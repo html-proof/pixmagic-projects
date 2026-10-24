@@ -28,6 +28,11 @@ AdSense has neither limit (`adsense.readonly` is non-sensitive and the consent s
 | Google Ads | `bizinsights-google-ads` | `google` | `https://www.googleapis.com/auth/adwords,openid` | Google Ads API `v25` (access level Explorer: 2,880 operations a day, counted by bizinsights) |
 | Google AdSense | `bizinsights-google-adsense` | `google` | `https://www.googleapis.com/auth/adsense.readonly,openid` | AdSense Management API v2 |
 
+The same environment also holds **`whatsapp-business`** (provider `whatsapp-business`, an API-key integration made in
+Nango's dashboard, not by nango-setup.mjs): the window where a merchant can paste their WhatsApp access token.
+bizinsights reads the token once and deletes the connection, so Nango keeps none ([whatsapp.md](whatsapp.md),
+"Through Nango").
+
 `openid` is who the Google account is: Google's tokeninfo didn't name the person for an
 adsense.readonly-only token (first real connect, 2026-10-22), so its disconnect couldn't revoke the grant.
 The integrations are made by `infra/cdk/scripts/nango-setup.mjs` from bizinsights' own keys

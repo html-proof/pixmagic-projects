@@ -29,12 +29,12 @@ import type { DryRunResult, RuleDetail, SmsRule, SmsTemplate } from "./types";
 // ---------------------------------------------------------------------------
 
 /** Each condition field's comparisons, as the shared schema allows them. */
-const OPS = Object.fromEntries(ruleConditionSchema.options.map((o) => [o.shape.field.value, o.shape.op.options as readonly string[]])) as Record<RuleConditionField, readonly string[]>;
+export const OPS = Object.fromEntries(ruleConditionSchema.options.map((o) => [o.shape.field.value, o.shape.op.options as readonly string[]])) as Record<RuleConditionField, readonly string[]>;
 
-const OP_LABEL: Record<string, string> = { gte: "is at least", lte: "is at most", in: "is one of", not_in: "is not one of", contains: "contains", has: "has the tag", lacks: "doesn't have the tag" };
+export const OP_LABEL: Record<string, string> = { gte: "is at least", lte: "is at most", in: "is one of", not_in: "is not one of", contains: "contains", has: "has the tag", lacks: "doesn't have the tag" };
 
 /** Which input each field needs (validation is the schema's). */
-const VALUE_INPUT: Record<RuleConditionField, { kind: "number" | "list" | "text"; placeholder: string; step?: string }> = {
+export const VALUE_INPUT: Record<RuleConditionField, { kind: "number" | "list" | "text"; placeholder: string; step?: string }> = {
   order_total: { kind: "number", placeholder: "100", step: "0.01" },
   customer_spent: { kind: "number", placeholder: "500", step: "0.01" },
   customer_orders: { kind: "number", placeholder: "2", step: "1" },

@@ -5,6 +5,7 @@ import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
+import { openNangoConnect } from "@/lib/nangoConnect";
 import { useWa, WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
 import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
@@ -13,13 +14,29 @@ import { connectionStatus, quality, tier, type Overview } from "@/components/wha
 // ---------------------------------------------------------------------------
 // The merchant's own Meta app, as three steps: paste the token, pick the number bizinsights found
 // with it, paste the app secret. bizinsights points the app's webhook at itself, so nothing has to
-// be copied back into Meta.
+// be copied back into Meta. When the server offers it (`nango`), the token is added in Nango's
+// window instead (docs/whatsapp.md "Through Nango"): the page then holds only a handle to it.
 // ---------------------------------------------------------------------------
 
 interface Discovered {
   appId: string | null;
   accounts: Array<{ id: string; name: string | null; numbers: Array<{ id: string; displayPhoneNumber: string | null; verifiedName: string | null; registered: boolean }> }>;
 }
+
+/** What the manual connect's refusals say (the page words each code itself; the server's text isn't shown). */
+const CONNECT_ERRORS: Readonly<Record<string, string>> = {
+  token_rejected: "Meta didn't accept that access token. Copy it again from Meta (it's long and starts with EAA), or generate a new one.",
+  missing_permissions: "That token is missing a WhatsApp permission. Generate a new one and tick both whatsapp_business_messaging and whatsapp_business_management.",
+  wrong_app_secret: "That app secret doesn't belong to the Meta app your token was made with. Copy the secret from the same app.",
+  phone_not_in_account: "That phone number ID isn't in that WhatsApp Business Account.",
+  number_in_use: "This WhatsApp number is already connected to another store in bizinsights. Disconnect it there first.",
+  not_found: "Meta couldn't find that account or number. Check the IDs on your app's WhatsApp → API Setup page.",
+  state_expired: "That took too long. Press Add your token and paste it again.",
+  session_mismatch: "That window was opened by someone else. Press Add your token and paste it again.",
+  state_mismatch: "That token couldn't be matched to this page. Press Add your token and paste it again.",
+  token_expired: "The token from Nango's window has expired. Press Add your token and paste it again.",
+  not_configured: "Adding the token through Nango isn't available right now. Paste it here instead.",
+};
 
 const META = {
   createApp: "https://developers.facebook.com/apps/creation/",
@@ -59,35 +76,71 @@ function Step({ n, title, done, children }: { n: number; title: string; done?: b
   );
 }
 
-function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; reconnect: boolean }) {
+function ManualConnect({ onConnected, reconnect, nango }: { onConnected: () => void; reconnect: boolean; nango: boolean }) {
   const { base } = useWa();
   const toast = useToast();
   const [token, setToken] = useState("");
+  /** The token added in Nango's window, as the server holds it: the page never sees the token itself. */
+  const [handle, setHandle] = useState<string | null>(null);
+  const [paste, setPaste] = useState(!nango);
   const [found, setFound] = useState<Discovered | null>(null);
   const [pick, setPick] = useState<{ wabaId: string; phoneNumberId: string } | null>(null);
   const [typeIds, setTypeIds] = useState(false);
   const [ids, setIds] = useState({ wabaId: "", phoneNumberId: "" });
   const [secret, setSecret] = useState("");
-  const [busy, setBusy] = useState<null | "find" | "connect">(null);
+  const [busy, setBusy] = useState<null | "nango" | "find" | "connect">(null);
   const [error, setError] = useState<string | null>(null);
 
   const numbers = found?.accounts.flatMap((a) => a.numbers.map((n) => ({ ...n, wabaId: a.id, wabaName: a.name }))) ?? [];
   const typed = /^\d{5,}$/.test(ids.wabaId) && /^\d{5,}$/.test(ids.phoneNumberId) ? ids : null;
   const chosen = typeIds ? typed : pick;
+  const tokenBody = handle ? { tokenHandle: handle } : { accessToken: token.trim() };
 
-  const find = async (e: FormEvent) => {
-    e.preventDefault();
+  const show = (r: Discovered) => {
+    const all = r.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));
+    setFound(r);
+    setPick(all.length === 1 ? all[0]! : null);
+    setTypeIds(all.length === 0);
+  };
+
+  const find = async (e?: FormEvent) => {
+    e?.preventDefault();
     setBusy("find");
     setError(null);
     try {
-      const r = await api<Discovered>(`${base}/manual/discover`, { method: "POST", body: { accessToken: token.trim() } });
-      const all = r.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));
-      setFound(r);
-      setPick(all.length === 1 ? all[0]! : null);
-      setTypeIds(all.length === 0);
+      show(await api<Discovered>(`${base}/manual/discover`, { method: "POST", body: tokenBody }));
     } catch (err) {
       setFound(null);
-      setError(actionError(err, "check the token"));
+      setError(actionError(err, "check the token", CONNECT_ERRORS));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Nango's window, where the token is pasted; bizinsights reads it from Nango and finds the numbers. */
+  const addInNango = async () => {
+    setBusy("nango");
+    setError(null);
+    try {
+      const session = await api<{ token: string; nonce: string }>(`${base}/nango/session`, { method: "POST", body: {} });
+      const outcome = await openNangoConnect(session.token).catch(() => ({ kind: "error" as const, type: "load_timeout", message: "" }));
+      if (outcome.kind === "closed") return;
+      if (outcome.kind === "error") {
+        setError(
+          outcome.type === "load_timeout"
+            ? "Nango's window couldn't be opened. Check your connection (or any blocker that stops pop-up windows), or paste the token here instead."
+            : "Nango's window didn't save the token. Press Add your token and try again.",
+        );
+        return;
+      }
+      const r = await api<Discovered & { tokenHandle: string }>(`${base}/nango/finish`, { method: "POST", body: { nonce: session.nonce, connectionId: outcome.connectionId } });
+      setToken("");
+      setHandle(r.tokenHandle);
+      show(r);
+    } catch (err) {
+      setFound(null);
+      setHandle(null);
+      setError(actionError(err, "add the token", CONNECT_ERRORS));
     } finally {
       setBusy(null);
     }
@@ -101,7 +154,7 @@ function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; re
     try {
       const r = await api<{ webhook: "verified" | "in_use" | "failed" }>(`${base}/manual`, {
         method: "POST",
-        body: { ...chosen, accessToken: token.trim(), appSecret: secret.trim() },
+        body: { ...chosen, ...tokenBody, appSecret: secret.trim() },
       });
       toast(
         "success",
@@ -110,11 +163,12 @@ function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; re
           : "WhatsApp is connected. One more thing: set up the webhook below.",
       );
       setToken("");
+      setHandle(null);
       setSecret("");
       setFound(null);
       onConnected();
     } catch (err) {
-      setError(actionError(err, "connect"));
+      setError(actionError(err, "connect", CONNECT_ERRORS));
     } finally {
       setBusy(null);
     }
@@ -144,32 +198,55 @@ function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; re
               </li>
             </ol>
           </details>
-          <form onSubmit={(e) => void find(e)} className="flex flex-wrap items-end gap-2">
-            <div className="min-w-0 flex-1 basis-64">
-              <label className="label" htmlFor="wa-token">
-                Access token
-              </label>
-              <input
-                id="wa-token"
-                className="input font-mono"
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="EAA…"
-                required
-                minLength={20}
-                value={token}
-                onChange={(e) => {
-                  setToken(e.target.value);
-                  setFound(null);
-                  setPick(null);
-                }}
-              />
+          {nango && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" className="btn-primary" disabled={busy !== null} onClick={() => void addInNango()}>
+                {busy === "nango" ? "Opening…" : handle ? "Add a different token" : "Add your token"}
+              </button>
+              {handle && (
+                <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => void find()}>
+                  {busy === "find" ? "Looking…" : "Look again"}
+                </button>
+              )}
+              <p className="min-w-0 flex-1 basis-56 text-xs text-muted">
+                Opens a secure window from Nango, the service bizinsights connects your accounts through. Paste the token there.
+              </p>
             </div>
-            <button type="submit" className="btn-primary" disabled={busy !== null || token.trim().length < 20}>
-              {busy === "find" ? "Looking…" : found ? "Look again" : "Find my numbers"}
+          )}
+          {!paste && (
+            <button type="button" className="text-xs text-muted underline underline-offset-2 hover:text-text" onClick={() => setPaste(true)}>
+              Paste it here instead
             </button>
-          </form>
+          )}
+          {paste && (
+            <form onSubmit={(e) => void find(e)} className="flex flex-wrap items-end gap-2">
+              <div className="min-w-0 flex-1 basis-64">
+                <label className="label" htmlFor="wa-token">
+                  Access token
+                </label>
+                <input
+                  id="wa-token"
+                  className="input font-mono"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="EAA…"
+                  required
+                  minLength={20}
+                  value={token}
+                  onChange={(e) => {
+                    setToken(e.target.value);
+                    setHandle(null);
+                    setFound(null);
+                    setPick(null);
+                  }}
+                />
+              </div>
+              <button type="submit" className={nango ? "btn-secondary" : "btn-primary"} disabled={busy !== null || token.trim().length < 20}>
+                {busy === "find" ? "Looking…" : found && !handle ? "Look again" : "Find my numbers"}
+              </button>
+            </form>
+          )}
         </Step>
 
         <Step n={2} title="Choose the number customers will see" done={!!chosen}>
@@ -450,7 +527,7 @@ export default function ConnectWhatsapp() {
                 <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" aria-expanded={showManual} onClick={() => setShowManual((s) => !s)}>
                   Use your own Meta app instead
                 </button>
-                {showManual && <div className="mt-3"><ManualConnect onConnected={reloaded} reconnect={!!c} /></div>}
+                {showManual && <div className="mt-3"><ManualConnect onConnected={reloaded} reconnect={!!c} nango={!!data.platform.nango} /></div>}
               </div>
             </>
           ) : (
@@ -471,7 +548,7 @@ export default function ConnectWhatsapp() {
                   </p>
                 </div>
               )}
-              <ManualConnect onConnected={reloaded} reconnect={!!c} />
+              <ManualConnect onConnected={reloaded} reconnect={!!c} nango={!!data.platform.nango} />
             </div>
           )}
         </section>

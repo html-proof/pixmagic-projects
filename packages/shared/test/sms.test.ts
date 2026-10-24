@@ -38,6 +38,16 @@ import {
   senderNameStatus,
   SETUP_AUTOMATIONS,
   suggestSenderName,
+  AUTOMATION_STARTERS,
+  AUTOMATION_TRIGGER_CARDS,
+  automationRule,
+  automationVariables,
+  checkAutomationMessage,
+  smsAutomationSchema,
+  SMS_TRIGGERS,
+  TRIGGER_CONDITION_FIELDS,
+  TRIGGER_INFO,
+  TRIGGER_SOURCES,
 } from "../src/sms.js";
 
 describe("smsSegments", () => {
@@ -397,5 +407,54 @@ describe("the setup's variables and messages", () => {
       expect(missingForTrigger(a.body, a.trigger!), a.key).toEqual([]);
     }
     expect(SETUP_AUTOMATIONS.find((a) => a.key === "appointment_reminder")).toMatchObject({ trigger: null, unavailable: expect.stringMatching(/appointments/) });
+  });
+});
+
+describe("the automation builder", () => {
+  it("has a card for every trigger, and a Shopify source for every trigger it offers", () => {
+    for (const t of SMS_TRIGGERS) expect(AUTOMATION_TRIGGER_CARDS.filter((c) => c.trigger === t), t).toHaveLength(1);
+    for (const c of AUTOMATION_TRIGGER_CARDS) {
+      if (c.unavailable) continue;
+      const source = TRIGGER_SOURCES[c.trigger!];
+      expect(source && (source.topics.length > 0 || !!source.perStore), c.key).toBe(true);
+    }
+    expect(AUTOMATION_TRIGGER_CARDS.find((c) => c.key === "custom_event")).toMatchObject({ trigger: null, unavailable: expect.stringMatching(/Shopify's own events/) });
+    expect(TRIGGER_INFO.customer_registered).toMatchObject({ category: "marketing", available: true });
+    expect(TRIGGER_SOURCES.customer_registered!.perStore).toMatchObject({ topic: "customers/create", scope: "read_customers" });
+  });
+
+  it("starts every trigger from ready-made messages that pass its own checks", () => {
+    for (const t of SMS_TRIGGERS) {
+      if (!TRIGGER_INFO[t].available) continue;
+      expect(AUTOMATION_STARTERS[t].length, t).toBeGreaterThan(0);
+      for (const s of AUTOMATION_STARTERS[t]) {
+        const issues = checkAutomationMessage(s.body, t, "WELCOME10");
+        expect(issues.filter((i) => i.level === "error"), `${t}: ${s.name}`).toEqual([]);
+        // Every variable it uses is one the editor offers for the trigger.
+        expect(templateVariables(s.body).used.every((v) => automationVariables(t).includes(v)), `${t}: ${s.name}`).toBe(true);
+      }
+    }
+  });
+
+  it("says in plain words what a message can't do for its trigger", () => {
+    expect(checkAutomationMessage("Order {{order_number}}: {{tracking_url}}", "order_created")).toContainEqual(expect.objectContaining({ level: "error", code: "unsupported_variable", message: expect.stringMatching(/"Order placed" texts have no tracking link/) }));
+    expect(checkAutomationMessage("Welcome! {{opt_out_url}}", "customer_registered").some((i) => i.code === "no_opt_out")).toBe(false);
+    expect(checkAutomationMessage("Welcome!", "customer_registered").map((i) => i.code)).toContain("no_opt_out");
+    expect(checkAutomationMessage("Use {{discount_code}}. Opt out: {{opt_out_url}}", "checkout_abandoned").map((i) => i.code)).toContain("discount_code");
+    expect(checkAutomationMessage("Use {{discount_code}}", "order_created").map((i) => i.code)).toContain("promotional_variable");
+    expect(checkAutomationMessage("Hi {{customer_name}}, order {{order_number}} shipped: {{tracking_url}}", "fulfillment_created").filter((i) => i.level === "error")).toEqual([]);
+  });
+
+  it("checks conditions against what the trigger's event has, and caps order updates per event", () => {
+    const base = { name: "A", body: "x", delayMinutes: 0 };
+    expect(smsAutomationSchema.safeParse({ ...base, trigger: "refund_issued", conditions: [{ field: "tag", op: "has", value: "vip" }] }).success).toBe(false);
+    expect(smsAutomationSchema.safeParse({ ...base, trigger: "order_created", conditions: [{ field: "tag", op: "has", value: "vip" }] }).success).toBe(true);
+    expect(smsAutomationSchema.safeParse({ ...base, trigger: "customer_birthday" }).success).toBe(false);
+    expect(smsAutomationSchema.safeParse({ ...base, trigger: "customer_inactive" }).success).toBe(false);
+    expect(TRIGGER_CONDITION_FIELDS.customer_registered).toEqual(["country"]);
+    const order = automationRule(smsAutomationSchema.parse({ ...base, trigger: "order_created" }), "tpl1");
+    expect(order).toMatchObject({ templateId: "tpl1", maxPerCustomer: 10, capDays: 1, dryRun: false, quietStart: 21, quietEnd: 9 });
+    const cart = automationRule(smsAutomationSchema.parse({ ...base, trigger: "checkout_abandoned", delayMinutes: 60, maxPerCustomer: 2 }), "tpl2");
+    expect(cart).toMatchObject({ maxPerCustomer: 2, capDays: 30, delayMinutes: 60 });
   });
 });

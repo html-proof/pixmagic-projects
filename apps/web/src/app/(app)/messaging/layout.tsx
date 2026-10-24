@@ -12,7 +12,7 @@ const ITEMS = [
   ["settings", "SMS Settings"],
   ["send", "Send SMS"],
   ["templates", "Message Templates"],
-  ["automations", "Automated Workflows"],
+  ["automations", "Automations"],
   ["campaigns", "Campaigns"],
   ["segments", "Customer Segments"],
   ["history", "Message History"],
@@ -27,7 +27,7 @@ export default function MessagingLayout({ children }: { children: ReactNode }) {
   const { storesStatus, store, workspace } = useApp();
   const items = ITEMS.map(([slug, label]) => {
     const href = slug ? `/messaging/${slug}` : "/messaging";
-    return { href, label, active: path === href };
+    return { href, label, active: path === href || (!!slug && path.startsWith(`${href}/`)) };
   });
   return (
     <ToastProvider>

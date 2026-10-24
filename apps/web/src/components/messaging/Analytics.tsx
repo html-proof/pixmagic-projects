@@ -191,7 +191,7 @@ export function DeliveryAnalytics() {
               )}
             </section>
             <section className="card min-w-0" aria-labelledby="a-rule-h">
-              <h2 id="a-rule-h" className="font-semibold">Automated workflows</h2>
+              <h2 id="a-rule-h" className="font-semibold">Automations</h2>
               {!data.automations.length ? (
                 <p className="mt-2 text-sm text-muted">No workflow texts in this period.</p>
               ) : (

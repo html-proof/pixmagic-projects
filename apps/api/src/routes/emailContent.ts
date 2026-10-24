@@ -174,8 +174,8 @@ export function emailContentRoutes(app: App, deps: Deps) {
 
   app.post(`${base}/templates/:id/versions/:version/restore`, async (c) => {
     const { ws, id } = c.req.param();
-    const version = z.coerce.number().int().min(1).parse(c.req.param("version"));
     const { user } = await requireEmail(c, deps, ws, "email:automate");
+    const version = z.coerce.number().int().min(1).parse(c.req.param("version"));
     return c.json({ template: publicTemplate(await restoreTemplateVersion(ws, id, version, user.id)) });
   });
 
@@ -189,12 +189,18 @@ export function emailContentRoutes(app: App, deps: Deps) {
     return c.json({ preview: await previewTemplate(ws, { subject: t.subjectTemplate, html: t.htmlTemplate, text: t.textTemplate, category: t.category, eventType: t.eventType }, data) });
   });
 
-  /** Render a template that isn't saved yet (the editor's live preview). */
+  /**
+   * Render a template that isn't saved yet (the editor's live preview). Only what the email is made
+   * of is checked: a new template has no name yet, and the preview doesn't need one.
+   */
   app.post(`${base}/templates/preview`, async (c) => {
     const ws = c.req.param("ws");
     const { user } = await requireEmail(c, deps, ws, "email:automate");
     await limit(deps.coord, `rl:email:preview:${user.id}`, LIMITS.emailPreview);
-    const input = templateInputSchema.extend({ data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
+    const input = templateInputSchema
+      .pick({ category: true, eventType: true, subject: true, html: true, text: true })
+      .extend({ data: z.record(z.string(), z.unknown()).optional() })
+      .parse(await body(c));
     return c.json({ preview: await previewTemplate(ws, { subject: input.subject, html: input.html, text: input.text, category: input.category, eventType: input.eventType }, input.data) });
   });
 

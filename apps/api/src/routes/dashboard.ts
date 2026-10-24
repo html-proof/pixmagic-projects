@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { AD_PROVIDERS, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
+import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
 import {
   audit,
   latestReconciliation,
@@ -156,9 +156,13 @@ export function dashboardRoutes(app: App, deps: Deps) {
   });
   app.get("/workspaces/:ws/stores", async (c) => {
     const { ws } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    const { access } = await requireWorkspace(c, deps, ws, "dashboard:read");
     const stores = await withTenant(ws, (tx) => workspaceStores(tx, ws));
-    return c.json({ stores: stores.map(({ store, imported, syncProblem, startDay }) => ({ ...publicStore(store), imported, syncProblem, startDay })) });
+    // Every member gets the store picker; how many orders and products each store holds is for
+    // those who see the stores' connection (Settings → Stores), as the dashboard's answer keeps a
+    // store's size from members who see neither its orders nor its products (redactOverview).
+    const counts = allows(access, "integrations.status");
+    return c.json({ stores: stores.map(({ store, imported, syncProblem, startDay }) => ({ ...publicStore(store), ...(counts ? { imported } : {}), syncProblem, startDay })) });
   });
 
   // The import's progress and its failures: the Shopify connection's status page.

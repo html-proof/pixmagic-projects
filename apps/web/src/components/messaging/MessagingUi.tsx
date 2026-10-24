@@ -135,7 +135,7 @@ export function actionLabel(action: string): string {
 
 /** Why a message went out: an automated workflow's event, a campaign, a test, or a text sent from Send SMS. */
 export function purposeLabel(purpose: string, trigger?: string | null): string {
-  if (purpose === "automation") return trigger && trigger in TRIGGER_INFO ? TRIGGER_INFO[trigger as SmsTrigger].label : "Automated workflow";
+  if (purpose === "automation") return trigger && trigger in TRIGGER_INFO ? TRIGGER_INFO[trigger as SmsTrigger].label : "Automation";
   return ({ campaign: "Campaign", test: "Test text", manual: "Sent from Send SMS" } as Record<string, string>)[purpose] ?? purpose;
 }
 
@@ -211,7 +211,7 @@ export function ModeBanner({ mode, showLive = false }: { mode: SmsMode; showLive
   if (mode === "off") {
     return (
       <Alert kind="info">
-        <strong>SMS isn&apos;t switched on for bizinsights yet.</strong> You can prepare templates, workflows, segments and campaigns, but no text is sent to anyone.
+        <strong>SMS isn&apos;t switched on for bizinsights yet.</strong> You can prepare templates, automations, segments and campaigns, but no text is sent to anyone.
       </Alert>
     );
   }
@@ -222,13 +222,13 @@ export function ModeBanner({ mode, showLive = false }: { mode: SmsMode; showLive
         <Link className="underline" href="/messaging/sender">
           Sender Configuration
         </Link>
-        . Workflows, campaigns and texts to customers are recorded as dry runs in Message History instead of being sent.
+        . Automations, campaigns and texts to customers are recorded as dry runs in Message History instead of being sent.
       </Alert>
     );
   }
   return showLive ? (
     <Alert kind="success">
-      <strong>Live.</strong> Approved workflows and scheduled campaigns text customers who may receive them. Every text is checked for consent and opt-outs right before it goes.
+      <strong>Live.</strong> Automations that are on and scheduled campaigns text customers who may receive them. Every text is checked for consent and opt-outs right before it goes.
     </Alert>
   ) : null;
 }

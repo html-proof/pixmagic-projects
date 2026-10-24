@@ -105,7 +105,8 @@ export function LegalPage({
             <ul className="-mx-2 flex flex-wrap">
               {[{ href: "/", label: "Home" }, ...PAGES].map((p) => (
                 <li key={p.href}>
-                  <Link className="inline-flex min-h-10 items-center rounded-md px-2 transition-colors hover:text-text" href={p.href}>
+                  {/* Home not prefetched, like the logo above. */}
+                  <Link prefetch={p.href === "/" ? false : undefined} className="inline-flex min-h-10 items-center rounded-md px-2 transition-colors hover:text-text" href={p.href}>
                     {p.label}
                   </Link>
                 </li>

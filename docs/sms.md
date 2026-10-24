@@ -31,12 +31,13 @@ Nothing reaches a customer until all of these are true, and none is true by defa
 | The 15-minute sweep, retention | `sweep.ts` |
 | Figures (overview, analytics, billing); GDPR | `analytics.ts`, `privacy.ts` |
 | Set up SMS (the five-step setup) and SMS Settings | `setup.ts`; rules in `@app/shared/sms` (`checkSenderName`, `SENDER_ID_SUPPORT`, `SETUP_AUTOMATIONS`); API `apps/api/src/routes/smsSetup.ts`; pages `/messaging/setup`, `/messaging/settings` (`components/messaging/Setup.tsx`, `SmsSettings.tsx`, `PhonePreview.tsx`) |
+| Automations (the four-step builder) | `builder.ts`; rules in `@app/shared/sms` (`AUTOMATION_TRIGGER_CARDS`, `TRIGGER_SOURCES`, `AUTOMATION_STARTERS`, `smsAutomationSchema`, `checkAutomationMessage`); each app's toml topics in core `apps.ts` (`APP_WEBHOOK_TOPICS`); API `apps/api/src/routes/smsAutomations.ts`; pages `/messaging/automations`, `/messaging/automations/edit` (`components/messaging/Automations.tsx`, `AutomationBuilder.tsx`, `AutomationUi.tsx`) |
 | AWS adapter (signed calls to sms-voice) | `apps/aws/src/smsProvider.ts` |
 | API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts` |
 | Worker | `apps/worker/src/handlers/integrations.ts` (`runSmsJob`, `runSmsEvent`), `webhooks.ts`, `index.ts` (sweep) |
 | Infrastructure | `infra/cdk/lib/app-stack.ts` (configuration set, events topic and queue, IAM, alarms) |
 | Dashboard | `apps/web/src/app/(app)/messaging/*`, `apps/web/src/components/messaging/*`; the customers' `/stop` page |
-| Tests | `packages/shared/test/sms.test.ts`, `apps/worker/test/sms.test.ts`, `apps/api/test/sms.test.ts`, `apps/aws/test/smsProvider.test.ts`, `infra/cdk/test/stacks.test.ts` |
+| Tests | `packages/shared/test/sms.test.ts`, `apps/worker/test/sms.test.ts`, `apps/api/test/sms.test.ts`, `apps/api/test/smsSetup.test.ts`, `apps/api/test/smsAutomations.test.ts`, `apps/web/e2e/messaging.spec.ts`, `apps/aws/test/smsProvider.test.ts`, `infra/cdk/test/stacks.test.ts` |
 
 The AWS calls are signed JSON requests (aws4fetch), the same API the AWS SDK calls, as the rest of
 `apps/aws` does for SQS, SES and DynamoDB: the SDK would add hundreds of milliseconds to every cold
@@ -132,6 +133,7 @@ Checked against Admin API 2026-10.
 | Order cancelled | `orders/cancelled` | Also cancels the order's other waiting texts |
 | Refund issued | `refunds/create` | `{{order_total}}` is the refunded amount |
 | Checkout abandoned | `checkouts/create`, `checkouts/update` | Marketing |
+| Customer registered | `customers/create`, subscribed per store once it grants `read_customers` | Marketing (a welcome text): only customers subscribed to SMS marketing; once per customer |
 | Inactive customer / VIP | daily, from the orders seen per contact (`sms_contact_orders`) | Marketing; once per inactive stretch / once |
 | Customer birthday | **not available**: Shopify customers have no birthday field | Needs a birthday metafield and `read_customers` |
 
@@ -211,6 +213,62 @@ recent texts with their delivery status, and this month's spend.
 New variables: `{{business_name}}` (the setup's business name, else the store's name, filled at
 send time) and `{{order_status}}` (`ORDER_STATUS_WORD`: confirmed, paid, shipped, delivered,
 cancelled, refunded, filled by `runSmsRules`).
+
+## Automations (for merchants)
+
+Customer Messaging → **Automations** (`/messaging/automations`) lists every automation of the store
+(made here, in Set up SMS or in the advanced editor alike) as a card: its trigger, its message, its
+status, its last text and the last 30 days' outcomes, with search, status and trigger filters, a
+switch, Edit, Duplicate, Delete and Advanced (the WHEN / IF / WAIT / THEN editor with priority,
+version history and "Test with recent orders"). Above the cards: what stops the store's texts
+reaching anyone right now (`sendingProblems`: test mode, no approved sender, Automatic SMS off, a
+budget of 0, no basis for order updates, marketing switched off), each with the page that fixes it.
+
+**Create automation** (`/messaging/automations/edit`; `?id=` edits one, `?trigger=` starts from a
+trigger) is four steps beside a phone showing the text with a sample customer:
+
+1. **Trigger.** Cards for Order placed, Order paid, Order shipped or fulfilled, Order delivered,
+   Abandoned checkout, Customer registered and Custom event, and under *More triggers* Order
+   cancelled, Refund issued, Inactive customer, VIP customer and Customer birthday. Each says
+   whether Shopify sends its event for this store (`triggerCapabilities`), from:
+   - the topics the store's app subscribes to in its toml (`APP_WEBHOOK_TOPICS`, kept equal to the
+     tomls by `appConfig.test.ts`): a store connected through an App Store app gets no order,
+     refund or checkout topics until Shopify approves protected customer data, so those triggers
+     are *Not available for your store*;
+   - for Customer registered, `customers/create` subscribed for the store (`checkSmsWebhooks`): it
+     needs `read_customers` (*Give permission in Shopify* asks for it) and Shopify's acceptance of
+     the subscription, asked for on the page, on activation and daily, and kept 26 hours in the
+     coordinator (`sms:webhooks:<storeId>`);
+   - the last event of the trigger's topics that reached bizinsights for the store (90 days of
+     `webhook_events`), shown as evidence.
+
+   Custom event and Customer birthday can't be chosen: bizinsights receives no event of the
+   merchant's own, and Shopify customers have no birthday.
+2. **Message.** The sender (approved by AWS, or the sender name to ask for, checked as typed with
+   `checkSenderName` and requested through Set up SMS's endpoints: the sender is the store's, the
+   same for all its texts), ready-made messages per trigger (`AUTOMATION_STARTERS`), the editor with
+   a button per detail the trigger can fill (`automationVariables`), the characters and SMS parts,
+   and `checkAutomationMessage`: an opt-out link on marketing, no marketing details on order
+   updates, no detail the trigger can't fill, a discount code entered when the text shows one.
+3. **Timing.** Send immediately or after a delay (up to 30 days); everyone or only when conditions
+   hold (only the facts the trigger's event has: `TRIGGER_CONDITION_FIELDS`); the consent rule and
+   duplicate protection said in words; and under *Advanced settings* quiet hours (the store's by
+   default), the customer's time zone, the per-customer cap (`automationCapDefaults`: order updates
+   10 a day, each event once; marketing once in 30 days) and a practice run. *Save and continue*
+   saves it: the message as the automation's own template (a draft version), the settings as its
+   rule (a draft, or a new version of a running one).
+4. **Test and activate.** The summary, the checks, what still stops texts reaching customers, a test
+   text to a verified number (one `requestId` per press, followed to AWS's delivery event), and the
+   switch. On asks first, then (`activateAutomation`) needs `confirm`, a trigger Shopify sends for
+   the store and a message without errors, and approves the template's latest version and the
+   rule's in the member's name (audited `automation_activated`, `automation_republished` for
+   changes put live). Store-wide problems don't stop it: they stop its texts, and every page says
+   which. Off pauses it (its waiting texts are cancelled). Edits of a running automation wait under
+   *Changes not live* until *Put changes live*.
+
+Delete cancels its waiting texts, removes the rule (its texts stay in Message History, its audit
+trail stays, `rule_deleted` with its last settings) and archives its template unless another rule
+or a campaign uses it. Duplicate makes a draft with a template of its own.
 
 ### Sender names from Set up SMS (platform owner)
 
@@ -348,7 +406,7 @@ TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/worker exec vitest run tes
 ```
 
 ```bash
-TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/sms.test.ts test/smsSetup.test.ts
+TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/sms.test.ts test/smsSetup.test.ts test/smsAutomations.test.ts
 ```
 
 ```bash

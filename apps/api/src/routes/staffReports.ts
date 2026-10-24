@@ -2,7 +2,7 @@ import { z } from "zod";
 import { systemDb } from "@app/db";
 import { buildReport, employeeScope, employeeStatement, logger, payslip, REPORT_GROUPS, REPORT_TYPES, reportFile, staffKpis, staffTrends, type ExportFile, type StaffActor } from "@app/core";
 import { randomToken, sha256Hex } from "@app/shared";
-import { GRANULARITIES, PAYMENT_STATUSES, RANGE_PRESETS, type StaffPermission } from "@app/shared/staff";
+import { GRANULARITIES, PAYMENT_STATUSES, RANGE_PRESETS, staffCan, type StaffPermission } from "@app/shared/staff";
 import { body, HttpError, requireUser, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -83,8 +83,10 @@ export function staffReportRoutes(app: App, deps: Deps) {
   });
 
   app.get(`${BASE}/reports`, async (c) => {
+    // Who is asking before what they ask: every role with a report holds staff:view.
+    const actor = await requireStaff(c, deps, c.req.param("ws"), "staff:view");
     const q = reportSchema.parse(c.req.query());
-    const actor = await requireStaff(c, deps, c.req.param("ws"), q.type === "attendance" ? "attendance:view" : "pay:view");
+    if (!staffCan(actor.access, q.type === "attendance" ? "attendance:view" : "pay:view")) throw new HttpError(403, "You don't have permission to do that", "forbidden");
     await analyticsLimit(actor.userId);
     return c.json(await buildReport(actor, q));
   });
@@ -92,9 +94,9 @@ export function staffReportRoutes(app: App, deps: Deps) {
   /** Ask for a download: answers a link that works once, for five minutes, for this user only. */
   app.post(`${BASE}/exports`, async (c) => {
     const ws = c.req.param("ws");
-    const request = exportSchema.parse(await body(c));
     const actor = await requireStaff(c, deps, ws, "staff:export");
-    await requireStaff(c, deps, ws, permissionFor(request));
+    const request = exportSchema.parse(await body(c));
+    if (!staffCan(actor.access, permissionFor(request))) throw new HttpError(403, "You don't have permission to do that", "forbidden");
     return grantDownload(c, deps, { userId: actor.userId, workspaceId: ws, as: "staff", request });
   });
 

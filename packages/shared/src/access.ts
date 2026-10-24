@@ -134,7 +134,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "orders.cancellations", module: "orders", kind: "view", requires: ["orders.list"], label: "View cancellations", reveals: "Which of the latest orders were cancelled." },
   // ---- Marketing
   { key: "marketing.ads", module: "marketing", kind: "view", label: "View advertising analytics", reveals: "Meta and Google Ads spend, clicks, conversions and return on ad spend, and AdSense earnings." },
-  { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and WhatsApp campaigns, automations and their results." },
+  { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and Customer Messaging: WhatsApp and text message (SMS) campaigns, automations, templates and settings, their results and what texts cost. Customers' numbers and messages need \"View contact information\" too." },
   { key: "marketing.attribution", module: "marketing", kind: "view", requires: ["analytics.traffic"], label: "View conversion attribution", reveals: "Orders and sales that came from paid traffic and from each UTM campaign." },
   // ---- Discounts
   { key: "discounts.codes", module: "discounts", kind: "view", label: "View discount codes and usage", reveals: "Which discount codes were used, and on how many orders." },
@@ -144,7 +144,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "finance.refunds", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View refunds", reveals: "Returns (money refunded, cancelled or edited out), the return rate and how many orders had one." },
   { key: "finance.reports", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View financial reports", reveals: "This year's sales month by month, compared with last year." },
   // ---- Integrations
-  { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work. Never passwords, tokens or keys." },
+  { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work, and the email setup: sending accounts, domains, templates, automations and sending totals. Never passwords, tokens or keys." },
   {
     key: "integrations.manage",
     module: "integrations",
