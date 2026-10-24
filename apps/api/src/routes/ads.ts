@@ -137,7 +137,7 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     lastSyncedAt: c.lastSyncedAt,
     /** When the last sync started, whatever came of it ("Last attempted"). */
     lastSyncAttemptAt: c.lastSyncAttemptAt,
-    /** How the figures are read: "direct" (bizinsights' own sign-in with the platform) or "nango" (the same, authorized through Nango). */
+    /** How it was authorized: "nango" (every connection made now) or "direct" (bizinsights' own older sign-in, moving to Nango by itself, docs/nango.md). */
     source: nango ? "nango" : "direct",
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
