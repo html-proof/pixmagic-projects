@@ -120,3 +120,45 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByTestId("report-row").filter({ hasText: "Spring" })).toContainText("act_1");
   await expect(page.getByTestId("download-ads_campaigns")).toHaveAttribute("href", new RegExp(`section=ads_campaigns&preset=custom&from=${day(-7)}&to=${day(-1)}`));
 });
+
+test("the AdSense page splits the earnings by country and device type from AdSense's live report", async ({ page }) => {
+  const email = uniqueEmail("ads-adsense");
+  await signUp(page, email);
+  const ws = await createWorkspace(page, "AdSense Co");
+  const storeId = await insertStore(db, ws, `ads-adsense-${Date.now()}.myshopify.com`);
+  const conn = await insertAdConnection(db, { workspaceId: ws, storeId, provider: "adsense", accountId: "pub-77", accountName: "Shop site", historyFrom: day(-89), syncedThrough: day(0), lastSyncedAt: new Date() });
+  for (let n = -7; n <= -1; n++) {
+    await db.query(
+      `INSERT INTO adsense_daily (workspace_id, store_id, connection_id, account_id, site, day, earnings, page_views, impressions, clicks, currency, updated_at)
+       VALUES ($1, $2, $3, 'pub-77', '', $4, 2, 1000, 800, 4, 'USD', now())`,
+      [ws, storeId, conn, day(n)],
+    );
+  }
+  // AdSense itself can't run in e2e: its live report is answered as the API answers it (apps/api/test/ads.test.ts).
+  const totals = (earnings: number, pageViews: number) => ({ earnings, pageViews, impressions: pageViews, clicks: 4, pageRpm: (earnings * 1000) / pageViews, perClick: earnings / 4, ctr: 4 / pageViews });
+  const asked: string[] = [];
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/adsense/report?*`, (route) => {
+    const level = new URL(route.request().url()).searchParams.get("level") ?? "country";
+    asked.push(level);
+    const rows = level === "country" ? [{ id: "AU", name: "Australia", ...totals(10, 5000) }, { id: "NZ", name: "New Zealand", ...totals(4, 2000) }] : [{ id: "HighEndMobile", name: "High-end mobile devices", ...totals(14, 7000) }];
+    return route.fulfill({
+      json: {
+        account: { id: conn, accountId: "pub-77", name: "Shop site" },
+        today: day(0),
+        cached: false,
+        report: { level, since: day(-7), until: day(-1), currency: "USD", rows, totals: totals(14, 7000), truncated: false, sites: [] },
+      },
+    });
+  });
+
+  await page.goto(`/advertising/adsense?preset=custom&from=${day(-7)}&to=${day(-1)}`);
+  const table = page.getByTestId("adsense-report-table");
+  await expect(table).toContainText("Whole account");
+  await expect(table).toContainText("Australia");
+  await expect(table).toContainText("New Zealand");
+  await expect(table).toContainText("$14.00");
+  await page.getByTestId("adsense-report-platform").click();
+  await expect(table).toContainText("High-end mobile devices");
+  await expect(table).not.toContainText("Australia");
+  expect(asked).toEqual(expect.arrayContaining(["country", "platform"]));
+});
