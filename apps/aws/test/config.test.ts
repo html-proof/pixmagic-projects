@@ -36,6 +36,8 @@ describe("the shipped settings", () => {
       "Shopify app appstore: SHOPIFY_APP_SECRET_APPSTORE",
       "Meta Ads: META_APP_SECRET",
       "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
+      // Every ad platform connects through Nango (docs/nango.md): its key is a secret too.
+      "Ad platforms through Nango: NANGO_SECRET_KEY",
     ]);
   });
 
@@ -56,8 +58,8 @@ describe('the cron action {"action":"config"}', () => {
 
     const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
 
-    expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
-    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense"]);
+    expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: false, google: false, adsense: false } });
+    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
     expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);

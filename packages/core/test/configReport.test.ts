@@ -22,6 +22,8 @@ const KEYS = [
   "GOOGLE_ADS_CLIENT_SECRET",
   "GOOGLE_ADS_ENABLED",
   "GOOGLE_ADS_OAUTH_VERIFIED",
+  "NANGO_SECRET_KEY",
+  "NANGO_PROVIDERS",
   "WHATSAPP_APP_ID",
   "WHATSAPP_APP_SECRET",
   "WHATSAPP_CONFIG_ID",
@@ -77,6 +79,7 @@ const EVERYTHING = {
   GOOGLE_ADS_CLIENT_ID: "public-google-6666.apps.googleusercontent.com",
   GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-secret-google-7777",
   GOOGLE_ADS_ENABLED: "1",
+  NANGO_SECRET_KEY: "secret-nango-9191919191919191919191919191",
   WHATSAPP_APP_ID: "1799660384680551",
   WHATSAPP_APP_SECRET: "secret-whatsapp-8888",
   WHATSAPP_CONFIG_ID: "public-wa-config-9999",
@@ -98,7 +101,7 @@ const half = (vars: Record<string, string>) => halfConfigured(vars).map((c) => c
 describe("which provider has its public id but not its secret", () => {
   it("names each provider whose id is set and whose secret is missing, and no other", () => {
     const vars = { META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-y", EMAIL_MICROSOFT_CLIENT_SECRET: "a secret without its id" };
-    expect(half(vars)).toEqual(["Meta Ads"]);
+    expect(half(vars)).toEqual(["Meta Ads", "Ad platforms through Nango"]);
     const meta = providerCredentials(vars).find((c) => c.provider === "Meta Ads")!;
     expect(meta).toEqual({
       provider: "Meta Ads",
@@ -125,6 +128,7 @@ describe("which provider has its public id but not its secret", () => {
       "SHOPIFY_EXTRA_APPS/SHOPIFY_APP_SECRET_APPSTORE",
       "META_APP_ID/META_APP_SECRET",
       "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET",
+      "GOOGLE_ADS_CLIENT_ID/NANGO_SECRET_KEY",
       "WHATSAPP_CONFIG_ID/WHATSAPP_APP_SECRET",
       "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
       "EMAIL_MICROSOFT_CLIENT_ID/EMAIL_MICROSOFT_CLIENT_SECRET",
@@ -143,7 +147,7 @@ describe("which provider has its public id but not its secret", () => {
   });
 
   it("lets WhatsApp borrow the Meta Ads app's secret only when it runs on that app", () => {
-    const signup = { WHATSAPP_CONFIG_ID: "public-wa-config-9999", META_APP_ID: "971575545351940", META_APP_SECRET: "m" };
+    const signup = { WHATSAPP_CONFIG_ID: "public-wa-config-9999", META_APP_ID: "971575545351940", META_APP_SECRET: "m", NANGO_SECRET_KEY: "n" };
     // Its own app: only its own secret signs what it sends.
     expect(half({ ...signup, WHATSAPP_APP_ID: "1799660384680551" })).toEqual(["WhatsApp (Embedded Signup)"]);
     expect(half({ ...signup, WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w" })).toEqual([]);
@@ -177,7 +181,7 @@ describe("the configuration report", () => {
   it("says what is set up, as booleans", () => {
     setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", COGNITO_EMAIL_OTP: "" });
     const r = configReport();
-    expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
+    expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: true, google: true, adsense: true } });
     expect(r.whatsapp).toEqual({ embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
     expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false });
@@ -197,7 +201,7 @@ describe("the configuration report", () => {
   it("lists the half-configured providers, and the ad platforms they leave off", () => {
     setEnv({ META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_ENABLED: "1" });
     const r = configReport();
-    expect(r.halfConfigured).toEqual(["Meta Ads", "Google Ads and Google AdSense"]);
+    expect(r.halfConfigured).toEqual(["Meta Ads", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
     expect(r.ads.configured).toEqual({ meta: false, google: false, adsense: false });
     expect(r.ads.restricted).toEqual({ meta: false, google: false, adsense: false });
   });
@@ -238,6 +242,7 @@ describe("the warning at cold start", () => {
     warnHalfConfigured(vars);
     expect(warn.mock.calls).toEqual([
       [{ provider: "Meta Ads", idSetting: "META_APP_ID", secretSetting: "META_APP_SECRET" }, "public id set but secret missing"],
+      [{ provider: "Ad platforms through Nango", idSetting: "META_APP_ID", secretSetting: "NANGO_SECRET_KEY" }, "public id set but secret missing"],
       [{ provider: "WhatsApp (Embedded Signup)", idSetting: "WHATSAPP_CONFIG_ID", secretSetting: "WHATSAPP_APP_SECRET" }, "public id set but secret missing"],
     ]);
   });

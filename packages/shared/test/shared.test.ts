@@ -23,6 +23,8 @@ import {
   localTime,
   normalizeShopDomain,
   parseKeyring,
+  pkceChallenge,
+  pkcePair,
   resolveCapabilities,
   resolvePreset,
   saleValue,
@@ -106,6 +108,16 @@ describe("token encryption", () => {
   it("rejects bad keys", () => {
     expect(() => parseKeyring("1:short")).toThrow();
     expect(() => parseKeyring("")).toThrow();
+  });
+});
+
+describe("PKCE", () => {
+  it("makes a verifier RFC 7636 allows and its S256 challenge, never the verifier itself", () => {
+    const { verifier, challenge } = pkcePair();
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+    expect(pkceChallenge(verifier)).toBe(challenge);
+    expect(challenge).not.toBe(verifier);
+    expect(pkcePair().verifier).not.toBe(verifier);
   });
 });
 

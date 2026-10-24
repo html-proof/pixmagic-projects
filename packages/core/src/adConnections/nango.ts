@@ -1,12 +1,13 @@
 /**
- * Connecting ad accounts through Nango (docs/nango.md): the connect session a merchant authorizes in,
- * checking what Nango made of it, and Nango's webhooks about connections. The Nango API itself is
- * ads/nango.ts; the routes are apps/api/src/routes/adsNango.ts.
+ * Connecting ad accounts through Nango (docs/nango.md), the only way any platform is connected: which
+ * platforms Nango can connect now, the connect session a merchant authorizes in, checking what Nango
+ * made of it, and Nango's webhooks about connections. The Nango API itself is ads/nango.ts; the routes
+ * are apps/api/src/routes/adsNango.ts; moving the connections made before Nango is migrate.ts.
  *
  * Nango only brokers the OAuth and keeps the tokens: the grant is to bizinsights' own Meta app or Google
  * client, every token is checked to be one (Meta's appsecret_proof, Google's tokeninfo audience), and the
- * accounts are listed and read with bizinsights' own clients. So a Nango connection is a direct one whose
- * tokens live at Nango; grants are taken back the same way (connect.ts).
+ * accounts are listed and read with bizinsights' own clients. Grants are taken back the same way as
+ * they always were (connect.ts).
  */
 import { systemDb } from "@app/db";
 import type { AdProvider } from "@app/shared";
@@ -20,6 +21,8 @@ import {
   NANGO_INTEGRATION,
   nangoConnections,
   nangoCreateConnectSession,
+  nangoIntegrations,
+  nangoIntegrationsReady,
   nangoProviderOf,
   REQUIRED_AD_SCOPE,
   type AdAccountList,
@@ -30,13 +33,58 @@ import type { Coord } from "../coord.js";
 import { pendingSource, type PendingAdConnect } from "./connect.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
-import { adsenseConfig, googleClient, metaConfig } from "./config.js";
+import { adsenseConfig, googleClient, metaConfig, nangoConfig, nangoProviders } from "./config.js";
 import { forgetNangoToken, nangoTokenFor, platformPerson } from "./credentials.js";
 import { releaseNangoConnectionIfUnused } from "./connect.js";
 import { recordAdFailure } from "./status.js";
 
 /** How long a connect session (and its state here) lasts: Nango's own session lifetime. */
 export const NANGO_SESSION_TTL_S = 30 * 60;
+
+const NONE: Record<AdProvider, boolean> = { meta: false, google: false, adsense: false };
+const READY_KEY = "nango-integrations-ready";
+/** How long what Nango said about its integrations is kept: a fix in Nango's dashboard shows within this. */
+export const NANGO_READY_TTL_S = 5 * 60;
+
+/**
+ * The platforms that can be connected right now: this server connects them through Nango
+ * (nangoProviders: listed, key set, the platform's own app set up) and Nango holds each one's integration,
+ * made from the right provider and lacking no credential (asked of Nango, kept NANGO_READY_TTL_S). So a
+ * card offers Connect only for a platform whose sign-in can actually work, never one whose integration
+ * nobody made yet. Nango not answering offers the listed platforms (starting a sign-in then says Nango is
+ * busy); Nango refusing bizinsights' key offers none, for a minute.
+ */
+export async function connectableAdProviders(coord: Coord, fetchImpl?: FetchLike): Promise<Record<AdProvider, boolean>> {
+  const listed = nangoProviders();
+  const cfg = nangoConfig(fetchImpl);
+  if (!cfg || !Object.values(listed).some(Boolean)) return { ...NONE };
+  let ready: Record<AdProvider, boolean> | null = null;
+  const cached = await coord.peek(READY_KEY).catch(() => null);
+  if (cached) ready = JSON.parse(cached) as Record<AdProvider, boolean>;
+  else {
+    try {
+      ready = nangoIntegrationsReady(await nangoIntegrations(cfg));
+      for (const p of Object.keys(listed) as AdProvider[]) {
+        if (listed[p] && !ready[p]) logger.warn({ provider: p, integrationKey: NANGO_INTEGRATION[p] }, "nango has no usable integration for this platform: run infra/cdk/scripts/nango-setup.mjs --apply");
+      }
+      await coord.put(READY_KEY, JSON.stringify(ready), NANGO_READY_TTL_S).catch(() => undefined);
+    } catch (err) {
+      if (err instanceof AdsApiError && err.errorCode === "not_configured") {
+        logger.error({ err }, "nango refused bizinsights' key: no ad platform can be connected");
+        await coord.put(READY_KEY, JSON.stringify(NONE), 60).catch(() => undefined);
+        return { ...NONE };
+      }
+      logger.warn({ err }, "nango's integrations couldn't be listed; offering the platforms set up here");
+      ready = { meta: true, google: true, adsense: true };
+    }
+  }
+  return { meta: listed.meta && ready.meta, google: listed.google && ready.google, adsense: listed.adsense && ready.adsense };
+}
+
+/** For tests, and after nango-setup.mjs changed the integrations: ask Nango again on the next look. */
+export async function forgetNangoIntegrations(coord: Coord) {
+  await coord.take(READY_KEY).catch(() => null);
+}
 
 /** A Nango sign-in on its way: who started it, for which store and platform, through which integration. */
 export interface NangoSessionState {

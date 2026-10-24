@@ -135,7 +135,10 @@ export function accountFacts(c: AdConnection) {
           row("Demo seed", String(c.demoSeed ?? "—")),
         ]
       : [],
-    readThrough: c.demo ? null : row("Read through", c.source === "nango" ? `Direct connection to ${P.name} (sign-in kept by Nango)` : `Direct connection to ${P.name}`),
+    // Every connection is made through Nango now; an older one bizinsights signed in itself moves there by itself (docs/nango.md).
+    readThrough: c.demo
+      ? null
+      : row("Read through", c.source === "nango" ? `${P.name}'s own API (sign-in kept by Nango)` : `${P.name}'s own API (an older sign-in, moving to Nango by itself)`),
     lastSynced: row("Last successful sync", c.lastSyncedAt ? <span title={exact(c.lastSyncedAt)}>{fmtRelative(c.lastSyncedAt)}</span> : "Not yet"),
     lastAttempt: row("Last attempted sync", c.lastSyncAttemptAt ? <span title={exact(c.lastSyncAttemptAt)}>{fmtRelative(c.lastSyncAttemptAt)}</span> : "Not yet"),
     dataThrough: row("Data through", c.syncedThrough ? `${fmtDay(c.syncedThrough)}${c.historyFrom ? ` (from ${fmtDay(c.historyFrom)})` : ""}` : "Nothing stored yet"),

@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, encryptAdTokens, googleAdsOperationsToday, pauseGoogleAds, type FetchLike } from "@app/core";
-import { adErrorMessage, pkceChallenge } from "@app/shared";
+import { adAccessToken, encryptAdTokens, forgetNangoToken, googleAdsOperationsToday, pauseGoogleAds, type FetchLike } from "@app/core";
+import { adErrorMessage, type AdProvider } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { connectThroughNango, fakeNango, NANGO_ENV, type FakeNango, type NangoPlatform } from "./nangoFake.js";
 
 /**
- * "Continue with Google Ads" / "Continue with Meta Ads" beyond the first connect: PKCE, who signed
- * in, refresh tokens Google doesn't resend or replaces, giving access back on disconnect, and the
- * live Google Ads report.
+ * "Continue with Google Ads" / "Continue with Meta Ads" beyond the first connect: who signed in, giving
+ * access back on disconnect (through Nango, and for the connections made before Nango), the tokens of
+ * a connection made before Nango until it is moved, and the live Google Ads report.
  */
 
 let ctx: TestCtx;
@@ -20,32 +21,27 @@ const KEYS = {
   GOOGLE_ADS_CLIENT_ID: "g_client",
   GOOGLE_ADS_CLIENT_SECRET: "g_secret",
   GOOGLE_ADS_ENABLED: "1",
+  ...NANGO_ENV,
 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 interface GoogleSeen {
-  exchanges: URLSearchParams[];
   refreshes: string[];
   revoked: string[];
   reportQueries: string[];
 }
 
 /**
- * Google's OAuth endpoints, tokeninfo, Google Ads and AdSense. `refreshToken` is what a code
- * exchange hands out (null: none, as on a repeat consent); `rotateTo` is what a refresh hands back.
+ * Google's token endpoint (renewing a connection made before Nango: `rotateTo` is what a refresh hands
+ * back), tokeninfo for those tokens, revoke, Google Ads and AdSense. Nango's own tokens are answered by
+ * the fake Nango in front of it.
  */
-function googlePlatform(seen: GoogleSeen, opts: { refreshToken?: string | null; rotateTo?: string; sub?: string | null; accounts?: string[]; refreshFails?: boolean } = {}): FetchLike {
+function googlePlatform(seen: GoogleSeen, opts: { rotateTo?: string; sub?: string | null; accounts?: string[]; refreshFails?: boolean } = {}): FetchLike {
   return async (input, init) => {
     const u = new URL(String(input));
     if (u.host === "oauth2.googleapis.com" && u.pathname === "/token") {
       const form = new URLSearchParams(String(init?.body));
-      if (form.get("grant_type") === "authorization_code") {
-        seen.exchanges.push(form);
-        const refresh = opts.refreshToken === undefined ? "G_REFRESH_1" : opts.refreshToken;
-        const scope = form.get("redirect_uri")!.includes("/adsense/") ? "https://www.googleapis.com/auth/adsense.readonly" : "https://www.googleapis.com/auth/adwords";
-        return json({ access_token: "G_ACCESS", expires_in: 3599, scope, ...(refresh ? { refresh_token: refresh } : {}) });
-      }
       seen.refreshes.push(form.get("refresh_token")!);
       if (opts.refreshFails) return json({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400);
       return json({ access_token: "G_ACCESS_2", expires_in: 3599, ...(opts.rotateTo ? { refresh_token: opts.rotateTo } : {}) });
@@ -71,13 +67,10 @@ function googlePlatform(seen: GoogleSeen, opts: { refreshToken?: string | null; 
   };
 }
 
-/** Meta's token endpoints, permissions, /me and two ad accounts; records permission revocations. */
+/** Meta's permissions, /me and two ad accounts; records permission revocations (by the token they were made with). */
 function metaPlatform(revoked: string[]): FetchLike {
   return async (input, init) => {
     const u = new URL(String(input));
-    if (u.pathname.endsWith("/oauth/access_token")) {
-      return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT", expires_in: 3600 });
-    }
     if (u.pathname.endsWith("/me/permissions/ads_read") && init?.method === "DELETE") {
       revoked.push(new Headers(init.headers).get("authorization")!.replace(/^Bearer /, ""));
       return json({ success: true });
@@ -92,128 +85,98 @@ function metaPlatform(revoked: string[]): FetchLike {
 }
 
 let headers: Record<string, string>;
-let cookie: string;
 let ws: string;
 let storeId: string;
+let nango: FakeNango;
 
 beforeEach(async () => {
   await clean(ctx);
   ctx.setEnv(KEYS);
+  forgetNangoToken();
+  nango = fakeNango();
+  usePlatform(async () => json({ error: { message: "no platform in this test" } }, 400));
   const u = await signIn(ctx, "ads-life-owner", "owner@x.com");
   headers = u.headers;
-  cookie = u.cookie;
   ws = await createWorkspace(ctx, headers);
   storeId = (await createStore(ws, "ads-life.myshopify.com", ["read_orders"], { currency: "USD" })).id;
 });
 
-/** Start a connect for `store` and follow the platform back to our callback; when it offers a choice, take every account. */
-async function connect(provider: "meta" | "google" | "adsense", store = storeId) {
-  const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store}/ads/${provider}/connect`, headers });
-  expect(start.statusCode).toBe(200);
-  const url = new URL(start.json().url);
-  const state = url.searchParams.get("state")!;
-  const cb = await ctx.app.inject({ method: "GET", url: `/ads/${provider}/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-  expect(cb.statusCode).toBe(302);
-  const location = new URL(cb.headers.location as string);
-  const pick = location.searchParams.get("choose");
+/** The platform's own API (Nango's answered by the fake Nango in front of it). */
+const usePlatform = (platform: FetchLike) => ctx.setFetch(nango.fetch(platform));
+
+/** "Continue with …" for `store` through Nango; when it offers a choice, take every account. */
+async function connect(provider: NangoPlatform, store = storeId) {
+  const flow = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${store}`, provider, headers });
+  expect(flow.start.statusCode).toBe(200);
+  const finish = flow.finish!;
+  const pick = finish.json().choose as string | undefined;
   if (pick) {
     const pending = `/workspaces/${ws}/stores/${store}/ads/pending/${pick}`;
     const list = await ctx.app.inject({ method: "GET", url: pending, headers });
     const ids = (list.json().accounts as Array<{ accountId: string }>).map((a) => a.accountId);
     expect((await ctx.app.inject({ method: "POST", url: pending, headers, payload: { accountIds: ids } })).statusCode).toBe(200);
   }
-  return { url, location };
+  return { finish, connectionId: flow.connectionId! };
+}
+
+/** A finish that ended without a connection: its error code. */
+async function connectError(provider: NangoPlatform) {
+  const { finish } = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider, headers });
+  expect(finish!.statusCode).toBeGreaterThanOrEqual(400);
+  return finish!.json().error as string;
+}
+
+/**
+ * Accounts connected by bizinsights' own sign-in before every platform went through Nango: their
+ * tokens sealed on the rows (one sign-in's accounts share them), as the old callback stored them.
+ */
+async function connectedBeforeNango(provider: AdProvider, accounts: string[], tokens: { access: string; refresh: string | null; expiresAt?: Date }, extra: { externalUserId?: string | null; store?: string } = {}) {
+  const store = extra.store ?? storeId;
+  const enc = encryptAdTokens(store, provider, { accessToken: tokens.access, refreshToken: tokens.refresh, expiresAt: tokens.expiresAt ?? new Date(Date.now() + 3600_000) });
+  const rows = [];
+  for (const accountId of accounts) {
+    rows.push(
+      await systemDb.adConnection.create({
+        data: { workspaceId: ws, storeId: store, provider, accountId, accountName: `Account ${accountId}`, currency: "USD", timezone: "UTC", externalUserId: extra.externalUserId ?? null, ...enc },
+      }),
+    );
+  }
+  return rows;
 }
 
 const disconnect = (id: string, store = storeId) => ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${store}/ads/connections/${id}`, headers });
-const fresh = (): GoogleSeen => ({ exchanges: [], refreshes: [], revoked: [], reportQueries: [] });
+const fresh = (): GoogleSeen => ({ refreshes: [], revoked: [], reportQueries: [] });
 const expire = (ids: string[]) => systemDb.adConnection.updateMany({ where: { id: { in: ids } }, data: { accessTokenExpiresAt: new Date(Date.now() - 60_000) } });
 
 describe("Continue with Google Ads: the sign-in", () => {
-  it("PKCE ties the code to this sign-in; who signed in and what they granted are kept; the browser never sees a token", async () => {
-    const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
-    const { url, location } = await connect("google");
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(location.pathname).toBe("/dashboard");
-    // The verifier was never in the browser, yet the exchange carried the one that matches the challenge.
-    const verifier = seen.exchanges[0]!.get("code_verifier")!;
-    expect(verifier).toBeTruthy();
-    expect(pkceChallenge(verifier)).toBe(url.searchParams.get("code_challenge"));
-    expect(url.toString()).not.toContain(verifier);
-
+  it("who signed in and what they granted are kept; the browser never sees a token or the Nango connection", async () => {
+    usePlatform(googlePlatform(fresh()));
+    const { finish, connectionId } = await connect("google");
+    expect(finish.json()).toEqual({ connected: 1, provider: "google" });
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
-    expect(row).toMatchObject({ accountId: "111", externalUserId: "100200300", grantedScopes: ["https://www.googleapis.com/auth/adwords"] });
+    expect(row).toMatchObject({ accountId: "111", externalUserId: "100200300", grantedScopes: ["https://www.googleapis.com/auth/adwords", "openid"], source: "nango", refreshTokenEnc: null });
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
-    expect(list.json().connections[0]).toMatchObject({ provider: "google", status: "active", grantedScopes: ["https://www.googleapis.com/auth/adwords"] });
-    expect(list.body).not.toContain("G_REFRESH_1");
+    expect(list.json().connections[0]).toMatchObject({ provider: "google", status: "active", source: "nango", grantedScopes: ["https://www.googleapis.com/auth/adwords", "openid"] });
     expect(list.body).not.toContain("G_ACCESS");
     expect(list.body).not.toContain("100200300");
+    expect(list.body).not.toContain(connectionId);
   });
 
-  it("someone who gave bizinsights a working refresh token skips Google's consent screen and theirs is reused; a login it holds none for is asked with the consent screen", async () => {
+  it("a connection made before Nango renews its own tokens until it is moved: a refresh token Google replaces is stored for every account that shares it", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
-    const first = await connect("google");
-    // The first time: the consent screen, which hands out a refresh token.
-    expect(first.url.searchParams.get("prompt")).toBe("select_account consent");
-    const second = (await createStore(ws, "ads-life-2.myshopify.com", ["read_orders"], { currency: "USD" })).id;
-    const repeat = googlePlatform(seen, { refreshToken: null });
-    ctx.setFetch(repeat);
-    const { url, location } = await connect("google", second);
-    // Each consent makes Google hand out another refresh token, and it ends a login's oldest past 100:
-    // only the account chooser this time, and Google sends none.
-    expect(url.searchParams.get("prompt")).toBe("select_account");
-    expect(location.pathname).toBe("/dashboard");
-    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId: second, provider: "google" } });
-    await expire([row.id]);
-    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: row.id } }), repeat);
-    expect(seen.refreshes).toEqual(["G_REFRESH_1"]);
-
-    // They pick another Google login, one bizinsights holds no refresh token for: Google sent none.
-    ctx.setFetch(googlePlatform(fresh(), { refreshToken: null, sub: "999" }));
-    const third = (await createStore(ws, "ads-life-3.myshopify.com", ["read_orders"], { currency: "USD" })).id;
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${third}/ads/google/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    // Sent back to Google, with the consent screen this time, under a new state for this browser.
-    const again = new URL(cb.headers.location as string);
-    expect(again.origin).toBe("https://accounts.google.com");
-    expect(again.searchParams.get("prompt")).toBe("select_account consent");
-    const state2 = again.searchParams.get("state")!;
-    expect(state2).not.toBe(state);
-    // (The used state's removal comes first; the browser keeps the last value set.)
-    const jar = [...String(cb.headers["set-cookie"]).matchAll(/ads_oauth_state=([^;]*)/g)].map((m) => m[1]);
-    expect(jar.at(-1)).toContain(state2);
-    expect(await systemDb.adConnection.count({ where: { storeId: third } })).toBe(0);
-    // Google still sending none after its consent screen: the person is told to try again.
-    const cb2 = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state2}&code=C2`, headers: { cookie: `${cookie}; ads_oauth_state=${state2}` } });
-    expect(new URL(cb2.headers.location as string).searchParams.get("error")).toBe("no_refresh_token");
-
-    // With it, the login connects.
-    ctx.setFetch(googlePlatform(fresh(), { refreshToken: "G_REFRESH_999", sub: "999" }));
-    const start3 = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${third}/ads/google/connect`, headers });
-    const s3 = new URL(start3.json().url).searchParams.get("state")!;
-    const bounce = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${s3}&code=C3`, headers: { cookie: `${cookie}; ads_oauth_state=${s3}` } });
-    expect(new URL(bounce.headers.location as string).pathname).toBe("/dashboard");
-    expect((await systemDb.adConnection.findFirstOrThrow({ where: { storeId: third } })).externalUserId).toBe("999");
-  });
-
-  it("a refresh token Google replaces is stored for every account that shares it", async () => {
-    const seen = fresh();
-    const rotating = googlePlatform(seen, { accounts: ["111", "222"], rotateTo: "G_REFRESH_2" });
-    ctx.setFetch(rotating);
-    await connect("google");
-    const rows = await systemDb.adConnection.findMany({ where: { storeId, provider: "google" }, orderBy: { accountId: "asc" } });
-    expect(rows).toHaveLength(2);
+    const rotating = googlePlatform(seen, { rotateTo: "G_REFRESH_2" });
+    usePlatform(rotating);
+    const rows = await connectedBeforeNango("google", ["111", "222"], { access: "G_OLD", refresh: "G_REFRESH_1" }, { externalUserId: "100200300" });
     await expire(rows.map((r) => r.id));
-    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: rows[0]!.id } }), rotating);
+    expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: rows[0]!.id } }), rotating)).toBe("G_ACCESS_2");
     // The other account got the new access token too; once that runs out, it refreshes with the replacement, not the retired token.
     const second = await systemDb.adConnection.findUniqueOrThrow({ where: { id: rows[1]!.id } });
     expect(second.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
     await expire([second.id]);
     await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: second.id } }), googlePlatform(seen));
     expect(seen.refreshes).toEqual(["G_REFRESH_1", "G_REFRESH_2"]);
+    // Nango never saw them: they move only with the sweep (adsMigrate.test.ts in apps/worker).
+    expect(nango.imports).toEqual([]);
   });
 });
 
@@ -222,72 +185,40 @@ describe("Google Ads before Google approves bizinsights for real accounts", () =
     ctx.setEnv({ ...KEYS, GOOGLE_ADS_ENABLED: "" });
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
     expect(list.json().configured).toMatchObject({ google: false, adsense: true });
-    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers })).statusCode).toBe(503);
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/nango/session`, headers, payload: {} })).statusCode).toBe(503);
 
     ctx.setEnv(KEYS);
-    const seen = fresh();
-    const base = googlePlatform(seen);
-    ctx.setFetch(async (input, init) => {
+    const base = googlePlatform(fresh());
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("googleAds:searchStream")) {
         return json([{ error: { code: 403, message: "denied", status: "PERMISSION_DENIED", details: [{ errors: [{ errorCode: { authorizationError: "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION" } }] }] } }], 403);
       }
       return base(input, init);
     });
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    const location = new URL(cb.headers.location as string);
-    expect(location.pathname).toBe("/settings/ads");
-    expect(location.searchParams.get("error")).toBe("not_approved");
-    expect(location.searchParams.get("provider")).toBe("google");
+    expect(await connectError("google")).toBe("not_approved");
     expect(await systemDb.adConnection.count()).toBe(0);
-  });
-});
-
-describe("the sign-in's state cookie", () => {
-  /** The ads_oauth_state value a response sets, if any. */
-  const stateCookie = (res: { headers: Record<string, string> }) => /ads_oauth_state=([^;]*)/.exec(res.headers["set-cookie"] ?? "")?.[1] ?? null;
-
-  it("pressing the button twice doesn't void the first sign-in: either can come back, once each, only to this browser", async () => {
-    const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
-    const press = (cookieJar: string | null) =>
-      ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers: cookieJar ? { ...headers, cookie: `${cookie}; ads_oauth_state=${cookieJar}` } : headers });
-    const first = await press(null);
-    const jar1 = stateCookie(first)!;
-    const second = await press(jar1);
-    const jar2 = stateCookie(second)!;
-    const s1 = new URL(first.json().url).searchParams.get("state")!;
-    const s2 = new URL(second.json().url).searchParams.get("state")!;
-    expect(jar2.split(".")).toEqual([s2, s1]);
-
-    // The person finishes the FIRST sign-in (the second tab was abandoned).
-    const back = (state: string, jar: string) => ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${jar}` } });
-    const done = await back(s1, jar2);
-    expect(new URL(done.headers.location as string).pathname).toBe("/dashboard");
-    // The used one is gone; the other is still pending for this browser.
-    expect(stateCookie(done)).toBe(s2);
-    // Replaying the first is refused; a state this browser never started is refused.
-    expect(new URL((await back(s1, s2)).headers.location as string).searchParams.get("error")).toBe("state_mismatch");
-    expect(new URL((await back(s2, "someone-elses-state-0123456789ab")).headers.location as string).searchParams.get("error")).toBe("state_mismatch");
+    expect(nango.deleted).toHaveLength(1);
   });
 });
 
 describe("disconnecting gives access back to the platform, only when nothing else relies on it", () => {
   it("Google: Google Ads and AdSense share one person's grant, so it is revoked with the last of them", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
-    await connect("google");
-    await connect("adsense");
+    usePlatform(googlePlatform(seen));
+    const google = await connect("google");
+    const adsense = await connect("adsense");
     const g = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     const a = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
     const first = await disconnect(g.id);
     expect(first.json()).toEqual({ ok: true, revoked: "still_used" });
     expect(seen.revoked).toEqual([]);
+    // Its own Nango connection goes all the same, with the tokens Nango held.
+    expect(nango.deleted).toEqual([google.connectionId]);
     const last = await disconnect(a.id);
     expect(last.json()).toEqual({ ok: true, revoked: "revoked" });
-    expect(seen.revoked).toEqual(["G_REFRESH_1"]);
+    expect(seen.revoked).toEqual(["AS_ACCESS"]);
+    expect(nango.deleted).toEqual([google.connectionId, adsense.connectionId]);
     expect(await systemDb.adConnection.count()).toBe(0);
     const audit = await systemDb.auditLog.findMany({ where: { action: "ads.disconnected" }, orderBy: { createdAt: "asc" } });
     expect(audit.map((x) => (x.metadata as { revoked: string }).revoked)).toEqual(["still_used", "revoked"]);
@@ -295,55 +226,67 @@ describe("disconnecting gives access back to the platform, only when nothing els
 
   it("Meta: ads_read is dropped (and nothing else) when the last account from that login goes", async () => {
     const revoked: string[] = [];
-    ctx.setFetch(metaPlatform(revoked));
-    await connect("meta");
+    usePlatform(metaPlatform(revoked));
+    const { connectionId } = await connect("meta");
     const rows = await systemDb.adConnection.findMany({ where: { storeId, provider: "meta" }, orderBy: { accountId: "asc" } });
     expect(rows.map((r) => r.externalUserId)).toEqual(["5550001", "5550001"]);
     expect((await disconnect(rows[0]!.id)).json().revoked).toBe("still_used");
     expect(revoked).toEqual([]);
+    expect(nango.deleted).toEqual([]);
     expect((await disconnect(rows[1]!.id)).json().revoked).toBe("revoked");
-    expect(revoked).toEqual(["META_LONG"]);
+    expect(revoked).toEqual(["META_LONG_SECRET"]);
+    expect(nango.deleted).toEqual([connectionId]);
   });
 
   it("when Google wouldn't say who signed in, nothing is revoked (it can't be told whether another connection relies on it)", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen, { sub: null }));
-    await connect("google");
+    usePlatform(googlePlatform(seen, { sub: null }));
+    nango.googleSub = null;
+    const { connectionId } = await connect("google");
     const g = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     expect(g.externalUserId).toBeNull();
     expect((await disconnect(g.id)).json()).toEqual({ ok: true, revoked: "unknown_person" });
     expect(seen.revoked).toEqual([]);
+    expect(nango.deleted).toEqual([connectionId]);
+  });
+
+  it("a connection made before Nango: revoked with its own refresh token when nothing else relies on it", async () => {
+    const seen = fresh();
+    usePlatform(googlePlatform(seen));
+    const [old] = await connectedBeforeNango("adsense", ["pub-77"], { access: "AS_OLD", refresh: "AS_REFRESH" }, { externalUserId: "100200300" });
+    expect((await disconnect(old!.id)).json()).toEqual({ ok: true, revoked: "revoked" });
+    expect(seen.revoked).toEqual(["AS_REFRESH"]);
+    expect(nango.deleted).toEqual([]);
   });
 });
 
 describe("review fixes: grants nobody can vouch for are never revoked", () => {
   it("an older AdSense connection with no known person keeps the grant; it learns its person at its next refresh", async () => {
     const seen = fresh();
-    // The older connection: made before identities were kept (tokeninfo didn't say).
-    ctx.setFetch(googlePlatform(seen, { sub: null }));
-    await connect("adsense");
-    const old = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
-    expect(old.externalUserId).toBeNull();
-    // The same person connects Google Ads now, and their sub is known.
-    ctx.setFetch(googlePlatform(seen));
+    usePlatform(googlePlatform(seen));
+    // The older connection: made before identities were kept, and before Nango.
+    const [old] = await connectedBeforeNango("adsense", ["pub-77"], { access: "AS_OLD", refresh: "AS_REFRESH" });
+    expect(old!.externalUserId).toBeNull();
+    // The same person connects Google Ads now, through Nango, and their sub is known.
     await connect("google");
     const g = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     expect(g.externalUserId).toBe("100200300");
     expect((await disconnect(g.id)).json().revoked).toBe("still_used");
     expect(seen.revoked).toEqual([]);
 
-    // The older row's next refresh learns who granted it.
-    await expire([old.id]);
-    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: old.id } }), googlePlatform(seen));
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: old.id } })).externalUserId).toBe("100200300");
+    // The older row's next refresh learns who granted it (here, already learned while checking the grant).
+    await expire([old!.id]);
+    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: old!.id } }), googlePlatform(seen));
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: old!.id } })).externalUserId).toBe("100200300");
   });
 
   it("a reconnect whose person can't be looked up forgets the previous person instead of inheriting them", async () => {
-    ctx.setFetch(googlePlatform(fresh()));
+    usePlatform(googlePlatform(fresh()));
     await connect("google");
     expect((await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } })).externalUserId).toBe("100200300");
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen, { sub: null, refreshToken: "G_REFRESH_OTHER" }));
+    usePlatform(googlePlatform(seen, { sub: null }));
+    nango.googleSub = null;
     await connect("google");
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     expect(row.externalUserId).toBeNull();
@@ -353,62 +296,50 @@ describe("review fixes: grants nobody can vouch for are never revoked", () => {
 
   it("a Google login with no Google Ads account is told so, not 'try again'", async () => {
     const base = googlePlatform(fresh());
-    ctx.setFetch(async (input, init) => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("customers:listAccessibleCustomers")) {
         return json({ error: { code: 401, message: "The user's Google Account isn't associated with any Google Ads accounts.", status: "UNAUTHENTICATED", details: [{ errors: [{ errorCode: { authenticationError: "NOT_ADS_USER" } }] }] } }, 401);
       }
       return base(input, init);
     });
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_accounts");
+    expect(await connectError("google")).toBe("no_accounts");
   });
 
   it("a login that reaches only an empty manager account, or an account Google won't report on yet, is told which", async () => {
     const base = googlePlatform(fresh());
-    const callbackError = async (searchStream: (query: string) => Response) => {
-      ctx.setFetch(async (input, init) => {
+    const errorWith = async (searchStream: (query: string) => Response) => {
+      usePlatform(async (input, init) => {
         const u = new URL(String(input));
         if (u.pathname.endsWith("googleAds:searchStream")) return searchStream((JSON.parse(String(init?.body)) as { query: string }).query);
         return base(input, init);
       });
-      const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
-      const state = new URL(start.json().url).searchParams.get("state")!;
-      const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-      return new URL(cb.headers.location as string).searchParams.get("error");
+      return connectError("google");
     };
-    const managerOnly = await callbackError((q) => (q.endsWith("FROM customer") ? json([{ results: [{ customer: { id: "111", descriptiveName: "Manager", manager: true } }] }]) : json([{ results: [] }])));
+    const managerOnly = await errorWith((q) => (q.endsWith("FROM customer") ? json([{ results: [{ customer: { id: "111", descriptiveName: "Manager", manager: true } }] }]) : json([{ results: [] }])));
     expect(managerOnly).toBe("manager_only");
-    const notReady = await callbackError(() => json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403));
+    const notReady = await errorWith(() => json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403));
     expect(notReady).toBe("account_not_ready");
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 });
 
 describe("Continue with Meta Ads: a login with nothing to connect", () => {
-  /** Follow Meta's sign-in back when /me/adaccounts is empty and Meta's token inspector answers `granular`. */
-  const callbackError = async (granular: Array<{ scope: string; target_ids?: string[] }>) => {
+  /** Meta's sign-in finishing when /me/adaccounts is empty and Meta's token inspector answers `granular`. */
+  const errorWith = async (granular: Array<{ scope: string; target_ids?: string[] }>) => {
     const base = metaPlatform([]);
-    ctx.setFetch(async (input, init) => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
       if (u.pathname.endsWith("/debug_token")) return json({ data: { is_valid: true, granular_scopes: granular } });
       return base(input, init);
     });
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    const back = new URL(cb.headers.location as string);
-    expect(back.pathname).toBe("/settings/ads");
-    expect(back.searchParams.get("provider")).toBe("meta");
-    return back.searchParams.get("error");
+    return connectError("meta");
   };
 
   it("says whether the login reaches no ad account or shared none on Facebook's screen", async () => {
-    expect(await callbackError([{ scope: "ads_read" }])).toBe("no_accounts");
-    expect(await callbackError([{ scope: "ads_read", target_ids: [] }])).toBe("none_shared");
+    expect(await errorWith([{ scope: "ads_read" }])).toBe("no_accounts");
+    expect(await errorWith([{ scope: "ads_read", target_ids: [] }])).toBe("none_shared");
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 });
@@ -419,7 +350,7 @@ describe("the Google Ads report", () => {
 
   it("asks Google for exactly those dates: account totals and campaigns with status, type and budget; cached", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
+    usePlatform(googlePlatform(seen));
     await connect("google");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
@@ -437,7 +368,7 @@ describe("the Google Ads report", () => {
   });
 
   it("is only for the workspace and store the account belongs to, refuses unknown levels and bad dates", async () => {
-    ctx.setFetch(googlePlatform(fresh()));
+    usePlatform(googlePlatform(fresh()));
     await connect("google");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     const other = await signIn(ctx, "ads-life-other", "other@x.com");
@@ -457,11 +388,12 @@ describe("the Google Ads report", () => {
   });
 
   it("access Google took back marks the account 'reconnect' and says so, instead of showing old numbers", async () => {
-    ctx.setFetch(googlePlatform(fresh()));
-    await connect("google");
+    usePlatform(googlePlatform(fresh()));
+    const { connectionId } = await connect("google");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
-    await expire([conn.id]);
-    ctx.setFetch(googlePlatform(fresh(), { refreshFails: true }));
+    // Nango can't renew the grant any more (the person removed bizinsights at Google).
+    nango.connections.get(connectionId)!.dead = true;
+    forgetNangoToken(connectionId);
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("reconnect");
@@ -472,7 +404,7 @@ describe("the Google Ads report", () => {
 describe("the Meta Ads report's splits", () => {
   it("placement, device and country are accepted views", async () => {
     const revoked: string[] = [];
-    ctx.setFetch(async (input, init) => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("/act_1/insights")) {
         const b = u.searchParams.get("breakdowns");
@@ -494,19 +426,19 @@ describe("the Meta Ads report's splits", () => {
 });
 
 describe("access given back when nothing uses it", () => {
-  it("Meta: a disconnect after the person's token expired takes ads_read back with bizinsights' app token, for that person", async () => {
+  it("Meta: a disconnect after the person's token ended takes ads_read back with bizinsights' app token, for that person", async () => {
     const revoked: string[] = [];
-    ctx.setFetch(metaPlatform(revoked));
-    await connect("meta");
+    usePlatform(metaPlatform(revoked));
+    const { connectionId } = await connect("meta");
     const rows = await systemDb.adConnection.findMany({ where: { storeId, provider: "meta" }, orderBy: { accountId: "asc" } });
     await disconnect(rows[0]!.id);
-    // The other account's token has run out (Meta's last about 60 days).
-    await systemDb.adConnection.update({ where: { id: rows[1]!.id }, data: { accessTokenExpiresAt: new Date(Date.now() - 86_400_000) } });
+    // The token Nango held has run out (Meta's last about 60 days) and can't be renewed.
+    nango.connections.get(connectionId)!.dead = true;
+    forgetNangoToken(connectionId);
     const appTokenCalls: Array<{ path: string; token: string }> = [];
-    ctx.setFetch(async (input, init) => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /, "") ?? "";
-      if (init?.method === "DELETE" && u.pathname.endsWith("/me/permissions/ads_read")) return json({ error: { message: "Error validating access token: Session has expired", type: "OAuthException", code: 190 } }, 400);
       if (init?.method === "DELETE" && u.pathname.endsWith("/5550001/permissions/ads_read")) {
         appTokenCalls.push({ path: u.pathname, token });
         return json({ success: true });
@@ -516,65 +448,60 @@ describe("access given back when nothing uses it", () => {
     const res = await disconnect(rows[1]!.id);
     expect(res.json()).toEqual({ ok: true, revoked: "revoked" });
     expect(appTokenCalls).toEqual([{ path: "/v26.0/5550001/permissions/ads_read", token: "meta_app|meta_secret" }]);
+    expect(nango.deleted).toEqual([connectionId]);
   });
 
   it("cancelling the account choice gives the sign-in's grant back, unless the same person relies on it elsewhere", async () => {
     const revoked: string[] = [];
-    ctx.setFetch(metaPlatform(revoked));
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    const pick = new URL(cb.headers.location as string).searchParams.get("choose")!;
+    usePlatform(metaPlatform(revoked));
+    const choice = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider: "meta", headers });
+    const pick = choice.finish!.json().choose as string;
     expect(pick).toBeTruthy();
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}/ads/pending/${pick}`, headers })).json()).toEqual({ ok: true });
-    expect(revoked).toEqual(["META_LONG"]);
+    expect(revoked).toEqual(["META_LONG_SECRET"]);
+    expect(nango.deleted).toEqual([choice.connectionId]);
     expect(await systemDb.adConnection.count()).toBe(0);
 
     // Connected on another store by the same person: their grant stays when a later choice is cancelled.
     await connect("meta");
     const other = (await createStore(ws, "ads-life-2.myshopify.com", ["read_orders"], { currency: "USD" })).id;
-    const start2 = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${other}/ads/meta/connect`, headers });
-    const state2 = new URL(start2.json().url).searchParams.get("state")!;
-    const cb2 = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?${new URLSearchParams({ state: state2, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state2}` } });
-    const pick2 = new URL(cb2.headers.location as string).searchParams.get("choose")!;
+    const second = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${other}`, provider: "meta", headers });
+    const pick2 = second.finish!.json().choose as string;
     await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${other}/ads/pending/${pick2}`, headers });
-    expect(revoked).toEqual(["META_LONG"]);
+    expect(revoked).toEqual(["META_LONG_SECRET"]);
+    // The cancelled sign-in's own Nango connection goes all the same.
+    expect(nango.deleted).toEqual([choice.connectionId, second.connectionId]);
   });
 
   it("a Google sign-in that finds nothing to connect gives its grant back", async () => {
     const seen = fresh();
     const base = googlePlatform(seen);
-    ctx.setFetch(async (input, init) => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: [] });
       return base(input, init);
     });
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_accounts");
-    expect(seen.revoked).toEqual(["G_REFRESH_1"]);
+    expect(await connectError("google")).toBe("no_accounts");
+    expect(seen.revoked).toEqual(["G_ACCESS"]);
+    expect(nango.deleted).toHaveLength(1);
   });
 });
 
 describe("a Google grant that no longer covers reporting", () => {
-  it("is found at the token refresh: the connection asks for a reconnect with the permission ticked", async () => {
+  it("a connection made before Nango finds it at its token refresh: it asks for a reconnect with the permission ticked", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
-    await connect("google");
-    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
-    await expire([conn.id]);
+    const [conn] = await connectedBeforeNango("google", ["111"], { access: "G_OLD", refresh: "G_REFRESH_1", expiresAt: new Date(Date.now() - 60_000) }, { externalUserId: "100200300" });
     const base = googlePlatform(seen);
-    ctx.setFetch(async (input, init) => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
       // The person unticked the Google Ads permission on Google's own account page: the refresh lists what is left.
       if (u.host === "oauth2.googleapis.com" && u.pathname === "/token") return json({ access_token: "G_ACCESS_2", expires_in: 3599, scope: "openid https://www.googleapis.com/auth/userinfo.email" });
       return base(input, init);
     });
-    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads/google/report?connection=${conn.id}&from=2026-09-01&to=2026-09-30`, headers });
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads/google/report?connection=${conn!.id}&from=2026-09-01&to=2026-09-30`, headers });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("reconnect");
-    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "reconnect", errorCode: "scope_missing" });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn!.id } })).toMatchObject({ status: "reconnect", errorCode: "scope_missing" });
     expect(seen.reportQueries).toEqual([]);
   });
 });
@@ -585,7 +512,7 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
 
   it("the comparison's dates asked of Google too, its figures by id; the operations counted like a sync's", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
+    usePlatform(googlePlatform(seen));
     await connect("google");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     const before = await googleAdsOperationsToday(ctx.deps.coord);
@@ -597,28 +524,26 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
     expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + seen.reportQueries.length);
   });
 
-  it("a sign-in's account listing counts against the allowance; while it's used up, the sign-in comes back rate_limited with nothing exchanged", async () => {
-    const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
+  it("a sign-in's account listing counts against the allowance; while it's used up, no sign-in is started", async () => {
+    usePlatform(googlePlatform(fresh()));
     const before = await googleAdsOperationsToday(ctx.deps.coord);
     await connect("google");
     // listAccessibleCustomers and the one customer's details.
     expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 2);
 
     await pauseGoogleAds(ctx.deps.coord, null);
-    const exchanges = seen.exchanges.length;
-    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    const location = new URL(cb.headers.location as string);
-    expect(location.pathname).toBe("/settings/ads");
-    expect(Object.fromEntries(location.searchParams)).toEqual({ error: "rate_limited", provider: "google", store: storeId });
-    expect(seen.exchanges).toHaveLength(exchanges);
+    const sessions = nango.sessions.length;
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/nango/session`, headers, payload: {} });
+    expect(start.statusCode).toBe(503);
+    expect(start.json()).toEqual({ error: "rate_limited", message: adErrorMessage("quota_exhausted", "google") });
+    expect(nango.sessions).toHaveLength(sessions);
+    // AdSense doesn't spend Google Ads operations: it still starts.
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/adsense/nango/session`, headers, payload: {} })).statusCode).toBe(200);
   });
 
   it("while Google says the day's allowance is used up, the report says so in plain words and asks Google nothing", async () => {
     const seen = fresh();
-    ctx.setFetch(googlePlatform(seen));
+    usePlatform(googlePlatform(seen));
     await connect("google");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     await pauseGoogleAds(ctx.deps.coord, null);
@@ -632,7 +557,7 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
 });
 
 describe("someone whose login powers ad accounts leaves", () => {
-  /** A Meta connection powered by `userId`'s login (Meta's person 5550001), in `store`. */
+  /** A Meta connection made before Nango, powered by `userId`'s login (Meta's person 5550001), in `store`. */
   async function connectedBy(userId: string, workspaceId: string, store: string, accountId: string) {
     const tokens = encryptAdTokens(store, "meta", { accessToken: "META_LONG", refreshToken: null, expiresAt: new Date(Date.now() + 30 * 86_400_000) });
     return systemDb.adConnection.create({
@@ -649,7 +574,7 @@ describe("someone whose login powers ad accounts leaves", () => {
     const theirStore = (await createStore(theirWs, "admins-own.myshopify.com", ["read_orders"])).id;
     const theirs = await connectedBy(admin.user.id, theirWs, theirStore, "act_9");
     const revoked: string[] = [];
-    ctx.setFetch(metaPlatform(revoked));
+    usePlatform(metaPlatform(revoked));
 
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
     expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", connectedByUserId: null });
@@ -665,11 +590,25 @@ describe("someone whose login powers ad accounts leaves", () => {
     const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
     const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
     const revoked: string[] = [];
-    ctx.setFetch(metaPlatform(revoked));
+    usePlatform(metaPlatform(revoked));
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/members/${member.id}`, headers })).statusCode).toBe(200);
     expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left" });
     // Nothing else relies on that grant: ads_read goes back to Meta.
     expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("removed: an account they connected through Nango waits for a reconnect too, and its Nango connection goes with the grant", async () => {
+    const admin = await signIn(ctx, "ads-life-admin4", "admin4@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const revoked: string[] = [];
+    usePlatform(metaPlatform(revoked));
+    const flow = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider: "meta", headers: admin.headers });
+    const pick = flow.finish!.json().choose as string;
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/pending/${pick}`, headers: admin.headers, payload: { accountIds: ["act_1"] } })).statusCode).toBe(200);
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
+    expect(await systemDb.adConnection.findFirstOrThrow({ where: { accountId: "act_1" } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", source: "nango" });
+    expect(revoked).toEqual(["META_LONG_SECRET"]);
+    expect(nango.deleted).toEqual([flow.connectionId]);
   });
 
   it("their bizinsights account deleted: every account their login powers waits for a reconnect, and the grant goes back", async () => {
@@ -678,7 +617,7 @@ describe("someone whose login powers ad accounts leaves", () => {
     const a = await connectedBy(admin.user.id, ws, storeId, "act_1");
     const b = await connectedBy(admin.user.id, ws, storeId, "act_2");
     const revoked: string[] = [];
-    ctx.setFetch(metaPlatform(revoked));
+    usePlatform(metaPlatform(revoked));
     const password = ctx.auth.users.get("ads-life-leaver")!.password!;
     const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
     expect(res.statusCode).toBe(200);
@@ -707,7 +646,7 @@ describe("someone whose login powers ad accounts leaves", () => {
     const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
     const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
     await systemDb.adConnection.update({ where: { id: here.id }, data: { enabled: false } });
-    ctx.setFetch(metaPlatform([]));
+    usePlatform(metaPlatform([]));
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
 
     ctx.deps.queues.clear();
@@ -719,7 +658,7 @@ describe("someone whose login powers ad accounts leaves", () => {
     await systemDb.adConnection.update({ where: { id: here.id }, data: { syncRequestedAt: new Date() } });
     await connect("meta");
     expect(ctx.deps.queues.sent.sync).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "ads", connectionId: here.id, trigger: "request" })]));
-    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "active", errorCode: null, syncRequestedAt: expect.any(Date) });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "active", errorCode: null, syncRequestedAt: expect.any(Date), source: "nango" });
   });
 
   it("an account hidden while its sync is on its way stops saying 'Synchronizing', and showing it again queues its catch-up", async () => {

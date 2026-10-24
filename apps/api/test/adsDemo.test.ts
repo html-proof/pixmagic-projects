@@ -72,7 +72,7 @@ describe("the two modes' status", () => {
     expect(s.production).toMatchObject({ configured: false, status: "not_connected", connections: [], missing: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] });
     expect(res.body).not.toContain("secret_value");
     // The real sign-in isn't offered in the demo's place.
-    const start = await post(`/workspaces/${ws}/stores/${storeId}/ads/google/connect`);
+    const start = await post(`/workspaces/${ws}/stores/${storeId}/ads/google/nango/session`);
     expect(start.statusCode).toBe(503);
     expect(start.json().error).toBe("not_configured");
   });

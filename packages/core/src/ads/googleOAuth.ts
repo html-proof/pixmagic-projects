@@ -1,6 +1,9 @@
 /**
- * Google's OAuth for both Google Ads and AdSense, which sign in through the same Cloud OAuth
- * client: the consent screen (PKCE), code exchange, refresh, revoke and who the token belongs to.
+ * Google's OAuth for both Google Ads and AdSense, which are authorized for the same Cloud OAuth client
+ * ("Insights web") through Nango (docs/nango.md): who a token belongs to (and that it was issued to
+ * bizinsights' client), taking a grant back, and renewing the tokens of a connection made before Nango
+ * until it is moved there (adConnections/migrate.ts). The consent screen and the code exchange are
+ * Nango's.
  */
 import type { FetchLike } from "../shopify.js";
 import { AdsApiError, AdsAuthError, AdsRateLimitedError, AdsRetryableError, tokenExpiry, type TokenSet } from "./common.js";
@@ -12,48 +15,14 @@ export interface GoogleOAuthClient {
   fetchImpl?: FetchLike;
 }
 
-export interface GoogleConsentOptions {
-  /**
-   * Ask for consent again (the default), which makes Google hand out a new refresh token. Google keeps
-   * at most 100 live refresh tokens per Google account for one client and silently ends the oldest
-   * after that, so a person who already gave bizinsights a working one can be sent through with the
-   * account chooser only (false): Google then sends no new refresh token and theirs is reused.
-   */
-  forceConsent?: boolean;
-}
-
 /**
- * Asked for with every Google Ads and AdSense sign-in, next to the reporting permission: only who the
- * Google account is (its `sub`), nothing about it. Without it Google's tokeninfo may not say whose a
- * token is, and a disconnect then can't take the grant back (it never revokes a grant whose person it
- * doesn't know: Google ends the whole grant, which may be someone else's connection too).
- * Non-sensitive: no Google verification.
+ * Asked for with every Google Ads and AdSense sign-in (the Nango integrations' scopes, nango-setup.mjs),
+ * next to the reporting permission: only who the Google account is (its `sub`), nothing about it.
+ * Without it Google's tokeninfo may not say whose a token is, and a disconnect then can't take the grant
+ * back (it never revokes a grant whose person it doesn't know: Google ends the whole grant, which may be
+ * someone else's connection too). Non-sensitive: no Google verification.
  */
 export const GOOGLE_IDENTITY_SCOPE = "openid";
-
-/**
- * Google's consent screen, for `scope` and who signs in (GOOGLE_IDENTITY_SCOPE). `codeChallenge` is the
- * PKCE S256 challenge: its verifier stays on the server and goes with the code exchange.
- */
-export function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: string, state: string, codeChallenge?: string, opts: GoogleConsentOptions = {}): string {
-  const q = new URLSearchParams({
-    client_id: c.clientId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    scope: `${scope} ${GOOGLE_IDENTITY_SCOPE}`,
-    // A refresh token: the access token lasts an hour and syncs run for months.
-    access_type: "offline",
-    // Google's account chooser, every time: otherwise a browser signed in to one Google account goes
-    // straight through with it, and someone whose ads live under another login can never pick that one.
-    prompt: opts.forceConsent === false ? "select_account" : "select_account consent",
-    state,
-  });
-  if (codeChallenge) {
-    q.set("code_challenge", codeChallenge);
-    q.set("code_challenge_method", "S256");
-  }
-  return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
-}
 
 async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string; scope?: string }> {
   const res = await (c.fetchImpl ?? fetch)("https://oauth2.googleapis.com/token", {
@@ -79,14 +48,10 @@ async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): 
 /** Google lists what was granted, space-separated; with granular consent a scope can be left unticked. */
 const scopesOf = (scope: string | undefined) => (scope ? scope.split(/\s+/).filter(Boolean) : undefined);
 
-export async function googleExchangeCode(c: GoogleOAuthClient, code: string, redirectUri: string, codeVerifier?: string): Promise<TokenSet> {
-  const t = await googleToken(c, { code, redirect_uri: redirectUri, grant_type: "authorization_code", ...(codeVerifier ? { code_verifier: codeVerifier } : {}) });
-  return { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: tokenExpiry(t.expires_in), grantedScopes: scopesOf(t.scope) };
-}
-
 /**
- * A fresh one-hour access token from the stored refresh token. If Google hands back a new refresh
- * token with it, that one replaces the old (`rotated`), so the caller must store it.
+ * A connection made before Nango (source "direct", until migrate.ts moves it): a fresh one-hour access
+ * token from its stored refresh token. If Google hands back a new refresh token with it, that one
+ * replaces the old (`rotated`), so the caller must store it.
  *
  * `requiredScope`: the permission the connection reads with. When Google lists the token's scopes
  * without it, the grant no longer covers reporting: AdsAuthError "scope_missing" (connect again with

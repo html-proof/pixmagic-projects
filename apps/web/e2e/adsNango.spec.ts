@@ -39,7 +39,7 @@ async function nangoHere(page: Page, ws: string, storeId: string, then: "connect
   await page.route(base, async (route) => {
     const res = await route.fetch();
     const body = (await res.json()) as Record<string, Record<string, boolean>>;
-    await route.fulfill({ response: res, json: { ...body, configured: { ...body.configured, adsense: true }, nango: { meta: false, google: false, adsense: true } } });
+    await route.fulfill({ response: res, json: { ...body, configured: { ...body.configured, adsense: true } } });
   });
   const calls: Array<{ path: string; body: unknown }> = [];
   await page.route(`${base}/adsense/nango/*`, async (route) => {
@@ -94,7 +94,7 @@ test("closing the Connect UI ends the session and leaves the card as it was", as
   await expect(card.getByRole("button", { name: "Connect Google AdSense" })).toBeEnabled();
 });
 
-test("a refused finish is worded like the full-page sign-in's", async ({ page }) => {
+test("a refused finish says why, and nothing is connected", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "nango-refused");
   await nangoHere(page, ws, storeId, "connect");
   await page.goto("/settings/integrations");

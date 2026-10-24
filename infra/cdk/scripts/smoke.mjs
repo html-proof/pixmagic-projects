@@ -93,7 +93,7 @@ export function configCheck(invoke, envName) {
   const on = (flags) => Object.keys(flags).filter((k) => flags[k]).join("+") || "none";
   const needs = Array.isArray(report.whatsapp.embeddedSignupNeeds) && report.whatsapp.embeddedSignupNeeds.length ? ` (needs ${report.whatsapp.embeddedSignupNeeds.join(", ")})` : "";
   const detail = [
-    `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)})`,
+    `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)}${report.ads.nango ? `, through Nango ${on(report.ads.nango)}` : ""})`,
     `WhatsApp Embedded Signup ${report.whatsapp.embeddedSignup ? "on" : `off${needs}`}`,
     `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
     `Google sign-in ${report.auth.google ? "on" : "off"}`,

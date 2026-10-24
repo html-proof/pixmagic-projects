@@ -1,14 +1,16 @@
 /**
- * Nango (https://nango.dev, docs/nango.md): the OAuth broker a merchant can connect Meta Ads and
- * Google AdSense through. The merchant authorizes on the platform's own consent screen, opened by
- * Nango's Connect UI, for bizinsights' own Meta app and Google OAuth client (the integrations in
- * bizinsights' Nango environment carry their keys). Nango keeps the tokens and renews them; bizinsights
- * asks Nango for a working access token right before each call and reads the platform with its own
- * clients (ads/meta.ts, ads/adsense.ts), exactly as for a direct connection.
+ * Nango (https://nango.dev, docs/nango.md): the OAuth broker every ad platform is connected through
+ * (Meta Ads, Google Ads, Google AdSense). The merchant authorizes on the platform's own consent screen,
+ * opened by Nango's Connect UI, for bizinsights' own Meta app and Google OAuth client (the integrations
+ * in bizinsights' Nango environment carry their keys). Nango keeps the tokens and renews them;
+ * bizinsights asks Nango for a working access token right before each call and reads the platform with
+ * its own clients (ads/meta.ts, ads/googleAds.ts, ads/adsense.ts).
  *
  * Only Nango's REST API is used, server side, with the environment's secret key in the Authorization
- * header: connect sessions, the connections they made (with their tags), a connection's access token,
- * deleting a connection, and the signature on Nango's webhooks. Nothing here reads the environment.
+ * header: the integrations that exist, connect sessions, the connections they made (with their tags), a
+ * connection's access token, importing a connection bizinsights already held the tokens of (the move of
+ * the older direct connections, adConnections/migrate.ts), deleting a connection, and the signature on
+ * Nango's webhooks. Nothing here reads the environment.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { AdProvider } from "@app/shared";
@@ -123,6 +125,42 @@ async function nangoRequest<T>(
 }
 
 // ---------------------------------------------------------------------------
+// Integrations
+// ---------------------------------------------------------------------------
+
+export interface NangoIntegrationInfo {
+  integrationKey: string;
+  /** The Nango provider it was made from ("facebook", "google"). */
+  provider: string;
+  /** Credential fields the integration still lacks (`oauth_client_id`, ...): names only, never values. */
+  missingFields: string[];
+}
+
+/**
+ * The integrations bizinsights' Nango environment holds (GET /integrations): what infra/cdk/scripts/
+ * nango-setup.mjs made. Never their credentials (the list doesn't carry them).
+ */
+export async function nangoIntegrations(c: NangoConfig): Promise<NangoIntegrationInfo[]> {
+  const res = await nangoRequest<{ data?: Array<{ unique_key?: unknown; provider?: unknown; missing_fields?: unknown }> }>(c, "GET", "/integrations", { what: "Nango integrations" });
+  return (res.data ?? [])
+    .filter((x): x is { unique_key: string; provider: string; missing_fields?: unknown } => typeof x.unique_key === "string" && typeof x.provider === "string")
+    .map((x) => ({
+      integrationKey: x.unique_key,
+      provider: x.provider,
+      missingFields: Array.isArray(x.missing_fields) ? x.missing_fields.filter((f): f is string => typeof f === "string") : [],
+    }));
+}
+
+/**
+ * Which platforms can be connected through `integrations`: each one's integration (NANGO_INTEGRATION)
+ * exists, is made from the right Nango provider (NANGO_PROVIDER_TEMPLATE) and lacks no credential.
+ */
+export function nangoIntegrationsReady(integrations: NangoIntegrationInfo[]): Record<AdProvider, boolean> {
+  const ready = (p: AdProvider) => integrations.some((i) => i.integrationKey === NANGO_INTEGRATION[p] && i.provider === NANGO_PROVIDER_TEMPLATE[p] && !i.missingFields.length);
+  return { meta: ready("meta"), google: ready("google"), adsense: ready("adsense") };
+}
+
+// ---------------------------------------------------------------------------
 // Connect sessions
 // ---------------------------------------------------------------------------
 
@@ -234,12 +272,14 @@ const scopesOf = (v: unknown): string[] | undefined => {
  * A working access token for a connection: Nango renews one that expires within 15 minutes before
  * answering (Google's last an hour; Meta's are long-lived and renewed by Nango's `facebook` template).
  * A grant Nango can't renew is an AdsAuthError (reconnect); a connection Nango doesn't have is too.
+ * `forceRefresh`: Nango renews the token whatever its expiry (Nango's `force_refresh`), which proves it
+ * can (used once, right after a connection is imported).
  */
-export async function nangoAccessToken(c: NangoConfig, integrationKey: string, connectionId: string): Promise<NangoToken> {
+export async function nangoAccessToken(c: NangoConfig, integrationKey: string, connectionId: string, opts: { forceRefresh?: boolean } = {}): Promise<NangoToken> {
   let res: ConnectionCredentials;
   try {
     res = await nangoRequest<ConnectionCredentials>(c, "GET", `/connections/${encodeURIComponent(connectionId)}`, {
-      query: [["provider_config_key", integrationKey]],
+      query: [["provider_config_key", integrationKey], ...(opts.forceRefresh ? ([["force_refresh", "true"]] as Array<[string, string]>) : [])],
       what: "Nango connection",
     });
   } catch (err) {
@@ -255,6 +295,46 @@ export async function nangoAccessToken(c: NangoConfig, integrationKey: string, c
     expiresAt: expiresAt && Number.isFinite(expiresAt.getTime()) ? expiresAt : null,
     grantedScopes: scopesOf(cred.raw?.scope) ?? scopesOf(cred.raw?.granted_scopes),
   };
+}
+
+/**
+ * Tags bizinsights puts on a connection it imported (a direct connection moved to Nango): the same ids
+ * as a connect session's, without a session. No personal data.
+ */
+export interface NangoImportTags {
+  end_user_id: string;
+  organization_id: string;
+  bi_store: string;
+  bi_provider: AdProvider;
+  /** Where the tokens came from: "direct", bizinsights' own sign-in before every platform went through Nango. */
+  bi_imported: "direct";
+}
+
+/**
+ * Hand Nango the OAuth tokens of a connection bizinsights already holds (POST /connections, Nango's
+ * import): from then on Nango keeps and renews them with the integration's client, which is
+ * bizinsights' own, the one the tokens were issued to. Nango updates a connection with the same id and
+ * integration instead of making a second one, so a retry with the same id is safe.
+ */
+export async function nangoImportConnection(
+  c: NangoConfig,
+  input: { integrationKey: string; connectionId: string; accessToken: string; refreshToken: string | null; expiresAt: Date | null; tags: NangoImportTags },
+): Promise<void> {
+  if (!isNangoConnectionId(input.connectionId)) throw new AdsApiError("Not a Nango connection id", 400);
+  await nangoRequest(c, "POST", "/connections", {
+    what: "Nango connection import",
+    body: {
+      provider_config_key: input.integrationKey,
+      connection_id: input.connectionId,
+      credentials: {
+        type: "OAUTH2",
+        access_token: input.accessToken,
+        ...(input.refreshToken ? { refresh_token: input.refreshToken } : {}),
+        ...(input.expiresAt ? { expires_at: input.expiresAt.toISOString() } : {}),
+      },
+      tags: input.tags,
+    },
+  });
 }
 
 /** Delete a connection at Nango (its tokens with it). "gone": it wasn't there any more. */

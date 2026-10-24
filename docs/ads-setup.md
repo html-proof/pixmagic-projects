@@ -4,8 +4,8 @@ What a merchant sees, what the owner sets up, and how the connections behave. Th
 is done and what is still open at Google, Meta and AWS is [integrations-readiness.md](integrations-readiness.md);
 paste-ready review material is [ads-review-packs.md](ads-review-packs.md). A simulated Google Ads account for development,
 demonstrations and tests, which needs none of what follows and never stands in for it: [ads-demo.md](ads-demo.md).
-The same sign-ins can run through Nango's Connect UI (one window over the page, tokens kept by Nango):
-[nango.md](nango.md).
+Every platform is connected through Nango's Connect UI (one window over the page; Nango keeps and renews the
+tokens, bizinsights reads the platforms itself): [nango.md](nango.md).
 
 ## How a merchant uses it
 
@@ -21,13 +21,14 @@ The same sign-ins can run through Nango's Connect UI (one window over the page, 
    Facebook"), AdSense goes straight to Google, and once connected each card links to Settings → Advertising
    (**Manage**, or **Fix it** when an account needs attention). Signing in with Google is on Settings → Security.
 3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (or
-   **Connect** on Settings → Integrations) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
+   **Connect** on Settings → Integrations): Nango's window opens over the page, and they approve on the platform's
+   own screen in it. Connecting needs the integrations permission (`integrations.manage`:
    owners and admins, unless the owner gave it to another role) and a verified email address.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
-   - The sign-in waits on the server, encrypted, for 15 minutes.
+   - What the sign-in found waits on the server for 15 minutes (the Nango connection it was made through, sealed).
    - One account, or a reconnect that sees nothing new, skips this step.
-   - Leaving the picker without choosing (Cancel) gives the platform's access back when nothing else uses it
-     (`dropUnusedGrant`, below).
+   - Leaving the picker without choosing (Cancel) gives the platform's access back when nothing else uses it,
+     and deletes the Nango connection.
 5. They land back on the **dashboard**. The first sync usually arrives within a minute or two; the card says
    **Synchronizing** meanwhile.
 
@@ -140,8 +141,8 @@ the people who manage integrations, and closes it when the connection works agai
   `DELETE /me/permissions/ads_read` (only ads_read), or, when the person's token has ended, the same on their user id
   with the app token. The outcome (`revoked`, `still_used`, `unknown_person`,
   `failed`) is in the response and the audit log.
-- **A connect that ends without connecting** (cancelled picker, an error after the code exchange) drops the grant it
-  just made, under the same rules (`dropUnusedGrant`).
+- **A connect that ends without connecting** (cancelled picker, nothing to connect, the platform refusing) drops the
+  grant it just made under the same rules, and its Nango connection (`abandonNangoConnection`).
 - **A member removed from a workspace**: their ad connections there are released (`releaseUserAdGrants`): the tokens
   are cleared, the accounts wait for someone else to press Reconnect (`connector_left`), the figures stay, and the
   grant is revoked when nothing else uses it. A sync running at that moment can't undo it.
@@ -151,11 +152,16 @@ the people who manage integrations, and closes it when the connection works agai
 
 ## Security
 
-- **The sign-in.** One-time `state` (10 minutes), bound to the browser by an HttpOnly cookie, accepted only for the
-  signed-in person who started it. Codes are exchanged on the server only.
-- **PKCE (Google Ads and AdSense)**: the S256 challenge goes to Google; the verifier stays on the server.
-- **Tokens** are AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, bound to their store and platform, never sent to
-  the browser or logged. A key rotation re-seals them; a sign-in left on a removed key waits for a reconnect.
+- **The sign-in** goes through Nango ([nango.md](nango.md)): a single-use connect session bound to the person,
+  workspace, store and platform; the platform's consent is forwarded to Nango only for the signed-in person who
+  started a session in that browser; the connection Nango made is trusted only once Nango shows it carries the
+  session's tags. The code exchange is Nango's. bizinsights' own OAuth (state cookie, PKCE, code exchange) was
+  removed on 2026-10-24.
+- **Tokens** are kept and renewed by Nango; a row holds only a sealed reference to its Nango connection
+  (AES-256-GCM with `TOKEN_ENCRYPTION_KEYS`, bound to its store and platform), never sent to the browser or
+  logged. Connections made before Nango still hold their own sealed tokens until they are moved there
+  (nango.md, "Connections made before Nango"). A key rotation re-seals both; a sign-in left on a removed key
+  waits for a reconnect.
 - **Who signed in** is kept per connection (`external_user_id`: Google's account id, checked to be a token issued to
   bizinsights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`).
 - **Meta `appsecret_proof`**: every Graph call made with a person's token carries it (HMAC of the token with
@@ -197,8 +203,9 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 
 | Where | Address |
 | --- | --- |
-| Google client "Insights web" → Authorized redirect URIs | `https://bizinsights.io/api/ads/google/callback` and `https://bizinsights.io/api/ads/adsense/callback` |
-| Meta app → Facebook Login for Business → Settings → Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/meta/callback` |
+| Google client "Insights web" → Authorized redirect URIs | `https://bizinsights.io/api/ads/nango/oauth-callback` (Nango's callback at bizinsights; the old `…/api/ads/google/callback` and `…/adsense/callback` can go once nango.md's move says `left: 0`) |
+| Meta app → Facebook Login for Business → Settings → Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/nango/oauth-callback` (the old `…/api/ads/meta/callback` likewise) |
+| Nango (prod) → Environment Settings → Callback URL / Webhook URL | `https://bizinsights.io/api/ads/nango/oauth-callback` / `https://bizinsights.io/api/webhooks/nango` |
 | Meta app → Facebook Login for Business → Settings → Deauthorize callback URL | `https://bizinsights.io/api/webhooks/meta/deauthorize` |
 | Meta app → App settings → Basic → User data deletion → Data deletion callback URL | `https://bizinsights.io/api/webhooks/meta/data-deletion` |
 
@@ -210,11 +217,13 @@ In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields 
 saved" toast, but a reload shows the list unchanged (seen three times on 2026-10-19). Check with the Redirect URI
 Validator at the top of the Facebook Login for Business settings page.
 
-**Local development.** Don't add localhost to "Insights web": Google wants a separate project per deployment tier.
-Create an OAuth client in a separate Cloud project and register `<APP_URL>/api/ads/<provider>/callback` for the
-local server you run: `http://localhost:8787` for the usual local server (`apps/aws/.env.example`), and
-`http://localhost:8789` for the ads demo (`.claude/ads-demo-server.mjs`). Put its id and secret in `apps/aws/.env`.
-A new project's Google Ads API access starts at Test (test accounts only).
+**Local development.** Don't add localhost to "Insights web": Google wants a separate project per deployment tier,
+and the prod Nango environment is production's alone. Use a Nango **dev** environment (its own `NANGO_SECRET_KEY`,
+callback URL `<APP_URL>/api/ads/nango/oauth-callback`), an OAuth client in a separate Cloud project registered with
+that callback for the local server you run: `http://localhost:8787` for the usual local server (`apps/aws/.env.example`), and
+`http://localhost:8789` for the ads demo (`.claude/ads-demo-server.mjs`). Put its id and secret in `apps/aws/.env`,
+and in the dev environment's integrations (Nango's dashboard: the same unique keys as nango.md's table). A new
+project's Google Ads API access starts at Test (test accounts only). The Google Ads demo needs none of this.
 
 ## 1. Meta (Facebook and Instagram ads)
 

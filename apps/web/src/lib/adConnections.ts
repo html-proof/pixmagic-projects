@@ -33,8 +33,9 @@ export interface AdConnection {
   /** When the last sync started, whatever came of it. */
   lastSyncAttemptAt: string | null;
   /**
-   * How the figures are read: bizinsights' own sign-in with the platform ("direct"), or the same sign-in
-   * authorized through Nango, which keeps the token (docs/nango.md).
+   * How the account was authorized: through Nango, which keeps the token ("nango", every connection made
+   * now), or bizinsights' own older sign-in ("direct"), which moves to Nango by itself (docs/nango.md).
+   * bizinsights reads the platform's API itself either way.
    */
   source: "direct" | "nango";
   /** The account's own last day (YYYY-MM-DD) stored without a gap, and the first. */
@@ -90,8 +91,6 @@ export interface AdsState {
   demo?: Partial<Record<AdProvider, boolean>>;
   /** The settings each platform's real sign-in still lacks on this server, by name (never a value). */
   missing?: Partial<Record<AdProvider, string[]>>;
-  /** Which platforms' Connect button opens Nango's Connect UI on this server (docs/nango.md); absent from older answers. */
-  nango?: Partial<Record<AdProvider, boolean>>;
 }
 
 /** One sync of a connection as it ended (GET .../ads/connections/:id/syncs). */

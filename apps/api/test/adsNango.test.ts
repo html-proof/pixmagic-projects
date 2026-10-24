@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { encryptAdTokens, forgetNangoToken, sweepNangoOrphans, syncAdConnection, type FetchLike } from "@app/core";
+import { encryptAdTokens, forgetNangoIntegrations, forgetNangoToken, sweepNangoOrphans, syncAdConnection, type FetchLike } from "@app/core";
 import { LEGACY_GRANTS } from "@app/shared";
 import { clean, cookiesFrom, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -60,6 +60,8 @@ interface World {
   googleAud: string;
   /** Google's tokeninfo names the person (as it does for some tokens); false: only userinfo does, for a token with openid. */
   tokeninfoSub: boolean;
+  /** The integrations bizinsights' Nango environment holds. */
+  integrations: string[];
 }
 
 /** Nango's API, Meta's Graph API and Google's tokeninfo/revoke/AdSense, enough for one sign-in of each. */
@@ -75,11 +77,15 @@ function world(): World {
     adsRead: "granted",
     googleAud: "g_client",
     tokeninfoSub: true,
+    integrations: ["bizinsights-meta-ads", "bizinsights-google-ads", "bizinsights-google-adsense"],
     fetchImpl: async (input, init) => {
       const u = new URL(String(input));
       const method = init?.method ?? "GET";
       if (u.host === "api.nango.dev") {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${NANGO_KEY}`);
+        if (u.pathname === "/integrations" && method === "GET") {
+          return json({ data: w.integrations.map((k) => ({ unique_key: k, display_name: k, provider: k.includes("meta") ? "facebook" : "google", created_at: "2026-10-22T00:00:00Z", updated_at: "2026-10-22T00:00:00Z" })) });
+        }
         if (u.pathname === "/connect/sessions" && method === "POST") {
           w.sessions.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
           return json({ data: { token: `nango_connect_session_${w.sessions.length}`, expires_at: "2099-01-01T00:00:00Z" } }, 201);
@@ -224,17 +230,25 @@ const webhook = (body: unknown, signature?: string) => {
   return ctx.app.inject({ method: "POST", url: "/webhooks/nango", headers: { "content-type": "application/json", "x-nango-hmac-sha256": signature ?? sign(raw) }, payload: raw });
 };
 
-describe("which platforms go through Nango", () => {
-  it("those NANGO_PROVIDERS lists, once the key is set and the platform's own app is set up", async () => {
-    expect((await ctx.app.inject({ method: "GET", url: adsUrl(), headers })).json().nango).toEqual({ meta: true, google: false, adsense: true });
+describe("which platforms can be connected", () => {
+  it("those NANGO_PROVIDERS lists, once the key is set, the platform's own app is set up, and Nango holds its integration", async () => {
+    const configured = async () => (await ctx.app.inject({ method: "GET", url: adsUrl(), headers })).json().configured;
+    expect(await configured()).toEqual({ meta: true, google: false, adsense: true });
     ctx.setEnv({ NANGO_PROVIDERS: "adsense" });
-    expect((await ctx.app.inject({ method: "GET", url: adsUrl(), headers })).json().nango).toEqual({ meta: false, google: false, adsense: true });
+    expect(await configured()).toEqual({ meta: false, google: false, adsense: true });
     expect((await session("meta")).json().error).toBe("not_configured");
     // Meta's own app keys missing: its tokens couldn't be checked or read, so it isn't offered.
     ctx.setEnv({ NANGO_PROVIDERS: "meta,adsense", META_APP_SECRET: "" });
-    expect((await ctx.app.inject({ method: "GET", url: adsUrl(), headers })).json().nango.meta).toBe(false);
+    expect((await configured()).meta).toBe(false);
+    // The integration missing in Nango (nango-setup.mjs not run): not offered either, once Nango is asked again.
+    ctx.setEnv({ META_APP_SECRET: "meta_secret" });
+    w.integrations = ["bizinsights-meta-ads"];
+    expect(await configured()).toEqual({ meta: true, google: false, adsense: true });
+    await forgetNangoIntegrations(ctx.deps.coord);
+    expect(await configured()).toEqual({ meta: true, google: false, adsense: false });
+    expect((await session("adsense")).json().error).toBe("not_configured");
     ctx.setEnv({ NANGO_SECRET_KEY: "" });
-    expect((await ctx.app.inject({ method: "GET", url: adsUrl(), headers })).json().nango).toEqual({ meta: false, google: false, adsense: false });
+    expect(await configured()).toEqual({ meta: false, google: false, adsense: false });
     expect((await session("adsense")).statusCode).toBe(503);
     expect(w.sessions).toHaveLength(0);
   });

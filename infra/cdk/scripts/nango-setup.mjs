@@ -1,8 +1,9 @@
 // Create (or bring up to date) bizinsights' integrations in its Nango environment (docs/nango.md), from
-// the keys bizinsights already has: the Meta app and the Google OAuth client the direct sign-ins use.
+// the keys bizinsights already has: its Meta app and its Google OAuth client. Every ad platform is
+// connected through these three integrations (Meta Ads, Google Ads, Google AdSense).
 // Nothing is printed but names, ids that are public anyway, and what changed.
 //
-//   node infra/cdk/scripts/nango-setup.mjs [--env production] [--providers meta,adsense] [--check]
+//   node infra/cdk/scripts/nango-setup.mjs [--env production] [--providers meta,google,adsense] [--check]
 //
 // --check      only read: says which integrations exist, from which Nango provider, with which
 //              client id, whether Nango holds the same client secret, whether Meta accepts
@@ -34,7 +35,7 @@ const opt = (name) => {
 const envName = opt("--env") ?? "production";
 const region = opt("--region") ?? "ap-southeast-2";
 const apply = args.includes("--apply");
-const providers = (opt("--providers") ?? "meta,adsense").split(",").map((s) => s.trim()).filter(Boolean);
+const providers = (opt("--providers") ?? "meta,google,adsense").split(",").map((s) => s.trim()).filter(Boolean);
 
 /** Kept in step with packages/core/src/ads/nango.ts (NANGO_INTEGRATION, NANGO_PROVIDER_TEMPLATE). */
 export const INTEGRATIONS = {
@@ -53,9 +54,9 @@ function settings() {
 
 /**
  * What each integration must hold: the client id and secret of bizinsights' own app, and the scopes
- * the direct sign-in asks for. Meta with a Login for Business configuration (META_CONFIG_ID) takes no
+ * bizinsights reads with. Meta with a Login for Business configuration (META_CONFIG_ID) takes no
  * scope: the configuration decides, and bizinsights sends its config_id with every session. Google's
- * also ask for `openid` (who the account is, nothing else), as the direct sign-in does, so a disconnect
+ * also ask for `openid` (who the account is, nothing else), so a disconnect
  * knows whose grant it is taking back (packages/core/src/ads/googleOAuth.ts GOOGLE_IDENTITY_SCOPE).
  */
 export function wanted(provider, s, secret) {
@@ -146,6 +147,7 @@ async function main() {
     console.log(`  ${def.key}: ${updated.status < 300 ? "updated" : `NOT updated (HTTP ${updated.status}: ${updated.json?.error?.code ?? "?"})`} (${problems.join("; ")})`);
   }
   console.log("Then in Nango's dashboard (Environment Settings): Callback URL and Webhook URL, as docs/nango.md says.");
+  console.log("bizinsights asks Nango which integrations exist every 5 minutes: a platform made or fixed here shows its Connect button within that.");
 }
 
 // Run as a script. Imported by tests (vitest sets VITEST), it only provides the definitions above.

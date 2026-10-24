@@ -2,18 +2,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { disconnectDb, systemDb } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import {
-  dropUnusedGrant,
   encryptAdTokens,
   fillAdPersons,
-  holdPendingAdConnect,
-  memoryCoord,
   reencryptAdTokens,
   releaseUserAdGrants,
   resetEnvCache,
   revokeAdAccessIfUnused,
   saveAdConnections,
   syncAdConnection,
-  takePendingAdConnect,
   type FetchLike,
 } from "@app/core";
 
@@ -150,45 +146,6 @@ describe("a disconnect gives the grant back unless something relies on it", () =
     expect(seen.metaRevoked).toEqual(["MA"]);
     expect(seen.lookups).toEqual([]);
     expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: expired.id } })).toMatchObject({ status: "reconnect", errorCode: "auth_expired" });
-  });
-});
-
-describe("a sign-in that ended without a connection", () => {
-  const tokens = (refresh: string | null = "R_NEW") => ({ accessToken: "NEW", refreshToken: refresh, expiresAt: null });
-
-  it("is revoked only when it's known whose it is and nothing else could rely on it", async () => {
-    const seen = fresh();
-    const f = platform(seen, {});
-    expect(await dropUnusedGrant("google", tokens(), null, f)).toBe("unknown_person");
-    // Google sent no refresh token: the person gave one before, which may be in use.
-    expect(await dropUnusedGrant("google", tokens(null), "1005", f)).toBe("still_used");
-    // The refresh token was the one their other connections use.
-    expect(await dropUnusedGrant("google", tokens(), "1005", f, { reusedRefreshToken: true })).toBe("still_used");
-    // A connection of theirs exists.
-    await connection("adsense", await store(), { access: "X" }, { externalUserId: "1005" });
-    expect(await dropUnusedGrant("google", tokens(), "1005", f)).toBe("still_used");
-    expect(seen.revoked).toEqual([]);
-    // Nobody's: revoked (the refresh token ends the access tokens too).
-    expect(await dropUnusedGrant("google", tokens(), "1006", f)).toBe("revoked");
-    expect(seen.revoked).toEqual(["R_NEW"]);
-    expect(await dropUnusedGrant("meta", { accessToken: "META_NEW", refreshToken: null, expiresAt: null }, "2006", f)).toBe("revoked");
-    expect(seen.metaRevoked).toEqual(["META_NEW"]);
-  });
-
-  it("leaves the grant while the same person has another account choice waiting", async () => {
-    const coord = memoryCoord();
-    const s = await store();
-    const hold = (nonce: string) =>
-      holdPendingAdConnect(coord, nonce, { userId: "u", workspaceId: s.workspaceId, storeId: s.id, provider: "google", accounts: [], tokens: tokens(), externalUserId: "1007" });
-    await hold("first");
-    await hold("second");
-    const seen = fresh();
-    // "Cancel" on the first: the second still needs the grant.
-    await takePendingAdConnect(coord, "first");
-    expect(await dropUnusedGrant("google", tokens(), "1007", platform(seen, {}), { coord, exceptPending: "first" })).toBe("still_used");
-    // Once that one is gone too, nothing is waiting.
-    await takePendingAdConnect(coord, "second");
-    expect(await dropUnusedGrant("google", tokens(), "1007", platform(seen, {}), { coord, exceptPending: "second" })).toBe("revoked");
   });
 });
 

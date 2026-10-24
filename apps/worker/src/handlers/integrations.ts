@@ -8,6 +8,7 @@ import {
   enqueueAdSync,
   googleAdsBudget,
   googleAdsBudgetAllows,
+  moveDirectAdConnectionsToNango,
   nextHistoryWindow,
   recheckDays,
   sweepNangoOrphans,
@@ -186,4 +187,9 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
 /** Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a grace period. */
 export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
   return sweepNangoOrphans(deps.coord, deps.fetchImpl);
+}
+
+/** Ad connections made before every platform went through Nango: moved there, a few sign-ins a tick (docs/nango.md). */
+export async function moveDirectAdConnections(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
+  return moveDirectAdConnectionsToNango(deps.coord, { fetchImpl: deps.fetchImpl });
 }

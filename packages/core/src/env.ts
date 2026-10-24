@@ -154,11 +154,12 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * Nango (docs/nango.md): the secret API key of bizinsights' Nango environment, a secret (Secrets
-   * Manager, put-secrets.mjs --set NANGO_SECRET_KEY). With it, "Continue with Meta Ads" / "Continue with
-   * Google AdSense" open Nango's Connect UI for the platforms NANGO_PROVIDERS lists: the merchant
-   * authorizes bizinsights' own Meta app or Google client there, Nango keeps and renews the tokens, and
-   * bizinsights reads the platform with them as for a direct connection. Empty: the direct sign-in.
+   * Nango (docs/nango.md): the secret API key of bizinsights' Nango environment (its prod environment in
+   * production), a secret (Secrets Manager, put-secrets.mjs --set NANGO_SECRET_KEY). Every ad platform is
+   * connected through it: "Continue with Meta Ads / Google Ads / Google AdSense" open Nango's Connect UI,
+   * the merchant authorizes bizinsights' own Meta app or Google client there, Nango keeps and renews the
+   * tokens, and bizinsights reads the platform with them. Empty: no ad platform can be connected (the
+   * cards say so), and connections made before Nango keep working until they can be moved there.
    */
   NANGO_SECRET_KEY: z.string().optional().default(""),
   /** The webhook signing key of the same environment (Environment Settings → Webhooks), a secret. Empty: Nango's webhooks are refused. */
@@ -166,11 +167,13 @@ const schema = z.object({
   /** Nango's API. */
   NANGO_API_URL: z.string().default("https://api.nango.dev"),
   /**
-   * The platforms whose Connect button goes through Nango once the key is set, comma-separated (meta,
-   * adsense, google). Each also needs its own app's keys here (META_APP_ID/SECRET, GOOGLE_ADS_CLIENT_*),
-   * which Nango's integration must carry too: bizinsights checks every token was issued to them.
+   * The platforms connected through Nango once the key is set, comma-separated (meta, google, adsense):
+   * one left out can't be connected (its card says so). Each also needs its own app's keys here
+   * (META_APP_ID/SECRET, GOOGLE_ADS_CLIENT_*), which Nango's integration must carry too: bizinsights
+   * checks every token was issued to them. And each one's integration must exist in Nango, which is
+   * asked (nango-setup.mjs makes them).
    */
-  NANGO_PROVIDERS: z.string().optional().default("meta,adsense"),
+  NANGO_PROVIDERS: z.string().optional().default("meta,google,adsense"),
   /**
    * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
    * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the

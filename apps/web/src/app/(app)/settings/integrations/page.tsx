@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
-import { BackFromFacebook } from "@/components/MetaAdsAccess";
+import { FacebookUnfinished } from "@/components/MetaAdsAccess";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
@@ -154,9 +154,9 @@ export default function IntegrationsPage() {
       <StateAnnouncer items={announced} />
       {note && <Alert kind={note.kind}>{note.text}</Alert>}
       {ads.note && <NoteAlert note={ads.note} onDismiss={() => ads.setNote(null)} />}
-      {ads.backFromMeta && (
+      {ads.metaUnfinished && (
         <Alert kind="info">
-          <BackFromFacebook restricted={ads.answer?.restricted.meta ?? false} />
+          <FacebookUnfinished restricted={ads.answer?.restricted.meta ?? false} />
         </Alert>
       )}
 
