@@ -1,9 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { shownFigures, upToWords } from "./adFigures";
-import { hourRange, plural } from "./format";
 import type { IconName } from "./Icons";
-import type { Overview } from "./types";
 
 /** Everything a dashboard card can open, each as its own detail panel (?view=<topic>). */
 export const TOPICS = ["overview", "sales", "ads", "adsense", "products", "shoppers", "timing", "channels", "shipping", "stock", "discounts", "customers", "orders"] as const;
@@ -27,29 +23,6 @@ const INFO: Record<Topic, { title: string; icon: IconName }> = {
 
 export const topicInfo = (t: Topic) => INFO[t];
 export const isTopic = (s: string | null): s is Topic => s !== null && (TOPICS as readonly string[]).includes(s);
-
-/** The topics this store has data for, in the order the main page's list uses for equal statuses. */
-export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
-  const m = ov.modules;
-  const has: Record<Topic, boolean> = {
-    // The overview has its own first row in the list; ads and AdSense have their own Advertising
-    // section on the main page (Advertising.tsx), which opens their detail panels.
-    overview: false,
-    ads: false,
-    adsense: false,
-    sales: !!m.sales_overview,
-    products: !!(m.top_products || m.catalog),
-    shoppers: !!(m.funnel || m.shopify_sessions),
-    timing: !!m.order_timing,
-    channels: !!m.channels,
-    shipping: !!m.fulfillment,
-    stock: !!m.inventory,
-    discounts: !!m.discount_codes,
-    customers: !!m.customers || contactsOn,
-    orders: !!m.recent_orders,
-  };
-  return TOPICS.filter((t) => has[t]);
-}
 
 // ---------------------------------------------------------------------------
 // Which topic is open lives in the address bar (?view=sales), so the phone's back button closes
@@ -108,74 +81,4 @@ export function closeView() {
 
 export function useDetailView() {
   return { view: useCurrentView(), open: openView, close: closeView };
-}
-
-/** One line about a topic: the number that matters most (used when the health check has nothing to say). */
-export function topicSummary(t: Topic, ov: Overview, currency: string): string {
-  const m = ov.modules;
-  const money = (n: number) => fmtMoney(n, currency);
-  switch (t) {
-    case "overview":
-      return "Your whole store in one place";
-    case "sales": {
-      const c = m.sales_overview?.current;
-      return c ? `${money(c.netSales)} from ${plural(c.orders, "order")}` : "";
-    }
-    case "ads": {
-      const a = m.ads;
-      if (!a) return "Connect Meta or Google Ads";
-      // Some account lacks days of the range: never a short total, except the days so far, dated.
-      const { totals: c, through } = shownFigures(a);
-      if (!c) return "Ad figures unavailable for some of these days";
-      return `${fmtMoney(c.spend, a.currency)} spent${through ? ` ${upToWords(through)}` : ""}${c.linkClicks === null ? "" : ` · ${plural(c.linkClicks, "link click")}`}`;
-    }
-    case "adsense": {
-      const a = m.adsense;
-      if (!a) return "Connect Google AdSense";
-      const { totals: c, through } = shownFigures(a);
-      if (!c) return "AdSense figures unavailable for some of these days";
-      return `${fmtMoney(c.earnings, a.currency)} estimated${through ? ` ${upToWords(through)}` : ""} · ${plural(c.pageViews, "page view")}`;
-    }
-    case "products": {
-      const top = m.top_products?.items[0];
-      if (top) return `${top.title} leads with ${plural(top.units, "net unit")}`;
-      if (m.top_products?.complete === false) return "Awaiting complete sales history";
-      return m.catalog ? `${plural(m.catalog.products.total, "product")} in your catalog` : "No product sales yet";
-    }
-    case "shoppers": {
-      // Shopify's own sessions when it shares them; the pixel's tracked visits otherwise.
-      const s = m.shopify_sessions?.current;
-      if (s && s.sessions !== null) return `${plural(s.sessions, "session")} · ${fmtPct(s.conversionRate)} converted`;
-      return m.funnel && m.funnel.visits > 0 ? `${plural(m.funnel.visits, "tracked visit")} · ${fmtPct(m.funnel.conversionRate)} bought` : "No visits recorded yet";
-    }
-    case "timing": {
-      const o = m.order_timing;
-      return o?.busiestDay && o.busiestHour !== null ? `${o.busiestDay}s, around ${hourRange(o.busiestHour)}` : "Not enough orders to spot a pattern";
-    }
-    case "channels": {
-      const c = m.channels?.items[0];
-      return c ? `${c.label}: ${fmtPct(c.share)} of sales` : "No sales in these dates";
-    }
-    case "shipping": {
-      const f = m.fulfillment;
-      return f && f.openNow > 0 ? `${plural(f.openNow, "order")} waiting to ship` : "All caught up";
-    }
-    case "stock": {
-      const c = m.inventory?.current;
-      if (!c || c.trackedVariants === 0) return "No stock levels yet";
-      return c.lowStock + c.outOfStock > 0 ? `${fmtNum(c.lowStock)} running low · ${fmtNum(c.outOfStock)} sold out` : "Nothing running low";
-    }
-    case "discounts": {
-      const d = m.discount_codes?.items ?? [];
-      return d.length ? `${d[0]!.code} used most (${plural(d[0]!.orders, "order")})` : "No codes used in these dates";
-    }
-    case "customers": {
-      const r = m.customers?.current.returningCustomerRate;
-      return r !== undefined && r !== null ? `${fmtPct(r)} of customers had bought before` : "Who's buying, and who to follow up";
-    }
-    case "orders": {
-      const o = m.recent_orders?.items[0];
-      return o ? `Latest: ${o.name}, ${money(o.total)}` : "No orders yet";
-    }
-  }
 }

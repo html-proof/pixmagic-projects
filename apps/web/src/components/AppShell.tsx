@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { canManage, useApp } from "@/components/AppContext";
 import { BrandLogo } from "@/components/Brand";
+import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { CommandPalette, type PaletteItem } from "@/components/CommandPalette";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
@@ -59,10 +60,11 @@ import { Alert } from "@/components/ui";
 import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } from "@/lib/access";
 
 // ---------------------------------------------------------------------------
-// The signed-in frame: a top bar (store, search, notifications, account) over a sidebar that
-// lists the dashboard's topics and the other areas. On a phone the sidebar slides in from the
-// menu button. Topics open the dashboard's detail panels (?view=…), the same ones its cards open;
-// advertising has an area of its own (/advertising).
+// The signed-in frame, in the owner's design (2026-10-24): a dark sidebar down the whole left side
+// (logo, the dashboard's topics and the other areas, help, and the account at its foot) beside a
+// top bar over the page (store, search, notifications). On a phone the sidebar slides in from the
+// menu button and the account sits in the top bar. Topics open the dashboard's detail panels
+// (?view=…), the same ones its cards open; advertising has an area of its own (/advertising).
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";
@@ -79,6 +81,8 @@ function goToTopic(topic: Topic, path: string, push: (href: string) => void) {
 interface NavItem {
   label: string;
   icon: LucideIcon;
+  /** A brand's own mark in place of the icon (Google Ads, Meta Ads). */
+  glyph?: ReactNode;
   href: string;
   topic?: Topic;
   active: boolean;
@@ -99,11 +103,15 @@ function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void
         }
         onNavigate?.();
       }}
-      className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-        item.active ? "bg-accent/10 text-text" : "text-text/75 hover:bg-text/[0.04] hover:text-text"
+      className={`group flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-emerald-300 ${
+        item.active ? "bg-nav-active text-white shadow-sm" : "text-white/75 hover:bg-white/[0.07] hover:text-white"
       }`}
     >
-      <Icon aria-hidden className={`h-[18px] w-[18px] shrink-0 ${item.active ? "text-accent" : "text-muted group-hover:text-text"}`} strokeWidth={1.8} />
+      {item.glyph ? (
+        <span aria-hidden className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">{item.glyph}</span>
+      ) : (
+        <Icon aria-hidden className={`h-[18px] w-[18px] shrink-0 ${item.active ? "text-white" : "text-white/60 group-hover:text-white"}`} strokeWidth={1.8} />
+      )}
       <span className="truncate">{item.label}</span>
     </Link>
   );
@@ -112,8 +120,8 @@ function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void
 function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem[]; onNavigate?: () => void }) {
   if (!items.length) return null;
   return (
-    <div className={title ? "border-t border-border pt-4" : undefined}>
-      {title && <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">{title}</p>}
+    <div className={title ? "border-t border-white/10 pt-4" : undefined}>
+      {title && <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-white/45">{title}</p>}
       <ul className="space-y-0.5">
         {items.map((i) => (
           <li key={i.href}>
@@ -135,6 +143,10 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   // the rest whatever the menu shows.
   const topic = (t: Topic, label: string, icon: LucideIcon): NavItem[] => (seesTopic(access, t, offers) ? [{ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t }] : []);
   const area = (href: string, label: string, icon: LucideIcon): NavItem => ({ label, icon, href, active: path === href || path.startsWith(`${href}/`) });
+  const within = (href: string) => path === href || path.startsWith(`${href}/`);
+  // Each platform's own pages light up its own entry, not Advertising's as well.
+  const adsPlatform = within("/advertising/google") || within("/advertising/meta");
+  const ads = seesTopic(access, "ads", offers);
 
   const main: NavItem[] = [
     ...(showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : []),
@@ -146,36 +158,45 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     ...(offers("inventory") && allowed("inventory.view") ? [area("/inventory", "Inventory", Boxes)] : []),
     ...topic("customers", "Customers", UsersRound),
     // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
-    ...(seesTopic(access, "ads", offers) ? [area("/advertising", "Advertising", Megaphone)] : []),
+    ...(ads ? [{ ...area("/advertising", "Advertising", Megaphone), active: within("/advertising") && !adsPlatform }] : []),
     ...topic("discounts", "Discounts", BadgePercent),
     ...topic("shoppers", "Analytics", ChartColumn),
   ];
   const inventory = offers("inventory") && allowed("inventory.view");
-  const store: NavItem[] = [...topic("orders", "Orders", ReceiptText), ...(inventory ? [] : topic("stock", "Stock", Boxes)), ...topic("shipping", "Shipping", Truck), ...topic("channels", "Sales channels", Store)];
-  const marketing: NavItem[] = [...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : [])];
-  const apps: NavItem[] = [
-    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
+  const store: NavItem[] = [
+    ...topic("orders", "Orders", ReceiptText),
+    ...(inventory ? [] : topic("stock", "Stock", Boxes)),
+    ...topic("shipping", "Shipping", Truck),
+    ...topic("channels", "Sales channels", Store),
     ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
-    ...(!full && allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
+  ];
+  // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
+  const marketing: NavItem[] = [
+    ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
+    ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
+    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
+  ];
+  const settings: NavItem[] = [
+    ...(allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
     ...(allowed("members:manage") ? [area("/team", "Team & Access", ShieldCheck)] : []),
     // Opened from a shared link: no account to manage, only their notifications for this workspace.
     me.shared
       ? area("/settings/notifications", "Notifications", Bell)
       : full
-        ? { ...area("/settings", "Settings", Settings), href: "/settings/profile" }
+        ? { ...area("/settings", "Business Settings", Settings), href: "/settings/profile", active: within("/settings") && !within("/settings/integrations") }
         : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
   ];
 
   return (
-    <nav aria-label="App" className="flex h-full flex-col gap-4 px-3 py-5">
+    <nav aria-label="App" className="flex flex-1 flex-col gap-4 px-3 pb-4 pt-2">
       {!full && (
         // Whose dashboard this is, and as what: someone from outside the business sees it at a glance.
-        <div className="rounded-xl border border-border bg-bg/60 px-3 py-2.5" data-testid="member-badge">
-          <p className="truncate text-sm font-semibold">{workspace.name}</p>
-          <p className="text-xs text-muted">Shared with you · {me.shared ? "View only" : ROLE_INFO[access.role].label}</p>
+        <div className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5" data-testid="member-badge">
+          <p className="truncate text-sm font-semibold text-white">{workspace.name}</p>
+          <p className="text-xs text-white/60">Shared with you · {me.shared ? "View only" : ROLE_INFO[access.role].label}</p>
           {me.shared && (
-            <p className="mt-1 text-xs text-muted" data-testid="shared-badge">
+            <p className="mt-1 text-xs text-white/60" data-testid="shared-badge">
               Opened from your invitation link: no sign-in needed{me.shared.expiresAt ? `. Access until ${new Date(me.shared.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}.` : "."}
             </p>
           )}
@@ -183,18 +204,26 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       )}
       <NavGroup items={main} onNavigate={onNavigate} />
       <NavGroup title="Store" items={store} onNavigate={onNavigate} />
-      <NavGroup title="Marketing" items={marketing} onNavigate={onNavigate} />
-      <NavGroup title={full ? "Apps & integrations" : "More"} items={apps} onNavigate={onNavigate} />
-      <div className="mt-auto rounded-2xl border border-border bg-gradient-to-br from-accent/[0.07] to-transparent p-4">
-        <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 text-accent">
-          <LifeBuoy className="h-[18px] w-[18px]" strokeWidth={1.8} />
-        </span>
-        <p className="mt-3 text-sm font-semibold">Need help?</p>
-        <p className="mt-0.5 text-xs leading-relaxed text-muted">Get support or read answers to common questions.</p>
+      <NavGroup title="Marketing & integrations" items={marketing} onNavigate={onNavigate} />
+      <NavGroup title="Settings" items={settings} onNavigate={onNavigate} />
+      <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.05] p-4">
+        <div className="flex items-start gap-3">
+          <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
+            <Headset className="h-[18px] w-[18px]" strokeWidth={1.8} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white">Need help?</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-white/60">Get support or reach out to our team.</p>
+          </div>
+        </div>
         {/* Not prefetched: /support is in Geist, and its prefetch preloads fonts this page never uses (docs/architecture.md). */}
-        <Link prefetch={false} href="/support" onClick={onNavigate} className="btn-primary mt-3 w-full text-xs">
-          View help centre
-          <span aria-hidden>→</span>
+        <Link
+          prefetch={false}
+          href="/support"
+          onClick={onNavigate}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-400 px-3 py-2 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-300"
+        >
+          Contact support
         </Link>
       </div>
     </nav>
@@ -285,7 +314,11 @@ function useDismiss(open: boolean, close: () => void) {
 
 const menuItem = "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-text/85 transition-colors hover:bg-text/[0.05] hover:text-text";
 
-function AccountMenu() {
+/**
+ * The account: the avatar in the top bar on a phone ("bar"), or the card at the foot of the
+ * sidebar with the name and address ("sidebar"), whose menu opens upwards.
+ */
+function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" }) {
   const { me } = useApp();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -308,6 +341,7 @@ function AccountMenu() {
     router.replace("/login");
   }
 
+  const card = variant === "sidebar";
   return (
     <div ref={ref} className="relative">
       <button
@@ -315,13 +349,25 @@ function AccountMenu() {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label="Account menu"
-        className="flex items-center gap-1 rounded-full p-0.5 pr-1 transition-colors hover:bg-text/[0.05]"
+        className={
+          card
+            ? "flex w-full items-center gap-3 rounded-xl p-2 text-left outline-none transition-colors hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-emerald-300"
+            : "flex items-center gap-1 rounded-full p-0.5 pr-1 transition-colors hover:bg-text/[0.05]"
+        }
       >
         <AccountAvatar user={me.user} />
-        <ChevronDown aria-hidden className={`h-4 w-4 text-muted transition-transform ${open ? "rotate-180" : ""}`} />
+        {card && (
+          <span className="min-w-0 flex-1 leading-tight">
+            <span className="block truncate text-sm font-semibold text-white">{me.user.displayName ?? me.user.email}</span>
+            {me.user.displayName && <span className="block truncate text-xs text-white/55">{me.user.email}</span>}
+          </span>
+        )}
+        <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 transition-transform ${card ? "text-white/60" : "text-muted"} ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="animate-rise absolute right-0 top-full z-40 mt-2 w-64 rounded-xl border border-border bg-surface p-1.5 shadow-[var(--shadow-lift)]">
+        <div
+          className={`animate-rise absolute z-40 w-64 rounded-xl border border-border bg-surface p-1.5 text-text shadow-[var(--shadow-lift)] ${card ? "bottom-full left-0 mb-2" : "right-0 top-full mt-2"}`}
+        >
           <div className="px-3 py-2">
             {me.user.displayName && <p className="truncate text-sm font-semibold">{me.user.displayName}</p>}
             <p className="truncate text-xs text-muted">{me.user.email}</p>
@@ -546,10 +592,11 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
   const { workspaces, workspace, setWorkspaceId } = useApp();
   const mac = useMac();
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-surface/85 backdrop-blur-md print:hidden">
-      <div className="flex h-16 items-center gap-3 pr-3 sm:pr-5">
-        <div className="flex shrink-0 items-center gap-1 pl-2 sm:pl-3 lg:w-60 lg:pl-5">
-          <button type="button" onClick={onMenu} aria-label="Open navigation" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text lg:hidden">
+    <header className="sticky top-0 z-30 border-b border-border bg-surface/85 backdrop-blur-md print:hidden lg:border-transparent lg:bg-bg/75">
+      <div className="flex h-16 items-center gap-3 pl-2 pr-3 sm:pl-3 sm:pr-5 lg:px-8">
+        {/* On a wide screen the logo heads the sidebar instead. */}
+        <div className="flex shrink-0 items-center gap-1 lg:hidden">
+          <button type="button" onClick={onMenu} aria-label="Open navigation" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text">
             <Menu aria-hidden className="h-5 w-5" />
           </button>
           <Link href={DASHBOARD} className="hidden items-center sm:flex" aria-label="bizinsights home">
@@ -578,7 +625,10 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
             <Search aria-hidden className="h-5 w-5" />
           </button>
           <Notifications />
-          <AccountMenu />
+          {/* On a wide screen the account is the card at the foot of the sidebar. */}
+          <div className="lg:hidden">
+            <AccountMenu />
+          </div>
         </div>
       </div>
     </header>
@@ -688,38 +738,51 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed, offers]);
 
   return (
-    <div className="min-h-dvh">
-      <TopBar onMenu={() => setDrawer(true)} onSearch={() => setPalette(true)} />
-      <div className="flex">
-        <aside className="sticky top-16 hidden h-[calc(100dvh-4rem)] w-60 shrink-0 overflow-y-auto border-r border-border bg-surface/55 lg:block print:hidden">
+    <div className="min-h-dvh lg:flex">
+      <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col bg-nav lg:flex print:hidden">
+        <div className="flex h-16 shrink-0 items-center px-5">
+          <Link href={DASHBOARD} className="flex items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-emerald-300" aria-label="bizinsights home">
+            <BrandLogo size={26} className="text-lg text-white" />
+          </Link>
+        </div>
+        {/* The menu scrolls on a short screen; the account stays at the foot. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <Sidebar />
-        </aside>
-        {drawer && (
-          <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
-            <div className="animate-fade absolute inset-0 bg-black/40" onClick={() => setDrawer(false)} aria-hidden />
-            <div className="animate-drawer relative flex h-full w-72 max-w-[85vw] flex-col overflow-y-auto bg-surface shadow-2xl">
-              <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-4">
-                <BrandLogo size={26} className="text-lg" />
-                <button type="button" onClick={() => setDrawer(false)} aria-label="Close navigation" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text">
-                  <X aria-hidden className="h-5 w-5" />
-                </button>
+        </div>
+        <div className="shrink-0 border-t border-white/10 p-3">
+          <AccountMenu variant="sidebar" />
+        </div>
+      </aside>
+      {drawer && (
+        <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+          <div className="animate-fade absolute inset-0 bg-black/40" onClick={() => setDrawer(false)} aria-hidden />
+          <div className="animate-drawer relative flex h-full w-72 max-w-[85vw] flex-col overflow-y-auto bg-nav shadow-2xl">
+            <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
+              <BrandLogo size={26} className="text-lg text-white" />
+              <button type="button" onClick={() => setDrawer(false)} aria-label="Close navigation" className="flex h-10 w-10 items-center justify-center rounded-full text-white/70 hover:bg-white/[0.08] hover:text-white">
+                <X aria-hidden className="h-5 w-5" />
+              </button>
+            </div>
+            {/* The top bar has no room for the workspace picker on a phone. */}
+            {workspaces.length > 1 && (
+              <div className="px-6 pt-4 md:hidden">
+                <label htmlFor="drawer-workspace" className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/45">Workspace</label>
+                <select id="drawer-workspace" className="input" value={workspace.id} onChange={(e) => setWorkspaceId(e.target.value)}>
+                  {workspaces.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
               </div>
-              {/* The top bar has no room for the workspace picker on a phone. */}
-              {workspaces.length > 1 && (
-                <div className="px-6 pt-4 md:hidden">
-                  <label htmlFor="drawer-workspace" className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted">Workspace</label>
-                  <select id="drawer-workspace" className="input" value={workspace.id} onChange={(e) => setWorkspaceId(e.target.value)}>
-                    {workspaces.map((w) => (
-                      <option key={w.id} value={w.id}>{w.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+            )}
+            <div className="flex flex-1 flex-col pt-3">
               <Sidebar onNavigate={() => setDrawer(false)} />
             </div>
           </div>
-        )}
-        <main className="min-w-0 flex-1 px-4 pb-24 pt-6 sm:px-6 lg:px-8">
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <TopBar onMenu={() => setDrawer(true)} onSearch={() => setPalette(true)} />
+        <main className="px-4 pb-24 pt-6 sm:px-6 lg:px-8 lg:pt-2">
           <div className="mx-auto max-w-[90rem]">
             <AccessNotice />
             {allowedHere ? children : <p className="text-muted">Loading…</p>}

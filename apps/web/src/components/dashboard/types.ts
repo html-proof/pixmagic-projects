@@ -93,10 +93,11 @@ export interface SalesOverview {
   };
   /**
    * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
-   * its `totalSales`: "View gross sales, discounts, tax and shipping".
+   * its `totalSales`: "View gross sales, discounts, tax and shipping". `units`: net items sold that
+   * day (absent from older answers).
    */
   series: Array<
-    Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number }
+    Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number; units?: number }
   >;
   /**
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
