@@ -150,6 +150,17 @@ for you (integrations-readiness.md, Meta rows).
 To switch Nango off again: empty `NANGO_PROVIDERS` in `apps/aws/src/settings.ts` (or remove the key). The
 buttons go back to the direct sign-in, and connections made through Nango keep working while the key is there.
 
+**"This platform isn't set up correctly on bizinsights' side" after Facebook's screen** (log: `nango connection's
+token refused`, Meta's `Invalid appsecret_proof provided in the API argument`, code 100): Nango's
+`bizinsights-meta-ads` holds another app id or secret than `META_APP_ID`/`META_APP_SECRET`, so Meta refuses
+the proof bizinsights signs each call with. First seen 2026-10-23 20:41Z (it showed as "The platform didn't
+accept the sign-in" then). `node infra/cdk/scripts/nango-setup.mjs --check` says which side is wrong: "Meta
+accepts META_APP_SECRET" plus "client secret isn't the one in the app secret" means Nango's copy is stale, and
+`--apply` copies AWS's to Nango. "Meta REFUSES META_APP_SECRET" means AWS's copy is wrong: store the App secret
+from developers.facebook.com → App settings → Basic with `put-secrets.mjs --set META_APP_SECRET` (it asks Meta
+first and refuses a secret that isn't the app's), restart the functions, then run `--apply`. On 2026-10-24 the
+check said "Meta REFUSES META_APP_SECRET ... Error validating client secret." with Nango holding the same value.
+
 ## A merchant connecting an account
 
 1. Settings → Integrations (or Settings → Advertising), on the store's card: **Continue with Meta Ads** or
@@ -172,7 +183,8 @@ buttons go back to the direct sign-in, and connections made through Nango keep w
   (sessions, connections and tags, tokens, deletes, error mapping, webhook HMAC and parsing).
 - `apps/api/test/adsNango.test.ts`: the round trip on a database (session tags and Meta's config_id, finish
   checks against Nango's tags, one account vs the choice, sync with Nango's token, cancel, permission missing,
-  a token issued to another client, disconnect with the grant still used or not, another workspace kept out,
+  a Google token issued to another client, a Meta token Meta won't take bizinsights' appsecret_proof for,
+  disconnect with the grant still used or not, another workspace kept out,
   signed and replayed webhooks, the leftover sweep, the callback forward).
 - Not done: anything against a live Nango environment (no account yet), and the comparison with Ads Manager
   and AdSense (step 7 above).

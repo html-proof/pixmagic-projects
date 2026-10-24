@@ -178,9 +178,10 @@ export function adsNangoRoutes(app: App, deps: Deps) {
       signIn = await finishNangoSignIn(provider, input.connectionId, state.integrationKey, counter?.fetchImpl ?? deps.fetchImpl);
     } catch (err) {
       if (err instanceof NangoPermissionMissingError) throw await fail("permission_missing");
-      // A token Nango holds but the platform refuses, or one issued to another app: the Nango integration's keys aren't bizinsights' own.
-      if (err instanceof AdsAuthError) {
-        logger.error({ err, provider }, "nango connection's token refused: check the integration's client id and secret");
+      // A token Nango holds but the platform refuses, or one issued to another app (Meta: our appsecret_proof
+      // refused): the Nango integration's keys aren't bizinsights' own.
+      if (err instanceof AdsAuthError || (err instanceof AdsApiError && err.errorCode === "not_configured")) {
+        logger.error({ err, provider }, "nango connection's token refused: check the integration's client id and secret (infra/cdk/scripts/nango-setup.mjs)");
         throw await fail("not_configured", 503);
       }
       const code = connectFailure(err, provider, storeId);

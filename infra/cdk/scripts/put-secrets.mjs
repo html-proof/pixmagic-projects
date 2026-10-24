@@ -12,7 +12,8 @@
 //                When the clipboard has no usable value (taking a screenshot replaces copied text),
 //                it asks for it instead: paste or type it, only a * per character is shown. A
 //                value without that secret's shape, or equal to one of the app's public settings
-//                (an App ID or client id copied instead of the secret), is refused.
+//                (an App ID or client id copied instead of the secret), is refused. So is a Meta
+//                secret (META_APP_SECRET, WHATSAPP_APP_SECRET) that Meta says isn't its app's.
 // --dry-run      everything but the write: says what would change, and lists the keys the secret
 //                holds (`keys now:`), which is how to check that a provider's secret is there.
 //
@@ -25,6 +26,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { metaAcceptsSecret } from "./meta-secret.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name) => {
@@ -124,6 +126,17 @@ export function secretProblem(name, value, publics = publicSettings()) {
   if (same) return `it is ${same.name} from apps/aws/src/settings.ts, which is public, not ${what}`;
   if (!shape.test(value)) return `it isn't ${what} (${value.length} characters)`;
   return null;
+}
+
+/**
+ * The Meta app a Meta secret belongs to, from the public settings: META_APP_SECRET is META_APP_ID's,
+ * WHATSAPP_APP_SECRET is WHATSAPP_APP_ID's (META_APP_ID's when WhatsApp is on the same app). Null for
+ * any other secret, or without the id.
+ */
+export function metaAppOf(name, publics = publicSettings()) {
+  const get = (k) => publics.find((p) => p.name === k)?.value || "";
+  const appId = name === "META_APP_SECRET" ? get("META_APP_ID") : name === "WHATSAPP_APP_SECRET" ? get("WHATSAPP_APP_ID") || get("META_APP_ID") : "";
+  return appId ? { appId, version: get("META_API_VERSION") || undefined } : null;
 }
 
 const aws = (cliArgs) => execFileSync("aws", [...cliArgs, "--region", region, "--output", "json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -229,6 +242,16 @@ async function main() {
     if (problem) {
       console.error(`That can't be ${name}: ${problem}. Nothing was saved.`);
       process.exit(1);
+    }
+    // A Meta secret of the right shape can still be another app's, an old one, or the Client token: Meta says.
+    const app = metaAppOf(name, publics);
+    if (app) {
+      const { accepted, detail } = await metaAcceptsSecret(app.appId, value, app.version);
+      if (accepted === false) {
+        console.error(`Meta says that isn't the secret of app ${app.appId} (${detail}). Nothing was saved. Copy App settings → Basic → App secret (Show) of that app, then run this again.`);
+        process.exit(1);
+      }
+      console.log(accepted ? `Meta accepts it as app ${app.appId}'s secret.` : `Meta didn't answer (${detail}), so it is stored unchecked: run nango-setup.mjs --check afterwards.`);
     }
     if (next[name] !== value) report.push(`${name}: ${next[name] ? "replaced" : "set"} from ${source}`);
     next[name] = value;
