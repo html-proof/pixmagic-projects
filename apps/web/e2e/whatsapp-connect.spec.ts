@@ -170,7 +170,7 @@ test("the manual connect's token can be added in Nango's window, and the connect
   });
   await page.route(`${base}/manual`, (route) => {
     calls.push({ path: "manual", body: route.request().postDataJSON() });
-    return route.fulfill({ status: 400, json: { error: "wrong_app_secret", message: "That app secret belongs to a different app." } });
+    return route.fulfill({ status: 400, json: { error: "wrong_app_secret", message: "x" } });
   });
   // Nango's Connect UI: ready, takes the session token, then says the token was saved.
   await page.route("https://connect.nango.dev/**", (route) =>
@@ -198,7 +198,7 @@ test("the manual connect's token can be added in Nango's window, and the connect
 
   await page.getByLabel("App secret").fill("0123456789abcdef0123456789abcdef");
   await page.getByRole("button", { name: "Connect WhatsApp" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "That app secret belongs to a different app." })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "That app secret doesn't belong to the Meta app your token was made with." })).toBeVisible();
   expect(calls).toEqual([
     { path: "session", body: {} },
     { path: "finish", body: { nonce: "e2e-wa-nango-nonce-0001", connectionId: "conn-e2e-wa" } },

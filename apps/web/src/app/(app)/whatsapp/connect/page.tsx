@@ -23,6 +23,21 @@ interface Discovered {
   accounts: Array<{ id: string; name: string | null; numbers: Array<{ id: string; displayPhoneNumber: string | null; verifiedName: string | null; registered: boolean }> }>;
 }
 
+/** What the manual connect's refusals say (the page words each code itself; the server's text isn't shown). */
+const CONNECT_ERRORS: Readonly<Record<string, string>> = {
+  token_rejected: "Meta didn't accept that access token. Copy it again from Meta (it's long and starts with EAA), or generate a new one.",
+  missing_permissions: "That token is missing a WhatsApp permission. Generate a new one and tick both whatsapp_business_messaging and whatsapp_business_management.",
+  wrong_app_secret: "That app secret doesn't belong to the Meta app your token was made with. Copy the secret from the same app.",
+  phone_not_in_account: "That phone number ID isn't in that WhatsApp Business Account.",
+  number_in_use: "This WhatsApp number is already connected to another store in bizinsights. Disconnect it there first.",
+  not_found: "Meta couldn't find that account or number. Check the IDs on your app's WhatsApp → API Setup page.",
+  state_expired: "That took too long. Press Add your token and paste it again.",
+  session_mismatch: "That window was opened by someone else. Press Add your token and paste it again.",
+  state_mismatch: "That token couldn't be matched to this page. Press Add your token and paste it again.",
+  token_expired: "The token from Nango's window has expired. Press Add your token and paste it again.",
+  not_configured: "Adding the token through Nango isn't available right now. Paste it here instead.",
+};
+
 const META = {
   createApp: "https://developers.facebook.com/apps/creation/",
   apps: "https://developers.facebook.com/apps/",
@@ -96,7 +111,7 @@ function ManualConnect({ onConnected, reconnect, nango }: { onConnected: () => v
       show(await api<Discovered>(`${base}/manual/discover`, { method: "POST", body: tokenBody }));
     } catch (err) {
       setFound(null);
-      setError(actionError(err, "check the token"));
+      setError(actionError(err, "check the token", CONNECT_ERRORS));
     } finally {
       setBusy(null);
     }
@@ -125,7 +140,7 @@ function ManualConnect({ onConnected, reconnect, nango }: { onConnected: () => v
     } catch (err) {
       setFound(null);
       setHandle(null);
-      setError(actionError(err, "add the token"));
+      setError(actionError(err, "add the token", CONNECT_ERRORS));
     } finally {
       setBusy(null);
     }
@@ -153,7 +168,7 @@ function ManualConnect({ onConnected, reconnect, nango }: { onConnected: () => v
       setFound(null);
       onConnected();
     } catch (err) {
-      setError(actionError(err, "connect"));
+      setError(actionError(err, "connect", CONNECT_ERRORS));
     } finally {
       setBusy(null);
     }
