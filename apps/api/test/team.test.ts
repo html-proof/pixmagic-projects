@@ -246,6 +246,19 @@ describe("changing access after they joined (scenarios 7-11)", () => {
     expect(stale.json().error).toBe("access_changed");
   });
 
+  it("shows who can see each section of the dashboard", async () => {
+    const b = await business();
+    await inviteAndJoin(b, "sales@example.com", "custom", ["analytics.sales"]);
+    await inviteAndJoin(b, "crm@example.com", "custom", ["customers.list"]);
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "later@example.com", role: "custom", permissions: ["customers.list", "customers.contact"] }));
+    const who = async (module: string) => ok(await call("GET", `/workspaces/${b.ws}/team?module=${module}`, b.owner.headers)).rows.map((r: { email: string }) => r.email).sort();
+    // Owners and admins see every section; an invitation not opened yet shows what it will give.
+    expect(await who("customers")).toEqual(["crm@example.com", "later@example.com", "owner@acme.test"]);
+    expect(await who("analytics")).toEqual(["owner@acme.test", "sales@example.com"]);
+    expect(await who("finance")).toEqual(["owner@acme.test"]);
+    expect((await call("GET", `/workspaces/${b.ws}/team?module=everything`, b.owner.headers)).statusCode).toBe(400);
+  });
+
   it("revokes access everywhere at once, and restores it (scenario 11)", async () => {
     const b = await business();
     const { guest, memberId } = await inviteAndJoin(b, "temp@example.com", "analyst", ["analytics.sales", "products.view"]);

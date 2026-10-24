@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
 import { SectionLayout, ToastProvider } from "@/components/AppUi";
+import { canOpenPage } from "@/lib/access";
 
 const ITEMS = [
   ["", "Overview"],
@@ -23,11 +24,13 @@ const ITEMS = [
 
 export default function WhatsappLayout({ children }: { children: ReactNode }) {
   const path = usePathname().replace(/\/$/, "");
-  const { storesStatus, store, workspace } = useApp();
+  const { storesStatus, store, workspace, me, access, offers } = useApp();
+  // Only the pages this member may open (Connect WhatsApp needs "Manage integrations"): the route
+  // guard would send them straight back from any other.
   const items = ITEMS.map(([slug, label]) => {
     const href = slug ? `/whatsapp/${slug}` : "/whatsapp";
     return { href, label, active: path === href };
-  });
+  }).filter((i) => canOpenPage(i.href, access, workspace.staffRole ?? null, !!me.shared, offers));
   return (
     <ToastProvider>
       <SectionLayout title="WhatsApp" icon={<WhatsappIcon size={18} />} items={items}>

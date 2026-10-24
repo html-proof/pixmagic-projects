@@ -176,8 +176,8 @@ export function inventoryRoutes(app: App, deps: Deps) {
   /** One product: its information, variants, stock per location, sales and (with inventory.history) its stock history. */
   app.get(`${base}/products/:productId`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const productId = productParam.parse(c.req.param("productId"));
     const a = await requireWorkspace(c, deps, ws, "inventory.view");
+    const productId = productParam.parse(c.req.param("productId"));
     const detail = await withTenant(ws, async (tx) => {
       const store = await loadStore(tx, ws, storeId);
       const today = localDay(new Date(), store.timezone);
@@ -195,8 +195,8 @@ export function inventoryRoutes(app: App, deps: Deps) {
   /** A product's images and options, read live from Shopify (bizinsights keeps only the featured image). */
   app.get(`${base}/products/:productId/media`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const productId = productParam.parse(c.req.param("productId"));
     const a = await requireWorkspace(c, deps, ws, "inventory.products");
+    const productId = productParam.parse(c.req.param("productId"));
     await limit(deps.coord, `rl:inventory-media:${a.user?.id ?? ws}`, LIMITS.inventoryMedia);
     const store = await withTenant(ws, (tx) => loadStore(tx, ws, storeId));
     if (store.status === "uninstalled") throw new HttpError(409, "The store isn't connected.", "store_disconnected");

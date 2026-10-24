@@ -173,8 +173,8 @@ export function emailContentRoutes(app: App, deps: Deps) {
 
   app.post(`${base}/templates/:id/versions/:version/restore`, async (c) => {
     const { ws, id } = c.req.param();
-    const version = z.coerce.number().int().min(1).parse(c.req.param("version"));
     const { user } = await requireEmail(c, deps, ws, "email:automate");
+    const version = z.coerce.number().int().min(1).parse(c.req.param("version"));
     return c.json({ template: publicTemplate(await restoreTemplateVersion(ws, id, version, user.id)) });
   });
 
