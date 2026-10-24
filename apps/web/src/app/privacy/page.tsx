@@ -44,7 +44,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-24";
+const UPDATED = "2026-10-25";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -108,6 +108,11 @@ const PROVIDERS = [
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
     purpose: "The source of advertising reports, only for stores that connect an advertising account.",
+  },
+  {
+    name: "Nango",
+    purpose:
+      "Opens the sign-in window for each advertising account you connect and keeps its access tokens until you disconnect it. If you add your WhatsApp access token in Nango's window, Nango holds it only until bizinsights reads it, a few seconds later, and then deletes it.",
   },
   {
     name: "Google (Gmail API), Microsoft (Microsoft Graph) or your own SMTP provider",
