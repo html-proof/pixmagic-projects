@@ -252,7 +252,49 @@ describe("a Meta login with nothing to connect says why", () => {
 
   it("the inspector failing still says 'no ad account', never 'try again'", async () => {
     const f = emptyMeta(() => json({ error: { message: "Invalid OAuth access token", code: 190 } }, 400));
-    await expect(metaAdAccounts(meta(f.fetchImpl), "T")).rejects.toMatchObject({ reason: "no_ads_account" });
+    const err = (await metaAdAccounts(meta(f.fetchImpl), "T").catch((e: unknown) => e)) as AdsNoAccountsError;
+    expect(err).toMatchObject({ reason: "no_ads_account" });
+    // Every look-up Meta refused is noted with its code, not thrown.
+    expect(err.diagnosis).toMatchObject({ metaUserId: null, me: { failed: 400 }, token: { failed: "auth", message: "Invalid OAuth access token" }, appRole: null });
+    expect(err.loginName).toBeNull();
+  });
+
+  it("says, for the log, who signed in, what the grant holds and their role on the app; the login's name only for the page", async () => {
+    const f = fake((u) => {
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
+      if (u.pathname.endsWith("/me")) return json({ id: "1020", name: " Sebastian Thomas " });
+      if (u.pathname.endsWith("/debug_token")) {
+        return json({ data: { type: "USER", app_id: "app1", is_valid: true, user_id: "1020", scopes: ["ads_read", "public_profile"], granular_scopes: [{ scope: "ads_read" }, { scope: "pages_show_list", target_ids: ["9", "8"] }] } });
+      }
+      if (u.pathname.endsWith("/app1/roles")) return json({ data: [{ user: "1020", role: "administrators" }, { user: "77", role: "testers" }] });
+      return json({ error: { message: "unexpected" } }, 400);
+    });
+    const err = (await metaAdAccounts(meta(f.fetchImpl), "USER_T").catch((e: unknown) => e)) as AdsNoAccountsError;
+    expect(err).toMatchObject({ reason: "no_ads_account", loginName: "Sebastian Thomas" });
+    expect(err.diagnosis).toEqual({
+      metaUserId: "1020",
+      token: { type: "USER", ownApp: true, valid: true, scopes: ["ads_read", "public_profile"], granted: { ads_read: "all", pages_show_list: 2 } },
+      appRole: "administrators",
+      appRolesListed: 2,
+    });
+    expect(JSON.stringify(err.diagnosis)).not.toContain("Sebastian");
+    // The roles are asked with the app's own token; the person's name with theirs.
+    const roles = f.calls.find((c) => c.url.pathname.endsWith("/app1/roles"))!;
+    expect(new Headers(roles.init?.headers).get("authorization")).toBe("Bearer app1|sec");
+    const me = f.calls.find((c) => c.url.pathname.endsWith("/me"))!;
+    expect(me.url.searchParams.get("fields")).toBe("id,name");
+    expect(new Headers(me.init?.headers).get("authorization")).toBe("Bearer USER_T");
+
+    // A profile with no role on the app, which shared no ad account on Facebook's screen.
+    const stranger = fake((u) => {
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
+      if (u.pathname.endsWith("/me")) return json({ id: "3030", name: "Other" });
+      if (u.pathname.endsWith("/debug_token")) return json({ data: { type: "USER", app_id: "app1", is_valid: true, granular_scopes: [{ scope: "ads_read", target_ids: [] }] } });
+      if (u.pathname.endsWith("/app1/roles")) return json({ data: [{ user: "1020", role: "administrators" }] });
+      return json({ error: { message: "unexpected" } }, 400);
+    });
+    const none = (await metaAdAccounts(meta(stranger.fetchImpl), "T").catch((e: unknown) => e)) as AdsNoAccountsError;
+    expect(none).toMatchObject({ reason: "none_shared", diagnosis: { metaUserId: "3030", appRole: "none", appRolesListed: 1, token: { granted: { ads_read: 0 } } } });
   });
 });
 

@@ -277,7 +277,8 @@ export function connectFailure(err: unknown, provider: AdProvider, storeId: stri
   }
   // The login reaches nothing that can be connected. Which case it is decides what the person should do.
   if (err instanceof AdsNoAccountsError) {
-    logger.info({ reason: err.reason, detail: err.message, provider, storeId }, "ads: nothing to connect for this login");
+    // Meta's diagnosis says who signed in and what the grant holds (docs/ads-setup.md reads it); the login's name stays out.
+    logger.info({ reason: err.reason, detail: err.message, provider, storeId, ...(err.diagnosis ? { diagnosis: err.diagnosis } : {}) }, "ads: nothing to connect for this login");
     return NO_ACCOUNTS_ERROR[err.reason];
   }
   // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
