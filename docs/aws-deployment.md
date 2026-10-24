@@ -651,7 +651,8 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   serves other methods where they arrive (webhooks and pixel events don't follow redirects).
 - **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
   under bizinsights.io must serve HTTPS.
-- **Email**: the domain has no MX (no mailbox; "App email" says how to forward support@ and link@).
+- **Email**: Cloudflare Email Routing receives for the domain (MX `route1/2/3.mx.cloudflare.net`) and
+  forwards support@ and link@ to the owner's inbox ("App email", "Who each email comes from").
   SES sends from it (`no-reply@`, `support@`, `link@`):
   identity `bizinsights.io` in ap-southeast-2 with Easy DKIM, its three `<token>._domainkey` CNAMEs
   → `<token>.dkim.amazonses.com` in this zone, DNS only (added 2026-10-16). The existing `_dmarc`
@@ -816,13 +817,16 @@ sent them. An empty `OTP_FROM_EMAIL` or `LINK_FROM_EMAIL` sends those emails fro
   domain, not single addresses (checked 2026-10-23: `resend._domainkey` DKIM, SPF on `send.`, DMARC
   `p=quarantine` with relaxed alignment, which Resend's DKIM passes). A sender on another domain
   would be refused (`not_allowed`).
-- **Receiving**: bizinsights.io has **no MX record** (checked 2026-10-23), so mail to `support@` or
-  `link@` bounces until it is forwarded. Owner step: Cloudflare dashboard → bizinsights.io → **Email**
-  → **Email Routing** → *Get started* (it adds its MX and SPF records on the apex; they don't touch
-  Resend's on `send.` and `resend._domainkey`), add the destination `bizinsightsaus@yahoo.com` and
-  confirm the email Cloudflare sends it, then routes `support@bizinsights.io` and
-  `link@bizinsights.io` → that destination. Check: an email to support@bizinsights.io arrives in the
-  Yahoo inbox.
+- **Receiving**: Cloudflare **Email Routing**, on since 2026-10-24 (Cloudflare dashboard → Email
+  Service → **Email Routing** → bizinsights.io). It added three MX records (`route1/2/3.mx.cloudflare.net`),
+  the apex SPF `v=spf1 include:_spf.mx.cloudflare.net ~all` and its own DKIM key
+  `cf2024-1._domainkey`, all shown as *Locked* there; Resend's records on `send.` and
+  `resend._domainkey`, SES's DKIM CNAMEs and `_dmarc` are untouched. Destination
+  `bizinsightsaus@yahoo.com` (verified); rules `support@bizinsights.io` and `link@bizinsights.io`
+  → that destination, both *Active*. The catch-all is off (Drop), so mail to any other address is
+  dropped. A new destination must be verified (Cloudflare emails it a link) before a rule can use
+  it. Check: send to support@bizinsights.io and see it in the Yahoo inbox, or its "Forwarded" line
+  in Email Routing → Activity log.
 
 **Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`
 aliases point at published versions, so changing `$LATEST` alone restarts nothing live. Publish the
@@ -875,10 +879,8 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Owner-only steps
 
-- **Mail to support@ and link@** (not done as of 2026-10-23): turn on Cloudflare Email Routing and
-  forward both addresses to `bizinsightsaus@yahoo.com` ("Who each email comes from", above). Until
-  then the codes and invitations go out fine, but a reply or a question sent to those addresses
-  bounces.
+- **Mail to support@ and link@**: **done 2026-10-24**, Cloudflare Email Routing forwards both to
+  `bizinsightsaus@yahoo.com` ("Who each email comes from", above).
 - **MFA on the root user** (Trusted Advisor "MFA on Root Account"): **done 2026-10-22**, a
   passkey/security key (`aws iam list-mfa-devices` as root lists it; `aws iam get-account-summary`
   says `AccountMFAEnabled` 1). To add or replace one: sign in as root → account menu (top right) →
