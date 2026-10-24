@@ -23,6 +23,13 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
   (`lastyear`, compared with the whole year before), Custom (`@app/shared/dates`).
 - **Platform and account**: `?platform=meta|google|adsense` and `?account=<ad connection id>`, picked on
   the page and kept in the address too.
+- **Campaign and campaign status** (Campaign comparison): find a campaign by part of its name or its id,
+  and keep only one status group: Active, Paused, Removed or archived, Other (in review, with issues...), or
+  Status not read yet. The status is the platform's own word as of the account's last sync (Google's
+  `campaign.status`, read with the daily figures; Meta's `effective_status`, read from the account's
+  campaign list alongside its insights, best effort), kept per campaign in `ad_campaigns` and grouped by
+  `campaignStatusGroup` (@app/shared/ads). A filter only picks rows: share of spend stays of all spend,
+  and the totals above stay every campaign's. The status is also a column of the `ads_campaigns` report.
 - The pages ask `GET /workspaces/:ws/stores/:storeId/overview?<dates>&parts=advertising[&platform=][&account=]`
   (apps/api/src/routes/dashboard.ts): the dashboard's answer with only the ad modules and the store's
   sales and traffic they are set against, every campaign (each with its `change`) rather than the top

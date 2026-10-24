@@ -414,6 +414,8 @@ export function demoCampaignDay(ctx: DemoContext, c: DemoCampaign, day: string):
     purchases,
     purchaseValue,
     leads,
+    // As Google Ads' campaign.status would say it, so the demo's campaigns filter like a real account's.
+    campaignStatus: c.status,
   };
 }
 

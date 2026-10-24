@@ -328,7 +328,7 @@ export async function googleCampaignDays(c: GoogleConfig, accessToken: string, a
       c,
       accessToken,
       account.accountId,
-      `SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE ${during}`,
+      `SELECT campaign.id, campaign.name, campaign.status, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE ${during}`,
       account.loginCustomerId,
     )
   )

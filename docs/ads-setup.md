@@ -197,6 +197,8 @@ asks the cron function and puts a warning on the Deploy run for each provider wh
 secret is missing ("Meta Ads isn't set up", with the command to run). Details: [aws-deployment.md](aws-deployment.md),
 "Which provider secrets are there".
 
+**Which connections are in trouble?** `pnpm --filter @app/worker ops:ad-health` (docs/RUNBOOK.md, "Maintenance tasks") lists, for the whole server, the connections per platform and status, the ones that stopped syncing or keep failing, the last day's syncs and Nango's set-up, with ids and counts only.
+
 ### Addresses to register at the platforms
 
 The app builds every address from `APP_URL` (`https://bizinsights.io`), so they must be registered **exactly**:

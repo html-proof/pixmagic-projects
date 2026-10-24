@@ -1,5 +1,5 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
-import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals } from "@app/shared/ads";
+import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
@@ -226,7 +226,19 @@ export interface AdsModule extends AdFigures<AdTotals> {
    * before the range ends. The dashboard gets the 10 that spent most; the Advertising pages
    * (?parts=advertising) every one, each with its `change`.
    */
-  campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean; change?: CampaignChange | null }>;
+  campaigns?: Array<
+    AdTotals & {
+      provider: AdSpendProvider;
+      accountId: string;
+      campaignId: string;
+      name: string;
+      complete?: boolean;
+      change?: CampaignChange | null;
+      /** The platform's own word for the campaign's delivery now (Google's campaign.status, Meta's effective_status); null: not read yet. Absent from older answers. */
+      status?: string | null;
+      statusGroup?: CampaignStatusGroup | null;
+    }
+  >;
   /** Ad spend divided by the store's net sales (same currency, every day known); null with a demo among the accounts. */
   shareOfSales: number | null;
   /** A demo account (simulated figures) is among the counted accounts: the store's own sales are left out of this module. */

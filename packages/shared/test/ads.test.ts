@@ -8,6 +8,9 @@ import {
   adsenseSiteChosen,
   adsenseTotals,
   adTotals,
+  CAMPAIGN_STATUS_GROUP_LABEL,
+  CAMPAIGN_STATUS_GROUPS,
+  campaignStatusGroup,
   campaignTotals,
   canCompareFrom,
   commonCoverage,
@@ -112,7 +115,7 @@ describe("ad platform rows", () => {
   it("reads Google Ads rows, turning micros into money", () => {
     expect(
       fromGoogleAdsRow("1234567890", {
-        campaign: { id: "555", name: "Search - brand" },
+        campaign: { id: "555", name: "Search - brand", status: "PAUSED" },
         segments: { date: "2026-10-02" },
         metrics: { costMicros: "4567890", impressions: "320", clicks: "18", conversions: 1.5, conversionsValue: 99.999 },
       }),
@@ -131,8 +134,10 @@ describe("ad platform rows", () => {
       purchases: null,
       purchaseValue: null,
       leads: 0,
+      campaignStatus: "PAUSED",
     });
     expect(fromGoogleAdsRow("1", { metrics: {} })).toBeNull();
+    expect(fromGoogleAdsRow("1", { segments: { date: "2026-10-02" } })!.campaignStatus).toBeNull();
     expect(googleCustomerId("123-456-7890")).toBe("1234567890");
     expect(metaAccountId("42")).toBe("act_42");
     expect(metaAccountId("act_42")).toBe("act_42");
@@ -441,6 +446,17 @@ describe("the AdSense report's totals", () => {
     expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({ earnings: 12.5, pageViews: 5000, impressions: 8000, clicks: 25, pageRpm: 2.5, perClick: 0.5, ctr: 25 / 8000 });
     expect(adsenseReportTotals({ headers }, rows)).toMatchObject({ earnings: 1, pageViews: 100, impressions: 200, clicks: 2 });
     expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null });
+  });
+});
+
+describe("a campaign's status, as the campaign filters group it", () => {
+  it("puts Google's and Meta's own words in the same four groups, and an unread status in none", () => {
+    expect(["ENABLED", "ACTIVE", "enabled"].map(campaignStatusGroup)).toEqual(["active", "active", "active"]);
+    expect(["PAUSED", "CAMPAIGN_PAUSED", "ADSET_PAUSED"].map(campaignStatusGroup)).toEqual(["paused", "paused", "paused"]);
+    expect(["REMOVED", "DELETED", "ARCHIVED"].map(campaignStatusGroup)).toEqual(["ended", "ended", "ended"]);
+    expect(["WITH_ISSUES", "IN_PROCESS", "PENDING_BILLING_INFO", "UNKNOWN"].map(campaignStatusGroup)).toEqual(["other", "other", "other", "other"]);
+    expect([null, undefined, ""].map(campaignStatusGroup)).toEqual([null, null, null]);
+    expect(CAMPAIGN_STATUS_GROUPS.map((g) => CAMPAIGN_STATUS_GROUP_LABEL[g])).toEqual(["Active", "Paused", "Removed or archived", "Other"]);
   });
 });
 

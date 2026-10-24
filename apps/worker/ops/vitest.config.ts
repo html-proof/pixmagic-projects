@@ -8,6 +8,7 @@ import { defineConfig } from "vitest/config";
  *   pnpm --filter @app/worker ops:recompute     (needs OPS_SHOP=<shop>.myshopify.com)
  *   pnpm --filter @app/worker ops:reencrypt
  *   pnpm --filter @app/worker ops:ad-persons    (OPS_LIMIT=<sign-ins> optional)
+ *   pnpm --filter @app/worker ops:ad-health     (reads only)
  *
  * They run under Vitest, which loads the workspace's TypeScript as the tests do. Configuration
  * comes from OPS_ENV_FILE (default: the repo-root .env). It must hold the owner-role DATABASE_URL

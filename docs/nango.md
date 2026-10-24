@@ -169,17 +169,15 @@ which bizinsights' own OAuth client still allows (its redirect URIs are kept unt
 
 Claude can't see Nango's keys, create Nango's integrations or change Meta's or Google's consoles for you.
 
-1. **Create the Google Ads integration** (Meta's and AdSense's exist since 2026-10-22), from a PowerShell on
-   the PC with `aws login` done:
+1. **The integrations** (done 2026-10-24: `nango-setup.mjs --apply` created `bizinsights-google-ads` and gave
+   `bizinsights-meta-ads` the app secret Meta accepts; `--check` then said all three "ok"). To check again, from a
+   PowerShell on the PC with `aws login` done:
    ```
    node infra/cdk/scripts/nango-setup.mjs --check
-   node infra/cdk/scripts/nango-setup.mjs --apply
    ```
-   Until `bizinsights-google-ads` exists, Google Ads' card says it isn't set up, and the Google Ads
-   connections made before Nango keep syncing the old way. bizinsights asks Nango again within 5 minutes.
-2. **Meta's secret in Nango.** `--check` also says whether Nango's `bizinsights-meta-ads` holds the app's
-   secret; see "This platform isn't set up correctly" below. The correct `META_APP_SECRET` was stored in AWS
-   on 2026-10-24; Nango's copy still had to be replaced then.
+   `--apply` fixes whatever it reports. bizinsights asks Nango again within 5 minutes.
+2. **Meta's secret in Nango** must stay the app's: after a new App secret, store it with `put-secrets.mjs` and run
+   `--apply` again (see "This platform isn't set up correctly" below).
 3. **Nango's plan.** The free plan holds **10 connections**; each sign-in is one (an account choice of five
    accounts is one). Moving the older connections needs as many as there are direct sign-ins. Past the
    limit Nango refuses new ones: upgrade (Pay-as-you-go, US$50/month minimum including US$50 of usage, about
@@ -251,6 +249,6 @@ check said "Meta REFUSES META_APP_SECRET ... Error validating client secret." wi
 - `apps/web/e2e/adsNango.spec.ts`, `integrations.spec.ts`: the card with the real `@nangohq/frontend` SDK and
   a stand-in Connect UI page.
 - **Not done:** anything against the live Nango environment beyond the first AdSense connect of 2026-10-22,
-  Google Ads through Nango with a real account (its integration doesn't exist yet), the move of the
+  Google Ads through Nango with a real account (its integration exists since 2026-10-24), the move of the
   production connections (it runs after the deploy), and the comparison with Ads Manager, Google Ads and
   AdSense (step 6 above).

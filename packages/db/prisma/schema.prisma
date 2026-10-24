@@ -1081,6 +1081,7 @@ model AdConnection {
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
   campaignDays         AdCampaignDaily[]
+  campaigns            AdCampaign[]
   adsenseDays          AdsenseDaily[]
   syncRuns             AdSyncRun[]
 
@@ -1150,6 +1151,29 @@ model AdCampaignDaily {
   @@index([workspaceId])
   @@index([storeId, day])
   @@map("ad_campaign_daily")
+}
+
+// A campaign as its platform last described it to a sync: its name and delivery status, for the
+// Advertising pages' campaign filters. Its days are in ad_campaign_daily; one row per campaign an
+// account's syncs have seen, kept when the campaign stops spending (its status says why).
+model AdCampaign {
+  workspaceId  String   @map("workspace_id")
+  storeId      String   @map("store_id")
+  connectionId String   @map("connection_id")
+  provider     String
+  accountId    String   @map("account_id")
+  campaignId   String   @map("campaign_id")
+  name         String
+  /** The platform's own word: Google's campaign.status (ENABLED, PAUSED, REMOVED), Meta's effective_status (ACTIVE, PAUSED, ARCHIVED, WITH_ISSUES...). Null: not read yet. */
+  status       String?
+  /** When a sync last read the status. */
+  checkedAt    DateTime @map("checked_at")
+  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@id([connectionId, campaignId])
+  @@index([workspaceId])
+  @@index([storeId])
+  @@map("ad_campaigns")
 }
 
 // What an AdSense account earned from ads shown on one site on one day (the account's own

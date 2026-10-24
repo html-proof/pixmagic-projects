@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import type { AdSpendProvider } from "@app/shared/ads";
+import { CAMPAIGN_STATUS_GROUP_LABEL, CAMPAIGN_STATUS_GROUPS, type AdSpendProvider, type CampaignStatusGroup } from "@app/shared/ads";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BEING_READ, ChangeNote, ComparedLine } from "@/components/dashboard/AdsCommon";
 import { shownFigures } from "@/components/dashboard/adFigures";
@@ -28,6 +28,20 @@ const SORTS: Array<[SortKey, string]> = [
   ["cpc", "Cost per click"],
   ["impressions", "Impressions"],
 ];
+
+type StatusFilter = "all" | CampaignStatusGroup | "unknown";
+const STATUS_FILTERS: Array<[StatusFilter, string]> = [["all", "All statuses"], ...CAMPAIGN_STATUS_GROUPS.map((g): [StatusFilter, string] => [g, CAMPAIGN_STATUS_GROUP_LABEL[g]]), ["unknown", "Status not read yet"]];
+
+/** Whether a campaign is one the filters ask for: its name (or id) has the words typed, and its status is the one picked. */
+function matches(c: Campaign, query: string, status: StatusFilter) {
+  const q = query.trim().toLowerCase();
+  const named = !q || c.name.toLowerCase().includes(q) || c.campaignId === q;
+  const group = c.statusGroup ?? null;
+  return named && (status === "all" || (status === "unknown" ? group === null : group === status));
+}
+
+/** The platform's own word, as a reader would write it (CAMPAIGN_PAUSED → "Campaign paused"). */
+const statusWords = (s: string) => s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
 
 /** A figure not known yet (null) sorts last, whichever way. */
 function byKey(k: SortKey) {
@@ -57,12 +71,15 @@ function RoasChange({ c, a }: { c: Campaign; a: AdsModule }) {
 export function CampaignComparison({ ov }: { ov: Overview }) {
   const a = ov.modules.ads!;
   const [sort, setSort] = useState<SortKey>("spend");
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
   const campaigns = a.campaigns ?? [];
   const money = (n: number) => fmtMoney(n, a.currency);
   const total = shownFigures(a).totals?.spend ?? null;
   const names = new Map(a.accounts.map((acc) => [`${acc.provider}:${acc.accountId}`, { name: acc.name ?? acc.accountId, demo: !!acc.demo }]));
   const providers = [...new Set(campaigns.map((c) => c.provider))] as AdSpendProvider[];
-  const rows = [...campaigns].sort(byKey(sort));
+  const rows = campaigns.filter((c) => matches(c, query, status)).sort(byKey(sort));
+  const filtered = rows.length !== campaigns.length;
   return (
     <Panel
       id="ad-campaigns"
@@ -83,14 +100,48 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
       }
       aside={<ChartChoice label="Sort by" value={sort} options={SORTS} onChange={setSort} />}
     >
+      {campaigns.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="campaign-filters">
+          <input
+            type="search"
+            className="input h-9 w-56"
+            placeholder="Find a campaign"
+            aria-label="Find a campaign by name or ID"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            data-testid="campaign-search"
+          />
+          <ChartChoice label="Campaign status" value={status} options={STATUS_FILTERS} onChange={setStatus} />
+          {filtered && (
+            <span className="text-xs text-muted" data-testid="campaign-filter-count" aria-live="polite">
+              Showing {fmtNum(rows.length)} of {fmtNum(campaigns.length)}. Share of spend is still of all spend.
+            </span>
+          )}
+        </div>
+      )}
       {campaigns.length === 0 ? (
         <p className="text-sm text-muted">No campaign spent anything in these dates.</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-muted" data-testid="campaign-filter-empty">
+          No campaign here matches.{" "}
+          <button
+            type="button"
+            className="text-accent underline-offset-2 hover:underline"
+            onClick={() => {
+              setQuery("");
+              setStatus("all");
+            }}
+          >
+            Show every campaign
+          </button>
+        </p>
       ) : (
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full min-w-[72rem] text-sm" data-testid="campaign-comparison">
             <thead className="text-left text-xs text-muted">
               <tr>
                 <th className="px-1 pb-2 font-normal">Campaign</th>
+                <th className="px-1 pb-2 font-normal">Status</th>
                 <th className="px-1 pb-2 text-right font-normal">Spend</th>
                 <th className="px-1 pb-2 text-right font-normal">Share of spend</th>
                 <th className="px-1 pb-2 text-right font-normal">Spend change</th>
@@ -110,7 +161,13 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
                 const P = PLATFORM[c.provider];
                 const account = names.get(`${c.provider}:${c.accountId}`);
                 return (
-                  <tr key={`${c.provider}:${c.accountId}:${c.campaignId}`} className="border-t border-border" data-testid="campaign-row" data-provider={c.provider}>
+                  <tr
+                    key={`${c.provider}:${c.accountId}:${c.campaignId}`}
+                    className="border-t border-border"
+                    data-testid="campaign-row"
+                    data-provider={c.provider}
+                    data-status={c.statusGroup ?? "unknown"}
+                  >
                     <td className="px-1 py-2">
                       <span className="inline-flex items-center gap-2">
                         <P.Icon size={14} />
@@ -121,6 +178,9 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
                         {P.name} · {account?.name ?? c.accountId}
                         {c.complete === false ? " · its account's figures stop before these dates end" : ""}
                       </span>
+                    </td>
+                    <td className="whitespace-nowrap px-1 py-2 text-xs" title={c.status ? `${P.name} says ${c.status}` : undefined}>
+                      {c.status ? statusWords(c.status) : <span className="text-muted">Not read yet</span>}
                     </td>
                     <td className="px-1 py-2 text-right tabular-nums">{money(c.spend)}</td>
                     <td className="px-1 py-2 text-right tabular-nums">{total ? fmtPct(c.spend / total) : "—"}</td>
@@ -147,7 +207,8 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
       )}
       <p className="mt-3 text-xs text-muted">
         Purchases, their value and ROAS are what each platform credits to its own ads: a sale can be counted by both, and they aren&apos;t your Shopify orders. A campaign&apos;s change
-        compares the same whole days as the totals above; one that spent nothing in the dates compared is new, not up from $0.
+        compares the same whole days as the totals above; one that spent nothing in the dates compared is new, not up from $0. A status is the platform&apos;s own, as of the
+        account&apos;s last sync.
       </p>
     </Panel>
   );

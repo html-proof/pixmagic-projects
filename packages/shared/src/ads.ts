@@ -252,6 +252,30 @@ export interface AdDayRow {
   purchaseValue: number | null;
   /** Leads from lead forms and lead events (Meta); 0 where the platform has none. */
   leads: number;
+  /**
+   * The campaign's delivery status as the platform states it now (Google's campaign.status; Meta's
+   * effective_status, read alongside), kept per campaign (ad_campaigns), not per day. Absent: not read.
+   */
+  campaignStatus?: string | null;
+}
+
+/**
+ * A campaign's delivery status as the Advertising pages filter by it, from the platform's own word
+ * (Google's campaign.status, Meta's effective_status): running ("active"), paused (Meta also by its
+ * campaign or ad set), "ended" (removed, deleted, archived), or "other" (in review, with issues,
+ * billing needed, anything new). Null: the status hasn't been read yet.
+ */
+export const CAMPAIGN_STATUS_GROUPS = ["active", "paused", "ended", "other"] as const;
+export type CampaignStatusGroup = (typeof CAMPAIGN_STATUS_GROUPS)[number];
+export const CAMPAIGN_STATUS_GROUP_LABEL: Record<CampaignStatusGroup, string> = { active: "Active", paused: "Paused", ended: "Removed or archived", other: "Other" };
+
+export function campaignStatusGroup(status: string | null | undefined): CampaignStatusGroup | null {
+  if (!status) return null;
+  const s = status.toUpperCase();
+  if (s === "ACTIVE" || s === "ENABLED") return "active";
+  if (s === "PAUSED" || s === "CAMPAIGN_PAUSED" || s === "ADSET_PAUSED") return "paused";
+  if (s === "REMOVED" || s === "DELETED" || s === "ARCHIVED") return "ended";
+  return "other";
 }
 
 /**
@@ -1009,7 +1033,7 @@ export function metaAttributionLabel(setting: string | null | undefined): string
 
 /** One result of googleAds:searchStream for the campaign query (JSON field names are camelCase). */
 export interface GoogleAdsRow {
-  campaign?: { id?: string; name?: string };
+  campaign?: { id?: string; name?: string; status?: string };
   segments?: { date?: string };
   metrics?: { costMicros?: string | number; impressions?: string | number; clicks?: string | number; conversions?: string | number; conversionsValue?: string | number };
 }
@@ -1036,6 +1060,7 @@ export function fromGoogleAdsRow(accountId: string, r: GoogleAdsRow): AdDayRow |
     purchases: null,
     purchaseValue: null,
     leads: 0,
+    campaignStatus: r.campaign?.status ?? null,
   };
 }
 
