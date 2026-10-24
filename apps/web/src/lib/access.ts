@@ -66,10 +66,11 @@ export const TOPIC_EXPORT: Partial<Record<Topic, string>> = {
 };
 
 /**
- * The dashboard topics that have pages of their own in the Advertising area: the dashboard sends
- * ?view=ads and ?view=adsense there (with its dates), so old links keep working.
+ * The dashboard topics that have pages of their own: the Advertising area's, and the Shopping Funnel
+ * (shoppers). The dashboard sends ?view=ads, ?view=adsense and ?view=shoppers there (with its
+ * dates), so old links keep working.
  */
-export const TOPIC_PAGE: Partial<Record<Topic, string>> = { ads: "/advertising", adsense: "/advertising/adsense" };
+export const TOPIC_PAGE: Partial<Record<Topic, string>> = { ads: "/advertising", adsense: "/advertising/adsense", shoppers: "/funnel" };
 
 /** A member with permissions in at least one dashboard area (everything but Integrations, Staff and Reports alone). */
 export function hasDashboardAccess(access: MemberAccess): boolean {
@@ -112,6 +113,7 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/ads", "marketing.ads"],
   ["/advertising", "marketing.ads"],
   ["/advertising/campaigns", "marketing.campaigns"],
+  ["/funnel", "analytics.conversion"],
   ["/inventory", "inventory.view"],
   ["/team", "members:manage"],
   ["/staff", "staff"],

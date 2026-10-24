@@ -32,7 +32,8 @@ Workspace ──< Membership >── User           (role: owner | admin | analy
 | Store connection | `stores` (encrypted tokens, granted scopes, pixel key), `sync_jobs`, `webhook_events` | API (OAuth), worker |
 | Commerce data | `orders`, `order_line_items`, `refunds`, `products`, `product_variants` | worker (imports, webhooks) through `core/persist.ts` |
 | Aggregates | `daily_store_metrics` (one row per store and store-local day) | worker (`recomputeDays`) |
-| Storefront funnel | `funnel_visits`, `funnel_daily`, `pixel_events_seen` | API (`/pixel`) |
+| Storefront funnel | `funnel_visits`, `funnel_product_visits`, `funnel_daily`, `pixel_events_seen` | API (`/pixel`) |
+| Shopping Funnel checklist | `funnel_action_checks` | API (`PUT …/funnel/actions/:id`) |
 | Advertising | `ad_connections` (the sealed Nango reference, or an older connection's encrypted tokens), `ad_campaign_daily`, `ad_campaigns` (each campaign's latest name and status), `adsense_daily`, `ad_sync_runs` | API (connect through Nango), worker (sync) |
 | WhatsApp | `whatsapp_connections`, `whatsapp_settings`, `whatsapp_templates`, `whatsapp_contacts`, `whatsapp_messages`, `whatsapp_message_events`, `whatsapp_campaigns`, `whatsapp_automation_rules`, `whatsapp_automation_runs`, `order_tracking`, `order_tracking_events`, `abandoned_checkouts`, `customer_reviews` | API, worker ([../whatsapp.md](../whatsapp.md)) |
 | Operations | `alerts`, `audit_logs` | API, worker |

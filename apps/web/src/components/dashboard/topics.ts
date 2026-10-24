@@ -11,7 +11,7 @@ const INFO: Record<Topic, { title: string; icon: IconName }> = {
   ads: { title: "Ads", icon: "megaphone" },
   adsense: { title: "Ad earnings", icon: "coins" },
   products: { title: "Best sellers", icon: "trophy" },
-  shoppers: { title: "Shoppers", icon: "eye" },
+  shoppers: { title: "Shopping funnel", icon: "eye" },
   timing: { title: "Busiest times", icon: "clock" },
   channels: { title: "Sales channels", icon: "store" },
   shipping: { title: "Shipping", icon: "truck" },

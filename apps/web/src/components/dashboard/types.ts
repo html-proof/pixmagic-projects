@@ -2,6 +2,7 @@
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
+import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
@@ -400,9 +401,49 @@ export interface FunnelModule extends JourneySummary {
   exitPages: JourneyPageRow[];
   /** The first day every visit was counted from: the day after the pixel was put in place. */
   historyFrom?: string | null;
-  /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
-  previous: { visits: number | null; conversionRate: number | null; imported?: boolean };
+  /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". `reached`: visits per step then. */
+  previous: { visits: number | null; conversionRate: number | null; imported?: boolean; reached?: number[] | null };
   deltas: { visits: number | null; conversionRate: number | null };
+}
+
+/** One product page on the Shopping Funnel page (funnelDetail in packages/core/src/reports/funnel.ts). */
+export interface FunnelProduct {
+  handle: string;
+  productId: string | null;
+  title: string | null;
+  imageUrl: string | null;
+  url: string | null;
+  /** Visits that viewed its page; null when product pages weren't recorded in these dates. */
+  viewed: number | null;
+  /** Visits that added it to cart from its page. */
+  added: number | null;
+  addRate: number | null;
+  /** Visits that started on its page; of those, visits that left the store from it without buying; and all visits that left from it without buying. */
+  landed: number;
+  landedLeft: number;
+  exits: number;
+  /** The store's orders of it in these dates (only with the top products permission). */
+  orders?: number;
+  units?: number;
+  netSales?: number;
+}
+
+/** The Shopping Funnel page's funnel (GET …/overview?parts=funnel): the dashboard's, and everything funnelDetail adds. */
+export interface FunnelPageModule extends FunnelModule {
+  filter: FunnelFilter;
+  stepDeltas: Array<number | null>;
+  browsers: number;
+  transitions: FunnelTransition[];
+  /** Day by day, visits reached per step; null on a day before visits were counted. */
+  daily: Array<{ day: string; reached: number[] | null }>;
+  segments: { device: SegmentFunnel[]; country: SegmentFunnel[]; landing: SegmentFunnel[]; visitor: SegmentFunnel[] };
+  products: FunnelProduct[];
+  productSales: boolean;
+  /** The first day device, country and product pages were recorded. */
+  detailsFrom: string | null;
+  lastEventAt: string | null;
+  insights: FunnelInsight[];
+  actions: Array<{ id: string; doneAt: string; doneBy: string | null; doneByName: string | null }>;
 }
 
 /** GET .../contacts: read live from Shopify, never stored (see apps/api/src/routes/contacts.ts). Names, contact details and order history can each be withheld (Team & Access). */

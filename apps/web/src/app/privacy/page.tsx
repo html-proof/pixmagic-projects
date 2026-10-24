@@ -25,8 +25,9 @@ export const metadata: Metadata = {
  *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
- *   - the funnel stores hashed browser ids and cleaned page paths only (apps/api/src/routes/pixel.ts,
- *     packages/shared/src/journey.ts `cleanPath`);
+ *   - the funnel stores hashed browser ids, cleaned page paths, the product pages each visit saw, and one
+ *     word each for the kind of device and the country (apps/api/src/routes/pixel.ts,
+ *     packages/shared/src/journey.ts `cleanPath`, packages/shared/src/funnel.ts `funnelDevice`);
  *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
  *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL, and Meta's
@@ -43,7 +44,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-19";
+const UPDATED = "2026-10-24";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -205,8 +206,9 @@ export default function PrivacyPage() {
         <p>
           We keep the page address without its query string, and never keep checkout, order-status or account addresses, because those
           carry a shopper&apos;s token. The browser ID is stored only as a one-way hash. From these events we record each visit&apos;s
-          landing page, last page, how far it progressed and which parts of the store it viewed. No names, email addresses or IP
-          addresses are stored.
+          landing page, last page, how far it progressed, which parts of the store and which product pages it viewed, the kind of
+          device it came from (mobile, tablet or desktop, read from the browser&apos;s own description of itself) and its country (as
+          our network places the request). No names, email addresses or IP addresses are stored.
         </p>
 
         <h3>Customers to follow up (only if you allow access to your customers)</h3>

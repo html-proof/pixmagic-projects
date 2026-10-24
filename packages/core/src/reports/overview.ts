@@ -7,7 +7,7 @@ import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
-import { funnel } from "./funnel.js";
+import { funnel, funnelDetail, type FunnelView } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
 import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
 import { productPerformance } from "./products.js";
@@ -57,7 +57,9 @@ export interface AdsView {
  * @app/shared/access): the others are not even computed. The route still passes the answer through
  * `redactOverview`, which also takes out the fields inside a module that need their own permission.
  *
- * `adsView` narrows the ad modules for the Advertising pages (AdsView).
+ * `adsView` narrows the ad modules for the Advertising pages (AdsView). `funnelView`: the Shopping
+ * Funnel page's question (its filter), which makes the funnel module the page's full report
+ * (`funnelDetail`) instead of the dashboard's summary.
  *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
@@ -68,6 +70,7 @@ export async function storeOverview(
   now = new Date(),
   sees: (module: string) => boolean = () => true,
   adsView: AdsView = {},
+  funnelView?: FunnelView,
 ) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
@@ -175,7 +178,7 @@ export async function storeOverview(
 
   if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range, {}, now);
 
-  if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store);
+  if (enabled.has("funnel")) modules.funnel = funnelView ? await funnelDetail(tx, scope, range, previous, store, funnelView) : await funnel(tx, scope, range, previous, store);
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   type SalesFigures = { netSales?: number; orders?: number };

@@ -10,6 +10,7 @@ import {
   ChartColumn,
   ChevronDown,
   CircleCheck,
+  Funnel,
   Gauge,
   Headset,
   Info,
@@ -64,7 +65,8 @@ import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } f
 // (logo, the dashboard's topics and the other areas, help, and the account at its foot) beside a
 // top bar over the page (store, search, notifications). On a phone the sidebar slides in from the
 // menu button and the account sits in the top bar. Topics open the dashboard's detail panels
-// (?view=…), the same ones its cards open; advertising has an area of its own (/advertising).
+// (?view=…), the same ones its cards open; advertising (/advertising) and the shopping funnel (/funnel)
+// have pages of their own.
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";
@@ -160,7 +162,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
     ...(ads ? [{ ...area("/advertising", "Advertising", Megaphone), active: within("/advertising") && !adsPlatform }] : []),
     ...topic("discounts", "Discounts", BadgePercent),
-    ...topic("shoppers", "Analytics", ChartColumn),
+    // The Shopping Funnel: a page of its own (/funnel), shown to whoever the dashboard's shoppers panel was.
+    ...(seesTopic(access, "shoppers", offers) ? [area("/funnel", "Shopping Funnel", Funnel)] : []),
   ];
   const inventory = offers("inventory") && allowed("inventory.view");
   const store: NavItem[] = [
@@ -559,7 +562,7 @@ const TOPIC_ICON: Record<Topic, LucideIcon> = {
   ads: Megaphone,
   adsense: Megaphone,
   products: Package,
-  shoppers: ChartColumn,
+  shoppers: Funnel,
   timing: ChartColumn,
   channels: Store,
   shipping: Truck,
