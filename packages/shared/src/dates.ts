@@ -14,6 +14,21 @@ export function localTime(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date);
 }
 
+/**
+ * The moment a store-local day begins, as a UTC instant: "2026-01-01" in Melbourne (UTC+11) is
+ * 2025-12-31T13:00:00Z. Where a daylight-saving change skips midnight, the first moment the day has.
+ */
+export function startOfLocalDay(day: string, timeZone: string): Date {
+  const wanted = Date.parse(`${day}T00:00:00Z`);
+  let t = wanted;
+  // Shift by the zone's offset at the guess, twice: once more lands right across a DST change.
+  for (let i = 0; i < 2; i++) {
+    const at = new Date(t);
+    t -= Date.parse(`${localDay(at, timeZone)}T${localTime(at, timeZone)}Z`) - wanted;
+  }
+  return new Date(t);
+}
+
 export function addDays(day: string, n: number): string {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -24,7 +39,12 @@ export function daysBetweenInclusive(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 }
 
-export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth", "ytd", "lastyear", "custom"] as const;
+/**
+ * The dates the dashboard can report on. `6m` and `12m` are the last 6 and 12 months up to today
+ * (from the day after the same date 6 or 12 months earlier: 25 Apr – 24 Oct, 25 Oct 2025 – 24 Oct
+ * 2026). No preset or custom range is longer than 12 months (`latestRangeEnd`).
+ */
+export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "6m", "12m", "mtd", "lastmonth", "ytd", "lastyear", "custom"] as const;
 export type DatePreset = (typeof DATE_PRESETS)[number];
 
 export interface DateRange {
@@ -65,23 +85,95 @@ export function eachDay(from: string, to: string): string[] {
  * counting as a date: Chrome reports "2026" typed digit by digit as 0002, 0020, 0202, then 2026.
  */
 export const MIN_CUSTOM_DAY = "2000-01-01";
+/** The most days 12 months can hold (`latestRangeEnd`): the ad reports' own limit. */
 export const MAX_CUSTOM_DAYS = 366;
+/** The longest range asked about at once, as the dashboard, its downloads and Customer Messaging take it. */
+export const MAX_RANGE_MONTHS = 12;
 
-export type CustomRangeProblem = "incomplete" | "reversed" | "future" | "too_long";
+/** The same calendar day `n` months earlier (a negative `n`: later), or the month's last day when it has none: "2026-08-31", 6 → "2026-02-28". */
+export function monthsEarlier(day: string, n: number): string {
+  const y = Number(day.slice(0, 4));
+  const m = Number(day.slice(5, 7)) - 1 - n;
+  const year = y + Math.floor(m / 12);
+  const month = ((m % 12) + 12) % 12;
+  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const d = Math.min(Number(day.slice(8, 10)), last);
+  return `${String(year).padStart(4, "0")}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
+ * The last day a range starting on `from` may run to: 12 months, the day before the same date a
+ * year later ("2025-03-15" → "2026-03-14", "2024-01-01" → "2024-12-31"). From 29 February the year
+ * runs to the 28th: 1 March is the first day it hasn't reached. At most 366 days, in a year
+ * holding a 29 February.
+ */
+export function latestRangeEnd(from: string): string {
+  const year = String(Number(from.slice(0, 4)) + 1).padStart(4, "0");
+  const next = `${year}${from.slice(4)}`;
+  return addDays(isDay(next) ? next : `${year}-03-01`, -1);
+}
+
+/**
+ * The first store-local day a store has anything from: the day Shopify created it (shop.createdAt,
+ * stores.shop_created_at), or an earlier order's day. Orders brought in from another platform keep
+ * the day they were processed there, which can be before the store existed on Shopify, and are
+ * never left out. Null while neither is known (the store's details not read yet, and no orders).
+ */
+export function storeStartDay(createdAt: Date | null, timeZone: string, oldestOrderDay: string | null): string | null {
+  const created = createdAt ? localDay(createdAt, timeZone) : null;
+  if (created === null || oldestOrderDay === null) return created ?? oldestOrderDay;
+  return oldestOrderDay < created ? oldestOrderDay : created;
+}
+
+/**
+ * A calendar year as dates to report on: 1 January to 31 December, or to `today` for the year still
+ * running. Twelve months, so any year can be asked about on its own, however long ago.
+ */
+export function calendarYear(year: number, today: string): DateRange {
+  const y = String(year).padStart(4, "0");
+  const to = `${y}-12-31`;
+  return { from: `${y}-01-01`, to: to > today ? today : to };
+}
+
+/** The years from `startDay`'s (MIN_CUSTOM_DAY's when unknown) to `today`'s, newest first: what the year picker offers. */
+export function yearsBetween(startDay: string | null, today: string): number[] {
+  const first = Number((startDay && startDay >= MIN_CUSTOM_DAY ? startDay : MIN_CUSTOM_DAY).slice(0, 4));
+  const years: number[] = [];
+  for (let y = Number(today.slice(0, 4)); y >= first; y--) years.push(y);
+  return years;
+}
+
+/** How early custom dates may start: from `earliest` on (null or absent: MIN_CUSTOM_DAY). */
+export interface RangeLimits {
+  earliest?: string | null;
+}
+
+/**
+ * The dashboard's limits for a store whose first day is `start` (`storeStartDay`): custom dates may
+ * not start before it once Shopify's creation date is known (`created`), since nothing happened in
+ * the store before then. Until it is, `start` is only the first order's day, and a quiet first
+ * month before that order is still the store's: no earlier limit than MIN_CUSTOM_DAY is set.
+ */
+export const storeRangeLimits = (start: string | null, created: boolean): RangeLimits => ({ earliest: created ? start : null });
+
+export type CustomRangeProblem = "incomplete" | "reversed" | "future" | "before_start" | "too_long";
 
 /**
  * Why a custom range can't be reported on, or null when it can. The API refuses these and the
  * dashboard holds off asking for them, so both read this one definition.
  *
  * With `today` (the store's), a range may run past it, because it is reported only up to today
- * (see `clampCustomRange`), but it can't start after it, and its length is counted to today.
+ * (see `clampCustomRange`), but it can't start after it, and its length is counted to today: at
+ * most 12 months (`latestRangeEnd`), however far back it starts. `limits` bound how early it may
+ * start (RangeLimits).
  */
-export function customRangeProblem(r: { from?: string; to?: string }, today?: string): CustomRangeProblem | null {
+export function customRangeProblem(r: { from?: string; to?: string }, today?: string, limits: RangeLimits = {}): CustomRangeProblem | null {
   const { from, to } = r;
   if (!isDay(from) || !isDay(to) || from < MIN_CUSTOM_DAY || to < MIN_CUSTOM_DAY) return "incomplete";
   if (from > to) return "reversed";
   if (today && from > today) return "future";
-  if (daysBetweenInclusive(from, clampCustomRange({ from, to }, today).to) > MAX_CUSTOM_DAYS) return "too_long";
+  if (limits.earliest && from < limits.earliest) return "before_start";
+  if (clampCustomRange({ from, to }, today).to > latestRangeEnd(from)) return "too_long";
   return null;
 }
 
@@ -98,7 +190,8 @@ const CUSTOM_RANGE_ERROR: Record<CustomRangeProblem, string> = {
   incomplete: "Invalid custom range",
   reversed: "Invalid custom range",
   future: "Range starts after today",
-  too_long: "Range too long",
+  before_start: "Range starts before the store's first day",
+  too_long: "Range too long: pick up to 12 months at a time",
 };
 
 /**
@@ -123,10 +216,11 @@ const CUSTOM_COMPARISON_ERROR: Record<CustomRangeProblem, string> = {
   incomplete: "Invalid comparison dates",
   reversed: "Invalid comparison dates",
   future: "Comparison starts after today",
-  too_long: "Comparison too long",
+  before_start: "Comparison starts before the store's first day",
+  too_long: "Comparison too long: compare up to 12 months at a time",
 };
 
-function presetRange(preset: DatePreset, today: string, custom?: DateRange): DateRange {
+function presetRange(preset: DatePreset, today: string, custom: DateRange | undefined, limits: RangeLimits): DateRange {
   switch (preset) {
     case "today":
       return { from: today, to: today };
@@ -140,6 +234,10 @@ function presetRange(preset: DatePreset, today: string, custom?: DateRange): Dat
       return { from: addDays(today, -29), to: today };
     case "90d":
       return { from: addDays(today, -89), to: today };
+    case "6m":
+      return { from: addDays(monthsEarlier(today, 6), 1), to: today };
+    case "12m":
+      return { from: addDays(yearEarlier(today), 1), to: today };
     case "mtd":
       return { from: `${today.slice(0, 8)}01`, to: today };
     case "lastmonth": {
@@ -155,14 +253,18 @@ function presetRange(preset: DatePreset, today: string, custom?: DateRange): Dat
       return { from: `${year}-01-01`, to: `${year}-12-31` };
     }
     case "custom": {
-      const problem = customRangeProblem(custom ?? {}, today);
+      const problem = customRangeProblem(custom ?? {}, today, limits);
       if (problem) throw new Error(CUSTOM_RANGE_ERROR[problem]);
       return clampCustomRange(custom!, today);
     }
   }
 }
 
-/** The whole days `range` is compared with (see COMPARE_MODES); throws on custom dates that can't be. */
+/**
+ * The whole days `range` is compared with (see COMPARE_MODES); throws on custom dates that can't be.
+ * Comparison dates may reach back before the store's first day (`limits`): the API then says the
+ * orders don't reach back to them, rather than refusing a year-on-year question about a new store.
+ */
 function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareChoice, today: string): DateRange {
   switch (compare.mode) {
     case "year":
@@ -192,7 +294,9 @@ function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareCh
 /**
  * The dates a preset reports on in the store's zone, and what they are compared with (`compare`,
  * the period just before when not given). Throws, with a message the API answers 400
- * `invalid_range` with, on custom dates or comparison dates that can't be reported on.
+ * `invalid_range` with, on custom dates or comparison dates that can't be reported on: longer than
+ * 12 months, or (`limits`, the store's `storeRangeLimits`) custom dates starting before the store's
+ * first day once Shopify's creation date is known.
  */
 export function resolvePreset(
   preset: DatePreset,
@@ -200,9 +304,10 @@ export function resolvePreset(
   timeZone: string,
   custom?: DateRange,
   compare: CompareChoice = { mode: "previous" },
+  limits: RangeLimits = {},
 ): { range: DateRange; previous: Comparison } {
   const today = localDay(now, timeZone);
-  const range = presetRange(preset, today, custom);
+  const range = presetRange(preset, today, custom, limits);
   const previous = comparisonDays(range, preset, compare, today);
   // Today isn't over: whatever it is compared with is counted up to this moment of its own last day.
   return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };

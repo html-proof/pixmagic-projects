@@ -65,6 +65,12 @@ export interface SyncJobData {
    */
   pagedOnly?: boolean;
   /**
+   * On a full orders import with read_all_orders: the year of the history plan this message reads
+   * (order_history_windows, packages/core/src/orderHistory.ts). Absent on the import's first message,
+   * which plans the years, and on every other orders job.
+   */
+  history?: { windowId: string };
+  /**
    * On a "shop" job: the jobs seeded with it that wait for the store's time zone, which it
    * starts once it has learned it. Absent on messages sent before the ids were carried.
    */

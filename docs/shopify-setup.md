@@ -148,7 +148,8 @@ What keeps a store complete, and its limits:
   per 5 minutes per store.
 - **History.** Shopify gives 60 days of orders without `read_all_orders`; that scope has to be
   requested in the Partner Dashboard (API access requests) and approved for each app before a
-  store can grant it. Ranges reaching further back show only what was imported.
+  store can grant it. Ranges reaching further back show those days as not imported, and the line
+  under the dashboard's dates says from when the orders are in and why (below, "History import").
 - **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only with the GitHub
   variable `AWS_SCHEDULES=on`; without it, missed webhooks are repaired only while a dashboard is
   open, by "Sync now", or by the re-read above.
@@ -174,8 +175,53 @@ Shopify screen set to compare with 14 Mar), in this order:
    (`scopeFollowUpKinds`), which reads every order with no date filter and records the history as
    complete, so "No earlier data" goes away for any comparison.
 
-Declaring it in `optional_scopes` instead grants nothing by itself: no dashboard button asks for
-`read_all_orders` (it unlocks no module), so it would need one first.
+Or, once approved, declare it in `optional_scopes` instead (every toml and
+`SHOPIFY_OPTIONAL_SCOPES`, as in 3e): installs keep working for merchants who never want it, and the
+line under the dashboard's dates then offers owners and admins **Import full history**, which sends
+them to Shopify to grant it (`POST .../scopes/request` with `scopes: ["read_all_orders"]`). The
+overview's `data.history.access` says which applies to a store: `granted`, `reconnect` (declared
+required, this store's grant predates it), `requestable` (declared optional) or `awaiting_shopify`
+(declared nowhere: the dashboard says Shopify has to approve bizinsights first, with no button).
+
+Apps created in the Dev Dashboard under a merchant's own organization (not a Partner organization) need
+no approval for `read_all_orders`, per Shopify's access-scope docs; every app in `shopify-app/` is in
+a Partner organization today, and `SHOPIFY_SCOPES` is shared by all of them, so a scope added for one
+is asked of every store.
+
+### History import (read_all_orders): a year at a time
+
+With `read_all_orders`, a full orders import (the first import, a newly granted scope, a store whose
+sync broke) reads the store's whole history **one store-local calendar year at a time, newest first**
+(packages/core/src/orderHistory.ts, table `order_history_windows`):
+
+1. The import's first message asks Shopify for the store's first order (`OLDEST_ORDER_QUERY`,
+   `orders(first: 1, sortKey: CREATED_AT)`) and plans one row per year from that order's year to this
+   one. Years go by creation date, as the order search filters, with each boundary the start of
+   1 January in the store's time zone, shared by the years either side, so no order falls between
+   two. The newest year runs on to now; the oldest has no lower bound.
+2. Each year is one bulk export (`created_at:>='…' AND created_at:<'…'`), polled and ingested as the
+   60-day import is; a year whose export fails or runs past the poll limit is walked page by page on
+   its own, and the next year tries bulk again. The export submitted for a year is recorded on its
+   row, so a finished export of the year before is never read as this year's.
+3. When a year is in, its row is done with its order count, its days are added up (the dashboard shows
+   it at once), and the store's history start (`orders_history_from`) moves back to its 1 January once
+   every newer year is done too. After the oldest year the store's returning customers are settled, the
+   epoch is recorded (the whole history is in) and the import ends as any full import does.
+4. A job that gives up (its last retry, or the stale-job sweep) marks the year it was reading failed.
+   The next full import (the dashboard retries an `error` store about every half hour) **resumes**:
+   years already done are kept and the import carries on from the year that failed. The newest year
+   is always read again (orders kept coming meanwhile), and a plan read without customers is started
+   over once `read_customers` is granted, since its orders lack the customer. A plan whose years are
+   all done is started over by the next full import. Disconnecting the store deletes the rows.
+
+Why years: one export of five years of orders with their sales records can run for hours, and an
+export still running after about an hour is walked page by page instead, at Shopify's query-cost
+pace of about 7 orders every 9 seconds (days, for a large store). A year is a fraction of that, a
+year that fails is all that is read again, and the most recent years, the ones looked at most,
+arrive first. The dashboard's line under the dates names the years in and the one being read
+("2026 and 2025 are in, 2024 now (3 of 6 years)"), or the year that failed, from `data.history.years`.
+
+Without `read_all_orders` nothing above applies: Shopify's 60 days are read as one window.
 
 ## 3c. A client's store with its own app (custom distribution) — not the product strategy
 

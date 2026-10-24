@@ -32,7 +32,7 @@ export function liveSyncJobs(storeId: string, idleMs: number): Prisma.SyncJobWhe
  * even when webhooks are missed: re-pull recently updated orders every 5 minutes and the
  * catalog + stock every 30; a store with a sync problem retries its import every 30 minutes.
  */
-export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryEverySec: 1800, orderDays: 2, sourcesEverySec: 86_400, sourcesDays: 60 } as const;
+export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryEverySec: 1800, orderDays: 2, sourcesEverySec: 86_400, sourcesDays: 60, shopEverySec: 86_400 } as const;
 
 /**
  * Whether the store has orders in the import window that were stored without something only a
@@ -63,7 +63,7 @@ const BUSY_IDLE_MS = 10 * 60 * 1000;
  */
 export async function autoRefresh(
   deps: Pick<Deps, "queues" | "coord">,
-  store: Pick<Store, "id" | "workspaceId" | "grantedScopes" | "lastSyncedAt" | "status">,
+  store: Pick<Store, "id" | "workspaceId" | "grantedScopes" | "lastSyncedAt" | "status"> & Partial<Pick<Store, "shopCreatedAt">>,
 ): Promise<string[]> {
   if (store.status !== "active" && store.status !== "error") return [];
   const busy = await systemDb.syncJob.count({ where: liveSyncJobs(store.id, BUSY_IDLE_MS) });
@@ -86,9 +86,19 @@ export async function autoRefresh(
   if (expandScopes(store.grantedScopes).has("read_products") && (await due("catalog", AUTO_REFRESH.catalogEverySec))) {
     kinds.push({ kind: "products" }, { kind: "variants" });
   }
+  // A store connected before bizinsights read when Shopify created it: read its details again, which
+  // brings that date (where the dashboard's dates begin). At most daily, until it is known.
+  if (store.shopCreatedAt === null && (await due("shop", AUTO_REFRESH.shopEverySec))) kinds.push({ kind: "shop" });
   for (const k of kinds) {
     const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: k.kind } });
-    await deps.queues.sync.send({ storeId: store.id, kind: k.kind, syncJobId: job.id, ...(k.sinceDays ? { sinceDays: k.sinceDays } : {}) });
+    await deps.queues.sync.send({
+      storeId: store.id,
+      kind: k.kind,
+      syncJobId: job.id,
+      ...(k.sinceDays ? { sinceDays: k.sinceDays } : {}),
+      // No jobs wait on this one: without the (empty) list the worker would start orders rows queued alongside it a second time.
+      ...(k.kind === "shop" ? { waitingJobIds: [] } : {}),
+    });
   }
   return kinds.map((k) => k.kind);
 }

@@ -69,8 +69,14 @@ export type BulkResult = { done: boolean };
 
 export interface BulkApi {
   gql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
-  /** The backfill window, from the same `ordersSearch` the paged path uses. */
+  /** The backfill window, from the same `ordersSearch` the paged path uses (a history year's search). */
   ordersSearch: () => string | null;
+  /**
+   * Reading one year of a full history (orderHistory in core): which export is this year's, and
+   * where to record the one submitted or adopted for it. A finished export lingers as the shop's
+   * current one, and the next year's start must not read last year's file as its own.
+   */
+  historyYear?: { ownsExport: (bulkId: string) => boolean; exportStarted: (bulkId: string) => Promise<void> };
 }
 
 const lockKey = (storeId: string) => `bulk:orders:${storeId}`;
@@ -181,7 +187,8 @@ async function fallbackToPaged(data: SyncJobData, deps: WorkerDeps, reason: stri
     "bulk order backfill unavailable; falling back to the paged path",
   );
   if (holdsLock) await deps.coord.release(lockKey(data.storeId));
-  await deps.queues.sync.send({ storeId: data.storeId, kind: "orders", syncJobId: data.syncJobId, pagedOnly: true });
+  // A history year falls back on its own: the paged walk reads that year, and the next one tries bulk again.
+  await deps.queues.sync.send({ storeId: data.storeId, kind: "orders", syncJobId: data.syncJobId, pagedOnly: true, ...(data.history ? { history: data.history, progress: data.progress } : {}) });
   return { done: false };
 }
 
@@ -230,11 +237,12 @@ async function adoptOrSubmit(data: SyncJobData, store: Store, deps: WorkerDeps, 
       // It is scoped to app + shop, so it is ours - almost always an earlier attempt of this
       // same job. Adopt it; starting a second one would be refused anyway.
       logger.info({ storeId: store.id, bulkId: current.id }, "adopting the bulk operation already running for this shop");
+      await api.historyYear?.exportStarted(current.id);
       await nextBulk(data, deps, { phase: "poll", id: current.id, polls: 0 }, pollDelayS(0));
       return { done: false };
     }
     await api.gql(BULK_OPERATION_CANCEL, { id: current.id }).catch(() => undefined);
-  } else if (current?.status === "COMPLETED" && current.url && age < STALE_OPERATION_MS) {
+  } else if (current?.status === "COMPLETED" && current.url && age < STALE_OPERATION_MS && (api.historyYear?.ownsExport(current.id) ?? true)) {
     // A redelivered `start` after the export already finished: skip straight to reading it.
     logger.info({ storeId: store.id, bulkId: current.id }, "a completed bulk export is already waiting; ingesting it");
     await nextBulk(data, deps, { phase: "ingest", id: current.id, byteOffset: 0 });
@@ -255,11 +263,13 @@ async function adoptOrSubmit(data: SyncJobData, store: Store, deps: WorkerDeps, 
     return fallbackToPaged(data, deps, `bulkOperationRunQuery rejected: ${why}`);
   }
   const now = new Date();
+  await api.historyYear?.exportStarted(bulkOperation.id);
+  // A history year's export carries on the import already running: only the import's first export starts it.
   await systemDb.syncJob.update({
     where: { id: data.syncJobId },
-    data: { status: "running", startedAt: now, lastActivityAt: now, attempts: { increment: 1 } },
+    data: api.historyYear ? { lastActivityAt: now } : { status: "running", startedAt: now, lastActivityAt: now, attempts: { increment: 1 } },
   });
-  logger.info({ storeId: store.id, bulkId: bulkOperation.id }, "bulk order backfill started");
+  logger.info({ storeId: store.id, bulkId: bulkOperation.id, ...(data.history ? { historyWindowId: data.history.windowId } : {}) }, "bulk order backfill started");
   await nextBulk(data, deps, { phase: "poll", id: bulkOperation.id, polls: 0 }, pollDelayS(0));
   return { done: false };
 }

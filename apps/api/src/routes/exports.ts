@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
 import { audit, logger, toCsv } from "@app/core";
-import { checkReportTable, EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, shopifyCheckReport, storeOverview, type ExportSection } from "@app/core/reports";
+import { checkReportTable, EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, shopifyCheckReport, storeLimits, storeOverview, type ExportSection } from "@app/core/reports";
 import { allows, redactOverview, seesModule, type MemberAccess } from "@app/shared";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -33,7 +33,7 @@ async function sectionTable(ws: string, storeId: string, access: MemberAccess, s
   return withTenant(ws, async (tx) => {
     const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
     if (!store) throw new HttpError(404, "Not found", "not_found");
-    const dates = resolveQueryDates(q, new Date(), store.timezone);
+    const dates = resolveQueryDates(q, new Date(), store.timezone, await storeLimits(tx, { ws, storeId }, store));
     const wanted = new Set<string>(def.modules);
     const adsView = section === "ads" ? {} : { platform: q.platform, account: q.account, allCampaigns: section === "ads_campaigns" };
     const report = redactOverview(await storeOverview(tx, store, dates, new Date(), (m) => wanted.has(m) && seesModule(access, m), adsView), access);

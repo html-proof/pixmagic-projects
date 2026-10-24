@@ -330,11 +330,9 @@ model Store {
   // history was imported, null when no import has recorded it. Set by the worker's orders sync.
   ordersHistoryFrom     DateTime?   @map("orders_history_from")
   // When Shopify created the store (Shop.createdAt), read with its details by the "shop" sync job;
-  // null until it has been. The dashboard's dates begin on its day (All time, custom dates).
-  // @ignore: the column exists in the database (migration 20261023150000) but not yet in the
-  // client, because the workflow migrates after the new code is live; the change that reads it
-  // removes @ignore once this migration has run.
-  shopCreatedAt         DateTime?   @map("shop_created_at") @ignore
+  // null until it has been. The dashboard's dates begin on its day, or an earlier order's
+  // (storeStartDay in @app/shared/dates): the earliest day custom dates may start, the years offered.
+  shopCreatedAt         DateTime?   @map("shop_created_at")
   createdAt             DateTime    @default(now()) @map("created_at")
   updatedAt             DateTime    @updatedAt @map("updated_at")
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -754,6 +752,9 @@ model Order {
   @@index([storeId, localDay])
   // A customer's earlier orders (returning-customer flag, redaction, campaign audiences).
   @@index([storeId, customerKey, shopifyCreatedAt])
+  // The orders cancelled in the dates asked about (recent orders), and a history year's orders by creation.
+  @@index([storeId, cancelledAt])
+  @@index([storeId, shopifyCreatedAt])
   @@index([workspaceId])
   @@map("orders")
 }
@@ -792,6 +793,43 @@ model Refund {
   @@unique([storeId, shopifyId])
   @@index([storeId, localDay])
   @@map("refunds")
+}
+
+// A store's full order history (read_all_orders), imported one store-local calendar year at a time,
+// newest first (packages/core/src/orderHistory.ts): one row per year of the import's plan, so the
+// dashboard can say which years are in, an import that stopped resumes at the year it stopped in,
+// and a year that failed says why. By order creation date, as Shopify's order search filters: the
+// newest year runs on to now (`toAt` null), the oldest from the store's first order back (its
+// search has no lower bound). A newer plan replaces the rows (one per store and year).
+model OrderHistoryWindow {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  // The import (sync_jobs.id) that planned the years, and the one working on this year now.
+  planJobId        String    @map("plan_job_id")
+  syncJobId        String    @map("sync_job_id")
+  year             Int
+  fromAt           DateTime  @map("from_at")
+  toAt             DateTime? @map("to_at")
+  // queued | running | done | failed
+  status           String    @default("queued")
+  // Orders created in the window and held once it was done.
+  orders           Int       @default(0)
+  // Whether the plan read customers with the orders (read_customers): a plan read without them is
+  // started over, not resumed, when the scope arrives, since its orders lack the customer.
+  withCustomers    Boolean   @map("with_customers")
+  // The bulk export submitted for this year: a finished export of another year is never read as this one's.
+  bulkOperationId  String?   @map("bulk_operation_id")
+  attempts         Int       @default(0)
+  error            String?
+  startedAt        DateTime? @map("started_at")
+  finishedAt       DateTime? @map("finished_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, year])
+  @@index([workspaceId])
+  @@map("order_history_windows")
 }
 
 // Shopify's own report figures (ShopifyQL, scope read_reports; packages/core/src/shopifyReports.ts):

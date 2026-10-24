@@ -322,9 +322,10 @@ describe("dates & time zones", () => {
     expect(resolvePreset("custom", now, sydney, { from: "2026-10-09", to: "2026-10-09" }).range).toEqual({ from: "2026-10-09", to: "2026-10-09" });
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-09", to: "2026-10-09" })).toThrow("Range starts after today");
 
-    // The year limit counts the days actually reported.
-    expect(customRangeProblem({ from: "2025-10-09", to: "2026-12-31" }, today)).toBeNull();
-    expect(customRangeProblem({ from: "2025-10-08", to: "2026-12-31" }, today)).toBe("too_long");
+    // The 12-month limit counts the days actually reported: from 10 Oct 2025 up to today (9 Oct) is
+    // 12 months, from the 9th it is 12 months and a day.
+    expect(customRangeProblem({ from: "2025-10-10", to: "2026-12-31" }, today)).toBeNull();
+    expect(customRangeProblem({ from: "2025-10-09", to: "2026-12-31" }, today)).toBe("too_long");
   });
 });
 

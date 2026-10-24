@@ -155,6 +155,8 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
   // No orders at all says so whatever is measured: it is why there are no sales either, and new
   // orders are what fill the chart in.
   const noOrders = b.days.every((d) => d.orders === 0);
+  // Every day before the orders Shopify shared: nothing is known about them, which isn't zero.
+  const noneImported = b.days.length > 0 && b.days.every((d) => d.status === "not_imported");
 
   const tip = (i: number) => {
     const d = b.days[i]!;
@@ -235,7 +237,13 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
           describe={describe}
         />
         {empty &&
-          (view === "refunds" ? (
+          (noneImported ? (
+            <EmptyChart
+              icon={ChartColumn}
+              title="Not imported"
+              body={`Shopify shared orders from ${fmtDay(historyFrom)} on, so these dates hold no orders yet. That isn't the same as no sales: their orders were never imported.`}
+            />
+          ) : view === "refunds" ? (
             <EmptyChart icon={ChartColumn} title="No refunds in this period" body="Refunds show up here on the day they're issued." />
           ) : view === "orders" || noOrders ? (
             <EmptyChart

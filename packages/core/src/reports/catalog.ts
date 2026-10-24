@@ -1,5 +1,7 @@
 import { Prisma, type Store, type Tx } from "@app/db";
-import { dailyRate, historyStart, MIN_HISTORY_DAYS, type DateRange } from "@app/shared";
+import { dailyRate, historyAccess, historyStart, localDay, MIN_HISTORY_DAYS, storeRangeLimits, storeStartDay, type DateRange, type RangeLimits } from "@app/shared";
+import { orderHistoryStatus } from "../orderHistory.js";
+import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { salesDays, soldCte, STATUS, stockScope, variantStockCte } from "../inventory/stock.js";
 import { num, numOrNull, r1, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 
@@ -101,11 +103,27 @@ export async function catalog(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
 }
 
 /**
+ * Where the store's dates begin (`storeRangeLimits`): custom dates can't start before its first day
+ * (`storeStartDay`: the day Shopify created it, or an earlier order's) once Shopify's creation date
+ * is known.
+ */
+export async function storeLimits(tx: Tx, { ws, storeId }: Scope, store: Pick<Store, "shopCreatedAt" | "timezone">): Promise<RangeLimits> {
+  const [row] = await tx.$queryRaw<Array<{ oldest_day: string | null }>>`
+    SELECT MIN(local_day) AS oldest_day FROM orders WHERE workspace_id = ${ws} AND store_id = ${storeId}`;
+  return storeRangeLimits(storeStartDay(store.shopCreatedAt, store.timezone, row?.oldest_day ?? null), store.shopCreatedAt !== null);
+}
+
+/**
  * What has been imported so far (all time, cancelled orders included), and from which day every
  * order is in (`historyFrom`, see `historyStart`): what comparisons and the "not imported" days
- * go by, while oldest/newestOrderDay are the orders actually held. Not a module: always present.
+ * go by, while oldest/newestOrderDay are the orders actually held. `createdDay` is the day Shopify
+ * created the store (null until its details are read), `startDay` the store's first day
+ * (`storeStartDay`: the earliest day custom dates may start, the first year offered). `history` says
+ * how the orders older than Shopify's 60 days can be had (`historyAccess`) and, once they can, how
+ * far their import has got, a year at a time (`orderHistoryStatus`). Not a module: always present.
  */
-export async function importedData(tx: Tx, { ws, storeId }: Scope, store: Pick<Store, "ordersHistoryFrom" | "timezone">) {
+export async function importedData(tx: Tx, scope: Scope, store: Pick<Store, "ordersHistoryFrom" | "timezone" | "shopCreatedAt" | "grantedScopes">) {
+  const { ws, storeId } = scope;
   const [row] = await tx.$queryRaw<Array<{ orders: number; oldest_day: string | null; newest_day: string | null; products: number; variants: number }>>`
     SELECT o.orders, o.oldest_day, o.newest_day,
            (SELECT COUNT(*) FROM products p WHERE p.workspace_id = ${ws} AND p.store_id = ${storeId})::int AS products,
@@ -115,6 +133,7 @@ export async function importedData(tx: Tx, { ws, storeId }: Scope, store: Pick<S
       FROM orders
       WHERE workspace_id = ${ws} AND store_id = ${storeId}
     ) o`;
+  const access = historyAccess(store.grantedScopes, { optionalScopes: declaredOptionalScopes(), declaredScopes: declaredScopes() });
   return {
     orders: num(row?.orders),
     products: num(row?.products),
@@ -122,5 +141,8 @@ export async function importedData(tx: Tx, { ws, storeId }: Scope, store: Pick<S
     oldestOrderDay: row?.oldest_day ?? null,
     newestOrderDay: row?.newest_day ?? null,
     historyFrom: historyStart(store.ordersHistoryFrom, store.timezone, row?.oldest_day ?? null),
+    createdDay: store.shopCreatedAt ? localDay(store.shopCreatedAt, store.timezone) : null,
+    startDay: storeStartDay(store.shopCreatedAt, store.timezone, row?.oldest_day ?? null),
+    history: { access, years: access === "granted" ? await orderHistoryStatus(tx, scope) : [] },
   };
 }

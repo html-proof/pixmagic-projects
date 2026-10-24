@@ -1,6 +1,7 @@
 /** The cron sweeps: nightly reconcile, sales re-reads, stuck jobs, expiring tokens, and the one-off seeds after a move. */
 import { systemDb } from "@app/db";
 import {
+  failHistoryWindows,
   getAccessToken,
   logger,
   migrateToExpiringToken,
@@ -304,6 +305,7 @@ export async function failStaleJobs(deps: WorkerDeps) {
     });
     if (!count) continue;
     reaped++;
+    if (job.kind === "orders") await failHistoryWindows(job.id, error);
     const log = { syncJobId: job.id, storeId: job.storeId, kind: job.kind, startedAt: job.startedAt, lastActivityAt: job.lastActivityAt };
 
     // An uninstalled store has no sync to recover and must not be dragged back into `error`.

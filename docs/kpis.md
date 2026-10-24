@@ -94,7 +94,27 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
 - **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
-- **Custom ranges** run from 2000-01-01 at the earliest, cover at most 366 days, and are reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today is refused (`400 invalid_range`).
+- **Presets:** Today, Yesterday, Last 7 / 30 / 90 days, **Last 6 months** and **Last 12 months**
+  (`6m`, `12m`: from the day after the same date 6 or 12 months earlier, up to today: on 24 Oct 2026,
+  25 Apr – 24 Oct and 25 Oct 2025 – 24 Oct 2026), This month, Last month, This year, Last year, and
+  every **calendar year** of the store under "Calendar years" in the same menu (1 January to
+  31 December; this year up to today), from the year Shopify created the store. The custom dates also
+  move **a year earlier or later** with a click, so the same months of two years are compared quickly.
+- **At most 12 months at a time, however far back** (`latestRangeEnd`, `MAX_RANGE_MONTHS` in
+  packages/shared/src/dates.ts): a range starting on 15 Mar 2025 may end on 14 Mar 2026 at the latest,
+  one starting on 1 Jan 2024 on 31 Dec 2024 (366 days, a leap year), one starting on 29 Feb on the 28th
+  a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"), for
+  the dates picked and for comparison dates alike; the dates menu offers nothing longer, and the end
+  date's calendar stops there. Older periods are not limited: 1 Jan – 31 Dec 2023 is a question like
+  any other, and its comparison with the previous year is 2022. The downloads and Customer Messaging
+  read the same rule; the ad platforms' own report endpoints keep their 366-day limit.
+- **Custom ranges** run from 2000-01-01 at the earliest, or from the store's first day once Shopify's
+  creation date is known (`storeRangeLimits`: `Shop.createdAt`, `stores.shop_created_at`, read by the
+  shop sync job, and daily by the dashboard's refresh until it is; or an earlier order's day, since an
+  order imported from another platform can predate the store), and are reported only up to the
+  store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today, or before
+  the store's first day, is refused (`400 invalid_range`). Comparison dates may reach back before the
+  store's first day: they then hold no orders, and the change says "No earlier data".
 - **Comparison period:** what the % changes compare with, chosen beside the dates as in Shopify
   Analytics' second date chip (`compare` in the overview and export query; `resolvePreset` in
   packages/shared/src/dates.ts):
@@ -104,7 +124,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
     lack, becomes the 28th, so February 2028 is compared with 1–28 February 2027.
   - **Custom** (`compare=custom&cfrom=…&cto=…`): any dates, under the custom-range rules above (from
-    2000-01-01, at most 366 days, reported up to the store's today, not starting after it). They may
+    2000-01-01, at most 12 months, reported up to the store's today, not starting after it). They may
     have another length than the range, sit after it or overlap it. A pair that breaks a rule is
     refused with `400 invalid_range`, as a bad custom range is.
 
@@ -160,8 +180,14 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   import that covers a window of creation dates (the first import, "Refresh data", the 60-day
   re-read) records where its window began, in `stores.orders_history_from`, keeping the earliest.
   The day the window begins on was only partly covered, so `historyFrom` is the day after (unless it
-  began at midnight). With `read_all_orders` the whole history is in: the epoch is recorded and
-  `historyFrom` is `1970-01-01`, so nothing counts as not imported. A store holding an order from
+  began at midnight). With `read_all_orders` the whole history is imported **one calendar year at a
+  time, newest first** (`order_history_windows`, packages/core/src/orderHistory.ts, and "History
+  import" in docs/shopify-setup.md): as each year comes in with every newer one, `historyFrom` moves
+  back to its 1 January, and once the oldest year (the one holding the store's first order) is in, the
+  epoch is recorded and `historyFrom` is `1970-01-01`, so nothing counts as not imported. The
+  overview's `data.history` says how the store can have that history (`access`: `granted`,
+  `reconnect`, `requestable`, `awaiting_shopify`) and how far its import has got (`years`: each year's
+  status and orders), and the line under the dates says it in words. A store holding an order from
   before its window (imported before the window was recorded) starts at that order's day instead:
   `historyFrom` is the earlier of the window's first whole day and `oldestOrderDay`. A quiet store's
   first order can come days after its window starts; those days were imported too, with no orders, so
@@ -169,7 +195,13 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   forgets the window. Stores imported before the record existed were given 60 days before their last
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
-- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
+- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0, days before the imported history are "not imported" (null in the breakdown, drawn hatched).
+- **Every section follows the dates picked**, in the store's time zone: the tiles, both sales panels'
+  daily view, the sales, product, customer, channel, discount and fulfillment details, recent orders
+  (the latest 10 placed in the dates, and how many orders were cancelled in them, counted on the day of
+  the cancellation) and the downloads. The exceptions say so where they show: the monthly panel is the
+  calendar year to date against the two years before (whole months), stock is as of now, and the
+  ad platforms' own report pages have their own limits.
 - **An order counts on the day Shopify processed it** (`Order.processedAt`), the date its reports and
   its order list use. For an order placed in the store that is the moment it was created; an order
   imported from another platform, synced from POS offline or brought in by a marketplace app was
@@ -592,6 +624,10 @@ briefly in either direction.
 - A refund today on an order older than Shopify's 60 days (without `read_all_orders`) is in Shopify's
   reports and can't be read here: neither the order nor the refund is visible to the app.
 
-- `read_orders` exposes 60 days of history. Longer ranges show data only from 60 days before the first import onward unless `read_all_orders` is approved.
+- `read_orders` exposes 60 days of history. Older dates show as not imported (hatched, "Not
+  imported", and a line under the dates saying from when the orders are in), never as zero sales,
+  until `read_all_orders` is granted and its year-by-year import has reached them. No figure is ever
+  estimated for them. A public app gets `read_all_orders` only once Shopify approves it for the scope
+  (docs/shopify-setup.md), so until then no store can reach further back than its import window.
 - An edit reaches the dashboard through the `orders/updated` delivery it causes (`orders/edited` isn't subscribed): its totals change, so the order's sales are read again.
 - Days before the switch to Shopify's sales records keep their old totals until their orders are read again (the dashboard's refresh re-reads the 60-day import window once); older days than that keep them for good.

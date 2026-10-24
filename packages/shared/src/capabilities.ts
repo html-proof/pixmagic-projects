@@ -287,6 +287,26 @@ export function resolveCapabilities(
   });
 }
 
+/**
+ * How a store gets the orders Shopify keeps from apps after 60 days (`read_all_orders`):
+ *
+ * - `granted`: it has: the whole history is imported (or being imported, a year at a time);
+ * - `reconnect`: the app asks for it at install and this store's grant predates that: reconnecting
+ *   grants it;
+ * - `requestable`: the app declares it optional: the owner can be sent to Shopify to grant it
+ *   (`POST .../scopes/request` with `scopes: ["read_all_orders"]`);
+ * - `awaiting_shopify`: the app doesn't ask for it at all, which for a public app means Shopify
+ *   hasn't approved it for the scope yet (docs/shopify-setup.md): nothing the merchant can do.
+ */
+export type HistoryAccess = "granted" | "reconnect" | "requestable" | "awaiting_shopify";
+
+export function historyAccess(grantedScopes: string[] | string, ctx: { optionalScopes?: string[]; declaredScopes?: string[] } = {}): HistoryAccess {
+  if (expandScopes(grantedScopes).has("read_all_orders")) return "granted";
+  if (expandScopes(ctx.declaredScopes ?? []).has("read_all_orders")) return "reconnect";
+  if (expandScopes(ctx.optionalScopes ?? []).has("read_all_orders")) return "requestable";
+  return "awaiting_shopify";
+}
+
 /** The scopes a module needs, for turning a module id back into a scope request. */
 export function scopesForModule(id: ModuleId): string[] {
   return CAPABILITIES.find((c) => c.id === id)?.requiredScopes ?? [];
