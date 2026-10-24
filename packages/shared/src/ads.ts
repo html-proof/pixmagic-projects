@@ -53,7 +53,7 @@ export const AD_ERROR_CODES = [
   "account_not_ready",
   /** bizinsights' own app isn't approved for this yet (Google Ads API access level, Meta App Review): on our side. */
   "not_approved",
-  /** The platform's API isn't switched on for bizinsights: on our side. */
+  /** The platform's API isn't switched on for bizinsights, or refuses bizinsights' own keys: on our side. */
   "not_configured",
   /** The platform asked bizinsights to slow down for a while. */
   "rate_limited",

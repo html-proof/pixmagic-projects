@@ -54,6 +54,8 @@ interface World {
   /** Meta: the ad accounts the login reaches, and whether ads_read was granted. */
   metaAccounts: Array<{ id: string; name: string }>;
   adsRead: "granted" | "declined";
+  /** Meta: the secret of the app the tokens were issued to, when it matters. A proof made with another is refused, as Meta does. */
+  metaTokenAppSecret?: string;
   /** Google: which client the token was issued to. */
   googleAud: string;
   /** Google's tokeninfo names the person (as it does for some tokens); false: only userinfo does, for a token with openid. */
@@ -105,7 +107,12 @@ function world(): World {
       }
       if (u.host === "graph.facebook.com") {
         // Every Meta call is signed with bizinsights' own app secret: a token from another app would fail here.
-        expect(u.searchParams.get("appsecret_proof") ?? new URLSearchParams(String(init?.body ?? "")).get("appsecret_proof")).toBeTruthy();
+        const proof = u.searchParams.get("appsecret_proof") ?? new URLSearchParams(String(init?.body ?? "")).get("appsecret_proof");
+        expect(proof).toBeTruthy();
+        const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /, "") ?? "";
+        if (w.metaTokenAppSecret !== undefined && proof !== createHmac("sha256", w.metaTokenAppSecret).update(token).digest("hex")) {
+          return json({ error: { message: "Invalid appsecret_proof provided in the API argument", type: "GraphMethodException", code: 100 } }, 400);
+        }
         if (u.pathname.endsWith("/me/permissions/ads_read") && method === "DELETE") {
           w.metaRevoked++;
           return json({ success: true });
@@ -435,6 +442,20 @@ describe("finishing a Nango sign-in", () => {
     expect(done.json().error).toBe("not_configured");
     expect(w.deleted).toEqual([connectionId]);
     expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("refuses a Meta token Meta won't take our appsecret_proof for (the Nango integration holds other keys), on our side", async () => {
+    w.metaTokenAppSecret = "another_apps_secret";
+    const { done, connectionId } = await connectThrough("meta");
+    expect(done.statusCode).toBe(503);
+    expect(done.json().error).toBe("not_configured");
+    expect(w.deleted).toEqual([connectionId]);
+    expect(await systemDb.adConnection.count()).toBe(0);
+    // The same keys on both sides: it connects.
+    w.metaTokenAppSecret = KEYS.META_APP_SECRET;
+    const again = await connectThrough("meta");
+    expect(again.done.statusCode).toBe(200);
+    expect(again.done.json().connected).toBe(1);
   });
 
   it("closing the Connect UI uses the session up", async () => {

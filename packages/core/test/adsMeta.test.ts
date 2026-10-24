@@ -136,6 +136,19 @@ describe("appsecret_proof on the ads calls", () => {
     expect(inspector.url.searchParams.has("appsecret_proof")).toBe(false);
     expect(new Headers(inspector.init?.headers).get("authorization")).toBe("Bearer app1|sec");
   });
+
+  it("Meta refusing the proof (a token issued to other keys than ours) is our set-up, asked once, never a bad parameter", async () => {
+    const refused = fake(() => json({ error: { message: "Invalid appsecret_proof provided in the API argument", type: "GraphMethodException", code: 100 } }, 400));
+    const err = await failureOf(metaAdAccounts(meta(refused.fetchImpl), "FOREIGN_T"));
+    expect(err).toBeInstanceOf(AdsApiError);
+    expect(err).not.toBeInstanceOf(AdsPermissionError);
+    expect(err).toMatchObject({ code: 100, errorCode: "not_configured" });
+    expect(classifyAdError(err)).toMatchObject({ status: "error", code: "not_configured" });
+    // A daily read doesn't ask again without its status filter, as it does for a refused parameter.
+    const daily = fake(() => json({ error: { message: "Invalid appsecret_proof provided in the API argument", type: "GraphMethodException", code: 100 } }, 400));
+    expect(await failureOf(metaCampaignDays(meta(daily.fetchImpl), "FOREIGN_T", "1", "2026-10-01", "2026-10-01"))).toMatchObject({ errorCode: "not_configured" });
+    expect(daily.calls.filter((c) => level(c.url) === "campaign")).toHaveLength(1);
+  });
 });
 
 describe("the ad accounts a Meta login reaches", () => {

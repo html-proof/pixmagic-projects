@@ -141,6 +141,10 @@ function metaAdsError(f: GraphFailure): Error {
   }
   // 1/2: temporary (1 is also Meta's "reduce the amount of data").
   if (code === 1 || code === 2 || f.status >= 500) return new AdsRetryableError(msg, code);
+  // 100 "Invalid appsecret_proof": the token wasn't issued to the app whose secret signs our calls (a
+  // Nango integration holding other keys, or a META_APP_SECRET that isn't this app's). Ours to fix,
+  // never the person's, and no retry or other login changes it.
+  if (code === 100 && /appsecret_proof/i.test(msg)) return new AdsApiError(msg, f.status, code, "not_configured");
   return new AdsApiError(msg, f.status, code);
 }
 
@@ -375,8 +379,8 @@ async function metaPagesFrom<R>(c: MetaConfig, accessToken: string, first: Insig
  */
 const wantsJob = (err: unknown) => err instanceof MetaNoAnswerError || (err instanceof AdsRetryableError && !(err instanceof AdsRateLimitedError) && (err.code === 1 || err.code === 2));
 
-/** Meta refused a parameter (code 100, "Invalid parameter"), not the account (100 with subcode 33 is a permission error). */
-const refusedParameter = (err: unknown) => err instanceof AdsApiError && !(err instanceof AdsPermissionError) && err.code === 100;
+/** Meta refused a parameter (code 100, "Invalid parameter"), not the account (100 with subcode 33 is a permission error) nor our appsecret_proof. */
+const refusedParameter = (err: unknown) => err instanceof AdsApiError && !(err instanceof AdsPermissionError) && err.code === 100 && err.errorCode !== "not_configured";
 
 /**
  * Every effective_status each level has (the Campaign, Ad Set and Ad references), so archived and
