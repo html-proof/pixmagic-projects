@@ -150,6 +150,18 @@ the last address alone (6 of 15 to CDK's us-east-1 bucket got through within 10 
 10 of 15 at 5000 ms). A hand deploy from this PC on the hotspot does well to set both
 (`$env:AWS_MAX_ATTEMPTS = "10"`).
 
+A connection that goes quiet mid-call is a different failure: nothing ever times it out. The CLI
+gives each call 5 minutes (`requestTimeout`), but its HTTP handler only logs a warning when that
+passes, and it sets no socket timeout. On 2026-10-23 (Deploy 40032504218, attempt 1) the PC was in
+Modern Standby: CloudFormation finished `InsightsEdge-production` in 10 s, and the CLI waited 57
+minutes on that stack's status until the job hit its 60-minute limit. A job cancelled at its limit
+skips every later step, the rollback included. So the step also preloads
+`infra/cdk/scripts/stall-guard.cjs` (`--require` in its `NODE_OPTIONS`): a request that goes 2
+minutes without a byte either way ends with `ETIMEDOUT`, which the SDK retries like a dropped
+connection, and the `network` pattern catches it if every try fails. And the step stops itself at
+45 minutes, so a hang the guard misses fails the step and the rollback runs. A hand deploy can load
+it too: add `--require <repo>\infra\cdk\scripts\stall-guard.cjs` to `NODE_OPTIONS`.
+
 Dependency install scripts run, anywhere this repository is installed (CI, the deploy, a
 developer's machine), only for the packages `pnpm.onlyBuiltDependencies` in the root
 `package.json` names (esbuild, prisma, @prisma/engines). A new dependency that needs its install
@@ -485,8 +497,12 @@ job signs in only with the OIDC deploy role and checks that it did.
 - The PC must be on, awake and plugged in: queued jobs wait up to 24 hours for the runner, then are
   cancelled. It's a laptop with Modern Standby, where the screen going off is the way into standby.
   Its screen goes off 2 minutes after the last input on AC and 3 on battery (as of 2026-10-20). On
-  AC it then never sleeps (`standby-timeout-ac` is 0) and a job runs on at full speed with the
-  screen off; on battery it sleeps right after (DRIPS: the CPU runs nothing) while a test's clock
+  AC it then never sleeps (`standby-timeout-ac` is 0) and a job usually runs on at full speed with
+  the screen off, but it still enters Modern Standby (Kernel-Power 506, `Reason` 12, on AC), and
+  connections can stall there: on 2026-10-23 that took the runner offline for more than 12 minutes (15:06Z)
+  and hung a deploy's `cdk deploy` (21:46Z, see "Deploy (GitHub Actions)"). Keeping the screen on
+  while jobs run ends both: `powercfg /change monitor-timeout-ac 0` (the owner's, elevated). On
+  battery it sleeps right after (DRIPS: the CPU runs nothing) while a test's clock
   keeps running, and it sleeps when the lid closes. On battery it also runs a job 2-3 times slower
   (the 5-minute e2e suite took 10-14). What that did: on 2026-10-18 it slept twice mid-pipeline;
   on 2026-10-19 a 78 s sleep (unplugged with the lid closed) failed `pnpm test:integration` with
