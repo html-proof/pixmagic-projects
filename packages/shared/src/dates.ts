@@ -260,6 +260,9 @@ function presetRange(preset: DatePreset, today: string, custom: DateRange | unde
   }
 }
 
+/** 1 January to 31 December of one year. */
+const isCalendarYear = (r: DateRange) => r.from.endsWith("-01-01") && r.to === `${r.from.slice(0, 4)}-12-31`;
+
 /**
  * The whole days `range` is compared with (see COMPARE_MODES); throws on custom dates that can't be.
  * Comparison dates may reach back before the store's first day (`limits`): the API then says the
@@ -280,8 +283,8 @@ function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareCh
         const prevLast = addDays(range.from, -1);
         return { from: `${prevLast.slice(0, 8)}01`, to: prevLast };
       }
-      if (preset === "lastyear") {
-        // The whole year before, leap or not.
+      if (preset === "lastyear" || isCalendarYear(range)) {
+        // The whole year before, leap or not (Last year, or a calendar year picked as custom dates).
         const year = String(Number(range.from.slice(0, 4)) - 1).padStart(4, "0");
         return { from: `${year}-01-01`, to: `${year}-12-31` };
       }

@@ -539,7 +539,7 @@ export function CustomDates({ r }: { r: DateRangeState }) {
   const min = r.start.created && r.start.day ? r.start.day : MIN_CUSTOM_DAY;
   return (
     <div className="flex flex-wrap items-start justify-end gap-x-3 gap-y-2">
-      <span className="flex items-center gap-1.5 py-0.5" role="group" aria-label="Move the dates by a year">
+      <span className="flex items-center gap-1.5 py-0.5" role="group" aria-label="Move by a year">
         <button type="button" className={shiftButton} disabled={!earlier} onClick={() => r.shiftYear(-1)} title={earlier ? fmtRange(earlier.from, earlier.to) : "Nothing earlier to show"}>
           <ChevronLeft aria-hidden className="h-3.5 w-3.5" /> A year earlier
         </button>
@@ -588,8 +588,12 @@ export function periodWords(r: DateRangeState, shown: Shown): string {
       return "this year";
     case "lastyear":
       return "last year";
-    case "custom":
-      return shown ? (shown.range.from === shown.range.to ? `on ${fmtDay(shown.range.from)}` : `from ${fmtSpan(shown.range.from, shown.range.to)}`) : "in the dates you picked";
+    case "custom": {
+      if (!shown) return "in the dates you picked";
+      const { from, to } = shown.range;
+      // An older year says which: "from 1 Jan – 31 Dec" alone read as this year.
+      return from === to ? `on ${fmtDay(from)}` : `from ${fmtSpan(from, to, { year: to.slice(0, 4) !== r.today.slice(0, 4) })}`;
+    }
     default:
       return `in the ${PRESETS.find((p) => p.id === r.preset)!.label.toLowerCase()}`;
   }

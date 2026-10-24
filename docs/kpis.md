@@ -120,7 +120,8 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   packages/shared/src/dates.ts):
   - **Previous period** (the default, `compare=previous` or absent): the same number of days
     immediately before the selected range (after that clamp); last month against the whole month
-    before it, whatever its length.
+    before it, whatever its length; last year, or any calendar year picked (1 Jan – 31 Dec), against
+    the whole calendar year before it, leap or not.
   - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
     lack, becomes the 28th, so February 2028 is compared with 1–28 February 2027.
   - **Custom** (`compare=custom&cfrom=…&cto=…`): any dates, under the custom-range rules above (from

@@ -264,7 +264,7 @@ async function adoptOrSubmit(data: SyncJobData, store: Store, deps: WorkerDeps, 
   }
   const now = new Date();
   await api.historyYear?.exportStarted(bulkOperation.id);
-  // A history year's export carries on the import already running: only the import's first export starts it.
+  // A history year's export carries on an import its first message already started (runSync).
   await systemDb.syncJob.update({
     where: { id: data.syncJobId },
     data: api.historyYear ? { lastActivityAt: now } : { status: "running", startedAt: now, lastActivityAt: now, attempts: { increment: 1 } },

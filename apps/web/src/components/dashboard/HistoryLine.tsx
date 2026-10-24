@@ -45,7 +45,7 @@ export function HistoryLine({
   const gap = historyFrom && !whole && range.from < historyFrom ? { from: range.from, to: range.to < historyFrom ? range.to : addDays(historyFrom, -1) } : null;
 
   return (
-    <section aria-label="Dates and order history" className="space-y-1.5 text-sm" data-testid="history-line">
+    <section aria-label="What the numbers cover" className="space-y-1.5 text-sm" data-testid="history-line">
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted">
         <CalendarRange aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.8} />
         <span>
@@ -84,8 +84,8 @@ export function HistoryLine({
           ) : (
             <>
               <span>
-                {historyFrom ? <>Orders from {fmtDay(historyFrom)} on. </> : null}
-                Shopify shares the last 60 days of orders with apps until a store allows its full order history.
+                {historyFrom ? <>Orders from {fmtDay(historyFrom)} on: </> : null}
+                Shopify shares only the last 60 days of orders with an app until the store grants it full order history.
               </span>
               {history.access === "requestable" && canManage && (
                 <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={onImportHistory} disabled={importing} data-testid="import-history">
@@ -95,7 +95,7 @@ export function HistoryLine({
               {history.access === "reconnect" && canManage && (
                 <Link className="btn-secondary inline-flex h-8 items-center px-3 text-xs" href={reconnectHref}>Reconnect to import full history</Link>
               )}
-              {history.access === "awaiting_shopify" && <span>Older orders need Shopify to approve bizinsights for full order history first; there&apos;s nothing to turn on yet.</span>}
+              {history.access === "awaiting_shopify" && <span>bizinsights can&apos;t ask for it yet: Shopify has to approve bizinsights for full order history first, so there&apos;s nothing to turn on.</span>}
             </>
           )}
         </p>

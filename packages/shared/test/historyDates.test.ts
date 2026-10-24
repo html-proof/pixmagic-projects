@@ -45,6 +45,12 @@ describe("ranges of up to 12 months, however far back", () => {
       range: { from: "2023-01-01", to: "2023-12-31" },
       previous: { from: "2022-01-01", to: "2022-12-31" },
     });
+    // The period before a calendar year is the calendar year before, leap or not, as for Last year:
+    // never 31 Dec 2022 – 31 Dec 2023 (the 366 days before 2024).
+    expect(resolvePreset("custom", now, "UTC", { from: "2024-01-01", to: "2024-12-31" }).previous).toEqual({ from: "2023-01-01", to: "2023-12-31" });
+    expect(resolvePreset("custom", now, "UTC", { from: "2025-01-01", to: "2025-12-31" }).previous).toEqual({ from: "2024-01-01", to: "2024-12-31" });
+    // Other custom dates keep as many days just before.
+    expect(resolvePreset("custom", now, "UTC", { from: "2024-01-02", to: "2024-12-31" }).previous).toEqual({ from: "2023-01-02", to: "2024-01-01" });
   });
 
   it("has the last 6 and 12 months up to today, compared with as many days before", () => {

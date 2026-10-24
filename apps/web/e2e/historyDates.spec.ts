@@ -30,9 +30,9 @@ test("any calendar year of the store, 12 months at a time, with where its orders
   const line = page.getByTestId("history-line");
   await expect(line).toContainText("Showing");
   await expect(line).toContainText("UTC");
-  await expect(page.getByTestId("history-availability")).toContainText("Shopify shares the last 60 days of orders");
+  await expect(page.getByTestId("history-availability")).toContainText("Shopify shares only the last 60 days of orders");
   // Nothing the merchant can turn on until Shopify approves bizinsights for it: no button.
-  await expect(page.getByTestId("history-availability")).toContainText("need Shopify to approve");
+  await expect(page.getByTestId("history-availability")).toContainText("Shopify has to approve bizinsights for full order history");
   await expect(page.getByTestId("import-history")).toHaveCount(0);
 
   // The menu: the last 6 and 12 months, and each year from the store's first.
@@ -50,7 +50,12 @@ test("any calendar year of the store, 12 months at a time, with where its orders
   // 2024 lies before the orders Shopify shared: missing, not zero.
   await expect(page.getByTestId("history-gap")).toContainText("No orders from these dates have been imported");
   await expect(page.getByTestId("history-gap")).toContainText("not as days without sales");
-  await expect(page.getByTestId("trend-sales").getByText("Not imported", { exact: true })).toBeVisible();
+  // The chart and the tiles say so too: no figures, never $0.
+  await expect(page.getByTestId("trend-sales").getByRole("paragraph").filter({ hasText: "Not imported" })).toBeVisible();
+  await expect(page.getByTestId("metric-Orders").getByTestId("figure-not-imported")).toBeVisible();
+  // 2024 against 2023 as a whole year, not the 366 days before it.
+  await expect(page.getByTestId("compare-dates")).toContainText("2023");
+  await expect(page.getByTestId("compare-dates")).not.toContainText("2022");
 
   await page.getByRole("button", { name: "A year earlier" }).click();
   await expect(page.getByLabel("From", { exact: true })).toHaveValue("2023-01-01");

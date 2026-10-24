@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
@@ -20,6 +20,7 @@ import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
+import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
 import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
@@ -335,6 +336,18 @@ export default function DashboardPage() {
   const custom = appliedCustom(s);
 
   const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  // Every day of the dates lies before the orders Shopify shared: there are no figures for them,
+  // which isn't the same as $0 (the line under the dates says why).
+  const historyFrom = ov?.data?.historyFrom;
+  const notImported = !!ov && !!historyFrom && historyFrom !== ALL_HISTORY && ov.range.to < historyFrom;
+  const figure = (n: ReactNode) =>
+    notImported ? (
+      <span className="text-base font-semibold text-muted sm:text-lg" data-testid="figure-not-imported">
+        Not imported
+      </span>
+    ) : (
+      n
+    );
   const compared = comparedWith(shown);
   const versus = versusWords(shown);
   const name = firstName(me.user.displayName);
@@ -472,7 +485,7 @@ export default function DashboardPage() {
               icon={CircleDollarSign}
               tint="green"
               title="Total sales"
-              value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />}
+              value={figure(<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />)}
               delta={s.deltas.totalSales ?? null}
               compared={compared}
               versus={versus}
@@ -488,11 +501,11 @@ export default function DashboardPage() {
               onClick={() => detail.open("sales")}
             />
           ) : (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
           )}
-          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
-          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
-          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} versus={versus} onClick={() => detail.open("products")} />
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} onClick={() => detail.open("products")} />
         </section>
       )}
 
