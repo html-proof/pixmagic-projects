@@ -42,8 +42,8 @@ the permission in the table below (`@app/shared/roles`):
   Machine endpoints (webhooks, pixel) answer `{ "error": "<code>" }`.
 - **Every response** carries `x-request-id` (a random UUID). Quote it when
   reporting a problem: every log line written for that request carries the same id.
-- **Lists**: capped (100 by default). WhatsApp messages, orders, carts and reviews page with
-  `?limit=&cursor=` and answer `{ <items>, nextCursor }` (`apps/api/src/pagination.ts`).
+- **Lists**: capped (100 by default). WhatsApp messages and contacts page with `?limit=&cursor=`
+  and answer `{ <items>, nextCursor }`.
 - **Rate limits**: 300 requests a minute per IP overall (AWS WAF at CloudFront, and the app behind
   it; webhooks and the pixel exempt), tighter per-key limits on sign-in,
   codes, invitations, provider calls and public pages (`apps/api/src/rateLimit.ts`).
@@ -97,52 +97,48 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/shopify/callback` | public (signed/origin-checked) | shopify.ts |
 | GET | `/shopify/launch` | public (signed/origin-checked) | shopify.ts |
 | POST | `/webhooks/shopify` | public (signed/origin-checked) | webhooks.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/embedded` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/manual/discover` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/manual` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/register` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/pin` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/refresh` | stores:manage | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/settings` | dashboard:read | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp` | marketing.campaigns or integrations.status | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/start` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/finish` | integrations.manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/connect/numbers` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/number` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/pin` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/check` | integrations.manage | whatsapp.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/pin` | owners and admins | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/settings` | marketing.campaigns | whatsapp.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/whatsapp/settings` | stores:manage | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/templates` | dashboard:read | whatsapp.ts |
+| POST|DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/settings/event-key` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/templates` | marketing.campaigns | whatsapp.ts |
 | POST | `/workspaces/:ws/stores/:storeId/whatsapp/templates` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/test` | stores:manage | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/analytics` | dashboard:read | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/messages` | customers:contact | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id/retry` | stores:manage | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id/cancel` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/orders` | customers:contact | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/orders/:id` | customers:contact | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/orders/:id/steps` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/carts` | customers:contact | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/carts/:id/remind` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/reviews` | customers:contact | whatsappOps.ts |
-| PATCH | `/workspaces/:ws/stores/:storeId/whatsapp/reviews/:id` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | dashboard:read | whatsappOps.ts |
-| PATCH | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappOps.ts |
-| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id/schedule` | stores:manage | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id/pause|resume|cancel` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/automations` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/automations` | stores:manage | whatsappOps.ts |
-| PATCH | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id` | stores:manage | whatsappOps.ts |
-| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id/runs` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id/test` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/summary` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/opt-out` | customers:contact | whatsappOps.ts |
-| GET | `/webhooks/whatsapp` | Meta verify token | whatsappPublic.ts |
-| POST | `/webhooks/whatsapp` | `X-Hub-Signature-256` (rate-limited when not bizinsights' own app) | whatsappPublic.ts |
-| GET | `/public/track/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/public/review/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| POST | `/public/review/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/public/stores/:storeId/reviews` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/r/:code` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/whatsapp/platform` | public (unguessable token / rate-limited) | whatsappPublic.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/templates/sync` | stores:manage | whatsapp.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/templates/:id` | stores:manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/templates/:id/test` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/messages` | marketing.campaigns (text: customers.contact) | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id` | marketing.campaigns (text: customers.contact) | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages` | stores:manage + customers.contact | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id/retry` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts` | marketing.campaigns + customers.contact | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/:id` | marketing.campaigns + customers.contact | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/:id/consent` | stores:manage + customers.contact | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/events` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/workflows` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/check` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/workflows` | stores:manage | whatsappAutomation.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id` | marketing.campaigns | whatsappAutomation.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id` | stores:manage | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id/activate|pause|test` | stores:manage | whatsappAutomation.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id` | stores:manage | whatsappAutomation.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | stores:manage | whatsappAutomation.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | marketing.campaigns | whatsappAutomation.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappAutomation.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id/test|schedule|cancel` | stores:manage | whatsappAutomation.ts |
+| GET | `/webhooks/whatsapp` | Meta verify token | whatsappWebhook.ts |
+| POST | `/webhooks/whatsapp` | `X-Hub-Signature-256` (refusals rate-limited per IP) | whatsappWebhook.ts |
+| POST | `/whatsapp/events` | the store's event key (`Authorization: Bearer whev_...`) | whatsappWebhook.ts |
 | POST | `/workspaces` | signed in | workspaces.ts |
 | PATCH | `/workspaces/:ws` | members:manage | workspaces.ts |
 | GET | `/workspaces/:ws/members` | dashboard:read | workspaces.ts |

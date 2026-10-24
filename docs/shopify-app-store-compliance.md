@@ -27,7 +27,7 @@ whole tab (docs/shopify-setup.md, "refused to connect" inside the admin).
 | 1.2.1 | Charges only through Shopify App Pricing / Billing API | PASS | No charges: billing is off (`BILLING_ENABLED` in `apps/web/src/lib/features.ts`, and the API's own setting, which refuses to start one: `apps/api/test/billing.test.ts` "no charge can be started"). The only charge path is `appSubscriptionCreate` (`apps/api/src/routes/workspaces.ts`) | |
 | 1.2.2 | Accept/decline, re-approval on reinstall | FIXED (billing off) | Every plan change goes through Shopify's approval page and counts only once Shopify reports the charge active. Before: a plan billed on a store could stay in force after the app was uninstalled from it (Shopify needn't send `app_subscriptions/update` to an app that is gone), so a reinstall skipped approval. Now `app/uninstalled` and a store coming back both put it on Free (`apps/worker/test/billing.test.ts`, `apps/api/test/billing.test.ts` "a store back after an uninstall…") | |
 | 1.2.3 | Upgrade and downgrade without support | FIXED (billing off) | Before: no way back to Free, and an upgrade could put a second charge on another store's bill. Now "Switch to Free" (`appSubscriptionCancel`) and plan changes that replace the charge in force (`APPLY_IMMEDIATELY`, same store's bill) from Settings → Billing (`billing.test.ts` "upgrades and downgrades…", "switching to Free"; e2e `settings.spec.ts` "…switches to Free…") | |
-| 1.3.1 | No incentives for reviews | PASS | The app never asks for an App Store review. (The WhatsApp "review request" is the merchant asking *their* customers to review *products*.) | |
+| 1.3.1 | No incentives for reviews | PASS | The app never asks for an App Store review. | |
 
 ## 2. Functionality
 
