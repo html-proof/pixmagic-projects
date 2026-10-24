@@ -275,6 +275,32 @@ bizinsights asks Meta's token inspector which ad accounts the grant names, and S
   Business settings → Ad accounts). Facebook has no account chooser: log out of Facebook in that browser to use
   another login.
 
+The card starts with the Facebook profile the sign-in used ("You signed in to Facebook as …"): a browser signed
+in to another profile, or two profiles with one name, is the usual cause. No code change can make Meta list an ad
+account the profile has no access to.
+
+**Which case it is, from the log.** The API's line `ads: nothing to connect for this login` (Logs Insights on
+`/aws/lambda/insights-production-api`) carries `diagnosis`. It holds ids, counts and permission names, never the
+profile's name or a token:
+- `metaUserId`: the profile's app-scoped id (the `externalUserId` a connection made with it would store).
+- `token`: what Meta's token inspector says. `type` should be `USER`, `ownApp` and `valid` true. `scopes` are the
+  permissions granted. `granted` names, per permission, how many assets it is limited to, or `all` when it names
+  none (it covers what the profile reaches).
+- `appRole`: the profile's role on Meta app 971575545351940 (`administrators`, `developers`, `testers`), `none`
+  when the app's roles don't list it (`appRolesListed` says how many they do). While `ads_read` has Standard Access,
+  only a profile with a role can connect.
+- `me`, `token` or `appRole` as `{ failed, message }`: that look-up was refused (Meta's code, or `auth` when the
+  inspector refused bizinsights' app token: check `META_APP_SECRET` with `nango-setup.mjs --check`).
+
+What to do, by what it says:
+- `appRole: "none"`: the person used a profile without a role on the app. Connect with the admin's profile, or add
+  this one under App roles → Testers.
+- A role, `granted.ads_read: "all"`, and Meta still lists no ad account: Meta itself says this profile reaches none.
+  Open <https://adsmanager.facebook.com> in the same browser. If it shows no ad account, create one or have the
+  business portfolio assign this profile to its ad account (Business settings → Accounts → Ad accounts → Assign
+  people; admins have to assign themselves too). Then connect again.
+- `granted.ads_read: 0`: the profile has access, but none was ticked on Facebook's screen (`none_shared`).
+
 ### Facebook says "Feature Unavailable"
 
 Facebook's own page, shown instead of its login; nothing reaches our logs. Two causes, both fixed in Meta:
