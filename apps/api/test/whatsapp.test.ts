@@ -307,6 +307,13 @@ describe("tenant isolation", () => {
     expect((await call("POST", `${o.base}/connect/start`, v.headers)).statusCode).toBe(403);
     expect((await call("DELETE", o.base, v.headers)).statusCode).toBe(403);
     expect((await call("PUT", `${o.base}/settings`, v.headers, { orderUpdates: "checkout_notice" })).statusCode).toBe(403);
+    // Someone who may only see how integrations stand (Settings → Integrations' card): the connection, no messages.
+    const i = await signIn(ctx, "integrations", "integrations@acme.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: i.user.id, role: "custom", permissions: ["integrations.status"] } });
+    const card = await call("GET", o.base, i.headers);
+    expect(card.statusCode).toBe(200);
+    expect(card.json()).toMatchObject({ connection: { status: "active" }, recent: [], can: { connect: false, manage: false } });
+    expect((await call("GET", `${o.base}/messages`, i.headers)).statusCode).toBe(403);
   });
 });
 

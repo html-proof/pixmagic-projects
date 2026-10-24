@@ -34,6 +34,7 @@ import {
   messagePreview,
 } from "@app/core";
 import {
+  allows,
   customEventSchema,
   mappingSchema,
   maskPhone,
@@ -49,7 +50,7 @@ import {
   type TemplateComponent,
   type TemplateMapping,
 } from "@app/shared";
-import { body, clientIp, HttpError, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { base, connectionView, messageView, requireContacts, requireWaConnect, requireWaManage, requireWaView, seesContacts, settingsJson, templateView, waCan, waStore } from "./whatsappCommon.js";
@@ -68,10 +69,14 @@ const DAY = 86_400_000;
 const idParam = z.string().trim().min(1).max(64);
 
 export function whatsappRoutes(app: App, deps: Deps) {
-  /** Everything the WhatsApp Automation page opens with, in one call. */
+  /**
+   * Everything the WhatsApp Automation page opens with, in one call. Settings → Integrations reads it
+   * too, for people who may only see how connections stand: they get no message history.
+   */
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaView(c, deps, ws);
+    const a = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
+    const seesCampaigns = allows(a.access, "marketing.campaigns");
     const store = await waStore(ws, storeId);
     const can = waCan(a);
     const now = Date.now();
@@ -157,7 +162,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
         campaigns: { scheduled: count(data.campaigns, "scheduled"), sending: count(data.campaigns, "sending"), total: data.campaigns.reduce((s, r) => s + r._count._all, 0) },
       },
       problems,
-      recent: data.recent.map((m) => messageView(m, { contacts: can.contacts })),
+      recent: seesCampaigns ? data.recent.map((m) => messageView(m, { contacts: can.contacts })) : [],
       webhookUrl: waWebhookUrl(),
     });
   });
