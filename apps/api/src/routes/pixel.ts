@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { systemDb } from "@app/db";
 import { env } from "@app/core";
-import { EVENT_STEP, foldVisit, funnelDevice, localDay, productStepsOf, sha256Hex, type PixelEventIn, type PixelEventName } from "@app/shared";
+import { arrivalSource, CLICK_IDS, EVENT_STEP, foldVisit, funnelDevice, localDay, productStepsOf, sha256Hex, type PixelEventIn, type PixelEventName, type TrafficSource } from "@app/shared";
 import { clientIp, type Deps } from "../context.js";
 import { deviceOf, locationOf } from "../devices.js";
 import type { App } from "../app.js";
@@ -20,6 +20,18 @@ const eventSchema = z.object({
   // path used to fail the whole batch, and the pixel drops a refused batch, so those visits were
   // lost. What is stored is cut down by cleanPath (MAX_PATH).
   path: z.string().max(2048).optional(),
+  // How the shopper arrived, with the page view of a page reached from outside the store (PixelArrival):
+  // a host and tag values only, as cut by the pixel. Optional, like everything after `path`: older pixels send none.
+  arrival: z
+    .object({
+      ref: z.string().max(253).optional(),
+      utmSource: z.string().max(100).optional(),
+      utmMedium: z.string().max(100).optional(),
+      click: z.array(z.enum(CLICK_IDS)).max(CLICK_IDS.length).optional(),
+    })
+    .optional(),
+  // The products an add to cart or a checkout holds, by handle (productStepsOf). The pixel sends at most 50 of 200 characters.
+  products: z.array(z.string().max(200)).max(50).optional(),
 });
 const bodySchema = z.object({ events: z.array(eventSchema).min(1).max(50) });
 /** Clock skew tolerated on a shopper's device. */
@@ -48,8 +60,11 @@ export function pixelEventInWindow(timestamp: string, now: number, production: b
  * The request itself says two things more about the visit, kept as one word each: the kind of
  * device (`funnelDevice`, from the browser's User-Agent; the pixel runs in the shopper's browser)
  * and the country the edge placed the request in (`locationOf`). Neither the User-Agent nor the
- * address is stored. Product views, and adds to cart made on a product's page, are kept per visit
- * and product (`funnel_product_visits`, `productStepsOf`) for the Shopping Funnel's product table.
+ * address is stored. Where the visit came from is one word too (`source`, `arrivalSource`), from the
+ * first arrival the pixel reports: a referring host and a link's utm_source/utm_medium and click id
+ * names, which are classified and dropped. Product views, adds to cart (on a product's page, or
+ * quick adds elsewhere), checkouts and purchases are kept per visit and product
+ * (`funnel_product_visits`, `productStepsOf`) for the Shopping Funnel's product table.
  */
 const CORS = {
   "access-control-allow-origin": "*",
@@ -66,8 +81,8 @@ export function pixelRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:pixel:${clientIp(c)}`, LIMITS.pixelIp);
     // navigator.sendBeacon posts text/plain, so parse the raw text whatever the content type.
     const raw = await c.req.text();
-    // 50 events (the pixel's largest batch) with 2048-character paths fit.
-    if (raw.length > 128 * 1024) return c.json({ error: "invalid_body" }, 413);
+    // 50 events (the pixel's largest batch) with 2048-character paths fit, and checkouts naming 50 products.
+    if (raw.length > 256 * 1024) return c.json({ error: "invalid_body" }, 413);
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -99,7 +114,7 @@ export function pixelRoutes(app: App, deps: Deps) {
         RETURNING event_id`;
       const freshIds = new Set(fresh.map((r) => r.event_id));
 
-      const visits = new Map<string, { day: string; visitor: string; events: PixelEventIn[] }>();
+      const visits = new Map<string, { day: string; visitor: string; events: PixelEventIn[]; source: TrafficSource | null; sourceAt: Date | null }>();
       const products = new Map<string, { day: string; visitor: string; handle: string; steps: number }>();
       for (const ev of events) {
         // Delete as we go: a batch that repeats an id counts it once.
@@ -108,11 +123,16 @@ export function pixelRoutes(app: App, deps: Deps) {
         const day = localDay(at, store.timezone);
         const visitor = sha256Hex(ev.clientId);
         const k = `${day}|${visitor}`;
-        const v = visits.get(k) ?? { day, visitor, events: [] };
+        const v = visits.get(k) ?? { day, visitor, events: [], source: null, sourceAt: null };
         v.events.push({ name: ev.name, timestamp: at, path: ev.path });
+        // The batch's earliest arrival says where the visit came from.
+        const source = ev.arrival ? arrivalSource(ev.arrival, ev.path) : null;
+        if (source && (!v.sourceAt || at < v.sourceAt)) {
+          v.source = source;
+          v.sourceAt = at;
+        }
         visits.set(k, v);
-        const product = productStepsOf(ev.name, ev.path);
-        if (product) {
+        for (const product of productStepsOf(ev.name, ev.path, ev.products)) {
           const pk = `${k}|${product.handle}`;
           const p = products.get(pk) ?? { day, visitor, handle: product.handle, steps: 0 };
           p.steps |= product.steps;
@@ -121,16 +141,16 @@ export function pixelRoutes(app: App, deps: Deps) {
       }
 
       let n = 0;
-      for (const { day, visitor, events } of visits.values()) {
+      for (const { day, visitor, events, source } of visits.values()) {
         const d = foldVisit(events);
         // Merge into the day's row: the earliest located event is the entry, the latest the exit,
         // whichever batch they arrive in. Every SET expression reads the row as it was before, and
         // a batch with no located event (NULL entered_at/exited_at) leaves entry and exit alone.
         await tx.$executeRaw`
           INSERT INTO funnel_visits AS v (workspace_id, store_id, day, visitor, entered_at, entry_section, entry_path,
-                                          exited_at, exit_section, exit_path, furthest_step, sections, page_views, device, country)
+                                          exited_at, exit_section, exit_path, furthest_step, sections, page_views, device, country, source)
           VALUES (${store.workspaceId}, ${store.id}, ${day}, ${visitor}, ${d.enteredAt}, ${d.entrySection}, ${d.entryPath},
-                  ${d.exitedAt}, ${d.exitSection}, ${d.exitPath}, ${d.furthestStep}, ${d.sections}, ${d.pageViews}, ${device}, ${country})
+                  ${d.exitedAt}, ${d.exitSection}, ${d.exitPath}, ${d.furthestStep}, ${d.sections}, ${d.pageViews}, ${device}, ${country}, ${source})
           ON CONFLICT (store_id, day, visitor) DO UPDATE SET
             entered_at    = CASE WHEN EXCLUDED.entered_at < v.entered_at OR v.entered_at IS NULL THEN EXCLUDED.entered_at ELSE v.entered_at END,
             entry_section = CASE WHEN EXCLUDED.entered_at < v.entered_at OR v.entered_at IS NULL THEN EXCLUDED.entry_section ELSE v.entry_section END,
@@ -142,10 +162,11 @@ export function pixelRoutes(app: App, deps: Deps) {
             sections      = v.sections | EXCLUDED.sections,
             page_views    = v.page_views + EXCLUDED.page_views,
             device        = COALESCE(v.device, EXCLUDED.device),
-            country       = COALESCE(v.country, EXCLUDED.country)`;
+            country       = COALESCE(v.country, EXCLUDED.country),
+            source        = COALESCE(v.source, EXCLUDED.source)`;
         n += events.length;
       }
-      // Which product pages each visit saw, and added to cart on: one statement for the batch.
+      // Which products each visit saw, added to cart, took to checkout and bought: one statement for the batch.
       if (products.size) {
         const rows = [...products.values()];
         await tx.$executeRaw`

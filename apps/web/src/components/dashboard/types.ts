@@ -418,6 +418,15 @@ export interface FunnelProduct {
   /** Visits that added it to cart from its page. */
   added: number | null;
   addRate: number | null;
+  /**
+   * Visits that added it to cart from anywhere else (a quick add), started a checkout holding it, and
+   * bought it; and bought ÷ started checkout on those visits. Null when they weren't recorded in these
+   * dates (`sourcesFrom`).
+   */
+  quickAdded: number | null;
+  checkouts: number | null;
+  purchased: number | null;
+  checkoutCompletion: number | null;
   /** Visits that started on its page; of those, visits that left the store from it without buying; and all visits that left from it without buying. */
   landed: number;
   landedLeft: number;
@@ -436,11 +445,14 @@ export interface FunnelPageModule extends FunnelModule {
   transitions: FunnelTransition[];
   /** Day by day, visits reached per step; null on a day before visits were counted. */
   daily: Array<{ day: string; reached: number[] | null }>;
-  segments: { device: SegmentFunnel[]; country: SegmentFunnel[]; landing: SegmentFunnel[]; visitor: SegmentFunnel[] };
+  /** `source`: only for members who see traffic sources. */
+  segments: { device: SegmentFunnel[]; country: SegmentFunnel[]; landing: SegmentFunnel[]; visitor: SegmentFunnel[]; source?: SegmentFunnel[] };
   products: FunnelProduct[];
   productSales: boolean;
   /** The first day device, country and product pages were recorded. */
   detailsFrom: string | null;
+  /** The first day traffic sources, and quick adds, checkouts and purchases per product, were recorded. */
+  sourcesFrom: string | null;
   lastEventAt: string | null;
   insights: FunnelInsight[];
   actions: Array<{ id: string; doneAt: string; doneBy: string | null; doneByName: string | null }>;

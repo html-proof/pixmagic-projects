@@ -4,6 +4,7 @@ import { Download, Funnel, Printer, RefreshCw, X } from "lucide-react";
 import { FUNNEL_DEVICES, FUNNEL_DEVICE_LABEL, VISITOR_KINDS, VISITOR_KIND_LABEL } from "@app/shared/funnel";
 import { SITE_SECTIONS } from "@app/shared/journey";
 import { hasFullAccess } from "@app/shared/access";
+import { TRAFFIC_LABEL, TRAFFIC_SOURCES } from "@app/shared/traffic";
 import { useApp } from "@/components/AppContext";
 import { CompareDates, CompareSelect, CustomDates, DateRangeSelect, comparedWith } from "@/components/dashboard/DateRange";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
@@ -28,6 +29,9 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
   const checked = s.checkedAt ? fmtRelative(new Date(s.checkedAt).toISOString(), now) : null;
   // The countries this answer has visits from, to pick one (and the one picked, whatever the answer).
   const countries = [...new Set([...(f?.segments.country.map((c) => c.key).filter((k) => /^[A-Z]{2}$/.test(k)) ?? []), ...(s.filter.country ? [s.filter.country] : [])])].sort((a, b) => countryName(a).localeCompare(countryName(b)));
+  // Likewise the traffic sources (only for members who see them: the answer then has the source segment).
+  const sourceKeys = new Set([...(f?.segments.source?.map((x) => x.key) ?? []), ...(s.filter.source ? [s.filter.source] : [])]);
+  const sources = TRAFFIC_SOURCES.filter((x) => x !== "unknown" && sourceKeys.has(x));
 
   const select = (key: FunnelFilterKey, label: string, value: string | undefined, options: Array<[string, string]>, all: string) => (
     <label className="flex min-w-0 items-center gap-2 text-xs text-muted">
@@ -108,6 +112,7 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
           {select("visitor", "Visitors", s.filter.visitor, VISITOR_KINDS.map((v) => [v, VISITOR_KIND_LABEL[v]]), "New and returning")}
           {select("landing", "Landed on", s.filter.landing, SITE_SECTIONS.map((x) => [x, SECTION_LABEL[x]]), "Any page")}
           {select("country", "Country", s.filter.country, countries.map((c) => [c, countryName(c)]), "All countries")}
+          {f.segments.source && select("source", "Traffic source", s.filter.source, sources.map((x) => [x, TRAFFIC_LABEL[x]]), "All sources")}
           {s.filtered && (
             <button type="button" className="inline-flex h-9 items-center gap-1 rounded-lg px-2 text-sm text-muted hover:bg-bg hover:text-text" onClick={s.clearFilter} data-testid="funnel-clear-filter">
               <X aria-hidden className="h-4 w-4" />

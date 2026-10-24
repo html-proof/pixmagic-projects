@@ -605,6 +605,15 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
     // How many orders were cancelled in the dates is cancellation detail too.
     if (drop.length) out.recent_orders = { ...((g.has("orders.cancellations") ? recent : omit(recent, ["cancelledInRange"])) as Obj), items: recent.items.map((i: unknown) => omit(i, drop)) };
   }
+  // The Shopping Funnel's visits by where they came from: the traffic sources permission's, like orders by source.
+  const funnel = out.funnel;
+  if (isObj(funnel) && !g.has("analytics.traffic")) {
+    out.funnel = {
+      ...funnel,
+      ...(isObj(funnel.segments) ? { segments: omit(funnel.segments, ["source"]) } : {}),
+      ...(isObj(funnel.filter) ? { filter: omit(funnel.filter, ["source"]) } : {}),
+    };
+  }
   const traffic = out.traffic;
   if (isObj(traffic) && !g.has("marketing.attribution")) {
     out.traffic = {

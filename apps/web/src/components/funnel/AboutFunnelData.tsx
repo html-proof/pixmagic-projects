@@ -13,6 +13,8 @@ const SOURCES: Array<[figure: string, measured: string, source: string]> = [
   ["Product orders, units and net sales", "Orders that included the product, units net of returns", "Your Shopify orders"],
   ["Orders by traffic source", "Shopify's record of the last visit before each order", "Your Shopify orders"],
   ["Device and country", "The browser's own description, and the country our network placed the request in (one word each; nothing else kept)", "bizinsights storefront pixel"],
+  ["Visits by traffic source", "The site that linked to the visit's first page and the link's tags, sorted by the same rules as orders' sources (one word kept; no address or link)", "bizinsights storefront pixel"],
+  ["Product quick adds, checkouts and purchases", "Visits whose cart, started checkout or completed checkout held the product", "bizinsights storefront pixel"],
 ];
 
 /**
@@ -65,6 +67,13 @@ export function AboutFunnelData({ f, ov }: { f: FunnelPageModule | null; ov: Ove
                 {f?.historyFrom ? <>Visits are counted from {fmtDay(f.historyFrom, { year: true })}, the first whole day after the bizinsights pixel was added to your store. Shopify doesn&apos;t share visits from before an app&apos;s pixel was added.</> : <>No visits have been recorded yet.</>}
               </li>
               <li>{f?.detailsFrom ? <>Device, country and product pages are recorded from {fmtDay(f.detailsFrom, { year: true })}; visits before that show as &ldquo;Not recorded&rdquo;.</> : <>Device, country and product pages are recorded from now on.</>}</li>
+              <li>
+                {f?.sourcesFrom ? (
+                  <>Traffic sources, and quick adds, checkouts and purchases per product, are recorded from {fmtDay(f.sourcesFrom, { year: true })}; visits before that show as &ldquo;Not recorded&rdquo;.</>
+                ) : (
+                  <>Traffic sources, and quick adds, checkouts and purchases per product, are recorded once your store runs the updated bizinsights pixel.</>
+                )}
+              </li>
               <li>You can pick any dates since then, up to 12 months at a time. Orders go back as far as bizinsights imported them.</li>
             </ul>
           </div>
@@ -73,8 +82,8 @@ export function AboutFunnelData({ f, ov }: { f: FunnelPageModule | null; ov: Ove
             <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
               <li>Shoppers who decline analytics tracking in your store&apos;s cookie banner aren&apos;t counted, so visits are lower than Shopify&apos;s sessions. Use them for trends and rates.</li>
               <li>The same shopper on another device or browser counts as another visitor.</li>
-              <li>Where each visit came from (search, social, email…) isn&apos;t recorded: the traffic source breakdown shows your orders instead.</li>
-              <li>Checkout isn&apos;t recorded per product, and a visit&apos;s purchase isn&apos;t matched to its order, so revenue is for all orders in the dates, not only tracked visits.</li>
+              <li>A visit&apos;s traffic source is where its first tracked page was reached from. A visit whose first page wasn&apos;t tracked (tracking accepted on a later page) shows as &ldquo;Not recorded&rdquo;, and a shopper who comes back from somewhere else the same day keeps the first source.</li>
+              <li>A visit&apos;s purchase isn&apos;t matched to its order, so revenue is for all orders in the dates, not only tracked visits.</li>
               <li>Today&apos;s visits include ones still in progress.</li>
             </ul>
           </div>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  arrivalSource,
   countsByStep,
   FUNNEL_ACTIONS,
   funnelDevice,
@@ -15,7 +16,9 @@ import {
   segmentFunnel,
   significant,
   type InsightInput,
+  type PixelArrival,
 } from "../src/funnel.js";
+import type { TrafficSource } from "../src/traffic.js";
 
 describe("funnelDevice", () => {
   it.each([
@@ -42,14 +45,66 @@ describe("product pages", () => {
     expect(productHandle(undefined)).toBeNull();
   });
 
-  it("puts a view or an add on its product page, and nothing else", () => {
-    expect(productStepsOf("product_viewed", "/products/tee")).toEqual({ handle: "tee", steps: 1 });
+  it("puts an older pixel's view or add on its product page, and nothing else", () => {
+    expect(productStepsOf("product_viewed", "/products/tee")).toEqual([{ handle: "tee", steps: 1 }]);
     // Added from its page: the page was seen too.
-    expect(productStepsOf("product_added_to_cart", "/products/tee")).toEqual({ handle: "tee", steps: 3 });
+    expect(productStepsOf("product_added_to_cart", "/products/tee")).toEqual([{ handle: "tee", steps: 3 }]);
     // A quick add from a collection names no product page.
-    expect(productStepsOf("product_added_to_cart", "/collections/all")).toBeNull();
-    expect(productStepsOf("page_viewed", "/products/tee")).toBeNull();
-    expect(productStepsOf("product_viewed", undefined)).toBeNull();
+    expect(productStepsOf("product_added_to_cart", "/collections/all")).toEqual([]);
+    expect(productStepsOf("page_viewed", "/products/tee")).toEqual([]);
+    expect(productStepsOf("product_viewed", undefined)).toEqual([]);
+    // Older pixels name no products in a checkout.
+    expect(productStepsOf("checkout_started", "/checkouts/cn/abc")).toEqual([]);
+  });
+
+  it("puts a newer pixel's add on the product it names: on its page, or a quick add elsewhere", () => {
+    expect(productStepsOf("product_added_to_cart", "/products/tee", ["Tee"])).toEqual([{ handle: "tee", steps: 3 }]);
+    expect(productStepsOf("product_added_to_cart", "/collections/all", ["tee"])).toEqual([{ handle: "tee", steps: 4 }]);
+    // Another product added from the tee's page ("you may also like"): a quick add of the mug, and the tee's page was seen.
+    expect(productStepsOf("product_added_to_cart", "/products/tee", ["mug"])).toEqual([
+      { handle: "mug", steps: 4 },
+      { handle: "tee", steps: 1 },
+    ]);
+    // A cart line without a product address falls back to the page's product.
+    expect(productStepsOf("product_added_to_cart", "/products/tee", [])).toEqual([{ handle: "tee", steps: 3 }]);
+    // Handles are read as a product address would be (decoded, lower case); nonsense names nothing.
+    expect(productStepsOf("product_added_to_cart", "/collections/all", ["T%C3%A9e", "", "?x"])).toEqual([{ handle: "tée", steps: 4 }]);
+  });
+
+  it("puts every product of a checkout down to it, and a completed checkout as started too", () => {
+    expect(productStepsOf("checkout_started", "/checkouts/cn/abc", ["tee", "mug", "tee"])).toEqual([
+      { handle: "tee", steps: 8 },
+      { handle: "mug", steps: 8 },
+    ]);
+    expect(productStepsOf("checkout_completed", "/checkouts/cn/abc/thank-you", ["tee"])).toEqual([{ handle: "tee", steps: 24 }]);
+  });
+});
+
+describe("arrivalSource", () => {
+  const cases: Array<[PixelArrival, string, TrafficSource]> = [
+    [{}, "/", "direct"],
+    [{ ref: "www.google.com" }, "/", "google"],
+    [{ ref: "l.instagram.com" }, "/products/tee", "instagram"],
+    [{ ref: "news.example.org" }, "/", "other"],
+    // Tags and click ids win over the referrer, by the orders' rules.
+    [{ ref: "news.example.org", utmSource: "facebook", utmMedium: "paid_social" }, "/", "facebook"],
+    [{ click: ["gclid"] }, "/", "google"],
+    [{ click: ["fbclid"] }, "/", "facebook"],
+    [{ click: ["ttclid"] }, "/", "tiktok"],
+    [{ utmSource: "klaviyo", utmMedium: "email" }, "/", "email"],
+    [{ utmMedium: "newsletter" }, "/", "email"],
+  ];
+  it.each(cases)("%o on %s → %s", (arrival, path, source) => {
+    expect(arrivalSource(arrival, path)).toBe(source);
+  });
+
+  it("has no source for pages reached back from payment or sign-in, or from the store's own Shopify hosts", () => {
+    expect(arrivalSource({ ref: "www.paypal.com" }, "/checkouts/cn/abc/thank-you")).toBeNull();
+    expect(arrivalSource({ ref: "shopify.com" }, "/account")).toBeNull();
+    expect(arrivalSource({ ref: "a-store.myshopify.com" }, "/")).toBeNull();
+    expect(arrivalSource({ ref: "shopify.com" }, "/")).toBeNull();
+    // Without a path the arrival is taken as it is.
+    expect(arrivalSource({ ref: "bing.com" }, undefined)).toBe("bing");
   });
 });
 
@@ -211,7 +266,11 @@ describe("productSuggestion", () => {
 
   it("notes sales no tracked visit led to", () => {
     expect(productSuggestion({ viewed: 0, added: 0, ...none, orders: 3 }, others)).toBe("sold_untracked");
+    expect(productSuggestion({ viewed: 0, added: 0, ...none, orders: 3, quickAdded: 0, checkouts: 0 }, others)).toBe("sold_untracked");
     // Views not recorded for these dates: nothing to say about them.
     expect(productSuggestion({ viewed: null, added: null, ...none, orders: 3 }, others)).toBeNull();
+    // Tracked visits added it quickly, or took it to checkout, without viewing its page.
+    expect(productSuggestion({ viewed: 0, added: 0, ...none, orders: 3, quickAdded: 2, checkouts: 0 }, others)).toBeNull();
+    expect(productSuggestion({ viewed: 0, added: 0, ...none, orders: 3, quickAdded: 0, checkouts: 1 }, others)).toBeNull();
   });
 });

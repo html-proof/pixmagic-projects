@@ -13,6 +13,7 @@ import {
   segmentFunnel,
   SITE_SECTIONS,
   summarizeJourney,
+  TRAFFIC_SOURCES,
   visitsHistoryStart,
   type Comparison,
   type DateRange,
@@ -41,6 +42,7 @@ function filterSql(ws: string, f: FunnelFilter): Prisma.Sql {
   if (f.device) parts.push(Prisma.sql`v.device = ${f.device}`);
   if (f.country) parts.push(Prisma.sql`v.country = ${f.country}`);
   if (f.landing) parts.push(Prisma.sql`v.entry_section = ${f.landing}`);
+  if (f.source) parts.push(Prisma.sql`v.source = ${f.source}`);
   if (f.visitor) {
     const earlier = Prisma.sql`EXISTS (SELECT 1 FROM funnel_visits e WHERE e.workspace_id = ${ws} AND e.store_id = v.store_id AND e.visitor = v.visitor AND e.day < v.day)`;
     parts.push(f.visitor === "returning" ? earlier : Prisma.sql`NOT ${earlier}`);
@@ -139,6 +141,8 @@ export interface FunnelView {
   filter: FunnelFilter;
   /** The member may see product sales (orders, units and net sales per product: the top products permission). */
   productSales: boolean;
+  /** The member may see where visitors came from (the traffic sources permission): the source segment and filter. */
+  sources: boolean;
 }
 
 /** Countries listed one by one before the rest are put together. */
@@ -167,11 +171,13 @@ function topCountries(list: SegmentFunnel[]): SegmentFunnel[] {
 /**
  * Everything the Shopping Funnel page shows from the pixel's visits, for these dates and the
  * filter: the dashboard's funnel (above), the comparison step by step, every transition, day by
- * day, funnels per device, country, landing page and new or returning visitor, product pages,
- * the observations the numbers support, and the store's checklist.
+ * day, funnels per device, country, landing page, new or returning visitor and traffic source,
+ * products, the observations the numbers support, and the store's checklist.
  *
  * Device and country, and the product pages, are recorded from `detailsFrom` (the first visit that
- * has them): visits from before have none, and say so (`not_recorded`) rather than guess.
+ * has them); traffic sources, and quick adds, checkouts and purchases per product, from
+ * `sourcesFrom` (the first visit with a source: the same pixel release sends both). Visits from
+ * before have none, and say so (`not_recorded`, null) rather than guess.
  */
 export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previous: Comparison, store: Pick<Store, "timezone" | "pixelInstalledAt">, view: FunnelView) {
   const { ws, storeId } = scope;
@@ -190,19 +196,21 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
   const daily = eachDay(range.from, range.to).map((day) => ({ day, reached: base.historyFrom && day >= base.historyFrom ? reachedCounts(countsByStep(byDay.get(day) ?? [])) : null }));
 
   // Every segment at once. `recorded`: the visit has a device (and so a country, when the edge knew it).
-  const segRows = await tx.$queryRaw<Array<{ gd: number; gc: number; gl: number; gr: number; device: string | null; recorded: boolean | null; country: string | null; entry_section: string | null; returning: boolean | null; furthest_step: number; visits: number }>>`
+  const segRows = await tx.$queryRaw<
+    Array<{ gd: number; gc: number; gl: number; gr: number; gs: number; device: string | null; recorded: boolean | null; country: string | null; entry_section: string | null; returning: boolean | null; source: string | null; furthest_step: number; visits: number }>
+  >`
     WITH s AS (
-      SELECT v.device, v.device IS NOT NULL AS recorded, v.country, v.entry_section, v.furthest_step,
+      SELECT v.device, v.device IS NOT NULL AS recorded, v.country, v.entry_section, v.source, v.furthest_step,
              EXISTS (SELECT 1 FROM funnel_visits e WHERE e.workspace_id = ${ws} AND e.store_id = v.store_id AND e.visitor = v.visitor AND e.day < v.day) AS returning
       FROM funnel_visits v WHERE ${inRange}
     )
-    SELECT GROUPING(s.device)::int AS gd, GROUPING(s.country)::int AS gc, GROUPING(s.entry_section)::int AS gl, GROUPING(s.returning)::int AS gr,
-           s.device, s.recorded, s.country, s.entry_section, s.returning, s.furthest_step, COUNT(*)::int AS visits
+    SELECT GROUPING(s.device)::int AS gd, GROUPING(s.country)::int AS gc, GROUPING(s.entry_section)::int AS gl, GROUPING(s.returning)::int AS gr, GROUPING(s.source)::int AS gs,
+           s.device, s.recorded, s.country, s.entry_section, s.returning, s.source, s.furthest_step, COUNT(*)::int AS visits
     FROM s
-    GROUP BY GROUPING SETS ((s.device, s.furthest_step), (s.recorded, s.country, s.furthest_step), (s.entry_section, s.furthest_step), (s.returning, s.furthest_step))`;
-  const dim = (want: "device" | "country" | "landing" | "visitor") =>
+    GROUP BY GROUPING SETS ((s.device, s.furthest_step), (s.recorded, s.country, s.furthest_step), (s.entry_section, s.furthest_step), (s.returning, s.furthest_step), (s.source, s.furthest_step))`;
+  const dim = (want: "device" | "country" | "landing" | "visitor" | "source") =>
     segRows
-      .filter((r) => (want === "device" ? r.gd === 0 : want === "country" ? r.gc === 0 : want === "landing" ? r.gl === 0 : r.gr === 0))
+      .filter((r) => (want === "device" ? r.gd : want === "country" ? r.gc : want === "landing" ? r.gl : want === "visitor" ? r.gr : r.gs) === 0)
       .map((r) => ({
         key:
           want === "device"
@@ -211,24 +219,39 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
               ? (!r.recorded ? "not_recorded" : (r.country ?? "unknown"))
               : want === "landing"
                 ? (isSection(r.entry_section) ? r.entry_section : "not_recorded")
-                : (r.returning ? "returning" : "new"),
+                : want === "visitor"
+                  ? (r.returning ? "returning" : "new")
+                  : (r.source === null ? "not_recorded" : (TRAFFIC_SOURCES as readonly string[]).includes(r.source) ? r.source : "unknown"),
         furthest_step: r.furthest_step,
         visits: r.visits,
       }));
-  const segments = { device: segmentsOf(dim("device")), country: topCountries(segmentsOf(dim("country"))), landing: segmentsOf(dim("landing")), visitor: segmentsOf(dim("visitor")) };
+  const segments = {
+    device: segmentsOf(dim("device")),
+    country: topCountries(segmentsOf(dim("country"))),
+    landing: segmentsOf(dim("landing")),
+    visitor: segmentsOf(dim("visitor")),
+    // Where visitors came from is the traffic sources permission's.
+    ...(view.sources ? { source: segmentsOf(dim("source")) } : {}),
+  };
 
-  // When device, country and product pages began to be recorded, and the last visit seen.
+  // When device, country and product pages, and traffic sources, began to be recorded, and the last visit seen.
   const [details] = await tx.$queryRaw<Array<{ day: string }>>`
     SELECT day FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId} AND device IS NOT NULL ORDER BY day LIMIT 1`;
+  const [sourced] = await tx.$queryRaw<Array<{ day: string }>>`
+    SELECT day FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId} AND source IS NOT NULL ORDER BY day LIMIT 1`;
   const [last] = await tx.$queryRaw<Array<{ at: Date | null }>>`
     SELECT MAX(exited_at) AS at FROM funnel_visits
     WHERE workspace_id = ${ws} AND store_id = ${storeId} AND day = (SELECT MAX(day) FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId})`;
   const detailsFrom = details?.day ?? null;
+  const sourcesFrom = sourced?.day ?? null;
 
-  // Product pages: visits that viewed each, added it to cart from its page, landed on it, left the store from it without
-  // buying, and landed on it and left from it without buying (`landedLeft`).
-  const productRows = await tx.$queryRaw<Array<{ handle: string; viewed: number; added: number }>>`
-    SELECT p.handle, COUNT(*) FILTER (WHERE p.steps & 1 <> 0)::int AS viewed, COUNT(*) FILTER (WHERE p.steps & 2 <> 0)::int AS added
+  // Products: visits that viewed each, added it to cart from its page, added it quickly from anywhere else, started a checkout
+  // with it, bought it (the steps bits, PRODUCT_* in packages/shared/src/funnel.ts); visits that landed on its page, left the
+  // store from it without buying, and landed on it and left from it without buying (`landedLeft`).
+  const productRows = await tx.$queryRaw<Array<{ handle: string; viewed: number; added: number; quick_added: number; checkouts: number; purchased: number }>>`
+    SELECT p.handle, COUNT(*) FILTER (WHERE p.steps & 1 <> 0)::int AS viewed, COUNT(*) FILTER (WHERE p.steps & 2 <> 0)::int AS added,
+           COUNT(*) FILTER (WHERE p.steps & 4 <> 0)::int AS quick_added, COUNT(*) FILTER (WHERE p.steps & 8 <> 0)::int AS checkouts,
+           COUNT(*) FILTER (WHERE p.steps & 16 <> 0)::int AS purchased
     FROM funnel_product_visits p
     JOIN funnel_visits v ON v.store_id = p.store_id AND v.day = p.day AND v.visitor = p.visitor
     WHERE p.workspace_id = ${ws} AND p.store_id = ${storeId} AND p.day BETWEEN ${range.from} AND ${range.to} AND ${inRange}
@@ -266,8 +289,9 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
   });
   const byHandle = new Map(catalog.filter((p) => p.handle).map((p) => [p.handle!.toLowerCase(), p]));
   const edges = (kind: "landed" | "exit" | "landedLeft", handle: string) => edgeRows.find((r) => r.kind === kind && r.handle === handle)?.visits ?? 0;
-  // Views are known only for days product pages were recorded.
+  // Views are known only for days product pages were recorded; quick adds, checkouts and purchases for days sources were.
   const viewsKnown = !!detailsFrom && range.to >= detailsFrom;
+  const cartsKnown = !!sourcesFrom && range.to >= sourcesFrom;
   const products = productRows.map((r) => {
     const p = byHandle.get(r.handle);
     return {
@@ -279,6 +303,11 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
       viewed: r.viewed as number | null,
       added: r.added as number | null,
       addRate: r.viewed > 0 ? r.added / r.viewed : null,
+      quickAdded: cartsKnown ? r.quick_added : null,
+      checkouts: cartsKnown ? r.checkouts : null,
+      purchased: cartsKnown ? r.purchased : null,
+      // Every visit that bought it started a checkout with it (PRODUCT_PURCHASED sets both), so this is a share of the same visits.
+      checkoutCompletion: cartsKnown && r.checkouts > 0 ? r.purchased / r.checkouts : null,
       landed: edges("landed", r.handle),
       landedLeft: edges("landedLeft", r.handle),
       exits: edges("exit", r.handle),
@@ -300,6 +329,10 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
       viewed: viewsKnown ? 0 : null,
       added: viewsKnown ? 0 : null,
       addRate: null,
+      quickAdded: cartsKnown ? 0 : null,
+      checkouts: cartsKnown ? 0 : null,
+      purchased: cartsKnown ? 0 : null,
+      checkoutCompletion: null,
       landed: edges("landed", handle),
       landedLeft: edges("landedLeft", handle),
       exits: edges("exit", handle),
@@ -332,6 +365,8 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
     productSales: view.productSales,
     /** The first day device, country and product pages were recorded (null: none yet). */
     detailsFrom,
+    /** The first day traffic sources, and quick adds, checkouts and purchases per product, were recorded (null: none yet). */
+    sourcesFrom,
     /** When the latest tracked visit was last seen. */
     lastEventAt: last?.at ? last.at.toISOString() : null,
     insights: funnelInsights({

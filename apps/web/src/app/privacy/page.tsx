@@ -25,9 +25,10 @@ export const metadata: Metadata = {
  *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
- *   - the funnel stores hashed browser ids, cleaned page paths, the product pages each visit saw, and one
- *     word each for the kind of device and the country (apps/api/src/routes/pixel.ts,
- *     packages/shared/src/journey.ts `cleanPath`, packages/shared/src/funnel.ts `funnelDevice`);
+ *   - the funnel stores hashed browser ids, cleaned page paths, the products each visit saw, added to cart,
+ *     took to checkout and bought, and one word each for the kind of device, the country and where the visit
+ *     came from; the referring host and link tags the pixel sends for that are not kept (apps/api/src/routes/pixel.ts,
+ *     packages/shared/src/journey.ts `cleanPath`, packages/shared/src/funnel.ts `funnelDevice`, `arrivalSource`);
  *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
  *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL, and Meta's
@@ -201,14 +202,19 @@ export default function PrivacyPage() {
           The funnel needs two further permissions, <code>write_pixels</code> and <code>read_customer_events</code>, and adds a
           Shopify web pixel to your storefront. The pixel runs only for shoppers who accept analytics tracking, and sends five events:
           page viewed, product viewed, added to cart, checkout started and checkout completed. Each event carries its time, the page
-          address and Shopify&apos;s anonymous browser ID.
+          address and Shopify&apos;s anonymous browser ID. When a shopper arrives from outside your store, the page view also carries
+          the name of the website they came from (its domain only, never the page), the link&apos;s campaign tags{" "}
+          <code>utm_source</code> and <code>utm_medium</code>, and whether the link carried an ad click ID (only that it did, never the
+          ID). Adds to cart and checkouts also carry which products they hold.
         </p>
         <p>
           We keep the page address without its query string, and never keep checkout, order-status or account addresses, because those
           carry a shopper&apos;s token. The browser ID is stored only as a one-way hash. From these events we record each visit&apos;s
-          landing page, last page, how far it progressed, which parts of the store and which product pages it viewed, the kind of
-          device it came from (mobile, tablet or desktop, read from the browser&apos;s own description of itself) and its country (as
-          our network places the request). No names, email addresses or IP addresses are stored.
+          landing page, last page, how far it progressed, which parts of the store and which product pages it viewed, which products
+          it added to cart, took to checkout and bought, the kind of device it came from (mobile, tablet or desktop, read from the
+          browser&apos;s own description of itself), its country (as our network places the request) and one word for where it came
+          from (for example Google, Instagram, Email or Direct). The website name and campaign tags are used to choose that word and
+          are not kept. No names, email addresses or IP addresses are stored.
         </p>
 
         <h3>Customers to follow up (only if you allow access to your customers)</h3>
