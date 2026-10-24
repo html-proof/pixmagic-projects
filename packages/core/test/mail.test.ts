@@ -17,6 +17,8 @@ beforeAll(() => {
     OTP_FROM_NAME: "BizInsights Support",
     LINK_FROM_EMAIL: "link@bizinsights.io",
     LINK_FROM_NAME: "BizInsights",
+    STAFF_FROM_EMAIL: "staff@bizinsights.io",
+    STAFF_FROM_NAME: "BizInsights",
     SUPPORT_EMAIL: "support@bizinsights.io",
   });
   resetEnvCache();
@@ -82,10 +84,12 @@ describe("who each email comes from", () => {
     OTP_FROM_NAME: "BizInsights Support",
     LINK_FROM_EMAIL: "link@bizinsights.io",
     LINK_FROM_NAME: "BizInsights",
+    STAFF_FROM_EMAIL: "staff@bizinsights.io",
+    STAFF_FROM_NAME: "BizInsights",
     SUPPORT_EMAIL: "support@bizinsights.io",
   };
 
-  it("sends every code from support@, every shared link from link@, and the rest from EMAIL_FROM", () => {
+  it("sends every code from support@, every shared link from link@, Staff Management's from staff@, and the rest from EMAIL_FROM", () => {
     const expected: Record<EmailPurpose, string> = {
       signup_code: "BizInsights Support <support@bizinsights.io>",
       login_code: "BizInsights Support <support@bizinsights.io>",
@@ -94,7 +98,7 @@ describe("who each email comes from", () => {
       temporary_password: "BizInsights Support <support@bizinsights.io>",
       account_deletion_code: "BizInsights Support <support@bizinsights.io>",
       team_invitation: "BizInsights <link@bizinsights.io>",
-      staff_invitation: "BizInsights <link@bizinsights.io>",
+      staff_invitation: "BizInsights <staff@bizinsights.io>",
       notice: "bizinsights <no-reply@bizinsights.io>",
     };
     expect(Object.keys(EMAIL_PURPOSES).sort()).toEqual(Object.keys(expected).sort());
@@ -107,9 +111,10 @@ describe("who each email comes from", () => {
   });
 
   it("falls back to EMAIL_FROM for an identity left unset, keeping EMAIL_FROM's name when the identity has none", () => {
-    const bare = { ...settings, OTP_FROM_EMAIL: "", LINK_FROM_NAME: "" };
+    const bare = { ...settings, OTP_FROM_EMAIL: "", LINK_FROM_NAME: "", STAFF_FROM_EMAIL: "" };
     expect(fromHeader("login_code", bare)).toBe("bizinsights <no-reply@bizinsights.io>");
     expect(fromHeader("team_invitation", bare)).toBe("bizinsights <link@bizinsights.io>");
+    expect(fromHeader("staff_invitation", bare)).toBe("bizinsights <no-reply@bizinsights.io>");
     expect(senderFor("notice", { ...bare, EMAIL_FROM: "no-reply@bizinsights.io" })).toEqual({ name: null, email: "no-reply@bizinsights.io" });
     expect(fromHeader("notice", { ...bare, EMAIL_FROM: "no-reply@bizinsights.io" })).toBe("no-reply@bizinsights.io");
   });
@@ -117,6 +122,7 @@ describe("who each email comes from", () => {
   it("signs off as the sender, with the support address", () => {
     expect(signatureFor("login_code", settings)).toEqual({ name: "BizInsights Support", email: "support@bizinsights.io", support: "support@bizinsights.io" });
     expect(signatureFor("team_invitation", settings)).toEqual({ name: "BizInsights", email: "link@bizinsights.io", support: "support@bizinsights.io" });
+    expect(signatureFor("staff_invitation", settings)).toEqual({ name: "BizInsights", email: "staff@bizinsights.io", support: "support@bizinsights.io" });
     expect(signatureFor("team_invitation", { ...settings, SUPPORT_EMAIL: "" }).support).toBeNull();
     // Unset, the email signs as before, never showing EMAIL_FROM's no-reply address.
     expect(signatureFor("login_code", { ...settings, OTP_FROM_EMAIL: "" })).toEqual({ name: "bizinsights Team", email: null, support: "support@bizinsights.io" });
@@ -127,7 +133,7 @@ describe("who each email comes from", () => {
     const resend = fakeFetch(200, { id: "r1" });
     await resendMailer({ apiKey: "k", fetchImpl: resend.f }).send("a@b.co", "s", "t", undefined, { purpose: "signup_code" });
     await resendMailer({ apiKey: "k", fetchImpl: resend.f }).send("a@b.co", "s", "t", undefined, { purpose: "staff_invitation" });
-    expect(resend.calls.map((c) => JSON.parse(String(c.init.body)).from)).toEqual(["BizInsights Support <support@bizinsights.io>", "BizInsights <link@bizinsights.io>"]);
+    expect(resend.calls.map((c) => JSON.parse(String(c.init.body)).from)).toEqual(["BizInsights Support <support@bizinsights.io>", "BizInsights <staff@bizinsights.io>"]);
 
     const mailpit = fakeFetch(200, { ID: "m1" });
     await mailpitMailer("http://mailpit.test", mailpit.f).send("a@b.co", "s", "t", undefined, { purpose: "password_reset_code" });
@@ -147,6 +153,8 @@ describe("who each email comes from", () => {
       ["SUPPORT_EMAIL", "help desk"],
       ["OTP_FROM_NAME", "Support <evil@x.test>"],
       ["LINK_FROM_NAME", "BizInsights\r\nBcc: x@y.z"],
+      ["STAFF_FROM_EMAIL", "staff"],
+      ["STAFF_FROM_NAME", "Staff <evil@x.test>"],
     ] as const) {
       const before = process.env[name];
       process.env[name] = value;

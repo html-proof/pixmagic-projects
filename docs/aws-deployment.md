@@ -806,12 +806,14 @@ sender.
 | Purpose | From | Settings |
 | --- | --- | --- |
 | Sign-up, sign-in, email verification and password-reset codes; the temporary password | `BizInsights Support <support@bizinsights.io>` | `OTP_FROM_EMAIL`, `OTP_FROM_NAME` |
-| Dashboard invitations (shared links), employee portal invitations | `BizInsights <link@bizinsights.io>` | `LINK_FROM_EMAIL`, `LINK_FROM_NAME` |
+| Dashboard invitations (shared links) | `BizInsights <link@bizinsights.io>` | `LINK_FROM_EMAIL`, `LINK_FROM_NAME` |
+| Staff Management: employee portal invitations | `BizInsights <staff@bizinsights.io>` | `STAFF_FROM_EMAIL`, `STAFF_FROM_NAME` |
 | Everything else (alerts, stock alerts, sign-in method notices, the daily cost report) | `bizinsights <no-reply@bizinsights.io>` | `EMAIL_FROM` |
 
 The codes sign off with the support address and the invitations add "Need help with bizinsights?
 Contact support@bizinsights.io" (`SUPPORT_EMAIL`); invitations still send replies to the person who
-sent them. An empty `OTP_FROM_EMAIL` or `LINK_FROM_EMAIL` sends those emails from `EMAIL_FROM` again.
+sent them. An empty `OTP_FROM_EMAIL`, `LINK_FROM_EMAIL` or `STAFF_FROM_EMAIL` sends those emails from
+`EMAIL_FROM` again.
 
 - **Sending** from any `@bizinsights.io` address needs nothing more: Resend and SES both verify the
   domain, not single addresses (checked 2026-10-23: `resend._domainkey` DKIM, SPF on `send.`, DMARC
@@ -824,7 +826,8 @@ sent them. An empty `OTP_FROM_EMAIL` or `LINK_FROM_EMAIL` sends those emails fro
   `resend._domainkey`, SES's DKIM CNAMEs and `_dmarc` are untouched. Destination
   `bizinsightsaus@yahoo.com` (verified); rules `support@bizinsights.io` and `link@bizinsights.io`
   → that destination, both *Active*. The catch-all is off (Drop), so mail to any other address is
-  dropped. A new destination must be verified (Cloudflare emails it a link) before a rule can use
+  dropped: `staff@bizinsights.io` too, until a rule forwards it (employee invitations name the
+  employer's support address, not staff@, for questions). A new destination must be verified (Cloudflare emails it a link) before a rule can use
   it. Check: send to support@bizinsights.io and see it in the Yahoo inbox, or its "Forwarded" line
   in Email Routing → Activity log.
 

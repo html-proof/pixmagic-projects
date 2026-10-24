@@ -112,7 +112,7 @@ export async function createInvitation(actor: StaffActor, employeeId: string, de
       support: settings.supportEmail ?? inviter?.email ?? "your manager",
     });
     try {
-      // From the link sender (core/mail/senders.ts), like the dashboard invitations.
+      // From the staff sender, staff@bizinsights.io in production (core/mail/senders.ts).
       await mailer.send(employee.email, msg.subject, msg.text, msg.html, { purpose: "staff_invitation" });
       emailed = true;
     } catch (err) {
