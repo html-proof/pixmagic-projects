@@ -94,7 +94,7 @@ export const APP_SETTINGS = {
   "META_CONFIG_ID": "1521935306664882",
   // "1" once Meta grants the app Advanced Access to ads_read (App Review, after Business Verification).
   // Until then only people with a role on the app (admins, developers, testers: App roles → Roles) can
-  // connect; Facebook shows everyone else "Feature Unavailable", so Settings warns before sending them.
+  // connect; Facebook shows everyone else "Feature Unavailable" (Settings shows no note about it).
   "META_ADS_ADVANCED_ACCESS": "",
   "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
   "GOOGLE_ADS_API_VERSION": "v25",
@@ -109,7 +109,7 @@ export const APP_SETTINGS = {
   "GOOGLE_ADS_DAILY_OPERATIONS": "",
   // "1" once Google verifies the app's use of the adwords scope (Google Auth Platform → Verification
   // Center: branding first, then data access with the demo video). Until then Google shows "Google
-  // hasn't verified this app" before its consent screen, so Settings warns first. AdSense is unaffected.
+  // hasn't verified this app" before its consent screen (Settings shows no note about it). AdSense is unaffected.
   "GOOGLE_ADS_OAUTH_VERIFIED": "",
   // "1": the Google Ads card offers "Try demo", a simulated account whose figures bizinsights generates
   // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it

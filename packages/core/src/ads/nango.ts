@@ -175,7 +175,8 @@ export interface NangoSessionTags {
   /** The workspace (Nango's recommended key). */
   organization_id: string;
   bi_store: string;
-  bi_provider: AdProvider;
+  /** The ad platform, or "whatsapp" for a WhatsApp access token (whatsapp/nango.ts). */
+  bi_provider: AdProvider | "whatsapp";
   /** The session's single-use nonce: how the connection is tied to the session that made it. */
   bi_session: string;
 }
@@ -229,11 +230,11 @@ interface ConnectionListItem {
 }
 
 /**
- * The connections Nango holds with this id (one per integration at most), with their tags. Never their
- * credentials (the list doesn't carry them).
+ * The connections Nango holds with this id (one per integration at most), or all of them without one,
+ * with their tags. Never their credentials (the list doesn't carry them).
  */
-export async function nangoConnections(c: NangoConfig, connectionId: string): Promise<NangoConnectionInfo[]> {
-  const res = await nangoRequest<{ connections?: ConnectionListItem[] }>(c, "GET", "/connections", { query: [["connectionId", connectionId]], what: "Nango connections" });
+export async function nangoConnections(c: NangoConfig, connectionId?: string): Promise<NangoConnectionInfo[]> {
+  const res = await nangoRequest<{ connections?: ConnectionListItem[] }>(c, "GET", "/connections", { query: connectionId ? [["connectionId", connectionId]] : [], what: "Nango connections" });
   return (res.connections ?? [])
     .filter((x): x is ConnectionListItem & { connection_id: string; provider_config_key: string } => typeof x.connection_id === "string" && typeof x.provider_config_key === "string")
     .map((x) => ({
@@ -295,6 +296,23 @@ export async function nangoAccessToken(c: NangoConfig, integrationKey: string, c
     expiresAt: expiresAt && Number.isFinite(expiresAt.getTime()) ? expiresAt : null,
     grantedScopes: scopesOf(cred.raw?.scope) ?? scopesOf(cred.raw?.granted_scopes),
   };
+}
+
+/**
+ * The key an API-key connection holds (WhatsApp's: the access token the merchant pasted into the Connect
+ * UI, whatsapp/nango.ts). A connection Nango doesn't have, or one holding no key, is an AdsAuthError.
+ */
+export async function nangoApiKey(c: NangoConfig, integrationKey: string, connectionId: string): Promise<string> {
+  let res: { credentials?: { type?: string; apiKey?: unknown } };
+  try {
+    res = await nangoRequest<typeof res>(c, "GET", `/connections/${encodeURIComponent(connectionId)}`, { query: [["provider_config_key", integrationKey]], what: "Nango connection" });
+  } catch (err) {
+    if (err instanceof NangoNotFoundError) throw new AdsAuthError("The Nango connection no longer exists");
+    throw err;
+  }
+  const key = res.credentials?.type === "API_KEY" ? res.credentials.apiKey : null;
+  if (typeof key !== "string" || !key) throw new AdsAuthError("The Nango connection holds no API key");
+  return key;
 }
 
 /**

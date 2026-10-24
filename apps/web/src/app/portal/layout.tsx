@@ -8,7 +8,7 @@ import { PORTAL_WS_KEY, PortalProvider, portalSignOut, type PortalCtx } from "@/
 import { Alert } from "@/components/ui";
 import { BrandLogo, BrandMark } from "@/components/Brand";
 import { ToastProvider } from "@/components/AppUi";
-import { api, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
+import { getMe, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
 import { setReturnTo, signInAndReturn } from "@/lib/returnTo";
 import { readLocal, writeLocal } from "@/lib/storage";
 
@@ -37,7 +37,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   const loadMe = useCallback(async () => {
     let m: Me;
     try {
-      m = await api<Me>("/me");
+      m = await getMe<Me>();
     } catch (e) {
       if (isSignedOut(e)) {
         signInAndReturn(router);

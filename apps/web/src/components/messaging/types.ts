@@ -1,4 +1,4 @@
-import type { SegmentFilter, SegmentInfo, SenderIdSupport, SenderNameStatus, SetupStep, SmsCategory, SmsRuleInput, SmsStatus, SmsTransactionalBasis, SmsTrigger, TemplateIssue } from "@app/shared/sms";
+import type { SegmentFilter, SegmentInfo, SenderIdSupport, SenderNameStatus, SetupStep, SmsAutomationInput, SmsCategory, SmsRuleInput, SmsStatus, SmsTransactionalBasis, SmsTrigger, TemplateIssue } from "@app/shared/sms";
 
 // ---------------------------------------------------------------------------
 // What the Customer Messaging API answers (apps/api/src/routes/sms*.ts), as the pages read it.
@@ -419,4 +419,61 @@ export interface SmsSetupState {
   lastTest: SmsMessage | null;
   completedAt: string | null;
   done: Record<SetupStep, boolean>;
+}
+
+// ---------------------------------------------------------------------------
+// Automations, the four-step builder (apps/api/src/routes/smsAutomations.ts)
+// ---------------------------------------------------------------------------
+
+export type TriggerState = "ready" | "needs_permission" | "unchecked" | "not_subscribed" | "not_sent" | "unknown_app" | "unavailable";
+
+export interface TriggerCapability {
+  key: string;
+  trigger: SmsTrigger | null;
+  state: TriggerState;
+  reason: string | null;
+  topics: string[];
+  lastEventAt: string | null;
+  checkedAt: string | null;
+  scope: string | null;
+}
+
+export interface TriggersResponse {
+  triggers: TriggerCapability[];
+  /** Customers with a mobile number that have reached bizinsights from this store. */
+  contactsSeen?: number;
+}
+
+export interface SendingProblem {
+  code: string;
+  message: string;
+  stops: "all" | SmsCategory;
+  fix: { label: string; href: string } | null;
+}
+
+export interface AutomationView {
+  id: string;
+  name: string;
+  trigger: SmsTrigger | null;
+  triggerLabel: string | null;
+  category: SmsCategory | null;
+  status: "draft" | "pending_approval" | "active" | "paused" | "disabled";
+  pendingChanges: boolean;
+  dryRun: boolean;
+  config: SmsAutomationInput | null;
+  templateId: string | null;
+  body: string | null;
+  liveBody: string | null;
+  lastRunAt: string | null;
+  lastResult: { status: SmsStatus; statusLabel: string; reason: string | null; reasonLabel: string | null; at: string; dryRun: boolean } | null;
+  last30Days: StatusCounts;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationsResponse {
+  mode: SmsMode;
+  timezone: string;
+  automations: AutomationView[];
+  problems: SendingProblem[];
 }

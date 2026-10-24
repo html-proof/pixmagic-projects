@@ -120,7 +120,7 @@ const schema = z.object({
    * "1" once Meta has granted the app Advanced Access to ads_read (App Review, which needs Business
    * Verification). Until then Facebook lets only people with a role on the app (administrators,
    * developers, testers) grant it; anyone else gets Facebook's own "Feature Unavailable" page, which
-   * never comes back to bizinsights. Off, Settings says so before sending people to Facebook.
+   * never comes back to bizinsights. Off, the API reports Meta as `restricted` (Settings shows no note).
    */
   META_ADS_ADVANCED_ACCESS: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
@@ -135,7 +135,7 @@ const schema = z.object({
   /**
    * "1" once Google has verified the OAuth app's use of the sensitive adwords scope (Google Auth
    * Platform → Verification Center). Until then Google shows "Google hasn't verified this app" before
-   * its consent screen and caps new users at 100, so Settings says so before sending people there.
+   * its consent screen and caps new users at 100; the API reports Google Ads as `restricted` (Settings shows no note).
    */
   GOOGLE_ADS_OAUTH_VERIFIED: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),

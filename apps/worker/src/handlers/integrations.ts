@@ -190,7 +190,10 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
   return sweepAdAlerts({ mailer: deps.mailer, fetchImpl: deps.fetchImpl });
 }
 
-/** Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a grace period. */
+/**
+ * Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a
+ * grace period. (WhatsApp's stray tokens at Nango are the WhatsApp sweep's: whatsapp/nango.ts.)
+ */
 export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
   return sweepNangoOrphans(deps.coord, deps.fetchImpl);
 }

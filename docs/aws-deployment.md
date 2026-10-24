@@ -824,11 +824,10 @@ sent them. An empty `OTP_FROM_EMAIL`, `LINK_FROM_EMAIL` or `STAFF_FROM_EMAIL` se
   the apex SPF `v=spf1 include:_spf.mx.cloudflare.net ~all` and its own DKIM key
   `cf2024-1._domainkey`, all shown as *Locked* there; Resend's records on `send.` and
   `resend._domainkey`, SES's DKIM CNAMEs and `_dmarc` are untouched. Destination
-  `bizinsightsaus@yahoo.com` (verified); rules `support@bizinsights.io` and `link@bizinsights.io`
-  → that destination, both *Active*. The catch-all is off (Drop), so mail to any other address is
-  dropped: `staff@bizinsights.io` too, until a rule forwards it (employee invitations name the
-  employer's support address, not staff@, for questions). A new destination must be verified (Cloudflare emails it a link) before a rule can use
-  it. Check: send to support@bizinsights.io and see it in the Yahoo inbox, or its "Forwarded" line
+  `bizinsightsaus@yahoo.com` (verified); rules `support@bizinsights.io`, `link@bizinsights.io` and
+  (since 2026-10-25) `staff@bizinsights.io` → that destination, all *Active*. The catch-all is off
+  (Drop), so mail to any other address is dropped: a new sender address needs its own rule. A new
+  destination must be verified (Cloudflare emails it a link) before a rule can use it. Check: send to support@bizinsights.io and see it in the Yahoo inbox, or its "Forwarded" line
   in Email Routing → Activity log.
 
 **Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`

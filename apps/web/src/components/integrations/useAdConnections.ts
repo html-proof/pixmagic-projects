@@ -39,8 +39,6 @@ export function useAdConnections(base: string | null) {
   // The Google Ads demo's connection flow (GoogleAdsDemoDialog) is open.
   const [demoOpen, setDemoOpen] = useState(false);
   const [confirming, setConfirming] = useState<AdConnection | null>(null);
-  // Facebook's window closed without connecting: Facebook never says why to bizinsights, so the page does.
-  const [metaUnfinished, setMetaUnfinished] = useState(false);
 
   // Another store chosen at the top (the page stays mounted): what was said or under way here was
   // about the last one. Not on the first store's arrival, which a note from the trip back can precede.
@@ -53,7 +51,6 @@ export function useAdConnections(base: string | null) {
       setDemoOpen(false);
       setChoosing(null);
       setConfirming(null);
-      setMetaUnfinished(false);
     }
   }
 
@@ -93,7 +90,6 @@ export function useAdConnections(base: string | null) {
   const begin = (key: string) => {
     setBusy(key);
     setNote(null);
-    setMetaUnfinished(false);
   };
 
   /**
@@ -131,8 +127,6 @@ export function useAdConnections(base: string | null) {
     }
     if (outcome.kind !== "connected") {
       await api(`${base}/ads/${p}/nango/cancel`, { method: "POST", body: { nonce: session.nonce } }).catch(() => undefined);
-      // Facebook's own error pages ("Feature Unavailable") never tell bizinsights why: the page explains them.
-      if (p === "meta" && (outcome.kind === "closed" || outcome.type === "window_closed")) setMetaUnfinished(true);
       if (outcome.kind === "closed") return stop();
       return stop({
         kind: "error",
@@ -284,8 +278,6 @@ export function useAdConnections(base: string | null) {
     setNote,
     leaving,
     setChoosing,
-    /** Facebook's sign-in window closed without a connection: the page explains Facebook's own error pages. */
-    metaUnfinished,
     connect,
     refresh,
     toggle,

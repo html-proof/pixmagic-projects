@@ -779,7 +779,7 @@ export function SmsSetup() {
                   <p className="text-muted">
                     Texts for other moments (a cancelled order, a refund, an abandoned checkout) are in{" "}
                     <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/automations">
-                      Automated Workflows
+                      Automations
                     </Link>
                     , and a one-off text to one customer in{" "}
                     <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/send">
@@ -1143,7 +1143,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
 }
 
 /** A test text's state in plain words: AWS accepting it isn't the phone getting it. */
-function testOutcome(m: SmsMessage): { said: string; fix: string | null } {
+export function testOutcome(m: SmsMessage): { said: string; fix: string | null } {
   const fix = TEST_FIX[m.providerStatus?.toUpperCase() ?? ""] ?? TEST_FIX[m.errorCode ?? ""] ?? TEST_FIX[m.reason ?? ""] ?? null;
   switch (m.status) {
     case "scheduled":

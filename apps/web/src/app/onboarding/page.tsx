@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { api, fmtNum, friendlyError, isSignedOut, keepRetrying, type ApiError } from "@/lib/api";
+import { api, fmtNum, friendlyError, getMe, isSignedOut, keepRetrying, type ApiError } from "@/lib/api";
 import { Alert } from "@/components/ui";
 import { BrandLogo } from "@/components/Brand";
 import type { Me } from "@/components/AppContext";
@@ -89,7 +89,7 @@ function Onboarding() {
    */
   const loadMe = useCallback(async () => {
     try {
-      setMe(await api<Me>("/me"));
+      setMe(await getMe<Me>());
       setMeError(null);
     } catch (e) {
       if (!isSignedOut(e)) {

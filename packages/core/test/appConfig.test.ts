@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { REQUIRED_AD_SCOPE } from "../src/ads/common.js";
+import { APP_WEBHOOK_TOPICS } from "../src/apps.js";
 
 /**
  * Guards the one piece of configuration Shopify reads instead of us.
@@ -106,6 +107,23 @@ describe("Shopify app configuration", () => {
       });
     });
   }
+
+  /**
+   * Customer Messaging offers a trigger only where Shopify sends its event (core sms/builder.ts):
+   * APP_WEBHOOK_TOPICS says which topics each app's toml subscribes to, since the Admin API can't
+   * list a toml's subscriptions. A topic added to or dropped from a toml must be changed there too.
+   */
+  it("lists each app's toml webhook topics in APP_WEBHOOK_TOPICS", () => {
+    const keys: Record<string, string> = { "shopify-app/shopify.app.toml": "default", "shopify-app/shopify.app.pixmagic.toml": "pixmagic", "shopify-app/shopify.app.public.toml": "public", "shopify-app/shopify.app.appstore.toml": "appstore" };
+    for (const path of APP_CONFIGS) {
+      const toml = read(path)
+        .split("\n")
+        .filter((l) => !l.trim().startsWith("#"))
+        .join("\n");
+      const topics = [...toml.matchAll(/^\s*topics\s*=\s*\[([^\]]*)\]/gm)].flatMap((m) => [...m[1]!.matchAll(/"([^"]*)"/g)].map((x) => x[1]!));
+      expect([...topics].sort(), path).toEqual([...(APP_WEBHOOK_TOPICS[keys[path]!] ?? [])].sort());
+    }
+  });
 
   it("keeps every app on the same API version and URLs", () => {
     const [main, ...others] = APP_CONFIGS.map(read);

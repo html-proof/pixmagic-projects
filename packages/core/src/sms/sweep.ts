@@ -127,7 +127,7 @@ async function dailySms(deps: SmsDeps, now: Date) {
     const senders = await systemDb.smsSenderConfiguration.findMany({ select: { storeId: true } });
     const stores = await systemDb.store.findMany({ where: { id: { in: senders.map((s) => s.storeId) }, status: "active", grantedScopes: { has: "read_customers" } } });
     let n = 0;
-    for (const store of stores) n += await ensureSmsWebhooks(store, storeGraphql(store, deps.coord, deps.fetchImpl)).catch((err: unknown) => (logger.warn({ err, storeId: store.id }, "sms consent webhook check failed"), 0));
+    for (const store of stores) n += await ensureSmsWebhooks(store, storeGraphql(store, deps.coord, deps.fetchImpl), deps.coord).catch((err: unknown) => (logger.warn({ err, storeId: store.id }, "sms consent webhook check failed"), 0));
     return n;
   });
   return { customers, verified, budgets, retention, webhooks, month: billingMonth(now) };

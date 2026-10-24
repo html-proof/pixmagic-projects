@@ -51,7 +51,7 @@ export function MessagingOverview() {
     [setup.basis, "/messaging/sender", "Choose how customers agree to order updates by text"],
     [setup.testNumber, "/messaging/sender", "Add and verify a test number, and send yourself a test"],
     [setup.approvedTemplate, "/messaging/templates", "Write a message template and get it approved"],
-    [setup.activeRule, "/messaging/automations", "Approve an automated workflow"],
+    [setup.activeRule, "/messaging/automations", "Create an automation and switch it on"],
     [setup.sending, "/messaging/sender", "Turn sending on"],
   ];
   const todo = steps.filter(([done]) => !done).length;
@@ -197,7 +197,7 @@ export function MessagingOverview() {
             {p.rules > 0 && (
               <li>
                 <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/automations">
-                  {plural(p.rules, "workflow")} waiting for approval
+                  {plural(p.rules, "automation")} waiting for approval
                 </Link>
               </li>
             )}

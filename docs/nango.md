@@ -17,7 +17,7 @@ routes) was removed on 2026-10-24. Connections made by it before then are moved 
 WhatsApp is connected differently: Meta's Embedded Signup runs on bizinsights' page and bizinsights
 imports the business token into Nango's `whatsapp-business` integration (provider
 `whatsapp-business`, API key), one connection per store (`wa-<storeId>`); bizinsights makes that
-integration itself on first use. [whatsapp.md](whatsapp.md) explains why (Nango's WhatsApp
+integration itself if it is ever missing. [whatsapp.md](whatsapp.md) explains why (Nango's WhatsApp
 integration is API-key only, with no Embedded Signup) and how.
 
 What Nango does **not** change: Meta's App Review / Advanced Access for `ads_read` and Google's
@@ -33,6 +33,12 @@ AdSense has neither limit (`adsense.readonly` is non-sensitive and the consent s
 | Meta Ads | `bizinsights-meta-ads` | `facebook` (not `meta-marketing-api`: only `facebook` gets Nango's long-lived-token renewal) | none: Facebook Login for Business configuration `META_CONFIG_ID` sent as `config_id` (else `ads_read`, re-asked) | Marketing API `v26.0`, every call signed with `appsecret_proof` |
 | Google Ads | `bizinsights-google-ads` | `google` | `https://www.googleapis.com/auth/adwords,openid` | Google Ads API `v25` (access level Explorer: 2,880 operations a day, counted by bizinsights) |
 | Google AdSense | `bizinsights-google-adsense` | `google` | `https://www.googleapis.com/auth/adsense.readonly,openid` | AdSense Management API v2 |
+
+The same environment also holds **`whatsapp-business`** (provider `whatsapp-business`, an API-key integration made in
+Nango's dashboard on 2026-10-24, not by nango-setup.mjs): each store's WhatsApp token, imported by bizinsights after
+Meta's Embedded Signup, as the connection `wa-<storeId>` ([whatsapp.md](whatsapp.md)). Any other connection in it (a
+token the earlier "add your token in Nango's window" flow left behind) is deleted by the hourly sweep once 30
+minutes old.
 
 `openid` is who the Google account is: Google's tokeninfo didn't name the person for an
 adsense.readonly-only token (first real connect, 2026-10-22), so its disconnect couldn't revoke the grant.
