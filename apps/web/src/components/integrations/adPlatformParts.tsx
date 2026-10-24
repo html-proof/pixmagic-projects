@@ -1,5 +1,3 @@
-import { GoogleUnverified } from "@/components/GoogleAdsAccess";
-import { MetaTestersOnly } from "@/components/MetaAdsAccess";
 import type { StoreSummary } from "@/components/AppContext";
 import { RECONNECT_STATES, type AdConnection, type AdProvider, type AdsState, type AdState } from "@/lib/adConnections";
 import { AD_PLATFORMS, type AdPlatformInfo } from "./adPlatforms";
@@ -19,8 +17,6 @@ export interface AdPlatformProps {
   busy: string | null;
   /** This platform's sign-in is being opened. */
   leaving: boolean;
-  /** Meta's testers-only note (not again right after coming back from Facebook, which explains it). */
-  showMetaNote: boolean;
   onConnect: () => void;
   /** The account rows' recent syncs are read from `${base}/ads/connections/:id/syncs`. */
   base?: string | null;
@@ -40,7 +36,6 @@ export function platformFacts({ provider, answer, connections, view, store, mana
   return {
     P: AD_PLATFORMS[provider],
     configured: answer?.configured[provider] ?? false,
-    restricted: answer?.restricted[provider] ?? false,
     reconnect: RECONNECT_STATES.has(view.state) || connections.some((c) => c.status === "reconnect"),
     readable: connections.some((c) => c.enabled && c.status !== "reconnect"),
     canAct: manage && !!store && !!answer,
@@ -67,15 +62,5 @@ export function NotConfiguredNote({ P, manage, missing, demoOffered, testid }: {
         </>
       )}
     </p>
-  );
-}
-
-/** Read before going to the platform: who it lets in, and what it shows first. */
-export function RestrictedNotes({ provider, connected, showMetaNote }: { provider: AdProvider; connected: boolean; showMetaNote: boolean }) {
-  return (
-    <>
-      {provider === "meta" && !connected && showMetaNote && <MetaTestersOnly />}
-      {provider === "google" && <GoogleUnverified brief={connected} />}
-    </>
   );
 }

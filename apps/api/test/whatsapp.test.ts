@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Prisma } from "@app/db";
-import { cancelScheduled, ensurePlatformWebhook, newLinkToken, waEncrypt, type FetchLike } from "@app/core";
+import { cancelScheduled, ensurePlatformWebhook, newLinkToken, sweepWhatsappNangoLeftovers, waEncrypt, type FetchLike } from "@app/core";
 import { LEGACY_GRANTS, sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
 import { newLinkSession, signSession } from "../src/session.js";
 import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -80,7 +80,7 @@ async function trackedOrder(storeId: string, workspaceId: string, over: Partial<
 
 beforeEach(async () => {
   await clean(ctx);
-  ctx.setEnv({ ...PLATFORM });
+  ctx.setEnv({ ...PLATFORM, NANGO_SECRET_KEY: "" });
   ctx.setFetch(async () => {
     throw new Error("unexpected network call in test");
   });
@@ -212,6 +212,154 @@ describe("connecting WhatsApp", () => {
     expect(kept.json().webhook).toBe("in_use");
     expect(meta.subscribed).toHaveLength(0);
     expect(kept.json().connection.verifyToken).toMatch(/^wa_vt_/);
+  });
+
+  const NANGO = { NANGO_SECRET_KEY: "nango-secret-wa-0123456789abcdef" };
+  const TOKEN = "EAAG_valid_system_user_token_0123456789";
+  const SECRET = "0123456789abcdef0123456789abcdef";
+
+  /**
+   * bizinsights' Nango environment with the WhatsApp integration (an API-key one: its key is the token
+   * the merchant pastes in Nango's window) in front of `meta`. `paste` is the merchant doing so in the
+   * window session `n` opened: Nango copies the session's tags onto the connection it makes.
+   */
+  function nangoWa(meta: FetchLike, opts: { integration?: boolean } = {}) {
+    const sessions: Array<{ tags: Record<string, string>; allowed_integrations: string[] }> = [];
+    const connections = new Map<string, { key: string; tags: Record<string, string>; apiKey: string; created: string }>();
+    const deleted: string[] = [];
+    const fetch: FetchLike = async (input, init) => {
+      const u = new URL(String(input));
+      if (u.host !== "api.nango.dev") return meta(input, init);
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${NANGO.NANGO_SECRET_KEY}`);
+      const method = init?.method ?? "GET";
+      if (u.pathname === "/integrations") return json({ data: opts.integration === false ? [] : [{ unique_key: "whatsapp-business", provider: "whatsapp-business", missing_fields: [] }] });
+      if (u.pathname === "/connect/sessions" && method === "POST") {
+        sessions.push(JSON.parse(String(init?.body)));
+        return json({ data: { token: `nango_connect_session_${sessions.length}`, expires_at: "2099-01-01T00:00:00Z" } }, 201);
+      }
+      if (u.pathname === "/connections" && method === "GET") {
+        const id = u.searchParams.get("connectionId");
+        return json({ connections: [...connections].filter(([k]) => !id || k === id).map(([k, c]) => ({ connection_id: k, provider_config_key: c.key, provider: "whatsapp-business", created: c.created, tags: c.tags })) });
+      }
+      const one = /^\/connections\/([^/]+)$/.exec(u.pathname);
+      if (one) {
+        const id = decodeURIComponent(one[1]!);
+        const c = connections.get(id);
+        if (!c || c.key !== u.searchParams.get("provider_config_key")) return json({ error: { code: "not_found", message: "Connection not found" } }, 404);
+        if (method === "DELETE") {
+          deleted.push(id);
+          connections.delete(id);
+          return json({ success: true });
+        }
+        return json({ connection_id: id, provider_config_key: c.key, credentials: { type: "API_KEY", apiKey: c.apiKey } });
+      }
+      return json({ error: { code: "not_found", message: `unexpected ${method} ${u.pathname}` } }, 404);
+    };
+    let made = 0;
+    const paste = (n: number, apiKey = TOKEN, created = new Date().toISOString()) => {
+      const id = `wa-conn-${++made}`;
+      connections.set(id, { key: "whatsapp-business", tags: sessions[n - 1]!.tags, apiKey, created });
+      return id;
+    };
+    return { fetch, sessions, connections, deleted, paste };
+  }
+
+  it("adds the token in Nango's window: read once, deleted at Nango, and held for the rest of the connect", async () => {
+    ctx.setEnv(NANGO);
+    const o = await owner();
+    const nango = nangoWa(guidedMeta().fetch);
+    ctx.setFetch(nango.fetch);
+    expect((await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers })).json().platform.nango).toBe(true);
+
+    const start = await ctx.app.inject({ method: "POST", url: `${o.base}/nango/session`, headers: o.headers, payload: {} });
+    expect(start.statusCode).toBe(200);
+    const { token, nonce } = start.json();
+    expect(token).toBe("nango_connect_session_1");
+    expect(nango.sessions[0]).toMatchObject({ allowed_integrations: ["whatsapp-business"], tags: { bi_provider: "whatsapp", bi_store: o.store.id, organization_id: o.ws, bi_session: nonce } });
+
+    const connectionId = nango.paste(1);
+    const finish = await ctx.app.inject({ method: "POST", url: `${o.base}/nango/finish`, headers: o.headers, payload: { nonce, connectionId } });
+    expect(finish.statusCode).toBe(200);
+    expect(finish.json()).toMatchObject({ appId: "777", accounts: [{ id: "1111111111", numbers: [{ id: "2222222222" }] }], tokenHandle: expect.any(String) });
+    expect(finish.body).not.toContain("EAAG_valid");
+    // Nango keeps no copy.
+    expect(nango.deleted).toEqual([connectionId]);
+    expect(nango.connections.size).toBe(0);
+    // Once: the session's state is used up.
+    const again = await ctx.app.inject({ method: "POST", url: `${o.base}/nango/finish`, headers: o.headers, payload: { nonce, connectionId } });
+    expect(again.json().error).toBe("state_expired");
+
+    const { tokenHandle } = finish.json();
+    const look = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { tokenHandle } });
+    expect(look.json().accounts).toHaveLength(1);
+    const done = await ctx.app.inject({ method: "POST", url: `${o.base}/manual`, headers: o.headers, payload: { wabaId: "1111111111", phoneNumberId: "2222222222", tokenHandle, appSecret: SECRET } });
+    expect(done.statusCode).toBe(200);
+    expect(done.json().webhook).toBe("verified");
+    expect(done.json().connection).toMatchObject({ mode: "manual", displayPhoneNumber: "+91 98765 00000" });
+    const audit = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: o.ws, action: "whatsapp.connected" } });
+    expect(audit.metadata).toMatchObject({ mode: "manual", token: "nango" });
+    // The connection keeps its own encrypted copy; the held one is gone.
+    const used = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { tokenHandle } });
+    expect(used.json().error).toBe("token_expired");
+  });
+
+  it("takes a token only from the person's own window, for their store, and never two at once", async () => {
+    ctx.setEnv(NANGO);
+    const o = await owner();
+    const p = await owner("u2", "p@shop.test");
+    const nango = nangoWa(guidedMeta().fetch);
+    ctx.setFetch(nango.fetch);
+    const session = async (who: typeof o) => (await ctx.app.inject({ method: "POST", url: `${who.base}/nango/session`, headers: who.headers, payload: {} })).json().nonce as string;
+
+    // Another workspace's person with this session's nonce and connection: refused, and the token deleted at Nango.
+    const n1 = await session(o);
+    const c1 = nango.paste(1);
+    const stolen = await ctx.app.inject({ method: "POST", url: `${p.base}/nango/finish`, headers: p.headers, payload: { nonce: n1, connectionId: c1 } });
+    expect(stolen.json().error).toBe("session_mismatch");
+    expect(nango.deleted).toContain(c1);
+
+    // A connection another session made: not this one's.
+    const n2 = await session(o);
+    const n3 = await session(o);
+    const c2 = nango.paste(2);
+    const crossed = await ctx.app.inject({ method: "POST", url: `${o.base}/nango/finish`, headers: o.headers, payload: { nonce: n3, connectionId: c2 } });
+    expect(crossed.json().error).toBe("state_mismatch");
+    expect(nango.deleted).toContain(c2);
+    expect(n2).not.toBe(n3);
+
+    // A held token is for its person and store only.
+    const n4 = await session(o);
+    const ok = await ctx.app.inject({ method: "POST", url: `${o.base}/nango/finish`, headers: o.headers, payload: { nonce: n4, connectionId: nango.paste(4) } });
+    const { tokenHandle } = ok.json();
+    const elsewhere = await ctx.app.inject({ method: "POST", url: `${p.base}/manual/discover`, headers: p.headers, payload: { tokenHandle } });
+    expect(elsewhere.json().error).toBe("token_expired");
+    const both = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { tokenHandle, accessToken: TOKEN } });
+    expect(both.statusCode).toBe(400);
+    const neither = await ctx.app.inject({ method: "POST", url: `${o.base}/manual`, headers: o.headers, payload: { wabaId: "1111111111", phoneNumberId: "2222222222", appSecret: SECRET } });
+    expect(neither.statusCode).toBe(400);
+    expect(await systemDb.whatsappConnection.count()).toBe(0);
+  });
+
+  it("offers Nango's window only when Nango holds the integration, and deletes tokens nobody finished", async () => {
+    const o = await owner();
+    ctx.setFetch(guidedMeta().fetch);
+    expect((await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers })).json().platform.nango).toBe(false);
+    expect((await ctx.app.inject({ method: "POST", url: `${o.base}/nango/session`, headers: o.headers, payload: {} })).json().error).toBe("not_configured");
+
+    ctx.setEnv(NANGO);
+    ctx.setFetch(nangoWa(guidedMeta().fetch, { integration: false }).fetch);
+    expect((await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers })).json().platform.nango).toBe(false);
+    expect((await ctx.app.inject({ method: "POST", url: `${o.base}/nango/session`, headers: o.headers, payload: {} })).statusCode).toBe(503);
+
+    ctx.deps.coord.clear();
+    const nango = nangoWa(guidedMeta().fetch);
+    ctx.setFetch(nango.fetch);
+    await ctx.app.inject({ method: "POST", url: `${o.base}/nango/session`, headers: o.headers, payload: {} });
+    const old = nango.paste(1, TOKEN, new Date(Date.now() - 2 * 3600_000).toISOString());
+    const fresh = nango.paste(1);
+    expect(await sweepWhatsappNangoLeftovers(ctx.deps.fetchImpl)).toBe(1);
+    expect(nango.deleted).toEqual([old]);
+    expect(nango.connections.has(fresh)).toBe(true);
   });
 
   /** Meta behind "Continue with WhatsApp": the code exchange, then the business token as above. */
@@ -378,7 +526,7 @@ describe("connecting WhatsApp", () => {
     ctx.setEnv({ WHATSAPP_CONFIG_ID: "", META_APP_ID: "", WHATSAPP_APP_ID: "" });
     const o = await owner();
     const view = await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers });
-    expect(view.json().platform).toEqual({ embeddedSignup: false });
+    expect(view.json().platform).toEqual({ embeddedSignup: false, nango: false });
     expect(view.json().connection).toBeNull();
     const res = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "abcdefghijkl", wabaId: "1111111111", phoneNumberId: "2222222222" } });
     expect(res.statusCode).toBe(503);

@@ -10,3 +10,4 @@ export * from "./campaigns.js";
 export * from "./carts.js";
 export * from "./scheduler.js";
 export * from "./connect.js";
+export * from "./nango.js";

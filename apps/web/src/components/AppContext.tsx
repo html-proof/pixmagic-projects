@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { allows, type AccessNeed, type MemberAccess } from "@app/shared/access";
 import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
-import { ApiError, api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
+import { ApiError, api, contextHeaders, getMe, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
 import { ACCESS_CHANGED_EVENT, onAccessSignal } from "@/lib/access";
 import { offersModule, type AppModule } from "@/lib/features";
 import { LoadError, Unreachable } from "@/components/LoadError";
@@ -158,7 +158,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadMe = useCallback(async () => {
     let m: Me;
     try {
-      m = await api<Me>("/me");
+      m = await getMe<Me>();
     } catch (e) {
       if (!isSignedOut(e)) {
         setMeError(e);
