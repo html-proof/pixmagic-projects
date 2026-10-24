@@ -44,6 +44,8 @@ describe("the invitation email", () => {
       OTP_FROM_NAME: "BizInsights Support",
       LINK_FROM_EMAIL: "link@bizinsights.io",
       LINK_FROM_NAME: "BizInsights",
+      STAFF_FROM_EMAIL: "staff@bizinsights.io",
+      STAFF_FROM_NAME: "BizInsights",
       SUPPORT_EMAIL: "support@bizinsights.io",
     };
     const m = teamInvitationEmail({ ...base, senders });
