@@ -8,6 +8,8 @@ vi.mock("@app/core/mailer", async (orig) => ({
     OTP_FROM_NAME: "Example Support",
     LINK_FROM_EMAIL: "link@example.test",
     LINK_FROM_NAME: "Example",
+    STAFF_FROM_EMAIL: "staff@example.test",
+    STAFF_FROM_NAME: "Example",
     SUPPORT_EMAIL: "support@example.test",
   }),
 }));

@@ -3,13 +3,15 @@ import { env, type Env } from "../env.js";
 /**
  * Who each of the app's emails comes from. A message says what it is for (MailOptions.purpose) and
  * the provider takes the From address from here, from the server's own configuration: nothing a
- * request carries can name a sender, so the only addresses mail ever leaves from are the three
+ * request carries can name a sender, so the only addresses mail ever leaves from are the four
  * below. Every one of them must be on a domain verified with the provider (bizinsights.io in
  * Resend; docs/aws-deployment.md, "App email"), or the provider refuses the send as not_allowed.
  *
  * - `support` (OTP_FROM_EMAIL / OTP_FROM_NAME): the verification codes, the temporary password.
  * - `link` (LINK_FROM_EMAIL / LINK_FROM_NAME): links that open something shared, the dashboard
- *   invitations and the employee portal's.
+ *   invitations.
+ * - `staff` (STAFF_FROM_EMAIL / STAFF_FROM_NAME): Staff Management's emails, the employee portal
+ *   invitations.
  * - `default` (EMAIL_FROM): everything else (alerts, notices, the daily cost report).
  *
  * An identity left unset sends from EMAIL_FROM, as all mail did before these settings existed.
@@ -22,14 +24,14 @@ export const EMAIL_PURPOSES = {
   temporary_password: "support",
   account_deletion_code: "support",
   team_invitation: "link",
-  staff_invitation: "link",
+  staff_invitation: "staff",
   notice: "default",
 } as const;
 export type EmailPurpose = keyof typeof EMAIL_PURPOSES;
 export type SenderIdentity = (typeof EMAIL_PURPOSES)[EmailPurpose];
 
 /** The settings the senders come from: env() itself, or just these in a test. */
-export type SenderSettings = Pick<Env, "EMAIL_FROM" | "OTP_FROM_EMAIL" | "OTP_FROM_NAME" | "LINK_FROM_EMAIL" | "LINK_FROM_NAME" | "SUPPORT_EMAIL">;
+export type SenderSettings = Pick<Env, "EMAIL_FROM" | "OTP_FROM_EMAIL" | "OTP_FROM_NAME" | "LINK_FROM_EMAIL" | "LINK_FROM_NAME" | "STAFF_FROM_EMAIL" | "STAFF_FROM_NAME" | "SUPPORT_EMAIL">;
 
 /** "Name <addr@x>" -> { name, email }; a bare address has no name. */
 function split(from: string): { name: string | null; email: string } {
@@ -44,6 +46,7 @@ export function senderFor(purpose: EmailPurpose | undefined, e: SenderSettings =
   const fallback = split(e.EMAIL_FROM);
   if (identity === "support" && e.OTP_FROM_EMAIL) return { name: e.OTP_FROM_NAME || fallback.name, email: e.OTP_FROM_EMAIL };
   if (identity === "link" && e.LINK_FROM_EMAIL) return { name: e.LINK_FROM_NAME || fallback.name, email: e.LINK_FROM_EMAIL };
+  if (identity === "staff" && e.STAFF_FROM_EMAIL) return { name: e.STAFF_FROM_NAME || fallback.name, email: e.STAFF_FROM_EMAIL };
   return fallback;
 }
 
@@ -68,7 +71,7 @@ export interface Signature {
 export function signatureFor(purpose: EmailPurpose, e: SenderSettings = env()): Signature {
   const support = e.SUPPORT_EMAIL || null;
   const identity = EMAIL_PURPOSES[purpose];
-  const own = identity === "support" ? e.OTP_FROM_EMAIL : identity === "link" ? e.LINK_FROM_EMAIL : "";
+  const own = identity === "support" ? e.OTP_FROM_EMAIL : identity === "link" ? e.LINK_FROM_EMAIL : identity === "staff" ? e.STAFF_FROM_EMAIL : "";
   if (!own) return { name: "bizinsights Team", email: null, support };
   const s = senderFor(purpose, e);
   return { name: s.name ?? "bizinsights", email: s.email, support };

@@ -97,7 +97,7 @@ describe("employee onboarding and invitations", () => {
     expect(inv.url).toBeUndefined(); // emailed links never go to the inviter
 
     const mail = ctx.mailer.sent.find((m) => m.to === "jane@example.com")!;
-    expect(mail.from).toBe("BizInsights <link@bizinsights.io>");
+    expect(mail.from).toBe("BizInsights <staff@bizinsights.io>");
     expect(mail.subject).toContain("Acme");
     expect(mail.text).toContain("Barista");
     expect(mail.text).toMatch(/expires on/);

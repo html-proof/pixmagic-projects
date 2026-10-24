@@ -216,15 +216,17 @@ const schema = z.object({
   SMS_CAMPAIGN_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(1_000_000).default(2000),
   EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
   /**
-   * The senders of the codes (OTP_*: sign-up, sign-in, verification and password-reset codes) and
-   * of shared links (LINK_*: dashboard and employee invitations), core/mail/senders.ts. An empty
-   * address sends from EMAIL_FROM. Names go into the From header as they are, so they may not
-   * hold the characters that would need quoting there.
+   * The senders of the codes (OTP_*: sign-up, sign-in, verification and password-reset codes), of
+   * shared links (LINK_*: dashboard invitations) and of Staff Management (STAFF_*: employee portal
+   * invitations), core/mail/senders.ts. An empty address sends from EMAIL_FROM. Names go into the
+   * From header as they are, so they may not hold the characters that would need quoting there.
    */
   OTP_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
   OTP_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
   LINK_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
   LINK_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
+  STAFF_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
+  STAFF_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
   /** Where the app's emails send people with questions ("contact support@..."). Empty: no such line. */
   SUPPORT_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
   /**
