@@ -7,7 +7,7 @@ import { signSession, readSession, REVALIDATE_MS } from "../src/session.js";
 import { CLIENT_IP_HEADER } from "../src/context.js";
 import { LIMITS } from "../src/rateLimit.js";
 import { totpCode } from "./fakeCognito.js";
-import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
+import { clean, cookiesFrom, createWorkspace, emailedDeletionCode, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
 
 /**
  * Sign-in on Amazon Cognito: what each screen sends, what Cognito is asked, and what the person
@@ -930,20 +930,38 @@ describe("account security", () => {
     }
   });
 
-  it("deletes the account and its sign-in, but not while it is a workspace's only owner", async () => {
+  it("deletes the account and its sign-in with a code emailed to its address, but not while it is a workspace's only owner", async () => {
     const owner = await signIn(ctx, "u1", "a@x.com");
     const password = ctx.auth.users.get("u1")!.password!;
     const ws = await createWorkspace(ctx, owner.headers, "Solo Shop");
     const del = (payload: Record<string, unknown>) => post("/auth/account/delete", payload, owner.headers);
-    expect((await del({ confirm: "DELETE" })).json().error).toBe("password_required");
-    const blocked = await del({ confirm: "DELETE", password });
+    const askForCode = () => post("/auth/account/delete/code", {}, owner.headers);
+    // The password no longer deletes it: the emailed code does, and none was asked for yet.
+    expect((await del({ confirm: "DELETE", password })).statusCode).toBe(400);
+    expect((await del({ confirm: "DELETE", code: "123456" })).json().error).toBe("code_required");
+    // The only owner hears why before any code is emailed.
+    const sent = ctx.mailer.sent.length;
+    const blocked = await askForCode();
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json()).toMatchObject({ error: "sole_owner", workspaces: ["Solo Shop"] });
+    expect(ctx.mailer.sent.length).toBe(sent);
 
-    // A second owner takes over.
+    // A second owner takes over; the code goes to the account's address, from the support sender.
     const partner = await signIn(ctx, "u2", "b@x.com");
+    const second = await systemDb.membership.create({ data: { workspaceId: ws, userId: partner.user.id, role: "owner" } });
+    const asked = await askForCode();
+    expect(asked.json()).toMatchObject({ ok: true, challenge: { expiresAt: expect.any(Number), resendAt: expect.any(Number) } });
+    expect(ctx.mailer.sent.at(-1)).toMatchObject({ to: "a@x.com", subject: "Confirm deleting your bizinsights account" });
+    const code = emailedDeletionCode(ctx, "a@x.com");
+    // Another one only after the minute.
+    expect((await askForCode()).json().error).toBe("resend_cooldown");
+    expect((await del({ confirm: "DELETE", code: String((Number(code) + 1) % 1_000_000).padStart(6, "0") })).json().error).toBe("invalid_code");
+    expect((await del({ confirm: "delete", code })).statusCode).toBe(400);
+    // Left the only owner after the code was sent: refused, and the code isn't spent by the refusal.
+    await systemDb.membership.delete({ where: { id: second.id } });
+    expect((await del({ confirm: "DELETE", code })).statusCode).toBe(409);
     await systemDb.membership.create({ data: { workspaceId: ws, userId: partner.user.id, role: "owner" } });
-    const res = await del({ confirm: "DELETE", password });
+    const res = await del({ confirm: "DELETE", code });
     expect(res.statusCode).toBe(200);
     expect(await systemDb.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
     expect(ctx.auth.users.has("u1")).toBe(false);

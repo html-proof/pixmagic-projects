@@ -31,7 +31,7 @@ async function readCodeFromClipboard(): Promise<{ code: string } | { problem: "n
 }
 
 /** "00:59": whole seconds left, never negative. */
-const clock = (ms: number) => {
+export const clock = (ms: number) => {
   const s = Math.max(0, Math.ceil(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 };
@@ -41,7 +41,7 @@ const clock = (ms: number) => {
  * that has passed on this device since the answer arrived is added to it, so a device whose clock
  * is off still counts the right minute. Re-read four times a second; the moments never move.
  */
-function useCountdown(challenge: CodeChallenge | null | undefined) {
+export function useCountdown(challenge: CodeChallenge | null | undefined) {
   const [tick, setTick] = useState(0);
   /** When this challenge arrived here (this device's clock). */
   const received = useRef<{ challenge: CodeChallenge; at: number } | null>(null);

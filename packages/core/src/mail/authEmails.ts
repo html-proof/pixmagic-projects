@@ -23,28 +23,31 @@ export const AUTH_EMAIL_KINDS = {
 } as const;
 export type AuthEmailTrigger = keyof typeof AUTH_EMAIL_KINDS;
 export type AuthEmailKind = (typeof AUTH_EMAIL_KINDS)[AuthEmailTrigger];
+/** Codes the API emails of its own accord, which no Cognito trigger names: deleting the account (accountDeletionEmail). */
+type CodeEmailKind = AuthEmailKind | "delete";
 
 /** What each one is for, which picks its sender: all of them the support sender. */
-const PURPOSE: Record<AuthEmailKind, EmailPurpose> = {
+const PURPOSE: Record<CodeEmailKind, EmailPurpose> = {
   signup: "signup_code",
   reset: "password_reset_code",
   change: "verification_code",
   verify: "verification_code",
   signin: "login_code",
   invite: "temporary_password",
+  delete: "account_deletion_code",
 };
 
 export const isAuthEmailTrigger = (trigger: string): trigger is AuthEmailTrigger => Object.hasOwn(AUTH_EMAIL_KINDS, trigger);
 
 /**
- * Lifetimes: a sign-up code and a sign-in code last EMAIL_CODE_TTL_S (60 seconds), the API's rule
- * (apps/api/src/emailCode.ts: Cognito itself keeps a confirmation code 24 hours, but every code
- * reaches it through the API, which refuses one older than that). The others are Cognito's:
- * attribute codes 24 hours, password-reset codes 1 hour, temporary passwords
+ * Lifetimes: a sign-up code, a sign-in code and an account-deletion code last EMAIL_CODE_TTL_S (60
+ * seconds), the API's rule (apps/api/src/emailCode.ts: Cognito itself keeps a confirmation code 24
+ * hours, but every code reaches it through the API, which refuses one older than that). The others
+ * are Cognito's: attribute codes 24 hours, password-reset codes 1 hour, temporary passwords
  * TemporaryPasswordValidityDays (7, infra/aws/cognito.yaml).
  */
 const minute = `${EMAIL_CODE_TTL_S} seconds`;
-const COPY: Record<AuthEmailKind, { subject: string; heading: string; lead: string; expires: string; ignore: string; preview: string }> = {
+const COPY: Record<CodeEmailKind, { subject: string; heading: string; lead: string; expires: string; ignore: string; preview: string }> = {
   signup: {
     subject: "Your bizinsights verification code",
     heading: "Verify your email address",
@@ -93,6 +96,14 @@ const COPY: Record<AuthEmailKind, { subject: string; heading: string; lead: stri
     ignore: "If you weren't expecting this, you can ignore this email.",
     preview: "Sign in to bizinsights with your temporary password.",
   },
+  delete: {
+    subject: "Confirm deleting your bizinsights account",
+    heading: "Confirm deleting your account",
+    lead: "Use the code below to confirm that you want to permanently delete your bizinsights account.",
+    expires: `This code expires in ${minute} and works once.`,
+    ignore: "If you didn't ask to delete your account, someone may be signed in to it: don't share this code, choose Sign out everywhere in Settings → Security, and change your password.",
+    preview: "Your code to confirm deleting your bizinsights account.",
+  },
 };
 
 /**
@@ -118,9 +129,24 @@ function greetingName(name: string | null | undefined): string | null {
  * the support sender. `senders` (env() in the app) signs it off as that sender, with the support
  * address; without it, "bizinsights Team". Null for a trigger that sends nothing.
  */
-export function authEmail(input: { trigger: string; code: string; name?: string | null; email: string; appUrl: string; senders?: SenderSettings }): { subject: string; text: string; html: string; purpose: EmailPurpose } | null {
+export function authEmail(input: { trigger: string } & CodeEmailInput): CodeEmail | null {
   if (!isAuthEmailTrigger(input.trigger)) return null;
-  const kind = AUTH_EMAIL_KINDS[input.trigger];
+  return codeEmail(AUTH_EMAIL_KINDS[input.trigger], input);
+}
+
+/** The code that confirms deleting the account (apps/api/src/routes/account.ts), built like the others. */
+export const accountDeletionEmail = (input: CodeEmailInput): CodeEmail => codeEmail("delete", input);
+
+interface CodeEmailInput {
+  code: string;
+  name?: string | null;
+  email: string;
+  appUrl: string;
+  senders?: SenderSettings;
+}
+type CodeEmail = { subject: string; text: string; html: string; purpose: EmailPurpose };
+
+function codeEmail(kind: CodeEmailKind, input: CodeEmailInput): CodeEmail {
   const copy = COPY[kind];
   const purpose = PURPOSE[kind];
   const name = greetingName(input.name);

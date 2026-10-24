@@ -114,6 +114,20 @@ export async function userOf(sub: string) {
   return id.user;
 }
 
+/** The newest account-deletion code emailed to `to` (POST /auth/account/delete/code). */
+export function emailedDeletionCode(ctx: TestCtx, to: string): string {
+  const mail = [...ctx.mailer.sent].reverse().find((m) => m.to === to && m.subject === "Confirm deleting your bizinsights account");
+  if (!mail) throw new Error(`no account-deletion code emailed to ${to}`);
+  return /^ {4}(\d{6})$/m.exec(mail.text)![1]!;
+}
+
+/** Deleting the account, step 1, as the Security page does it: the code emailed to the account's address `to`. */
+export async function deletionCode(ctx: TestCtx, headers: Record<string, string>, to: string): Promise<string> {
+  const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete/code", headers: { ...ORIGIN, ...headers } });
+  if (res.statusCode !== 200) throw new Error(`account-deletion code refused: ${res.body}`);
+  return emailedDeletionCode(ctx, to);
+}
+
 export async function createWorkspace(ctx: TestCtx, headers: Record<string, string>, name = "Acme") {
   const res = await ctx.app.inject({ method: "POST", url: "/workspaces", headers, payload: { name } });
   if (res.statusCode !== 200) throw new Error(res.body);

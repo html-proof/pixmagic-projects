@@ -266,6 +266,41 @@ test("a Google-only account adds a password in Settings, then signs in with it",
   await expect(page).toHaveURL(/\/dashboard/);
 });
 
+test("Settings → Security: deleting the account takes DELETE and a code emailed to its address, never a password", async ({ page }) => {
+  const email = uniqueEmail("delete-me");
+  await signUp(page, email);
+  await createWorkspace(page, "Delete Me Co");
+  await page.goto("/settings/security");
+  await section(page, "Delete account").getByRole("button", { name: "Delete my account" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete your account?" });
+  // No password box: beside one, the browser's password manager filled the address into the DELETE box.
+  await expect(dialog.locator('input[type="password"]')).toHaveCount(0);
+  const typed = dialog.getByLabel("Type DELETE to confirm");
+  await expect(typed).toHaveValue("");
+  await expect(typed).toHaveAttribute("autocomplete", "off");
+  const send = dialog.getByRole("button", { name: "Email me a code" });
+  await expect(send).toBeDisabled();
+  await typed.fill("DELETE");
+
+  // The workspace's only owner hears why before any code is emailed.
+  await send.click();
+  await expect(dialog.getByRole("alert")).toContainText("You're the only owner of Delete Me Co");
+  await db.query("UPDATE memberships SET role = 'admin' WHERE user_id = (SELECT id FROM users WHERE email = $1)", [email]);
+
+  const before = await newestMailId(email, /Confirm deleting/);
+  await send.click();
+  const code = await latestMailCode(email, before, /Confirm deleting/);
+  await expect(dialog.getByText(/Code expires in 00:[0-5]\d/)).toBeVisible();
+  await expect(dialog).not.toContainText(email);
+  const remove = dialog.getByRole("button", { name: "Delete account" });
+  await expect(remove).toBeDisabled();
+  await dialog.getByRole("group", { name: "Code from the email" }).getByRole("textbox").first().fill(code);
+  await expect(typed).toHaveValue("DELETE");
+  await remove.click();
+  await expect(page).toHaveURL(/\/login\?deleted=1/);
+  expect((await db.query("SELECT 1 FROM users WHERE email = $1", [email])).rowCount).toBe(0);
+});
+
 test("without Google offered, the sign-in pages show no Google button (and keep it when the settings can't be read)", async ({ page }) => {
   await page.route("**/api/auth/config", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ providers: { google: false }, emailOtp: false }) }));
   for (const path of ["/login", "/signup"]) {

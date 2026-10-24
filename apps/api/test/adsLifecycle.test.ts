@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { systemDb } from "@app/db";
 import { adAccessToken, encryptAdTokens, forgetNangoToken, googleAdsOperationsToday, logger, pauseGoogleAds, type FetchLike } from "@app/core";
 import { adErrorMessage, type AdProvider } from "@app/shared";
-import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { clean, createStore, createWorkspace, deletionCode, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 import { connectThroughNango, fakeNango, NANGO_ENV, type FakeNango, type NangoPlatform } from "./nangoFake.js";
 
 /**
@@ -644,8 +644,8 @@ describe("someone whose login powers ad accounts leaves", () => {
     const b = await connectedBy(admin.user.id, ws, storeId, "act_2");
     const revoked: string[] = [];
     usePlatform(metaPlatform(revoked));
-    const password = ctx.auth.users.get("ads-life-leaver")!.password!;
-    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
+    const code = await deletionCode(ctx, admin.headers, "leaver@x.com");
+    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", code } });
     expect(res.statusCode).toBe(200);
     expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
     // Who granted them stays, so a data deletion request from that person still finds them.
@@ -660,8 +660,8 @@ describe("someone whose login powers ad accounts leaves", () => {
     ctx.setFetch(async () => {
       throw new TypeError("fetch failed");
     });
-    const password = ctx.auth.users.get("ads-life-leaver2")!.password!;
-    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
+    const code = await deletionCode(ctx, admin.headers, "leaver2@x.com");
+    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", code } });
     expect(res.statusCode).toBe(200);
     expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
     expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "" });
