@@ -54,6 +54,7 @@ import { closeSharedDashboard } from "@/components/team/AccessStates";
 import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
+import { AUTOMATIONS_HUB } from "@/lib/features";
 import { notesSeenKey, readLocal, writeLocal } from "@/lib/storage";
 import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/alerts";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
@@ -176,10 +177,11 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
   ];
   // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
+  const automationsHub = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
   const marketing: NavItem[] = [
     ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
     // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
-    ...((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")) ? [area("/automations", "Automations", Workflow)] : []),
+    ...(automationsHub ? [area("/automations", "Automations", Workflow)] : []),
     ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
     ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
   ];
@@ -731,7 +733,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             { id: "advertising-reports", label: "Advertising reports", group: "Advertising", icon: Megaphone, keywords: "csv export download ads", go: go("/advertising/reports") },
           ]
         : []),
-      ...((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status"))
+      ...(AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")))
         ? [{ id: "automations", label: "Automations", group: "Marketing", icon: Workflow, keywords: "automation workflow trigger sms email whatsapp message history delivery", go: go("/automations") }]
         : []),
       ...(offers("sms") && allowed("marketing.campaigns")

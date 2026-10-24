@@ -11,7 +11,8 @@
     "ops:recompute": "vitest run --config ops/vitest.config.ts recompute",
     "ops:reencrypt": "vitest run --config ops/vitest.config.ts reencrypt",
     "ops:ad-persons": "vitest run --config ops/vitest.config.ts adPersons",
-    "ops:ad-health": "vitest run --config ops/vitest.config.ts adHealth"
+    "ops:ad-health": "vitest run --config ops/vitest.config.ts adHealth",
+    "load:automations": "vitest run --config load/vitest.config.ts"
   },
   "dependencies": {
     "@app/core": "workspace:*",

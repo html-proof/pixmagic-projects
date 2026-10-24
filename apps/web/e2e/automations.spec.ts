@@ -76,7 +76,7 @@ test("an owner creates an SMS automation in four steps, tests it on themself and
   await expect(page.getByRole("heading", { name: /4\. Review/ })).toBeVisible();
   await expect(page.getByText("Draft", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Send test text" }).click();
-  await expect(page.getByText(/^Test:/)).toBeVisible();
+  await expect(page.getByText(/^Test:/).first()).toBeVisible();
   await expect
     .poll(async () => ((await call(page, "GET", `${hub}/messages?storeId=${store}`)).json as { messages: Array<{ kind: string; status: string }> }).messages.find((m) => m.kind === "test")?.status, { timeout: 15_000 })
     .toBe("delivered");

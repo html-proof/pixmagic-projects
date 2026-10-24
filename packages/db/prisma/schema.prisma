@@ -2740,6 +2740,8 @@ model EmailMessage {
   @@unique([id, workspaceId])
   @@index([status, scheduledAt])
   @@index([workspaceId, createdAt])
+  /// An automation's messages, newest first (the Automations hub's history and counts).
+  @@index([workspaceId, ruleId, createdAt])
   @@index([emailAccountId, createdAt])
   @@index([ruleId, createdAt])
   @@index([workspaceId, recipientHash])
@@ -3296,6 +3298,8 @@ model SmsMessageJob {
   @@index([storeId, createdAt])
   @@index([campaignId])
   @@index([ruleId])
+  /// A store's texts of one automation, newest first (the Automations hub's history).
+  @@index([storeId, ruleId, createdAt])
   @@index([contactId, acceptedAt])
   @@index([storeId, checkoutToken])
   @@index([workspaceId])

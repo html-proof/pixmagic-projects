@@ -313,6 +313,9 @@ describe("the app stack", () => {
       DestinationConfig: { OnFailure: { Destination: missed } },
     });
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-cron-missed-ticks" });
+    // Bursts of automated messages refused by SMS or email providers (the Automations hub).
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-messaging-send-failures", Threshold: 25, EvaluationPeriods: 2 });
+    t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '?"sms send refused" ?"email send failed"' });
   });
 
   it("tells the alarm topic about the database's events", () => {

@@ -30,6 +30,9 @@ const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
   ["/settings/email", "email"],
 ];
 
+/** Pages over several parts of the app: closed only when the workspace offers none of them. */
+const MULTI_MODULE_PAGES: Array<[prefix: string, parts: AppModule[]]> = [["/automations", ["sms", "email"]]];
+
 const under = (p: string, prefix: string) => p === prefix || p.startsWith(`${prefix}/`);
 
 /** The dashboard's detail panels and the permissions that show each (any of). */
@@ -146,6 +149,7 @@ export function canOpenPage(path: string, access: MemberAccess, staffRole: Staff
   const p = path.replace(/\/$/, "") || "/";
   if (shared && ACCOUNT_PAGES.some((a) => under(p, a))) return false;
   if (MODULE_PAGES.some(([prefix, part]) => under(p, prefix) && !offers(part))) return false;
+  if (MULTI_MODULE_PAGES.some(([prefix, parts]) => under(p, prefix) && !parts.some(offers))) return false;
   let best: (typeof PAGE_NEED)[number] | null = null;
   for (const rule of PAGE_NEED) {
     if ((p === rule[0] || p.startsWith(`${rule[0]}/`)) && (!best || rule[0].length > best[0].length)) best = rule;

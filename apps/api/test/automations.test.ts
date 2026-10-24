@@ -49,7 +49,7 @@ async function owner(uid = "u1", email = "o@shop.test", extra: Record<string, un
   const ws = await createWorkspace(ctx, s.headers);
   const store = await createStore(ws, `${uid}.myshopify.com`, ["read_orders"], { name: "Green Leaf", currency: "AUD", ...extra });
   const q = `storeId=${store.id}`;
-  const call = (method: "GET" | "POST" | "PUT" | "DELETE", path: string, payload?: unknown, headers = s.headers) =>
+  const call = (method: "GET" | "POST" | "PUT" | "DELETE", path: string, payload?: unknown, headers: Record<string, string> = s.headers) =>
     ctx.app.inject({ method, url: `/workspaces/${ws}/automations${path}${path.includes("?") ? "&" : "?"}${q}`, headers, ...(payload === undefined ? {} : { payload }) });
   return { ...s, ws, store, call };
 }
@@ -365,15 +365,15 @@ describe("the history", () => {
     const o = await owner();
     const r = await seed(o);
     const list = (await o.call("GET", `/messages?from=${r.from}&to=${r.to}`)).json().messages as Array<{ id: string; status: string; reason: string | null; costUsd: number | null; to: string | null }>;
-    const by = Object.fromEntries(list.map((m) => [m.id, m]));
+    const by = Object.fromEntries(list.map((m) => [m.id, m])) as Record<string, (typeof list)[number]>;
     expect(by.s1).toMatchObject({ status: "delivered", costUsd: expect.closeTo(0.06, 6), to: "+61 4•• ••• 678" });
     expect(by.s2).toMatchObject({ status: "undelivered" });
     expect(by.s3).toMatchObject({ status: "failed", reason: expect.any(String) });
-    expect(by.s4.status).toBe("sent");
-    expect(by.s5.status).toBe("test_only");
-    expect(by.e1.status).toBe("sent");
-    expect(by.e3.status).toBe("undelivered");
-    expect(by.e4.status).toBe("unknown");
+    expect(by.s4!.status).toBe("sent");
+    expect(by.s5!.status).toBe("test_only");
+    expect(by.e1!.status).toBe("sent");
+    expect(by.e3!.status).toBe("undelivered");
+    expect(by.e4!.status).toBe("unknown");
 
     const failed = (await o.call("GET", `/messages?from=${r.from}&to=${r.to}&status=failed`)).json().messages.map((m: { id: string }) => m.id);
     expect(failed.sort()).toEqual(["e2", "s3"]);

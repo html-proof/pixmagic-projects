@@ -524,6 +524,18 @@ export class AppStack extends Stack {
       });
       alarm(`sms-hold-${name}`, smsHold.metric({ period: five, statistic: "Sum" }), 1, `Texts are on hold (${name}): AWS failing, the SMS spending limit, or the platform's monthly SMS ceiling; see docs/sms.md`);
     }
+    // Automated messages the providers refuse (each SMS refusal, retried or not, and each failed
+    // email send): a burst means a provider, an account or a sender has a problem the Automations
+    // hub's history shows message by message (docs/automations.md, "Alarms").
+    const sendFailures = new logs.MetricFilter(this, "MessagingSendFailures", {
+      logGroup: jobs.fn.logGroup,
+      filterPattern: logs.FilterPattern.anyTerm("sms send refused", "email send failed"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-messaging-send-failures`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("messaging-send-failures", sendFailures.metric({ period: five, statistic: "Sum" }), 25, "Many automated SMS or emails refused by their providers: see Automations → Message history and docs/automations.md", 2);
 
     new cloudwatch.Dashboard(this, "Dashboard", {
       dashboardName: prefix,
