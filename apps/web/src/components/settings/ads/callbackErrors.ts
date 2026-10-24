@@ -36,7 +36,7 @@ const ERRORS: Record<string, string> = {
   not_approved_google:
     "Google is still approving bizinsights for live Google Ads accounts, so nothing was connected. This is on our side, not yours; please try again in a day or two.",
   not_approved_meta: "Meta is still reviewing bizinsights for this, so nothing was connected. This is on our side, not yours; please try again later.",
-  not_configured: "This platform isn't switched on for bizinsights yet, so nothing was connected. It's on our side: please try again later.",
+  not_configured: "This platform isn't set up correctly on bizinsights' side, so nothing was connected. It's on our side, not yours: please try again later.",
   rate_limited: "You started connecting several times in the last few minutes. Wait a few minutes, then press the button again.",
 };
 

@@ -9,8 +9,9 @@ type Publics = Array<{ name: string; value: string }>;
 const script = (await import(new URL("../scripts/put-secrets.mjs", import.meta.url).href)) as {
   secretProblem: (name: string, value: string, publics?: Publics) => string | null;
   publicSettings: (text?: string) => Publics;
+  metaAppOf: (name: string, publics?: Publics) => { appId: string; version?: string } | null;
 };
-const { secretProblem, publicSettings } = script;
+const { secretProblem, publicSettings, metaAppOf } = script;
 
 const META_SECRET = "0123456789abcdef0123456789abcdef";
 const ENTRA_SECRET = "Xyz8Q~abcdefghijklmnopqrstuvwxyz0123456_";
@@ -51,6 +52,23 @@ describe("the shapes put-secrets.mjs accepts", () => {
   it("never repeats the value it refuses", () => {
     const value = "a-pasted-value-that-must-not-be-printed";
     expect(secretProblem("META_APP_SECRET", value)).not.toContain(value);
+  });
+});
+
+describe("the Meta app a Meta secret is checked against", () => {
+  it("META_APP_SECRET is META_APP_ID's; WHATSAPP_APP_SECRET is WHATSAPP_APP_ID's, else META_APP_ID's", () => {
+    expect(metaAppOf("META_APP_SECRET")).toEqual({ appId: APP_SETTINGS.META_APP_ID, version: APP_SETTINGS.META_API_VERSION });
+    const own = [
+      { name: "META_APP_ID", value: "111" },
+      { name: "WHATSAPP_APP_ID", value: "222" },
+    ];
+    expect(metaAppOf("WHATSAPP_APP_SECRET", own)).toEqual({ appId: "222", version: undefined });
+    expect(metaAppOf("WHATSAPP_APP_SECRET", [own[0]!])).toEqual({ appId: "111", version: undefined });
+  });
+
+  it("nothing for another secret, or without the app id", () => {
+    expect(metaAppOf("GOOGLE_ADS_CLIENT_SECRET")).toBeNull();
+    expect(metaAppOf("META_APP_SECRET", [])).toBeNull();
   });
 });
 

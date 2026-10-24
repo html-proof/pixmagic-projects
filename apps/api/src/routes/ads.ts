@@ -368,7 +368,7 @@ export function connectFailure(err: unknown, provider: AdProvider, storeId: stri
   }
   // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
   if (provider === "adsense" && err instanceof AdsApiError && err.status === 403 && /adsense account/i.test(err.message)) return "no_accounts";
-  // The platform's API isn't switched on for bizinsights, or its client was refused: ours to fix.
+  // The platform's API isn't switched on for bizinsights, or its client (Meta: our appsecret_proof) was refused: ours to fix.
   if (err instanceof AdsApiError && err.errorCode === "not_configured") {
     logger.error({ err, provider, storeId }, "ad platform connect failed on our set-up");
     return "not_configured";
