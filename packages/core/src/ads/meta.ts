@@ -270,8 +270,73 @@ export async function metaClassifyPermissionError(c: MetaConfig, accessToken: st
  * none), a list (maybe empty) when the person picked accounts on Facebook's screen.
  */
 export async function metaAdsReadTargets(c: MetaConfig, accessToken: string): Promise<string[] | null> {
-  const r = await metaGet<{ data?: { granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(c, "debug_token", { input_token: accessToken }, metaAppToken(c));
-  return (r.data?.granular_scopes ?? []).find((g) => g.scope === REQUIRED_AD_SCOPE.meta)?.target_ids ?? null;
+  return adsReadTargetsOf(await metaInspectToken(c, accessToken));
+}
+
+/** What Meta's token inspector says about a person's token (https://developers.facebook.com/docs/graph-api/reference/debug_token/). */
+interface MetaTokenInspection {
+  type?: string;
+  app_id?: string;
+  is_valid?: boolean;
+  user_id?: string;
+  scopes?: string[];
+  granular_scopes?: Array<{ scope?: string; target_ids?: string[] }>;
+}
+
+async function metaInspectToken(c: MetaConfig, accessToken: string): Promise<MetaTokenInspection> {
+  const r = await metaGet<{ data?: MetaTokenInspection }>(c, "debug_token", { input_token: accessToken }, metaAppToken(c));
+  return r.data ?? {};
+}
+
+const adsReadTargetsOf = (t: MetaTokenInspection) => (t.granular_scopes ?? []).find((g) => g.scope === REQUIRED_AD_SCOPE.meta)?.target_ids ?? null;
+
+/** A look-up's outcome without a throw. */
+const settle = <T>(p: Promise<T>): Promise<{ value: T; err?: undefined } | { value?: undefined; err: unknown }> =>
+  p.then(
+    (value) => ({ value }),
+    (err: unknown) => ({ err }),
+  );
+
+/**
+ * A diagnosis look-up Meta refused or didn't answer: Meta's code (or the HTTP status; "auth" for a token
+ * refused, which for the inspector means bizinsights' app token) and Meta's words, which hold no token.
+ */
+const lookUpFailed = (err: unknown) => ({
+  failed: err instanceof AdsApiError ? (err.code ?? err.status) : err instanceof AdsAuthError ? "auth" : err instanceof Error ? err.name : "error",
+  ...(err instanceof Error ? { message: err.message.slice(0, 160) } : {}),
+});
+
+/**
+ * What Meta says about a login whose ad account list came back empty, so the log tells the cases apart
+ * without anyone asking Meta by hand: who signed in (the app-scoped id), what the token is (its type, its
+ * app, whether it works, the permissions it carries and the ad accounts ads_read names) and the role that
+ * person has on bizinsights' Meta app (with Standard Access, only people with one can grant ads_read).
+ * Each look-up is best effort: one Meta refuses is noted as failed, never thrown.
+ */
+async function metaEmptyList(c: MetaConfig, accessToken: string): Promise<{ diagnosis: Record<string, unknown>; targets: string[] | null; loginName: string | null }> {
+  const [me, inspected] = await Promise.all([settle(metaGet<{ id?: string; name?: string }>(c, "me", { fields: "id,name" }, accessToken)), settle(metaInspectToken(c, accessToken))]);
+  const t = inspected.value;
+  const userId = [me.value?.id, t?.user_id].find((id): id is string => !!id && /^\d{1,30}$/.test(id)) ?? null;
+  // The app's roles list the people by the ids the app knows them by, as the token's own id is.
+  const roles = userId ? await settle(metaGet<{ data?: Array<{ user?: string; role?: string }> }>(c, `${c.appId}/roles`, { limit: "100" }, metaAppToken(c))) : null;
+  const targets = t ? adsReadTargetsOf(t) : null;
+  const diagnosis: Record<string, unknown> = {
+    metaUserId: userId,
+    ...(me.err !== undefined ? { me: lookUpFailed(me.err) } : {}),
+    token: t
+      ? {
+          type: t.type ?? null,
+          ownApp: t.app_id ? t.app_id === c.appId : null,
+          valid: t.is_valid ?? null,
+          scopes: t.scopes ?? null,
+          // Per permission, how many accounts or pages it names ("all": it names none, so it covers what the login reaches).
+          granted: Object.fromEntries((t.granular_scopes ?? []).filter((g) => g.scope).map((g) => [g.scope!, g.target_ids ? g.target_ids.length : "all"])),
+        }
+      : lookUpFailed(inspected.err),
+    appRole: !roles ? null : roles.value ? ((roles.value.data ?? []).find((r) => r.user === userId)?.role ?? "none") : lookUpFailed(roles.err),
+    ...(roles?.value ? { appRolesListed: (roles.value.data ?? []).length } : {}),
+  };
+  return { diagnosis, targets, loginName: me.value?.name?.trim().slice(0, 120) || null };
 }
 
 /** Pages of ad accounts read at most (2,000 accounts): the sign-in reads them all before the person picks. */
@@ -314,9 +379,9 @@ export async function metaAdAccounts(c: MetaConfig, accessToken: string, opts: {
   if (list.truncated) logger.warn({ read: out.length, listed: list.length, cut: cut ?? "size" }, "meta: login reaches more ad accounts than one sign-in lists");
   if (list.length) return list;
   // Only explains the empty list: a failed look-up still ends in "no ad account".
-  const targets = await metaAdsReadTargets(c, accessToken).catch(() => null);
-  if (targets) throw new AdsNoAccountsError(`The ads_read grant names ${targets.length ? targets.join(", ") : "no ad account"} and none can be read`, "none_shared");
-  throw new AdsNoAccountsError("This Facebook login reaches no ad account");
+  const { diagnosis, targets, loginName } = await metaEmptyList(c, accessToken);
+  if (targets) throw new AdsNoAccountsError(`The ads_read grant names ${targets.length ? targets.join(", ") : "no ad account"} and none can be read`, "none_shared", diagnosis, loginName);
+  throw new AdsNoAccountsError("This Facebook login reaches no ad account", "no_ads_account", diagnosis, loginName);
 }
 
 type InsightsPage<R> = { data?: R[]; paging?: { next?: string } };

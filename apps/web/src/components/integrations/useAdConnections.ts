@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { openNangoConnect } from "@/lib/nangoConnect";
-import { callbackErrorMessage } from "../settings/ads/callbackErrors";
+import { callbackErrorMessage, loginOf } from "../settings/ads/callbackErrors";
 import { AD_PLATFORMS } from "./adPlatforms";
 import type { Note } from "./AdUi";
 import type { DemoConnected } from "./GoogleAdsDemoDialog";
@@ -157,7 +157,7 @@ export function useAdConnections(base: string | null) {
       // The finish's own answers carry codes worded on the page (callbackErrors.ts). A timeout, the
       // network or an ended session isn't one of them ("check whether it completed": the reload shows it).
       const own = e instanceof ApiError && e.status !== 0 && e.status !== 408 && e.status !== 401 && !!e.code;
-      stop({ kind: "error", text: own ? callbackErrorMessage((e as ApiError).code!, p) : actionError(e, `finish connecting ${name}`) });
+      stop({ kind: "error", text: own ? callbackErrorMessage((e as ApiError).code!, p, loginOf((e as ApiError).data)) : actionError(e, `finish connecting ${name}`) });
       await reload();
     }
   };

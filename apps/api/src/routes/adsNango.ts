@@ -7,6 +7,7 @@ import {
   ADS_PENDING_TTL_S,
   AdsApiError,
   AdsAuthError,
+  AdsNoAccountsError,
   AdsRateLimitedError,
   AdsRetryableError,
   claimNangoConsent,
@@ -91,7 +92,7 @@ const FINISH_MESSAGES: Record<string, string> = {
   temporarily_unavailable: "The platform didn't answer. Try again in a minute.",
 };
 
-const finishError = (code: string, status = 409) => new HttpError(status, FINISH_MESSAGES[code] ?? "Connecting didn't work. Try again.", code);
+const finishError = (code: string, status = 409, detail?: unknown) => new HttpError(status, FINISH_MESSAGES[code] ?? "Connecting didn't work. Try again.", code, undefined, detail);
 
 /** A failure of Nango's own while starting a sign-in, as the HTTP answer the card words. */
 function startFailure(err: unknown, provider: AdProvider): unknown {
@@ -172,9 +173,9 @@ export function adsNangoRoutes(app: App, deps: Deps) {
 
     let signIn: NangoSignIn | undefined;
     /** End without a connection: the grant goes back and the Nango connection is deleted, unless a connection already reads through it. */
-    const fail = async (code: string, status = 409) => {
+    const fail = async (code: string, status = 409, detail?: unknown) => {
       await abandonNangoConnection(provider, input.connectionId, state.integrationKey, signIn?.externalUserId, deps.fetchImpl, { coord: deps.coord });
-      return finishError(code, status);
+      return finishError(code, status, detail);
     };
     // Listing a login's Google Ads accounts spends bizinsights' daily operations, as the direct callback's do.
     const counter = provider === "google" ? countingGoogleAdsFetch(deps.fetchImpl) : null;
@@ -189,7 +190,10 @@ export function adsNangoRoutes(app: App, deps: Deps) {
         throw await fail("not_configured", 503);
       }
       const code = connectFailure(err, provider, storeId);
-      throw await fail(code, code === "rate_limited" || code === "temporarily_unavailable" || code === "not_configured" ? 503 : 409);
+      // Nothing to connect: the card names the login the platform signed in, for the person who just used it
+      // (the platform's screen may have picked a profile they didn't mean).
+      const login = err instanceof AdsNoAccountsError && err.loginName ? { login: err.loginName } : undefined;
+      throw await fail(code, code === "rate_limited" || code === "temporarily_unavailable" || code === "not_configured" ? 503 : 409, login);
     } finally {
       if (counter) await countGoogleAdsOperations(deps.coord, counter.operations());
     }

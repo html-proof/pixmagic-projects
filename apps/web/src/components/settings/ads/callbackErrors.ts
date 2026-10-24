@@ -43,8 +43,23 @@ const ERRORS: Record<string, string> = {
 /** Only the wording above: the code comes from the address bar ("constructor" is not a message). */
 const said = (key: string) => (Object.hasOwn(ERRORS, key) ? ERRORS[key] : undefined);
 
-export function callbackErrorMessage(code: string, provider: string | null): string {
-  return (provider ? said(`${code}_${provider}`) : undefined) ?? said(code) ?? "Connecting didn't work. Please try again.";
+/** Where each platform's sign-in is made, as the person saw it. */
+const SIGNED_IN_AT: Record<AdProvider, string> = { meta: "Facebook", google: "Google", adsense: "Google" };
+
+/**
+ * `login`: the name the platform's sign-in went by (the finish's `detail.login`), said first for a login
+ * that reaches nothing: a browser signed in to another profile picks it without asking.
+ */
+export function callbackErrorMessage(code: string, provider: string | null, login?: string | null): string {
+  const text = (provider ? said(`${code}_${provider}`) : undefined) ?? said(code) ?? "Connecting didn't work. Please try again.";
+  return login && isAdProvider(provider) && WRONG_LOGIN.has(code) ? `You signed in to ${SIGNED_IN_AT[provider]} as “${login}”. ${text}` : text;
+}
+
+/** The login name in an error body's `detail`, when it carries one. */
+export function loginOf(data: Record<string, unknown> | undefined): string | null {
+  const detail = data?.detail;
+  const login = detail !== null && typeof detail === "object" ? (detail as { login?: unknown }).login : undefined;
+  return typeof login === "string" && login.trim() ? login.trim().slice(0, 120) : null;
 }
 
 /**

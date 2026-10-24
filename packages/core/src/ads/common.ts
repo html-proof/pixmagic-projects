@@ -122,6 +122,10 @@ export class AdsNoAccountsError extends AdsApiError {
   constructor(
     message: string,
     public reason: NoAdAccountsReason = "no_ads_account",
+    /** What the platform said about the login, for the log: ids, counts, permission names and its error codes only. */
+    public diagnosis?: Record<string, unknown>,
+    /** The name the login goes by at the platform, for the person who just signed in with it: never logged. */
+    public loginName?: string | null,
   ) {
     super(message, 403);
   }

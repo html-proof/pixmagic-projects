@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, encryptAdTokens, forgetNangoToken, googleAdsOperationsToday, pauseGoogleAds, type FetchLike } from "@app/core";
+import { adAccessToken, encryptAdTokens, forgetNangoToken, googleAdsOperationsToday, logger, pauseGoogleAds, type FetchLike } from "@app/core";
 import { adErrorMessage, type AdProvider } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 import { connectThroughNango, fakeNango, NANGO_ENV, type FakeNango, type NangoPlatform } from "./nangoFake.js";
@@ -340,6 +340,32 @@ describe("Continue with Meta Ads: a login with nothing to connect", () => {
   it("says whether the login reaches no ad account or shared none on Facebook's screen", async () => {
     expect(await errorWith([{ scope: "ads_read" }])).toBe("no_accounts");
     expect(await errorWith([{ scope: "ads_read", target_ids: [] }])).toBe("none_shared");
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("names the Facebook login for the card and logs what Meta said about it, without the name", async () => {
+    const base = metaPlatform([]);
+    usePlatform(async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
+      if (u.pathname.endsWith("/me") && u.searchParams.get("fields") === "id,name") return json({ id: "5550001", name: "Sebastian Thomas" });
+      if (u.pathname.endsWith("/debug_token")) return json({ data: { type: "USER", is_valid: true, user_id: "5550001", scopes: ["ads_read"], granular_scopes: [{ scope: "ads_read" }] } });
+      if (u.pathname.endsWith("/roles")) return json({ data: [{ user: "5550001", role: "administrators" }] });
+      return base(input, init);
+    });
+    const logged: unknown[][] = [];
+    const info = vi.spyOn(logger, "info").mockImplementation((...a: unknown[]) => void logged.push(a));
+    let finish: Awaited<ReturnType<typeof connectThroughNango>>["finish"] = null;
+    try {
+      ({ finish } = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider: "meta", headers }));
+    } finally {
+      info.mockRestore();
+    }
+    expect(finish!.statusCode).toBe(409);
+    expect(finish!.json()).toMatchObject({ error: "no_accounts", detail: { login: "Sebastian Thomas" } });
+    const line = logged.find((a) => a[1] === "ads: nothing to connect for this login");
+    expect(line?.[0]).toMatchObject({ reason: "no_ads_account", provider: "meta", diagnosis: { metaUserId: "5550001", appRole: "administrators", token: { type: "USER", granted: { ads_read: "all" } } } });
+    expect(JSON.stringify(line?.[0])).not.toContain("Sebastian");
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 });
