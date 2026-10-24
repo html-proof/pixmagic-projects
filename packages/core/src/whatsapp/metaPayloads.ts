@@ -29,7 +29,7 @@ export const metaWebhookSchema = obj({ object: str, entry: z.array(z.unknown()).
 export const metaEntrySchema = obj({ id, changes: z.array(z.unknown()).nullish() });
 
 /** One change; `value` is read by the schema for its field. */
-export const metaChangeSchema = obj({ field: z.string(), value: z.unknown() });
+export const metaChangeSchema = obj({ field: z.string(), value: z.unknown().optional() });
 
 /** field "messages": delivery statuses and customers' own messages, for one number. */
 export const metaMessagesValueSchema = obj({ metadata, statuses: z.array(z.unknown()).nullish(), messages: z.array(z.unknown()).nullish() });

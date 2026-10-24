@@ -45,6 +45,18 @@ export default tseslint.config(
     },
   },
   {
+    // Code that runs in the browser gets zod from packages/shared/src/zod.ts, which turns off zod's
+    // `new Function` probe there (the site's CSP reports it on every page).
+    files: ["packages/shared/src/**/*.ts", "apps/web/**/*.{ts,tsx}"],
+    ignores: ["packages/shared/src/zod.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { paths: [{ name: "zod", message: "Import { z } from packages/shared/src/zod.ts: it keeps zod's eval probe out of the browser (CSP)." }] },
+      ],
+    },
+  },
+  {
     // Node scripts and configs (ESM .mjs, CommonJS .cjs).
     files: ["**/*.{mjs,cjs,js}"],
     languageOptions: {

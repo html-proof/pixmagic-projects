@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarX2, LinkIcon, LockKeyhole, ShieldOff } from "lucide-react";
-import { BrandLogo } from "@/components/Brand";
+import { LayoutDashboard, LockKeyhole, LogIn, LogOut, X } from "lucide-react";
+import { ErrorPanel } from "@/components/ErrorState";
 import { leaveSharedSession, setSharedTab } from "@/lib/api";
 import { leaveTo, signOut } from "@/lib/auth";
 
@@ -22,8 +22,9 @@ export async function closeSharedDashboard(router: { replace(href: string): void
 }
 
 /**
- * Full page, outside the app's frame: their access to `workspace` was revoked, or (`expired`) the
- * access an invitation gave them reached its end date. Nothing of the workspace is shown.
+ * Full page, in the error pages' frame and card (ErrorPanel), outside the app's: their access to
+ * `workspace` was revoked, or (`expired`) the access an invitation gave them reached its end date.
+ * Nothing of the workspace is shown.
  */
 export function AccessRevoked({
   workspace,
@@ -40,45 +41,48 @@ export function AccessRevoked({
 }) {
   const router = useRouter();
   const expired = reason === "expired";
+  // The way out is the main button when there's no other workspace to open.
+  const leave = `${others.length ? "btn-secondary" : "btn-primary"} px-5 py-2.5`;
   return (
-    <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-4 py-12" data-testid={expired ? "access-expired" : "access-revoked"}>
-      <p className="mb-8">
-        <BrandLogo size={26} className="text-lg" />
-      </p>
-      <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-full bg-danger/10 text-danger">
-        {expired ? <CalendarX2 className="h-6 w-6" strokeWidth={1.8} /> : <ShieldOff className="h-6 w-6" strokeWidth={1.8} />}
-      </span>
-      <h1 className="mt-4 text-2xl font-semibold">{expired ? "Your shared access has ended" : "Your access was revoked"}</h1>
-      <p className="mt-2 text-muted">
-        {expired ? (
-          <>
-            The access <strong className="text-text">{workspace}</strong> shared with you has reached its end date, so its dashboard is no longer available. If you still need it, ask
-            the person who shared it to renew your access: the same link will work again.
-          </>
-        ) : (
-          <>
-            An owner or admin of <strong className="text-text">{workspace}</strong> has revoked your access, so you can no longer see its dashboard. If you still need it, ask them to
-            restore it.
-          </>
-        )}
-      </p>
-      <div className="mt-6 flex flex-wrap gap-2">
+    <div data-testid={expired ? "access-expired" : "access-revoked"}>
+      <ErrorPanel
+        kind={expired ? "invite" : "forbidden"}
+        code={expired ? "Access ended" : "Access revoked"}
+        title={expired ? "Your shared access has ended" : "Your access was revoked"}
+        body={
+          expired ? (
+            <>
+              The access <strong className="text-text">{workspace}</strong> shared with you has reached its end date, so its dashboard is no longer available. If you still need it,
+              ask the person who shared it to renew your access: the same link will work again.
+            </>
+          ) : (
+            <>
+              An owner or admin of <strong className="text-text">{workspace}</strong> has revoked your access, so you can no longer see its dashboard. If you still need it, ask them
+              to restore it.
+            </>
+          )
+        }
+        fullPage
+      >
         {others.map((w) => (
-          <button key={w.id} type="button" className="btn-primary" onClick={() => onSwitch(w.id)}>
+          <button key={w.id} type="button" className="btn-primary px-5 py-2.5" onClick={() => onSwitch(w.id)}>
+            <LayoutDashboard aria-hidden className="size-4" />
             Open {w.name}
           </button>
         ))}
         {shared ? (
-          <button type="button" className="btn-secondary" onClick={() => void closeSharedDashboard(router)}>
+          <button type="button" className={leave} onClick={() => void closeSharedDashboard(router)}>
+            <X aria-hidden className="size-4" />
             Close the shared dashboard
           </button>
         ) : (
-          <button type="button" className="btn-secondary" onClick={async () => leaveTo(await signOut(), router)}>
+          <button type="button" className={leave} onClick={async () => leaveTo(await signOut(), router)}>
+            <LogOut aria-hidden className="size-4" />
             Sign out
           </button>
         )}
-      </div>
-    </main>
+      </ErrorPanel>
+    </div>
   );
 }
 
@@ -86,31 +90,27 @@ export function AccessRevoked({
 export function SharedLinkEnded() {
   const router = useRouter();
   return (
-    <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-4 py-12" data-testid="shared-link-ended">
-      <p className="mb-8">
-        <BrandLogo size={26} className="text-lg" />
-      </p>
-      <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-full bg-accent/10 text-accent">
-        <LinkIcon className="h-6 w-6" strokeWidth={1.8} />
-      </span>
-      <h1 className="mt-4 text-2xl font-semibold">This shared dashboard has closed</h1>
-      <p className="mt-2 text-muted">
-        The dashboard was opened from an invitation link, and that session has ended. To see it again, open the link from your invitation email. If the link no longer works, ask the
-        person who shared it with you.
-      </p>
-      <div className="mt-6 flex flex-wrap gap-2">
+    <div data-testid="shared-link-ended">
+      <ErrorPanel
+        kind="session"
+        code="Link closed"
+        title="This shared dashboard has closed"
+        body="The dashboard was opened from an invitation link, and that session has ended. To see it again, open the link from your invitation email. If the link no longer works, ask the person who shared it with you."
+        fullPage
+      >
         <button
           type="button"
-          className="btn-secondary"
+          className="btn-primary px-5 py-2.5"
           onClick={() => {
             setSharedTab(false);
             router.replace("/login");
           }}
         >
+          <LogIn aria-hidden className="size-4" />
           Sign in to your own account
         </button>
-      </div>
-    </main>
+      </ErrorPanel>
+    </div>
   );
 }
 

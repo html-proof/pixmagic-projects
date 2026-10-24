@@ -130,7 +130,7 @@ describe("webhooks that don't fit", () => {
     await webhook("orders/updated", order({ id: undefined }));
     await webhook("orders/paid", order({ line_items: [{ id: 1, title: "Tee", quantity: "2 units", price: "45.00" }] }));
     expect(await systemDb.order.count()).toBe(0);
-    expect(problems()).toEqual(["id: Required", "line_items.0.quantity: Expected number, received string"]);
+    expect(problems()).toEqual(["id: Invalid input: expected number, received undefined", "line_items.0.quantity: Invalid input: expected number, received string"]);
     // A good copy afterwards goes in as usual.
     await webhook("orders/updated", order());
     expect(await systemDb.order.count()).toBe(1);
@@ -143,7 +143,7 @@ describe("webhooks that don't fit", () => {
     const { r } = await webhook("refunds/create", { id: 9, created_at: "2026-03-05T12:00:00Z", refund_line_items: [{ subtotal: "45.00" }] });
     expect(r).toEqual({ ok: true });
     expect(await systemDb.orderSale.count()).toBe(1);
-    expect(problems()).toEqual(["order_id: Required"]);
+    expect(problems()).toEqual(["order_id: Invalid input: expected number, received undefined"]);
   });
 
   it("a product update with one malformed variant changes nothing, so no variant is pruned", async () => {
@@ -161,7 +161,7 @@ describe("webhooks that don't fit", () => {
       ["70", 25],
       ["71", 26],
     ]);
-    expect(problems()).toEqual(["variants.1.price: Expected string, received object"]);
+    expect(problems()).toEqual(["variants.1.price: Invalid input: expected string, received object"]);
   });
 
   it("products/delete without an id deletes nothing", async () => {
@@ -217,7 +217,7 @@ describe("sync pages with nodes that don't fit", () => {
     await runSync({ storeId: store.id, kind: "variants", syncJobId: j.id }, deps);
     expect((await systemDb.productVariant.findMany()).map((v) => v.shopifyId)).toEqual(["70"]);
     expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded" });
-    expect(problems()).toEqual(["product: Expected object, received null"]);
+    expect(problems()).toEqual(["product: Invalid input: expected object, received null"]);
   });
 
   it("products: one without updatedAt is skipped", async () => {
@@ -227,7 +227,7 @@ describe("sync pages with nodes that don't fit", () => {
     fetchImpl = async () => page("products", [product(1, { updatedAt: undefined }), product(2)]);
     await runSync({ storeId: store.id, kind: "products", syncJobId: j.id }, deps);
     expect((await systemDb.product.findMany()).map((p) => p.shopifyId)).toEqual(["2"]);
-    expect(problems()).toEqual(["updatedAt: Required"]);
+    expect(problems()).toEqual(["updatedAt: Invalid input: expected string, received undefined"]);
   });
 
   it("bulk import: an order line that doesn't fit is skipped and the rest ingested", async () => {
@@ -271,7 +271,7 @@ describe("order detail pages and bulk lines that don't fit", () => {
     expect((await systemDb.order.findMany()).map((o) => o.shopifyId)).toEqual(["2"]);
     expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
     expect(warnings[0]).toMatchObject({ payload: "GraphQL order", storeId: store.id });
-    expect(problems()).toEqual(["lineItems.nodes.1.quantity: Expected number, received string"]);
+    expect(problems()).toEqual(["lineItems.nodes.1.quantity: Invalid input: expected number, received string"]);
   });
 
   it("bulk import: an unreadable sale, or a line that isn't an object, cost only that order", async () => {
@@ -310,7 +310,7 @@ describe("order detail pages and bulk lines that don't fit", () => {
     expect(await systemDb.orderSale.count()).toBe(1);
     expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
     expect(warnings[0]).toMatchObject({ payload: "bulk order", skipped: 2, of: 3 });
-    expect(problems()).toEqual(["agreements.nodes.0.sales.nodes.0.quantity: Expected number, received string"]);
+    expect(problems()).toEqual(["agreements.nodes.0.sales.nodes.0.quantity: Invalid input: expected number, received string"]);
   });
 });
 
@@ -364,7 +364,7 @@ describe("app and GDPR topics that don't fit", () => {
     const r = await consumeWebhook(store, "customers/data_request", { customer: { id: { nested: 7 } }, orders_requested: [1] });
     expect(r).toMatchObject({ acked: true, retried: false, ev: { status: "failed" } });
     expect(await systemDb.auditLog.count({ where: { action: "gdpr.customer_data_request" } })).toBe(0);
-    expect(problems()).toEqual(["customer.id: Expected number, received object"]);
+    expect(problems()).toEqual(["customer.id: Invalid input: expected number, received object"]);
   });
 
   it("app/scopes_update without `current` keeps the store's scopes instead of revoking them all", async () => {
@@ -373,7 +373,7 @@ describe("app and GDPR topics that don't fit", () => {
     expect(r).toEqual({ ok: true });
     expect(ev.status).toBe("succeeded");
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).grantedScopes).toEqual(["read_orders", "read_products"]);
-    expect(problems()).toEqual(["current: Required"]);
+    expect(problems()).toEqual(["current: Invalid input: expected array, received undefined"]);
     // A readable one still applies.
     await webhook("app/scopes_update", { current: ["read_orders"] });
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).grantedScopes).toEqual(["read_orders"]);
@@ -384,6 +384,6 @@ describe("app and GDPR topics that don't fit", () => {
     const { r, ev } = await webhook("app_subscriptions/update", { app_subscription: { status: "ACTIVE" } });
     expect(r).toEqual({ ok: true });
     expect(ev.status).toBe("succeeded");
-    expect(problems()).toEqual(["app_subscription.admin_graphql_api_id: Required"]);
+    expect(problems()).toEqual(["app_subscription.admin_graphql_api_id: Invalid input: expected string, received undefined"]);
   });
 });

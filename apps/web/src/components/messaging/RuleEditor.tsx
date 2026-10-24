@@ -182,7 +182,7 @@ function problemsOf(d: Draft): string[] {
   return r.error.issues.map((i) => {
     const [head, index] = i.path;
     const where = head === "conditions" && typeof index === "number" ? `Condition ${index + 1}` : (PATH_LABEL[String(head)] ?? String(head));
-    const msg = i.message === "Expected number, received nan" ? "enter a number" : i.message;
+    const msg = i.code === "invalid_type" && i.expected === "number" ? "enter a number" : i.message;
     return `${where}: ${msg}`;
   });
 }

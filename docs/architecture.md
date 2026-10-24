@@ -15,6 +15,7 @@ surroundings differs.
 browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTTP server
               /api/*, /webhooks/*, /pixel/*, /shopify/*  ──► Hono app (apps/api)
               everything else                            ──► static UI (apps/web, Next.js static export)
+                                                             (if the function can't answer: apps/web's /unavailable page, from S3)
 
 jobs   SQS (sync, webhooks, aggregate, email, smsEvents) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
 cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
@@ -273,7 +274,11 @@ never change merchant permissions or session state.
 on the store's public link. Every error card (the 404 page, crashes, failed loads, customer links) is
 `ErrorPanel` in `components/ErrorState.tsx`: the status code in the logo's green, or an illustration
 for a failure without one, and a `fullPage` one sits in the site's frame (`ErrorPage`), so a new error
-screen uses it rather than a design of its own. Retry-After hints disable manual retries and delay automatic retries.
+screen uses it rather than a design of its own. The access screens (access revoked or ended, a shared
+dashboard closed: `components/team/AccessStates.tsx`) use it too, with a word in place of a code.
+`app/unavailable` is the page CloudFront shows at any page's address while the server can't answer;
+the AWS build moves it to the site bucket, so it must work without the API (no API calls; support is
+a mail link). Retry-After hints disable manual retries and delay automatic retries.
 Use `pnpm --filter @app/web test` for transport and recovery tests and
 `pnpm --filter @app/web test:errors-ui` for browser checks independent of Postgres and Cognito.
 

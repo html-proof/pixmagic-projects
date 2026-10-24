@@ -525,7 +525,7 @@ export function accountRoutes(app: App, deps: Deps) {
    */
   app.post("/auth/account/delete", async (c) => {
     const user = await requireUser(c, deps);
-    const input = z.object({ confirm: z.literal("DELETE", { errorMap: () => ({ message: "Type DELETE to confirm." }) }), password: z.string().max(256).optional() }).parse(await body(c));
+    const input = z.object({ confirm: z.literal("DELETE", { error: "Type DELETE to confirm." }), password: z.string().max(256).optional() }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
     await reauthenticate(c, user, input.password);
     const owned = await systemDb.membership.findMany({ where: { userId: user.id, role: "owner" }, include: { workspace: { select: { id: true, name: true } } } });
