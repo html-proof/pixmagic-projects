@@ -93,7 +93,7 @@ test("Integrations shows Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSe
   for (const p of ["meta", "adsense"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Coming soon");
 });
 
-test("Google Ads and Meta Ads say what their screen shows first while their platform still reviews bizinsights; AdSense goes straight to Google", async ({ page }) => {
+test("Connect goes straight to the platform's sign-in, with no note, even while Google and Meta still review bizinsights", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "choose");
   await quietMeta(page);
   // This server as if every platform's sign-in were set up, with Google Ads and Meta still under their platform's review.
@@ -116,30 +116,23 @@ test("Google Ads and Meta Ads say what their screen shows first while their plat
 
   const google = page.getByTestId("int-google");
   await expect(platform(page, "int-google")).toHaveText("Not connected");
+  await expect(platform(page, "int-meta")).toHaveText("Not connected");
   // The real sign-in is set up, so the demo is a line under it, not the button.
   await expect(google.getByTestId("int-google-try-demo")).toBeVisible();
-  // Google Ads is still unverified: what Google's screen will say, before going there. Escape closes it.
+  // Each Connect starts its platform's sign-in at once: no window in between.
   await google.getByRole("button", { name: "Connect Google Ads" }).click();
-  const beforeGoogle = page.getByRole("dialog", { name: "Before you go to Google" });
-  await expect(beforeGoogle.getByTestId("google-unverified")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(beforeGoogle).toHaveCount(0);
-  expect(started).toEqual([]);
-  await google.getByRole("button", { name: "Connect Google Ads" }).click();
-  await beforeGoogle.getByRole("button", { name: "Continue to Google" }).click();
   await expect.poll(() => started).toEqual(["google"]);
   await expect(page.getByText("The Google Ads sign-in window couldn't be opened just now")).toBeVisible();
-
-  // AdSense never meets Google's unverified screen: straight to Google.
   await page.getByTestId("int-adsense").getByRole("button", { name: "Connect Google AdSense" }).click();
   await expect.poll(() => started).toEqual(["google", "adsense"]);
-
-  // Meta: Facebook would show anyone but a tester "Feature Unavailable", so the page says so first.
   await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta Ads" }).click();
-  const before = page.getByRole("dialog", { name: "Before you go to Facebook" });
-  await expect(before.getByTestId("meta-testers-only")).toBeVisible();
-  await before.getByRole("button", { name: "Continue to Facebook" }).click();
   await expect.poll(() => started).toEqual(["google", "adsense", "meta"]);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Settings → Advertising: both cards read "Not connected", with no note about the platform's review.
+  await page.goto("/settings/ads");
+  for (const p of ["google", "meta"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Not connected");
+  await expect(page.getByText(/added as testers|Feature Unavailable|still verifying bizinsights/)).toHaveCount(0);
 });
 
 test("each connected account shows its state, and Integrations the most pressing one per platform", async ({ page }) => {

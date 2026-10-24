@@ -1,9 +1,15 @@
 import { withTenant, type Store, type WhatsappConnection, type WhatsappTemplate } from "@app/db";
-import { manualVerifyToken } from "@app/core";
+import { manualVerifyToken, providerDetail, WhatsappApiError } from "@app/core";
 import { allows, templateShape, type TemplateComponent } from "@app/shared";
 import { HttpError, requireWorkspace, type Ctx, type Deps } from "../context.js";
 
-/** Helpers shared by the merchant WhatsApp routes (whatsapp.ts, whatsappOps.ts). */
+/** Helpers shared by the merchant WhatsApp routes (whatsapp.ts, whatsappOps.ts, whatsappNango.ts). */
+
+/** Meta refused a connect step: say so with Meta's reason (WhatsappConnectError answers itself, as a 400). */
+export const connectError = (err: unknown): never => {
+  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${providerDetail(err.details ?? err.title)}`, "meta_error");
+  throw err;
+};
 
 /**
  * WhatsApp's conversations, orders, carts and reviews carry customers' names and phone numbers:

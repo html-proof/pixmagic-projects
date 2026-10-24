@@ -4,7 +4,8 @@ import { E2E_BASE_URL, E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * The browser console stays free of two things that once filled it:
+ * The browser console stays free of errors (a refused request, an uncaught exception), and of two
+ * things that once filled it:
  * - "preloaded using link preload but not used". Prefetching a page in other fonts (Geist: the
  *   landing, sign-in and legal pages; Geist Mono: the landing alone) preloads that page's fonts and
  *   stylesheet on the current one (docs/architecture.md, "Fonts and prefetch"). Chrome lists every
@@ -22,6 +23,12 @@ const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
 test.afterAll(() => db.end());
 
 const PRELOAD_WARNING = /preloaded using link preload but not used/;
+/**
+ * Playwright's trace recorder (the config records every test) runs a script in each frame, and a
+ * sandboxed frame such as the email preview (EmailPreviewFrame) refuses it. No browser outside a
+ * recorded test runs that script.
+ */
+const RECORDER_REFUSED = /^Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed/;
 
 /**
  * This page's preloads that nothing uses, counted the way Chrome counts them: a stylesheet that
@@ -52,15 +59,41 @@ const hoverLinks = (page: Page) =>
   });
 
 /**
+ * Wait for React to take over the page's links. An exported page shows its heading before then, and
+ * a link scrolled into view or hovered before hydration prefetches nothing.
+ */
+const hydrated = (page: Page) =>
+  page.waitForFunction(() => {
+    const a = document.querySelector("a[href]");
+    return !a || Object.keys(a).some((k) => k.startsWith("__reactFiber"));
+  });
+
+/** Scroll to the bottom and back, so the links further down (a footer's) come into view and prefetch too. */
+const scrollThrough = (page: Page) =>
+  page.evaluate(async () => {
+    for (let y = 0; y < document.documentElement.scrollHeight; y += innerHeight * 0.8) {
+      scrollTo(0, y);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    scrollTo(0, document.documentElement.scrollHeight);
+    await new Promise((r) => setTimeout(r, 500));
+    scrollTo(0, 0);
+  });
+
+/**
  * Open a page, give every link on it (menus included) the chance to prefetch, then look: at the
  * preloads in the page, at the policy reports the page saw, and at Chrome's own warnings.
  */
 async function check(page: Page, path: string, heading: RegExp) {
   const where = `${path} at ${page.viewportSize()?.width}px`;
   const warnings: string[] = [];
+  const errors: string[] = [];
   page.on("console", (m) => {
     if (PRELOAD_WARNING.test(m.text())) warnings.push(`${page.url()}: ${m.text()}`);
+    // Chrome logs every response of 400 or more this way, a signed-out visitor's 401 included.
+    if (m.type() === "error" && !RECORDER_REFUSED.test(m.text())) errors.push(`${page.url()}: ${m.text()} (${m.location().url})`);
   });
+  page.on("pageerror", (e) => errors.push(`${page.url()}: uncaught ${e.message}`));
   await page.addInitScript(() => {
     const w = window as unknown as { cspViolations: string[] };
     w.cspViolations = [];
@@ -69,6 +102,8 @@ async function check(page: Page, path: string, heading: RegExp) {
 
   await page.goto(path);
   await expect(page.getByRole("heading", { name: heading }).first()).toBeVisible();
+  await hydrated(page);
+  await scrollThrough(page);
   await hoverLinks(page);
   // The account menu, the notifications panel and (on a phone) the navigation drawer hold links too.
   for (const menu of [page.getByRole("button", { name: "Account menu" }), page.getByTestId("notifications-bell"), page.getByRole("button", { name: "Open navigation" })]) {
@@ -83,9 +118,10 @@ async function check(page: Page, path: string, heading: RegExp) {
   expect(await unusedPreloads(page), `unused preloads on ${where}`).toEqual([]);
   expect(await page.evaluate(() => (window as unknown as { cspViolations: string[] }).cspViolations), `CSP violations on ${where}`).toEqual([]);
   expect(warnings, `Chrome's preload warnings on ${where}`).toEqual([]);
+  expect(errors, `console errors on ${where}`).toEqual([]);
 }
 
-const title = (path: string) => `${path} preloads nothing it doesn't use and breaks no content policy`;
+const title = (path: string) => `${path} logs no error, preloads nothing it doesn't use and breaks no content policy`;
 
 // Signed out: the landing page, the sign-in and legal pages (Geist), and the plain account pages
 // (AuthCard) an invitation or a failed sign-in opens.
@@ -101,6 +137,9 @@ test.describe("signed out", () => {
     ["/data-deletion", /./],
     ["/invite?token=not-a-real-invitation", /./],
     ["/auth/error", /couldn't sign you in/],
+    // App pages, signed out: off to sign in, without a refused request on the way (getMe).
+    ["/dashboard", /Welcome Back/],
+    ["/portal", /Welcome Back/],
   ];
   for (const [path, heading] of publicPages) test(title(path), ({ page }) => check(page, path, heading));
 });
@@ -130,6 +169,8 @@ test.describe("signed in", () => {
     ["/staff", /./],
     ["/whatsapp", /./],
     ["/messaging", /./],
+    // A new email template: its live preview renders before it has a name.
+    ["/settings/email/templates/edit", /./],
   ];
   for (const [name, viewport] of [
     ["on desktop", { width: 1366, height: 860 }],
