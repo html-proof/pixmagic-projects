@@ -1,12 +1,18 @@
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowLeftRight, CalendarDays, ChevronDown, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react";
 import {
+  calendarYear,
   customRangeProblem,
   daysBetweenInclusive,
   isDay,
+  latestRangeEnd,
   localDay,
   MIN_CUSTOM_DAY,
+  monthsEarlier,
+  storeRangeLimits,
+  yearEarlier,
+  yearsBetween,
   type CompareMode,
   type Comparison,
   type CustomRangeProblem,
@@ -20,6 +26,8 @@ export const PRESETS = [
   { id: "7d", label: "Last 7 days" },
   { id: "30d", label: "Last 30 days" },
   { id: "90d", label: "Last 90 days" },
+  { id: "6m", label: "Last 6 months" },
+  { id: "12m", label: "Last 12 months" },
   { id: "mtd", label: "This month" },
   { id: "lastmonth", label: "Last month" },
   { id: "ytd", label: "This year" },
@@ -35,12 +43,25 @@ export const COMPARISONS: ReadonlyArray<{ id: CompareMode; label: string }> = [
   { id: "custom", label: "Custom" },
 ];
 
-const CUSTOM_HINT: Record<CustomRangeProblem, string> = {
-  incomplete: "Pick a start and an end date.",
-  reversed: "The start date is after the end date.",
-  future: "The start date hasn't happened yet in the store's time zone.",
-  too_long: "Pick up to a year at a time.",
-};
+/** What is wrong with dates picked, in the words of the person picking them. */
+function customHint(problem: CustomRangeProblem, from: string, startDay: string | null): string {
+  switch (problem) {
+    case "incomplete":
+      return "Pick a start and an end date.";
+    case "reversed":
+      return "The start date is after the end date.";
+    case "future":
+      return "The start date hasn't happened yet in the store's time zone.";
+    case "before_start":
+      return startDay ? `The store's first day is ${fmtDay(startDay)}: pick a start date from then on.` : "Pick a start date from the store's first day on.";
+    case "too_long":
+      // Older years are just as available: only the length is limited.
+      return `Pick up to 12 months at a time: from ${fmtDay(from)}, the latest end date is ${fmtDay(latestRangeEnd(from))}.`;
+  }
+}
+
+/** The menu's value for a calendar year picked from it (`yearChoice`). */
+const yearId = (year: number) => `year-${year}`;
 
 /**
  * What a question looks like in the address bar and in the API call: `preset=7d`,
@@ -50,6 +71,14 @@ const CUSTOM_HINT: Record<CustomRangeProblem, string> = {
 type Question = { qs: string; label: string };
 const DEFAULT: Question = { qs: "preset=30d", label: "Last 30 days" };
 const PARAMS = ["preset", "from", "to", "compare", "cfrom", "cto"] as const;
+
+/**
+ * Where the store's dates begin, as far as the page knows: its first day (`storeStartDay` in
+ * @app/shared, from the store list, so it is known before the numbers load), and whether that is
+ * Shopify's creation date, which custom dates may not start before (`storeRangeLimits`). The API
+ * checks the same limits; this only lets the page say so before asking.
+ */
+export type StoreStart = { day: string | null; created: boolean };
 
 /** The last dates looked at in this tab, for coming back to the dashboard from another page. */
 const LAST_RANGE_KEY = "insights:dashboard-range";
@@ -111,13 +140,14 @@ function readStored(): string | null {
  * back button, a shared link or a trip to Settings and back no longer drops it to the last 30 days.
  * `asking` stays null until that has been read, so the page doesn't first load the default dates.
  */
-export function useDateRange(timeZone: string) {
+export function useDateRange(timeZone: string, start: StoreStart = { day: null, created: false }) {
   const [choice, setChoice] = useState<Choice>({ preset: "30d", from: "", to: "", compare: "previous", cfrom: "", cto: "" });
   const [restored, setRestored] = useState(false);
   const [asking, setAsking] = useState<Question>(DEFAULT);
   // The store's today: custom dates can't start after it, and are reported up to it at most.
   const today = storeToday(timeZone);
-  const problem = choice.preset === "custom" ? customRangeProblem(choice, today) : null;
+  const limits = storeRangeLimits(start.day, start.created);
+  const problem = choice.preset === "custom" ? customRangeProblem(choice, today, limits) : null;
   const compareProblem = choice.compare === "custom" ? customRangeProblem({ from: choice.cfrom, to: choice.cto }, today) : null;
 
   if (restored && !problem && !compareProblem) {
@@ -154,15 +184,35 @@ export function useDateRange(timeZone: string) {
   /** The same for the comparison: custom starts from the dates the numbers are compared with now. */
   const chooseCompare = (compare: CompareMode, shown?: DateRange) =>
     setChoice((c) => (compare === "custom" && !c.cfrom && !c.cto && shown ? { ...c, compare, cfrom: shown.from, cto: shown.to } : { ...c, compare }));
+  /** A calendar year, 1 January to 31 December (to today for this year): any year, however long ago. */
+  const chooseYear = (year: number) => setChoice((c) => ({ ...c, preset: "custom", ...calendarYear(year, today) }));
+  /**
+   * The custom dates a year earlier or later (`by` -1 or 1), so the same months of another year are
+   * one click away; null when that year can't be reported on (it hasn't started, or the store hadn't).
+   */
+  const yearShift = (by: -1 | 1): DateRange | null => {
+    if (choice.preset !== "custom" || problem) return null;
+    const move = (d: string) => (by < 0 ? yearEarlier(d) : monthsEarlier(d, -12));
+    const next = { from: move(choice.from), to: move(choice.to) };
+    return customRangeProblem(next, today, limits) ? null : next;
+  };
+  const shiftYear = (by: -1 | 1) => {
+    const next = yearShift(by);
+    if (next) setChoice((c) => ({ ...c, ...next }));
+  };
 
   return {
     ...choice,
     today,
+    start,
     problem,
     compareProblem,
     asking: restored ? asking : null,
     choose,
     chooseCompare,
+    chooseYear,
+    yearShift,
+    shiftYear,
     setFrom: (from: string) => setChoice((c) => ({ ...c, from })),
     setTo: (to: string) => setChoice((c) => ({ ...c, to })),
     setCompareFrom: (cfrom: string) => setChoice((c) => ({ ...c, cfrom })),
@@ -270,6 +320,7 @@ function PillSelect<T extends string>({
   size,
   value,
   options,
+  groups = [],
   onChange,
 }: {
   id: string;
@@ -280,6 +331,8 @@ function PillSelect<T extends string>({
   size: "sm" | "md";
   value: T;
   options: ReadonlyArray<{ id: T; label: string }>;
+  /** More choices after `options`, under a heading each (the dates menu's calendar years). */
+  groups?: ReadonlyArray<{ label: string; options: ReadonlyArray<{ id: T; label: string }> }>;
   onChange: (value: T) => void;
 }) {
   return (
@@ -297,12 +350,42 @@ function PillSelect<T extends string>({
         {options.map((o) => (
           <option key={o.id} value={o.id}>{o.id === "custom" ? "Pick dates…" : o.label}</option>
         ))}
+        {groups.map((g) => (
+          <optgroup key={g.label} label={g.label}>
+            {g.options.map((o) => (
+              <option key={o.id} value={o.id}>{o.label}</option>
+            ))}
+          </optgroup>
+        ))}
       </select>
     </div>
   );
 }
 
-/** The dates menu. The page has one "Dates" menu, and the summary card repeats it as "Period". */
+/**
+ * The calendar years the dates menu offers, newest first: from the year Shopify created the store to
+ * this one, years whose orders Shopify hasn't shared included (the page says so, rather than the
+ * menu hiding them). While the creation date isn't known: the last five years, or back to the first
+ * order held when that is older.
+ */
+function menuYears(r: DateRangeState): number[] {
+  const fallback = `${Number(r.today.slice(0, 4)) - 4}-01-01`;
+  const first = r.start.created && r.start.day ? r.start.day : r.start.day && r.start.day < fallback ? r.start.day : fallback;
+  return yearsBetween(first, r.today);
+}
+
+/** The year the custom dates are, when they are exactly one calendar year (this year: up to today or its end). */
+function yearChoice(r: DateRangeState): number | null {
+  if (r.preset !== "custom" || r.problem) return null;
+  const year = r.from.slice(0, 4);
+  return r.from === `${year}-01-01` && (r.to === `${year}-12-31` || r.to === calendarYear(Number(year), r.today).to) ? Number(year) : null;
+}
+
+/**
+ * The dates menu. The page has one "Dates" menu, and the summary card repeats it as "Period". Below
+ * the presets it lists every calendar year of the store: each is 12 months, and a year long past is
+ * asked about like this one.
+ */
 export function DateRangeSelect({
   r,
   shown,
@@ -316,19 +399,30 @@ export function DateRangeSelect({
   label: string;
   size?: "sm" | "md";
 }) {
+  const year = yearChoice(r);
   const text =
-    r.preset !== "custom" ? PRESETS.find((p) => p.id === r.preset)!.label : r.from && r.to && !r.problem ? fmtRange(r.from, r.to) : "Pick dates";
+    year !== null
+      ? String(year)
+      : r.preset !== "custom"
+        ? PRESETS.find((p) => p.id === r.preset)!.label
+        : r.from && r.to && !r.problem
+          ? fmtRange(r.from, r.to)
+          : "Pick dates";
   return (
-    <PillSelect
+    <PillSelect<string>
       id={id}
       label={label}
       icon={CalendarDays}
       text={text}
       title={shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}).` : undefined}
       size={size}
-      value={r.preset}
+      value={year !== null ? yearId(year) : r.preset}
       options={PRESETS}
-      onChange={(p) => r.choose(p, shown?.range)}
+      groups={[{ label: "Calendar years", options: menuYears(r).map((y) => ({ id: yearId(y), label: String(y) })) }]}
+      onChange={(v) => {
+        if (v.startsWith("year-")) r.chooseYear(Number(v.slice(5)));
+        else r.choose(v as PresetId, shown?.range);
+      }}
     />
   );
 }
@@ -387,40 +481,75 @@ export function CompareSelect({
   );
 }
 
-/** Two date boxes, and what is wrong with them while they don't make a range yet. */
+/**
+ * Two date boxes, and what is wrong with them while they don't make a range yet. The end box's
+ * calendar stops 12 months after the start (and at today), so a range too long can't be picked
+ * there; typed, it says so.
+ */
 function DatePair({
   labels,
   from,
   to,
+  min,
   max,
   problem,
+  startDay,
   setFrom,
   setTo,
 }: {
   labels: [from: string, to: string];
   from: string;
   to: string;
+  min: string;
   max: string;
   problem: CustomRangeProblem | null;
+  startDay: string | null;
   setFrom: (v: string) => void;
   setTo: (v: string) => void;
 }) {
+  const started = isDay(from) && from >= MIN_CUSTOM_DAY;
+  const toMax = started && latestRangeEnd(from) < max ? latestRangeEnd(from) : max;
   return (
     <div className="flex flex-col items-end gap-1.5">
       <span className="flex flex-wrap items-center justify-end gap-2 text-sm">
-        <input aria-label={labels[0]} type="date" min={MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input aria-label={labels[0]} type="date" min={min} max={max} className="input w-auto py-1.5" value={from} onChange={(e) => setFrom(e.target.value)} />
         to
-        <input aria-label={labels[1]} type="date" min={MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={to} onChange={(e) => setTo(e.target.value)} />
+        <input aria-label={labels[1]} type="date" min={started && from > min ? from : min} max={toMax} className="input w-auto py-1.5" value={to} onChange={(e) => setTo(e.target.value)} />
       </span>
-      {problem && <p className={`text-xs ${problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">{CUSTOM_HINT[problem]}</p>}
+      {problem && (
+        <p className={`text-xs ${problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">
+          {customHint(problem, from, startDay)}
+        </p>
+      )}
     </div>
   );
 }
 
-/** With "Pick dates…" chosen: the two date boxes. */
+const shiftButton =
+  "inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-xs font-medium text-muted transition-colors hover:border-accent/40 hover:text-text disabled:cursor-not-allowed disabled:opacity-40";
+
+/**
+ * With "Pick dates…" chosen (or a calendar year from the menu): the two date boxes, and the same
+ * dates a year earlier or later, so 2023 against 2024, or one March against another, is a click away.
+ */
 export function CustomDates({ r }: { r: DateRangeState }) {
   if (r.preset !== "custom") return null;
-  return <DatePair labels={["From", "To"]} from={r.from} to={r.to} max={r.today} problem={r.problem} setFrom={r.setFrom} setTo={r.setTo} />;
+  const earlier = r.yearShift(-1);
+  const later = r.yearShift(1);
+  const min = r.start.created && r.start.day ? r.start.day : MIN_CUSTOM_DAY;
+  return (
+    <div className="flex flex-wrap items-start justify-end gap-x-3 gap-y-2">
+      <span className="flex items-center gap-1.5 py-0.5" role="group" aria-label="Move by a year">
+        <button type="button" className={shiftButton} disabled={!earlier} onClick={() => r.shiftYear(-1)} title={earlier ? fmtRange(earlier.from, earlier.to) : "Nothing earlier to show"}>
+          <ChevronLeft aria-hidden className="h-3.5 w-3.5" /> A year earlier
+        </button>
+        <button type="button" className={shiftButton} disabled={!later} onClick={() => r.shiftYear(1)} title={later ? fmtRange(later.from, later.to) : "Those dates haven't started yet"}>
+          A year later <ChevronRight aria-hidden className="h-3.5 w-3.5" />
+        </button>
+      </span>
+      <DatePair labels={["From", "To"]} from={r.from} to={r.to} min={min} max={r.today} problem={r.problem} startDay={r.start.day} setFrom={r.setFrom} setTo={r.setTo} />
+    </div>
+  );
 }
 
 /** With "Pick dates…" chosen to compare with: its two date boxes, named so they aren't mistaken for the dates reported on. */
@@ -429,7 +558,17 @@ export function CompareDates({ r }: { r: DateRangeState }) {
   return (
     <div className="flex flex-wrap items-start justify-end gap-x-2 gap-y-1">
       <span className="py-1.5 text-sm text-muted">Compare with</span>
-      <DatePair labels={["Compare from", "Compare to"]} from={r.cfrom} to={r.cto} max={r.today} problem={r.compareProblem} setFrom={r.setCompareFrom} setTo={r.setCompareTo} />
+      <DatePair
+        labels={["Compare from", "Compare to"]}
+        from={r.cfrom}
+        to={r.cto}
+        min={MIN_CUSTOM_DAY}
+        max={r.today}
+        problem={r.compareProblem}
+        startDay={r.start.day}
+        setFrom={r.setCompareFrom}
+        setTo={r.setCompareTo}
+      />
     </div>
   );
 }
@@ -449,8 +588,12 @@ export function periodWords(r: DateRangeState, shown: Shown): string {
       return "this year";
     case "lastyear":
       return "last year";
-    case "custom":
-      return shown ? (shown.range.from === shown.range.to ? `on ${fmtDay(shown.range.from)}` : `from ${fmtSpan(shown.range.from, shown.range.to)}`) : "in the dates you picked";
+    case "custom": {
+      if (!shown) return "in the dates you picked";
+      const { from, to } = shown.range;
+      // An older year says which: "from 1 Jan – 31 Dec" alone read as this year.
+      return from === to ? `on ${fmtDay(from)}` : `from ${fmtSpan(from, to, { year: to.slice(0, 4) !== r.today.slice(0, 4) })}`;
+    }
     default:
       return `in the ${PRESETS.find((p) => p.id === r.preset)!.label.toLowerCase()}`;
   }

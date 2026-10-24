@@ -931,6 +931,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.inventorySyncRun.deleteMany({ where: { storeId } }),
     systemDb.inventorySettings.deleteMany({ where: { storeId } }),
     systemDb.dailyStoreMetrics.deleteMany({ where: { storeId } }),
+    // The full history's import plan, year by year: the next import plans its own.
+    systemDb.orderHistoryWindow.deleteMany({ where: { storeId } }),
     // The store's own sales calculation (which lines Custom sales counts) goes with its figures.
     systemDb.salesCalculation.deleteMany({ where: { storeId } }),
     // Its checks against Shopify describe data that is gone.

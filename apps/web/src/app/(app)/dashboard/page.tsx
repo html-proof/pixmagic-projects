@@ -1,13 +1,14 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
 import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
+import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard } from "@/components/dashboard/HomeCards";
@@ -18,6 +19,7 @@ import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
+import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
 import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
@@ -165,6 +167,17 @@ function DashboardSkeleton() {
   );
 }
 
+/** Ask again now rather than at the next check (every live answer on the page listens for it). */
+function RetryButton() {
+  return (
+    <span className="mt-2 block">
+      <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => window.dispatchEvent(new Event("insights:retry"))}>
+        Try again
+      </button>
+    </span>
+  );
+}
+
 /** "Sebastian" from "Sebastian Tran", for the greeting; nothing when the account has no name. */
 const firstName = (name: string | null) => name?.trim().split(/\s+/)[0] || null;
 
@@ -174,7 +187,8 @@ export default function DashboardPage() {
   const sharesData = hasDashboardAccess(access);
   const adsNotice = useAdsConnectedNotice();
   const [taken, dismissTaken] = useStoreTakenNotice();
-  const dates = useDateRange(store?.timezone ?? "UTC");
+  // Where the store's dates begin, from the store list (the API checks the same limits).
+  const dates = useDateRange(store?.timezone ?? "UTC", { day: store?.startDay ?? null, created: !!store?.shopCreatedAt });
   const detail = useDetailView();
   const asking = dates.asking;
   // Advertising has its own pages now: ?view=ads (an old link, a bookmark, the health check's row)
@@ -244,14 +258,15 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store?.id, workspace.id]);
 
-  const requestScopes = async (c: Capability) => {
+  /** Send the owner to Shopify to grant a module's scopes, or (`scopes`) the full order history's. */
+  const askShopify = async (pending: string, ask: { module: string } | { scopes: string[] }) => {
     if (!store) return;
-    setPendingScope(c.id);
+    setPendingScope(pending);
     setScopeError(null);
     try {
       const r = await api<{ url: string | null }>(`/workspaces/${workspace.id}/stores/${store.id}/scopes/request`, {
         method: "POST",
-        body: { module: c.id },
+        body: ask,
       });
       if (!r.url) {
         // Already granted — the poll will unlock the module on its next check.
@@ -269,6 +284,7 @@ export default function DashboardPage() {
       setPendingScope(null);
     }
   };
+  const requestScopes = (c: Capability) => askShopify(c.id, { module: c.id });
 
   // Never show one store's numbers under another store's name while switching.
   const ov = data && store && data.store.id === store.id ? data : null;
@@ -323,6 +339,18 @@ export default function DashboardPage() {
   const custom = appliedCustom(s);
 
   const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  // Every day of the dates lies before the orders Shopify shared: there are no figures for them,
+  // which isn't the same as $0 (the line under the dates says why).
+  const historyFrom = ov?.data?.historyFrom;
+  const notImported = !!ov && !!historyFrom && historyFrom !== ALL_HISTORY && ov.range.to < historyFrom;
+  const figure = (n: ReactNode) =>
+    notImported ? (
+      <span className="text-base font-semibold text-muted sm:text-lg" data-testid="figure-not-imported">
+        Not imported
+      </span>
+    ) : (
+      n
+    );
   const compared = comparedWith(shown);
   const versus = versusWords(shown);
   const name = firstName(me.user.displayName);
@@ -359,10 +387,28 @@ export default function DashboardPage() {
       {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
       {takenNotice}
 
-      {error && !ov && <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>}
+      {ov && (
+        <HistoryLine
+          ov={ov}
+          loading={olderAnswer && loading && !error ? (asking?.label ?? null) : null}
+          canManage={canManage(workspace.role)}
+          reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
+          onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
+          importing={pendingScope === "order_history"}
+        />
+      )}
+      {scopeError && pendingScope === null && disabled.length === 0 && <Alert>{scopeError}</Alert>}
+
+      {error && !ov && (
+        <Alert kind={isTransient(error) ? "info" : "error"}>
+          {friendlyError(error)}
+          <RetryButton />
+        </Alert>
+      )}
       {error && ov && olderAnswer && (
         <Alert kind={isTransient(error) ? "info" : "error"}>
           Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
+          <RetryButton />
         </Alert>
       )}
       {loading && !ov && (
@@ -443,7 +489,7 @@ export default function DashboardPage() {
               icon={CircleDollarSign}
               tint="green"
               title="Total sales"
-              value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />}
+              value={figure(<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />)}
               delta={s.deltas.totalSales ?? null}
               compared={compared}
               versus={versus}
@@ -460,11 +506,11 @@ export default function DashboardPage() {
               onClick={() => detail.open("sales")}
             />
           ) : (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} versus={versus} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
           )}
-          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} versus={versus} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
-          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
-          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
         </section>
       )}
 

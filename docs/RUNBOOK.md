@@ -93,6 +93,22 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 
 4. Still off: re-sync the store (re-pulls 60 days).
 
+### Older dates show "not imported" (no history before ~60 days)
+
+That is Shopify's limit, not a fault: without `read_all_orders` it shares the last 60 days of orders.
+The line under the dashboard's dates says which case the store is in (`data.history.access` in the
+overview): `awaiting_shopify` means the app doesn't ask for the scope yet. The fix is Shopify's
+approval, then declaring the scope (docs/shopify-setup.md, "To import more than 60 days of
+history"). Once a store holds it, its full import reads a year at a time; the same line shows the
+years in and the one being read. To see a stopped import's years:
+
+```sql
+SELECT year, status, orders, attempts, error, finished_at FROM order_history_windows WHERE store_id = '<id>' ORDER BY year DESC;
+```
+
+A `failed` year resumes on the next full import (the dashboard retries an `error` store about every
+half hour, or Settings → Shopify → Reconnect).
+
 ## Maintenance tasks
 
 `pnpm --filter @app/worker ops:<task>` from the repo root runs a task in `apps/worker/ops/` against the database in the repo-root `.env` (or the file named by `OPS_ENV_FILE`). That file needs the **owner-role** `DATABASE_URL` and the **same** `TOKEN_ENCRYPTION_KEYS` as the deployed app (the `insights/production/app` secret). `.env.example` points `DATABASE_URL` at the development database (`app_dev`); for production, use a separate `OPS_ENV_FILE` to keep the two apart. Production's database is private: reach it through the admin host (a Systems Manager port forward to the database's port 5432; aws-deployment.md, "Database") with the credentials from the `insights/production/db-owner` secret. In Windows PowerShell set variables first: `$env:OPS_SHOP = "shop.myshopify.com"`, then run the `pnpm` line on its own.

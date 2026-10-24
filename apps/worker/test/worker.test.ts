@@ -1461,20 +1461,28 @@ describe("orders pipeline", () => {
     expect(ordersSearch({}, ["read_orders"], now)).toBe(`created_at:>='${new Date(now - BACKFILL_DAYS * 86400_000).toISOString()}'`);
     expect(ordersSearch({ sinceDays: 3 }, ["read_orders", "read_all_orders"], now)).toBe(`updated_at:>='${new Date(now - 3 * 86400_000).toISOString()}'`);
 
+    // With read_all_orders the whole history is read a calendar year at a time, newest first, from
+    // the year of the store's first order (apps/worker/test/orderHistory.test.ts follows it through).
     const store = await makeStore(["read_orders", "read_all_orders"]);
     const job = await makeJob(store, "orders");
     let vars: Record<string, unknown> = {};
     fetchImpl = async (_u, init) => {
-      vars = gqlBody(init).variables;
+      const body = gqlBody(init);
+      if (body.query.includes("query OldestOrder")) return gqlJson({ orders: { nodes: [{ createdAt: "2019-05-01T00:00:00Z" }] } });
+      vars = body.variables;
       return gqlJson(ordersPage([gOrder(1, { createdAt: "2019-05-01T00:00:00Z", updatedAt: "2019-05-01T00:00:00Z" })]));
     };
     await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, pagedOnly: true }, deps);
-    expect(vars).toMatchObject({ query: null });
+    const thisYear = Number(localDay(new Date(), "America/New_York").slice(0, 4));
+    const years = await systemDb.orderHistoryWindow.findMany({ where: { storeId: store.id }, orderBy: { year: "desc" } });
+    expect(years.map((y) => y.year)).toEqual(Array.from({ length: thisYear - 2018 }, (_, i) => thisYear - i));
+    // This year first: from midnight on 1 January in New York.
+    expect(vars).toMatchObject({ query: `created_at:>='${years[0]!.fromAt.toISOString()}'` });
+    expect(years[0]!.fromAt.toISOString()).toBe(`${thisYear}-01-01T05:00:00.000Z`);
     expect((await systemDb.order.findFirstOrThrow()).localDay).toBe("2019-04-30"); // New York
-    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
-    expect(after.status).toBe("active");
-    // The whole history is in: no comparison reaches back before it.
-    expect(after.ordersHistoryFrom).toEqual(new Date(0));
+    // The next year goes out on its own; the store isn't fully synced until the oldest is in.
+    expect(queues.sent.sync.at(-1)).toMatchObject({ kind: "orders", syncJobId: job.id, history: { windowId: years[1]!.id } });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).lastSyncedAt).toBeNull();
   });
 
   it("records where the imported order history starts: the window, the earliest one, never a reconcile's", async () => {

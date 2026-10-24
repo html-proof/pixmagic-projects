@@ -602,7 +602,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       ...(g.has("orders.fulfillment") ? [] : ["fulfillmentStatus"]),
       ...(g.has("orders.cancellations") ? [] : ["cancelled"]),
     ];
-    if (drop.length) out.recent_orders = { ...recent, items: recent.items.map((i: unknown) => omit(i, drop)) };
+    // How many orders were cancelled in the dates is cancellation detail too.
+    if (drop.length) out.recent_orders = { ...((g.has("orders.cancellations") ? recent : omit(recent, ["cancelledInRange"])) as Obj), items: recent.items.map((i: unknown) => omit(i, drop)) };
   }
   const traffic = out.traffic;
   if (isObj(traffic) && !g.has("marketing.attribution")) {
@@ -639,7 +640,7 @@ export function redactOverview<T extends { modules: Obj; capabilities: Array<{ i
   if (isObj(report.data)) {
     const seesOrders = g.has("analytics.sales") || g.has("orders.list");
     const seesProducts = g.has("products.view") || g.has("products.performance") || g.has("products.inventory");
-    out.data = omit(report.data, [...(seesOrders ? [] : ["orders", "oldestOrderDay", "newestOrderDay", "historyFrom"]), ...(seesProducts ? [] : ["products", "variants"])]);
+    out.data = omit(report.data, [...(seesOrders ? [] : ["orders", "oldestOrderDay", "newestOrderDay", "historyFrom", "history"]), ...(seesProducts ? [] : ["products", "variants"])]);
   }
   return out;
 }

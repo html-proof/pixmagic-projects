@@ -126,7 +126,17 @@ describe("allows", () => {
 const report = () => ({
   store: { id: "s" },
   capabilities: [{ id: "sales_overview" }, { id: "top_products" }, { id: "contacts" }, { id: "inventory" }, { id: "funnel" }],
-  data: { orders: 10, products: 4, variants: 6, oldestOrderDay: "2026-01-01", newestOrderDay: "2026-10-01", historyFrom: "2025-12-28" },
+  data: {
+    orders: 10,
+    products: 4,
+    variants: 6,
+    oldestOrderDay: "2026-01-01",
+    newestOrderDay: "2026-10-01",
+    historyFrom: "2025-12-28",
+    createdDay: "2025-12-01",
+    startDay: "2025-12-01",
+    history: { access: "granted", years: [{ year: 2026, status: "done", orders: 10, finishedAt: null }] },
+  },
   modules: {
     sales_overview: {
       current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
@@ -163,7 +173,7 @@ const report = () => ({
     },
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
     inventory: { current: { trackedVariants: 1, unitsInStock: 2, stockValueAtCost: 80, variantsWithCost: 1, retailValue: 200, outOfStock: 0, lowStock: 1 }, lowStockItems: [] },
-    recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }] },
+    recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }], cancelledInRange: 2 },
     traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
@@ -183,7 +193,8 @@ describe("redactOverview", () => {
     const out = redactOverview(report(), member(["products.performance"]));
     expect(Object.keys(out.modules)).toEqual(["top_products"]);
     expect(out.capabilities.map((c) => c.id)).toEqual(["top_products"]);
-    expect(out.data).toEqual({ products: 4, variants: 6 });
+    // The orders' history (how many each imported year holds) goes with the orders; where the dates begin stays.
+    expect(out.data).toEqual({ products: 4, variants: 6, createdDay: "2025-12-01", startDay: "2025-12-01" });
     expect(seesModule(member(["products.performance"]), "mystery_new_module")).toBe(false);
     expect(seesModule(member([], "admin"), "mystery_new_module")).toBe(true);
   });
@@ -203,6 +214,8 @@ describe("redactOverview", () => {
     expect(out.modules.inventory.current).not.toHaveProperty("stockValueAtCost");
     expect(out.modules.inventory.current).not.toHaveProperty("retailValue");
     expect(out.modules.recent_orders.items[0]).toEqual({ id: "o", name: "#1", total: 100, units: 1, channel: "web" });
+    // How many orders were cancelled in the dates is cancellation detail too.
+    expect(out.modules.recent_orders).not.toHaveProperty("cancelledInRange");
     expect(out.modules.traffic).not.toHaveProperty("campaigns");
     expect(out.modules.traffic).not.toHaveProperty("paid");
     expect(out.modules.traffic.items[0]).not.toHaveProperty("paidSales");
@@ -213,7 +226,7 @@ describe("redactOverview", () => {
     expect(out.modules.ads).toHaveProperty("sales");
     expect(out.modules).toHaveProperty("ad_connections");
     // Sales figures come with the dates they were imported from (a member without them gets neither, above).
-    expect(out.data).toMatchObject({ orders: 10, oldestOrderDay: "2026-01-01", historyFrom: "2025-12-28" });
+    expect(out.data).toMatchObject({ orders: 10, oldestOrderDay: "2026-01-01", historyFrom: "2025-12-28", history: { access: "granted" } });
     // The original is untouched.
     expect(report().modules.sales_overview.current.grossSales).toBe(120);
   });
@@ -280,6 +293,7 @@ describe("redactOverview", () => {
     expect(out.modules.sales_overview.year.months[0]).toMatchObject({ taxes: 5, totalSales: 115, comparedLines: { shipping: 6 } });
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
+    expect(out.modules.recent_orders.cancelledInRange).toBe(2);
   });
 });
 

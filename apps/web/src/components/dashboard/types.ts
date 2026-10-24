@@ -1,5 +1,6 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
+import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
@@ -38,6 +39,8 @@ export interface OverviewStore {
   pixelInstalled: boolean;
   lastSyncedAt: string | null;
   installedAt?: string | null;
+  /** When Shopify created the store; null until its details are read. */
+  shopCreatedAt?: string | null;
 }
 
 /**
@@ -457,6 +460,21 @@ export interface ImportedData {
    * the first order, which a quiet store has days later.
    */
   historyFrom?: string | null;
+  /** The store-local day Shopify created the store; null until its details are read. */
+  createdDay?: string | null;
+  /** The store's first day (that, or an earlier order's): how early custom dates may start, the first year offered. */
+  startDay?: string | null;
+  /**
+   * The orders older than Shopify's 60 days: how the store can have them (`HistoryAccess` in
+   * @app/shared) and, once it has, how their import is going, a year at a time, newest first.
+   * Left out for a member who may not see orders.
+   */
+  history?: OrderHistory;
+}
+
+export interface OrderHistory {
+  access: HistoryAccess;
+  years: Array<{ year: number; status: "queued" | "running" | "done" | "failed"; orders: number; finishedAt: string | null }>;
 }
 
 export interface Freshness {
@@ -514,7 +532,8 @@ export interface Overview {
     order_timing?: OrderTimingModule;
     fulfillment?: FulfillmentModule;
     discount_codes?: DiscountCodesModule;
-    recent_orders?: { items: RecentOrder[] };
+    /** The latest orders placed in the dates; `cancelledInRange`: orders cancelled in them (needs "View cancellations"). */
+    recent_orders?: { items: RecentOrder[]; cancelledInRange?: number };
     inventory?: InventoryModule;
     catalog?: CatalogModule;
     ads?: AdsModule;

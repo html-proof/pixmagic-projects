@@ -58,6 +58,10 @@ export interface StoreSummary {
   revocableScopes: string[];
   pixelInstalled: boolean;
   lastSyncedAt: string | null;
+  /** When Shopify created the store; null until its details are read. */
+  shopCreatedAt?: string | null;
+  /** The store's first day (its creation day, or an earlier order's): where the date pickers begin. */
+  startDay?: string | null;
   /** How much of the store actually landed, so the UI can tell an empty store from a broken one. */
   imported?: { orders: number; products: number };
   /** While the store is in error: why its sync stopped (syncProblem in the API). */

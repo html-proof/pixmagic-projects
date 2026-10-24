@@ -502,18 +502,24 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
 }
 
 function OrdersDetail({ ov, currency }: { ov: Overview; currency: string }) {
-  const items = ov.modules.recent_orders!.items;
+  const { items, cancelledInRange } = ov.modules.recent_orders!;
   const cancelled = items.filter((o) => o.cancelled).length;
   return (
     <>
       <InShort>
         {items.length ? (
           <p>
-            Your latest order is <B>{items[0]!.name}</B> for <B>{fmtMoney(items[0]!.total, currency)}</B>. Open any order to see it in Shopify.
+            The latest order placed in these dates is <B>{items[0]!.name}</B> for <B>{fmtMoney(items[0]!.total, currency)}</B>. Open any order to see it in Shopify.
             {cancelled ? <> {plural(cancelled, "order")} here {cancelled === 1 ? "was" : "were"} cancelled.</> : null}
           </p>
         ) : (
-          <p>No orders imported yet.</p>
+          <p>No orders were placed in these dates.</p>
+        )}
+        {/* Counted on the day each was cancelled, whenever it was placed: a transaction date, not the order's. */}
+        {cancelledInRange !== undefined && cancelledInRange > 0 && (
+          <p data-testid="cancelled-in-range">
+            <B>{plural(cancelledInRange, "order")}</B> {cancelledInRange === 1 ? "was" : "were"} cancelled in these dates, counted on the day of the cancellation.
+          </p>
         )}
       </InShort>
       <RecentOrdersCard items={items} currency={currency} timezone={ov.store.timezone} shopDomain={ov.store.shopDomain} />

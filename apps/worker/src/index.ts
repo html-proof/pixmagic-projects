@@ -24,6 +24,7 @@ import {
   type WebhookJobData,
   pruneReconciliations,
   failInventoryPass,
+  failHistoryWindows,
   type WhatsappJob,
 } from "@app/core";
 import { noSmsProvider, sweepSms, type SmsJob } from "@app/core/sms";
@@ -265,6 +266,8 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: final ? { status: "failed", error } : { error } }).catch(() => {});
     if (!final) return;
     if (data.kind === "inventory") await failInventoryPass(data.inventory?.runId, error).catch(() => {});
+    // A full history's year that was being read failed with it; the import resumes there next time.
+    if (data.kind === "orders") await failHistoryWindows(data.syncJobId, error).catch(() => {});
     // The jobs seeded to wait for this one's time zone (orders, a stock pass) will never be sent:
     // left queued, they read as an import or a stock check about to start until the stale-job
     // sweep gave up on them hours later.

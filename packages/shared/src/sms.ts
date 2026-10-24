@@ -1156,7 +1156,7 @@ export function smsPeriodRange(period: SmsPeriod, today: string, custom?: { from
       return { from: `${today.slice(0, 7)}-01`, to: today };
     case "custom": {
       const problem = customRangeProblem(custom ?? {}, today);
-      if (problem || !isDay(custom?.from) || !isDay(custom?.to)) throw new Error(problem === "too_long" ? "Choose at most a year." : "Choose a start and an end date, the start first, not in the future.");
+      if (problem || !isDay(custom?.from) || !isDay(custom?.to)) throw new Error(problem === "too_long" ? "Choose up to 12 months." : "Choose a start and an end date, the start first, not in the future.");
       return { from: custom!.from!, to: custom!.to! };
     }
   }
