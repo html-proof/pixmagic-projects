@@ -38,6 +38,7 @@ import {
   UserRound,
   Users,
   UsersRound,
+  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -177,6 +178,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
   const marketing: NavItem[] = [
     ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
+    // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
+    ...((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")) ? [area("/automations", "Automations", Workflow)] : []),
     ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
     ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
   ];
@@ -727,6 +730,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             ...(allowed("marketing.campaigns") ? [{ id: "advertising-campaigns", label: "Campaign comparison", group: "Advertising", icon: Megaphone, keywords: "campaigns meta google side by side", go: go("/advertising/campaigns") }] : []),
             { id: "advertising-reports", label: "Advertising reports", group: "Advertising", icon: Megaphone, keywords: "csv export download ads", go: go("/advertising/reports") },
           ]
+        : []),
+      ...((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status"))
+        ? [{ id: "automations", label: "Automations", group: "Marketing", icon: Workflow, keywords: "automation workflow trigger sms email whatsapp message history delivery", go: go("/automations") }]
         : []),
       ...(offers("sms") && allowed("marketing.campaigns")
         ? [{ id: "messaging", label: "Customer Messaging", group: "Marketing", icon: MessageSquareText, keywords: "sms text messages campaigns automations templates opt-out", go: go("/messaging") }]

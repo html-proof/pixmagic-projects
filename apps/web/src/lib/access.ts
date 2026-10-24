@@ -120,6 +120,9 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/whatsapp", "marketing.campaigns"],
   ["/whatsapp/connect", "integrations.manage"],
   ["/messaging", "marketing.campaigns"],
+  // The Automations hub: either channel's view lets someone in; each channel's own permission decides what they see there.
+  ["/automations", ["marketing.campaigns", "integrations.status"]],
+  ["/automations/audit", "audit:read"],
   ["/settings/workspace", "members:manage"],
   ["/settings/members", "members:manage"],
   ["/settings/integrations", "integrations.status"],
