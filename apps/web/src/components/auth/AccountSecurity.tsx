@@ -112,7 +112,7 @@ export function AccountSecurity({ title = "Security", intro, heading = "h1" }: {
             <ActivityCard expanded={activityExpanded} onExpanded={setActivityExpanded} />
             <div className="grid gap-4">
               <SignOutCard onSignOutAll={() => setConfirmAll(true)} />
-              <DeleteCard account={a} />
+              <DeleteCard />
             </div>
           </div>
         </>

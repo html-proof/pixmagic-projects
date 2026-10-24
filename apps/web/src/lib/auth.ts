@@ -361,7 +361,11 @@ export const sendVerificationCode = () => api<{ ok: true; alreadyVerified?: bool
 
 export const verifyEmailCode = (code: string) => api<{ user: SignedInUser }>("/auth/account/verify-email", { method: "POST", body: { code } });
 
-export const deleteAccount = (password?: string) => api<{ ok: true }>("/auth/account/delete", { method: "POST", body: { confirm: "DELETE", password } });
+/** Deleting the account, step 1: a 6-digit code emailed to the account's address (its countdowns, the server's clock). */
+export const sendDeletionCode = () => api<{ ok: true; challenge: CodeChallenge }>("/auth/account/delete/code", { method: "POST" });
+
+/** Step 2: the code deletes the account. */
+export const deleteAccount = (code: string) => api<{ ok: true }>("/auth/account/delete", { method: "POST", body: { confirm: "DELETE", code } });
 
 /**
  * Where a finished sign-in or sign-up goes: back to the page that asked for it (a deep link opened

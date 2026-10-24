@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EMAIL_CODE_TTL_S } from "@app/shared/auth";
-import { AUTH_EMAIL_KINDS, authEmail, EMAIL_PURPOSES, isAuthEmailTrigger, type SenderSettings } from "../src/mailer.js";
+import { accountDeletionEmail, AUTH_EMAIL_KINDS, authEmail, EMAIL_PURPOSES, isAuthEmailTrigger, type SenderSettings } from "../src/mailer.js";
 
 const base = { code: "482913", email: "merchant@example.test", appUrl: "https://bizinsights.io" };
 const senders: SenderSettings = {
@@ -112,6 +112,20 @@ describe("Cognito's emails, as bizinsights sends them", () => {
     const m = authEmail({ ...base, trigger: "CustomEmailSender_AdminCreateUser", code: `a<b>&"'` })!;
     expect(m.html).toContain("a&lt;b&gt;&amp;&quot;&#39;");
     expect(m.text).toContain(`Temporary password: a<b>&"'`);
+  });
+
+  it("words the account-deletion code (the API's own, no Cognito trigger) like the others, from the support sender", () => {
+    const m = accountDeletionEmail({ ...base, name: "Alex", senders });
+    expect(m).toMatchObject({ subject: "Confirm deleting your bizinsights account", purpose: "account_deletion_code" });
+    expect(EMAIL_PURPOSES[m.purpose]).toBe("support");
+    expect(m.text).toMatch(/^Hello Alex,\n\nUse the code below to confirm that you want to permanently delete your bizinsights account\./);
+    expect(m.text.split("\n")).toContain("    482913");
+    expect(m.text).toContain("This code expires in 60 seconds and works once.");
+    expect(m.text).toContain("Sign out everywhere");
+    expect(m.subject).not.toContain("482913");
+    expect(/<div style="display:none[^>]*>([^<]*)<\/div>/.exec(m.html)![1]).not.toContain("482913");
+    expect(m.html).toMatch(/aria-label="Verification code" style="[^"]*user-select:all[^"]*">482913</);
+    expect(isAuthEmailTrigger("delete")).toBe(false);
   });
 
   it("sends nothing for a trigger it doesn't know (account-takeover notices need the Plus plan)", () => {

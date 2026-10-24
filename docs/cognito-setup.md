@@ -90,8 +90,10 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
     Cognito user is deleted and its sessions end at once). Each addition and removal is emailed
     to the account's address. A Google session counts as the person again only when it proved the
     account's own address (the session's `own` claim, and that identity's address): one linked
-    under another address needs the account's password to remove a method or delete the account,
-    and can't add a password (`GET /api/auth/account` says which: `confirmWith`). A removed Google
+    under another address needs the account's password to remove a method, and can't add a
+    password (`GET /api/auth/account` says which: `confirmWith`). Deleting the account asks every
+    session for a 6-digit code emailed to the account's own address instead (no password field in
+    that dialog: beside one, browsers filled the address into the "Type DELETE" box). A removed Google
     account stays out even when its address is the account's: Cognito makes its federated user
     again on its next sign-in, but the removal (`identity_removed` with its Cognito user name, in
     `auth_events`) stops it linking back by address (`google_removed`) until it is linked again
@@ -129,8 +131,9 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 | `GET`, `DELETE /api/auth/pending-link` | the Google account held in this browser for an existing account (`{ pending, provider, email }`); let it go |
 | `POST /api/auth/logout`, `/logout-all` | this browser; every device |
 | `GET /api/auth/session`, `/api/auth/whoami`, `/api/me` | the session |
-| `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `canAddPassword`, `confirmWith` (`password`, `recent_sign_in` or `own_address_sign_in`: what removing a method or deleting the account asks for), `mfaEnabled` (null: Cognito couldn't be asked) |
-| `POST /api/auth/account/{password,password/add,email,email/confirm,verify-email/send,verify-email,delete}` | change or add a password, change or verify the email, delete the account |
+| `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `canAddPassword`, `confirmWith` (`password`, `recent_sign_in` or `own_address_sign_in`: what removing a method asks for), `mfaEnabled` (null: Cognito couldn't be asked) |
+| `POST /api/auth/account/{password,password/add,email,email/confirm,verify-email/send,verify-email}` | change or add a password, change or verify the email |
+| `POST /api/auth/account/delete/code`, `/delete` `{ confirm: "DELETE", code }` | delete the account: a code emailed to the account's address (`challenge`: its countdowns; 409 `sole_owner` before any email), then the code within its minute (section 8's rules: five guesses, one code a minute, the address's caps) |
 | `DELETE /api/auth/account/methods/:id` | remove a sign-in method |
 | `POST /api/auth/account/methods/google/prepare` | the password again, so this session may start one link to Google in the next 5 minutes |
 | `POST /api/auth/account/mfa/{setup,verify,disable}` | two-step verification (section 6) |
