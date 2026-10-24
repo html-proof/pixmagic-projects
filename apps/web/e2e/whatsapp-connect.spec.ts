@@ -145,3 +145,63 @@ test("Meta finishing without a phone number connects nothing and says what to do
   await expect(status).toContainText("finished without a phone number");
   expect(called).toBe(false);
 });
+
+test("the manual connect's token can be added in Nango's window, and the connect then sends only its handle", async ({ page }) => {
+  const { ws, storeId } = await onConnectPage(page);
+  const base = `**/api/workspaces/${ws}/stores/${storeId}/whatsapp`;
+  // This server as if Nango held the WhatsApp integration (docs/whatsapp.md "Through Nango").
+  await page.route(base, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.json()) as { platform: Record<string, unknown> };
+    await route.fulfill({ response: res, json: { ...body, platform: { ...body.platform, nango: true } } });
+  });
+  const calls: Array<{ path: string; body: unknown }> = [];
+  await page.route(`${base}/nango/*`, (route) => {
+    const path = new URL(route.request().url()).pathname.split("/").pop()!;
+    calls.push({ path, body: route.request().postDataJSON() });
+    if (path === "session") return route.fulfill({ json: { token: "nango_connect_session_wa", expiresAt: null, nonce: "e2e-wa-nango-nonce-0001" } });
+    return route.fulfill({
+      json: {
+        appId: "777",
+        accounts: [{ id: "1111111111", name: "Green Leaf WABA", numbers: [{ id: "2222222222", displayPhoneNumber: "+91 98765 00000", verifiedName: "Green Leaf", registered: true }] }],
+        tokenHandle: "e2e-held-token-handle-0001",
+      },
+    });
+  });
+  await page.route(`${base}/manual`, (route) => {
+    calls.push({ path: "manual", body: route.request().postDataJSON() });
+    return route.fulfill({ status: 400, json: { error: "wrong_app_secret", message: "That app secret belongs to a different app." } });
+  });
+  // Nango's Connect UI: ready, takes the session token, then says the token was saved.
+  await page.route("https://connect.nango.dev/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body>Connect UI stand-in<script>
+        window.addEventListener("message", (e) => {
+          if (e.data && e.data.type === "session_token" && e.data.sessionToken === "nango_connect_session_wa") {
+            parent.postMessage({ type: "connect", payload: { providerConfigKey: "whatsapp-business", connectionId: "conn-e2e-wa" } }, "*");
+          }
+        });
+        parent.postMessage({ type: "ready" }, "*");
+      </script></body></html>`,
+    }),
+  );
+  await page.reload();
+
+  await page.getByRole("button", { name: "Use your own Meta app instead" }).click();
+  await expect(page.getByLabel("Access token")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Paste it here instead" })).toBeVisible();
+  await page.getByRole("button", { name: "Add your token" }).click();
+  await expect(page.getByText("+91 98765 00000")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add a different token" })).toBeVisible();
+
+  await page.getByLabel("App secret").fill("0123456789abcdef0123456789abcdef");
+  await page.getByRole("button", { name: "Connect WhatsApp" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "That app secret belongs to a different app." })).toBeVisible();
+  expect(calls).toEqual([
+    { path: "session", body: {} },
+    { path: "finish", body: { nonce: "e2e-wa-nango-nonce-0001", connectionId: "conn-e2e-wa" } },
+    { path: "manual", body: { wabaId: "1111111111", phoneNumberId: "2222222222", tokenHandle: "e2e-held-token-handle-0001", appSecret: "0123456789abcdef0123456789abcdef" } },
+  ]);
+});

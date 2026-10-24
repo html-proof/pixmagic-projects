@@ -12,6 +12,7 @@ import {
   nextHistoryWindow,
   recheckDays,
   sweepNangoOrphans,
+  sweepWhatsappNangoLeftovers,
   sweepAdAlerts,
   syncAdConnection,
   type AdsSyncData,
@@ -184,9 +185,16 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
   return sweepAdAlerts({ mailer: deps.mailer, fetchImpl: deps.fetchImpl });
 }
 
-/** Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a grace period. */
+/**
+ * Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a
+ * grace period. Also WhatsApp access tokens added in Nango's window whose page never finished (whatsapp/nango.ts).
+ */
 export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
-  return sweepNangoOrphans(deps.coord, deps.fetchImpl);
+  const whatsapp = await sweepWhatsappNangoLeftovers(deps.fetchImpl).catch((err: unknown) => {
+    logger.error({ err }, "whatsapp nango leftover sweep failed; the next tick tries again");
+    return 0;
+  });
+  return (await sweepNangoOrphans(deps.coord, deps.fetchImpl)) + whatsapp;
 }
 
 /** Ad connections made before every platform went through Nango: moved there, a few sign-ins a tick (docs/nango.md). */
