@@ -43,6 +43,8 @@ function TeamAccess() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [role, setRole] = useState("");
+  // Who can see one section of the dashboard (Customer details, Finance…).
+  const [section, setSection] = useState("");
   const [sortBy, setSortBy] = useState("role:asc");
   const [sort = "role", dir = "asc"] = sortBy.split(":");
   const [page, setPage] = useState(1);
@@ -54,7 +56,7 @@ function TeamAccess() {
     }, 250);
     return () => window.clearTimeout(t);
   }, [q]);
-  const qs = new URLSearchParams({ sort, dir, page: String(page), pageSize: "20", ...(search ? { q: search } : {}), ...(status ? { status } : {}), ...(role ? { role } : {}) });
+  const qs = new URLSearchParams({ sort, dir, page: String(page), pageSize: "20", ...(search ? { q: search } : {}), ...(status ? { status } : {}), ...(role ? { role } : {}), ...(section ? { module: section } : {}) });
   const team = useApi<TeamPage>(`/workspaces/${ws}/team?${qs}`);
   const catalogAnswer = useApi<Catalog>(`/workspaces/${ws}/team/catalog`).data;
   // Only the permissions of what this workspace offers (an App Store workspace leaves some parts out).
@@ -176,7 +178,7 @@ function TeamAccess() {
   }
 
   const rows = team.data?.rows ?? [];
-  const filtered = !!(search || status || role);
+  const filtered = !!(search || status || role || section);
   const you = (r: TeamRow) => r.kind === "member" && r.userId === me.user.id;
   const person = (r: TeamRow) => (
     <span className="flex min-w-0 items-center gap-3">
@@ -200,6 +202,7 @@ function TeamAccess() {
     if (id === "clear") {
       setQ("");
       setRole("");
+      setSection("");
     }
     setStatus(id === "clear" ? "" : id);
     setPage(1);
@@ -272,6 +275,12 @@ function TeamAccess() {
               <option value="">All roles</option>
               {ROLES.map((r) => (
                 <option key={r} value={r}>{ROLE_INFO[r].label}</option>
+              ))}
+            </select>
+            <select aria-label="Section filter" className="input w-auto" value={section} onChange={(e) => (setSection(e.target.value), setPage(1))}>
+              <option value="">All sections</option>
+              {catalog?.modules.map((m) => (
+                <option key={m.id} value={m.id}>Can see {m.label}</option>
               ))}
             </select>
             <select aria-label="Sort by" className="input w-auto" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>

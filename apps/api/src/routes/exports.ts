@@ -88,13 +88,16 @@ export function exportRoutes(app: App, deps: Deps) {
 
   /**
    * The check against Shopify's own reports for the standard periods (core reports/shopifyCheck.ts):
-   * every figure, ours next to Shopify's, classified. Owners and admins (it reads every sales figure
-   * and Shopify's profit), a few a store per 10 minutes (each asks Shopify up to 21 times), in the
-   * audit log. `format=csv` downloads it.
+   * every figure, ours next to Shopify's, classified. A financial report holding every line of the
+   * sales breakdown and Shopify's gross profit, so it needs both "View financial reports" and the
+   * breakdown's own permission (the dashboard's breakdown, profit and check need that one alone);
+   * a few a store per 10 minutes (each asks Shopify up to 21 times), in the audit log.
+   * `format=csv` downloads it.
    */
   app.get("/workspaces/:ws/stores/:storeId/shopify-check", async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "finance.reports");
+    if (!allows(a.access, "finance.breakdown")) throw new HttpError(403, "You don't have permission to see the sales breakdown.", "forbidden");
     const csvWanted = c.req.query("format") === "csv";
     // Keyed by workspace too: the store isn't checked to be this workspace's yet, and another
     // workspace naming it must not use up the store's own allowance.
