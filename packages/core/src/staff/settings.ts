@@ -1,6 +1,6 @@
 import { systemDb, type BreakPolicy, type OvertimePolicy, type StaffSettings, type Tx } from "@app/db";
 import { isCurrencyCode, isTimeZone, localDayOf, startOfWeek, type OvertimeRules, type PayCycle } from "@app/shared/staff";
-import { decimalString } from "./common.js";
+import { decimalString, isUniqueViolation } from "./common.js";
 
 /**
  * The organization's staff settings, created with defaults on first use: the time zone and
@@ -16,18 +16,27 @@ export async function ensureStaffSettings(workspaceId: string): Promise<StaffSet
   const timezone = store && isTimeZone(store.timezone) ? store.timezone : "UTC";
   const currency = store && isCurrencyCode(store.currency) ? store.currency : "USD";
   const anchor = startOfWeek(localDayOf(Date.now(), timezone), 1);
-  return systemDb.$transaction(async (tx) => {
-    const again = await tx.staffSettings.findUnique({ where: { workspaceId } });
-    if (again) return again;
-    const brk = await tx.breakPolicy.upsert({
-      where: { workspaceId_name: { workspaceId, name: "Standard breaks" } },
-      create: { workspaceId, name: "Standard breaks", restBreaksPaid: true, mealBreaksPaid: false },
-      update: {},
+  try {
+    return await systemDb.$transaction(async (tx) => {
+      const again = await tx.staffSettings.findUnique({ where: { workspaceId } });
+      if (again) return again;
+      const brk = await tx.breakPolicy.upsert({
+        where: { workspaceId_name: { workspaceId, name: "Standard breaks" } },
+        create: { workspaceId, name: "Standard breaks", restBreaksPaid: true, mealBreaksPaid: false },
+        update: {},
+      });
+      return tx.staffSettings.create({
+        data: { workspaceId, timezone, currency, payCycle: "weekly", payCycleAnchor: anchor, weekStartsOn: 1, defaultBreakPolicyId: brk.id },
+      });
     });
-    return tx.staffSettings.create({
-      data: { workspaceId, timezone, currency, payCycle: "weekly", payCycleAnchor: anchor, weekStartsOn: 1, defaultBreakPolicyId: brk.id },
-    });
-  });
+  } catch (err) {
+    // The Staff page's first visit asks for several things at once, and each creates the defaults:
+    // the one that lost the race failed on the other's rows, which are committed by then.
+    if (!isUniqueViolation(err)) throw err;
+    const made = await systemDb.staffSettings.findUnique({ where: { workspaceId } });
+    if (!made) throw err;
+    return made;
+  }
 }
 
 /** A stored overtime policy as engine rules. */

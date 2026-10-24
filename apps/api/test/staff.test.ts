@@ -572,6 +572,17 @@ describe("payroll", () => {
   });
 });
 
+describe("first visit", () => {
+  it("the Staff page's first requests, all at once, each answer and create one set of defaults", async () => {
+    const { ws, h } = await org("Acme");
+    const paths = ["config", "analytics?preset=this_week", "analytics?preset=last_week", "analytics/trends?preset=this_month&granularity=day", "analytics?preset=this_month"];
+    const answers = await Promise.all(paths.map((p) => call("GET", `/workspaces/${ws}/staff/${p}`, h)));
+    expect(answers.map((r) => r.statusCode)).toEqual(paths.map(() => 200));
+    expect(await systemDb.staffSettings.count({ where: { workspaceId: ws } })).toBe(1);
+    expect(await systemDb.breakPolicy.count({ where: { workspaceId: ws } })).toBe(1);
+  });
+});
+
 describe("access control and tenant isolation", () => {
   it("employees only ever see their own records", async () => {
     at("2026-10-14T09:00:00Z");
