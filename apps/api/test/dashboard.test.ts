@@ -370,7 +370,7 @@ describe("date ranges", () => {
     expect(m.sales_overview.previous).toMatchObject({ grossSales: 70, netSales: 60, totalSales: 60, orders: 2, units: 3, averageOrderValue: 35 });
     expect(m.sales_overview.current).toMatchObject({ netSales: 50, orders: 1 });
     expect(m.sales_overview.deltas.orders).toBe(-0.5);
-    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5, imported: true });
+    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5, imported: true, reached: [2, 2, 1, 1, 1] });
     expect(m.funnel.visits).toBe(1);
 
     // Saturday on its own is still the whole day, as daily_store_metrics holds it.
@@ -609,7 +609,7 @@ describe("what the dates are compared with", () => {
 
     // After the pixel was in place, visits compare; the newer Meta account's figures don't reach back yet.
     const mid = await compared(d(-15), d(-13));
-    expect(mid.modules.funnel.previous).toEqual({ visits: 1, conversionRate: 1, imported: true });
+    expect(mid.modules.funnel.previous).toEqual({ visits: 1, conversionRate: 1, imported: true, reached: [1, 1, 1, 1, 1] });
     expect(mid.modules.funnel.deltas).toEqual({ visits: 1, conversionRate: -0.5 });
     expect(mid.modules.ads.previous.imported).toBe(false);
     expect(mid.modules.ads.deltas.spend).toBeNull();

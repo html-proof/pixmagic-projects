@@ -35,7 +35,7 @@ approval; until then the card says why it has no figure, never shows 0.
 | Sessions, visitors, conversion rate | Analytics: sessions, online store visitors, conversion rate | Reports (ShopifyQL) | Exact once granted | Bot sessions left out by Shopify. Without `read_reports` only the pixel's **tracked visits** exist, labelled as such and never called sessions |
 | Gross profit | Profit reports: gross profit | Reports (ShopifyQL) | Exact once granted | Uses the cost Shopify recorded at the time of sale, which the Admin API doesn't expose; never estimated from today's unit costs |
 | Net profit | none | | Not shown | No source holds the other costs (fees, postage, apps, staff, ads) |
-| Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits. Shopify's figures come with the sessions report |
+| Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits on the Shopping Funnel page (section "Shopping Funnel page"). Shopify's figures come with the sessions report |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
 | Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own |
@@ -552,6 +552,69 @@ Shoppers who decline analytics consent are not tracked, so funnel numbers are be
 Visits are compared only from the first whole day after the pixel was put in place (`historyFrom`, see Conventions: "No earlier data").
 
 `funnel_daily` is no longer written or read. It holds whatever the pre-visit pixel recorded and can be dropped once nothing needs that history.
+
+### Shopping Funnel page (/funnel)
+
+The page (`apps/web/src/app/(app)/funnel`, components in `apps/web/src/components/funnel/`) asks the
+dashboard's overview with `parts=funnel` (apps/api/src/routes/dashboard.ts): the funnel in full
+(`funnelDetail`, packages/core/src/reports/funnel.ts), the store's orders (sales overview), Shopify's
+own sessions when granted, and orders by traffic source. Its maths is in `packages/shared/src/funnel.ts`.
+`?view=shoppers` on the dashboard opens it.
+
+Every visit figure is a count of **tracked visits** and every rate divides tracked visits by tracked
+visits in the same dates and filter, so no rate mixes two sources:
+
+| Figure | Formula |
+| --- | --- |
+| Visits at a stage | Visits whose furthest step is that stage or a later one |
+| Share of visits | Visits at the stage ÷ all visits |
+| Progression rate | Visits at the stage ÷ visits at the stage before |
+| Drop-off rate | 1 − progression rate; visits lost = visits at the stage before − visits at the stage |
+| Conversion rate | Visits that completed checkout ÷ visits |
+| Checkout completion | Visits that completed checkout ÷ visits that started checkout |
+| View to cart rate (a product) | Visits that added the product to cart on its page ÷ visits that viewed its page |
+| Change of a stage | (visits now − visits then) ÷ visits then, against the comparison (`stepDeltas`) |
+
+- **Largest drop-off**: the transition that lost the most visits (`largestDropOff`; a tie goes to the
+  earlier step). Rates are never called good or bad: there is no benchmark, only the store's own
+  earlier dates.
+- **A clear change**: a transition's progression differs from the comparison by more than chance, by
+  the pooled two-proportion z-test at 95% (`proportionZ`, |z| ≥ 1.96) with at least 30 visits on each
+  side and five expected successes and failures in each group; otherwise "within normal variation".
+- **Observations** (`funnelInsights`, at most six): where most visits are lost (30 visits or more);
+  visits up or down (Poisson test, at least 50 a side, only between dates of the same length); the
+  conversion rate or a transition changed (the z-test); mobile against desktop, or new against
+  returning visitors, buying or completing checkout at different rates (the z-test); a product page
+  added to cart less often than the store's other product pages (the z-test). Nothing else is said,
+  and reasons are offered as things to check, never as measured causes.
+- **Segments** (each a funnel of its own on the same visits): device, country, landing page (the
+  section the visit started on), new or returning (returning: the same hashed browser has a visit on
+  an earlier day since the pixel's history began). The **filter** (`device`, `visitor`, `landing`,
+  `country`) narrows every visit figure on the page, the CSV included. Orders, revenue and product
+  sales are never narrowed: the orders carry no device or visit.
+- **Device and country** come from the pixel's own request: the browser's User-Agent read into
+  mobile, tablet, desktop or unknown (`funnelDevice`; an iPad asking for desktop sites counts as a
+  desktop), and the country the edge placed the request in (`locationOf`). Kept as one word each on
+  the visit (`funnel_visits.device`, `.country`), from the visit's first batch. Visits from before
+  2026-10-24 have neither: they show as "Not recorded", from `detailsFrom` on they have them.
+- **Products** (`funnel_product_visits`, one row per visit and product page): bit 0 the page was
+  viewed, bit 1 added to cart on that page. An add from a collection page or cart drawer names no
+  product page, so it isn't put down to any product. Beside them, each product's orders, units (net
+  of returns) and net sales come from the store's orders in the dates (only for members with the top
+  products permission), never divided by views: checkout isn't recorded per product, and a visit
+  that viewed a product may have bought another. `productSuggestion` names what to look at: a page
+  added to cart less often than the others (z-test, 20 viewing visits or more), added from its page
+  by 10 visits or more with no order holding it, a landing page that visits leave from more often
+  than the store's other product pages' (z-test), or ordered with no tracked view.
+- **Not measured**: where each visit came from (the pixel sends no referrer; the page shows orders by
+  traffic source, Shopify's record of each order's last visit), checkout per product, people across
+  devices, and Shopify Analytics' own sessions without `read_reports`.
+- **Checklist**: `FUNNEL_ACTIONS`, ticked per store by any member who sees the funnel
+  (`PUT …/funnel/actions/:id`, `funnel_action_checks`; audited as `funnel.action_done` /
+  `funnel.action_undone`). A shared, view-only dashboard and API keys can't tick.
+- **Download**: `GET …/export?section=funnel` with the dates and filter: the dates, the filter, the
+  funnel now and before, every transition, every day, every segment and the product pages. "Print or
+  save as PDF" prints the page.
 
 ## Shopify's own reports (sessions, gross profit, the check)
 

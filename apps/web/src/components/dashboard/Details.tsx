@@ -1,13 +1,11 @@
 "use client";
 import type { ReactNode } from "react";
 import type { CompareMode } from "@app/shared/dates";
-import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { TopProducts } from "./TopProducts";
 import { ContactsCard } from "./Contacts";
 import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
-import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
 import { Explained } from "./Explain";
@@ -15,7 +13,7 @@ import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
-import { ProfitCard, ShopifyCheckCard, ShopifySessionsCard } from "./ShopifyReports";
+import { ProfitCard, ShopifyCheckCard } from "./ShopifyReports";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 import { appliedCustom, breakdownOf, salesLinesOf } from "./redacted";
@@ -229,53 +227,6 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
       </InShort>
       {ov.modules.top_products && <TopProducts ov={ov} currency={currency} />}
       {ov.modules.catalog && <CatalogCard m={ov.modules.catalog} currency={currency} />}
-    </>
-  );
-}
-
-/** Shopify's own sessions and visitors first, when granted; then what the pixel tracked. */
-function ShoppersDetail({ ov }: { ov: Overview }) {
-  const s = ov.modules.shopify_sessions;
-  const f = ov.modules.funnel;
-  return (
-    <>
-      {s && <ShopifySessionsCard m={s} versus={versusWords(ov)} />}
-      {f && <FunnelDetail ov={ov} f={f} />}
-    </>
-  );
-}
-
-function FunnelDetail({ ov, f }: { ov: Overview; f: NonNullable<Overview["modules"]["funnel"]> }) {
-  const leak = biggestDropOff(f.steps);
-  const where = dropOffSection(leak);
-  const bestEntry = bestEntryPage(f.entryPages);
-  const visitsChange = f.previous.imported === false ? "no earlier data to compare" : upDown(f.deltas.visits);
-  return (
-    <>
-      <InShort>
-        {f.visits === 0 ? (
-          <p>No storefront visits recorded in these dates yet.</p>
-        ) : (
-          <>
-            <p>
-              Your store had <B>{plural(f.visits, "tracked visit")}</B>{visitsChange ? <> ({visitsChange})</> : null}, and <B>{fmtPct(f.conversionRate)}</B> of them ended in a purchase ({plural(f.purchases, "purchase")}).
-            </p>
-            {leak && leak.left > 0 && (
-              <p>
-                The biggest drop-off: <B>{fmtNum(leak.left)}</B> shoppers stopped at &ldquo;{STEP_LABEL[leak.step].toLowerCase()}&rdquo;
-                {where ? <>, most of them on <B>{SECTION_LABEL[where].toLowerCase()}</B></> : null}.
-              </p>
-            )}
-            {bestEntry && bestEntry.purchases > 0 && (
-              <p>
-                Visits that started on <B>{bestEntry.path === "/" ? "the home page" : bestEntry.path}</B> bought most often ({fmtPct(bestEntry.purchases / bestEntry.visits)}).
-              </p>
-            )}
-          </>
-        )}
-      </InShort>
-      <FunnelCard m={f} versus={versusWords(ov)} />
-      {f.visits > 0 && <JourneyCard m={f} />}
     </>
   );
 }
@@ -548,7 +499,6 @@ export function TopicContents({
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
     : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
-    : topic === "shoppers" && (m.funnel || m.shopify_sessions) ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />
     : topic === "channels" && m.channels ? <ChannelsDetail ov={ov} currency={currency} />
     : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />

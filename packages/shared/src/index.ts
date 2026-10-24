@@ -5,6 +5,7 @@ export * from "./capabilities.js";
 export * from "./dates.js";
 export * from "./kpi.js";
 export * from "./journey.js";
+export * from "./funnel.js";
 export * from "./roles.js";
 export * from "./access.js";
 export * from "./sales.js";

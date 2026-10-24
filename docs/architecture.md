@@ -119,7 +119,7 @@ Where a new piece of code goes:
 src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + AppShell (top bar, sidebar).
                     portal/ (employee self-service) and join/ (employee invitations) sit outside it:
                     employees aren't workspace members. Staff Management: docs/staff.md.
-src/components/     UI. dashboard/, whatsapp/, email/, staff/, team/, landing/ per area; app-wide pieces at
+src/components/     UI. dashboard/, funnel/, whatsapp/, email/, staff/, team/, landing/ per area; app-wide pieces at
                     the top (AppUi.tsx: page header, skeleton, toasts, useAction, confirm dialog; ui.tsx:
                     Alert, EmptyState, AuthShell). A page with several tabs or sections keeps only
                     their routing and state; the tabs and sections are components in
@@ -137,7 +137,7 @@ of truth and almost every screen is "load, show, edit, save".
 | --- | --- |
 | Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
-| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`. |
+| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`. |
 | Per-device preferences | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
 | Form drafts | Component state. |
 
@@ -169,7 +169,8 @@ unused preload or CSP report on the signed-in, sign-in and legal pages.
 **Business logic.** Pages and components format and arrange what the API returns; rules and
 calculations belong in `@app/shared` (shared with the API) or the API itself. The dashboard's
 health grading lives in `@app/shared/health` and its drop-off and landing-page maths in
-`@app/shared/journey`; the repeated sentence pieces are in `components/dashboard/Narrative.tsx`.
+`@app/shared/journey` (the Shopping Funnel page's transitions, segments, tests and observations in
+`@app/shared/funnel`); the repeated sentence pieces are in `components/dashboard/Narrative.tsx`.
 When a page needs to know what the API will allow (which campaign buttons to show, which message
 kinds a page covers), it asks the same function the API uses (`campaignCan`, `kindsOf` in
 `@app/shared/whatsapp`) rather than writing the rule out again.
