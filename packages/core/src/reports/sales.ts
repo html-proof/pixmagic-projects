@@ -116,7 +116,7 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
   const byDay = new Map(rows.map((x) => [x.day, x]));
   return eachDay(r.from, r.to).map((day) => {
     const x = byDay.get(day);
-    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, units: 0, refunds: 0, averageOrderValue: null };
     const beforeRefunds = r2(x.grossSales - x.discounts);
     return {
       day,
@@ -127,6 +127,7 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
       duties: r2(x.duties),
       additionalFees: r2(x.additionalFees),
       orders: x.orders,
+      units: x.units,
       refunds: r2(x.refunds),
       averageOrderValue: x.orders > 0 ? r2(x.orderValue / x.orders) : null,
     };

@@ -49,6 +49,10 @@
   --viz-weekend: #c2410c;
   --shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 8px 24px -14px rgb(20 28 22 / 0.14);
   --shadow-lift: 0 2px 4px rgb(20 28 22 / 0.06), 0 22px 44px -18px rgb(20 28 22 / 0.26);
+  /* The signed-in sidebar (the owner's design): deep navy in both schemes, the page you're on in a
+     green that keeps white text at 4.5:1. */
+  --nav-bg: #0f1c2e;
+  --nav-active: #198754;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -90,6 +94,7 @@
     --viz-year-1: #2f6799;
     --viz-weekend: #ff8a5c;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -16px rgb(0 0 0 / 0.7);
+    --nav-bg: #0c1522;
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
   }
 }
@@ -123,6 +128,8 @@
   --color-fill-danger: var(--fill-danger);
   --color-fill-warn: var(--fill-warn);
   --color-fill-good: var(--fill-good);
+  --color-nav: var(--nav-bg);
+  --color-nav-active: var(--nav-active);
 }
 
 body {
