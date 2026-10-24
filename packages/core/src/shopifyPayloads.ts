@@ -285,6 +285,7 @@ export const customerConsentSchema = obj({
   phone: str,
   sms_marketing_consent: smsMarketingConsent,
   default_address: address,
+  created_at: timestamp.nullish(),
   updated_at: timestamp.nullish(),
 });
 export type CustomerConsentPayload = z.output<typeof customerConsentSchema>;

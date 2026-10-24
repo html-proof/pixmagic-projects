@@ -135,6 +135,72 @@ test("an owner goes through Set up SMS: connect, sender name, message, a deliver
   await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
 });
 
+test("an owner builds an automation in four steps: trigger, message, timing, a delivered test, then on", async ({ page }) => {
+  const { base } = await ownerWithStore(page);
+  // A sender AWS approved (the local stand-in's shared one) and a verified test number.
+  expect((await call(page, "PUT", `${base}/sender`, { senderType: "sender_id", originationIdentity: "LOCALTEST", countries: ["AU"], monthlyBudgetUsd: 5, hardStop: true, transactionalBasis: "checkout_notice", quietStart: 0, quietEnd: 0, maxPerCustomerDay: 3, maxMarketingPerWeek: 2 })).status).toBe(200);
+  expect((await call(page, "POST", `${base}/sender/verify`, {})).status).toBe(200);
+  const added = await call(page, "POST", `${base}/test-numbers`, { number: "0412 345 678", country: "AU" });
+  expect((await call(page, "POST", `${base}/test-numbers/${(added.json as { testNumber: { id: string } }).testNumber.id}/verify`, { code: "123456" })).status).toBe(200);
+
+  await page.goto("/messaging/automations");
+  await expect(page.getByText("No automations yet")).toBeVisible();
+  await page.getByRole("link", { name: "Create automation" }).first().click();
+  await expect(page).toHaveURL(/\/messaging\/automations\/edit/);
+
+  // 1. The trigger: only what Shopify sends for the store can be chosen.
+  await expect(page.getByRole("radio", { name: /Custom event/ })).toBeDisabled();
+  await page.getByRole("radio", { name: /Order shipped or fulfilled/ }).click();
+  await expect(page.getByText(/Shopify sends bizinsights this event for your store/)).toBeVisible();
+  await expect(page.getByLabel("Automation name")).toHaveValue("Order shipped or fulfilled text");
+  await page.getByLabel("Automation name").fill("Shipping update");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 2. The message: the sender, a live preview, and a detail its trigger can't fill refused in words.
+  await expect(page.getByText(/Texts come from/)).toContainText("LOCALTEST");
+  await expect(page.getByTestId("preview-text")).toHaveText("Good news Sarah! Your Green Leaf order #1042 is on its way. Track it: https://track.example.com/AB123");
+  await page.getByLabel("Message", { exact: true }).fill("Hi {{customer_name}}, finish here: {{checkout_url}}");
+  await expect(page.getByText(/make this a marketing message/)).toBeVisible();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByText(/Fix the message first/)).toBeVisible();
+  await page.getByRole("button", { name: "Shipped, with tracking" }).click();
+  await expect(page.getByText(/characters · 1 SMS part/).first()).toBeVisible();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 3. The timing: after a delay, only for orders of 50 or more.
+  await page.getByText("Send after a delay").click();
+  await page.getByLabel("How long to wait").fill("2");
+  await page.getByLabel("Minutes, hours or days").selectOption("hours");
+  await page.getByText("Only when conditions match").click();
+  await page.getByLabel("Condition 1: value").fill("50");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+
+  // 4. The summary, a test text followed to the phone's receipt, then on (asked first).
+  await expect(page.getByText("2 hours after the event, only if order total is at least 50").first()).toBeVisible();
+  await page.getByRole("button", { name: "Send test SMS" }).click();
+  await expect(page.getByText("Delivered: the phone confirmed it arrived.")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("switch", { name: "Automation on" }).click();
+  await expect(page.getByRole("dialog")).toContainText("bizinsights is in test mode");
+  await page.getByRole("dialog").getByRole("button", { name: "Turn on" }).click();
+  await expect(page.getByRole("switch", { name: "Automation on" })).toBeChecked();
+  await page.getByRole("link", { name: "Done" }).click();
+
+  // The list: its real state, search, a copy as a draft, and deleting the copy.
+  const card = page.getByRole("listitem", { name: "Shipping update", exact: true });
+  await expect(card.getByText("Active", { exact: true })).toBeVisible();
+  await expect(card.getByRole("switch")).toBeChecked();
+  await page.getByLabel("Search automations").fill("nothing like it");
+  await expect(page.getByText("No automation matches.")).toBeVisible();
+  await page.getByRole("button", { name: "Clear the filters" }).click();
+  await card.getByRole("button", { name: "Duplicate Shipping update" }).click();
+  const copy = page.getByRole("listitem", { name: "Shipping update (copy)", exact: true });
+  await expect(copy.getByText("Draft", { exact: true })).toBeVisible();
+  await copy.getByRole("button", { name: "Delete Shipping update (copy)" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(copy).toHaveCount(0);
+  await expect(card).toBeVisible();
+});
+
 test("the opt-out page says so for a link that names nothing", async ({ page }) => {
   await page.goto("/stop?c=Nothing1234");
   await expect(page.getByText(/isn't valid any more/)).toBeVisible();

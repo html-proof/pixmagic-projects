@@ -459,6 +459,7 @@ export const SMS_TRIGGERS = [
   "order_cancelled",
   "refund_issued",
   "checkout_abandoned",
+  "customer_registered",
   "customer_birthday",
   "customer_inactive",
   "customer_vip",
@@ -503,6 +504,14 @@ export const TRIGGER_INFO: Record<SmsTrigger, TriggerInfo> = {
     variables: ["customer_name", "store_name", "product_name", "checkout_url", "discount_code", "opt_out_url"],
     available: true,
     defaultDelay: 60,
+  },
+  customer_registered: {
+    label: "Customer registered",
+    category: "marketing",
+    source: "customers/create webhook (subscribed for each store once it grants read_customers)",
+    variables: ["customer_name", "store_name", "discount_code", "opt_out_url"],
+    available: true,
+    defaultDelay: 0,
   },
   customer_birthday: {
     label: "Customer birthday",
@@ -1474,3 +1483,257 @@ export const smsSetupDraftSchema = z.object({
   transactionalBasis: z.enum(SMS_TRANSACTIONAL_BASES).nullish(),
 });
 export type SmsSetupDraft = z.infer<typeof smsSetupDraftSchema>;
+
+// ---------------------------------------------------------------------------
+// Automations: the four-step builder (trigger, message, timing, test and activate)
+// ---------------------------------------------------------------------------
+
+/** The builder's steps, in order. */
+export const AUTOMATION_STEPS = ["trigger", "message", "timing", "activate"] as const;
+export type AutomationStep = (typeof AUTOMATION_STEPS)[number];
+
+/**
+ * Which Shopify webhooks carry each trigger's event (any one of `topics` is enough). `topics` are
+ * the app's own subscriptions, declared in its toml, which Shopify sends for every store of that
+ * app; `perStore` is subscribed for each store once it granted `scope` (core's ensureSmsWebhooks);
+ * `daily`: worked out every day from the orders those topics brought in. Null: no event exists.
+ */
+export interface TriggerSource {
+  topics: string[];
+  perStore?: { topic: string; graphqlTopic: string; scope: string };
+  daily?: boolean;
+}
+
+export const TRIGGER_SOURCES: Record<SmsTrigger, TriggerSource | null> = {
+  order_created: { topics: ["orders/create"] },
+  payment_completed: { topics: ["orders/paid"] },
+  fulfillment_created: { topics: ["orders/fulfilled", "orders/partially_fulfilled", "orders/updated"] },
+  delivery_confirmed: { topics: ["orders/updated", "orders/fulfilled"] },
+  order_cancelled: { topics: ["orders/cancelled"] },
+  refund_issued: { topics: ["refunds/create"] },
+  checkout_abandoned: { topics: ["checkouts/create", "checkouts/update"] },
+  customer_registered: { topics: [], perStore: { topic: "customers/create", graphqlTopic: "CUSTOMERS_CREATE", scope: "read_customers" } },
+  customer_birthday: null,
+  customer_inactive: { topics: ["orders/create"], daily: true },
+  customer_vip: { topics: ["orders/create"], daily: true },
+};
+
+/** The icons the trigger cards use (lucide names; the dashboard draws them). */
+export type AutomationIcon = "shopping-bag" | "credit-card" | "truck" | "package-check" | "shopping-cart" | "user-plus" | "webhook" | "circle-x" | "undo" | "moon" | "crown" | "cake";
+
+export interface AutomationTriggerCard {
+  /** The trigger, or "custom_event" (no trigger behind it). */
+  key: string;
+  trigger: SmsTrigger | null;
+  label: string;
+  description: string;
+  icon: AutomationIcon;
+  /** Shown first; the rest are under "More triggers". */
+  main: boolean;
+  /** What the merchant should know before choosing it. */
+  note?: string;
+  /** Why it can't be chosen at all (there is no such event). */
+  unavailable?: string;
+}
+
+/** Step 1's cards, in the order they are shown. Whether each works for a store is the API's answer (core sms/builder.ts). */
+export const AUTOMATION_TRIGGER_CARDS: AutomationTriggerCard[] = [
+  { key: "order_created", trigger: "order_created", label: "Order placed", description: "When a customer places an order.", icon: "shopping-bag", main: true },
+  {
+    key: "payment_completed",
+    trigger: "payment_completed",
+    label: "Order paid",
+    description: "When an order that wasn't paid at checkout is paid.",
+    icon: "credit-card",
+    main: true,
+    note: "Card payments arrive with the order, so most stores need only one of Order placed and Order paid.",
+  },
+  { key: "fulfillment_created", trigger: "fulfillment_created", label: "Order shipped or fulfilled", description: "When you fulfil an order. The text can carry the tracking link.", icon: "truck", main: true },
+  {
+    key: "delivery_confirmed",
+    trigger: "delivery_confirmed",
+    label: "Order delivered",
+    description: "When the carrier tells Shopify the parcel arrived.",
+    icon: "package-check",
+    main: true,
+    note: "Only for carriers that report deliveries to Shopify; other parcels never get this text.",
+  },
+  {
+    key: "checkout_abandoned",
+    trigger: "checkout_abandoned",
+    label: "Abandoned checkout",
+    description: "When a customer leaves checkout with their mobile number and doesn't order.",
+    icon: "shopping-cart",
+    main: true,
+    note: "A reminder is marketing: only customers subscribed to your SMS marketing get it, and it's cancelled if they order.",
+  },
+  {
+    key: "customer_registered",
+    trigger: "customer_registered",
+    label: "Customer registered",
+    description: "When a customer creates an account with your store.",
+    icon: "user-plus",
+    main: true,
+    note: "A welcome text is marketing: only customers subscribed to your SMS marketing get it.",
+  },
+  {
+    key: "custom_event",
+    trigger: null,
+    label: "Custom event",
+    description: "When something outside Shopify's own events happens.",
+    icon: "webhook",
+    main: true,
+    unavailable: "bizinsights starts texts only from Shopify's own events. It can't receive an event of your own yet (from Shopify Flow or another app), so this trigger isn't offered.",
+  },
+  { key: "order_cancelled", trigger: "order_cancelled", label: "Order cancelled", description: "When an order is cancelled.", icon: "circle-x", main: false },
+  { key: "refund_issued", trigger: "refund_issued", label: "Refund issued", description: "When you refund an order. The text says how much was refunded.", icon: "undo", main: false },
+  { key: "customer_inactive", trigger: "customer_inactive", label: "Inactive customer", description: "Once a customer hasn't ordered for the number of days you choose (checked daily).", icon: "moon", main: false },
+  { key: "customer_vip", trigger: "customer_vip", label: "VIP customer", description: "Once a customer reaches the orders or spend you choose (checked daily).", icon: "crown", main: false },
+  { key: "customer_birthday", trigger: "customer_birthday", label: "Customer birthday", description: "On a customer's birthday.", icon: "cake", main: false, unavailable: TRIGGER_INFO.customer_birthday.unavailableReason },
+];
+
+/** A trigger's card (every trigger has one). */
+export const automationTriggerCard = (trigger: SmsTrigger): AutomationTriggerCard => AUTOMATION_TRIGGER_CARDS.find((c) => c.trigger === trigger)!;
+
+/** Ready-made messages for each trigger (the builder's "Templates"). Marketing ones carry the opt-out link. */
+export const AUTOMATION_STARTERS: Record<SmsTrigger, Array<{ name: string; body: string }>> = {
+  order_created: [
+    { name: "Order confirmation", body: "Hi {{customer_name}}, thanks for your order {{order_number}} with {{business_name}}! We'll text you when it ships." },
+    { name: "Confirmation with total", body: "Hi {{customer_name}}, we've got your order {{order_number}} ({{order_total}} {{currency}}). Thank you for shopping with {{business_name}}!" },
+  ],
+  payment_completed: [{ name: "Payment received", body: "Hi {{customer_name}}, we've received your payment for order {{order_number}}. Thank you, {{business_name}}." }],
+  fulfillment_created: [
+    { name: "Shipped, with tracking", body: "Good news {{customer_name}}! Your {{business_name}} order {{order_number}} is on its way. Track it: {{tracking_url}}" },
+    { name: "Shipped, no link", body: "Hi {{customer_name}}, your order {{order_number}} from {{business_name}} has shipped." },
+  ],
+  delivery_confirmed: [{ name: "Delivered", body: "Hi {{customer_name}}, your order {{order_number}} has been delivered. Enjoy, from {{business_name}}!" }],
+  order_cancelled: [{ name: "Order cancelled", body: "Hi {{customer_name}}, your order {{order_number}} with {{business_name}} has been cancelled. Contact us if you didn't expect this." }],
+  refund_issued: [{ name: "Refund issued", body: "Hi {{customer_name}}, we've refunded {{order_total}} {{currency}} for order {{order_number}}. {{business_name}}" }],
+  checkout_abandoned: [
+    { name: "Gentle reminder", body: "Hi {{customer_name}}, you left something at {{business_name}}. Finish your order here: {{checkout_url}} Opt out: {{opt_out_url}}" },
+    { name: "Reminder with a code", body: "Hi {{customer_name}}, still thinking about {{product_name}}? Use {{discount_code}} at checkout: {{checkout_url}} - {{business_name}}. Opt out: {{opt_out_url}}" },
+  ],
+  customer_registered: [
+    { name: "Welcome", body: "Welcome to {{business_name}}, {{customer_name}}! Thanks for joining us. Opt out: {{opt_out_url}}" },
+    { name: "Welcome with a code", body: "Welcome to {{business_name}}, {{customer_name}}! Here's a code for your first order: {{discount_code}}. Opt out: {{opt_out_url}}" },
+  ],
+  customer_birthday: [],
+  customer_inactive: [{ name: "We miss you", body: "Hi {{customer_name}}, we miss you at {{business_name}}! Here's a code for your next order: {{discount_code}}. Opt out: {{opt_out_url}}" }],
+  customer_vip: [{ name: "Thank you", body: "Hi {{customer_name}}, thank you for being one of {{business_name}}'s best customers! Here's a code just for you: {{discount_code}}. Opt out: {{opt_out_url}}" }],
+};
+
+/** The conditions that mean something for each trigger: the facts its event has (a fact it lacks makes a condition fail). */
+export const TRIGGER_CONDITION_FIELDS: Record<SmsTrigger, RuleConditionField[]> = {
+  order_created: [...RULE_CONDITION_FIELDS],
+  payment_completed: [...RULE_CONDITION_FIELDS],
+  fulfillment_created: [...RULE_CONDITION_FIELDS],
+  delivery_confirmed: [...RULE_CONDITION_FIELDS],
+  order_cancelled: [...RULE_CONDITION_FIELDS],
+  refund_issued: ["order_total", "country"],
+  checkout_abandoned: ["order_total", "country", "product", "customer_orders", "customer_spent"],
+  customer_registered: ["country"],
+  customer_birthday: [],
+  customer_inactive: ["country", "customer_orders", "customer_spent", "days_since_last_order"],
+  customer_vip: ["country", "customer_orders", "customer_spent", "days_since_last_order"],
+};
+
+/**
+ * How often one automation may text one customer, by default. Each event texts a customer once
+ * whatever the cap (the dedupe key), so order updates allow several a day (a customer with two
+ * orders gets both confirmations); marketing texts reach a customer once a month at most.
+ */
+export const automationCapDefaults = (trigger: SmsTrigger): { maxPerCustomer: number; capDays: number } =>
+  TRIGGER_INFO[trigger].category === "marketing" ? { maxPerCustomer: 1, capDays: 30 } : { maxPerCustomer: 10, capDays: 1 };
+
+/**
+ * An automation as the builder saves it. Its message is written in place and kept as the
+ * automation's own template; what runs is still a rule (smsRuleSchema) with an approved template.
+ * No cap given: automationCapDefaults.
+ */
+export const smsAutomationSchema = z
+  .object({
+    name: z.string().trim().min(1, "Give the automation a name.").max(80),
+    trigger: z.enum(SMS_TRIGGERS),
+    body: z.string().max(SMS_MAX_BODY),
+    conditions: z.array(ruleConditionSchema).max(10).default([]),
+    delayMinutes: z.number().int().min(0).max(43_200).default(0),
+    discountCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_-]{1,30}$/, "A discount code is letters, digits, - and _ only.")
+      .nullish(),
+    quietStart: hour.default(21),
+    quietEnd: hour.default(9),
+    useCustomerTimezone: z.boolean().default(true),
+    maxPerCustomer: z.number().int().min(1).max(100).nullish(),
+    capDays: z.number().int().min(1).max(365).nullish(),
+    priority: z.number().int().min(1).max(100).default(50),
+    /** Practice run: record in Message History what it would send, and send nothing. */
+    dryRun: z.boolean().default(false),
+    inactiveDays: z.number().int().min(14).max(1095).nullish(),
+    vipMinOrders: z.number().int().min(2).max(10_000).nullish(),
+    vipMinSpent: z.number().min(1).max(1e9).nullish(),
+  })
+  .superRefine((a, ctx) => {
+    const allowed = new Set(TRIGGER_CONDITION_FIELDS[a.trigger]);
+    a.conditions.forEach((c, i) => {
+      if (!allowed.has(c.field)) ctx.addIssue({ code: "custom", path: ["conditions", i, "field"], message: `"${automationTriggerCard(a.trigger).label}" events have no ${RULE_CONDITION_LABEL[c.field].toLowerCase()} to compare.` });
+    });
+    if (a.trigger === "customer_inactive" && !a.inactiveDays) ctx.addIssue({ code: "custom", path: ["inactiveDays"], message: "Say after how many days without an order a customer counts as inactive." });
+    if (a.trigger === "customer_vip" && !a.vipMinOrders && !a.vipMinSpent) ctx.addIssue({ code: "custom", path: ["vipMinOrders"], message: "Say how many orders or how much spend makes a VIP." });
+    if (!TRIGGER_INFO[a.trigger].available) ctx.addIssue({ code: "custom", path: ["trigger"], message: TRIGGER_INFO[a.trigger].unavailableReason ?? "This event isn't available." });
+  });
+export type SmsAutomationInput = z.infer<typeof smsAutomationSchema>;
+
+/** The rule an automation runs, with its template. */
+export function automationRule(a: SmsAutomationInput, templateId: string): SmsRuleInput {
+  const cap = automationCapDefaults(a.trigger);
+  return smsRuleSchema.parse({
+    name: a.name,
+    trigger: a.trigger,
+    conditions: a.conditions,
+    delayMinutes: a.delayMinutes,
+    templateId,
+    discountCode: a.discountCode || null,
+    quietStart: a.quietStart,
+    quietEnd: a.quietEnd,
+    useCustomerTimezone: a.useCustomerTimezone,
+    maxPerCustomer: a.maxPerCustomer ?? cap.maxPerCustomer,
+    capDays: a.capDays ?? cap.capDays,
+    priority: a.priority,
+    dryRun: a.dryRun,
+    inactiveDays: a.trigger === "customer_inactive" ? a.inactiveDays : null,
+    vipMinOrders: a.trigger === "customer_vip" ? a.vipMinOrders : null,
+    vipMinSpent: a.trigger === "customer_vip" ? a.vipMinSpent : null,
+  });
+}
+
+/**
+ * What is wrong with an automation's message for its trigger, in the merchant's words: the
+ * template checks for the trigger's category (an opt-out link on marketing, no marketing
+ * variables on order updates, length, unknown variables), the details its event can't fill, and
+ * a discount code the text shows but the automation doesn't give. Errors keep it from being
+ * turned on; warnings don't.
+ */
+export function checkAutomationMessage(body: string, trigger: SmsTrigger, discountCode?: string | null): TemplateIssue[] {
+  const out = checkTemplate({ category: TRIGGER_INFO[trigger].category, body });
+  const missing = missingForTrigger(body, trigger);
+  if (missing.length) {
+    out.push({
+      level: "error",
+      code: "unsupported_variable",
+      message: `"${automationTriggerCard(trigger).label}" texts have no ${missing.map((m) => SMS_VARIABLE_INFO[m].label.toLowerCase()).join(" or ")} to fill in: take ${missing.map((m) => `{{${m}}}`).join(", ")} out.`,
+    });
+  }
+  // (An order update can't show one at all: checkTemplate says so.)
+  if (TRIGGER_INFO[trigger].category === "marketing" && templateVariables(body).used.includes("discount_code") && !discountCode?.trim()) {
+    out.push({ level: "error", code: "discount_code", message: "The text shows a discount code: enter the code (create it in Shopify first)." });
+  }
+  return out;
+}
+
+/** The variables the builder's editor offers for a trigger, in the module's order ({{business_name}} stands in for {{store_name}}). */
+export function automationVariables(trigger: SmsTrigger): SmsVariable[] {
+  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, "business_name"]);
+  return SMS_VARIABLES.filter((v) => can.has(v) && v !== "store_name");
+}

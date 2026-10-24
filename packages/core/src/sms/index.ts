@@ -12,3 +12,4 @@ export * from "./sweep.js";
 export * from "./analytics.js";
 export * from "./privacy.js";
 export * from "./setup.js";
+export * from "./builder.js";
