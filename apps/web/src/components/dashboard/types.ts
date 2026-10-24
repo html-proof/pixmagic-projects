@@ -10,6 +10,8 @@ import type { SalesCalculation } from "@app/shared/salesCalculation";
  * a member who may see them (Team & Access: "View gross sales, discounts, tax and shipping", "View refunds").
  */
 export type YearMonth = Omit<SalesMonth, MonthLine | "refunds"> & Partial<Pick<SalesMonth, MonthLine | "refunds">>;
+/** A calendar year month by month, as `SalesOverview.year` carries it. */
+export type YearOf = Omit<YearBreakdown, "months"> & { months: YearMonth[] };
 
 export interface Capability {
   id: string;
@@ -100,7 +102,13 @@ export interface SalesOverview {
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
    * month's lines of total sales as `totalSales`.
    */
-  year?: Omit<YearBreakdown, "months"> & { months: YearMonth[] };
+  year?: YearOf & {
+    /**
+     * The same months of the two years before (last year first), each whole (`pastYearBreakdown`):
+     * the overview's monthly comparison. Redacted as this year's months; absent from older answers.
+     */
+    past?: YearOf[];
+  };
   /**
    * The store's own calculation from the lines of total sales (Custom sales): which it counts and
    * whether the dashboard shows it. Team & Access: as grossSales (its figures are drawn from them).

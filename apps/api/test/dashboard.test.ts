@@ -301,6 +301,14 @@ describe("date ranges", () => {
     // Nothing was imported before today's order: earlier months are "none", not $0 months.
     expect(y.months.slice(0, -1).every((m: { coverage: string }) => m.coverage === "none")).toBe(true);
     expect(y.total).toBe(70);
+    // The same months of the two years before, whole, for the overview's monthly comparison: none
+    // of them imported here, so each says so rather than reading as a $0 month.
+    expect(y.past.map((p: { year: number }) => p.year)).toEqual([y.year - 1, y.year - 2]);
+    for (const p of y.past as Array<{ year: number; total: number; months: Array<{ month: string; to: string; current: boolean; coverage: string }> }>) {
+      expect(p.months.map((m) => m.month)).toEqual(y.months.map((m: { month: string }) => `${p.year}${m.month.slice(4)}`));
+      expect(p.months.every((m) => m.coverage === "none" && !m.current)).toBe(true);
+      expect(p.total).toBe(0);
+    }
   });
 
   it("reports a custom range up to the store's today, and compares it with as many days before", async () => {
