@@ -152,6 +152,9 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
     hasMissing ? `orders before ${fmtDay(historyFrom, { year: false })} weren't shared by Shopify` : null,
   ].filter(Boolean);
   const empty = b.days.every((d) => d.value === 0);
+  // No orders at all says so whatever is measured: it is why there are no sales either, and new
+  // orders are what fill the chart in.
+  const noOrders = b.days.every((d) => d.orders === 0);
 
   const tip = (i: number) => {
     const d = b.days[i]!;
@@ -234,8 +237,12 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
         {empty &&
           (view === "refunds" ? (
             <EmptyChart icon={ChartColumn} title="No refunds in this period" body="Refunds show up here on the day they're issued." />
-          ) : view === "orders" ? (
-            <EmptyChart icon={ChartColumn} title="No orders in this period" body="New orders show up here within a few minutes while this page is open. Test orders aren't counted, as in Shopify's reports." />
+          ) : view === "orders" || noOrders ? (
+            <EmptyChart
+              icon={ChartColumn}
+              title="No orders in this period"
+              body="Try a longer date range. New orders show up here within a few minutes while this page is open. Test orders aren't counted, as in Shopify's reports."
+            />
           ) : (
             <EmptyChart icon={ChartColumn} title="No sales in this period" body="Try a longer date range. Sales appear here as soon as your store receives orders." />
           ))}
