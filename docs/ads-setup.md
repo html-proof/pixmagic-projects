@@ -16,9 +16,8 @@ tokens, bizinsights reads the platforms itself): [nango.md](nango.md).
    connected, each account's details and data status beside how the integration stands (rules in
    `components/integrations/adPlatformParts.tsx`). **Settings → Integrations** (`/settings/integrations`, the owner's
    2026-10-23 design: `components/integrations/IntegrationRow.tsx`, `AdRow.tsx`) shows a card each for Google Ads,
-   Shopify, WhatsApp, Meta Ads and Google AdSense with a **Connect** button: Google Ads and Meta Ads first show what
-   their platform's screen will say while it still reviews bizinsights ("Before you go to Google" / "Before you go to
-   Facebook"), AdSense goes straight to Google, and once connected each card links to Settings → Advertising
+   Shopify, WhatsApp, Meta Ads and Google AdSense with a **Connect** button that goes straight to the platform's
+   sign-in, and once connected each card links to Settings → Advertising
    (**Manage**, or **Fix it** when an account needs attention). Signing in with Google is on Settings → Security.
 3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (or
    **Connect** on Settings → Integrations): Nango's window opens over the page, and they approve on the platform's
@@ -70,12 +69,10 @@ the worst of its accounts. Each account row shows who connected it, when, the pe
 and **Refresh**, **Show on dashboard** and **Disconnect** (on Settings → Advertising: **Sync data now**, **Show on
 dashboard**, **Disconnect**, and who connected it and the permission behind **View data details**).
 
-Two notes appear before anyone is sent to a platform:
-- **Google Ads**: while `GOOGLE_ADS_OAUTH_VERIFIED` isn't `"1"`, the card warns that Google first shows "Google
-  hasn't verified this app" and that the way on is **Advanced → Go to bizinsights.io (unsafe)**
-  (`apps/web/src/components/GoogleAdsAccess.tsx`). AdSense never shows that screen.
-- **Meta Ads**: while `META_ADS_ADVANCED_ACCESS` isn't `"1"`, the card says only people with a role on the Meta app
-  can connect, and how to ask to be added (`MetaAdsAccess.tsx`).
+The cards say nothing about the platforms' own reviews (removed on the owner's word, 2026-10-24): while
+`GOOGLE_ADS_OAUTH_VERIFIED` isn't `"1"`, Google first shows "Google hasn't verified this app" (the way on is
+**Advanced → Go to bizinsights.io (unsafe)**; AdSense never shows it), and while `META_ADS_ADVANCED_ACCESS` isn't
+`"1"`, Facebook lets in only people with a role on the Meta app. The API still reports both as `restricted`.
 
 ## What the dashboard shows
 
