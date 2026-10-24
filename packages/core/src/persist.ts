@@ -940,6 +940,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.shopifyReport.deleteMany({ where: { storeId } }),
     systemDb.funnelDaily.deleteMany({ where: { storeId } }),
     systemDb.funnelVisit.deleteMany({ where: { storeId } }),
+    systemDb.funnelProductVisit.deleteMany({ where: { storeId } }),
+    systemDb.funnelActionCheck.deleteMany({ where: { storeId } }),
     systemDb.pixelEventSeen.deleteMany({ where: { storeId } }),
     // Connected ad accounts belong to the store too: their numbers and their tokens go with it.
     systemDb.adCampaignDaily.deleteMany({ where: { storeId } }),

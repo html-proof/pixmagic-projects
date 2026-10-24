@@ -1,4 +1,21 @@
-import { calculationName, customApplied, customSales, DEMO_ACCOUNT_ID, type AccessKey, type SalesCalculation } from "@app/shared";
+import {
+  calculationName,
+  customApplied,
+  customSales,
+  DEMO_ACCOUNT_ID,
+  FUNNEL_DEVICE_LABEL,
+  FUNNEL_STEP_LABEL,
+  SITE_SECTION_LABEL,
+  VISITOR_KIND_LABEL,
+  type AccessKey,
+  type Comparison,
+  type DateRange,
+  type FunnelDevice,
+  type FunnelStep,
+  type SalesCalculation,
+  type SiteSection,
+  type VisitorKind,
+} from "@app/shared";
 
 /**
  * The dashboard sections that can be downloaded as CSV ("Export approved reports"), each with the
@@ -20,6 +37,8 @@ export const EXPORT_SECTIONS = {
   ads_daily: { label: "Advertising by day", need: ["marketing.ads"], modules: ["ads"] },
   ads_campaigns: { label: "Ad campaigns", need: ["marketing.campaigns"], modules: ["ads"] },
   adsense_daily: { label: "AdSense by day", need: ["marketing.ads"], modules: ["adsense"] },
+  // The Shopping Funnel page (apps/web/src/app/(app)/funnel), with its filter.
+  funnel: { label: "Shopping funnel", need: ["analytics.conversion"], modules: ["funnel"] },
 } as const satisfies Record<string, { label: string; need: readonly AccessKey[]; modules: readonly string[] }>;
 export type ExportSection = keyof typeof EXPORT_SECTIONS;
 export const EXPORT_SECTION_IDS = Object.keys(EXPORT_SECTIONS) as ExportSection[];
@@ -47,8 +66,10 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
  * One section of a (redacted) dashboard answer as a CSV table. Built from what this member's copy
  * of the data holds, so a field they can't see is not a column.
  */
-export function exportTable(section: ExportSection, modules: Obj): { header: string[]; rows: Cell[][] } {
+export function exportTable(section: ExportSection, modules: Obj, dates?: { range: DateRange; previous: Comparison }): { header: string[]; rows: Cell[][] } {
   switch (section) {
+    case "funnel":
+      return funnelTable(isObj(modules.funnel) ? modules.funnel : null, dates);
     case "sales": {
       const s = isObj(modules.sales_overview) ? modules.sales_overview : {};
       // Shopify's total sales and its lines as they are; the store's own calculation (Custom
@@ -188,6 +209,61 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
 
 /** A change (a fraction) as a percentage with one decimal; null when there is none. */
 const pct = (v: unknown): Cell => (typeof v === "number" ? Math.round(v * 1000) / 10 : null);
+
+const FUNNEL_HEADER = [
+  "Section", "Name", "Visits", "Viewed a product", "Added to cart", "Started checkout", "Completed a purchase", "Conversion rate (%)",
+  "Visits lost", "Progression (%)", "Drop-off (%)",
+  "Product page viewed (visits)", "Added to cart from its page (visits)", "View to cart rate (%)", "Orders", "Units sold", "Net sales",
+];
+
+/** Words for a segment's key (packages/core/src/reports/funnel.ts, funnelDetail's segments). */
+function segmentName(dimension: string, key: string): string {
+  if (key === "not_recorded") return "Not recorded";
+  if (dimension === "device") return FUNNEL_DEVICE_LABEL[key as FunnelDevice] ?? key;
+  if (dimension === "landing") return SITE_SECTION_LABEL[key as SiteSection] ?? key;
+  if (dimension === "visitor") return VISITOR_KIND_LABEL[key as VisitorKind] ?? key;
+  return key === "unknown" ? "Unknown country" : key === "other" ? "Other countries" : key;
+}
+
+/**
+ * The Shopping Funnel page as one table: the dates and filter, the funnel now and in the dates
+ * compared with (one row each, visits reached per step), each step to the next, every day, every
+ * segment, then the product pages. Columns a row has no figure for are empty.
+ */
+function funnelTable(f: Obj | null, dates?: { range: DateRange; previous: Comparison }) {
+  const blank = (n: number) => Array<Cell>(n).fill(null);
+  const rows: Cell[][] = [];
+  const funnelRow = (section: string, name: string, reached: unknown): Cell[] => {
+    const r = Array.isArray(reached) ? (reached as number[]) : null;
+    const conv = r && r[0] ? r[4]! / r[0] : null;
+    return [section, name, ...(r ? r.slice(0, 5) : blank(5)), pct(conv), ...blank(9)];
+  };
+  if (dates) rows.push(["Dates", `${dates.range.from} to ${dates.range.to}, compared with ${dates.previous.from} to ${dates.previous.to}${dates.previous.until ? ` up to ${dates.previous.until}` : ""}`, ...blank(15)]);
+  if (!f) return { header: FUNNEL_HEADER, rows };
+  const filter = isObj(f.filter) ? f.filter : {};
+  const parts = [
+    typeof filter.device === "string" ? `Device: ${segmentName("device", filter.device)}` : null,
+    typeof filter.visitor === "string" ? segmentName("visitor", filter.visitor) : null,
+    typeof filter.landing === "string" ? `Landed on: ${segmentName("landing", filter.landing)}` : null,
+    typeof filter.country === "string" ? `Country: ${filter.country}` : null,
+  ].filter(Boolean);
+  rows.push(["Filter", parts.length ? parts.join("; ") : "All tracked visits", ...blank(15)]);
+  rows.push(funnelRow("Funnel", "These dates", list(f.steps).map((s) => num(s, "reached"))));
+  const previous = isObj(f.previous) ? f.previous : {};
+  rows.push(Array.isArray(previous.reached) ? funnelRow("Funnel", "Dates compared with", previous.reached) : ["Funnel", "Dates compared with: no earlier data", ...blank(15)]);
+  for (const t of list(f.transitions)) {
+    rows.push(["Step to step", `${FUNNEL_STEP_LABEL[t.from as FunnelStep]} → ${FUNNEL_STEP_LABEL[t.to as FunnelStep]}`, val(t, "fromCount"), ...blank(5), val(t, "lost"), pct(t.progression), pct(t.dropOff), ...blank(6)]);
+  }
+  for (const d of list(f.daily)) rows.push(d.reached === null ? ["Day", `${String(d.day)} (not recorded)`, ...blank(15)] : funnelRow("Day", String(d.day), d.reached));
+  const segments = isObj(f.segments) ? f.segments : {};
+  for (const [dimension, label] of [["device", "Device"], ["country", "Country"], ["landing", "Landing page"], ["visitor", "Visitors"]] as const) {
+    for (const s of list(segments[dimension])) rows.push(funnelRow(label, segmentName(dimension, String(s.key)), s.reached));
+  }
+  for (const p of list(f.products)) {
+    rows.push(["Product", val(p, "title") ?? val(p, "handle"), ...blank(9), val(p, "viewed"), val(p, "added"), pct(p.addRate), val(p, "orders"), val(p, "units"), val(p, "netSales")]);
+  }
+  return { header: FUNNEL_HEADER, rows };
+}
 
 /** Figures as a page shows them: the whole range, or the days so far (dated), or none. */
 function shownTotals(fig: Obj): { totals: Obj | null; through: string | null } {

@@ -1031,10 +1031,49 @@ model FunnelVisit {
   furthestStep Int       @default(0) @map("furthest_step") @db.SmallInt
   sections     Int       @default(0)
   pageViews    Int       @default(0) @map("page_views")
+  // The kind of device ("mobile", "tablet", "desktop", "unknown"), read from the browser's own
+  // User-Agent on the visit's first batch, and the country (ISO 3166 code) the edge placed that
+  // request in; nothing else of either is kept. Null on visits recorded before they were
+  // (2026-10-24): `device` is always set from then on, so it also says whether a visit has them.
+  device       String?
+  country      String?
 
   @@id([storeId, day, visitor])
   @@index([workspaceId])
+  // "Returning" visits: the same browser on an earlier day.
+  @@index([storeId, visitor, day])
   @@map("funnel_visits")
+}
+
+// Which products a visit looked at: one row per visit (as in funnel_visits) and product page.
+// `handle` is the product's from its storefront address (/products/<handle>); `steps` bit 0: the
+// product page was viewed, bit 1: added to cart from that page (packages/shared/src/funnel.ts).
+model FunnelProductVisit {
+  workspaceId String @map("workspace_id")
+  storeId     String @map("store_id")
+  day         String
+  visitor     String
+  handle      String
+  steps       Int    @default(0) @db.SmallInt
+
+  @@id([storeId, day, visitor, handle])
+  @@index([workspaceId])
+  @@map("funnel_product_visits")
+}
+
+// The Shopping Funnel's checklist: a recommended action a member marked as done for a store
+// (packages/shared/src/funnel.ts, FUNNEL_ACTIONS). No row: not done.
+model FunnelActionCheck {
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  actionId    String   @map("action_id")
+  doneAt      DateTime @default(now()) @map("done_at")
+  // The member who marked it (a user id; kept if they leave).
+  doneBy      String?  @map("done_by")
+
+  @@id([storeId, actionId])
+  @@index([workspaceId])
+  @@map("funnel_action_checks")
 }
 
 // An ad account (Meta Ads, Google Ads, or a Google AdSense account) connected to a store with

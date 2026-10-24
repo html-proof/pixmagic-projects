@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { AD_PROVIDERS, COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule, type RangeLimits } from "@app/shared";
+import { AD_PROVIDERS, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
 import {
   audit,
   latestReconciliation,
@@ -12,7 +12,7 @@ import {
   storeSalesCalculation,
   type ReportRequest,
 } from "@app/core";
-import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeLimits, storeOverview, workspaceStores, type AdsView } from "@app/core/reports";
+import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeLimits, storeOverview, workspaceStores, type AdsView, type FunnelView } from "@app/core/reports";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -44,11 +44,37 @@ export const adsViewQuery = {
 };
 
 /**
+ * What the Shopping Funnel page narrows the visit figures to (FunnelFilter in @app/shared):
+ * `device=mobile|tablet|desktop|unknown`, `visitor=new|returning`, `landing=<site section>`,
+ * `country=<ISO 3166 code>`.
+ */
+export const funnelQuery = {
+  device: z.enum(FUNNEL_DEVICES).optional(),
+  visitor: z.enum(VISITOR_KINDS).optional(),
+  landing: z.enum(SITE_SECTIONS).optional(),
+  country: z.string().regex(COUNTRY_CODE).optional(),
+};
+type FunnelQuery = z.infer<z.ZodObject<typeof funnelQuery>>;
+
+/** The Shopping Funnel page's question, for the member asking: product sales only with the top products permission. */
+export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
+  const filter: FunnelFilter = {};
+  if (q.device) filter.device = q.device;
+  if (q.visitor) filter.visitor = q.visitor;
+  if (q.landing) filter.landing = q.landing;
+  if (q.country) filter.country = q.country;
+  return { filter, productSales: seesModule(access, "top_products") };
+}
+
+/**
  * `parts=advertising`: only what the Advertising pages show (the ad modules, and the store's sales
  * and traffic they're set against), with every campaign; the rest of the dashboard isn't computed.
+ * `parts=funnel`: only what the Shopping Funnel page shows (the funnel in full, narrowed by
+ * `funnelQuery`, and the orders, Shopify sessions and traffic sources beside it).
  */
 const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "sales_overview", "channels", "traffic"]);
-const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, parts: z.enum(["advertising"]).optional() });
+const FUNNEL_MODULES: ReadonlySet<string> = new Set(["funnel", "shopify_sessions", "sales_overview", "channels", "traffic"]);
+const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery, parts: z.enum(["advertising", "funnel"]).optional() });
 
 /**
  * The dates in the store's zone, at most 12 months at a time, within the store's `limits`
@@ -151,7 +177,9 @@ export function dashboardRoutes(app: App, deps: Deps) {
     const q = overviewQuery.parse(c.req.query());
     const advertising = q.parts === "advertising";
     const adsView: AdsView = advertising ? { platform: q.platform, account: q.account, allCampaigns: true } : {};
-    const sees = (m: string) => (!advertising || ADVERTISING_MODULES.has(m)) && seesModule(access, m);
+    const only = advertising ? ADVERTISING_MODULES : q.parts === "funnel" ? FUNNEL_MODULES : null;
+    const sees = (m: string) => (!only || only.has(m)) && seesModule(access, m);
+    const funnelView = q.parts === "funnel" ? funnelViewOf(q, access) : undefined;
 
     let polled: Parameters<typeof autoRefresh>[1] | null = null;
     let reports: ReportRequest[] = [];
@@ -161,7 +189,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       polled = store;
       const now = new Date();
       const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
-      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView), access);
+      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView), access);
       reports = report.shopifyRefresh;
       return {
         store: publicStore(store),
@@ -187,6 +215,38 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (reports.length) await requestShopifyReports(deps, polled, reports).catch((err) => logger.warn({ err, storeId }, "shopify reports request failed"));
     }
     return c.json(body);
+  });
+
+  /**
+   * The Shopping Funnel's checklist: mark a recommended action done for the store, or not done
+   * (FUNNEL_ACTIONS in @app/shared). Anyone who sees the funnel may tick it, as the team's shared
+   * list; a shared (view-only) dashboard and API keys can't.
+   */
+  app.put("/workspaces/:ws/stores/:storeId/funnel/actions/:actionId", async (c) => {
+    const { ws, storeId, actionId } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "analytics.conversion");
+    if (a.link || !a.user) throw new HttpError(403, "The shared dashboard is view-only.", "forbidden");
+    if (!isFunnelAction(actionId)) throw new HttpError(404, "Not found", "not_found");
+    const { done } = z.object({ done: z.boolean() }).parse(await body(c));
+    const userId = a.user.id;
+    const result = await withTenant(ws, async (tx) => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      if (!done) {
+        await tx.funnelActionCheck.deleteMany({ where: { workspaceId: ws, storeId, actionId } });
+        return { id: actionId, done: false, doneAt: null };
+      }
+      const row = await tx.funnelActionCheck.upsert({
+        where: { storeId_actionId: { storeId, actionId } },
+        create: { workspaceId: ws, storeId, actionId, doneBy: userId },
+        update: {},
+      });
+      return { id: actionId, done: true, doneAt: row.doneAt.toISOString() };
+    });
+    await audit({ workspaceId: ws, actorUserId: userId, action: done ? "funnel.action_done" : "funnel.action_undone", targetType: "store", targetId: storeId, metadata: { action: actionId }, ip: clientIp(c) }).catch(
+      (err: unknown) => logger.warn({ err }, "audit failed"),
+    );
+    return c.json(result);
   });
 
   /**

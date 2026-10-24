@@ -19,6 +19,7 @@
     "./health": "./src/health.ts",
     "./inventory": "./src/inventory.ts",
     "./journey": "./src/journey.ts",
+    "./funnel": "./src/funnel.ts",
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
     "./salesCalculation": "./src/salesCalculation.ts",

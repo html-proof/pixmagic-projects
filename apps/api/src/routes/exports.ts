@@ -6,13 +6,15 @@ import { allows, redactOverview, seesModule, type MemberAccess } from "@app/shar
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { adsViewQuery, datesQuery, resolveQueryDates } from "./dashboard.js";
+import { adsViewQuery, datesQuery, funnelQuery, funnelViewOf, resolveQueryDates } from "./dashboard.js";
 
 const querySchema = z.object({
   section: z.enum(EXPORT_SECTION_IDS as [string, ...string[]]),
   ...datesQuery,
   // The Advertising area's reports: the platform and account its page shows.
   ...adsViewQuery,
+  // The Shopping Funnel page's filter.
+  ...funnelQuery,
 });
 type Query = z.infer<typeof querySchema>;
 
@@ -36,8 +38,9 @@ async function sectionTable(ws: string, storeId: string, access: MemberAccess, s
     const dates = resolveQueryDates(q, new Date(), store.timezone, await storeLimits(tx, { ws, storeId }, store));
     const wanted = new Set<string>(def.modules);
     const adsView = section === "ads" ? {} : { platform: q.platform, account: q.account, allCampaigns: section === "ads_campaigns" };
-    const report = redactOverview(await storeOverview(tx, store, dates, new Date(), (m) => wanted.has(m) && seesModule(access, m), adsView), access);
-    return { table: exportTable(section, report.modules), range: dates.range, previous: dates.previous, shop: store.shopDomain.replace(/\.myshopify\.com$/, "") };
+    const funnelView = section === "funnel" ? funnelViewOf(q, access) : undefined;
+    const report = redactOverview(await storeOverview(tx, store, dates, new Date(), (m) => wanted.has(m) && seesModule(access, m), adsView, funnelView), access);
+    return { table: exportTable(section, report.modules, dates), range: dates.range, previous: dates.previous, shop: store.shopDomain.replace(/\.myshopify\.com$/, "") };
   });
 }
 
@@ -58,7 +61,7 @@ export function exportRoutes(app: App, deps: Deps) {
     const { table: t, range, shop } = await sectionTable(ws, storeId, a.access, section, q);
     const csv = toCsv(t.header, t.rows);
 
-    await audit({ workspaceId: ws, actorUserId: a.user?.id ?? null, action: "report.exported", targetType: "store", targetId: storeId, metadata: { section, from: range.from, to: range.to, ...(q.platform ? { platform: q.platform } : {}), ...(q.account ? { account: q.account } : {}) }, ip: clientIp(c) }).catch(
+    await audit({ workspaceId: ws, actorUserId: a.user?.id ?? null, action: "report.exported", targetType: "store", targetId: storeId, metadata: { section, from: range.from, to: range.to, ...(q.platform ? { platform: q.platform } : {}), ...(q.account ? { account: q.account } : {}), ...(section === "funnel" ? { filter: funnelViewOf(q, a.access).filter } : {}) }, ip: clientIp(c) }).catch(
       (err: unknown) => logger.warn({ err }, "audit failed"),
     );
     const filename = `bizinsights-${shop}-${section}-${range.from}-to-${range.to}.csv`.replace(/[^A-Za-z0-9._-]/g, "_");
