@@ -35,6 +35,18 @@
   --viz-cat-1: #2a78d6;
   --viz-cat-2: #eb6834;
   --viz-cat-3: #1baf7a;
+  /* The overview's sales panels (the owner's design, OverviewCharts.tsx): cyan days, yellow strong
+     and green best days, a light cyan day still running, a violet running total. The years compared
+     with are a recessive grey (two back) and a navy (last year), apart from this year's cyan. */
+  --viz-day: #00a6d9;
+  --viz-day-strong: #f2b705;
+  --viz-day-best: #18a957;
+  --viz-day-partial: #9bddf2;
+  --viz-running: #7c3aed;
+  --viz-year-2: #a3b5bd;
+  --viz-year-1: #33597a;
+  /* Weekend dates under the columns: an orange that reads as text. */
+  --viz-weekend: #c2410c;
   --shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 8px 24px -14px rgb(20 28 22 / 0.14);
   --shadow-lift: 0 2px 4px rgb(20 28 22 / 0.06), 0 22px 44px -18px rgb(20 28 22 / 0.26);
 }
@@ -69,6 +81,14 @@
     --viz-cat-1: #3987e5;
     --viz-cat-2: #d95926;
     --viz-cat-3: #199e70;
+    --viz-day: #45cdf3;
+    --viz-day-strong: #f5c431;
+    --viz-day-best: #34c26f;
+    --viz-day-partial: #1d6a80;
+    --viz-running: #a78bfa;
+    --viz-year-2: #848f94;
+    --viz-year-1: #2f6799;
+    --viz-weekend: #ff8a5c;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -16px rgb(0 0 0 / 0.7);
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
   }

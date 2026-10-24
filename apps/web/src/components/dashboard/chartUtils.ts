@@ -17,12 +17,17 @@ export function columnPath(x: number, w: number, y0: number, y1: number): string
   return `M${x},${y0}V${y1 - r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 - r}V${y0}Z`;
 }
 
+/** The smallest step a person would pick (1, 2, 2.5 or 5 × a power of ten) of at least `raw`. */
+export function niceStep(raw: number): number {
+  if (!(raw > 0)) return 1;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw)!;
+}
+
 /** Gridline steps a person would pick: 1, 2, 2.5 or 5 × a power of ten. */
 export function niceTicks(max: number, count: number): number[] {
   if (!(max > 0)) return [0];
-  const raw = max / count;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw)!;
+  const step = niceStep(max / count);
   const ticks: number[] = [];
   // From a whole-number index, not a running sum: no drift, and sub-cent steps stay distinct.
   for (let i = 0; i * step < max + step * 0.999; i++) ticks.push(Number((i * step).toPrecision(12)));

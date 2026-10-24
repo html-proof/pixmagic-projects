@@ -286,6 +286,17 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
   };
 }
 
+/**
+ * The same months of an earlier year (`yearsBack` before `today`'s), each whole: January to the
+ * month `today` is in. What this year's months are set against month by month, so its last month
+ * is a finished one (`current` false), unlike this year's.
+ */
+export function pastYearBreakdown(rows: DailyMetricsRow[], today: string, yearsBack: number, historyFrom: string | null): YearBreakdown {
+  const end = monthEnd(`${Number(today.slice(0, 4)) - yearsBack}-${today.slice(5, 7)}`);
+  const y = yearBreakdown(rows, end, historyFrom);
+  return { ...y, months: y.months.map((m) => ({ ...m, current: false })) };
+}
+
 /** What a month card measures: net sales, or the store's Custom sales from the month's lines. */
 export interface MonthMeasure<M> {
   value: (m: M) => number;
@@ -295,6 +306,12 @@ export interface MonthMeasure<M> {
 
 /** Shopify's net sales, as the months carry it. */
 export const NET_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "netSales" | "change">> = { value: (m) => m.netSales, change: (m) => m.change };
+
+/** Shopify's total sales, compared on the total sales of the dates the month is compared with. */
+export const TOTAL_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "totalSales" | "comparedLines">> = {
+  value: (m) => m.totalSales,
+  change: (m) => (m.comparedLines ? delta(m.totalSales, m.comparedLines.totalSales) : null),
+};
 
 /**
  * The store's Custom sales month by month: the lines its calculation counts, added up in cents
