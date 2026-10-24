@@ -36,7 +36,7 @@ import { awaitingApproval, createRule, hasUnapprovedVersion, parseRule, ruleActi
 import { senderOf, smsAudit, SmsError, smsMode, smsRegion, type SmsDeps } from "./common.js";
 import type { SmsIdentityInfo } from "./provider.js";
 import { identityAllowed, saveSender, setSending, verifySender, WORKSPACE_TAG } from "./senders.js";
-import { createTemplate, templateAction, templateOf, updateTemplate, type Actor } from "./templates.js";
+import { approveLatestVersion, createTemplate, templateAction, updateTemplate, type Actor } from "./templates.js";
 
 /** The template and rule the Automatic SMS step made for each event. */
 export type SetupAutomationMap = Partial<Record<SmsTrigger, { templateId?: string | null; ruleId?: string | null }>>;
@@ -385,17 +385,6 @@ export async function saveSetupMessage(store: Pick<Store, "id" | "workspaceId">,
   return { templateId, issues };
 }
 
-/** Submit and approve a template's latest version, unless it is approved already. */
-async function approveLatest(store: Pick<Store, "id" | "workspaceId">, templateId: string, actor: Actor) {
-  const t = await templateOf(store.id, templateId);
-  const latest = t.versions[0]!;
-  if (latest.status === "approved" && t.status !== "archived") return;
-  if (t.status === "archived") await templateAction(store, templateId, "restore", actor);
-  if (latest.status === "approved") return;
-  if (latest.status === "draft") await templateAction(store, templateId, "submit", actor);
-  await templateAction(store, templateId, "approve", actor, "Approved in Set up SMS");
-}
-
 /** Make the event's rule run the template: created, or edited to it, then approved and running. A rule's own conditions and limits (set on the advanced page) are kept. */
 async function startRule(store: Pick<Store, "id" | "workspaceId">, ruleId: string | null | undefined, trigger: SmsTrigger, templateId: string, actor: Actor): Promise<string> {
   const sender = await senderOf(store.id);
@@ -440,7 +429,7 @@ export async function setSetupAutomation(store: Pick<Store, "id" | "workspaceId"
   }
   let ruleId = current.ruleId ?? null;
   if (input.on) {
-    await approveLatest(store, templateId!, actor);
+    await approveLatestVersion(store, templateId!, actor, "Approved in Set up SMS");
     ruleId = await startRule(store, ruleId, trigger, templateId!, actor);
   } else if (rule && rule.status === "active") {
     await ruleAction(store, rule.id, "pause", actor);

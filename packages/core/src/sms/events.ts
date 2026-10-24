@@ -20,6 +20,7 @@ import { systemDb, type SmsContact, type Store } from "@app/db";
 import { expandScopes, normalizePhone } from "@app/shared";
 import type { RuleFacts, SmsTrigger, SmsValues } from "@app/shared/sms";
 import { DEFAULT_ATTRIBUTION_DAYS, ATTRIBUTABLE_STATUSES } from "@app/shared/sms";
+import type { Coord } from "../coord.js";
 import { env } from "../env.js";
 import { WEBHOOK_SUBSCRIPTIONS_QUERY, WEBHOOK_SUBSCRIPTION_CREATE } from "../inventory/queries.js";
 import type { InventoryGql } from "../inventory/shopify.js";
@@ -33,6 +34,7 @@ import {
   parseShopify,
   type AutomationCheckout,
   type AutomationOrder,
+  type CustomerConsentPayload,
 } from "../shopifyPayloads.js";
 import { firstNameOf, itemsOf, phoneOf, tagsOf } from "../whatsapp/events/context.js";
 import { runSmsRules, type RuleSubject } from "./automations.js";
@@ -85,7 +87,33 @@ export async function smsOnShopifyEvent(store: Store, topic: string, payload: un
     return;
   }
   const customer = parseShopify(customerConsentSchema, payload, topic, logIds);
-  if (customer) await onCustomer(store, customer, evidence);
+  if (!customer) return;
+  const contacts = await onCustomer(store, customer, evidence);
+  if (topic === "customers/create") await onCustomerCreated(store, customer, contacts[0] ?? null, deps);
+}
+
+/**
+ * customers/create: a new customer account, the "Customer registered" trigger. Welcome texts are
+ * marketing, so the rules' consent check sends them only to a customer subscribed to SMS
+ * marketing (Shopify says so on the customer); one per customer whatever Shopify repeats.
+ */
+async function onCustomerCreated(store: Store, c: CustomerConsentPayload, contact: SmsContact | null, deps: Pick<SmsDeps, "queues">) {
+  const at = date(c.created_at ?? c.updated_at);
+  if (!fresh(at)) return;
+  const current = contact ? await systemDb.smsContact.findUnique({ where: { id: contact.id } }) : null;
+  await runSmsRules(
+    "customer_registered",
+    {
+      key: `customer:${String(c.id)}`,
+      store,
+      contact: current,
+      noContactReason: current ? null : c.phone?.trim() ? "invalid_number" : "no_phone",
+      facts: { country: current?.country ?? c.default_address?.country_code ?? null },
+      values: { customer_name: c.first_name ?? null },
+      at,
+    },
+    deps,
+  );
 }
 
 async function contactFor(store: Store, p: AutomationOrder | AutomationCheckout, source: "shopify_order" | "shopify_checkout", evidence: Record<string, unknown>): Promise<SmsContact | null> {
@@ -234,15 +262,15 @@ async function onCheckout(store: Store, p: AutomationCheckout, evidence: Record<
   }
 }
 
-/** customers/* and customers_marketing_consent/update: the customer's SMS consent, as Shopify has it now. */
-async function onCustomer(store: Store, c: { id: string | number; first_name?: string | null; phone?: string | null; sms_marketing_consent?: { state?: string | null; opt_in_level?: string | null; consent_updated_at?: string | null; consent_collected_from?: string | null } | null; default_address?: { country_code?: string | null } | null }, evidence: Record<string, unknown>) {
+/** customers/* and customers_marketing_consent/update: the customer's SMS consent, as Shopify has it now. Returns the customer's contacts (the one for their number first). */
+async function onCustomer(store: Store, c: CustomerConsentPayload, evidence: Record<string, unknown>): Promise<SmsContact[]> {
   const signal = shopifySmsConsent(c.sms_marketing_consent, null, "shopify_customer", evidence);
   const customerId = String(c.id);
   const phone = normalizePhone(c.phone ?? null, c.default_address?.country_code ?? null);
   let contacts: SmsContact[] = [];
   if (phone) contacts = [await upsertSmsContact(store, { phone, firstName: c.first_name ?? null, shopifyCustomerId: customerId })];
   else contacts = await systemDb.smsContact.findMany({ where: { storeId: store.id, shopifyCustomerId: customerId } });
-  if (!signal) return;
+  if (!signal) return contacts;
   for (const contact of contacts) {
     const before = contact.consentState;
     const after = await applyConsent(contact, signal);
@@ -251,21 +279,60 @@ async function onCustomer(store: Store, c: { id: string | number; first_name?: s
       if (cancelled) logger.info({ storeId: store.id, cancelled }, "sms marketing texts cancelled: consent withdrawn");
     }
   }
+  return contacts;
 }
 
 /**
  * Shopify tells bizinsights when a customer's SMS consent changes (customers_marketing_consent/update)
+ * and when a customer account is created (customers/create, the "Customer registered" trigger)
  * only to an app subscribed per store, and only once the store granted read_customers (an optional
- * scope; the topic can't go in the app's toml). Subscribed when the sender is saved and checked
- * daily, as the inventory module does. Without it, consent still arrives on every order and
- * checkout, and an opt-out link or STOP works at once.
+ * scope; the topics can't go in the app's toml). Subscribed when the sender is saved, when the
+ * automation builder checks a trigger, and daily, as the inventory module does. Without them,
+ * consent still arrives on every order and checkout, and an opt-out link or STOP works at once.
  */
-export const SMS_WEBHOOK_TOPICS: ReadonlyArray<{ topic: string; scope: string }> = [{ topic: "CUSTOMERS_MARKETING_CONSENT_UPDATE", scope: "read_customers" }];
+export const SMS_WEBHOOK_TOPICS: ReadonlyArray<{ topic: string; scope: string }> = [
+  { topic: "CUSTOMERS_MARKETING_CONSENT_UPDATE", scope: "read_customers" },
+  { topic: "CUSTOMERS_CREATE", scope: "read_customers" },
+];
 
-export async function ensureSmsWebhooks(store: Pick<Store, "id" | "grantedScopes">, gql: InventoryGql): Promise<number> {
+/** Each per-store topic as Shopify last answered: subscribed (found or made now), refused by Shopify, or not asked for (the scope isn't granted). */
+export type SmsWebhookState = "subscribed" | "refused" | "no_scope";
+export interface SmsWebhookCheck {
+  topics: Record<string, SmsWebhookState>;
+  created: number;
+  checkedAt: string;
+}
+
+/** Where the last check of a store's per-store topics is kept (the builder reads it instead of asking Shopify on every page). */
+export const smsWebhookCheckKey = (storeId: string) => `sms:webhooks:${storeId}`;
+const CHECK_TTL_S = 26 * 3600;
+
+/** The last check of a store's per-store topics, if one is kept. */
+export async function lastSmsWebhookCheck(coord: Coord, storeId: string): Promise<SmsWebhookCheck | null> {
+  const raw = await coord.peek(smsWebhookCheckKey(storeId)).catch(() => null);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as SmsWebhookCheck;
+  } catch {
+    return null;
+  }
+}
+
+/** Subscribe the store to the per-store topics its scopes allow; how many were made now. */
+export async function ensureSmsWebhooks(store: Pick<Store, "id" | "grantedScopes">, gql: InventoryGql, coord?: Coord): Promise<number> {
+  return (await checkSmsWebhooks(store, gql, coord)).created;
+}
+
+/** Ask Shopify which per-store topics the store is subscribed to, subscribe what's missing, and keep the answer (when given `coord`). */
+export async function checkSmsWebhooks(store: Pick<Store, "id" | "grantedScopes">, gql: InventoryGql, coord?: Coord): Promise<SmsWebhookCheck> {
   const scopes = expandScopes(store.grantedScopes);
+  const topics: Record<string, SmsWebhookState> = Object.fromEntries(SMS_WEBHOOK_TOPICS.map((t) => [t.topic, scopes.has(t.scope) ? "refused" : "no_scope"]));
   const wanted = SMS_WEBHOOK_TOPICS.filter((t) => scopes.has(t.scope));
-  if (!wanted.length) return 0;
+  const result: SmsWebhookCheck = { topics, created: 0, checkedAt: new Date().toISOString() };
+  if (!wanted.length) {
+    await coord?.put(smsWebhookCheckKey(store.id), JSON.stringify(result), CHECK_TTL_S).catch(() => {});
+    return result;
+  }
   const uri = `${env().API_URL}/webhooks/shopify`;
   const have = new Set<string>();
   let cursor: string | null = null;
@@ -275,19 +342,23 @@ export async function ensureSmsWebhooks(store: Pick<Store, "id" | "grantedScopes
     if (!d.webhookSubscriptions.pageInfo.hasNextPage || !d.webhookSubscriptions.pageInfo.endCursor) break;
     cursor = d.webhookSubscriptions.pageInfo.endCursor;
   }
-  let created = 0;
   for (const t of wanted) {
-    if (have.has(t.topic)) continue;
+    if (have.has(t.topic)) {
+      topics[t.topic] = "subscribed";
+      continue;
+    }
     const r = await gql<{ webhookSubscriptionCreate: { webhookSubscription: { id: string } | null; userErrors: Array<{ message: string }> } }>(WEBHOOK_SUBSCRIPTION_CREATE, { topic: t.topic, sub: { uri } });
     const errs = r.webhookSubscriptionCreate.userErrors;
     // "Address for this topic has already been taken": subscribed already. Anything else (protected
     // customer data not approved yet, for one) is logged: consent still arrives with orders and checkouts.
     if (errs.length && !errs.every((e) => /already been taken/i.test(e.message))) {
-      logger.warn({ storeId: store.id, topic: t.topic, errors: errs.map((e) => e.message) }, "sms consent webhook subscription refused");
+      logger.warn({ storeId: store.id, topic: t.topic, errors: errs.map((e) => e.message) }, "sms customer webhook subscription refused");
       continue;
     }
-    created++;
+    topics[t.topic] = "subscribed";
+    if (!errs.length) result.created++;
   }
-  if (created) logger.info({ storeId: store.id, created }, "sms consent webhooks subscribed");
-  return created;
+  if (result.created) logger.info({ storeId: store.id, created: result.created }, "sms customer webhooks subscribed");
+  await coord?.put(smsWebhookCheckKey(store.id), JSON.stringify(result), CHECK_TTL_S).catch(() => {});
+  return result;
 }

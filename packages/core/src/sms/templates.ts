@@ -171,6 +171,21 @@ export async function templateAction(store: Pick<Store, "id" | "workspaceId">, i
   return templateOf(store.id, id);
 }
 
+/**
+ * Submit and approve a template's latest version in one go, unless it is approved already (an
+ * owner or admin turning on something they wrote: Set up SMS, the automation builder). Every
+ * check of the two steps applies, and both are audited in their name.
+ */
+export async function approveLatestVersion(store: Pick<Store, "id" | "workspaceId">, templateId: string, actor: Actor, note: string) {
+  const t = await templateOf(store.id, templateId);
+  const latest = t.versions[0]!;
+  if (latest.status === "approved" && t.status !== "archived") return;
+  if (t.status === "archived") await templateAction(store, templateId, "restore", actor);
+  if (latest.status === "approved") return;
+  if (latest.status === "draft") await templateAction(store, templateId, "submit", actor);
+  await templateAction(store, templateId, "approve", actor, note);
+}
+
 /** The version messages from this template use now, or null when none is approved (or the template is archived). */
 export async function approvedVersionOf(storeId: string, templateId: string): Promise<(SmsTemplateVersion & { template: SmsTemplate }) | null> {
   const t = await systemDb.smsTemplate.findFirst({ where: { id: templateId, storeId } });

@@ -4,14 +4,19 @@ import { resetDb } from "@app/db/testing";
 import { memoryBlobs, memoryCoord, memoryMailer, memoryQueues, resetEnvCache, type FetchLike } from "@app/core";
 import {
   ACCOUNT_HOLD_KEY,
+  activateAutomation,
   applyOptOut,
   applySmsEvent,
   campaignAction,
+  checkSmsWebhooks,
   createRule,
   createTemplate,
+  deleteAutomation,
   fakeSmsProvider,
   newOptOutCode,
+  pauseAutomation,
   ruleAction,
+  saveAutomation,
   saveCampaign,
   saveSender,
   saveSetupDraft,
@@ -704,5 +709,73 @@ describe("opt-out lists and campaigns", () => {
     expect(a.code).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(a.code).not.toBe(b.code);
     expect(a.hash).toBe(sha256Hex(a.code));
+  });
+});
+
+describe("automations from the builder", () => {
+  /** Shopify's Admin API for the per-store subscriptions: none yet, and each one made when asked. */
+  function fakeShopify() {
+    const created: string[] = [];
+    const gql = (async (query: string, vars: { topic?: string }) => {
+      if (query.includes("webhookSubscriptions(")) return { webhookSubscriptions: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } };
+      created.push(vars.topic!);
+      return { webhookSubscriptionCreate: { webhookSubscription: { id: `gid://shopify/WebhookSubscription/${created.length}` }, userErrors: [] } };
+    }) as never;
+    return { gql, created };
+  }
+
+  const subscribed = { state: "subscribed", opt_in_level: "single_opt_in", consent_updated_at: new Date(Date.now() - 60_000).toISOString(), consent_collected_from: "SHOPIFY" };
+  const customer = (over: Record<string, unknown> = {}) => ({ id: 4401, first_name: "Ana", phone: "+61412000111", created_at: new Date().toISOString(), updated_at: new Date().toISOString(), sms_marketing_consent: subscribed, default_address: { country_code: "AU" }, ...over });
+
+  it("welcomes a new customer subscribed to SMS marketing once, and nobody else, after subscribing the store to new accounts", async () => {
+    const created = await setupStore();
+    const store = await systemDb.store.update({ where: { id: created.id }, data: { grantedScopes: ["read_orders", "read_customers"] } });
+    const welcome = await saveAutomation(store, null, { name: "Welcome", trigger: "customer_registered", body: "Welcome to {{business_name}}, {{customer_name}}! Opt out: {{opt_out_url}}", ...ANY_HOUR }, actor);
+    // Not asked yet, and Shopify can't be reached here: it can't be turned on.
+    await expect(activateAutomation(store, welcome.id, { confirm: true }, deps, actor)).rejects.toThrow(/Not checked with Shopify/);
+    const shopify = fakeShopify();
+    const check = await checkSmsWebhooks(store, shopify.gql, coord);
+    expect(check.topics).toEqual({ CUSTOMERS_MARKETING_CONSENT_UPDATE: "subscribed", CUSTOMERS_CREATE: "subscribed" });
+    expect(shopify.created).toEqual(["CUSTOMERS_MARKETING_CONSENT_UPDATE", "CUSTOMERS_CREATE"]);
+    expect((await activateAutomation(store, welcome.id, { confirm: true }, deps, actor)).status).toBe("active");
+
+    await event(store, "customers/create", customer(), "wh-c1");
+    await event(store, "customers/create", customer(), "wh-c1-retry");
+    await event(store, "customers/update", customer({ first_name: "Anna" }));
+    await event(store, "customers/create", customer({ id: 4402, phone: "+61412000222", sms_marketing_consent: { ...subscribed, state: "not_subscribed" } }));
+    await event(store, "customers/create", customer({ id: 4403, phone: null }));
+    await drain();
+    expect(sms.sent).toHaveLength(1);
+    expect(sms.sent[0]).toMatchObject({ destination: "+61412000111", messageType: "PROMOTIONAL" });
+    expect(sms.sent[0]!.body).toMatch(/^Welcome to Green Leaf, Ana! Opt out: http\S+\/stop\?c=[A-Za-z0-9]{10}$/);
+    expect((await jobs(store.id)).map((j) => [j.trigger, j.status, j.reason])).toEqual([
+      ["customer_registered", "accepted", null],
+      ["customer_registered", "skipped", "no_marketing_consent"],
+      ["customer_registered", "skipped", "no_phone"],
+    ]);
+  });
+
+  it("runs its delay and conditions, and pausing or deleting it cancels what waits", async () => {
+    const store = await setupStore();
+    const a = await saveAutomation(store, null, { name: "Big orders", trigger: "order_created", body: "Thanks {{customer_name}}! Order {{order_number}} is confirmed.", delayMinutes: 30, conditions: [{ field: "order_total", op: "gte", value: 50 }], ...ANY_HOUR }, actor);
+    await activateAutomation(store, a.id, { confirm: true }, deps, actor);
+    await event(store, "orders/create", order({ total_price: "20.00" }));
+    await event(store, "orders/create", order());
+    const [waiting] = await jobs(store.id);
+    expect(waiting).toMatchObject({ status: "scheduled", trigger: "order_created", ruleId: a.id });
+    expect(waiting!.sendAfter.getTime()).toBeGreaterThan(Date.now() + 25 * 60_000);
+    expect(await jobs(store.id)).toHaveLength(1);
+
+    await pauseAutomation(store, a.id, actor);
+    expect((await systemDb.smsMessageJob.findUniqueOrThrow({ where: { id: waiting!.id } })).status).toBe("cancelled");
+    await event(store, "orders/create", order());
+    expect(await jobs(store.id)).toHaveLength(1);
+
+    await activateAutomation(store, a.id, { confirm: true }, deps, actor);
+    await event(store, "orders/create", order());
+    expect(await deleteAutomation(store, a.id, actor)).toEqual({ cancelled: 1 });
+    expect(await systemDb.smsAutomationRule.count({ where: { storeId: store.id } })).toBe(0);
+    await sendDue(store.id);
+    expect(sms.sent).toHaveLength(0);
   });
 });

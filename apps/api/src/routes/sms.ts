@@ -39,6 +39,7 @@ import { limit, LIMITS } from "../rateLimit.js";
 import { actorNames, actorOf, base, publicMessage, publicSender, publicTemplate, publicVersion, requireSmsContacts, SMS_MANAGE, SMS_READ, smsDeps, smsStore } from "./smsCommon.js";
 import { smsActivityRoutes } from "./smsActivity.js";
 import { smsOpsRoutes } from "./smsOps.js";
+import { smsAutomationRoutes } from "./smsAutomations.js";
 import { smsSetupRoutes } from "./smsSetup.js";
 
 /**
@@ -103,7 +104,7 @@ export function smsRoutes(app: App, deps: Deps) {
     const input = smsSenderSchema.parse(await body(c));
     const saved = await saveSender(store, input, actorOf(c, a));
     // Shopify's consent changes for this store, when it granted read_customers (best effort: consent also comes with orders).
-    await ensureSmsWebhooks(store, storeGraphql(store, deps.coord, deps.fetchImpl)).catch((err: unknown) => logger.warn({ err, storeId }, "sms consent webhook subscription failed"));
+    await ensureSmsWebhooks(store, storeGraphql(store, deps.coord, deps.fetchImpl), deps.coord).catch((err: unknown) => logger.warn({ err, storeId }, "sms consent webhook subscription failed"));
     return c.json({ sender: publicSender(saved, true) });
   });
 
@@ -323,4 +324,5 @@ export function smsRoutes(app: App, deps: Deps) {
   smsOpsRoutes(app, deps);
   smsActivityRoutes(app, deps);
   smsSetupRoutes(app, deps);
+  smsAutomationRoutes(app, deps);
 }
