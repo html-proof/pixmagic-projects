@@ -71,10 +71,12 @@ const connectionGone = (err: unknown) => err instanceof Prisma.PrismaClientKnown
 const INT_MAX = 2_147_483_647;
 
 /**
- * Replace what's stored for these days with what the platform reports now (campaigns can disappear).
- * Null when the connection was deleted meanwhile (a disconnect while this ran): nothing is written.
+ * Replace what's stored for these days with what the platform reports now (campaigns can disappear),
+ * then keep each campaign's latest name and status (ad_campaigns). `withStatuses` adds statuses the rows
+ * don't carry (Meta's), asked only once the days are stored. Null when the connection was deleted
+ * meanwhile (a disconnect while this ran): nothing is written, and nothing more is asked.
  */
-export async function storeAdDays(conn: AdConnection, since: string, until: string, rows: AdDayRow[]): Promise<number | null> {
+export async function storeAdDays(conn: AdConnection, since: string, until: string, rows: AdDayRow[], withStatuses?: (rows: AdDayRow[]) => Promise<AdDayRow[]>): Promise<number | null> {
   const inRange = rows.filter((r) => r.day >= since && r.day <= until);
   try {
     await systemDb.$transaction([
@@ -107,7 +109,7 @@ export async function storeAdDays(conn: AdConnection, since: string, until: stri
     if (connectionGone(err)) return null;
     throw err;
   }
-  await storeCampaigns(conn, rows).catch((err: unknown) => {
+  await storeCampaigns(conn, withStatuses ? await withStatuses(rows) : rows).catch((err: unknown) => {
     if (!connectionGone(err)) logger.warn({ err, connectionId: conn.id }, "ad campaigns' statuses not stored");
   });
   return inRange.length;
@@ -323,7 +325,7 @@ async function fetchAndStore(conn: AdConnection, token: string, since: string, u
     } catch (err) {
       throw await metaPermissionProblem(cfg, token, err);
     }
-    return storeAdDays(conn, since, until, await withMetaStatuses(cfg, token, conn.accountId, rows));
+    return storeAdDays(conn, since, until, rows, (stored) => withMetaStatuses(cfg, token, conn.accountId, stored));
   }
   if (conn.provider === "google") {
     // A demo connection reads bizinsights' generator; a real one Google, through the OAuth client (ads/googleAdsSource.ts).
