@@ -232,7 +232,7 @@ const fulfillmentTone = (s: string | null | undefined): Tone =>
   s === "fulfilled" ? "good" : s === "restocked" || s === "request_declined" || s === null ? "neutral" : "warn";
 
 /** Order number, linking to the order in the merchant's Shopify admin when we know its id. */
-function OrderName({ o, shopDomain }: { o: RecentOrder; shopDomain: string }) {
+export function OrderName({ o, shopDomain }: { o: RecentOrder; shopDomain: string }) {
   const cls = o.cancelled ? "line-through" : "";
   if (!o.shopifyId) return <span className={cls}>{o.name}</span>;
   return (

@@ -1,0 +1,655 @@
+"use client";
+import Link from "next/link";
+import { useState, type ReactNode } from "react";
+import { ArrowRight, ChevronRight, CircleCheck, Info, Lightbulb, Megaphone, OctagonAlert, Package, Plus, ReceiptText, Rocket, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
+import type { Health } from "@app/shared/health";
+import type { AdSpendProvider } from "@app/shared/ads";
+import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
+import { ShopifyIcon } from "@/components/ShopifyIcon";
+import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { shownFigures, upToWords } from "./adFigures";
+import { Donut, type DonutSlice } from "./Charts";
+import { fmtDateTime, fmtMoneyCompact, fmtTimes, humanize } from "./format";
+import { ChangeText } from "./HomeCards";
+import { LineChart } from "./LineChart";
+import { OrderName } from "./Modules";
+import { businessHealth } from "./Overview";
+import type { Topic } from "./topics";
+import type { AdsModule, Overview, RecentOrder } from "./types";
+
+// ---------------------------------------------------------------------------
+// The dashboard under its four headline numbers, in the owner's design (2026-10-24): sales against
+// ad spend and what is left after the costs we know, then sales, advertising and best sellers,
+// then costs, recent orders and key insights, and the integrations strip at the foot. Every figure
+// is one the overview already carries. What the store's data can't tell (fees, postage, apps and
+// staff; shoppers' names) isn't drawn, and the panels say so rather than guess.
+// ---------------------------------------------------------------------------
+
+/** One colour per thing, the same in every panel (the reference palette's first three slots, validated together). */
+const SALES = "var(--viz-cat-3)";
+const PRODUCT_COSTS = "var(--viz-cat-1)";
+const AD_SPEND = "var(--viz-cat-2)";
+
+const PROVIDER: Record<AdSpendProvider, { name: string; Icon: (p: { size?: number }) => ReactNode }> = {
+  google: { name: "Google Ads", Icon: GoogleAdsIcon },
+  meta: { name: "Meta Ads", Icon: MetaIcon },
+};
+
+/** An icon on a solid disc, as each panel's header has one. */
+function Disc({ icon: IconCmp, className }: { icon: LucideIcon; className: string }) {
+  return (
+    <span aria-hidden className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${className}`}>
+      <IconCmp className="h-5 w-5" strokeWidth={2} />
+    </span>
+  );
+}
+
+/** "View details →" at a panel's top right: opens the area's details, or its own page. */
+function DetailsLink({ onClick, href, children = "View details" }: { onClick?: () => void; href?: string; children?: ReactNode }) {
+  const cls = "inline-flex items-center gap-1 whitespace-nowrap rounded-md text-xs font-semibold text-accent hover:underline";
+  const inner = (
+    <>
+      {children}
+      <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+    </>
+  );
+  return href ? (
+    <Link href={href} className={cls}>{inner}</Link>
+  ) : (
+    <button type="button" onClick={onClick} className={cls}>{inner}</button>
+  );
+}
+
+/** A panel of the home page: a heading with its one line, a way into the details, and its body. */
+function HomeCard({ id, title, sub, icon, action, className = "", children }: { id: string; title: string; sub?: ReactNode; icon?: ReactNode; action?: ReactNode; className?: string; children: ReactNode }) {
+  return (
+    <section id={id} aria-labelledby={`${id}-h`} data-testid={`home-${id}`} className={`card animate-rise flex min-w-0 flex-col rounded-2xl ${className}`}>
+      <div className="flex items-start gap-3">
+        {icon}
+        <div className="min-w-0 flex-1">
+          <h2 id={`${id}-h`} className="font-semibold leading-tight">{title}</h2>
+          {sub && <p className="mt-1 text-xs text-muted">{sub}</p>}
+        </div>
+        {action && <div className="shrink-0 pt-0.5">{action}</div>}
+      </div>
+      <div className="mt-4 flex min-w-0 flex-1 flex-col">{children}</div>
+    </section>
+  );
+}
+
+/** A figure in a panel's row of three: label under the number, the change under that. */
+function Figure({ label, value, change }: { label: string; value: ReactNode; change?: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="truncate text-lg font-bold tabular-nums tracking-tight sm:text-xl">{value}</p>
+      <p className="truncate text-xs text-muted">{label}</p>
+      {change && <div className="mt-1.5">{change}</div>}
+    </div>
+  );
+}
+
+/** A legend row: swatch (or none, for a line that only adds up the others), name, figure and its share. */
+function LegendRow({ color, label, value, share, sub = false }: { color?: string; label: ReactNode; value: ReactNode; share?: string | null; sub?: boolean }) {
+  return (
+    <li className={`flex min-w-0 items-center gap-2 ${sub ? "pl-4 text-xs text-muted" : "text-sm"}`}>
+      {!sub && <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color ?? "transparent", boxShadow: color ? undefined : "inset 0 0 0 1.5px var(--muted)" }} />}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="font-medium tabular-nums">{value}</span>
+      {share !== undefined && <span className="w-12 text-right text-xs tabular-nums text-muted">{share ?? ""}</span>}
+    </li>
+  );
+}
+
+// ---- What the costs are -------------------------------------------------------------------------
+
+type CostState = "known" | "loading" | "missing" | "unavailable";
+
+interface Costs {
+  /** Shopify's cost of goods sold for the dates (its profit report), from the cost per item recorded with each sale. */
+  productCosts: number | null;
+  productState: CostState;
+  /** Sales with no cost recorded in Shopify: their cost isn't in `productCosts`. */
+  uncosted: number | null;
+  /** Ad spend for the whole range, in the store's currency; null while any account lacks a day of it. */
+  adSpend: number | null;
+  adState: CostState;
+  byProvider: Array<{ provider: AdSpendProvider; spend: number }>;
+}
+
+/**
+ * Ads whose spend can be set against the store's sales: the same currency, and no demo account
+ * among them (the demo's spend is simulated). Null otherwise.
+ */
+export function comparableAds(ov: Overview, currency: string): AdsModule | null {
+  const ads = ov.modules.ads;
+  return ads && ads.accounts.length > 0 && ads.currency === currency && !ads.demo ? ads : null;
+}
+
+function costsOf(ov: Overview, ads: AdsModule | null, adsOn: boolean): Costs {
+  const p = ov.modules.profit;
+  const c = p?.status === "ready" ? p.current : null;
+  const productCosts = c?.costOfGoodsSold ?? null;
+  const productState: CostState = productCosts !== null ? "known" : p?.status === "loading" ? "loading" : p ? "unavailable" : "missing";
+  const adSpend = ads?.current ? ads.current.spend : null;
+  const adState: CostState = !adsOn ? "missing" : !ads ? (ov.modules.ads ? "unavailable" : "missing") : adSpend !== null ? "known" : "unavailable";
+  return {
+    productCosts,
+    productState,
+    uncosted: c?.netSalesWithoutCost ?? null,
+    adSpend,
+    adState,
+    byProvider: ads && adSpend !== null ? ads.byProvider.filter((b) => b.current).map((b) => ({ provider: b.provider, spend: b.current!.spend })) : [],
+  };
+}
+
+/** A cost with no figure, in words: product costs need Shopify's reports, ad spend an ad account. */
+const STATE_WORDS: Record<"products" | "ads", Record<Exclude<CostState, "known">, string>> = {
+  products: { loading: "Loading…", missing: "Not available", unavailable: "Not available" },
+  ads: { loading: "Loading…", missing: "Not connected", unavailable: "Unavailable" },
+};
+
+// ---- Sales vs ad spend --------------------------------------------------------------------------
+
+/**
+ * Net sales day by day beside what the ads cost that day: the mock's "Revenue vs Expenses", with
+ * the one cost that is known day by day. Product costs come from Shopify's profit report, for the
+ * dates as a whole, so they are in the profit panel beside this one.
+ */
+export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; currency: string; adsOn: boolean; manage: boolean }) {
+  const s = ov.modules.sales_overview!;
+  const ads = adsOn ? comparableAds(ov, currency) : null;
+  const days = s.series.map((d) => d.day);
+  const spend = new Map(ads?.series.map((d) => [d.day, d.spend]) ?? []);
+  const series = [
+    { key: "sales", label: "Net sales", color: SALES, values: s.series.map((d) => d.netSales) },
+    ...(ads ? [{ key: "ads", label: "Ad spend", color: AD_SPEND, values: days.map((d) => spend.get(d) ?? null) }] : []),
+  ];
+  const money = (n: number) => fmtMoney(n, currency);
+  const other = adsOn ? ov.modules.ads : undefined;
+  return (
+    <HomeCard
+      id="sales-vs-ads"
+      title="Sales vs ad spend"
+      sub={ads ? "Net sales each day, beside what your ads cost that day." : "Net sales each day."}
+      className="xl:col-span-2"
+    >
+      <div className="mb-3 flex flex-wrap gap-x-8 gap-y-2">
+        <Figure label="Net sales" value={money(s.current.netSales)} />
+        {ads && <Figure label="Ad spend" value={ads.current ? money(ads.current.spend) : "—"} />}
+        {ads?.shareOfSales !== null && ads?.shareOfSales !== undefined && <Figure label="Ads cost, of net sales" value={fmtPct(ads.shareOfSales)} />}
+      </div>
+      <LineChart
+        days={days}
+        series={series}
+        bars
+        today={ov.today}
+        height={240}
+        label={ads ? "Net sales and ad spend by day" : "Net sales by day"}
+        format={money}
+        fmtAxis={(v) => fmtMoneyCompact(v, currency)}
+      />
+      {!ads && adsOn && (
+        <p className="mt-3 text-xs text-muted">
+          {other?.demo
+            ? "The Google Ads demo's spend is simulated, so it isn't set against your sales."
+            : other && other.accounts.length > 0 && other.currency !== currency
+              ? `Your ad accounts report in ${other.currency}, so their spend isn't set against your ${currency} sales.`
+              : <>Connect Meta or Google Ads to see your ad spend beside your sales.{manage && <> <Link href="/settings/integrations" className="font-medium text-accent hover:underline">Connect ad accounts</Link></>}</>}
+        </p>
+      )}
+    </HomeCard>
+  );
+}
+
+// ---- Profit overview ----------------------------------------------------------------------------
+
+/**
+ * What is left of net sales after the costs bizinsights can see: Shopify's cost of goods sold and
+ * the ad spend. Not net profit (fees, postage, apps and staff aren't known), and it says so.
+ */
+export function ProfitOverview({ ov, currency, adsOn }: { ov: Overview; currency: string; adsOn: boolean }) {
+  const net = ov.modules.sales_overview!.current.netSales;
+  const k = costsOf(ov, adsOn ? comparableAds(ov, currency) : null, adsOn);
+  const money = (n: number) => fmtMoney(n, currency);
+  const share = (n: number) => (net > 0 ? fmtPct(n / net) : null);
+  const taken = (k.productCosts ?? 0) + (k.adSpend ?? 0);
+  const left = net - taken;
+  const what = k.productCosts !== null && k.adSpend !== null ? "After product costs and ads" : k.productCosts !== null ? "After product costs" : k.adSpend !== null ? "After ad spend" : "Net sales";
+  const slices: DonutSlice[] = [
+    { key: "left", label: "Left after these costs", value: left, color: SALES },
+    { key: "products", label: "Product costs", value: k.productCosts ?? 0, color: PRODUCT_COSTS },
+    { key: "ads", label: "Ad spend", value: k.adSpend ?? 0, color: AD_SPEND },
+  ];
+  return (
+    <HomeCard id="profit" title="Business profit overview" sub="What's left of your net sales after the costs bizinsights can see.">
+      {/* Ring and legend side by side when the panel is wide enough, else one above the other. */}
+      <div className="@container">
+        <div className="flex flex-col items-center gap-5 @[25rem]:flex-row">
+          <Donut slices={slices} label={`${what}: ${money(left)}${net > 0 ? `, ${fmtPct(left / net)} of net sales` : ""}`}>
+            <span className={`text-lg font-bold tabular-nums tracking-tight ${left < 0 ? "text-danger" : ""}`}>{money(left)}</span>
+            <span className="text-[11px] leading-tight text-muted">{what}</span>
+            {net > 0 && taken > 0 && <span className="mt-0.5 text-[11px] font-semibold text-good">{fmtPct(left / net)} margin</span>}
+          </Donut>
+          <ul className="w-full min-w-0 flex-1 space-y-2.5">
+            <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />
+            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : STATE_WORDS.products[k.productState as Exclude<CostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
+            {adsOn && <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : STATE_WORDS.ads[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />}
+            <LegendRow color={SALES} label="Left after these costs" value={money(left)} share={share(left)} />
+          </ul>
+        </div>
+      </div>
+      <p className="mt-4 text-xs text-muted">
+        Not net profit: fees, shipping costs, apps and staff aren&apos;t taken off.
+        {k.productState === "known" && k.uncosted !== null && k.uncosted > 0 && <> {money(k.uncosted)} of sales had no cost recorded in Shopify, so their cost isn&apos;t included.</>}
+        {k.productState === "unavailable" && <> Product costs come from Shopify&apos;s profit report, which isn&apos;t available for this store.</>}
+        {k.productState === "missing" && <> Product costs need access to Shopify&apos;s reports.</>}
+      </p>
+    </HomeCard>
+  );
+}
+
+// ---- Sales performance --------------------------------------------------------------------------
+
+export function SalesPerformance({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+  const s = ov.modules.sales_overview!;
+  const total = s.current.totalSales !== undefined;
+  const money = (n: number) => fmtMoney(n, currency);
+  return (
+    <HomeCard
+      id="sales-performance"
+      title="Sales performance"
+      sub="Total sales and orders from your Shopify store."
+      icon={
+        <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-white">
+          <ShopifyIcon size={20} />
+        </span>
+      }
+      action={<DetailsLink onClick={() => onOpen("sales")} />}
+    >
+      <div className="grid grid-cols-3 gap-3 divide-x divide-border">
+        <Figure label={total ? "Total sales" : "Net sales"} value={money(total ? s.current.totalSales! : s.current.netSales)} change={<ChangeText value={total ? s.deltas.totalSales : s.deltas.netSales} />} />
+        <div className="pl-3">
+          <Figure label="Orders" value={fmtNum(s.current.orders)} change={<ChangeText value={s.deltas.orders} />} />
+        </div>
+        <div className="pl-3">
+          <Figure label="Average order" value={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} change={<ChangeText value={s.deltas.averageOrderValue} />} />
+        </div>
+      </div>
+      <div className="mt-4 flex-1">
+        <LineChart
+          days={s.series.map((d) => d.day)}
+          series={[{ key: "sales", label: total ? "Total sales" : "Net sales", color: SALES, values: s.series.map((d) => (total ? (d.totalSales ?? d.netSales) : d.netSales)) }]}
+          area
+          today={ov.today}
+          height={190}
+          label={total ? "Total sales by day" : "Net sales by day"}
+          format={money}
+          fmtAxis={(v) => fmtMoneyCompact(v, currency)}
+        />
+      </div>
+    </HomeCard>
+  );
+}
+
+// ---- Advertising performance --------------------------------------------------------------------
+
+/** Each connected ad platform's spend, clicks and return on ad spend, one tab each. */
+export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: boolean }) {
+  const ads = ov.modules.ads;
+  const providers = (ads?.byProvider ?? []).filter((p) => p.accounts.length > 0);
+  const [picked, setPicked] = useState<AdSpendProvider | null>(null);
+  const p = providers.find((x) => x.provider === picked) ?? providers[0];
+  const icon = <Disc icon={Megaphone} className="bg-sky-600 text-white dark:bg-sky-500" />;
+  if (!ads || !p) {
+    return (
+      <HomeCard id="advertising" title="Advertising performance" sub="Ad spend, clicks and return on ad spend across your ad platforms." icon={icon}>
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+          <span aria-hidden className="flex items-center gap-2">
+            <GoogleAdsIcon size={22} />
+            <MetaIcon size={22} />
+          </span>
+          <p className="max-w-xs text-sm text-muted">Connect Google Ads or Meta Ads to see what your ads cost and what they bring back.</p>
+          {manage ? (
+            <Link href="/settings/integrations" className="btn-primary text-xs">Connect ad accounts</Link>
+          ) : (
+            <p className="text-xs text-muted">A workspace admin can connect them.</p>
+          )}
+        </div>
+      </HomeCard>
+    );
+  }
+  const { totals, through } = shownFigures(p);
+  const money = (n: number) => fmtMoney(n, ads.currency);
+  const series = ads.seriesByProvider.find((x) => x.provider === p.provider)?.series ?? [];
+  const clicks = totals ? (totals.linkClicks ?? totals.clicks) : null;
+  return (
+    <HomeCard
+      id="advertising"
+      title="Advertising performance"
+      sub="Ad spend, clicks and return on ad spend across your ad platforms."
+      icon={icon}
+      action={<DetailsLink href="/advertising" />}
+    >
+      <div role="tablist" aria-label="Ad platform" className="flex gap-1 rounded-xl bg-bg p-1">
+        {providers.map((x) => {
+          const { name, Icon } = PROVIDER[x.provider];
+          const on = x.provider === p.provider;
+          return (
+            <button
+              key={x.provider}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => setPicked(x.provider)}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${on ? "bg-surface text-text shadow-[var(--shadow)]" : "text-muted hover:text-text"}`}
+            >
+              <Icon size={16} />
+              {name}
+              {x.demo && <span className="rounded-full bg-warn/10 px-1.5 text-[10px] font-semibold text-warn">Demo</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-3 divide-x divide-border">
+        <Figure label="Ad spend" value={totals ? money(totals.spend) : "—"} change={<ChangeText value={p.deltas.spend} neutral />} />
+        <div className="pl-3">
+          <Figure label={totals?.linkClicks !== null ? "Link clicks" : "Clicks"} value={clicks !== null ? fmtNum(clicks) : "—"} change={<ChangeText value={p.deltas.linkClicks} />} />
+        </div>
+        <div className="pl-3">
+          <Figure label="ROAS" value={fmtTimes(totals?.roas ?? null)} change={<ChangeText value={p.deltas.roas} />} />
+        </div>
+      </div>
+      {!totals && <p className="mt-2 text-xs text-muted">Some days of these dates haven&apos;t been read from {PROVIDER[p.provider].name} yet.</p>}
+      {totals && through && <p className="mt-2 text-xs text-muted">Figures {upToWords(through)}.</p>}
+      <div className="mt-4 flex-1">
+        <LineChart
+          days={series.map((d) => d.day)}
+          series={[{ key: "spend", label: "Ad spend", color: AD_SPEND, values: series.map((d) => d.spend) }]}
+          bars
+          today={ov.today}
+          height={170}
+          label={`${PROVIDER[p.provider].name} spend by day`}
+          format={money}
+          fmtAxis={(v) => fmtMoneyCompact(v, ads.currency)}
+        />
+      </div>
+    </HomeCard>
+  );
+}
+
+// ---- Top products -------------------------------------------------------------------------------
+
+export function TopProductsHome({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+  const tp = ov.modules.top_products!;
+  const net = ov.modules.sales_overview?.current.netSales ?? 0;
+  const items = [...tp.items].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+  const top = Math.max(0, ...items.map((p) => p.revenue));
+  return (
+    <HomeCard
+      id="top-products"
+      title="Top products"
+      sub="Your best sellers by net revenue."
+      icon={<Disc icon={Package} className="bg-blue-600 text-white dark:bg-blue-500" />}
+      action={<DetailsLink onClick={() => onOpen("products")}>View all</DetailsLink>}
+    >
+      {!tp.complete ? (
+        <p className="text-sm text-muted">Rankings show once every sale of these dates is imported and verified.</p>
+      ) : items.length === 0 ? (
+        <p className="text-sm text-muted">No products sold in these dates.</p>
+      ) : (
+        <ol className="space-y-3.5">
+          {items.map((p, i) => (
+            <li key={p.key} className="flex min-w-0 items-center gap-3">
+              <span className="w-4 shrink-0 text-center text-sm font-semibold tabular-nums text-muted">{i + 1}</span>
+              {p.imageUrl ? (
+                <img src={p.imageUrl} alt="" width={40} height={40} loading="lazy" className="h-10 w-10 shrink-0 rounded-lg border border-border object-cover" />
+              ) : (
+                <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-bg text-muted">
+                  <Package className="h-5 w-5" strokeWidth={1.6} />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="truncate text-sm font-medium" title={p.title}>{p.title}</p>
+                  <p className="shrink-0 text-sm font-semibold tabular-nums">{fmtMoney(p.revenue, currency)}</p>
+                </div>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-text/[0.07]">
+                    <span className="animate-grow-x block h-full rounded-full" style={{ width: `${top > 0 ? Math.max(2, (p.revenue / top) * 100) : 0}%`, background: SALES }} />
+                  </span>
+                  <span className="w-11 shrink-0 text-right text-[11px] tabular-nums text-muted">{net > 0 && p.revenue > 0 ? fmtPct(p.revenue / net) : ""}</span>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </HomeCard>
+  );
+}
+
+// ---- Expenses breakdown -------------------------------------------------------------------------
+
+export function ExpensesBreakdown({ ov, currency, adsOn, manage }: { ov: Overview; currency: string; adsOn: boolean; manage: boolean }) {
+  const k = costsOf(ov, adsOn ? comparableAds(ov, currency) : null, adsOn);
+  const money = (n: number) => fmtMoney(n, currency);
+  const total = (k.productCosts ?? 0) + (k.adSpend ?? 0);
+  const share = (n: number) => (total > 0 ? fmtPct(n / total) : null);
+  const any = k.productCosts !== null || k.adSpend !== null;
+  return (
+    <HomeCard
+      id="expenses"
+      title="Expenses breakdown"
+      sub="The costs bizinsights can see for these dates."
+      icon={<Disc icon={Wallet} className="bg-emerald-600 text-white dark:bg-emerald-500" />}
+    >
+      <div className="@container">
+        <div className="flex flex-col items-center gap-5 @[25rem]:flex-row">
+          <Donut
+            slices={[
+              { key: "products", label: "Product costs", value: k.productCosts ?? 0, color: PRODUCT_COSTS },
+              { key: "ads", label: "Ad spend", value: k.adSpend ?? 0, color: AD_SPEND },
+            ]}
+            label={any ? `Costs we can see: ${money(total)}` : "No costs to show yet"}
+            size={150}
+            thickness={20}
+          >
+            <span className="text-base font-bold tabular-nums tracking-tight">{any ? money(total) : "—"}</span>
+            <span className="text-[11px] leading-tight text-muted">Costs we can see</span>
+          </Donut>
+          <ul className="w-full min-w-0 flex-1 space-y-2.5">
+            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : STATE_WORDS.products[k.productState as Exclude<CostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
+            {adsOn && (
+              <>
+                <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : STATE_WORDS.ads[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />
+                {k.byProvider.length > 1 && k.byProvider.map((b) => <LegendRow key={b.provider} sub label={PROVIDER[b.provider].name} value={money(b.spend)} share={share(b.spend)} />)}
+              </>
+            )}
+          </ul>
+        </div>
+      </div>
+      <p className="mt-4 text-xs text-muted">
+        Shipping costs, fees, apps and staff aren&apos;t included: bizinsights can&apos;t see them.
+        {adsOn && k.adState === "missing" && manage && (
+          <>
+            {" "}
+            <Link href="/settings/integrations" className="font-medium text-accent hover:underline">Connect your ad accounts</Link> to add ad spend.
+          </>
+        )}
+      </p>
+    </HomeCard>
+  );
+}
+
+// ---- Recent orders ------------------------------------------------------------------------------
+
+const PILL = {
+  green: "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300",
+  blue: "bg-sky-50 text-sky-700 dark:bg-sky-400/10 dark:text-sky-300",
+  amber: "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300",
+  red: "bg-red-50 text-red-700 dark:bg-red-400/10 dark:text-red-300",
+  grey: "bg-text/[0.06] text-muted",
+} as const;
+
+/**
+ * One word for where an order stands, as the design's status column has: cancelled, then shipped,
+ * then its payment. Payment, fulfillment and cancellation each need their own permission (Team &
+ * Access): with none of them in the answer there is no word, rather than a guess.
+ */
+function orderStatus(o: RecentOrder): { label: string; tone: keyof typeof PILL } | null {
+  if (o.cancelled) return { label: "Cancelled", tone: "red" };
+  if (o.fulfillmentStatus === "fulfilled") return { label: "Fulfilled", tone: "blue" };
+  const f = o.financialStatus;
+  if (!f) return null;
+  if (f === "paid") return { label: "Paid", tone: "green" };
+  if (f === "pending" || f === "authorized" || f === "partially_paid" || f === "expired") return { label: humanize(f), tone: "amber" };
+  return { label: humanize(f), tone: "grey" };
+}
+
+export function RecentOrdersHome({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+  const items = ov.modules.recent_orders!.items.slice(0, 5);
+  const tz = ov.store.timezone;
+  return (
+    <HomeCard
+      id="recent-orders"
+      title="Recent orders"
+      sub="The latest orders, whatever dates are picked."
+      icon={<Disc icon={ReceiptText} className="bg-emerald-600 text-white dark:bg-emerald-500" />}
+      action={<DetailsLink onClick={() => onOpen("orders")}>View all</DetailsLink>}
+    >
+      {items.length === 0 ? (
+        <p className="text-sm text-muted">Orders show here as soon as they come in from Shopify.</p>
+      ) : (
+        <div className="-mx-1 overflow-x-auto">
+          <table className="w-full min-w-[22rem] text-sm">
+            <thead className="text-left text-[11px] text-muted">
+              <tr>
+                <th className="px-1 pb-2 font-medium">Order</th>
+                <th className="px-1 pb-2 font-medium">Channel</th>
+                <th className="px-1 pb-2 text-right font-medium">Amount</th>
+                <th className="px-1 pb-2 font-medium">Status</th>
+                <th className="px-1 pb-2 text-right font-medium">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((o) => {
+                const st = orderStatus(o);
+                return (
+                  <tr key={o.id} className={`border-t border-border ${o.cancelled ? "text-muted" : ""}`}>
+                    <td className="whitespace-nowrap px-1 py-2.5 font-medium"><OrderName o={o} shopDomain={ov.store.shopDomain} /></td>
+                    <td className="max-w-[7rem] truncate px-1 py-2.5 text-muted">{o.channel}</td>
+                    <td className="whitespace-nowrap px-1 py-2.5 text-right tabular-nums">{fmtMoney(o.total, currency)}</td>
+                    <td className="px-1 py-2.5">{st && <span className={`whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${PILL[st.tone]}`}>{st.label}</span>}</td>
+                    <td className="whitespace-nowrap px-1 py-2.5 text-right text-xs text-muted">{fmtDateTime(o.createdAt, tz)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </HomeCard>
+  );
+}
+
+// ---- Key insights -------------------------------------------------------------------------------
+
+const INSIGHT: Record<Health, { icon: LucideIcon; row: string; disc: string; word: string }> = {
+  attention: { icon: OctagonAlert, row: "border-red-200/70 bg-red-50/60 dark:border-red-400/20 dark:bg-red-400/[0.07]", disc: "bg-red-100 text-red-700 dark:bg-red-400/15 dark:text-red-300", word: "Needs attention" },
+  watch: { icon: TriangleAlert, row: "border-amber-200/70 bg-amber-50/60 dark:border-amber-400/20 dark:bg-amber-400/[0.07]", disc: "bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300", word: "Keep an eye on" },
+  good: { icon: CircleCheck, row: "border-emerald-200/70 bg-emerald-50/60 dark:border-emerald-400/20 dark:bg-emerald-400/[0.07]", disc: "bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300", word: "Looking good" },
+  info: { icon: Info, row: "border-sky-200/70 bg-sky-50/60 dark:border-sky-400/20 dark:bg-sky-400/[0.07]", disc: "bg-sky-100 text-sky-700 dark:bg-sky-400/15 dark:text-sky-300", word: "For your info" },
+};
+
+/**
+ * The business health check's first four (worst first, `businessHealth`), each opening its area;
+ * `report`: whether the full report (the overview panel) is shared with this member ("View reports").
+ */
+export function KeyInsights({ ov, currency, onOpen, report }: { ov: Overview; currency: string; onOpen: (t: Topic) => void; report: boolean }) {
+  const checks = businessHealth(ov, currency).slice(0, 4);
+  return (
+    <HomeCard
+      id="insights"
+      title="Key insights"
+      sub="What stands out for these dates."
+      icon={<Disc icon={Lightbulb} className="bg-amber-400 text-white dark:bg-amber-500" />}
+      action={report ? <DetailsLink onClick={() => onOpen("overview")}>View all</DetailsLink> : undefined}
+    >
+      {checks.length === 0 ? (
+        <p className="text-sm text-muted">Nothing to point out yet: insights show once orders come in.</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {checks.map((c) => {
+            const look = INSIGHT[c.health];
+            return (
+              <li key={c.id}>
+                <button type="button" onClick={() => onOpen(c.topic)} className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors hover:border-accent/40 ${look.row}`} data-testid={`insight-${c.id}`}>
+                  <span aria-hidden className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${look.disc}`}>
+                    <look.icon className="h-4 w-4" strokeWidth={2.2} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold leading-snug">
+                      {c.area} <span className="font-normal text-muted">· {look.word}</span>
+                    </span>
+                    <span className="mt-0.5 block text-xs leading-relaxed text-muted">{c.text}</span>
+                  </span>
+                  <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-muted" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </HomeCard>
+  );
+}
+
+// ---- Grow your business -------------------------------------------------------------------------
+
+function Connection({ icon, name, on }: { icon: ReactNode; name: string; on: boolean }) {
+  return (
+    <li className="flex min-w-[9.5rem] items-center gap-2.5 rounded-xl border border-border bg-surface px-3 py-2.5">
+      <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-white">{icon}</span>
+      <span className="min-w-0">
+        <span className="block truncate text-xs font-semibold">{name}</span>
+        <span className={`mt-0.5 flex items-center gap-1 text-[11px] ${on ? "text-good" : "text-muted"}`}>
+          {on ? <CircleCheck aria-hidden className="h-3 w-3" strokeWidth={2.5} /> : <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-muted" />}
+          {on ? "Connected" : "Not connected"}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+/** The foot of the page for those who connect things: what is connected, and the way to more. */
+export function GrowBusiness({ ov, adsOn }: { ov: Overview; adsOn: boolean }) {
+  const con = ov.modules.ad_connections;
+  return (
+    <section aria-labelledby="grow-h" className="animate-rise flex flex-col gap-4 rounded-2xl border border-accent/20 bg-gradient-to-r from-accent/[0.08] to-accent/[0.02] p-5 xl:flex-row xl:items-center" data-testid="home-grow">
+      <div className="flex min-w-0 flex-1 items-center gap-3.5">
+        <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink">
+          <Rocket className="h-5 w-5" strokeWidth={2} />
+        </span>
+        <div className="min-w-0">
+          <h2 id="grow-h" className="font-semibold">Grow your business</h2>
+          <p className="mt-0.5 text-xs text-muted">Connect more channels to see your sales, ads and costs side by side.</p>
+        </div>
+        <Link href="/settings/integrations" className="btn-primary ml-auto hidden shrink-0 text-xs sm:inline-flex xl:ml-4">
+          Connect more integrations
+          <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+        </Link>
+      </div>
+      <ul className="flex flex-wrap gap-2.5">
+        <Connection icon={<ShopifyIcon size={18} />} name="Shopify" on />
+        {adsOn && <Connection icon={<GoogleAdsIcon size={18} />} name="Google Ads" on={(con?.google ?? 0) > 0} />}
+        {adsOn && <Connection icon={<MetaIcon size={18} />} name="Meta Ads" on={(con?.meta ?? 0) > 0} />}
+        <li>
+          <Link href="/settings/integrations" className="flex h-full min-h-[3.25rem] items-center gap-2 rounded-xl border border-dashed border-accent/40 px-3.5 text-xs font-semibold text-accent hover:bg-accent/[0.05]">
+            <Plus aria-hidden className="h-4 w-4" />
+            Add integration
+          </Link>
+        </li>
+      </ul>
+    </section>
+  );
+}

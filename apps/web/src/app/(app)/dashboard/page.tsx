@@ -9,11 +9,10 @@ import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/co
 import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
 import { HistoryLine } from "@/components/dashboard/HistoryLine";
-import { availableTopics, useDetailView } from "@/components/dashboard/topics";
-import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/Overview";
-import { AdvertisingSection } from "@/components/dashboard/Advertising";
+import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { KpiCard, SummaryCard } from "@/components/dashboard/HomeCards";
+import { KpiCard } from "@/components/dashboard/HomeCards";
+import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
@@ -155,12 +154,14 @@ function DashboardSkeleton() {
   return (
     <div className="space-y-4" aria-hidden>
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-32" />)}
+        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-32 rounded-2xl" />)}
       </div>
-      {[0, 1].map((i) => <div key={i} className="skeleton h-96 rounded-2xl" />)}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <div className="skeleton h-40 lg:col-span-3" />
-        <div className="skeleton h-40 lg:col-span-2" />
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="skeleton h-96 rounded-2xl xl:col-span-2" />
+        <div className="skeleton h-96 rounded-2xl" />
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {[0, 1, 2].map((i) => <div key={i} className="skeleton h-80 rounded-2xl" />)}
       </div>
     </div>
   );
@@ -331,7 +332,9 @@ export default function DashboardPage() {
   const exportHref = exportSection && store && asking ? apiHref(`/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}`) : null;
   const headerStore = ov?.store ?? store;
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
-  const topics = ov ? availableTopics(ov, contactsOn) : [];
+  // Advertising on the home page: only where the workspace offers it and this member is shown it.
+  const adsOn = offers("ads") && seesTopic(access, "ads", offers);
+  const manage = allowed("integrations.manage");
   const s = m?.sales_overview;
   const custom = appliedCustom(s);
 
@@ -470,11 +473,12 @@ export default function DashboardPage() {
 
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
-      {/* The page says each thing once: four numbers, sales day by day and month by month against
-          the years before (the owner's design, components/dashboard/OverviewCharts.tsx), one health
-          check and one sentence, then one card per area of the store (worst first). Every number
-          and card opens the full details (components/dashboard/TopicDetail.tsx), so nothing is
-          lost by keeping this page short. */}
+      {/* The owner's design (2026-10-24): four numbers on tinted tiles, sales against ad spend and
+          what's left after the costs we can see, then sales, advertising and best sellers, then
+          costs, recent orders and key insights (components/dashboard/HomePanels.tsx); sales day by
+          day and month by month against the years before (OverviewCharts.tsx); and the
+          integrations strip. Every number and panel opens the full details
+          (components/dashboard/TopicDetail.tsx). */}
       {s && (
         <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
@@ -489,6 +493,7 @@ export default function DashboardPage() {
               delta={s.deltas.totalSales ?? null}
               compared={compared}
               versus={versus}
+              spark={s.series.map((d) => d.totalSales ?? d.netSales)}
               // The store's own calculation, when it shows it: under Shopify's figure, named, never instead of it.
               extra={
                 custom ? (
@@ -501,37 +506,37 @@ export default function DashboardPage() {
               onClick={() => detail.open("sales")}
             />
           ) : (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
           )}
-          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
-          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
-          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} onClick={() => detail.open("products")} />
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
         </section>
+      )}
+
+      {ov && s && (
+        <div className="grid gap-4 xl:grid-cols-3">
+          <SalesVsAdSpend ov={ov} currency={cur} adsOn={adsOn} manage={manage} />
+          <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} />
+        </div>
+      )}
+
+      {/* Whichever of these this store and this member have; the grid closes up around the rest. */}
+      {ov && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {s && <SalesPerformance ov={ov} currency={cur} onOpen={detail.open} />}
+          {/* Not in a workspace that leaves advertising out (lib/features.ts), nor for a member not shown it. */}
+          {adsOn && <AdvertisingPerformance ov={ov} manage={manage} />}
+          {m?.top_products && <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} />}
+          {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} manage={manage} />}
+          {m?.recent_orders && <RecentOrdersHome ov={ov} currency={cur} onOpen={detail.open} />}
+          <KeyInsights ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview", offers)} />
+        </div>
       )}
 
       {ov && s && <OverviewCharts ov={ov} currency={cur} />}
 
-      {ov && (
-        <div className="grid gap-4 lg:grid-cols-5">
-          <div className={s ? "lg:col-span-3" : "lg:col-span-5"}>
-            <HealthOverview ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview")} />
-          </div>
-          {s && (
-            <div className="lg:col-span-2">
-              <SummaryCard aside={<DateRangeSelect r={dates} shown={shown} id="summary-range" label="Period" size="sm" />}>
-                <StoreSummary ov={ov} currency={cur} />
-              </SummaryCard>
-            </div>
-          )}
-        </div>
-      )}
-
-      {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}
-
-      {/* Ad platforms report about themselves, so they get their own section rather than a card in
-          the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx).
-          Not in a workspace that leaves advertising out (lib/features.ts). */}
-      {ov && offers("ads") && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} />}
+      {ov && manage && <GrowBusiness ov={ov} adsOn={adsOn} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">

@@ -281,13 +281,13 @@ describe("date ranges", () => {
     // Only the 6th and 8th have daily rows; the chart used to be just those two points.
     // Each day carries the lines of its total sales too (here none besides net sales).
     const lines = { shipping: 0, tax: 0, duties: 0, additionalFees: 0 };
-    const quiet = { netSales: 0, totalSales: 0, ...lines, orders: 0, refunds: 0, averageOrderValue: null };
+    const quiet = { netSales: 0, totalSales: 0, ...lines, orders: 0, units: 0, refunds: 0, averageOrderValue: null };
     expect(s.series).toEqual([
       { day: "2026-03-05", ...quiet },
-      { day: "2026-03-06", netSales: 40, totalSales: 40, ...lines, orders: 1, refunds: 0, averageOrderValue: 40 },
+      { day: "2026-03-06", netSales: 40, totalSales: 40, ...lines, orders: 1, units: 1, refunds: 0, averageOrderValue: 40 },
       { day: "2026-03-07", ...quiet },
       // C was cancelled the same day: an order of the day, and its 99 a return, as in Shopify's reports.
-      { day: "2026-03-08", netSales: 55, totalSales: 55, ...lines, orders: 2, refunds: 99, averageOrderValue: 77 },
+      { day: "2026-03-08", netSales: 55, totalSales: 55, ...lines, orders: 2, units: 2, refunds: 99, averageOrderValue: 77 },
       { day: "2026-03-09", ...quiet },
     ]);
     expect(s.current).toMatchObject({ netSales: 95, totalSales: 95, orders: 3 });

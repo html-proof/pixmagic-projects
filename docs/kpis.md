@@ -331,10 +331,37 @@ measure net sales only.
 
 **Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 
+## Dashboard home (the owner's design)
+
+Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
+`HomeCards.tsx`), from the owner's mock of 2026-10-24. Every figure is one the overview already
+carries; nothing is estimated.
+
+- **Headline tiles**: Total sales (Net sales without `finance.breakdown`), Orders, Average order
+  value, Total products sold, each with its change and a sparkline of the same figure day by day
+  (`series`; a day's `units` are its net items sold).
+- **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
+  per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
+  in the store's currency and none is the Google Ads demo, as for MER.
+- **Business profit overview**: net sales less the costs bizinsights can see, Shopify's cost of
+  goods sold (its profit report, for the dates as a whole) and the ad spend for the whole range
+  (`ads.current`, null while a day is missing). It is **not net profit**: fees, postage, apps and
+  staff aren't known, and the panel says so; sales with no cost recorded in Shopify are named.
+- **Expenses breakdown**: the same two costs as a ring (ad spend split by platform when there are
+  two). The mock's shipping, software and other expenses have no source, so they aren't drawn.
+- **Top products**: the top five of `top_products` by net revenue, each with its share of net sales;
+  withheld while the period's sales aren't all imported (`complete` false), as the full list is.
+- **Recent orders**: the five latest, with one status word (cancelled, fulfilled, then payment).
+  The mock's customer column is the sales channel: names are protected customer data.
+- **Key insights**: the first four checks of the business health check below, worst first.
+- **Advertising performance** and the integrations strip only where the workspace offers
+  advertising and the member is shown it (Team & Access); the strip only for those who can manage
+  integrations. TikTok Ads isn't offered.
+
 ## Sales panels (dashboard overview)
 
 Reference implementation: `apps/web/src/components/dashboard/OverviewCharts.tsx`, in the owner's
-design (2026-10-24). Two panels under the headline numbers, each with its total in large type, a
+design (2026-10-24). Two panels under the home page's panels, each with its total in large type, a
 line on what is in it, a key, and the running total drawn as a violet line over the columns, read
 off its own scale on the right (its labels sit on the left scale's gridlines). The Sales section's
 cards above keep the running total in a strip of its own.
