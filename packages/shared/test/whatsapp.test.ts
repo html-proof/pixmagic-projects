@@ -1,229 +1,255 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildComponents,
+  buildSendComponents,
   campaignCan,
-  campaignEditable,
-  campaignStatusAfter,
-  classifyGraphError,
-  cleanParam,
-  evaluateConditions,
-  inSendWindow,
+  checkTemplateDraft,
+  classifyMetaError,
+  consentProblem,
+  describeAudience,
+  evaluateWorkflowConditions,
+  hasErrors,
   isStartKeyword,
   isStopKeyword,
   isStopPromotionsReply,
-  kindSetting,
-  kindsOf,
-  maskPhone,
-  messageKinds,
-  nextSendTime,
-  normalizePhone,
-  previewText,
-  ruleConflicts,
-  shipmentStage,
-  signMetaBody,
-  TEMPLATE_LIBRARY,
+  metaErrorExplanation,
+  missingValues,
+  MissingValueError,
+  parseEmbeddedSignupMessage,
+  renderTemplate,
+  STARTER_TEMPLATES,
+  statusAfterEvent,
+  statusBucket,
+  templateDraftSchema,
   templateShape,
-  verifyMetaSignature,
-  whatsappConfigSchema,
-  type RuleLike,
-} from "../src/index.js";
+  tierLimit,
+  toMetaComponents,
+  workflowSchema,
+  type TemplateComponent,
+  type WorkflowFacts,
+} from "../src/whatsapp";
+import { maskPhone, nextSendTime, normalizePhone } from "../src/messaging";
 
-describe("normalizePhone", () => {
-  it("keeps international numbers, whatever the spacing", () => {
-    expect(normalizePhone("+61 412 345 678")?.waId).toBe("61412345678");
-    expect(normalizePhone("+91-98765-43210")?.e164).toBe("+919876543210");
-    expect(normalizePhone("0061 412 345 678")?.waId).toBe("61412345678");
-    expect(normalizePhone("+1 (415) 555-0123")?.country).toBe("US");
+const draft = (over: Record<string, unknown> = {}) =>
+  templateDraftSchema.parse({ name: "Order Confirmation!", language: "en", category: "UTILITY", header: { type: "none" }, body: "Hi {{1}}, your order {{2}} is confirmed. Thank you!", bodyExamples: ["Priya", "#1042"], ...over });
+
+describe("templates", () => {
+  it("normalises the name the way Meta wants it", () => {
+    expect(draft().name).toBe("order_confirmation");
   });
 
-  it("turns a local number international only when the country is known", () => {
-    expect(normalizePhone("0412 345 678", "AU")?.waId).toBe("61412345678");
-    expect(normalizePhone("098765 43210", "IN")?.waId).toBe("919876543210");
-    expect(normalizePhone("9876543210", "IN")?.waId).toBe("919876543210");
-    expect(normalizePhone("919876543210", "IN")?.waId).toBe("919876543210");
-    expect(normalizePhone("(415) 555-0123", "US")?.waId).toBe("14155550123");
-    expect(normalizePhone("1 415 555 0123", "US")?.waId).toBe("14155550123");
-    expect(normalizePhone("312 345 6789", "IT")?.waId).toBe("393123456789");
-    // No country: a local number can't be placed, so it is refused rather than guessed.
-    expect(normalizePhone("0412 345 678")).toBeNull();
-    expect(normalizePhone("0412 345 678", "ZZ")).toBeNull();
+  it("accepts every starter template as written", () => {
+    for (const s of STARTER_TEMPLATES) {
+      const d = templateDraftSchema.parse(s.draft);
+      expect(hasErrors(checkTemplateDraft(d)), s.key).toBe(false);
+      expect(s.mapping.body.length, s.key).toBe(templateShape(toMetaComponents(d) as unknown as TemplateComponent[]).bodyVars);
+    }
   });
 
-  it("refuses what isn't a phone number", () => {
-    expect(normalizePhone("")).toBeNull();
-    expect(normalizePhone(null)).toBeNull();
-    expect(normalizePhone("call me")).toBeNull();
-    expect(normalizePhone("+12")).toBeNull();
-    expect(normalizePhone("+1234567890123456")).toBeNull();
-    expect(normalizePhone("041234", "AU")).toBeNull();
-    expect(normalizePhone("+61 412+345")).toBeNull();
+  it("refuses what Meta refuses", () => {
+    const codes = (d: ReturnType<typeof draft>) => checkTemplateDraft(d).filter((i) => i.level === "error").map((i) => i.code);
+    expect(codes(draft({ body: "Hi {{1}} and {{3}} welcome to the shop", bodyExamples: ["a", "b", "c"] }))).toContain("variables_gap");
+    expect(codes(draft({ body: "{{1}} your order is ready for pickup today", bodyExamples: ["a"] }))).toContain("variable_at_edge");
+    expect(codes(draft({ body: "Your order is ready for pickup {{1}}", bodyExamples: ["a"] }))).toContain("variable_at_edge");
+    expect(codes(draft({ body: "Hello there {{1}} {{2}} and welcome back", bodyExamples: ["a", "b"] }))).toContain("adjacent_variables");
+    expect(codes(draft({ bodyExamples: ["Priya"] }))).toContain("examples_missing");
+    expect(codes(draft({ body: "Hi {{1}}, {{2}}, ok {{3}}!", bodyExamples: ["a", "b", "c"] }))).toContain("too_many_variables");
+    expect(codes(draft({ footer: "Reply {{1}}" }))).toContain("footer_variables");
+    expect(codes(draft({ buttons: [{ type: "url", text: "Track", url: "https://x.example/{{1}}/track" }] }))).toContain("button_url_variable");
   });
 
-  it("masks all but the country code and last three digits", () => {
-    expect(maskPhone("+61412345678")).toBe("+61 •••••• 678");
-    expect(maskPhone("+919876543210")).toBe("+91 ••••••• 210");
+  it("warns about marketing without a way out, and offers in utility templates", () => {
+    const m = checkTemplateDraft(draft({ category: "MARKETING" }));
+    expect(m.find((i) => i.code === "no_opt_out")?.level).toBe("warning");
+    expect(checkTemplateDraft(draft({ category: "MARKETING", buttons: [{ type: "quick_reply", text: "Stop promotions" }] })).some((i) => i.code === "no_opt_out")).toBe(false);
+    expect(checkTemplateDraft(draft({ body: "Hi {{1}}, get 20% off your next order {{2}} today!" })).some((i) => i.code === "marketing_words")).toBe(true);
   });
-});
 
-describe("keywords", () => {
-  it("recognises STOP and START however they're typed", () => {
-    expect(isStopKeyword(" Stop ")).toBe(true);
-    expect(isStopKeyword("UNSUBSCRIBE!")).toBe(true);
-    expect(isStopKeyword("please stop sending these")).toBe(false);
-    expect(isStartKeyword("start")).toBe(true);
-    expect(isStopPromotionsReply("Stop promotions")).toBe(true);
-    expect(isStopPromotionsReply("stop")).toBe(false);
-  });
-});
-
-describe("parcel stages", () => {
-  it("maps Shopify's shipment statuses", () => {
-    expect(shipmentStage("in_transit")).toBe("in_transit");
-    expect(shipmentStage("OUT_FOR_DELIVERY")).toBe("out_for_delivery");
-    expect(shipmentStage("delivered")).toBe("delivered");
-    expect(shipmentStage("attempted_delivery")).toBe("failed");
-    expect(shipmentStage("label_printed")).toBe("shipped");
-    expect(shipmentStage(null)).toBeNull();
-    expect(shipmentStage("something_new")).toBeNull();
+  it("builds Meta's create call with examples", () => {
+    const comps = toMetaComponents(draft({ header: { type: "text", text: "Order {{1}}", example: "#1042" }, footer: "Reply STOP", buttons: [{ type: "url", text: "Track", url: "https://x.example/t/{{1}}", example: "https://x.example/t/abc" }] }));
+    expect(comps).toEqual([
+      { type: "HEADER", format: "TEXT", text: "Order {{1}}", example: { header_text: ["#1042"] } },
+      { type: "BODY", text: "Hi {{1}}, your order {{2}} is confirmed. Thank you!", example: { body_text: [["Priya", "#1042"]] } },
+      { type: "FOOTER", text: "Reply STOP" },
+      { type: "BUTTONS", buttons: [{ type: "URL", text: "Track", url: "https://x.example/t/{{1}}", example: ["https://x.example/t/abc"] }] },
+    ]);
   });
 });
 
-describe("template components", () => {
-  const lib = TEMPLATE_LIBRARY.find((t) => t.name === "insights_order_shipped")!;
-  const components = [{ type: "BODY", text: lib.body }, { type: "BUTTONS", buttons: [{ type: "URL", text: "Track", url: "https://x.test/track?t={{1}}" }] }];
+describe("sending a template", () => {
+  const components: TemplateComponent[] = [
+    { type: "HEADER", format: "IMAGE" },
+    { type: "BODY", text: "Hi {{1}}, order {{2}} shipped with {{3}}." },
+    { type: "BUTTONS", buttons: [{ type: "URL", text: "Track", url: "https://t.example/{{1}}" }] },
+  ];
+  const shape = templateShape(components);
+  const mapping = { body: [{ source: "customer_first_name" as const }, { source: "order_number" as const }, { source: "custom_text" as const, text: "Australia Post" }], buttons: [{ source: "tracking_number" as const }] };
 
-  it("reads a template's variables and dynamic buttons", () => {
-    expect(templateShape(components)).toEqual({ bodyVars: 4, headerFormat: "NONE", headerVars: 0, dynamicUrlButtons: [0] });
-  });
-
-  it("fills body variables in order and the button suffix, cleaning what Meta refuses", () => {
-    const out = buildComponents(templateShape(components), lib.mapping, {
-      customer_name: "Asha\nK",
-      order_number: "#1042",
-      courier_name: "Blue Dart",
-      tracking_number: "",
-      tracking_token: "tok123",
-    });
-    expect(out.components).toEqual([
-      { type: "body", parameters: [{ type: "text", text: "Asha K" }, { type: "text", text: "#1042" }, { type: "text", text: "Blue Dart" }, { type: "text", text: "-" }] },
-      { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: "tok123" }] },
+  it("fills every variable, the media header and the link button", () => {
+    expect(buildSendComponents(shape, mapping, { customer_first_name: "Priya", order_number: "#1042", tracking_number: "LX1" }, "https://cdn.example/a.jpg")).toEqual([
+      { type: "header", parameters: [{ type: "image", image: { link: "https://cdn.example/a.jpg" } }] },
+      { type: "body", parameters: [{ type: "text", text: "Priya" }, { type: "text", text: "#1042" }, { type: "text", text: "Australia Post" }] },
+      { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: "LX1" }] },
     ]);
   });
 
-  it("refuses a send that would not match the template", () => {
-    expect(() => buildComponents(templateShape(components), { body: ["customer_name"], buttons: ["tracking_token"], fixed: {} }, {})).toThrow(/4 variables/);
-    expect(() => buildComponents(templateShape([{ type: "HEADER", format: "IMAGE" }]), { body: [], buttons: [], fixed: {} }, {})).toThrow(/image/);
+  it("says hello to a customer without a name rather than sending nothing", () => {
+    expect(missingValues(shape, mapping, { order_number: "#1", tracking_number: "x" })).toEqual([]);
   });
 
-  it("previews with values", () => {
-    expect(previewText("Hi {{1}}, order {{2}}", ["Asha", "#1"])).toBe("Hi Asha, order #1");
-    expect(cleanParam("a     b")).toBe("a   b");
+  it("refuses to send with a value missing (Meta would refuse the whole message)", () => {
+    expect(() => buildSendComponents(shape, mapping, { order_number: "#1042" }, "https://cdn.example/a.jpg")).toThrow(MissingValueError);
+    expect(() => buildSendComponents(shape, mapping, { order_number: "#1042", tracking_number: "LX1" }, null)).toThrow(/image/);
   });
 
-  it("library templates start and end with text, and map every variable", () => {
-    for (const t of TEMPLATE_LIBRARY) {
-      expect(t.body.trimStart().startsWith("{{"), t.name).toBe(false);
-      expect(t.body.trimEnd().endsWith("}}"), t.name).toBe(false);
-      expect(t.mapping.body.length, t.name).toBe(templateShape([{ type: "BODY", text: t.body }]).bodyVars);
-      expect(t.examples.length, t.name).toBe(t.mapping.body.length);
-    }
+  it("cleans values Meta refuses (newlines, long runs of spaces)", () => {
+    const [, body] = buildSendComponents(shape, { ...mapping, body: [{ source: "custom_text", text: "a\nb      c" }, ...mapping.body.slice(1)] }, { order_number: "1", tracking_number: "2" }, "https://x.example/i.png") as Array<{ parameters: Array<{ text: string }> }>;
+    expect(body!.parameters[0]!.text).toBe("a b   c");
   });
-});
 
-describe("errors", () => {
-  it("decides what to do about each Cloud API error", () => {
-    expect(classifyGraphError(190, 401)).toBe("reconnect");
-    expect(classifyGraphError(131050, 400)).toBe("marketing_opt_out");
-    expect(classifyGraphError(130429, 400)).toBe("retry");
-    expect(classifyGraphError(131026, 400)).toBe("fail");
-    expect(classifyGraphError(null, 503)).toBe("retry");
-    expect(classifyGraphError(null, 400)).toBe("fail");
+  it("renders the preview the customer will read", () => {
+    expect(renderTemplate(components, mapping, { customer_first_name: "Priya", order_number: "#9" }).body).toBe("Hi Priya, order #9 shipped with Australia Post.");
+    expect(renderTemplate(components, mapping, null).body).toBe("Hi Priya, order #1042 shipped with Australia Post.");
   });
 });
 
-describe("send window", () => {
-  it("knows store-local hours, across midnight too", () => {
-    const at = new Date("2026-10-10T03:30:00Z"); // 09:00 in Kolkata
-    expect(inSendWindow(at, "Asia/Kolkata", 9, 21)).toBe(true);
-    expect(inSendWindow(at, "UTC", 9, 21)).toBe(false);
-    expect(inSendWindow(new Date("2026-10-10T23:00:00Z"), "UTC", 22, 6)).toBe(true);
+describe("consent", () => {
+  const none = { optedOut: false, optedIn: false, marketing: "unknown" as const };
+  it("sends nothing after STOP", () => {
+    expect(consentProblem("UTILITY", { ...none, optedOut: true, optedIn: true }, { orderUpdates: "checkout_notice" })).toBe("opted_out");
+    expect(consentProblem("MARKETING", { optedOut: true, optedIn: true, marketing: "opted_in" }, { orderUpdates: "checkout_notice" })).toBe("opted_out");
   });
-
-  it("finds the next moment inside the window", () => {
-    const at = new Date("2026-10-10T22:15:00Z");
-    const next = nextSendTime(at, "UTC", 9, 21);
-    expect(next.toISOString()).toBe("2026-10-11T09:00:00.000Z");
-    expect(nextSendTime(new Date("2026-10-10T10:00:00Z"), "UTC", 9, 21).toISOString()).toBe("2026-10-10T10:00:00.000Z");
+  it("sends marketing only to customers who opted in to it", () => {
+    expect(consentProblem("MARKETING", none, { orderUpdates: "checkout_notice" })).toBe("no_marketing_consent");
+    expect(consentProblem("MARKETING", { ...none, marketing: "opted_out", optedIn: true }, { orderUpdates: "checkout_notice" })).toBe("no_marketing_consent");
+    expect(consentProblem("MARKETING", { ...none, marketing: "opted_in", optedIn: true }, { orderUpdates: "unset" })).toBeNull();
   });
-});
-
-describe("automation conditions", () => {
-  const facts = { orderValue: 120, productIds: ["7"], productTitles: ["Kerala Saree"], orderStatus: "placed", customerSegment: "new" as const, country: "IN", marketingConsent: true };
-
-  it("ANDs every condition", () => {
-    expect(evaluateConditions([{ field: "order_value", op: "gte", value: 100 }, { field: "country", op: "in", value: ["IN", "AE"] }], facts).pass).toBe(true);
-    expect(evaluateConditions([{ field: "order_value", op: "gt", value: 200 }], facts).pass).toBe(false);
-    expect(evaluateConditions([{ field: "product", op: "contains", value: "saree" }], facts).pass).toBe(true);
-    expect(evaluateConditions([{ field: "marketing_consent", op: "eq", value: true }], facts).pass).toBe(true);
-    expect(evaluateConditions([{ field: "previous_message_status", op: "eq", value: "none" }], facts).pass).toBe(true);
+  it("sends order updates by the store's chosen basis, and to anyone who opted in", () => {
+    expect(consentProblem("UTILITY", none, { orderUpdates: "unset" })).toBe("no_order_update_consent");
+    expect(consentProblem("UTILITY", none, { orderUpdates: "opt_in_only" })).toBe("no_order_update_consent");
+    expect(consentProblem("UTILITY", none, { orderUpdates: "checkout_notice" })).toBeNull();
+    // "Stop promotions" leaves order updates on.
+    expect(consentProblem("UTILITY", { optedOut: false, optedIn: true, marketing: "opted_out" }, { orderUpdates: "opt_in_only" })).toBeNull();
   });
-
-  it("treats a missing fact as not met", () => {
-    expect(evaluateConditions([{ field: "order_value", op: "gt", value: 1 }], {}).pass).toBe(false);
+  it("never sends authentication templates from here", () => {
+    expect(consentProblem("AUTHENTICATION", { optedOut: false, optedIn: true, marketing: "opted_in" }, { orderUpdates: "checkout_notice" })).toBe("template_not_allowed");
   });
-});
-
-describe("rule conflicts", () => {
-  const send: RuleLike = { id: "a", name: "Thanks", enabled: true, trigger: "order_delivered", conditions: [], action: { type: "send_template", templateName: "t", language: "en", mapping: { body: [], buttons: [], fixed: {} } } };
-  it("blocks rules that undo each other and warns about duplicates", () => {
-    const cancel: RuleLike = { ...send, id: "b", name: "Quiet", action: { type: "cancel_pending", kinds: ["automation"] } };
-    expect(ruleConflicts(cancel, [send])[0]?.severity).toBe("block");
-    expect(ruleConflicts({ ...send, id: "c", name: "Again" }, [send])[0]?.severity).toBe("warn");
-    expect(ruleConflicts({ ...send, id: "d", trigger: "order_created" }, [send])).toEqual([]);
-    expect(ruleConflicts({ ...cancel, enabled: false }, [send])).toEqual([]);
+  it("reads STOP, START and Stop promotions, but not an order's 'cancel'", () => {
+    expect(isStopKeyword(" Stop. ")).toBe(true);
+    expect(isStopKeyword("unsubscribe")).toBe(true);
+    expect(isStopKeyword("cancel")).toBe(false);
+    expect(isStopKeyword("please stop sending")).toBe(false);
+    expect(isStartKeyword("START")).toBe(true);
+    expect(isStopPromotionsReply("Stop promotions")).toBe(true);
+    expect(isStopKeyword("Stop promotions")).toBe(false);
   });
 });
 
-describe("settings", () => {
-  it("defaults to sending nothing until the merchant chooses", () => {
-    const cfg = whatsappConfigSchema.parse({});
-    expect(cfg.transactionalBasis).toBe("none");
-    expect(kindSetting(cfg, "order_confirmation").enabled).toBe(false);
-    expect(kindSetting(cfg, "order_confirmation").mapping.body).toContain("delivery_address");
+describe("statuses", () => {
+  it("only moves a message forward, whatever order Meta's reports arrive in", () => {
+    expect(statusAfterEvent("accepted", "sent")).toBe("sent");
+    expect(statusAfterEvent("accepted", "delivered")).toBe("delivered");
+    expect(statusAfterEvent("delivered", "sent")).toBeNull();
+    expect(statusAfterEvent("read", "delivered")).toBeNull();
+    expect(statusAfterEvent("sent", "failed")).toBe("failed");
+    expect(statusAfterEvent("delivered", "failed")).toBeNull();
+    // Delivered after a failure report is a fact: it wins.
+    expect(statusAfterEvent("failed", "delivered")).toBe("delivered");
+    expect(statusAfterEvent("failed", "sent")).toBeNull();
+    expect(statusAfterEvent("cancelled", "sent")).toBeNull();
+  });
+  it("buckets statuses for the overview", () => {
+    expect(["queued", "sending", "accepted", "sent", "delivered", "read", "failed", "skipped"].map(statusBucket)).toEqual(["pending", "pending", "sent", "sent", "delivered", "delivered", "failed", "other"]);
   });
 });
 
-describe("Meta signatures", () => {
-  it("verifies X-Hub-Signature-256 against the raw body", () => {
-    const raw = '{"object":"whatsapp_business_account"}';
-    const sig = signMetaBody(raw, "secret");
-    expect(verifyMetaSignature(raw, sig, "secret")).toBe(true);
-    expect(verifyMetaSignature(raw + " ", sig, "secret")).toBe(false);
-    expect(verifyMetaSignature(raw, sig, "other")).toBe(false);
-    expect(verifyMetaSignature(raw, undefined, "secret")).toBe(false);
-    expect(verifyMetaSignature(raw, sig.replace("sha256=", ""), "secret")).toBe(false);
+describe("Meta's errors", () => {
+  it("sorts what to do", () => {
+    expect(classifyMetaError(190, 401)).toBe("reconnect");
+    expect(classifyMetaError(130429, 400)).toBe("retry");
+    expect(classifyMetaError(131050, 400)).toBe("marketing_opt_out");
+    expect(classifyMetaError(133010, 400)).toBe("account");
+    expect(classifyMetaError(131026, 400)).toBe("fail");
+    expect(classifyMetaError(null, 503)).toBe("retry");
+    expect(classifyMetaError(null, 400)).toBe("fail");
+  });
+  it("explains them in plain words", () => {
+    expect(metaErrorExplanation(131047)).toMatch(/24 hours/);
+    expect(metaErrorExplanation(999999, "Something odd")).toBe("Something odd");
+  });
+  it("knows Meta's messaging limit tiers", () => {
+    expect(tierLimit("TIER_250")).toBe(250);
+    expect(tierLimit("TIER_1K")).toBe(1000);
+    expect(tierLimit("TIER_100K")).toBe(100000);
+    expect(tierLimit("TIER_UNLIMITED")).toBeNull();
+    expect(tierLimit(null)).toBe(250);
   });
 });
 
-describe("message groups and the campaign lifecycle (shared by the API and the UI)", () => {
-  it("groups notification kinds as KIND_INFO says, and filters the history by group", () => {
-    expect(kindsOf("orders")).toEqual(["order_confirmation", "payment_confirmed", "order_processing", "order_packed", "order_cancelled", "refund_processed"]);
-    expect(kindsOf("delivery")).toEqual(["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"]);
-    expect(kindsOf("carts")).toEqual(["abandoned_cart_1", "abandoned_cart_2"]);
-    expect(kindsOf("reviews")).toEqual(["review_request", "review_reminder"]);
-    expect(messageKinds("carts")).toEqual(["abandoned_cart_1", "abandoned_cart_2"]);
-    expect(messageKinds("campaign")).toEqual(["campaign"]);
-    expect(messageKinds("anything else")).toBeNull();
+describe("Embedded Signup's window messages", () => {
+  it("reads a finish with its ids", () => {
+    expect(parseEmbeddedSignupMessage(JSON.stringify({ type: "WA_EMBEDDED_SIGNUP", event: "FINISH", data: { phone_number_id: "1061", waba_id: "2072", business_id: "3083" } }))).toEqual({
+      type: "finish",
+      flow: "cloud_api",
+      phoneNumberId: "1061",
+      wabaId: "2072",
+      businessId: "3083",
+    });
+    expect(parseEmbeddedSignupMessage({ type: "WA_EMBEDDED_SIGNUP", event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING", data: { waba_id: "2072" } })).toMatchObject({ flow: "business_app", phoneNumberId: null });
   });
+  it("reads a cancel and an error, and ignores everything else", () => {
+    expect(parseEmbeddedSignupMessage({ type: "WA_EMBEDDED_SIGNUP", event: "CANCEL", data: { current_step: "PHONE_NUMBER_VERIFICATION" } })).toEqual({ type: "cancel", step: "PHONE_NUMBER_VERIFICATION" });
+    expect(parseEmbeddedSignupMessage({ type: "WA_EMBEDDED_SIGNUP", event: "CANCEL", data: { error_message: "Business blocked", error_code: "524126", session_id: "s1" } })).toMatchObject({ type: "error", message: "Business blocked" });
+    expect(parseEmbeddedSignupMessage({ type: "OTHER" })).toBeNull();
+    expect(parseEmbeddedSignupMessage("not json")).toBeNull();
+    // An id that isn't Meta's numeric id is dropped.
+    expect(parseEmbeddedSignupMessage({ type: "WA_EMBEDDED_SIGNUP", event: "FINISH", data: { waba_id: "../x" } })).toMatchObject({ wabaId: null });
+  });
+});
 
-  it("allows each campaign action only from the states it makes sense in", () => {
-    expect(["draft", "scheduled", "sending", "paused", "completed", "cancelled"].filter((s) => campaignCan(s, "pause"))).toEqual(["scheduled", "sending"]);
-    expect(["draft", "scheduled", "sending", "paused", "completed", "cancelled"].filter((s) => campaignCan(s, "resume"))).toEqual(["paused"]);
-    expect(["draft", "scheduled", "sending", "paused", "completed", "cancelled"].filter((s) => campaignCan(s, "cancel"))).toEqual(["draft", "scheduled", "sending", "paused"]);
-    expect(campaignStatusAfter("resume", false)).toBe("scheduled");
-    expect(campaignStatusAfter("resume", true)).toBe("sending");
-    expect(campaignStatusAfter("pause", true)).toBe("paused");
-    expect(campaignEditable("scheduled")).toBe(true);
-    expect(campaignEditable("sending")).toBe(false);
+describe("workflows", () => {
+  const facts: WorkflowFacts = { orderTotal: 80, country: "AU", productTitles: ["Cardamom 200g"], customerType: "returning", tags: ["vip"], paymentMethods: ["Cash on Delivery (COD)"] };
+  it("passes only when every condition holds", () => {
+    expect(evaluateWorkflowConditions([{ field: "order_total", op: "gte", value: 50 }, { field: "country", op: "in", value: ["AU", "NZ"] }], facts).pass).toBe(true);
+    const r = evaluateWorkflowConditions([{ field: "order_total", op: "gte", value: 100 }, { field: "order_tag", op: "has", value: "VIP" }, { field: "payment_method", op: "contains", value: "cod" }], facts);
+    expect(r.pass).toBe(false);
+    expect(r.failed).toEqual(["Order total is at least 100"]);
+  });
+  it("fails a condition on an unknown fact", () => {
+    expect(evaluateWorkflowConditions([{ field: "customer_type", op: "is", value: "new" }], { ...facts, customerType: null }).pass).toBe(false);
+  });
+  it("checks a workflow is coherent", () => {
+    const base = { name: "x", template: { name: "t", language: "en" }, mapping: { body: [{ source: "customer_first_name" }] } };
+    expect(workflowSchema.safeParse({ ...base, trigger: "order_created" }).success).toBe(true);
+    expect(workflowSchema.safeParse({ ...base, trigger: "custom_event" }).success).toBe(false);
+    expect(workflowSchema.safeParse({ ...base, trigger: "order_created", timing: { mode: "before_event", minutes: 60 } }).success).toBe(false);
+    expect(workflowSchema.safeParse({ ...base, trigger: "checkout_abandoned", timing: { mode: "after_trigger", minutes: 5 } }).success).toBe(false);
+    expect(workflowSchema.safeParse({ ...base, trigger: "customer_created", mapping: { body: [{ source: "tracking_number" }] } }).success).toBe(false);
+    expect(workflowSchema.safeParse({ ...base, trigger: "customer_created", conditions: [{ field: "order_total", op: "gte", value: 5 }] }).success).toBe(false);
+  });
+});
+
+describe("campaigns", () => {
+  it("says who an audience is", () => {
+    expect(describeAudience({ countries: ["AU"], customerType: "returning", notOrderedForDays: 60 })).toBe("Customers who agreed to WhatsApp marketing who ordered more than once, who haven't ordered for 60 days, in AU");
+  });
+  it("allows each action only from the right status", () => {
+    expect(campaignCan("draft", "schedule")).toBe(true);
+    expect(campaignCan("sending", "schedule")).toBe(false);
+    expect(campaignCan("sending", "cancel")).toBe(true);
+    expect(campaignCan("completed", "cancel")).toBe(false);
+    expect(campaignCan("scheduled", "delete")).toBe(false);
+  });
+});
+
+describe("phone numbers and sending hours (shared with SMS)", () => {
+  it("reads local and international numbers", () => {
+    expect(normalizePhone("0412 345 678", "AU")?.e164).toBe("+61412345678");
+    expect(normalizePhone("+91 98765 43210", null)?.country).toBe("IN");
+    expect(normalizePhone("0412 345 678", null)).toBeNull();
+    expect(maskPhone("+61412345678")).toBe("+61 •••••• 678");
+  });
+  it("waits for the next sending hour", () => {
+    const at = new Date("2026-10-25T12:00:00Z"); // 23:00 in Melbourne
+    expect(nextSendTime(at, "Australia/Melbourne", 9, 20).toISOString()).toBe("2026-10-25T22:00:00.000Z");
   });
 });

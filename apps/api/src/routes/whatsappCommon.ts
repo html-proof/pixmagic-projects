@@ -1,30 +1,29 @@
-import { withTenant, type Store, type WhatsappConnection, type WhatsappTemplate } from "@app/db";
-import { manualVerifyToken } from "@app/core";
-import { allows, templateShape, type TemplateComponent } from "@app/shared";
-import { HttpError, requireWorkspace, type Ctx, type Deps } from "../context.js";
-
-/** Helpers shared by the merchant WhatsApp routes (whatsapp.ts, whatsappOps.ts). */
-
 /**
- * WhatsApp's conversations, orders, carts and reviews carry customers' names and phone numbers:
- * besides seeing WhatsApp (campaigns) they need "View contact information".
+ * What the WhatsApp Automation routes share (whatsapp.ts, whatsappAutomation.ts): the store
+ * lookup, who may do what, and the shapes the browser sees. Tokens, PINs, numbers in full and
+ * Meta's raw answers are never in them; message contents and customers' names only for those who
+ * may see contact information.
  */
-export async function requireWaContacts(c: Ctx, deps: Deps, ws: string) {
-  const a = await requireWorkspace(c, deps, ws, "marketing.campaigns");
-  if (!allows(a.access, "customers.contact")) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
-  return a;
-}
+import { withTenant, type Store, type WaConnection, type WaMessage, type WaTemplate } from "@app/db";
+import { messagePreview, type WaSettingsView } from "@app/core";
+import {
+  allows,
+  can,
+  CONNECTION_STATUS_LABEL,
+  QUALITY_LABEL,
+  skipLabel,
+  TEMPLATE_STATUS_LABEL,
+  templateShape,
+  templateTexts,
+  tierLimit,
+  WA_STATUS_LABEL,
+  type TemplateComponent,
+  type WaConnectionStatus,
+  type WaMessageStatus,
+} from "@app/shared";
+import { HttpError, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
 
-/**
- * Changing what a customer receives (an opt-out recorded by hand stops every message to them, and
- * only their own START undoes it): the store's managers, with "View contact information", as for
- * SMS. A shared-link session and API keys only look, so never.
- */
-export async function requireWaContactsManage(c: Ctx, deps: Deps, ws: string) {
-  const a = await requireWorkspace(c, deps, ws, "stores:manage");
-  if (!allows(a.access, "customers.contact")) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
-  return a;
-}
+export const base = "/workspaces/:ws/stores/:storeId/whatsapp";
 
 export async function waStore(ws: string, storeId: string): Promise<Store> {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
@@ -32,13 +31,49 @@ export async function waStore(ws: string, storeId: string): Promise<Store> {
   return store;
 }
 
-export const base = "/workspaces/:ws/stores/:storeId/whatsapp";
+/** Reading WhatsApp Automation: anyone who sees campaigns. */
+export const requireWaView = (c: Ctx, deps: Deps, ws: string) => requireWorkspace(c, deps, ws, "marketing.campaigns");
 
-/** What the browser may see of a connection. The verify token only for managers of a manual connection. */
-export function publicConnection(c: WhatsappConnection, manage: boolean) {
+/** Changing what customers receive (templates, workflows, campaigns, settings, sends): the store's owners and admins, signed in themselves. */
+export async function requireWaManage(c: Ctx, deps: Deps, ws: string): Promise<WorkspaceAccess & { user: NonNullable<WorkspaceAccess["user"]> }> {
+  const a = await requireWorkspace(c, deps, ws, "stores:manage");
+  if (!a.user || a.link) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  return a as WorkspaceAccess & { user: NonNullable<WorkspaceAccess["user"]> };
+}
+
+/** Connecting and disconnecting the number: "Manage integrations", signed in themselves. */
+export async function requireWaConnect(c: Ctx, deps: Deps, ws: string): Promise<WorkspaceAccess & { user: NonNullable<WorkspaceAccess["user"]> }> {
+  const a = await requireWorkspace(c, deps, ws, "integrations.manage");
+  if (!a.user || a.link) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  return a as WorkspaceAccess & { user: NonNullable<WorkspaceAccess["user"]> };
+}
+
+/** Customers' numbers, names and what was said: "View contact information" too. */
+export const seesContacts = (a: WorkspaceAccess) => allows(a.access, "customers.contact");
+
+export function requireContacts(a: WorkspaceAccess) {
+  if (!seesContacts(a)) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
+}
+
+/** What the browser may know of each permission, so it shows only the buttons that work. */
+export function waCan(a: WorkspaceAccess) {
+  const signedIn = !!a.user && !a.link;
   return {
-    id: c.id,
-    mode: c.mode,
+    connect: signedIn && allows(a.access, "integrations.manage"),
+    manage: signedIn && allows(a.access, "stores:manage"),
+    contacts: seesContacts(a),
+    pin: signedIn && can(a.role, "stores:manage"),
+  };
+}
+
+export function connectionView(c: WaConnection | null) {
+  if (!c) return null;
+  return {
+    status: c.status as WaConnectionStatus,
+    statusLabel: CONNECTION_STATUS_LABEL[c.status as WaConnectionStatus] ?? c.status,
+    step: c.step,
+    statusDetail: c.statusDetail,
+    signupFlow: c.signupFlow,
     businessId: c.businessId,
     wabaId: c.wabaId,
     wabaName: c.wabaName,
@@ -47,33 +82,80 @@ export function publicConnection(c: WhatsappConnection, manage: boolean) {
     verifiedName: c.verifiedName,
     nameStatus: c.nameStatus,
     qualityRating: c.qualityRating,
+    qualityLabel: c.qualityRating ? (QUALITY_LABEL[c.qualityRating] ?? c.qualityRating) : null,
     messagingLimitTier: c.messagingLimitTier,
+    dailyConversationLimit: tierLimit(c.messagingLimitTier),
     registered: c.registered,
-    status: c.status,
-    lastError: c.lastError,
-    webhookVerifiedAt: c.webhookVerifiedAt,
-    lastWebhookAt: c.lastWebhookAt,
-    lastSyncedAt: c.lastSyncedAt,
-    connectedAt: c.createdAt,
-    hasAppSecret: !!c.appSecretEnc,
-    /** Whether bizinsights knows the number's two-step verification PIN (POST .../pin shows it to owners and admins). */
+    subscribed: !!c.subscribedAt,
     hasPin: !!c.pinEnc,
-    verifyToken: manage && c.mode === "manual" ? manualVerifyToken(c) : null,
+    lastWebhookAt: c.lastWebhookAt,
+    lastCheckedAt: c.lastCheckedAt,
+    connectedAt: c.connectedAt,
+    disconnectedAt: c.disconnectedAt,
   };
 }
 
-export function publicTemplate(t: WhatsappTemplate) {
-  const shape = templateShape(t.components as unknown as TemplateComponent[]);
+export function settingsJson(s: WaSettingsView) {
+  return {
+    orderUpdates: s.orderUpdates,
+    orderUpdatesSetAt: s.orderUpdatesSetAt,
+    shopifySmsConsent: s.shopifySmsConsent,
+    sendWindow: s.sendWindow,
+    dailyLimit: s.dailyLimit,
+    testPhone: s.testPhoneMasked,
+    eventKey: s.eventKey,
+  };
+}
+
+export function templateView(t: WaTemplate, usedBy?: { workflows: number; campaigns: number }) {
+  const components = t.components as unknown as TemplateComponent[];
   return {
     id: t.id,
     name: t.name,
     language: t.language,
     category: t.category,
     status: t.status,
+    statusLabel: TEMPLATE_STATUS_LABEL[t.status] ?? t.status.toLowerCase(),
     rejectedReason: t.rejectedReason,
     qualityScore: t.qualityScore,
-    components: t.components,
-    shape,
+    components,
+    shape: templateShape(components),
+    texts: templateTexts(components),
+    madeHere: !!t.createdByUserId,
+    usedBy: usedBy ?? null,
     updatedAt: t.updatedAt,
+  };
+}
+
+/** A message as the history shows it. Its text only for those who may see contact information. */
+export function messageView(m: WaMessage, opts: { contacts: boolean }) {
+  return {
+    id: m.id,
+    direction: m.direction as "out" | "in",
+    source: m.source,
+    type: m.type,
+    templateName: m.templateName,
+    templateLanguage: m.templateLanguage,
+    category: m.category,
+    status: m.status as WaMessageStatus,
+    statusLabel: WA_STATUS_LABEL[m.status as WaMessageStatus] ?? m.status,
+    reason: m.reason,
+    reasonLabel: skipLabel(m.reason),
+    errorCode: m.errorCode,
+    errorTitle: m.errorTitle,
+    phone: m.phoneMasked,
+    contactId: opts.contacts ? m.contactId : null,
+    preview: opts.contacts ? messagePreview(m) : null,
+    workflowId: m.workflowId,
+    campaignId: m.campaignId,
+    createdAt: m.createdAt,
+    sendAfter: m.sendAfter,
+    acceptedAt: m.acceptedAt,
+    sentAt: m.sentAt,
+    deliveredAt: m.deliveredAt,
+    readAt: m.readAt,
+    failedAt: m.failedAt,
+    attempts: m.attempts,
+    canRetry: m.direction === "out" && m.status === "failed" && !!m.payloadEnc,
   };
 }

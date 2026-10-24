@@ -14,6 +14,12 @@ There is no other way in any more: bizinsights' own OAuth (consent URLs, code ex
 routes) was removed on 2026-10-24. Connections made by it before then are moved to Nango by themselves
 (below, "Connections made before Nango").
 
+WhatsApp is connected differently: Meta's Embedded Signup runs on bizinsights' page and bizinsights
+imports the business token into Nango's `whatsapp-business` integration (provider
+`whatsapp-business`, API key), one connection per store (`wa-<storeId>`); bizinsights makes that
+integration itself on first use. [whatsapp.md](whatsapp.md) explains why (Nango's WhatsApp
+integration is API-key only, with no Embedded Signup) and how.
+
 What Nango does **not** change: Meta's App Review / Advanced Access for `ads_read` and Google's
 verification are about bizinsights' app, which Nango signs in with. Until Meta grants Advanced Access, only
 people with a role on the Meta app can connect Meta. Until Google verifies the `adwords` scope, Google Ads

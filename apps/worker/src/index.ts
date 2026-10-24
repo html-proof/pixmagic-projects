@@ -15,6 +15,7 @@ import {
   type AggregateJobData,
   type Producer,
   type QueueName,
+  setWebhookAside,
   sweepWhatsapp,
   sweepEmail,
   type EmailJob,
@@ -129,7 +130,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     const kind = (job as { kind?: string }).kind;
     if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
     // WhatsApp messages ride the sync queue too; the message rows carry their own state.
-    else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) await runWhatsappJob(job as WhatsappJob, deps);
+    else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch" || kind === "whatsapp_webhook")) await runWhatsappJob(job as WhatsappJob, deps);
     // Texts (Customer Messaging) ride the sync queue too; the job rows carry their own state.
     else if (queue === "sync" && kind === "sms") await runSmsJob(job as SmsJob, deps);
     // The check against Shopify rides the sync queue too; its run's row is its record.
@@ -235,10 +236,11 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // that keeps failing is left to the queue's dead-letter queue, with its alarm.
     return;
   }
-  if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) {
-    // The message row is the record (scheduled / failed with its reason), and the sweeper picks up
-    // anything still due. A dispatch chain that gave up lets the next tick start a new one.
-    if (final && kind === "whatsapp_dispatch") await deps.coord.release(`wa-dispatch:${(body as { storeId: string }).storeId}`).catch(() => {});
+  if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch" || kind === "whatsapp_webhook")) {
+    // The rows are the record: a message stays queued or failed with its reason, a campaign's batch
+    // chain is picked up again by the sweep, and a webhook delivery that kept failing is set aside
+    // (its stores alerted) here or by the sweep.
+    if (final && kind === "whatsapp_webhook") await setWebhookAside((body as { eventId: string }).eventId, deps);
     return;
   }
   if (queue === "sync" && kind === "verify") {
@@ -441,7 +443,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "nango leftover sweep failed; the next tick tries again");
       return null;
     });
-    // WhatsApp: campaigns, due messages, parcel status, retention. Last, on its own leases.
+    // WhatsApp Automation: due messages, webhook retries, campaigns, health checks, retention. On its own leases.
     const whatsapp = await sweepWhatsapp(deps).catch((err: unknown) => {
       logger.error({ err }, "whatsapp sweep failed; the next tick tries again");
       return null;

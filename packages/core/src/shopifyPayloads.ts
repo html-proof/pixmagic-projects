@@ -171,7 +171,7 @@ export type RestProduct = z.output<typeof restProductSchema>;
 // ---------------------------------------------------------------- REST webhooks, as the automations read them
 
 /*
- * The WhatsApp and email automations (whatsapp/events.ts, email/events.ts) read more of an order
+ * WhatsApp Automation and the email automations (whatsapp/events.ts, email/events.ts) read more of an order
  * or checkout than analytics does: who the customer is and how to reach them. They have schemas of
  * their own, so a field only they read can't cost analytics an order, nor the other way round.
  * Each module parses a payload only once it is about to act on it, so a store that doesn't use it
@@ -213,6 +213,9 @@ const buyer = {
     email: str,
     phone: str,
     accepts_marketing: z.boolean().nullish(),
+    /** The customer's order count and lifetime spend as Shopify keeps them (WhatsApp campaign audiences). */
+    orders_count: z.number().nullish(),
+    total_spent: decimal.nullish(),
     email_marketing_consent: obj({ state: str }).nullish(),
     sms_marketing_consent: smsMarketingConsent,
     default_address: address,
@@ -262,6 +265,8 @@ export const automationOrderSchema = obj({
   /** Cart attributes, set by the merchant's theme and apps: values arrive as strings, but needn't. */
   note_attributes: z.array(obj({ name: str, value: z.union([z.string(), z.number(), z.boolean()]).nullish() })).nullish(),
   discount_codes: z.array(obj({ code: str })).nullish(),
+  /** How it was paid ("shopify_payments", "Cash on Delivery (COD)"...): a workflow condition. */
+  payment_gateway_names: z.array(z.string()).nullish(),
   order_status_url: str,
   /** Each parcel is checked on its own (fulfillmentSchema): one that doesn't fit costs only itself. */
   fulfillments: z.array(z.unknown()).nullish(),
@@ -488,20 +493,6 @@ export const graphqlVariantSchema = obj({
   selectedOptions: z.array(obj({ name: z.string(), value: z.string() })).nullish().catch(null),
 });
 
-/** Order.fulfillments as the WhatsApp shipment poll asks for them (SHIPMENTS_QUERY in whatsapp/events.ts). */
-export const graphqlShipmentSchema = obj({
-  id: gid,
-  status: str,
-  displayStatus: str,
-  updatedAt: timestamp.nullish(),
-  inTransitAt: timestamp.nullish(),
-  deliveredAt: timestamp.nullish(),
-  estimatedDeliveryAt: timestamp.nullish(),
-  trackingInfo: z.array(obj({ company: str, number: str, url: str })).nullish(),
-});
-
-/** An order of the shipment poll. Each parcel is checked on its own (graphqlShipmentSchema). */
-export const graphqlShipmentOrderSchema = obj({ id: gid, fulfillments: z.array(z.unknown()).nullish() });
 
 export type GraphqlMoney = z.output<typeof moneyBag>;
 export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;

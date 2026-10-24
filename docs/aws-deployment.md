@@ -77,13 +77,13 @@ secret among them:
 | --- | --- | --- |
 | `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
-| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (else `META_APP_ID`) | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app) | Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work |
+| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (else `META_APP_ID`) | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app); `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `NANGO_SECRET_KEY` too | Connect WhatsApp (Embedded Signup) can't be turned on, and there is no other way to connect (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
 Embedded Signup is off until `WHATSAPP_CONFIG_ID` is set, so until then nothing warns about
 WhatsApp's secret: the check's line on the Deploy run names what it still needs instead
-("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET)").
+("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN)").
 
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary

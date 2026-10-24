@@ -35,7 +35,8 @@ Workspace ──< Membership >── User           (role: owner | admin | analy
 | Storefront funnel | `funnel_visits`, `funnel_product_visits`, `funnel_daily`, `pixel_events_seen` | API (`/pixel`) |
 | Shopping Funnel checklist | `funnel_action_checks` | API (`PUT …/funnel/actions/:id`) |
 | Advertising | `ad_connections` (the sealed Nango reference, or an older connection's encrypted tokens), `ad_campaign_daily`, `ad_campaigns` (each campaign's latest name and status), `adsense_daily`, `ad_sync_runs` | API (connect through Nango), worker (sync) |
-| WhatsApp | `whatsapp_connections`, `whatsapp_settings`, `whatsapp_templates`, `whatsapp_contacts`, `whatsapp_messages`, `whatsapp_message_events`, `whatsapp_campaigns`, `whatsapp_automation_rules`, `whatsapp_automation_runs`, `order_tracking`, `order_tracking_events`, `abandoned_checkouts`, `customer_reviews` | API, worker ([../whatsapp.md](../whatsapp.md)) |
+| WhatsApp Automation | `wa_connections`, `wa_settings`, `wa_templates`, `wa_contacts`, `wa_consent_events`, `wa_messages`, `wa_message_events`, `wa_webhook_events`, `wa_workflows`, `wa_workflow_runs`, `wa_campaigns` | API, worker ([../whatsapp.md](../whatsapp.md)) |
+| WhatsApp (old, read by nothing; to be dropped) | `whatsapp_connections`, `whatsapp_settings`, `whatsapp_templates`, `whatsapp_contacts`, `whatsapp_messages`, `whatsapp_message_events`, `whatsapp_campaigns`, `whatsapp_automation_rules`, `whatsapp_automation_runs`, `order_trackings`, `order_tracking_events`, `abandoned_checkouts`, `customer_reviews` | erased on shop/redact and customers/redact only ([../whatsapp.md](../whatsapp.md#the-old-whatsapp-tables)) |
 | Operations | `alerts`, `audit_logs` | API, worker |
 
 ## Conventions

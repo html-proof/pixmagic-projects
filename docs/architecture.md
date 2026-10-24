@@ -104,7 +104,8 @@ Where a new piece of code goes:
 - Handlers must be idempotent: Shopify and SQS both deliver at least once.
 - What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, Meta's WhatsApp
   webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
-  (`parseShopify`, `parseShopifyList` for a page) and `core/whatsapp/metaPayloads.ts` (`parseMeta`).
+  (`parseShopify`, `parseShopifyList` for a page) and `core/whatsapp/metaPayloads.ts` (`parseMeta`,
+  applied by the worker to each stored delivery).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
   meet the same payload again. The WhatsApp and email automations read an order or checkout only
   once they are about to act on it, so a store that doesn't use them logs nothing about it. The
@@ -144,7 +145,7 @@ of truth and almost every screen is "load, show, edit, save".
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
 "load more", a request fired by a button), and then guard against late answers: keep the answer
 with the request it belongs to, or ignore any response that isn't the latest (see
-`components/dashboard/Contacts.tsx` and `app/(app)/whatsapp/messages/page.tsx`).
+`components/dashboard/Contacts.tsx` and `components/whatsapp/Activity.tsx`).
 
 The API response reader (`lib/apiResponse.ts`) owns `ApiError`, body parsing and error-envelope
 normalization. It has no React dependency, so response failures can be tested independently.
@@ -171,8 +172,8 @@ calculations belong in `@app/shared` (shared with the API) or the API itself. Th
 health grading lives in `@app/shared/health` and its drop-off and landing-page maths in
 `@app/shared/journey` (the Shopping Funnel page's transitions, segments, tests and observations in
 `@app/shared/funnel`); the repeated sentence pieces are in `components/dashboard/Narrative.tsx`.
-When a page needs to know what the API will allow (which campaign buttons to show, which message
-kinds a page covers), it asks the same function the API uses (`campaignCan`, `kindsOf` in
+When a page needs to know what the API will allow (which campaign buttons to show, what a template
+draft breaks), it asks the same function the API uses (`campaignCan`, `checkTemplateDraft` in
 `@app/shared/whatsapp`) rather than writing the rule out again.
 Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code that only a click
 needs out of the page's first load.
@@ -233,7 +234,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 ## Naming
 
 - **Files**: React component files are PascalCase (`StoreHeader.tsx`, `LoadError.tsx`, and modules of
-  several components such as `WhatsappUi.tsx`, `Primitives.tsx`); modules of helpers, hooks,
+  several components such as `WaUi.tsx`, `Primitives.tsx`); modules of helpers, hooks,
   constants or types are camelCase (`format.ts`, `storage.ts`, `heroLayout.ts`). `ui.tsx` (app-wide
   and in `components/staff`, `components/landing/shared`) is the one fixed name. Rename a file as a
   commit of pure `git mv` renames, imports in the next commit: git carries other branches' edits
@@ -242,7 +243,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
   use default exports.
 - **Errors**: `XxxError extends Error` (or `AppError`, for a rule the person broke) and sets
   `this.name`, so logs say which.
-- **API**: route files by area (`routes/whatsappOps.ts`), registration functions `<area>Routes`.
+- **API**: route files by area (`routes/whatsappAutomation.ts`), registration functions `<area>Routes`.
 - **Relative imports inside packages** use the `.js` extension (`./dates.js`), except in the
   `packages/shared` modules the UI imports by subpath (`ads.ts`, `sales.ts`): Next's bundler does
   not map `./dates.js` to `dates.ts` in a workspace package, so those stay extensionless.
@@ -311,10 +312,6 @@ components; then `worker/handlers.ts` (one module per job in `worker/src/handler
 
 What is left is not a move:
 
-- `appsecret_proof` on WhatsApp's Meta Graph calls. The ads calls send it (every
-  call made with a person's token, `metaGraph.ts` with the ads app's secret), so "Require App
-  Secret" can be turned on for the ads app "Insights" once that is deployed. WhatsApp still sends none: a merchant's own
-  WhatsApp app has a secret we don't hold.
 - `noUncheckedIndexedAccess` in `apps/web` (437 findings, nearly all in landing animations): a pass
   with visual checks.
 - No formatter (Prettier) or import sorting: one repository-wide reformat, at a moment when no

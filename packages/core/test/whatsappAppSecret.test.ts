@@ -1,14 +1,25 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resetEnvCache, waPlatformConfig, waPlatformSecret } from "../src/index.js";
+import { resetEnvCache, waAppSecret, waPlatform, waPlatformMissing } from "../src/index.js";
 
 /**
  * WhatsApp and Meta Ads can run on one Meta app or on two. WhatsApp only borrows the Meta Ads app's
- * secret when it is the same app: another app's secret would sign nothing WhatsApp sends.
+ * secret when it is the same app: another app's secret would sign nothing WhatsApp sends. "Connect
+ * WhatsApp" is on only once everything it needs is set (Nango keeps each store's token).
  */
 
 /** The env schema's required fields: the whole of it is parsed. */
 const BASE_ENV = { SESSION_SECRET: "0123456789abcdef", TOKEN_ENCRYPTION_KEYS: "1:" + "a".repeat(44), OTP_PEPPER: "pepper-value" };
-const KEYS = ["META_APP_ID", "META_APP_SECRET", "WHATSAPP_APP_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_CONFIG_ID", ...(Object.keys(BASE_ENV) as Array<keyof typeof BASE_ENV>)] as const;
+const READY = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify", NANGO_SECRET_KEY: "nango" };
+const KEYS = [
+  "META_APP_ID",
+  "META_APP_SECRET",
+  "WHATSAPP_APP_ID",
+  "WHATSAPP_APP_SECRET",
+  "WHATSAPP_CONFIG_ID",
+  "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+  "NANGO_SECRET_KEY",
+  ...(Object.keys(BASE_ENV) as Array<keyof typeof BASE_ENV>),
+] as const;
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 
 function setEnv(values: Partial<Record<(typeof KEYS)[number], string>>) {
@@ -28,21 +39,28 @@ afterEach(() => {
   resetEnvCache();
 });
 
-describe("WhatsApp's app secret", () => {
+describe("WhatsApp's Meta app", () => {
   it("uses the Meta Ads app's secret when WhatsApp runs on the same app", () => {
-    setEnv({ META_APP_ID: "111", META_APP_SECRET: "ads_secret", WHATSAPP_CONFIG_ID: "cfg" });
-    expect(waPlatformSecret()).toBe("ads_secret");
-    expect(waPlatformConfig()).toMatchObject({ appId: "111", appSecret: "ads_secret" });
-    setEnv({ META_APP_ID: "111", META_APP_SECRET: "ads_secret", WHATSAPP_APP_ID: "111", WHATSAPP_CONFIG_ID: "cfg" });
-    expect(waPlatformSecret()).toBe("ads_secret");
+    setEnv({ META_APP_ID: "111", META_APP_SECRET: "ads_secret", WHATSAPP_CONFIG_ID: "cfg", ...READY });
+    expect(waAppSecret()).toBe("ads_secret");
+    expect(waPlatform()).toMatchObject({ appId: "111", appSecret: "ads_secret", configId: "cfg", verifyToken: "verify" });
+    setEnv({ META_APP_ID: "111", META_APP_SECRET: "ads_secret", WHATSAPP_APP_ID: "111", WHATSAPP_CONFIG_ID: "cfg", ...READY });
+    expect(waAppSecret()).toBe("ads_secret");
   });
 
-  it("never borrows it for a different WhatsApp app: WhatsApp stays switched off until its own secret is set", () => {
-    setEnv({ META_APP_ID: "222", META_APP_SECRET: "ads_secret", WHATSAPP_APP_ID: "111", WHATSAPP_CONFIG_ID: "cfg" });
-    expect(waPlatformSecret()).toBe("");
-    expect(waPlatformConfig()).toBeNull();
-    setEnv({ META_APP_ID: "222", META_APP_SECRET: "ads_secret", WHATSAPP_APP_ID: "111", WHATSAPP_APP_SECRET: "wa_secret", WHATSAPP_CONFIG_ID: "cfg" });
-    expect(waPlatformSecret()).toBe("wa_secret");
-    expect(waPlatformConfig()).toMatchObject({ appId: "111", appSecret: "wa_secret" });
+  it("never borrows it for a different WhatsApp app: WhatsApp stays off until its own secret is set", () => {
+    setEnv({ META_APP_ID: "222", META_APP_SECRET: "ads_secret", WHATSAPP_APP_ID: "111", WHATSAPP_CONFIG_ID: "cfg", ...READY });
+    expect(waAppSecret()).toBe("");
+    expect(waPlatform()).toBeNull();
+    expect(waPlatformMissing()).toEqual(["WHATSAPP_APP_SECRET"]);
+    setEnv({ META_APP_ID: "222", META_APP_SECRET: "ads_secret", WHATSAPP_APP_ID: "111", WHATSAPP_APP_SECRET: "wa_secret", WHATSAPP_CONFIG_ID: "cfg", ...READY });
+    expect(waAppSecret()).toBe("wa_secret");
+    expect(waPlatform()).toMatchObject({ appId: "111", appSecret: "wa_secret" });
+  });
+
+  it("stays off without the verify token or Nango, and says which", () => {
+    setEnv({ WHATSAPP_APP_ID: "111", WHATSAPP_APP_SECRET: "wa_secret", WHATSAPP_CONFIG_ID: "cfg" });
+    expect(waPlatform()).toBeNull();
+    expect(waPlatformMissing()).toEqual(["WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"]);
   });
 });

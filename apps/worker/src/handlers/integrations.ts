@@ -15,8 +15,9 @@ import {
   sweepAdAlerts,
   syncAdConnection,
   type AdsSyncData,
-  dispatchStore,
-  sendWhatsappMessage,
+  dispatchCampaign,
+  processWebhookEvent,
+  sendWaMessage,
   type WhatsappJob,
   processBusinessEvent,
   retryInvitationEmail,
@@ -26,7 +27,6 @@ import {
 import { applySmsEvent, noSmsProvider, sendSmsJob, type SmsJob } from "@app/core/sms";
 import { UnrecoverableError, type WorkerDeps } from "./common.js";
 
-/** One WhatsApp message, or a store's due messages in a batch (campaigns, catch-up). */
 /** Email integrations: send one message, or run the automations for one business event. */
 export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
   if (job.kind === "email_send") return { outcome: await sendEmailMessage(job.messageId, deps) };
@@ -35,9 +35,15 @@ export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
   return processBusinessEvent(job.eventId, deps);
 }
 
+/**
+ * WhatsApp Automation: send one message, make a campaign's next batch, or apply one of Meta's webhook
+ * deliveries. The rows carry the state: a send never throws for Meta's answer; a webhook delivery
+ * that fails throws, so the queue brings it back (and the sweep sets it aside after enough tries).
+ */
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
-  if (job.kind === "whatsapp") return { outcome: await sendWhatsappMessage(job.messageId, deps) };
-  return dispatchStore(job.storeId, deps);
+  if (job.kind === "whatsapp") return { outcome: await sendWaMessage(job.messageId, deps) };
+  if (job.kind === "whatsapp_dispatch") return dispatchCampaign(job, deps);
+  return processWebhookEvent(job.eventId, deps);
 }
 
 /** One text (Customer Messaging). The row carries its state; the send path never throws for an SMS failure. */

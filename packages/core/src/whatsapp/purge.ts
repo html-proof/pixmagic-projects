@@ -1,0 +1,41 @@
+/**
+ * Erasing a store (shop/redact, a workspace deleted): every WhatsApp record of the store, as Prisma
+ * operations for persist.ts purgeStoreData's one transaction. Its own module, importing nothing but
+ * the database, so persist.ts can use it without importing the rest of WhatsApp.
+ */
+import { systemDb } from "@app/db";
+
+/** shop/redact (and a store's data being erased): every WhatsApp Automation record of the store, in one transaction with the rest. */
+export function purgeWhatsappStoreOps(storeId: string) {
+  return [
+    systemDb.waMessageEvent.deleteMany({ where: { storeId } }),
+    systemDb.waMessage.deleteMany({ where: { storeId } }),
+    systemDb.waWorkflowRun.deleteMany({ where: { storeId } }),
+    systemDb.waWorkflow.deleteMany({ where: { storeId } }),
+    systemDb.waCampaign.deleteMany({ where: { storeId } }),
+    systemDb.waConsentEvent.deleteMany({ where: { storeId } }),
+    systemDb.waContact.deleteMany({ where: { storeId } }),
+    systemDb.waTemplate.deleteMany({ where: { storeId } }),
+    systemDb.waSettings.deleteMany({ where: { storeId } }),
+    systemDb.waConnection.deleteMany({ where: { storeId } }),
+  ];
+}
+
+/** The earlier WhatsApp feature's tables (legacy.ts): everything of the store. */
+export function purgeLegacyWhatsappOps(storeId: string) {
+  return [
+    systemDb.whatsappMessageEvent.deleteMany({ where: { storeId } }),
+    systemDb.whatsappMessage.deleteMany({ where: { storeId } }),
+    systemDb.whatsappContact.deleteMany({ where: { storeId } }),
+    systemDb.customerReview.deleteMany({ where: { storeId } }),
+    systemDb.orderTrackingEvent.deleteMany({ where: { storeId } }),
+    systemDb.orderTracking.deleteMany({ where: { storeId } }),
+    systemDb.abandonedCheckout.deleteMany({ where: { storeId } }),
+    systemDb.whatsappCampaign.deleteMany({ where: { storeId } }),
+    systemDb.whatsappAutomationRun.deleteMany({ where: { storeId } }),
+    systemDb.whatsappAutomationRule.deleteMany({ where: { storeId } }),
+    systemDb.whatsappTemplate.deleteMany({ where: { storeId } }),
+    systemDb.whatsappConnection.deleteMany({ where: { storeId } }),
+    systemDb.whatsappSettings.deleteMany({ where: { storeId } }),
+  ];
+}

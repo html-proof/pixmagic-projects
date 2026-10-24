@@ -115,15 +115,16 @@ export const APP_SETTINGS = {
   // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it
   // shows. Offered to members who may manage integrations; empty hides the button.
   "GOOGLE_ADS_DEMO_ENABLED": "1",
-  // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
-  // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
-  // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets
-  // WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Until then the
-  // dashboard says it isn't set up, and merchants can still connect with their own Meta app.
+  // WhatsApp Automation (WhatsApp Business Platform, Cloud API), docs/whatsapp.md. "Connect WhatsApp"
+  // (Meta's Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login
+  // for Business configuration id of its WhatsApp Embedded Signup v4 variation (WHATSAPP_CONFIG_ID),
+  // and the secrets WHATSAPP_APP_SECRET (or META_APP_SECRET), WHATSAPP_WEBHOOK_VERIFY_TOKEN and
+  // NANGO_SECRET_KEY (Nango keeps each store's token). Until then the page says connecting isn't
+  // switched on yet; there is no other way to connect.
   // WhatsApp's Meta app: "pixmagic" (1799660384680551, portfolio "Testbusiness", the imeseban@gmail.com Facebook account).
   "WHATSAPP_APP_ID": "1799660384680551",
   "WHATSAPP_CONFIG_ID": "",
-  "WHATSAPP_API_VERSION": "v25.0",
+  "WHATSAPP_API_VERSION": "v26.0",
   // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "sandbox": merchants can
   // set up senders, templates and rules and send test texts to numbers they verified with AWS;
   // rules and campaigns only record dry runs, so no customer is texted. "live" once the account is

@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
-import { describe, expect, it } from "vitest";
-import { AdsApiError, AdsRetryableError, metaAdAccounts, graph, metaRevokeAdsRead, WhatsappApiError, type FetchLike } from "../src/index.js";
+import { describe, expect, it, vi } from "vitest";
+import { AdsApiError, AdsRetryableError, metaAdAccounts, graph, metaRevokeAdsRead, resetEnvCache, WhatsappApiError, type FetchLike } from "../src/index.js";
 import { graphCall, type GraphFailure } from "../src/metaGraph.js";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -176,7 +176,12 @@ describe("the ads and WhatsApp clients on it", () => {
     await expect(metaAdAccounts(meta(elsewhere.fetchImpl), "T")).rejects.toMatchObject({ constructor: AdsApiError, status: 502 });
   });
 
-  it("WhatsApp: Meta's wording and the action it implies; an outage is retryable", async () => {
+  it("WhatsApp: Meta's wording and the action it implies; no answer at all is told apart (a send may have reached Meta)", async () => {
+    vi.stubEnv("SESSION_SECRET", "0123456789abcdef");
+    vi.stubEnv("TOKEN_ENCRYPTION_KEYS", "1:" + "a".repeat(44));
+    vi.stubEnv("OTP_PEPPER", "pepper-value");
+    vi.stubEnv("WHATSAPP_APP_SECRET", "wa_secret");
+    resetEnvCache();
     const f = fake(() => json({ error: { message: "Invalid parameter", type: "OAuthException", code: 100, error_data: { details: "Unsupported get request" } } }, 400));
     const err = await graph(f.fetchImpl, "T", "GET", "123", { version: "v25.0" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(WhatsappApiError);
@@ -185,6 +190,10 @@ describe("the ads and WhatsApp clients on it", () => {
     const down: FetchLike = async () => {
       throw new TypeError("fetch failed");
     };
-    await expect(graph(down, "T", "GET", "123", { version: "v25.0" })).rejects.toMatchObject({ httpStatus: 503, title: "network", action: "retry" });
+    await expect(graph(down, "T", "GET", "123", { version: "v25.0" })).rejects.toMatchObject({ httpStatus: 0, title: "network", action: "network" });
+    // bizinsights' app issued the token: every call carries the proof made with its secret.
+    expect(new URL(f.calls[0]!.url.toString()).searchParams.get("appsecret_proof")).toMatch(/^[0-9a-f]{64}$/);
+    vi.unstubAllEnvs();
+    resetEnvCache();
   });
 });

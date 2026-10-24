@@ -26,7 +26,7 @@ describe("audit log", () => {
 });
 
 describe("WhatsApp webhook", () => {
-  it("limits unsigned deliveries per address before looking anything up", async () => {
+  it("limits deliveries whose signature doesn't verify, per address, before reading anything", async () => {
     const send = () =>
       ctx.app.inject({
         method: "POST",

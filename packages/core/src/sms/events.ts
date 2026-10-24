@@ -34,7 +34,7 @@ import {
   type AutomationCheckout,
   type AutomationOrder,
 } from "../shopifyPayloads.js";
-import { firstNameOf, itemsOf, phoneOf, tagsOf } from "../whatsapp/events/context.js";
+import { firstNameOf, itemsOf, phoneOf, tagsOf } from "../shopifyCustomer.js";
 import { runSmsRules, type RuleSubject } from "./automations.js";
 import { smsEncrypt, type SmsDeps } from "./common.js";
 import { applyConsent, cancelMarketingFor, refreshContactStats, shopifySmsConsent, upsertSmsContact } from "./contacts.js";

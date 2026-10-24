@@ -1,385 +1,333 @@
 import { z } from "zod";
-import { Prisma, systemDb, withTenant, type WhatsappTemplate } from "@app/db";
+import { systemDb, withTenant, type Prisma } from "@app/db";
 import {
+  accountNumbers,
   audit,
-  autoRegisterWhatsapp,
-  checkManualApp,
-  connectionPin,
-  connectWhatsapp,
-  discoverWhatsapp,
-  disconnectWhatsapp,
-  ensureSettings,
-  env,
-  logger,
-  parseConfig,
-  refreshConnection,
-  registerWhatsapp,
-  scheduleMessage,
-  setupManualWebhook,
-  storeName,
-  waCreateTemplate,
-  waExchangeCode,
-  waPlatformConfig,
-  waTokenInfo,
-  WhatsappApiError,
-  providerDetail,
-  sampleValues,
-  connectionToken,
-  numberOptedOut,
+  checkConnection,
+  chooseNumber,
+  disconnect,
+  finishSignup,
+  legacyConnection,
+  liveConnection,
+  receiveCustomEvent,
+  registerWithPin,
+  removeTemplate,
+  retryMessage,
+  revealPin,
+  revokeEventKey,
+  rotateEventKey,
+  sendManual,
+  sendTest,
+  setConsent,
+  settingsOf,
+  startSignup,
+  submitTemplate,
   syncTemplates,
+  connectionToken,
+  waEncrypt,
+  waPhoneHash,
+  waPlatform,
+  waPlatformMissing,
+  waWebhookUrl,
+  WhatsappError,
+  contactFirstName,
+  messagePreview,
 } from "@app/core";
 import {
-  allows,
-  KIND_INFO,
-  kindSetting,
-  libraryTemplate,
+  customEventSchema,
+  mappingSchema,
+  maskPhone,
   normalizePhone,
-  NOTIFICATION_KINDS,
-  templateMappingSchema,
+  ORDER_UPDATE_BASES,
+  sendWindowSchema,
+  STARTER_TEMPLATES,
+  statusBucket,
+  templateDraftSchema,
+  templateRefSchema,
   templateShape,
-  whatsappConfigSchema,
-  type KindSetting,
+  WA_MESSAGE_STATUSES,
   type TemplateComponent,
+  type TemplateMapping,
 } from "@app/shared";
-import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { whatsappOpsRoutes } from "./whatsappOps.js";
-import { base, publicConnection, publicTemplate, waStore } from "./whatsappCommon.js";
+import { base, connectionView, messageView, requireContacts, requireWaConnect, requireWaManage, requireWaView, seesContacts, settingsJson, templateView, waCan, waStore } from "./whatsappCommon.js";
 
 /**
- * WhatsApp for a store, for the signed-in merchant: connect the number (Meta's Embedded Signup,
- * or the merchant's own app and system-user token), choose what is sent and when, templates,
- * test sends, and the overview. Order timelines, carts, reviews, campaigns, automations and the
- * message history are in whatsappOps.ts.
+ * WhatsApp Automation for a store, for the signed-in merchant (docs/whatsapp.md): the overview,
+ * connecting the number with Meta's Embedded Signup (its finish, a number to choose, the number's
+ * PIN, "Check again", disconnect), settings, templates, the message history and sending, contacts
+ * and their consent, and test events. Workflows and campaigns are in whatsappAutomation.ts.
  *
- * Reading is for any member; anything that changes what customers receive needs stores:manage.
- * Tokens and secrets are never returned.
+ * Reading needs "View campaigns"; anything that changes what customers receive needs the store's
+ * owners or admins; connecting needs "Manage integrations". Tokens never reach the browser.
  */
 
-/** Whether a notification's template is ready, and what's wrong if not. */
-function templateCheck(templates: WhatsappTemplate[], s: KindSetting): { state: "ready" | "pending" | "rejected" | "missing" | "unset"; problem: string | null; category: string | null } {
-  if (!s.templateName) return { state: "unset", problem: "Choose a template", category: null };
-  const t = templates.find((x) => x.name === s.templateName && x.language === s.language);
-  if (!t) return { state: "missing", problem: `"${s.templateName}" (${s.language}) isn't in your WhatsApp account`, category: null };
-  if (t.status === "PENDING" || t.status === "IN_APPEAL") return { state: "pending", problem: "Waiting for Meta's review", category: t.category };
-  if (t.status !== "APPROVED") return { state: "rejected", problem: `Meta says ${t.status.toLowerCase()}${t.rejectedReason ? `: ${t.rejectedReason}` : ""}`, category: t.category };
-  const shape = templateShape(t.components as unknown as TemplateComponent[]);
-  if (s.mapping.body.length < shape.bodyVars) return { state: "missing", problem: `The template has ${shape.bodyVars} variables; ${s.mapping.body.length} are filled`, category: t.category };
-  if (s.mapping.buttons.length < shape.dynamicUrlButtons.length) return { state: "missing", problem: "The template's link button needs a value", category: t.category };
-  return { state: "ready", problem: null, category: t.category };
-}
-
-/** Meta refused a connect step: say so with Meta's reason (WhatsappConnectError answers itself, as a 400). */
-const connectError = (err: unknown): never => {
-  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-  throw err;
-};
-
-const idSchema = z.string().trim().regex(/^\d{5,25}$/, "must be the numeric id from WhatsApp Manager");
-const accessTokenSchema = z.string().trim().min(20).max(1000).regex(/^[A-Za-z0-9_-]+$/, "doesn't look like a Meta access token");
+const DAY = 86_400_000;
+const idParam = z.string().trim().min(1).max(64);
 
 export function whatsappRoutes(app: App, deps: Deps) {
-  /** Everything the WhatsApp overview needs, in one call. */
+  /** Everything the WhatsApp Automation page opens with, in one call. */
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
+    const a = await requireWaView(c, deps, ws);
     const store = await waStore(ws, storeId);
-    // The manual connection's verify token: for whoever may manage the connection.
-    const manage = allows(access.access, "integrations.manage");
-    const weekAgo = new Date(Date.now() - 7 * 86_400_000);
+    const can = waCan(a);
+    const now = Date.now();
     const data = await withTenant(ws, async (tx) => {
-      const [settings, conn, templates, byStatus, failed, rules, openCarts, pendingReviews, campaigns, scheduled] = await Promise.all([
-        tx.whatsappSettings.findUnique({ where: { storeId } }),
-        tx.whatsappConnection.findUnique({ where: { storeId } }),
-        tx.whatsappTemplate.findMany({ where: { storeId } }),
-        tx.whatsappMessage.groupBy({ by: ["status"], where: { storeId, workspaceId: ws, createdAt: { gte: weekAgo }, test: false }, _count: { _all: true } }),
-        tx.whatsappMessage.findMany({
-          where: { storeId, workspaceId: ws, status: "failed", createdAt: { gte: weekAgo } },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: { id: true, kind: true, orderName: true, errorTitle: true, phoneMasked: true, createdAt: true },
-        }),
-        tx.whatsappAutomationRule.count({ where: { storeId, workspaceId: ws, enabled: true } }),
-        tx.abandonedCheckout.count({ where: { storeId, workspaceId: ws, status: { in: ["open", "reminded"] } } }),
-        tx.customerReview.count({ where: { storeId, workspaceId: ws, status: "pending" } }),
-        tx.whatsappCampaign.findMany({ where: { storeId, workspaceId: ws, status: { in: ["scheduled", "sending", "paused"] } }, select: { id: true, name: true, status: true, startAt: true } }),
-        tx.whatsappMessage.count({ where: { storeId, workspaceId: ws, status: "scheduled" } }),
+      const [conn, templates, week, month, recent, workflows, campaigns] = await Promise.all([
+        tx.waConnection.findUnique({ where: { storeId } }),
+        tx.waTemplate.findMany({ where: { storeId, workspaceId: ws }, select: { status: true } }),
+        tx.waMessage.groupBy({ by: ["status", "direction"], where: { storeId, workspaceId: ws, createdAt: { gte: new Date(now - 7 * DAY) }, source: { not: "test" } }, _count: { _all: true } }),
+        tx.waMessage.groupBy({ by: ["status", "direction"], where: { storeId, workspaceId: ws, createdAt: { gte: new Date(now - 30 * DAY) }, source: { not: "test" } }, _count: { _all: true } }),
+        tx.waMessage.findMany({ where: { storeId, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 8 }),
+        tx.waWorkflow.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
+        tx.waCampaign.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
       ]);
-      return { settings, conn, templates, byStatus, failed, rules, openCarts, pendingReviews, campaigns, scheduled };
+      const failures = await tx.waMessage.groupBy({
+        by: ["errorTitle", "reason"],
+        where: { storeId, workspaceId: ws, status: "failed", createdAt: { gte: new Date(now - 7 * DAY) } },
+        _count: { _all: true },
+        orderBy: { _count: { id: "desc" } },
+        take: 5,
+      });
+      return { conn, templates, week, month, recent, workflows, campaigns, failures };
     });
-    const cfg = parseConfig(data.settings?.config);
-    const count = (s: string) => data.byStatus.find((b) => b.status === s)?._count._all ?? 0;
-    const notifications = NOTIFICATION_KINDS.map((k) => {
-      const s = kindSetting(cfg, k);
-      return { kind: k, enabled: s.enabled, templateName: s.templateName, check: templateCheck(data.templates, s) };
-    });
-    const platform = waPlatformConfig();
+    const conn = data.conn;
+    const live = conn && conn.status !== "disconnected" ? conn : null;
+    const dead = live ? await systemDb.waWebhookEvent.count({ where: { status: "dead", wabaIds: { has: live.wabaId }, receivedAt: { gte: new Date(now - 7 * DAY) } } }) : 0;
+    const settings = await settingsOf(storeId);
+    const stats = (rows: typeof data.week) => {
+      const out = { pending: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, received: 0 };
+      for (const r of rows) {
+        if (r.direction === "in") {
+          out.received += r._count._all;
+          continue;
+        }
+        const b = statusBucket(r.status);
+        if (b === "pending") out.pending += r._count._all;
+        else if (b === "sent") out.sent += r._count._all;
+        else if (b === "delivered") {
+          out.delivered += r._count._all;
+          if (r.status === "read") out.read += r._count._all;
+        } else if (b === "failed") out.failed += r._count._all;
+        else if (r.status === "skipped") out.skipped += r._count._all;
+      }
+      return out;
+    };
+    const count = (rows: Array<{ status: string; _count: { _all: number } }>, s: string) => rows.find((r) => r.status === s)?._count._all ?? 0;
+    const approved = data.templates.filter((t) => t.status === "APPROVED").length;
+    const missing = waPlatformMissing();
+    const platform = waPlatform();
+    const legacy = live ? null : await legacyConnection(storeId);
+
+    // What needs the merchant, in the order it matters.
+    const problems: Array<{ key: string; title: string; detail: string }> = [];
+    if (live?.status === "reconnect") problems.push({ key: "reconnect", title: "Reconnect WhatsApp", detail: live.statusDetail ?? "Meta no longer accepts bizinsights' access. Nothing is sent until you reconnect." });
+    if (live?.status === "error") problems.push({ key: "account", title: "Problem with your WhatsApp account", detail: live.statusDetail ?? "Meta restricted the account. Check WhatsApp Manager." });
+    if (live?.status === "action_required" && live.statusDetail) problems.push({ key: `step:${live.step}`, title: "One more step", detail: live.statusDetail });
+    if (live && !live.subscribedAt) problems.push({ key: "webhooks", title: "Replies aren't reaching bizinsights yet", detail: "Press Check again. Until it works, delivery reports and STOP replies don't arrive, and campaigns can't be sent." });
+    if (live && live.qualityRating === "RED") problems.push({ key: "quality", title: "Your number's quality is low", detail: "Customers are blocking or reporting your messages. Send fewer marketing messages and make sure customers expect them, or Meta may limit the number." });
+    if (dead) problems.push({ key: "webhook_failed", title: "Some updates from WhatsApp couldn't be applied", detail: `${dead} update${dead === 1 ? "" : "s"} from Meta failed in the last 7 days. Delivery statuses may be out of date; contact support if this keeps happening.` });
+    for (const f of data.failures) problems.push({ key: `failed:${f.reason}:${f.errorTitle}`, title: `${f._count._all} message${f._count._all === 1 ? "" : "s"} failed`, detail: f.errorTitle ?? "WhatsApp couldn't send them." });
+    if (live && settings.orderUpdates === "unset") problems.push({ key: "consent", title: "Choose how customers agree to updates", detail: "Order and service updates go to nobody until you choose, in Settings." });
+
     return c.json({
-      platform: platform ? { embeddedSignup: true, appId: platform.appId, configId: platform.configId, version: platform.version } : { embeddedSignup: false },
-      webhookUrl: `${env().API_URL}/webhooks/whatsapp`,
-      enabled: !!data.settings,
-      connection: data.conn ? publicConnection(data.conn, manage) : null,
-      store: { name: storeName(store), timezone: store.timezone, currency: store.currency },
-      setup: {
-        connected: !!data.conn,
-        registered: !!data.conn?.registered,
-        webhookVerified: !!data.conn?.webhookVerifiedAt,
-        consentBasis: cfg.transactionalBasis,
-        notificationsReady: notifications.filter((n) => n.enabled && n.check.state === "ready").length,
-        approvedTemplates: data.templates.filter((t) => t.status === "APPROVED").length,
+      // Public ids (Meta's SDK needs them in the page); the secret never leaves the server.
+      platform: { ready: !!platform, ...(platform ? { appId: platform.appId, configId: platform.configId, version: platform.version } : {}), ...(can.connect ? { missing } : {}) },
+      connection: connectionView(conn),
+      legacy,
+      can,
+      store: { name: store.name ?? store.shopDomain, timezone: store.timezone, currency: store.currency },
+      settings: settingsJson(settings),
+      stats: { last7Days: stats(data.week), last30Days: stats(data.month) },
+      checklist: {
+        connected: !!live,
+        registered: !!live?.registered,
+        subscribed: !!live?.subscribedAt,
+        approvedTemplates: approved,
+        consentChosen: settings.orderUpdates !== "unset",
+        testPhone: settings.hasTestPhone,
+        activeWorkflows: count(data.workflows, "active"),
       },
-      last7Days: {
-        sent: count("sent") + count("delivered") + count("read"),
-        delivered: count("delivered") + count("read"),
-        read: count("read"),
-        failed: count("failed"),
-        skipped: count("skipped"),
+      counts: {
+        templates: { approved, pending: data.templates.filter((t) => t.status === "PENDING" || t.status === "IN_APPEAL").length, rejected: data.templates.filter((t) => ["REJECTED", "PAUSED", "DISABLED"].includes(t.status)).length },
+        workflows: { active: count(data.workflows, "active"), total: data.workflows.reduce((s, r) => s + r._count._all, 0) },
+        campaigns: { scheduled: count(data.campaigns, "scheduled"), sending: count(data.campaigns, "sending"), total: data.campaigns.reduce((s, r) => s + r._count._all, 0) },
       },
-      scheduled: data.scheduled,
-      notifications,
-      automationsEnabled: data.rules,
-      attention: {
-        failed: data.failed,
-        pendingTemplates: data.templates.filter((t) => t.status === "PENDING").length,
-        rejectedTemplates: data.templates.filter((t) => ["REJECTED", "PAUSED", "DISABLED"].includes(t.status)).length,
-        openCarts: data.openCarts,
-        pendingReviews: data.pendingReviews,
-        campaigns: data.campaigns,
-        problems: notifications.filter((n) => n.enabled && n.check.state !== "ready").map((n) => ({ kind: n.kind, problem: n.check.problem })),
-      },
+      problems,
+      recent: data.recent.map((m) => messageView(m, { contacts: can.contacts })),
+      webhookUrl: waWebhookUrl(),
     });
   });
 
   // ---------------------------------------------------------------- connecting
 
-  /**
-   * Embedded Signup finished in the browser: exchange its code (it lives 30 seconds) for the
-   * business's token, check the number and account, subscribe webhooks, save.
-   */
-  app.post(`${base}/embedded`, async (c) => {
+  /** Start Meta's Embedded Signup: the ids its SDK needs and a nonce the finish brings back. */
+  app.post(`${base}/connect/start`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    const a = await requireWaConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    // The ids come from Meta's message to the page; when that never arrived, they're asked of Meta below.
+    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect, "Too many tries. Wait a few minutes and press Connect WhatsApp again.");
+    return c.json(await startSignup(deps, { store, userId: a.user.id }));
+  });
+
+  /** Meta's window finished: exchange the code (it lives 30 seconds), check everything, save. */
+  app.post(`${base}/connect/finish`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const id = z.string().regex(/^\d{3,30}$/).nullish();
     const input = z
-      .object({
-        code: z.string().min(10).max(2000),
-        wabaId: idSchema.optional(),
-        phoneNumberId: idSchema.optional(),
-        businessId: idSchema.optional(),
-        // How Meta's flow finished (its WA_EMBEDDED_SIGNUP message): only "FINISH" is a new Cloud API number.
-        event: z.string().max(64).optional(),
-      })
-      .refine((v) => !!v.wabaId === !!v.phoneNumberId, "wabaId and phoneNumberId go together")
+      .object({ nonce: z.string().uuid(), code: z.string().min(10).max(2000), flow: z.enum(["cloud_api", "only_waba", "business_app", "other"]).nullish(), wabaId: id, phoneNumberId: id, businessId: id })
       .parse(await body(c));
-    const cfg = waPlatformConfig();
-    if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this bizinsights server yet.", "not_configured");
-    let token: string;
-    try {
-      token = await waExchangeCode(cfg, input.code, deps.fetchImpl);
-    } catch (err) {
-      logger.warn({ err, storeId }, "whatsapp embedded signup code exchange failed");
-      throw new HttpError(400, "Meta didn't accept the sign-in (it expires after 30 seconds). Please press Connect again.", "exchange_failed");
-    }
-    let ids = input.wabaId && input.phoneNumberId ? { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId } : null;
-    if (ids) {
-      // The ids came from the browser: the account must be one this sign-up granted to bizinsights' app.
-      // (connectWhatsapp then checks the number is in that account, with the business's own token.)
-      const info = await waTokenInfo(token, deps.fetchImpl, `${cfg.appId}|${cfg.appSecret}`).catch((err: unknown) => {
-        logger.warn({ err, storeId }, "whatsapp embedded signup: couldn't inspect the token; relying on the account checks");
-        return null;
-      });
-      if (info?.appId && info.appId !== cfg.appId) throw new HttpError(400, "That sign-in was for a different Meta app. Please press Continue with WhatsApp again.", "wrong_app");
-      if (info?.wabaIds && !info.wabaIds.includes(ids.wabaId)) {
-        throw new HttpError(400, "Meta didn't give bizinsights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
-      }
-    }
-    if (!ids) {
-      const found = await discoverWhatsapp(token, deps.fetchImpl).catch(connectError);
-      const numbers = found.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));
-      if (numbers.length !== 1) {
-        throw new HttpError(400, "Meta didn't say which number you chose. Please press Continue with WhatsApp again.", "number_unknown");
-      }
-      ids = numbers[0]!;
-    }
-    let conn = await connectWhatsapp({ store, mode: "embedded", ...ids, businessId: input.businessId, accessToken: token, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
-    // The merchant just chose this number in Meta's own flow: register it so it can send straight away.
-    // Never a WhatsApp Business app number (coexistence) or one Meta didn't say how it finished.
-    const registration = input.event === "FINISH" ? await autoRegisterWhatsapp(conn, deps.fetchImpl) : { conn, outcome: conn.registered ? "already" : "pin_needed" };
-    conn = registration.conn;
-    await audit({
-      workspaceId: ws,
-      actorUserId: access.user!.id,
-      action: "whatsapp.connected",
-      targetType: "store",
-      targetId: storeId,
-      metadata: { mode: "embedded", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, event: input.event ?? null, registration: registration.outcome },
+    const conn = await finishSignup(deps, {
+      store,
+      userId: a.user.id,
       ip: clientIp(c),
+      nonce: input.nonce,
+      code: input.code,
+      flow: input.flow ?? null,
+      wabaId: input.wabaId ?? null,
+      phoneNumberId: input.phoneNumberId ?? null,
+      businessId: input.businessId ?? null,
     });
-    return c.json({ connection: publicConnection(conn, true), registration: registration.outcome });
+    return c.json({ connection: connectionView(conn) });
   });
 
-  /**
-   * The merchant's own Meta app, step one: from just the access token, the WhatsApp accounts and
-   * numbers it reaches and the app it belongs to. Nothing is saved.
-   */
-  app.post(`${base}/manual/discover`, async (c) => {
+  /** The numbers in the connected account (for "Choose a number"). */
+  app.get(`${base}/connect/numbers`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const { accessToken } = z.object({ accessToken: accessTokenSchema }).parse(await body(c));
-    const found = await discoverWhatsapp(accessToken, deps.fetchImpl).catch(connectError);
-    return c.json(found);
-  });
-
-  /**
-   * The merchant's own Meta app: WABA id, phone number id, a system-user token and the app secret.
-   * The secret is checked against the token's app, and the app's webhook is pointed at bizinsights,
-   * so there's nothing to paste into Meta's dashboard (unless Meta wouldn't let us).
-   */
-  app.post(`${base}/manual`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    await requireWaConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
+    return c.json({ numbers: await accountNumbers(deps, store) });
+  });
+
+  app.post(`${base}/connect/number`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const { phoneNumberId } = z.object({ phoneNumberId: z.string().regex(/^\d{3,30}$/) }).parse(await body(c));
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const input = z
-      .object({
-        wabaId: idSchema,
-        phoneNumberId: idSchema,
-        accessToken: accessTokenSchema,
-        // Without it, bizinsights can't verify Meta's deliveries, so it would never hear STOP replies.
-        appSecret: z.string().trim().regex(/^[a-f0-9]{32}$/i, "must be the 32-character app secret from your Meta app's Basic settings"),
-      })
-      .parse(await body(c));
-    const appId = await checkManualApp(input.accessToken, input.appSecret, deps.fetchImpl).catch(connectError);
-    let conn = await connectWhatsapp({ store, mode: "manual", ...input, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
-    const webhook = appId ? await setupManualWebhook(conn, appId, input.appSecret, deps.fetchImpl) : "failed";
-    if (webhook === "verified") conn = (await systemDb.whatsappConnection.findUnique({ where: { id: conn.id } })) ?? conn;
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "manual", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, webhook }, ip: clientIp(c) });
-    return c.json({ connection: publicConnection(conn, true), webhook });
+    return c.json({ connection: connectionView(await chooseNumber(deps, { store, userId: a.user.id, phoneNumberId, ip: clientIp(c) })) });
   });
 
-  /** Register the number with the Cloud API (it can't send until it is). */
-  app.post(`${base}/register`, async (c) => {
+  /** The number's own two-step verification PIN, to finish registering it. */
+  app.post(`${base}/connect/pin`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const { pin } = z.object({ pin: z.string().regex(/^\d{6}$/, "must be 6 digits") }).parse(await body(c));
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
-    const updated = await registerWhatsapp(conn, pin, deps.fetchImpl).catch(connectError);
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.number_registered", targetType: "store", targetId: storeId, ip: clientIp(c) });
-    return c.json({ connection: publicConnection(updated, true) });
+    const a = await requireWaConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const { pin } = z.object({ pin: z.string().regex(/^\d{6}$/, "The PIN is 6 digits") }).parse(await body(c));
+    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect, "Too many tries. Wait a few minutes before entering the PIN again.");
+    return c.json({ connection: connectionView(await registerWithPin(deps, { store, userId: a.user.id, pin, ip: clientIp(c) })) });
   });
 
-  /**
-   * The number's two-step verification PIN, for an owner or admin who needs it (to move the number
-   * to another provider, say). Only known when bizinsights registered the number or the merchant typed it.
-   */
-  app.post(`${base}/pin`, async (c) => {
+  /** "Check again": the number, the webhooks and the templates, from Meta, now. */
+  app.post(`${base}/connect/check`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    await requireWaConnect(c, deps, ws);
     await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-pin:${storeId}`, LIMITS.waRefresh);
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
-    const pin = connectionPin(conn);
-    if (!pin) throw new HttpError(404, "bizinsights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.pin_viewed", targetType: "store", targetId: storeId, ip: clientIp(c) });
-    c.header("cache-control", "no-store");
-    return c.json({ pin });
+    const conn = await liveConnection(storeId);
+    if (!conn) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
+    await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh, "WhatsApp was checked a moment ago. Wait a few minutes before checking again.");
+    const result = await checkConnection(deps, conn);
+    return c.json({ connection: connectionView(await systemDb.waConnection.findUnique({ where: { storeId } })), templates: result.templates });
   });
 
-  /** Read the number's status and the templates from Meta again. */
-  app.post(`${base}/refresh`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh);
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
-    try {
-      const updated = await refreshConnection(conn, deps.fetchImpl);
-      return c.json({ connection: publicConnection(updated, true) });
-    } catch (err) {
-      if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't answer as expected: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-      throw err;
-    }
-  });
-
+  /** Disconnect: bizinsights' access is deleted, waiting messages and running campaigns cancelled, history kept. */
   app.delete(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Not connected", "not_connected");
-    await disconnectWhatsapp(conn, deps.fetchImpl);
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.disconnected", targetType: "store", targetId: storeId, metadata: { wabaId: conn.wabaId }, ip: clientIp(c) });
+    const a = await requireWaConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await disconnect(deps, { store, userId: a.user.id, ip: clientIp(c) });
     return c.json({ ok: true });
+  });
+
+  /** The PIN bizinsights set on the number, for an owner or admin moving it to another provider. Audited. */
+  app.post(`${base}/pin`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    if (!waCan(a).pin) throw new HttpError(403, "Only owners and admins can see the PIN.", "forbidden");
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-pin:${a.user.id}`, LIMITS.waPin);
+    const pin = await revealPin({ store, userId: a.user.id, ip: clientIp(c) });
+    if (!pin) throw new HttpError(404, "bizinsights didn't set this number's PIN: it is the one you chose in WhatsApp Manager.", "no_pin");
+    return c.json({ pin });
   });
 
   // ---------------------------------------------------------------- settings
 
   app.get(`${base}/settings`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "marketing.campaigns");
+    await requireWaView(c, deps, ws);
     await waStore(ws, storeId);
-    const [settings, templates] = await withTenant(ws, (tx) =>
-      Promise.all([tx.whatsappSettings.findUnique({ where: { storeId } }), tx.whatsappTemplate.findMany({ where: { storeId }, orderBy: [{ name: "asc" }, { language: "asc" }] })]),
-    );
-    const cfg = parseConfig(settings?.config);
-    return c.json({
-      enabled: !!settings,
-      config: { ...cfg, notifications: Object.fromEntries(NOTIFICATION_KINDS.map((k) => [k, kindSetting(cfg, k)])) },
-      checks: Object.fromEntries(NOTIFICATION_KINDS.map((k) => [k, templateCheck(templates, kindSetting(cfg, k))])),
-      basisSetAt: settings?.basisSetAt ?? null,
-      templates: templates.map(publicTemplate),
-    });
+    return c.json(settingsJson(await settingsOf(storeId)));
   });
 
-  /** Save the whole configuration. Turning a notification on needs a template chosen for it. */
   app.put(`${base}/settings`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const a = await requireWaManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const cfg = whatsappConfigSchema.parse(await body(c));
-    for (const k of NOTIFICATION_KINDS) {
-      const s = cfg.notifications[k];
-      if (s?.enabled && !s.templateName) throw new HttpError(400, `Choose a template for "${KIND_INFO[k].label}" before turning it on.`, "template_required");
+    const input = z
+      .object({
+        orderUpdates: z.enum(ORDER_UPDATE_BASES).optional(),
+        shopifySmsConsent: z.boolean().optional(),
+        sendWindow: sendWindowSchema.optional(),
+        dailyLimit: z.number().int().min(1).max(1_000_000).nullable().optional(),
+        /** The merchant's own WhatsApp number for tests; null removes it. */
+        testPhone: z.string().trim().max(40).nullable().optional(),
+        testPhoneCountry: z.string().regex(/^[A-Z]{2}$/).optional(),
+      })
+      .parse(await body(c));
+    const data: Prisma.WaSettingsUncheckedUpdateInput = { updatedByUserId: a.user.id };
+    const now = new Date();
+    if (input.orderUpdates !== undefined) Object.assign(data, { orderUpdates: input.orderUpdates, orderUpdatesSetBy: a.user.id, orderUpdatesSetAt: now });
+    if (input.shopifySmsConsent !== undefined) data.shopifySmsConsent = input.shopifySmsConsent;
+    if (input.sendWindow) Object.assign(data, { sendWindowStart: input.sendWindow.start, sendWindowEnd: input.sendWindow.end });
+    if (input.dailyLimit !== undefined) data.dailyLimit = input.dailyLimit;
+    if (input.testPhone !== undefined) {
+      if (input.testPhone === null || input.testPhone === "") Object.assign(data, { testPhoneEnc: null, testPhoneMasked: null });
+      else {
+        const phone = normalizePhone(input.testPhone, input.testPhoneCountry ?? null);
+        if (!phone) throw new HttpError(400, "That number can't be read. Use the international format, like +61412345678.", "invalid_phone");
+        Object.assign(data, { testPhoneEnc: waEncrypt(storeId, "test_phone", phone.e164), testPhoneMasked: maskPhone(phone.e164) });
+      }
     }
-    if (cfg.sendWindowStart === cfg.sendWindowEnd) throw new HttpError(400, "The sending window needs different start and end hours.", "invalid_window");
-    const before = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
-    const prev = parseConfig(before?.config);
-    const basisChanged = !before || prev.transactionalBasis !== cfg.transactionalBasis;
-    await ensureSettings(store);
-    await systemDb.whatsappSettings.update({
-      where: { storeId },
-      data: {
-        config: cfg as unknown as Prisma.InputJsonValue,
-        updatedByUserId: access.user!.id,
-        ...(basisChanged ? { basisSetByUserId: access.user!.id, basisSetAt: new Date() } : {}),
-      },
-    });
-    const enabledNow = NOTIFICATION_KINDS.filter((k) => cfg.notifications[k]?.enabled);
-    const enabledBefore = NOTIFICATION_KINDS.filter((k) => prev.notifications[k]?.enabled);
+    const before = await settingsOf(storeId);
+    await systemDb.waSettings.upsert({ where: { storeId }, create: { ...(data as Prisma.WaSettingsUncheckedCreateInput), storeId, workspaceId: ws }, update: data });
     await audit({
       workspaceId: ws,
-      actorUserId: access.user!.id,
-      action: "whatsapp.settings_updated",
+      actorUserId: a.user.id,
+      action: "whatsapp.settings_changed",
       targetType: "store",
-      targetId: storeId,
+      targetId: store.id,
       metadata: {
-        turnedOn: enabledNow.filter((k) => !enabledBefore.includes(k)),
-        turnedOff: enabledBefore.filter((k) => !enabledNow.includes(k)),
-        ...(basisChanged ? { consentBasis: cfg.transactionalBasis } : {}),
-        smsConsentCountsForMarketing: cfg.smsConsentCountsForMarketing,
+        ...(input.orderUpdates !== undefined && input.orderUpdates !== before.orderUpdates ? { orderUpdates: { from: before.orderUpdates, to: input.orderUpdates } } : {}),
+        ...(input.shopifySmsConsent !== undefined ? { shopifySmsConsent: input.shopifySmsConsent } : {}),
+        ...(input.sendWindow ? { sendWindow: input.sendWindow } : {}),
+        ...(input.dailyLimit !== undefined ? { dailyLimit: input.dailyLimit } : {}),
+        ...(input.testPhone !== undefined ? { testPhone: input.testPhone ? "set" : "removed" } : {}),
       },
       ip: clientIp(c),
     });
+    return c.json(settingsJson(await settingsOf(storeId)));
+  });
+
+  /** A new custom-event key (shown this once; the old one stops working). */
+  app.post(`${base}/settings/event-key`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const key = await rotateEventKey({ store, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ key, endpoint: `${waWebhookUrl().replace(/\/webhooks\/whatsapp$/, "")}/whatsapp/events` });
+  });
+
+  app.delete(`${base}/settings/event-key`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await revokeEventKey({ store, userId: a.user.id, ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
@@ -387,185 +335,265 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "marketing.campaigns");
+    await requireWaView(c, deps, ws);
     await waStore(ws, storeId);
-    const templates = await withTenant(ws, (tx) => tx.whatsappTemplate.findMany({ where: { storeId, workspaceId: ws }, orderBy: [{ name: "asc" }, { language: "asc" }] }));
-    return c.json({ templates: templates.map(publicTemplate) });
+    const [templates, workflows, campaigns] = await withTenant(ws, (tx) =>
+      Promise.all([
+        tx.waTemplate.findMany({ where: { storeId, workspaceId: ws }, orderBy: [{ status: "asc" }, { name: "asc" }] }),
+        tx.waWorkflow.groupBy({ by: ["templateName", "templateLanguage"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
+        tx.waCampaign.groupBy({ by: ["templateName", "templateLanguage"], where: { storeId, workspaceId: ws, status: { in: ["draft", "scheduled", "sending"] } }, _count: { _all: true } }),
+      ]),
+    );
+    const used = (rows: typeof workflows, name: string, language: string) => rows.find((r) => r.templateName === name && r.templateLanguage === language)?._count._all ?? 0;
+    return c.json({
+      templates: templates.map((t) => templateView(t, { workflows: used(workflows, t.name, t.language), campaigns: used(campaigns, t.name, t.language) })),
+      starters: STARTER_TEMPLATES,
+    });
   });
 
-  /** Submit one of bizinsights' templates to Meta's review, in the merchant's account. */
+  /** Write a template and submit it for Meta's review. */
   app.post(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-template:${storeId}`, LIMITS.waTemplateCreate);
-    const { name, language } = z.object({ name: z.string(), language: z.string().regex(/^[a-z]{2,3}(_[A-Z]{2})?$/).default("en") }).parse(await body(c));
-    const lib = libraryTemplate(name);
-    if (!lib) throw new HttpError(400, "Choose a template from the library.", "unknown_template");
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    const e = env();
-    const buttons: Array<Record<string, unknown>> = [];
-    if (lib.urlButton) {
-      const root = lib.urlButton.base === "api" ? e.API_URL : e.APP_URL;
-      buttons.push({ type: "URL", text: lib.urlButton.text, url: `${root}${lib.urlButton.path}{{1}}`, example: [`${root}${lib.urlButton.path}${lib.urlButton.example}`] });
-    }
-    if (lib.stopButton) buttons.push({ type: "QUICK_REPLY", text: "Stop promotions" });
-    const components: Array<Record<string, unknown>> = [{ type: "BODY", text: lib.body, example: { body_text: [lib.examples] } }];
-    if (lib.footer) components.push({ type: "FOOTER", text: lib.footer });
-    if (buttons.length) components.push({ type: "BUTTONS", buttons });
-    try {
-      const created = await waCreateTemplate(conn.wabaId, connectionToken(conn), { name: lib.name, language, category: lib.category, components }, deps.fetchImpl);
-      await syncTemplates(conn, connectionToken(conn), deps.fetchImpl).catch((err: unknown) => logger.warn({ err }, "template sync after create failed"));
-      await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.template_submitted", targetType: "store", targetId: storeId, metadata: { name: lib.name, language }, ip: clientIp(c) });
-      return c.json({ id: created.id, status: created.status, category: created.category });
-    } catch (err) {
-      if (err instanceof WhatsappApiError) {
-        // Already there (Meta's "content in this language already exists"): just refresh the list.
-        if (err.code === 100 && /already exists/i.test(err.details ?? "")) {
-          await syncTemplates(conn, connectionToken(conn), deps.fetchImpl);
-          return c.json({ status: "EXISTS" });
-        }
-        throw new HttpError(502, `Meta didn't accept the template: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-      }
-      throw err;
-    }
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const draft = templateDraftSchema.parse(await body(c));
+    await limit(deps.coord, `rl:wa-template:${storeId}`, LIMITS.waTemplateCreate, "Too many templates submitted in an hour. Wait a little and try again.");
+    const t = await submitTemplate(deps, { store, draft, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ template: templateView(t) }, 201);
   });
 
-  /** Send one template to the merchant's own phone, with example values. */
-  app.post(`${base}/test`, async (c) => {
+  /** Read the templates from Meta again now. */
+  app.post(`${base}/templates/sync`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    await requireWaManage(c, deps, ws);
+    await waStore(ws, storeId);
+    const conn = await liveConnection(storeId);
+    if (!conn) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
+    await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh, "Templates were refreshed a moment ago. Wait a few minutes.");
+    const token = await connectionToken(conn, deps);
+    const count = await syncTemplates(conn, token, deps.fetchImpl).catch((err: unknown) => {
+      throw err instanceof WhatsappError ? err : new HttpError(503, "WhatsApp didn't answer just now. Try again in a minute.", "meta_unavailable");
+    });
+    return c.json({ count });
+  });
+
+  app.delete(`${base}/templates/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest);
+    await limit(deps.coord, `rl:wa-template:${storeId}`, LIMITS.waTemplateCreate);
+    await removeTemplate(deps, { store, templateId: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  /** An approved template to the merchant's own test number, with sample values (or the given mapping). */
+  app.post(`${base}/templates/:id/test`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const t = await withTenant(ws, (tx) => tx.waTemplate.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } }));
+    if (!t) throw new HttpError(404, "That template wasn't found.", "not_found");
+    const input = z.object({ mapping: mappingSchema.optional(), headerMediaUrl: z.string().url().max(2000).nullish() }).parse(await body(c).catch(() => ({})));
+    await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest, "Too many test messages. Wait a few minutes.");
+    const shape = templateShape(t.components as unknown as TemplateComponent[]);
+    const sample: TemplateMapping = input.mapping ?? {
+      header: shape.headerVars ? { source: "custom_text", text: "Sample" } : null,
+      body: Array.from({ length: shape.bodyVars }, (_x, i) => ({ source: "custom_text" as const, text: `sample ${i + 1}` })),
+      buttons: shape.dynamicUrlButtons.map(() => ({ source: "custom_text" as const, text: "example" })),
+    };
+    const message = await sendTest(deps, { store, userId: a.user.id, template: { name: t.name, language: t.language }, mapping: sample, headerMediaUrl: input.headerMediaUrl ?? null, label: `template:${t.id}` });
+    return c.json({ message: messageView(message, { contacts: true }) }, 202);
+  });
+
+  // ---------------------------------------------------------------- messages
+
+  app.get(`${base}/messages`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaView(c, deps, ws);
+    await waStore(ws, storeId);
+    const q = z
+      .object({
+        status: z.enum(WA_MESSAGE_STATUSES).optional(),
+        direction: z.enum(["out", "in"]).optional(),
+        source: z.enum(["workflow", "campaign", "manual", "test", "team_alert", "inbound"]).optional(),
+        workflowId: idParam.optional(),
+        campaignId: idParam.optional(),
+        contactId: idParam.optional(),
+        cursor: idParam.optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(c.req.query());
+    if (q.contactId) requireContacts(a);
+    const rows = await withTenant(ws, (tx) =>
+      tx.waMessage.findMany({
+        where: {
+          storeId,
+          workspaceId: ws,
+          ...(q.status ? { status: q.status } : {}),
+          ...(q.direction ? { direction: q.direction } : {}),
+          ...(q.source ? { source: q.source } : {}),
+          ...(q.workflowId ? { workflowId: q.workflowId } : {}),
+          ...(q.campaignId ? { campaignId: q.campaignId } : {}),
+          ...(q.contactId ? { contactId: q.contactId } : {}),
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: q.limit + 1,
+        ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
+      }),
+    );
+    const page = rows.slice(0, q.limit);
+    return c.json({ messages: page.map((m) => messageView(m, { contacts: seesContacts(a) })), nextCursor: rows.length > q.limit ? page.at(-1)!.id : null });
+  });
+
+  app.get(`${base}/messages/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireWaView(c, deps, ws);
+    await waStore(ws, storeId);
+    const found = await withTenant(ws, async (tx) => {
+      const m = await tx.waMessage.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } });
+      if (!m) return null;
+      const events = await tx.waMessageEvent.findMany({ where: { messageId: m.id, workspaceId: ws }, orderBy: { occurredAt: "asc" } });
+      return { m, events };
+    });
+    if (!found) throw new HttpError(404, "That message wasn't found.", "not_found");
+    return c.json({
+      message: messageView(found.m, { contacts: seesContacts(a) }),
+      events: found.events.map((e) => ({ status: e.status, at: e.occurredAt, errorCode: e.errorCode, errorTitle: e.errorTitle })),
+    });
+  });
+
+  app.post(`${base}/messages/:id/retry`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-send:${storeId}`, LIMITS.waSend);
+    const m = await retryMessage(deps, { storeId: store.id, messageId: idParam.parse(id) });
+    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.message_retried", targetType: "whatsapp_message", targetId: m.id, ip: clientIp(c) });
+    return c.json({ message: messageView(m, { contacts: seesContacts(a) }) });
+  });
+
+  /** One message from the dashboard: an approved template, or a reply within the customer's 24-hour window. */
+  app.post(`${base}/messages`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    const https = z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "Links must start with https://");
     const input = z
       .object({
-        templateName: z.string().min(1).max(512),
-        language: z.string().max(15).default("en"),
-        phone: z.string().min(6).max(30),
-        kind: z.enum(NOTIFICATION_KINDS).optional(),
-        mapping: templateMappingSchema.optional(),
-        /** For a template with an image header: a public https image. */
-        mediaUrl: z.string().url().startsWith("https://").max(2000).optional(),
+        requestId: z.string().uuid(),
+        to: z.union([z.object({ contactId: idParam }), z.object({ phone: z.string().trim().min(6).max(40), country: z.string().regex(/^[A-Z]{2}$/).nullish() })]),
+        message: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("template"), template: templateRefSchema, mapping: mappingSchema, headerMediaUrl: https.nullish() }),
+          z.object({ kind: z.literal("text"), body: z.string().trim().min(1).max(4096) }),
+          z.object({ kind: z.literal("media"), mediaType: z.enum(["image", "document", "video"]), link: https, caption: z.string().trim().max(1024).nullish(), filename: z.string().trim().max(200).nullish() }),
+        ]),
       })
       .parse(await body(c));
-    const phone = normalizePhone(input.phone, null);
-    if (!phone) throw new HttpError(400, "Enter the number in international format, starting with + and the country code.", "invalid_phone");
-    // A test skips the consent checks a real send makes, so it must at least respect a STOP.
-    if (await numberOptedOut(storeId, phone.waId)) throw new HttpError(409, "That number replied STOP to this store, so nothing (not even a test) can be sent to it.", "opted_out");
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    const settings = await ensureSettings(store);
-    const cfg = parseConfig(settings.config);
-    const template = await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: input.templateName, language: input.language } } });
-    if (!template) throw new HttpError(404, "That template isn't in your WhatsApp account. Press Refresh on Message templates.", "template_missing");
-    const shape = templateShape(template.components as unknown as TemplateComponent[]);
-    const mapping =
-      input.mapping ??
-      (input.kind ? kindSetting(cfg, input.kind).mapping : null) ??
-      libraryTemplate(template.name)?.mapping ?? { body: Array.from({ length: shape.bodyVars }, () => "custom_text" as const), buttons: shape.dynamicUrlButtons.map(() => "custom_text" as const), fixed: {} };
-    const { message } = await scheduleMessage(
-      {
-        store,
-        kind: "test",
-        dedupeKey: `test:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-        contact: null,
-        template: { name: template.name, language: template.language },
-        mapping: { ...mapping, fixed: { ...Object.fromEntries([...Array(shape.bodyVars).keys()].map((i) => [`body.${i + 1}`, "Test"])), "button.0": "test", ...mapping.fixed } },
-        values: sampleValues(store, cfg),
-        media: input.mediaUrl ? { link: input.mediaUrl } : null,
-        scheduledFor: new Date(),
-        test: { to: phone.waId },
-      },
-      deps,
-    );
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.test_sent", targetType: "store", targetId: storeId, metadata: { template: template.name }, ip: clientIp(c) });
-    return c.json({ messageId: message.id, status: message.status });
+    await limit(deps.coord, `rl:wa-send:${storeId}`, LIMITS.waSend, "Too many messages sent from here in a short time. Wait a few minutes.");
+    const message = await sendManual(deps, { store, userId: a.user.id, to: input.to, message: input.message, requestId: input.requestId });
+    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.message_sent", targetType: "whatsapp_message", targetId: message.id, metadata: { kind: input.message.kind }, ip: clientIp(c) });
+    return c.json({ message: messageView(message, { contacts: true }) }, 202);
   });
 
-  // ---------------------------------------------------------------- analytics
+  // ---------------------------------------------------------------- contacts and consent
 
-  app.get(`${base}/analytics`, async (c) => {
+  app.get(`${base}/contacts`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "marketing.campaigns");
-    const store = await waStore(ws, storeId);
-    const days = z.coerce.number().int().min(1).max(180).default(30).parse(c.req.query("days") ?? undefined);
-    const since = new Date(Date.now() - days * 86_400_000);
-    const scope = { storeId, workspaceId: ws };
-    const r = await withTenant(ws, async (tx) => {
-      const [statuses, kinds, daily, carts, recovered, reviews, rated, campaignMsgs, attributed, billable, clicks] = await Promise.all([
-        tx.whatsappMessage.groupBy({ by: ["status"], where: { ...scope, test: false, createdAt: { gte: since } }, _count: { _all: true } }),
-        tx.whatsappMessage.groupBy({ by: ["kind", "status"], where: { ...scope, test: false, createdAt: { gte: since } }, _count: { _all: true } }),
-        tx.$queryRaw<Array<{ day: string; sent: number; delivered: number; read: number; failed: number }>>`
-          SELECT to_char(created_at, 'YYYY-MM-DD') AS day,
-                 COUNT(*) FILTER (WHERE status IN ('sent','delivered','read'))::int AS sent,
-                 COUNT(*) FILTER (WHERE status IN ('delivered','read'))::int AS delivered,
-                 COUNT(*) FILTER (WHERE status = 'read')::int AS read,
-                 COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
-          FROM whatsapp_messages
-          WHERE store_id = ${storeId} AND workspace_id = ${ws} AND test = false AND created_at >= ${since}
-          GROUP BY 1 ORDER BY 1`,
-        tx.abandonedCheckout.groupBy({ by: ["status"], where: { ...scope, checkoutCreatedAt: { gte: since } }, _count: { _all: true } }),
-        tx.abandonedCheckout.groupBy({ by: ["currency"], where: { ...scope, status: "recovered", completedAt: { gte: since } }, _sum: { recoveredRevenue: true }, _count: { _all: true } }),
-        tx.customerReview.count({ where: { ...scope, submittedAt: { gte: since } } }),
-        // The average leaves out reviews removed for breaking the policy, as the Reviews page does.
-        tx.customerReview.aggregate({ where: { ...scope, submittedAt: { gte: since }, status: { in: ["published", "pending"] } }, _avg: { rating: true } }),
-        tx.whatsappMessage.count({ where: { ...scope, test: false, campaignId: { not: null }, sentAt: { gte: since } } }),
-        tx.$queryRaw<Array<{ currency: string; orders: number; revenue: string }>>`
-          SELECT COALESCE(t.currency, ${store.currency}) AS currency, COUNT(*)::int AS orders, COALESCE(SUM(m.attributed_revenue), 0)::text AS revenue
-          FROM whatsapp_messages m LEFT JOIN order_trackings t ON t.store_id = m.store_id AND t.shopify_order_id = m.attributed_order_id
-          WHERE m.store_id = ${storeId} AND m.workspace_id = ${ws} AND m.attributed_order_id IS NOT NULL AND m.attributed_at >= ${since}
-          GROUP BY 1`,
-        tx.whatsappMessage.groupBy({ by: ["pricingCategory"], where: { ...scope, test: false, billable: true, sentAt: { gte: since } }, _count: { _all: true } }),
-        tx.whatsappMessage.count({ where: { ...scope, test: false, clickedAt: { gte: since } } }),
-      ]);
-      return { statuses, kinds, daily, carts, recovered, reviews, rated, campaignMsgs, attributed, billable, clicks };
-    });
-    const n = (s: string) => r.statuses.find((x) => x.status === s)?._count._all ?? 0;
-    const group = (kind: string) =>
-      kind.startsWith("abandoned_cart") ? "carts"
-      : kind.startsWith("review") ? "reviews"
-      : (["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"] as string[]).includes(kind) ? "delivery"
-      : (NOTIFICATION_KINDS as readonly string[]).includes(kind) ? "orders"
-      : kind;
-    const byGroup: Record<string, { sent: number; delivered: number; read: number; failed: number; skipped: number }> = {};
-    for (const k of r.kinds) {
-      const g = (byGroup[group(k.kind)] ??= { sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0 });
-      const c2 = k._count._all;
-      if (["sent", "delivered", "read"].includes(k.status)) g.sent += c2;
-      if (["delivered", "read"].includes(k.status)) g.delivered += c2;
-      if (k.status === "read") g.read += c2;
-      if (k.status === "failed") g.failed += c2;
-      if (k.status === "skipped" || k.status === "cancelled") g.skipped += c2;
-    }
-    const cartCount = (s: string) => r.carts.find((x) => x.status === s)?._count._all ?? 0;
+    const a = await requireWaView(c, deps, ws);
+    requireContacts(a);
+    await waStore(ws, storeId);
+    const q = z
+      .object({ consent: z.enum(["marketing", "opted_out", "any"]).default("any"), phone: z.string().trim().max(40).optional(), cursor: idParam.optional(), limit: z.coerce.number().int().min(1).max(100).default(50) })
+      .parse(c.req.query());
+    const phone = q.phone ? normalizePhone(q.phone, null) : null;
+    if (q.phone && !phone) return c.json({ contacts: [], nextCursor: null });
+    const rows = await withTenant(ws, (tx) =>
+      tx.waContact.findMany({
+        where: {
+          storeId,
+          workspaceId: ws,
+          ...(q.consent === "marketing" ? { marketing: "opted_in", optedOut: false } : q.consent === "opted_out" ? { optedOut: true } : {}),
+          ...(phone ? { phoneHash: waPhoneHash(storeId, phone.waId) } : {}),
+        },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: q.limit + 1,
+        ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
+      }),
+    );
+    const page = rows.slice(0, q.limit);
+    const now = Date.now();
     return c.json({
-      days,
-      currency: store.currency,
-      messages: {
-        sent: n("sent") + n("delivered") + n("read"),
-        delivered: n("delivered") + n("read"),
-        read: n("read"),
-        failed: n("failed"),
-        skipped: n("skipped") + n("cancelled"),
-        scheduled: n("scheduled") + n("sending"),
-        clicks: r.clicks,
-      },
-      byGroup,
-      daily: r.daily,
-      carts: {
-        withPhone: r.carts.reduce((s, x) => s + x._count._all, 0),
-        reminded: cartCount("reminded") + cartCount("recovered"),
-        recovered: cartCount("recovered"),
-        completedWithoutReminder: cartCount("completed"),
-        revenue: r.recovered.map((x) => ({ currency: x.currency, amount: Number(x._sum.recoveredRevenue ?? 0), orders: x._count._all })),
-      },
-      reviews: { submitted: r.reviews, average: r.rated._avg.rating ? Math.round(r.rated._avg.rating * 10) / 10 : null },
-      campaigns: { messages: r.campaignMsgs, conversions: r.attributed.map((x) => ({ currency: x.currency, orders: x.orders, revenue: Number(x.revenue) })) },
-      billable: r.billable.map((b) => ({ category: b.pricingCategory ?? "unknown", messages: b._count._all })),
+      contacts: page.map((ct) => ({
+        id: ct.id,
+        phone: ct.phoneMasked,
+        firstName: contactFirstName(ct),
+        country: ct.country,
+        optedOut: ct.optedOut,
+        optedIn: ct.optedIn,
+        marketing: ct.marketing,
+        lastInboundAt: ct.lastInboundAt,
+        windowOpen: !!ct.lastInboundAt && now - ct.lastInboundAt.getTime() < DAY,
+        ordersCount: ct.ordersCount,
+        lastOrderAt: ct.lastOrderAt,
+        createdAt: ct.createdAt,
+      })),
+      nextCursor: rows.length > q.limit ? page.at(-1)!.id : null,
     });
   });
 
-  whatsappOpsRoutes(app, deps);
-}
+  app.get(`${base}/contacts/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireWaView(c, deps, ws);
+    requireContacts(a);
+    await waStore(ws, storeId);
+    const found = await withTenant(ws, async (tx) => {
+      const ct = await tx.waContact.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } });
+      if (!ct) return null;
+      const [consent, messages] = await Promise.all([
+        tx.waConsentEvent.findMany({ where: { contactId: ct.id, workspaceId: ws }, orderBy: { occurredAt: "desc" }, take: 50 }),
+        tx.waMessage.findMany({ where: { contactId: ct.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 30 }),
+      ]);
+      return { ct, consent, messages };
+    });
+    if (!found) throw new HttpError(404, "That customer wasn't found.", "not_found");
+    const { ct } = found;
+    return c.json({
+      contact: { id: ct.id, phone: ct.phoneMasked, firstName: contactFirstName(ct), country: ct.country, optedOut: ct.optedOut, optedIn: ct.optedIn, marketing: ct.marketing, lastInboundAt: ct.lastInboundAt, windowOpen: !!ct.lastInboundAt && Date.now() - ct.lastInboundAt.getTime() < DAY },
+      consent: found.consent.map((e) => ({ scope: e.scope, status: e.status, source: e.source, note: e.note, at: e.occurredAt })),
+      messages: found.messages.map((m) => ({ ...messageView(m, { contacts: true }), preview: messagePreview(m) })),
+    });
+  });
 
+  /**
+   * Record a customer's consent given another way (in the shop, on the phone), or their opt-out.
+   * A STOP can only be undone by the customer (START): recording it here is refused.
+   */
+  app.post(`${base}/contacts/:id/consent`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    requireContacts(a);
+    await waStore(ws, storeId);
+    const input = z.object({ scope: z.enum(["all", "marketing"]), status: z.enum(["opted_in", "opted_out"]), note: z.string().trim().min(3, "Say how the customer told you").max(300) }).parse(await body(c));
+    const ct = await withTenant(ws, (tx) => tx.waContact.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } }));
+    if (!ct) throw new HttpError(404, "That customer wasn't found.", "not_found");
+    if (ct.optedOut && input.status === "opted_in") throw new HttpError(409, "This customer replied STOP. Only they can undo it, by replying START on WhatsApp.", "customer_stopped");
+    const { changed } = await setConsent(ct, { scope: input.scope, status: input.status, source: "merchant", at: new Date(), actorUserId: a.user.id, note: input.note });
+    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.consent_recorded", targetType: "whatsapp_contact", targetId: ct.id, metadata: { scope: input.scope, status: input.status, changed }, ip: clientIp(c) });
+    return c.json({ changed });
+  });
+
+  // ---------------------------------------------------------------- test events
+
+  /** A custom event from the dashboard (to try a workflow): the same path the store's tools use. */
+  app.post(`${base}/events`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const event = customEventSchema.parse(await body(c));
+    await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest, "Too many test events. Wait a few minutes.");
+    const result = await receiveCustomEvent(deps, { store, event });
+    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.test_event", targetType: "store", targetId: store.id, metadata: { event: event.event, ...result }, ip: clientIp(c) });
+    return c.json(result);
+  });
+}

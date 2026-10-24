@@ -17,9 +17,11 @@ export const metadata: Metadata = {
  * schema or the scopes, change this page too:
  *   - analytics store no customer personal data (packages/core/src/persist.ts: `customerKey` is a
  *     keyed HMAC, and orders keep no name, email, address or phone);
- *   - WhatsApp messaging, only once a merchant turns it on, stores customers' WhatsApp numbers and
- *     first names encrypted, with the retention in packages/core/src/whatsapp/scheduler.ts
- *     (RETENTION) and redaction in packages/core/src/whatsapp/events.ts (redactWhatsappCustomer);
+ *   - WhatsApp Automation, only once a merchant connects WhatsApp, stores the WhatsApp numbers and first
+ *     names of customers it messages, who write in, or who agree to marketing, encrypted, with their
+ *     consent history and message texts, the retention in packages/core/src/whatsapp/sweep.ts
+ *     (RETENTION) and redaction in packages/core/src/whatsapp/privacy.ts (redactWhatsappCustomer); the
+ *     business's WhatsApp token is held by Nango (packages/core/src/whatsapp/nango.ts);
  *   - Customer Messaging (SMS), only once a merchant sets up a sender, stores customers' mobile numbers
  *     and first names encrypted, their SMS consent history and opt-outs, with the retention in
  *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
@@ -44,7 +46,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-24";
+const UPDATED = "2026-10-25";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -103,7 +105,11 @@ const PROVIDERS = [
     purpose: "Sends bizinsights' own emails: sign-in and verification codes, team invitations and alerts, to the address each one is for.",
   },
   { name: "Shopify", purpose: "The source of your store data." },
-  { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages, only for stores that connect WhatsApp." },
+  { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages and reports whether each was delivered and read, only for stores that connect WhatsApp." },
+  {
+    name: "Nango",
+    purpose: "Keeps, encrypted, the access tokens for the advertising accounts and the WhatsApp Business account you connect, and renews them, so bizinsights can read your ad reports and send your WhatsApp messages.",
+  },
   { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
@@ -220,18 +226,22 @@ export default function PrivacyPage() {
           database; we record only that the card was viewed, and by whom, in your workspace&apos;s audit log.
         </p>
 
-        <h3>WhatsApp messaging</h3>
+        <h3>WhatsApp messaging (WhatsApp Automation)</h3>
         <p>
-          To send the order updates, delivery updates, cart reminders, review requests and campaigns you switch on, bizinsights keeps each
-          customer&apos;s WhatsApp number and first name, encrypted with AES-256-GCM, together with a one-way keyed hash of the number
-          used to recognise replies. The dashboard shows numbers masked. We keep a record of what each customer agreed to and of every
-          opt-out, so that nobody who replied STOP is messaged again. Delivery addresses are used only to write the order confirmation
-          and are deleted once it is sent. Messages are sent through Meta&apos;s WhatsApp Business Platform.
+          To send the order updates, reminders, campaigns and replies you set up, bizinsights keeps the WhatsApp number and first name of
+          the customers a workflow messages, who write to your business, or who agree to receive your marketing on WhatsApp. Both are
+          encrypted with AES-256-GCM, together with a one-way keyed hash of the number used to recognise replies; the dashboard shows
+          numbers masked. We keep a record of every consent and opt-out (when, how, and who recorded it), so that nobody who replied STOP
+          is messaged again, and the text of each message sent and received, encrypted, with its delivery reports. Messages are sent
+          through Meta&apos;s WhatsApp Business Platform, and the access token for your WhatsApp Business account is held for bizinsights
+          by Nango.
         </p>
         <p>
-          Message history is kept for 180 days, unfinished-checkout links and names for 30 days, and order timelines for one year.
-          Customer reviews are kept until you delete your store from bizinsights. When Shopify asks us to erase a customer or your store,
-          all of it is deleted.
+          Message history is kept for 365 days after each message is final; what a failed message needs to be sent again, for 7 days;
+          Meta&apos;s update notifications until they are processed (one that can&apos;t be processed, for up to 30 days); and workflow
+          run records for 90 days. Records from bizinsights&apos; earlier WhatsApp feature (before 24 October 2026) are kept unchanged
+          until they are removed. When Shopify asks us to erase a customer or your store, all of it is deleted, including those earlier
+          records.
         </p>
 
         <h3>Text messages (Customer Messaging)</h3>

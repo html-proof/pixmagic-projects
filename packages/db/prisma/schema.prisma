@@ -1398,6 +1398,12 @@ model EmailOtp {
 }
 
 // ---------------------------------------------------------------------------------------------
+// LEGACY WhatsApp (2026-10-10 to 2026-10-24), replaced by WhatsApp Automation (the wa_* tables below).
+// No code reads or writes these any more, except to erase a store or a customer (shop/redact,
+// customers/redact: packages/core/src/whatsapp/legacy.ts) and to tell a store its old connection was
+// retired. They are kept, untouched, so a rollback to the release before the rebuild still works; a
+// later migration drops them (docs/whatsapp.md, "The old WhatsApp tables").
+//
 // WhatsApp (Cloud API). Unlike the analytics tables, these hold what messaging a customer needs:
 // their WhatsApp number and first name, ENCRYPTED (AES-256-GCM, AAD bound to the store), with a
 // keyed hash for lookups and a masked form for the dashboard. Retention is enforced by the worker
@@ -1810,6 +1816,383 @@ model WhatsappAutomationRun {
   @@index([storeId, createdAt])
   @@index([workspaceId])
   @@map("whatsapp_automation_runs")
+}
+
+// ---------------------------------------------------------------------------------------------
+// WhatsApp Automation (docs/whatsapp.md). The store's own WhatsApp Business number, connected with
+// Meta's Embedded Signup; the business's access token is held by Nango (integration
+// `whatsapp-business`), never in these tables. Customers' numbers, names and message contents are
+// ENCRYPTED (AES-256-GCM, AAD bound to the store and purpose), with a keyed hash to find a number and
+// a masked form for the dashboard. Retention: packages/core/src/whatsapp/sweep.ts. customers/redact
+// and shop/redact delete them (whatsapp/privacy.ts).
+// ---------------------------------------------------------------------------------------------
+
+// The store's WhatsApp Business number. One row per store, kept after a disconnect (for the history).
+model WaConnection {
+  id                 String    @id @default(cuid())
+  workspaceId        String    @map("workspace_id")
+  storeId            String    @unique @map("store_id")
+  /// active | action_required | reconnect | error | disconnected (@app/shared/whatsapp)
+  status             String    @default("active")
+  /// While action_required: what the merchant does next (CONNECTION_STEPS).
+  step               String?
+  /// Why the status is what it is, for the merchant (never a token or Meta's raw answer).
+  statusDetail       String?   @map("status_detail")
+  /// The Nango connection holding the business token; null once disconnected.
+  nangoConnectionId  String?   @map("nango_connection_id")
+  /// How Meta's sign-up finished: cloud_api | only_waba | business_app | other.
+  signupFlow         String?   @map("signup_flow")
+  businessId         String?   @map("business_id")
+  wabaId             String    @map("waba_id")
+  wabaName           String?   @map("waba_name")
+  /// One number sends for one store: unique while connected, cleared on disconnect.
+  phoneNumberId      String?   @unique @map("phone_number_id")
+  displayPhoneNumber String?   @map("display_phone_number")
+  verifiedName       String?   @map("verified_name")
+  nameStatus         String?   @map("name_status")
+  qualityRating      String?   @map("quality_rating")
+  /// TIER_250, TIER_1K, ...: how many customers a day the business may start conversations with.
+  messagingLimitTier String?   @map("messaging_limit_tier")
+  /// Registered with the Cloud API (it can't send until it is).
+  registered         Boolean   @default(false)
+  /// The two-step verification PIN bizinsights set when it registered the number, encrypted.
+  pinEnc             String?   @map("pin_enc")
+  /// The permissions Meta says the token holds (whatsapp_business_management, whatsapp_business_messaging).
+  grantedScopes      String[]  @default([]) @map("granted_scopes")
+  /// When bizinsights' app was subscribed to the account's webhooks (statuses, replies, STOP).
+  subscribedAt       DateTime? @map("subscribed_at")
+  lastWebhookAt      DateTime? @map("last_webhook_at")
+  lastCheckedAt      DateTime? @map("last_checked_at")
+  /// Since when it has needed reconnecting: waiting messages are cancelled 48 hours after.
+  reconnectSince     DateTime? @map("reconnect_since")
+  connectedByUserId  String?   @map("connected_by_user_id")
+  connectedAt        DateTime  @default(now()) @map("connected_at")
+  disconnectedAt     DateTime? @map("disconnected_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@index([wabaId])
+  @@map("wa_connections")
+}
+
+// The store's WhatsApp choices: how customers agree to updates, sending hours, the test number.
+model WaSettings {
+  storeId           String    @id @map("store_id")
+  workspaceId       String    @map("workspace_id")
+  /// unset | opt_in_only | checkout_notice (ORDER_UPDATE_BASES); who chose it and when, also audited.
+  orderUpdates      String    @default("unset") @map("order_updates")
+  orderUpdatesSetBy String?   @map("order_updates_set_by")
+  orderUpdatesSetAt DateTime? @map("order_updates_set_at")
+  /// The store says its Shopify text-message marketing consent wording covers WhatsApp too.
+  shopifySmsConsent Boolean   @default(false) @map("shopify_sms_consent")
+  /// Store-time hours marketing messages may go out (a workflow can choose its own).
+  sendWindowStart   Int       @default(9) @map("send_window_start")
+  sendWindowEnd     Int       @default(20) @map("send_window_end")
+  /// The store's own cap on business-started messages a day (null: Meta's limit only).
+  dailyLimit        Int?      @map("daily_limit")
+  /// The merchant's own phone, for test messages (encrypted) and as shown.
+  testPhoneEnc      String?   @map("test_phone_enc")
+  testPhoneMasked   String?   @map("test_phone_masked")
+  /// SHA-256 of the store's custom-event key ("whev_..."), which the store's own tools send events with.
+  eventKeyHash      String?   @unique @map("event_key_hash")
+  /// The key's last characters, so the merchant can tell which one is in use.
+  eventKeyHint      String?   @map("event_key_hint")
+  eventKeyCreatedAt DateTime? @map("event_key_created_at")
+  updatedByUserId   String?   @map("updated_by_user_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@map("wa_settings")
+}
+
+// Message templates in the store's WhatsApp Business Account, as Meta last reported them.
+model WaTemplate {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  wabaId          String   @map("waba_id")
+  metaId          String   @map("meta_id")
+  name            String
+  language        String
+  /// UTILITY | MARKETING | AUTHENTICATION: Meta's, which may differ from what was asked for.
+  category        String
+  /// APPROVED | PENDING | REJECTED | PAUSED | DISABLED | IN_APPEAL ...
+  status          String
+  components      Json
+  rejectedReason  String?  @map("rejected_reason")
+  qualityScore    String?  @map("quality_score")
+  /// Who wrote it in bizinsights (null: made in WhatsApp Manager).
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([storeId, name, language])
+  @@index([wabaId, metaId])
+  @@index([workspaceId])
+  @@map("wa_templates")
+}
+
+// A customer's WhatsApp number and what they agreed to. Opt-outs are kept for as long as the store
+// uses WhatsApp, so a customer who replied STOP is never messaged again.
+model WaContact {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  /// HMAC(CUSTOMER_HASH_KEY, "wa:<storeId>:<E.164 digits>"): finds the number without decrypting anything.
+  phoneHash         String    @map("phone_hash")
+  phoneEnc          String    @map("phone_enc")
+  phoneMasked       String    @map("phone_masked")
+  country           String?
+  firstNameEnc      String?   @map("first_name_enc")
+  shopifyCustomerId String?   @map("shopify_customer_id")
+  /// Replied STOP (or was recorded as opted out): nothing at all is sent.
+  optedOut          Boolean   @default(false) @map("opted_out")
+  /// Agreed to messages themselves (START, recorded by the store, Shopify's consent).
+  optedIn           Boolean   @default(false) @map("opted_in")
+  /// opted_in | opted_out | unknown
+  marketing         String    @default("unknown")
+  consentUpdatedAt  DateTime? @map("consent_updated_at")
+  /// The customer's last message: it opens WhatsApp's 24-hour window for free-form replies.
+  lastInboundAt     DateTime? @map("last_inbound_at")
+  /// From Shopify's customer record on their orders (for campaign audiences).
+  ordersCount       Int       @default(0) @map("orders_count")
+  totalSpent        Decimal   @default(0) @map("total_spent") @db.Decimal(18, 2)
+  lastOrderAt       DateTime? @map("last_order_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, phoneHash])
+  @@index([storeId, marketing, optedOut])
+  @@index([storeId, shopifyCustomerId])
+  @@index([workspaceId])
+  @@map("wa_contacts")
+}
+
+// Every change to a customer's consent, with where it came from: the record of who agreed to what.
+model WaConsentEvent {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  contactId   String   @map("contact_id")
+  /// all (every message) | marketing
+  scope       String
+  /// opted_in | opted_out
+  status      String
+  /// CONSENT_SOURCES
+  source      String
+  actorUserId String?  @map("actor_user_id")
+  note        String?
+  occurredAt  DateTime @map("occurred_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([contactId, occurredAt])
+  @@index([storeId, createdAt])
+  @@index([workspaceId])
+  @@map("wa_consent_events")
+}
+
+// Every WhatsApp message, sent and received: the queue (queued -> sending) and the history
+// (accepted -> sent -> delivered -> read, or failed / cancelled / skipped with the reason).
+// A campaign's recipients are its messages.
+model WaMessage {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  connectionId     String?   @map("connection_id")
+  /// out | in
+  direction        String    @default("out")
+  contactId        String?   @map("contact_id")
+  /// The other party's number: keyed hash, encrypted E.164 (to send), masked (to show).
+  phoneHash        String?   @map("phone_hash")
+  phoneEnc         String?   @map("phone_enc")
+  phoneMasked      String?   @map("phone_masked")
+  /// workflow | campaign | manual | test | team_alert | inbound
+  source           String
+  workflowId       String?   @map("workflow_id")
+  workflowRunId    String?   @map("workflow_run_id")
+  campaignId       String?   @map("campaign_id")
+  /// One message per purpose and store: "wf:<workflow>:<subject>", "campaign:<id>:<contact>", ...
+  idempotencyKey   String?   @map("idempotency_key")
+  /// template | text | image | document | video (out); whatever the customer sent (in).
+  type             String
+  templateName     String?   @map("template_name")
+  templateLanguage String?   @map("template_language")
+  /// The template's category when it was sent (UTILITY | MARKETING), or SERVICE for a reply in the window.
+  category         String?
+  /// What the send needs (variables, text, media link), encrypted; cleared once the message is final.
+  payloadEnc       String?   @map("payload_enc")
+  /// What the customer reads (or wrote), encrypted, for the history.
+  previewEnc       String?   @map("preview_enc")
+  status           String    @default("queued")
+  /// Why it was skipped, cancelled or is waiting (SKIP_REASONS, or a hold).
+  reason           String?
+  sendAfter        DateTime  @default(now()) @map("send_after")
+  enqueuedAt       DateTime? @map("enqueued_at")
+  attempts         Int       @default(0)
+  /// Meta's message id.
+  wamid            String?   @unique
+  errorCode        String?   @map("error_code")
+  errorTitle       String?   @map("error_title")
+  acceptedAt       DateTime? @map("accepted_at")
+  sentAt           DateTime? @map("sent_at")
+  deliveredAt      DateTime? @map("delivered_at")
+  readAt           DateTime? @map("read_at")
+  failedAt         DateTime? @map("failed_at")
+  finalAt          DateTime? @map("final_at")
+  billable         Boolean?
+  pricingCategory  String?   @map("pricing_category")
+  createdByUserId  String?   @map("created_by_user_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, idempotencyKey])
+  @@index([status, sendAfter])
+  @@index([storeId, createdAt])
+  @@index([campaignId, status])
+  @@index([workflowId, createdAt])
+  @@index([contactId, createdAt])
+  @@index([workspaceId])
+  @@map("wa_messages")
+}
+
+// Meta's delivery reports, once per message and status.
+model WaMessageEvent {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  messageId   String   @map("message_id")
+  status      String
+  occurredAt  DateTime @map("occurred_at")
+  errorCode   String?  @map("error_code")
+  errorTitle  String?  @map("error_title")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([messageId, status])
+  @@index([storeId])
+  @@index([workspaceId])
+  @@map("wa_message_events")
+}
+
+// Meta's webhook deliveries, as received (signature checked), until they are applied. One body may
+// speak for several stores (a shared business account), so the row belongs to no workspace: the
+// worker resolves each change to its store by number or account.
+model WaWebhookEvent {
+  id          String    @id @default(cuid())
+  /// SHA-256 of the raw body: Meta's retries of a body are stored once.
+  bodyHash    String    @unique @map("body_hash")
+  /// The body, encrypted (it carries customers' numbers and messages); cleared once applied.
+  bodyEnc     String?   @map("body_enc")
+  wabaIds     String[]  @default([]) @map("waba_ids")
+  /// pending | processed | dead (gave up after WA_WEBHOOK_MAX_ATTEMPTS)
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error")
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  enqueuedAt  DateTime? @map("enqueued_at")
+  processedAt DateTime? @map("processed_at")
+
+  @@index([status, receivedAt])
+  @@map("wa_webhook_events")
+}
+
+// A workflow: trigger -> conditions -> template -> timing, written by the merchant.
+model WaWorkflow {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  name             String
+  /// WORKFLOW_TRIGGERS
+  trigger          String
+  /// custom_event only: the event's name.
+  eventName        String?   @map("event_name")
+  conditions       Json      @default("[]")
+  templateName     String    @map("template_name")
+  templateLanguage String    @map("template_language")
+  mapping          Json
+  headerMediaUrl   String?   @map("header_media_url")
+  /// after_trigger | before_event
+  timingMode       String    @default("after_trigger") @map("timing_mode")
+  timingMinutes    Int       @default(0) @map("timing_minutes")
+  sendWindowStart  Int?      @map("send_window_start")
+  sendWindowEnd    Int?      @map("send_window_end")
+  /// draft | active | paused
+  status           String    @default("draft")
+  /// Goes up with every save: a message waiting from an older version re-checks the workflow.
+  version          Int       @default(1)
+  createdByUserId  String?   @map("created_by_user_id")
+  updatedByUserId  String?   @map("updated_by_user_id")
+  activatedAt      DateTime? @map("activated_at")
+  lastRunAt        DateTime? @map("last_run_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([storeId, trigger, status])
+  @@index([workspaceId])
+  @@map("wa_workflows")
+}
+
+// Each time a workflow's trigger fired: at most once per workflow and order, checkout, customer or event.
+model WaWorkflowRun {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  workflowId      String   @map("workflow_id")
+  workflowVersion Int      @map("workflow_version")
+  trigger         String
+  /// "order:<id>", "checkout:<token>", "customer:<id>", "event:<name>:<id>", "test:<id>"
+  subjectKey      String   @map("subject_key")
+  /// What the merchant recognises: "Order #1042", "Checkout", "Event appointment_booked".
+  subjectLabel    String?  @map("subject_label")
+  /// scheduled (a message was queued) | skipped (conditions, consent, no number) | test
+  outcome         String
+  reason          String?
+  messageId       String?  @map("message_id")
+  contactId       String?  @map("contact_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([workflowId, subjectKey])
+  @@index([storeId, createdAt])
+  @@index([workflowId, createdAt])
+  @@index([workspaceId])
+  @@map("wa_workflow_runs")
+}
+
+// A campaign: an approved marketing template to an audience of opted-in customers, now or at a time.
+model WaCampaign {
+  id                  String    @id @default(cuid())
+  workspaceId         String    @map("workspace_id")
+  storeId             String    @map("store_id")
+  name                String
+  templateName        String    @map("template_name")
+  templateLanguage    String    @map("template_language")
+  mapping             Json
+  headerMediaUrl      String?   @map("header_media_url")
+  audience            Json
+  /// draft | scheduled | sending | completed | cancelled
+  status              String    @default("draft")
+  scheduledAt         DateTime? @map("scheduled_at")
+  /// The count the merchant confirmed when scheduling, and how many messages were made.
+  estimatedRecipients Int?      @map("estimated_recipients")
+  recipients          Int       @default(0)
+  /// The last contact id given a message (recipients are made in batches).
+  cursor              String?
+  materializedAt      DateTime? @map("materialized_at")
+  startedAt           DateTime? @map("started_at")
+  completedAt         DateTime? @map("completed_at")
+  cancelledAt         DateTime? @map("cancelled_at")
+  cancelReason        String?   @map("cancel_reason")
+  lastTestAt          DateTime? @map("last_test_at")
+  createdByUserId     String?   @map("created_by_user_id")
+  scheduledByUserId   String?   @map("scheduled_by_user_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([storeId, status])
+  @@index([status, scheduledAt])
+  @@index([workspaceId])
+  @@map("wa_campaigns")
 }
 
 // ---------------------------------------------------------------------------------------------

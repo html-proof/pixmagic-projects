@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hmacSha256Hex } from "@app/shared";
-import { customerKey, developmentSettings, env, logger, phoneHash, publicSecrets, redactForLog, resetEnvCache } from "../src/index.js";
+import { customerKey, developmentSettings, env, logger, publicSecrets, redactForLog, resetEnvCache, waPhoneHash } from "../src/index.js";
 
 describe("log redaction", () => {
   it("drops credential fields at any depth, whatever their case", () => {
@@ -148,7 +148,7 @@ describe("customer hash key", () => {
     process.env = { ...saved, ...SECRETS, OTP_PEPPER: "pepper-two-456", CUSTOMER_HASH_KEY: "pepper-one-123" };
     resetEnvCache();
     expect(customerKey({ id: "st_1" }, "42")).toBe(before);
-    expect(phoneHash("st_1", "61400000000")).toBe(hmacSha256Hex("pepper-one-123", "wa:st_1:61400000000"));
+    expect(waPhoneHash("st_1", "61400000000")).toBe(hmacSha256Hex("pepper-one-123", "wa:st_1:61400000000"));
   });
 
   it("counts as a production secret when set to a published value", () => {

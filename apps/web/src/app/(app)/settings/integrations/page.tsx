@@ -12,11 +12,11 @@ import { AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { ConnectButton, IntegrationRow, ManageLink, OneClickSetup, RowPill } from "@/components/integrations/IntegrationRow";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
-import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
-import { WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
-import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
+import { ConnectWhatsApp } from "@/components/whatsapp/ConnectWhatsApp";
+import { WhatsappIcon } from "@/components/whatsapp/WaUi";
+import type { WaOverview } from "@/components/whatsapp/types";
 import { stateInfo, type AdProvider, type StateTone } from "@/lib/adConnections";
-import { actionError, api, friendlyError, useApi } from "@/lib/api";
+import { friendlyError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Settings → Integrations (the owner's design, 2026-10-23): the "One Click Setup" banner, then a card
@@ -24,7 +24,7 @@ import { actionError, api, friendlyError, useApi } from "@/lib/api";
 // one button that opens the platform's own sign-in (Manage once connected) and what it brings
 // (components/integrations/IntegrationRow.tsx, AdRow.tsx). Nothing here asks for an app id, a key or a
 // token: bizinsights' own Shopify, Google and Meta apps do that part. Accounts are managed in depth on
-// Settings → Shopify, Settings → Advertising and WhatsApp's own pages; signing in with Google is on
+// Settings → Shopify, Settings → Advertising and WhatsApp Automation (/whatsapp); signing in with Google is on
 // Settings → Security.
 // ---------------------------------------------------------------------------
 
@@ -56,11 +56,11 @@ function shopifyState(s: StoreSummary | null): State {
 function whatsappState(o: WaOverview | null, failed: boolean): State {
   if (!o) return failed ? "unknown" : "checking";
   const c = o.connection;
-  if (!c) return o.platform.embeddedSignup ? "not_connected" : "unavailable";
+  if (!c || c.status === "disconnected") return o.platform.ready ? "not_connected" : "unavailable";
   if (c.status === "reconnect") return "permission_expired";
   if (c.status === "error") return "failed";
-  if (!c.registered) return "action_required";
-  if (!c.webhookVerifiedAt) return "connecting";
+  if (c.status === "action_required") return "action_required";
+  if (!c.subscribed) return "connecting";
   return "connected";
 }
 
@@ -78,7 +78,6 @@ export default function IntegrationsPage() {
   const wa = useApi<WaOverview>(storeBase && showWa ? `${storeBase}/whatsapp` : null);
   const ads = useAdConnections(storeBase && showAds ? storeBase : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
   // Another store chosen at the top: a WhatsApp note was about the last one (the ad notes reset in useAdConnections).
   const [noteFor, setNoteFor] = useState(storeBase);
   if (noteFor !== storeBase) {
@@ -98,27 +97,7 @@ export default function IntegrationsPage() {
 
   if (storesStatus !== "ready") return <StoresPending />;
 
-  /** Disconnect WhatsApp: bizinsights deletes its access. The number itself carries on. */
-  const disconnectWa = async () => {
-    if (!storeBase) return;
-    const ok = window.confirm(
-      "Disconnect WhatsApp? bizinsights deletes its access to your number and stops sending; messages waiting to go out are cancelled. Your number keeps working in WhatsApp.",
-    );
-    if (!ok) return;
-    setBusy(true);
-    setNote(null);
-    try {
-      await api(`${storeBase}/whatsapp`, { method: "DELETE" });
-      await reloadWa();
-      setNote({ kind: "success", text: "WhatsApp is disconnected." });
-    } catch (e) {
-      setNote({ kind: "error", text: actionError(e, "disconnect") });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const waConn = wa.data?.connection ?? null;
+  const waConn = wa.data?.connection && wa.data.connection.status !== "disconnected" ? wa.data.connection : null;
   const shopState = shopifyState(store);
   const shownWa: State = store ? waState : "not_connected";
   const announced: Array<[string, string]> = [
@@ -202,16 +181,22 @@ export default function IntegrationsPage() {
             state={shownWa}
             logo={<WhatsappIcon size={46} />}
             name="WhatsApp"
-            sub="Send order updates, cart reminders and campaigns to your customers from your own business number."
+            sub="Send order updates, reminders and campaigns to your customers from your own business number."
             pill={pill(shownWa)}
             action={
               !store || !wa.data || !storeBase ? null : waConn ? (
-                <ManageLink name="WhatsApp" href="/whatsapp/connect" attention={waState === "action_required" || waState === "permission_expired" || waState === "failed"} />
-              ) : !manage ? null : wa.data.platform.embeddedSignup ? (
-                <EmbeddedSignup base={`${storeBase}/whatsapp`} platform={wa.data.platform} label="Connect" look="row" onConnected={() => void wa.reload()} notify={(kind, text) => setNote({ kind, text })} />
-              ) : (
-                // One-click sign-up isn't switched on here: WhatsApp's own page connects with the business's own Meta app.
-                <ConnectButton name="WhatsApp" href="/whatsapp/connect" />
+                <ManageLink name="WhatsApp" href="/whatsapp" attention={waState === "action_required" || waState === "permission_expired" || waState === "failed"} />
+              ) : !manage || !wa.data.platform.ready ? null : (
+                <ConnectWhatsApp
+                  base={`${storeBase}/whatsapp`}
+                  platform={wa.data.platform}
+                  label="Connect"
+                  look="row"
+                  onConnected={() => {
+                    setNote({ kind: "success", text: "WhatsApp is connected. Set up templates and workflows in WhatsApp Automation." });
+                    void wa.reload();
+                  }}
+                />
               )
             }
             brings={["Messages", "Templates", "Campaigns"]}
@@ -225,35 +210,27 @@ export default function IntegrationsPage() {
                 <p>
                   <span className="text-muted">Number:</span> {waConn.displayPhoneNumber ?? "—"}
                   {waConn.verifiedName ? ` · ${waConn.verifiedName}` : ""}
-                  <span className="text-muted"> · {waConn.wabaName ?? "WhatsApp Business Account"}</span>
+                  <span className="text-muted"> · {waConn.wabaName ?? "WhatsApp Business account"}</span>
                 </p>
                 <p className="text-muted">
                   {waState === "action_required"
-                    ? "Register the number to start sending: see Fix it."
+                    ? (waConn.statusDetail ?? "One more step before it can send: see Fix it.")
                     : waState === "connecting"
-                      ? "Waiting for Meta's first message."
+                      ? "Waiting for replies and delivery reports to reach bizinsights: press Check again in WhatsApp Automation."
                       : waState === "permission_expired"
                         ? "Meta access ended: reconnect from Fix it."
                         : waState === "failed"
-                          ? "Meta reported a problem with this number: see Fix it."
-                          : `Working · quality ${quality(waConn.qualityRating).toLowerCase()} · ${tier(waConn.messagingLimitTier)} · last synchronized ${waConn.lastSyncedAt ? fmtRelative(waConn.lastSyncedAt) : "not yet"}`}
-                  {manage && (
-                    <>
-                      {" · "}
-                      <button type="button" className="text-danger underline-offset-2 hover:underline" onClick={() => void disconnectWa()} disabled={busy}>
-                        {busy ? "Disconnecting…" : "Disconnect"}
-                      </button>
-                    </>
-                  )}
+                          ? "Meta reported a problem with this account: see Fix it."
+                          : `Working · quality ${(waConn.qualityLabel ?? "not rated yet").toLowerCase()}${waConn.lastCheckedAt ? ` · last checked ${fmtRelative(waConn.lastCheckedAt)}` : ""}`}
                 </p>
               </>
-            ) : !manage ? null : !wa.data.platform.embeddedSignup ? (
-              <p className="text-muted">One-click WhatsApp sign-up is being switched on. Meanwhile, Connect sets it up with your own Meta app.</p>
-            ) : (
+            ) : !wa.data.platform.ready ? (
+              <p className="text-muted">Connecting WhatsApp is being switched on. Meta&apos;s one-click sign-up will appear here.</p>
+            ) : !manage ? null : (
               <p className="text-muted">
                 Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.{" "}
-                <Link className="text-accent underline-offset-2 hover:underline" href="/whatsapp/connect">
-                  Other ways to connect
+                <Link className="text-accent underline-offset-2 hover:underline" href="/whatsapp">
+                  What WhatsApp Automation does
                 </Link>
               </p>
             )}

@@ -118,7 +118,6 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/team", "members:manage"],
   ["/staff", "staff"],
   ["/whatsapp", "marketing.campaigns"],
-  ["/whatsapp/connect", "integrations.manage"],
   ["/messaging", "marketing.campaigns"],
   ["/settings/workspace", "members:manage"],
   ["/settings/members", "members:manage"],

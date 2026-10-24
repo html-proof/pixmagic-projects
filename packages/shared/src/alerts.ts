@@ -19,7 +19,7 @@ export const ALERT_PATH: Record<AlertArea, string> = {
   ads: "/settings/ads",
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
-  whatsapp: "/whatsapp/automations",
+  whatsapp: "/whatsapp",
   sms: "/messaging/billing",
   privacy: "/settings/privacy",
   inventory: "/inventory/low-stock",
@@ -131,8 +131,26 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   // Composed from the app's wording and the store's own counts (core's inventory alerts).
   if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
-  // The text a merchant wrote in a WhatsApp automation's "notify the team" step.
-  if (code.startsWith("wa_rule_")) return { severity, area: "whatsapp", title: "WhatsApp automation", body: message };
+  // WhatsApp Automation (core whatsapp/tokens.ts): worded here from the code alone.
+  if (code === "wa_reconnect") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Reconnect WhatsApp",
+      body: "Meta no longer accepts bizinsights' access to your WhatsApp number, so nothing is being sent. Open WhatsApp Automation and press Reconnect: messages waiting are sent if you reconnect within 48 hours.",
+    };
+  }
+  if (code === "wa_account") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Your WhatsApp account needs attention",
+      body: "Meta reported a problem with your WhatsApp Business account, such as a restriction or a missing payment method. Open WhatsApp Automation to see what it says, then fix it in WhatsApp Manager.",
+    };
+  }
+  if (code === "wa_webhook_failed") {
+    return { severity, area: "whatsapp", title: "Some WhatsApp updates couldn't be applied", body: "Delivery reports or replies from WhatsApp couldn't be processed, so some statuses may be out of date. Contact bizinsights support if this keeps happening." };
+  }
   // Customer Messaging (core/sms): worded here from the code alone.
   const budget = /^sms_budget_(50|80|100)$/.exec(code);
   if (budget) {
