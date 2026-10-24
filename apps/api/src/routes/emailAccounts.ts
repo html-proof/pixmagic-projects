@@ -111,8 +111,8 @@ export function emailAccountRoutes(app: App, deps: Deps) {
   /** Step 1: where to send the browser to approve sending access. */
   app.post(`${base}/oauth/:provider/start`, async (c) => {
     const ws = c.req.param("ws");
-    const provider = providerSchema.parse(c.req.param("provider"));
     const { user } = await requireEmail(c, deps, ws, "email:manage");
+    const provider = providerSchema.parse(c.req.param("provider"));
     if (!user.emailVerified) throw new HttpError(403, "Verify your email first", "email_unverified");
     return c.json({ url: await oauthStart(c, deps, ws, provider, user.id, null) });
   });

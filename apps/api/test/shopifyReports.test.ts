@@ -172,7 +172,13 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
   it("needs financial reports access (it shows every sales figure and Shopify's profit)", async () => {
     const { ws, store } = await owner();
     const v = await signIn(ctx, "uv", "v@x.com");
-    await systemDb.membership.create({ data: { workspaceId: ws, userId: v.user.id, role: "custom", permissions: ["analytics.sales", "finance.breakdown"] } });
-    expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/shopify-check`, headers: v.headers })).statusCode).toBe(403);
+    const m = await systemDb.membership.create({ data: { workspaceId: ws, userId: v.user.id, role: "custom", permissions: ["analytics.sales", "finance.breakdown"] } });
+    const check = () => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/shopify-check`, headers: v.headers });
+    expect((await check()).statusCode).toBe(403);
+    // Financial reports alone isn't enough either: every line of the breakdown and the profit are in it.
+    await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "finance.reports"] } });
+    expect((await check()).statusCode).toBe(403);
+    await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "finance.breakdown", "finance.reports"] } });
+    expect((await check()).statusCode).toBe(200);
   });
 });

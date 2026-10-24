@@ -165,6 +165,7 @@ export function teamRoutes(app: App, deps: Deps) {
         q: z.string().max(100).optional(),
         status: z.enum(["active", "revoked", "pending", "expired", "cancelled", "members", "invitations"]).optional(),
         role: z.enum(ROLES).optional(),
+        module: z.enum(ACCESS_MODULES).optional(),
         sort: z.enum(TEAM_SORTS).optional(),
         dir: z.enum(["asc", "desc"]).optional(),
         page: z.coerce.number().int().min(1).max(10_000).optional(),

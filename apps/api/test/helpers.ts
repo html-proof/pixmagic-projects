@@ -42,6 +42,8 @@ async function inject(app: App, opts: InjectOptions): Promise<InjectResponse> {
 
 export interface TestCtx {
   app: { inject(opts: InjectOptions): Promise<InjectResponse> };
+  /** Every route the app serves (method and path pattern), middleware left out. */
+  routes: Array<{ method: string; path: string }>;
   deps: Deps & { coord: ReturnType<typeof memoryCoord>; queues: ReturnType<typeof memoryQueues> };
   mailer: ReturnType<typeof memoryMailer>;
   auth: ReturnType<typeof fakeCognito>;
@@ -70,7 +72,8 @@ export async function setup(): Promise<TestCtx> {
     resetEnvCache();
     resetShopifyAppsCache();
   };
-  return { app: { inject: (o) => inject(hono, o) }, deps, mailer, auth, setFetch: (f) => (fetchImpl = f), setEnv };
+  const routes = [...new Map(hono.routes.filter((r) => r.method !== "ALL").map((r) => [`${r.method} ${r.path}`, { method: r.method, path: r.path }])).values()];
+  return { app: { inject: (o) => inject(hono, o) }, routes, deps, mailer, auth, setFetch: (f) => (fetchImpl = f), setEnv };
 }
 
 export async function teardown(_ctx: TestCtx) {

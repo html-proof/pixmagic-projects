@@ -86,6 +86,15 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(row).toContainText("Email sent");
   await expect(row).toContainText("Custom");
   await expect(row).toContainText("60 days left");
+  // Who can see a section: the client for Customer details, nobody but the owner for Finance.
+  const section = page.getByLabel("Section filter");
+  await section.selectOption({ label: "Can see Customer details" });
+  await expect(row).toBeVisible();
+  await section.selectOption({ label: "Can see Finance" });
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId("team-row").filter({ hasText: ownerEmail }).filter({ visible: true })).toHaveCount(1);
+  await section.selectOption({ label: "All sections" });
+  await expect(row).toBeVisible();
 
   // ---- The email, and its link (the token after #, never sent to a server).
   const mail = await latestMail(client);
@@ -132,6 +141,22 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(guest).not.toHaveURL(/\/settings\/stores/);
   await guest.goto("/settings/profile");
   await expect(guest).not.toHaveURL(/\/settings\/profile/);
+  // Every owner's and admin's page, and the pages of areas that weren't shared: the page never shows.
+  for (const path of ["/settings/api-keys", "/settings/billing", "/settings/audit", "/settings/workspace", "/settings/integrations", "/staff", "/inventory/movements"]) {
+    await guest.goto(path);
+    await expect(guest, path).not.toHaveURL(new RegExp(`${path}$`));
+    await expect(guest.getByTestId("access-notice"), path).toContainText("You don't have access to that page.");
+  }
+  // An address with no page at all is the not-found page, outside the app: nothing of the workspace.
+  await guest.goto("/dashboard/setting");
+  await expect(guest.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await expect(sidebar(guest).getByRole("link", { name: "Products" })).toHaveCount(0);
+  // And their APIs refuse the shared session outright, whatever the page would have done.
+  const adminApis = await guest.evaluate(
+    async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees", "email/accounts"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
+    ws,
+  );
+  expect(adminApis.filter(([, status]) => status !== 403)).toEqual([]);
 
   // ---- The same link on another device opens the dashboard again, with what was shared.
   const ctx2 = await browser.newContext();

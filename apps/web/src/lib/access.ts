@@ -115,6 +115,7 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/advertising/campaigns", "marketing.campaigns"],
   ["/funnel", "analytics.conversion"],
   ["/inventory", "inventory.view"],
+  ["/inventory/movements", "inventory.history"],
   ["/team", "members:manage"],
   ["/staff", "staff"],
   ["/whatsapp", "marketing.campaigns"],

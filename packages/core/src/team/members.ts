@@ -1,5 +1,5 @@
 import { systemDb, withTenant, type Tx } from "@app/db";
-import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type Role } from "@app/shared";
+import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type AccessModule, type Role } from "@app/shared";
 import type { StaffRole } from "@app/shared/staff";
 import type { DeliveryStatus, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 import { latestDeliveries } from "../mail/deliveries.js";
@@ -144,6 +144,8 @@ export interface TeamQuery {
   /** "members" (active and revoked), "invitations" (every one not accepted), or one row status. */
   status?: TeamRowStatus | "members" | "invitations";
   role?: Role;
+  /** Who can see this section of the dashboard (any of its permissions; owners and admins see every one). */
+  module?: AccessModule;
   sort?: TeamSort;
   dir?: "asc" | "desc";
   page?: number;
@@ -159,6 +161,7 @@ export function queryTeam(rows: TeamRow[], query: TeamQuery) {
   let out = rows.filter((r) => {
     if (q && !r.email.toLowerCase().includes(q) && !(r.name ?? "").toLowerCase().includes(q)) return false;
     if (query.role && r.role !== query.role) return false;
+    if (query.module && !r.modules.includes(query.module)) return false;
     if (query.status === "members") return r.kind === "member";
     if (query.status === "invitations") return r.kind === "invitation";
     if (query.status && r.status !== query.status) return false;

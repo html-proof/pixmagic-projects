@@ -31,6 +31,15 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 
 ## What the API enforces
 
+- **Deny by default, route by route** (`apps/api/test/routeAccess.test.ts`): every route the API
+  serves is called as nobody signed in (401), as a member given nothing (403/404, except their own
+  access, notification settings, the store picker and a dashboard answer with no modules), as
+  another business's owner (404), as this workspace's owner naming another business's store (never
+  its data, never a call to Shopify for it), and as a shared link and an API key (every change
+  refused). A route that isn't public, an account's own or a workspace's fails the test until it is
+  placed in one of its lists, so a new route can't become reachable by accident.
+- Every route asks who is calling before it reads the request: a stranger gets 401 or 404, never a
+  validation error that shows what the route expects.
 - `requireWorkspace` reads the membership from the database on every request: a change or a
   revocation applies to the member's next request. A revoked member gets `403 access_revoked`.
 - `GET …/overview` computes only the modules the member may see (`storeOverview(…, sees)`), then
@@ -141,6 +150,18 @@ SES's sandbox). Delivered/bounced/complained come only from the provider's signe
 tracked. No address or message content is kept in the delivery records or the logs. Which provider
 sends is configuration (docs/aws-deployment.md "App email"); in production it is Resend since
 2026-10-16, so invitations reach any address.
+
+## What the web app does
+
+The pages are static files with no data in them: everything a page shows comes from the API above,
+which decides. `canOpenPage` (`apps/web/src/lib/access.ts`) says which pages a member may open, by
+path; the route guard (`useAccessGuard`, `components/AppShell.tsx`) sends anyone on a page they may
+not open (typed in, bookmarked, or just taken away) to where they can go, saying "You don't have
+access to that page.", before the page mounts, so it never asks for its data. The sidebar, the
+command palette and the section menus (Settings, WhatsApp) list only pages `canOpenPage` allows. An
+address with no page at all (`/dashboard/setting`) is the not-found page, outside the app.
+`apps/web/e2e/team.spec.ts` types the owners' and admins' pages into a shared dashboard and calls
+their APIs from it.
 
 ## Live updates
 
