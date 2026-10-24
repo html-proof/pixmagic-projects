@@ -83,7 +83,8 @@ export interface AdsState {
    * Who may connect is limited on the platform's side. Meta: only the people with a role on
    * bizinsights' Meta app, until Meta gives it Advanced Access (anyone else is turned away on
    * Facebook's page and never comes back). Google: Google shows "Google hasn't verified this app"
-   * first, until it verifies bizinsights' Google Ads access. AdSense: never.
+   * first, until it verifies bizinsights' Google Ads access. AdSense: never. The cards say nothing
+   * about it: Connect goes straight to the platform (the owner's choice, 2026-10-24).
    */
   restricted: Record<AdProvider, boolean>;
   connections: ConnectionAnswer[];
@@ -192,7 +193,7 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
  * | checking               | Checking…              | the card's first answer hasn't arrived                                                                    |
  * | unknown                | Status unavailable     | the first answer failed (an outage): never shown as "Not connected"                                        |
  * | coming_soon            | Coming soon            | the platform isn't set up on this server (configured false) and nothing is connected                      |
- * | not_connected          | Not connected          | nothing connected, and the platform lets anyone connect                                                   |
+ * | not_connected          | Not connected          | nothing connected, and the platform is set up on this server (or offers its demo)                         |
  * | connecting             | Connecting             | leaving for the platform's sign-in, or back from it with accounts to choose                               |
  * | synchronizing          | Synchronizing          | shown on the dashboard, and a sync someone asked for is on its way (syncRequestedAt, for up to 30 minutes), |
  * |                        |                        | or active and never synced, in the first 30 minutes after connecting                                      |
@@ -200,7 +201,7 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
  * |                        |                        | hidden account, so nothing is under way: its row says so)                                                 |
  * | authorization_required | Authorization required | reconnect + connector_left: the person whose login powered it left; someone with access must authorize again |
  * | permission_missing     | Permission missing     | reconnect + scope_missing (the read permission was taken back), or status permission (this login lost the account) |
- * | verification_pending   | Verification pending   | an unconnected card whose platform is restricted; error + not_approved; unavailable + account_not_ready;    |
+ * | verification_pending   | Verification pending   | error + not_approved; unavailable + account_not_ready;                                                    |
  * |                        |                        | an active account the platform has under review, not finished setting up, or needing attention           |
  * | sync_failed            | Sync failed            | error (other than not_approved); unavailable + account_disabled; an active account the platform disabled; |
  * |                        |                        | shown on the dashboard and still never synced 30 minutes after connecting (the first sync went missing)   |
@@ -342,7 +343,7 @@ export function platformState(provider: AdProvider, input: PlatformInput, now = 
     if (input.justDisconnected) return { state: "disconnected", hidden: false, demo: !!input.justDisconnectedDemo };
     // A platform not set up on this server offers its demo where it has one: never "Coming soon" with a button under it.
     if (!input.answer.configured[provider]) return { state: input.answer.demo?.[provider] ? "not_connected" : "coming_soon", hidden: false, demo: false };
-    return { state: input.answer.restricted[provider] ? "verification_pending" : "not_connected", hidden: false, demo: false };
+    return { state: "not_connected", hidden: false, demo: false };
   }
   const shown = mine.filter((c) => c.enabled);
   const counted = shown.length ? shown : mine;

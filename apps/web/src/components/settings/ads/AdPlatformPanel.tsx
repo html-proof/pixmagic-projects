@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ArrowRight, ChartLine, CircleAlert, CircleCheck, CircleDashed, EyeOff, FlaskConical, RefreshCw, Unlink, type LucideIcon } from "lucide-react";
 import { useApp } from "@/components/AppContext";
 import { refreshCadence } from "@/components/integrations/AdUi";
-import { NotConfiguredNote, platformFacts, RestrictedNotes, type AdPlatformProps } from "@/components/integrations/adPlatformParts";
+import { NotConfiguredNote, platformFacts, type AdPlatformProps } from "@/components/integrations/adPlatformParts";
 import type { AdPlatformInfo } from "@/components/integrations/adPlatforms";
 import { canOpenPage } from "@/lib/access";
 import { accountLabel, stateInfo, type AdConnection, type AdProvider, type AdState } from "@/lib/adConnections";
@@ -82,8 +82,8 @@ const ButtonMark = ({ P }: { P: AdPlatformInfo }) => (
  * Settings → Integrations (components/integrations/adPlatformParts.tsx).
  */
 export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConnection) => ReactNode }) {
-  const { provider, answer, loadError, connections, view, store, manage, busy, leaving, showMetaNote, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, rowExtra } = props;
-  const { P, configured, restricted, reconnect, readable, canAct, real, demoOffered, demoConnected, missing } = platformFacts(props);
+  const { provider, answer, loadError, connections, view, store, manage, busy, leaving, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, rowExtra } = props;
+  const { P, configured, reconnect, readable, canAct, real, demoOffered, demoConnected, missing } = platformFacts(props);
   const { access, workspace, me, offers } = useApp();
   const [more, setMore] = useState(false);
   const testid = `ads-provider-${provider}`;
@@ -158,7 +158,6 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
             Ready for the real thing? &ldquo;{P.button}&rdquo; above opens Google&apos;s own sign-in for a real account; the demo stays until you disconnect it.
           </p>
         )}
-        {canAct && configured && restricted && <RestrictedNotes provider={provider} connected showMetaNote={showMetaNote} />}
         <div className="flex flex-wrap items-center gap-2">
           {canAct && configured && readable && (
             <button type="button" className="tone-solid" style={tone("var(--good)")} onClick={onRefresh} disabled={!!busy} aria-label={`Sync data now: ${P.name}`} data-testid={`refresh-${provider}`}>
@@ -223,7 +222,6 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
           </Promo>
         </div>
         {configured && <p className="text-sm text-muted">{P.how}</p>}
-        {canAct && configured && restricted && <RestrictedNotes provider={provider} connected={false} showMetaNote={showMetaNote} />}
       </>
     );
   }

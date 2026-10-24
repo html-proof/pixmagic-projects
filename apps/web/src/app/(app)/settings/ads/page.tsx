@@ -3,7 +3,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
-import { FacebookUnfinished } from "@/components/MetaAdsAccess";
 import { Alert } from "@/components/ui";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
@@ -99,11 +98,6 @@ export default function AdAccountsPage() {
 
       <StateAnnouncer items={AD_PLATFORM_ORDER.map((p) => [AD_PLATFORMS[p].name, AD_STATE[views[p].state].label])} />
       {ads.note && <NoteAlert note={ads.note} onDismiss={() => ads.setNote(null)} />}
-      {ads.metaUnfinished && (
-        <Alert kind="info">
-          <FacebookUnfinished restricted={data?.restricted.meta ?? false} />
-        </Alert>
-      )}
       {error && (
         <Alert onDismiss={() => setError(null)}>
           {error}
@@ -139,7 +133,6 @@ export default function AdAccountsPage() {
           manage={manage}
           busy={ads.busy}
           leaving={ads.leaving === p}
-          showMetaNote={!ads.metaUnfinished}
           onConnect={() => connect(p)}
           base={base}
           onRefresh={() => void ads.refresh(p)}
