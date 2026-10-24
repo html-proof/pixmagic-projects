@@ -17,16 +17,12 @@ import {
   type AdsenseTotals,
 } from "@app/shared";
 import { AdsApiError, AdsNoAccountsError, AdsPermissionError, googleCommonError, readGoogleError, REQUIRED_AD_SCOPE, type AdAccount, type AdAccountHealth } from "./common.js";
-import { googleConsentUrl, type GoogleConsentOptions, type GoogleOAuthClient } from "./googleOAuth.js";
+import type { GoogleOAuthClient } from "./googleOAuth.js";
 
 /** AdSense needs only the Google OAuth client (and the AdSense Management API on its project). */
 export type AdsenseConfig = GoogleOAuthClient;
 
 export const ADSENSE_SCOPE = REQUIRED_AD_SCOPE.adsense;
-
-export function adsenseAuthorizeUrl(c: AdsenseConfig, redirectUri: string, state: string, codeChallenge?: string, opts?: GoogleConsentOptions): string {
-  return googleConsentUrl(c, ADSENSE_SCOPE, redirectUri, state, codeChallenge, opts);
-}
 
 /**
  * GET from the AdSense Management API v2. A failure is sorted by Google's error details, not only its

@@ -51,11 +51,11 @@ export function MetaTestersOnly() {
   );
 }
 
-/** Back from Facebook without connecting: what its error page meant. */
-export function BackFromFacebook({ restricted }: { restricted: boolean }) {
+/** Facebook's sign-in window closed without connecting: what its error page meant. */
+export function FacebookUnfinished({ restricted }: { restricted: boolean }) {
   return (
     <span data-testid="meta-back">
-      Back from Facebook without connecting? Nothing was connected.{" "}
+      Facebook's window closed without connecting? Nothing was connected.{" "}
       {restricted ? (
         <>
           If Facebook said &ldquo;Feature Unavailable&rdquo;, it turned that Facebook account away: Meta hasn&apos;t approved bizinsights for every account yet, only for the testers

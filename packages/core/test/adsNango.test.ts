@@ -13,6 +13,9 @@ import {
   nangoCreateConnectSession,
   nangoDeleteConnection,
   nangoError,
+  nangoImportConnection,
+  nangoIntegrations,
+  nangoIntegrationsReady,
   nangoProviderOf,
   parseNangoWebhook,
   verifyNangoSignature,
@@ -116,6 +119,66 @@ describe("connections", () => {
     expect(f.calls[0]!.init?.method).toBe("DELETE");
     expect(f.calls[0]!.url.searchParams.get("provider_config_key")).toBe("bizinsights-meta-ads");
     expect(await nangoDeleteConnection(cfg(f.fetchImpl), "bizinsights-meta-ads", "c-2")).toBe("gone");
+  });
+
+  it("asks Nango to renew a token whatever its expiry when told to (force_refresh), and only then", async () => {
+    const f = fake(() => json({ credentials: { type: "OAUTH2", access_token: "AT", expires_at: "2099-01-01T00:00:00Z" } }));
+    await nangoAccessToken(cfg(f.fetchImpl), "bizinsights-google-ads", "c-1", { forceRefresh: true });
+    await nangoAccessToken(cfg(f.fetchImpl), "bizinsights-google-ads", "c-1");
+    expect(f.calls.map((c) => c.url.searchParams.get("force_refresh"))).toEqual(["true", null]);
+    expect(f.calls.every((c) => c.url.searchParams.get("provider_config_key") === "bizinsights-google-ads")).toBe(true);
+  });
+
+  it("imports a connection bizinsights held the tokens of: Nango's OAuth2 credentials, the id chosen here, ids-only tags", async () => {
+    const f = fake(() => json({ id: 1, connection_id: "11111111-2222-3333-4444-555555555555", provider_config_key: "bizinsights-google-adsense", tags: {} }));
+    const expiresAt = new Date("2026-10-24T10:00:00Z");
+    const importTags = { end_user_id: "u1", organization_id: "ws1", bi_store: "s1", bi_provider: "adsense" as const, bi_imported: "direct" as const };
+    await nangoImportConnection(cfg(f.fetchImpl), { integrationKey: "bizinsights-google-adsense", connectionId: "11111111-2222-3333-4444-555555555555", accessToken: "AT", refreshToken: "RT", expiresAt, tags: importTags });
+    const [call] = f.calls;
+    expect(call!.url.href).toBe("https://api.nango.dev/connections");
+    expect(call!.init?.method).toBe("POST");
+    expect(new Headers(call!.init?.headers).get("authorization")).toBe(`Bearer ${KEY}`);
+    expect(call!.body).toEqual({
+      provider_config_key: "bizinsights-google-adsense",
+      connection_id: "11111111-2222-3333-4444-555555555555",
+      credentials: { type: "OAUTH2", access_token: "AT", refresh_token: "RT", expires_at: "2026-10-24T10:00:00.000Z" },
+      tags: importTags,
+    });
+    // Meta's long-lived token has no refresh token; one without an expiry sends none.
+    await nangoImportConnection(cfg(f.fetchImpl), { integrationKey: "bizinsights-meta-ads", connectionId: "c-2", accessToken: "MT", refreshToken: null, expiresAt: null, tags: { ...importTags, bi_provider: "meta" } });
+    expect(f.calls[1]!.body!.credentials).toEqual({ type: "OAUTH2", access_token: "MT" });
+    // An id that could reach another path is never sent.
+    await expect(nangoImportConnection(cfg(f.fetchImpl), { integrationKey: "k", connectionId: "../x", accessToken: "A", refreshToken: null, expiresAt: null, tags: importTags })).rejects.toBeInstanceOf(AdsApiError);
+    expect(f.calls).toHaveLength(2);
+    // Nango refusing the integration is ours to fix.
+    const missing = fake(() => json({ error: { code: "unknown_provider_config", message: "Integration not found" } }, 404));
+    await expect(nangoImportConnection(cfg(missing.fetchImpl), { integrationKey: "k", connectionId: "c-3", accessToken: "A", refreshToken: null, expiresAt: null, tags: importTags })).rejects.toMatchObject({ errorCode: "not_configured" });
+  });
+});
+
+describe("integrations", () => {
+  it("lists what Nango holds, and a platform is ready only with its own key, the right provider and no missing credential", async () => {
+    const f = fake(() =>
+      json({
+        data: [
+          { unique_key: "bizinsights-meta-ads", display_name: "Facebook", provider: "facebook", created_at: "x", updated_at: "x" },
+          { unique_key: "bizinsights-google-ads", display_name: "Google", provider: "google", created_at: "x", updated_at: "x", missing_fields: ["oauth_client_secret"] },
+          { unique_key: "bizinsights-google-adsense", display_name: "Meta", provider: "meta-marketing-api", created_at: "x", updated_at: "x" },
+          { unique_key: "someone-elses", provider: "slack" },
+          { display_name: "no key" },
+        ],
+      }),
+    );
+    const list = await nangoIntegrations(cfg(f.fetchImpl));
+    expect(f.calls[0]!.url.href).toBe("https://api.nango.dev/integrations");
+    expect(list).toEqual([
+      { integrationKey: "bizinsights-meta-ads", provider: "facebook", missingFields: [] },
+      { integrationKey: "bizinsights-google-ads", provider: "google", missingFields: ["oauth_client_secret"] },
+      { integrationKey: "bizinsights-google-adsense", provider: "meta-marketing-api", missingFields: [] },
+      { integrationKey: "someone-elses", provider: "slack", missingFields: [] },
+    ]);
+    expect(nangoIntegrationsReady(list)).toEqual({ meta: true, google: false, adsense: false });
+    expect(nangoIntegrationsReady([])).toEqual({ meta: false, google: false, adsense: false });
   });
 });
 

@@ -41,7 +41,7 @@ import {
   type GoogleAdsFailureError,
   type GoogleApiError,
 } from "./common.js";
-import { googleConsentUrl, type GoogleConsentOptions, type GoogleOAuthClient } from "./googleOAuth.js";
+import type { GoogleOAuthClient } from "./googleOAuth.js";
 
 /**
  * Google Ads API access follows the Cloud project that owns the OAuth client (Google retired developer
@@ -53,10 +53,6 @@ export interface GoogleConfig extends GoogleOAuthClient {
 }
 
 export const GOOGLE_ADS_SCOPE = REQUIRED_AD_SCOPE.google;
-
-export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: string, codeChallenge?: string, opts?: GoogleConsentOptions): string {
-  return googleConsentUrl(c, GOOGLE_ADS_SCOPE, redirectUri, state, codeChallenge, opts);
-}
 
 async function googleAds<T>(c: GoogleConfig, accessToken: string, path: string, init: { method: "GET" | "POST"; body?: unknown; loginCustomerId?: string | null }): Promise<T> {
   const headers: Record<string, string> = { authorization: `Bearer ${accessToken}` };

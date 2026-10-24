@@ -48,6 +48,7 @@ import {
   seedSalesRereads,
   sweepAdConnectionAlerts,
   sweepNangoLeftovers,
+  moveDirectAdConnections,
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
@@ -417,6 +418,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "sales re-read sweep failed; the next tick tries again");
       return null;
     });
+    // Ad connections made before Nango: moved to it first, so the syncs scheduled next already read through it.
+    const adsMovedToNango = await moveDirectAdConnections(deps).catch((err: unknown) => {
+      logger.error({ err }, "moving direct ad connections to Nango failed; the next tick tries again");
+      return null;
+    });
     // Ad accounts on their own leases, after everything the store itself depends on.
     const adsSynced = await scheduleAdsSync(deps).catch((err: unknown) => {
       logger.error({ err }, "ad sync scheduling failed; the next tick tries again");
@@ -485,7 +491,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync records prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, nangoReleased, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedToNango, adsSynced, adAlerts, nangoReleased, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

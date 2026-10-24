@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
-import { BackFromFacebook } from "@/components/MetaAdsAccess";
+import { FacebookUnfinished } from "@/components/MetaAdsAccess";
 import { Alert } from "@/components/ui";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
@@ -15,7 +15,6 @@ import { AdvertisingHero } from "@/components/settings/ads/AdvertisingHero";
 import { ChooseAccounts } from "@/components/settings/ads/ChooseAccounts";
 import { callbackErrorMessage, isAdProvider, WRONG_LOGIN } from "@/components/settings/ads/callbackErrors";
 import { AD_STATE, type AdProvider } from "@/lib/adConnections";
-import { signInFinished } from "@/lib/adSignIn";
 
 // ---------------------------------------------------------------------------
 // Advertising integrations: connect and manage. The numbers themselves live on the dashboard's
@@ -51,7 +50,6 @@ export default function AdAccountsPage() {
     if (code && WRONG_LOGIN.has(code) && isAdProvider(provider)) setRetry(provider);
     // It becomes part of an API path: only ever the nonce the callback put there.
     if (choose && /^[A-Za-z0-9_-]{16,64}$/.test(choose)) setPick(choose);
-    if (code || choose) signInFinished();
     if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -101,9 +99,9 @@ export default function AdAccountsPage() {
 
       <StateAnnouncer items={AD_PLATFORM_ORDER.map((p) => [AD_PLATFORMS[p].name, AD_STATE[views[p].state].label])} />
       {ads.note && <NoteAlert note={ads.note} onDismiss={() => ads.setNote(null)} />}
-      {ads.backFromMeta && (
+      {ads.metaUnfinished && (
         <Alert kind="info">
-          <BackFromFacebook restricted={data?.restricted.meta ?? false} />
+          <FacebookUnfinished restricted={data?.restricted.meta ?? false} />
         </Alert>
       )}
       {error && (
@@ -141,7 +139,7 @@ export default function AdAccountsPage() {
           manage={manage}
           busy={ads.busy}
           leaving={ads.leaving === p}
-          showMetaNote={!ads.backFromMeta}
+          showMetaNote={!ads.metaUnfinished}
           onConnect={() => connect(p)}
           base={base}
           onRefresh={() => void ads.refresh(p)}

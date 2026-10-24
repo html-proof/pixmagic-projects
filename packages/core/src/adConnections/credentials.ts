@@ -1,4 +1,8 @@
-/** A connection's tokens: encrypted at rest, refreshed when they expire, re-encrypted on key rotation. */
+/**
+ * A connection's credential: the sealed reference to its Nango connection (every connection made now),
+ * or, for one made by bizinsights' own sign-in before Nango (`source` "direct"), its encrypted tokens,
+ * renewed here until migrate.ts moves it to Nango. Re-encrypted on key rotation either way.
+ */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, encrypt, keyVersionOf, type AdProvider } from "@app/shared";
 import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, isNangoConnectionId, metaUserId, nangoAccessToken, REQUIRED_AD_SCOPE, type TokenSet } from "../ads.js";
@@ -111,9 +115,11 @@ export function sameSignIn(conn: Pick<AdConnection, "storeId" | "provider" | "ac
 }
 
 /**
- * A usable access token for this ad account. Google's (Google Ads and AdSense) last an hour, so a
- * fresh one is minted from the stored refresh token when needed; Meta's last about 60 days and
- * can't be renewed without the person signing in again, so an expired one means "reconnect".
+ * A usable access token for this ad account: Nango's, for every connection made through it. A
+ * connection made before Nango (until migrate.ts moves it) uses its own: Google's (Google Ads and
+ * AdSense) last an hour, so a fresh one is minted from the stored refresh token when needed; Meta's
+ * last about 60 days and can't be renewed without the person signing in again, so an expired one means
+ * "reconnect".
  */
 export async function adAccessToken(conn: AdConnection, fetchImpl?: FetchLike): Promise<string> {
   return (await accessTokenAndPerson(conn, fetchImpl)).token;
@@ -133,6 +139,7 @@ export async function accessTokenAndPerson(conn: AdConnection, fetchImpl?: Fetch
     if (conn.provider === "meta") await noteNangoMetaExpiry(conn, t.expiresAt);
     return { token: t.token };
   }
+  // Made before Nango: its own tokens, until it is moved (migrate.ts).
   if (conn.provider === "meta") {
     if (conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("Meta access has expired");
     return { token: access() };

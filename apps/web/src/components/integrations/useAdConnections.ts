@@ -1,7 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
-import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { openNangoConnect } from "@/lib/nangoConnect";
 import { callbackErrorMessage } from "../settings/ads/callbackErrors";
@@ -15,7 +14,7 @@ const POLL_MS = 5_000;
 /** Why "Connect" didn't open the platform, in words. */
 function connectError(e: unknown, name: string): string {
   if (e instanceof ApiError && e.code === "rate_limited") return `You started connecting several times in the last few minutes. Wait a few minutes, then press the ${name} button again.`;
-  if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't switched on for bizinsights yet, so there's nothing to connect to. Please try again later.`;
+  if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't set up for bizinsights yet, so there's nothing to connect to. It's on our side, not yours: please try again later.`;
   if (e instanceof ApiError && e.code === "nango_busy") return `The ${name} sign-in window couldn't be opened just now. Please try again in a minute.`;
   return actionError(e, `start connecting ${name}`);
 }
@@ -40,8 +39,8 @@ export function useAdConnections(base: string | null) {
   // The Google Ads demo's connection flow (GoogleAdsDemoDialog) is open.
   const [demoOpen, setDemoOpen] = useState(false);
   const [confirming, setConfirming] = useState<AdConnection | null>(null);
-  // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so the page does.
-  const [backFromMeta, setBackFromMeta] = useState(false);
+  // Facebook's window closed without connecting: Facebook never says why to bizinsights, so the page does.
+  const [metaUnfinished, setMetaUnfinished] = useState(false);
 
   // Another store chosen at the top (the page stays mounted): what was said or under way here was
   // about the last one. Not on the first store's arrival, which a note from the trip back can precede.
@@ -54,15 +53,9 @@ export function useAdConnections(base: string | null) {
       setDemoOpen(false);
       setChoosing(null);
       setConfirming(null);
-      setBackFromMeta(false);
+      setMetaUnfinished(false);
     }
   }
-
-  useBackFromSignIn((provider) => {
-    setLeaving(null);
-    setBusy(null);
-    if (provider === "meta") setBackFromMeta(true);
-  });
 
   // Looking again (a poll, or after an action): each look is numbered, and only the latest one's
   // answer is shown. A poll sent just before a change can come back after the change's own look, and
@@ -100,36 +93,18 @@ export function useAdConnections(base: string | null) {
   const begin = (key: string) => {
     setBusy(key);
     setNote(null);
-    setBackFromMeta(false);
-  };
-
-  const connect = async (p: AdProvider) => {
-    if (!base) return;
-    // Through Nango on this server (docs/nango.md): its Connect UI opens over the page instead of leaving it.
-    if (ads.data?.nango?.[p]) return connectNango(p);
-    begin(`connect-${p}`);
-    setLeaving(p);
-    setGone((s) => new Map([...s].filter(([x]) => x !== p)));
-    try {
-      const { url } = await api<{ url: string }>(`${base}/ads/${p}/connect`, { method: "POST" });
-      leavingForSignIn(p);
-      window.location.assign(url);
-      // The button stays busy while the browser leaves (useBackFromSignIn resets it if they come back).
-    } catch (e) {
-      setLeaving(null);
-      setBusy(null);
-      setNote({ kind: "error", text: connectError(e, AD_PLATFORMS[p].name) });
-    }
+    setMetaUnfinished(false);
   };
 
   /**
-   * "Continue with …" through Nango (docs/nango.md): Nango's Connect UI opens over this page with a
-   * session token from bizinsights, the person authorizes on the platform's own consent screen (a popup),
-   * and the page then hands bizinsights the connection Nango made, which bizinsights checks with Nango
-   * itself. One account (or a reconnect) lands on the dashboard; several go to the choice, as the
-   * full-page sign-in's do. Closing the window ends it with nothing connected.
+   * "Continue with …" (docs/nango.md): Nango's Connect UI opens over this page with a session token from
+   * bizinsights, the person authorizes on the platform's own consent screen (a popup), and the page then
+   * hands bizinsights the connection Nango made, which bizinsights checks with Nango itself. One account
+   * (or a reconnect) lands on the dashboard; several go to the choice on Settings → Advertising. Closing
+   * the window ends it with nothing connected. The card says "Connected" only once bizinsights has
+   * saved the account, never because the window closed.
    */
-  const connectNango = async (p: AdProvider) => {
+  const connect = async (p: AdProvider) => {
     if (!base) return;
     const name = AD_PLATFORMS[p].name;
     const storeId = base.split("/").pop()!;
@@ -156,6 +131,8 @@ export function useAdConnections(base: string | null) {
     }
     if (outcome.kind !== "connected") {
       await api(`${base}/ads/${p}/nango/cancel`, { method: "POST", body: { nonce: session.nonce } }).catch(() => undefined);
+      // Facebook's own error pages ("Feature Unavailable") never tell bizinsights why: the page explains them.
+      if (p === "meta" && (outcome.kind === "closed" || outcome.type === "window_closed")) setMetaUnfinished(true);
       if (outcome.kind === "closed") return stop();
       return stop({
         kind: "error",
@@ -174,11 +151,10 @@ export function useAdConnections(base: string | null) {
         body: { nonce: session.nonce, connectionId: outcome.connectionId },
         timeoutMs: 58_000,
       });
-      // Where the full-page sign-in lands too: the choice on Settings → Advertising, or the numbers.
       if (r.choose) window.location.assign(`/settings/ads?${new URLSearchParams({ choose: r.choose, provider: p, store: storeId })}`);
       else window.location.assign(`/dashboard?${new URLSearchParams({ adsConnected: p, accounts: String(r.connected ?? 0), store: storeId })}`);
     } catch (e) {
-      // The finish's own answers carry the direct callback's codes: worded the same way. A timeout, the
+      // The finish's own answers carry codes worded on the page (callbackErrors.ts). A timeout, the
       // network or an ended session isn't one of them ("check whether it completed": the reload shows it).
       const own = e instanceof ApiError && e.status !== 0 && e.status !== 408 && e.status !== 401 && !!e.code;
       stop({ kind: "error", text: own ? callbackErrorMessage((e as ApiError).code!, p) : actionError(e, `finish connecting ${name}`) });
@@ -308,11 +284,9 @@ export function useAdConnections(base: string | null) {
     setNote,
     leaving,
     setChoosing,
-    backFromMeta,
-    setBackFromMeta,
+    /** Facebook's sign-in window closed without a connection: the page explains Facebook's own error pages. */
+    metaUnfinished,
     connect,
-    /** Which platforms' Connect button opens Nango's Connect UI on this server. */
-    nango: (p: AdProvider) => !!ads.data?.nango?.[p],
     refresh,
     toggle,
     confirming,

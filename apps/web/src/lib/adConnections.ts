@@ -90,8 +90,6 @@ export interface AdsState {
   demo?: Partial<Record<AdProvider, boolean>>;
   /** The settings each platform's real sign-in still lacks on this server, by name (never a value). */
   missing?: Partial<Record<AdProvider, string[]>>;
-  /** Which platforms' Connect button opens Nango's Connect UI on this server (docs/nango.md); absent from older answers. */
-  nango?: Partial<Record<AdProvider, boolean>>;
 }
 
 /** One sync of a connection as it ended (GET .../ads/connections/:id/syncs). */

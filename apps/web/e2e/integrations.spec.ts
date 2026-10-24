@@ -102,15 +102,15 @@ test("Google Ads and Meta Ads say what their screen shows first while their plat
     const body = (await res.json()) as Record<string, Record<string, boolean>>;
     await route.fulfill({
       response: res,
-      json: { ...body, configured: { google: true, meta: true, adsense: true }, restricted: { google: true, meta: true, adsense: false }, nango: { google: false, meta: false, adsense: false } },
+      json: { ...body, configured: { google: true, meta: true, adsense: true }, restricted: { google: true, meta: true, adsense: false } },
     });
   });
   const started: string[] = [];
-  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/*/connect`, (route) => {
-    const p = new URL(route.request().url()).pathname.split("/").at(-2)!;
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/*/nango/session`, (route) => {
+    const p = new URL(route.request().url()).pathname.split("/").at(-3)!;
     started.push(p);
-    // Back to this page instead of the platform's sign-in, marked so the test can wait until the browser is there.
-    return route.fulfill({ json: { url: `/settings/integrations?back=${p}` } });
+    // No Nango here: the sign-in window can't open, which the card says; what matters is that it was started.
+    return route.fulfill({ status: 503, json: { error: "nango_busy", message: "x" } });
   });
   await page.goto("/settings/integrations");
 
@@ -127,22 +127,19 @@ test("Google Ads and Meta Ads say what their screen shows first while their plat
   expect(started).toEqual([]);
   await google.getByRole("button", { name: "Connect Google Ads" }).click();
   await beforeGoogle.getByRole("button", { name: "Continue to Google" }).click();
-  // The page leaves by itself: wait for it to arrive, or a goto of ours would be aborted by it.
-  await page.waitForURL(/\/settings\/integrations\?back=google$/);
-  expect(started).toEqual(["google"]);
+  await expect.poll(() => started).toEqual(["google"]);
+  await expect(page.getByText("The Google Ads sign-in window couldn't be opened just now")).toBeVisible();
 
   // AdSense never meets Google's unverified screen: straight to Google.
   await page.getByTestId("int-adsense").getByRole("button", { name: "Connect Google AdSense" }).click();
-  await page.waitForURL(/\/settings\/integrations\?back=adsense$/);
-  expect(started).toEqual(["google", "adsense"]);
+  await expect.poll(() => started).toEqual(["google", "adsense"]);
 
   // Meta: Facebook would show anyone but a tester "Feature Unavailable", so the page says so first.
   await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta Ads" }).click();
   const before = page.getByRole("dialog", { name: "Before you go to Facebook" });
   await expect(before.getByTestId("meta-testers-only")).toBeVisible();
   await before.getByRole("button", { name: "Continue to Facebook" }).click();
-  await page.waitForURL(/\/settings\/integrations\?back=meta$/);
-  expect(started).toEqual(["google", "adsense", "meta"]);
+  await expect.poll(() => started).toEqual(["google", "adsense", "meta"]);
 });
 
 test("each connected account shows its state, and Integrations the most pressing one per platform", async ({ page }) => {

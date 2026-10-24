@@ -159,10 +159,10 @@ disconnect, and a view-only member).
 
 ## The real Google Ads connection
 
-Unchanged by the demo, and the only way to real figures: "Continue with Google Ads" opens Google's
-own sign-in (authorization code flow with PKCE and single-use state, `routes/ads.ts`), the callback
-exchanges the code on the server, tokens are stored encrypted, the person picks the accounts their
-login reaches, and the sync reads them through the Google Ads API. What it still needs at Google is
+Unchanged by the demo, and the only way to real figures: "Continue with Google Ads" opens Nango's
+Connect UI with Google's own consent screen ([nango.md](nango.md), `routes/adsNango.ts`), Nango keeps
+the tokens, the person picks the accounts their login reaches, and the sync reads them through the
+Google Ads API. What it still needs at Google is
 in [integrations-readiness.md](integrations-readiness.md): Google's verification of the `adwords`
 scope (until then `GOOGLE_ADS_OAUTH_VERIFIED` stays empty and the card warns about Google's
 "unverified app" screen) and an API access level that admits real accounts (`GOOGLE_ADS_ENABLED`).

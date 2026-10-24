@@ -16,7 +16,6 @@ import { KpiCard, SummaryCard, TrendCharts } from "@/components/dashboard/HomeCa
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
-import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
@@ -112,7 +111,6 @@ function useAdsConnectedNotice(): string | null {
     const url = new URL(window.location.href);
     const provider = url.searchParams.get("adsConnected");
     if (!provider) return;
-    signInFinished();
     const target = url.searchParams.get("store");
     if (target && stores.some((s) => s.id === target)) setStoreId(target);
     const n = Number(url.searchParams.get("accounts") ?? 0);

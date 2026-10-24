@@ -915,10 +915,10 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   Until then Meta Ads, Google Ads and AdSense say "Coming soon" and their connections don't sync.
 - **Custom domain**: done, bizinsights.io (above). The app has sent only bizinsights.io callbacks since
   2026-10-16, so Google and Meta need these redirect URIs registered now (exactly, and nothing on the old
-  hosts once nothing uses them): `https://bizinsights.io/api/ads/google/callback` and
-  `https://bizinsights.io/api/ads/adsense/callback` on the Google client "Insights web";
-  `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app
-  971575545351940 (steps in [ads-review-packs.md](ads-review-packs.md)); and, once their clients
+  hosts once nothing uses them): `https://bizinsights.io/api/ads/nango/oauth-callback` (every ad
+  platform's, through Nango: [nango.md](nango.md)) on the Google client "Insights web" and in Facebook
+  Login for Business of Meta app 971575545351940 (steps in [ads-review-packs.md](ads-review-packs.md));
+  and, once their clients
   exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
   earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →

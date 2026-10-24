@@ -10,9 +10,11 @@ import {
   AdsRateLimitedError,
   AdsRetryableError,
   claimNangoConsent,
+  connectableAdProviders,
   countGoogleAdsOperations,
   countingGoogleAdsFetch,
   finishNangoSignIn,
+  googleAdsPaused,
   handleNangoAuthEvent,
   holdNangoConnection,
   holdPendingAdConnect,
@@ -32,24 +34,24 @@ import {
   env,
   type NangoSignIn,
 } from "@app/core";
-import { AD_PROVIDERS, randomToken, sha256Hex, type AdProvider } from "@app/shared";
+import { AD_PROVIDERS, adErrorMessage, randomToken, sha256Hex, type AdProvider } from "@app/shared";
 import { body, clientIp, HttpError, loadUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { connectAccounts, connectFailure, mayStillConnect, storeInWorkspace } from "./ads.js";
 
 /**
- * "Continue with Meta Ads" / "Continue with Google AdSense" through Nango (docs/nango.md), for the
- * platforms nangoProviders() turns on. Instead of a full-page redirect, the card opens Nango's Connect UI
- * over the page with a short-lived session token; the merchant authorizes bizinsights' own Meta app or
- * Google client on the platform's consent screen there, and the page then tells bizinsights which Nango
- * connection was made.
+ * "Continue with Meta Ads" / "Google Ads" / "Google AdSense" through Nango (docs/nango.md), the one way
+ * an ad platform is connected, for the platforms connectableAdProviders() offers. The card opens Nango's
+ * Connect UI over the page with a short-lived session token; the merchant authorizes bizinsights' own
+ * Meta app or Google client on the platform's consent screen there, and the page then tells bizinsights
+ * which Nango connection was made.
  *
  * Nothing the browser says is trusted past that connection's id: the session's state (single-use, bound
  * to the person, workspace, store and platform) is kept here, and the connection must carry the session's
- * tags as Nango holds them. From there it is the same as the direct callback (routes/ads.ts): one account
- * (or a reconnect) is connected at once, several wait for the person's choice, and a sign-in that ends
- * without a connection gives its grant back and its Nango connection is deleted.
+ * tags as Nango holds them. Then one account (or a reconnect) is connected at once, several wait for the
+ * person's choice (routes/ads.ts), and a sign-in that ends without a connection gives its grant back and
+ * its Nango connection is deleted.
  *
  * Also here: bizinsights' address for Nango's OAuth callback (forwarded to Nango, so the platforms'
  * consent screens name bizinsights.io), and Nango's signed webhooks about connections.
@@ -115,7 +117,9 @@ export function adsNangoRoutes(app: App, deps: Deps) {
     if (!user.emailVerified) throw new HttpError(403, "Verify your email first", "email_unverified");
     await storeInWorkspace(ws, storeId);
     const cfg = nangoConfig(deps.fetchImpl);
-    if (!cfg || !nangoProviders()[provider]) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
+    if (!cfg || !(await connectableAdProviders(deps.coord, deps.fetchImpl))[provider]) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
+    // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.
+    if (provider === "google" && (await googleAdsPaused(deps.coord))) throw new HttpError(503, adErrorMessage("quota_exhausted", "google")!, "rate_limited", 3600);
     // Each session writes a coordinator item and a Nango session, and its finish lists accounts against the platform's quota.
     await limit(deps.coord, `rl:ads-connect:${user.id}`, LIMITS.adsConnect, "That's a lot of sign-ins in a short time. Wait a few minutes and try again.");
     const nonce = randomToken(24);

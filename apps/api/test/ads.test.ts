@@ -1,17 +1,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { systemDb, withDb } from "@app/db";
-import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
+import { systemDb } from "@app/db";
+import { adAccessToken, forgetNangoToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
 import { addDays, adErrorMessage, LEGACY_GRANTS, localDay, META_OBJECT_FIELDS } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { connectThroughNango, fakeNango, NANGO_ENV, type FakeNango, type NangoPlatform } from "./nangoFake.js";
 
 /**
- * "Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense": connecting
- * ad accounts to a store, and what the dashboard shows from them.
+ * "Continue with Meta Ads" / "Google Ads" / "Google AdSense": connecting ad accounts to a store through
+ * Nango (docs/nango.md), and what the dashboard shows from them. The Nango round trip's own checks are
+ * adsNango.test.ts; here it is the way in, as a merchant takes it.
  */
 
 let ctx: TestCtx;
 beforeAll(async () => (ctx = await setup()));
 afterAll(async () => teardown(ctx));
+afterEach(() => vi.restoreAllMocks());
 
 const KEYS = {
   META_APP_ID: "meta_app",
@@ -21,12 +24,14 @@ const KEYS = {
   GOOGLE_ADS_ENABLED: "1",
   // Meta hasn't granted Advanced Access to ads_read: only the app's testers can connect (reset for every test).
   META_ADS_ADVANCED_ACCESS: "",
+  META_CONFIG_ID: "",
+  ...NANGO_ENV,
 };
 const NO_KEYS = Object.fromEntries(Object.keys(KEYS).map((k) => [k, ""]));
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** Meta's token endpoints, permissions and ad accounts, as seen by the callback. */
+/** Meta's permissions and ad accounts, as seen by the finish. */
 const metaPlatformWith =
   (adsRead: "granted" | "declined"): FetchLike =>
   async (input) => {
@@ -37,22 +42,19 @@ const metaPlatformWith =
 
 const metaPlatform: FetchLike = async (input) => {
   const u = new URL(String(input));
-  if (u.pathname.endsWith("/oauth/access_token")) {
-    return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG_SECRET", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT", expires_in: 3600 });
-  }
   if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: "granted" }] });
   if (u.pathname.endsWith("/me/adaccounts")) {
     return json({ data: [{ id: "act_1", name: "Shop ads", currency: "USD", timezone_name: "UTC" }, { id: "act_2", name: "EU ads", currency: "EUR", timezone_name: "Europe/Paris" }] });
   }
+  if (u.pathname.endsWith("/me")) return json({ id: "4242" });
   return json({ error: { message: `unexpected ${u.pathname}` } }, 400);
 };
 
-/** Google's token endpoint and AdSense: one account, and a report by day and site in `currency`. */
+/** AdSense: one account, and a report by day and site in `currency`. */
 const adsensePlatform =
   (currency = "USD", rows: string[][] = []): FetchLike =>
   async (input) => {
     const u = new URL(String(input));
-    if (u.host === "oauth2.googleapis.com") return json({ access_token: "AS_ACCESS", refresh_token: "AS_REFRESH_SECRET", expires_in: 3599 });
     if (u.pathname === "/v2/accounts") return json({ accounts: [{ name: "accounts/pub-77", displayName: "Shop site", timeZone: { id: "UTC" }, state: "READY" }] });
     if (u.pathname === "/v2/accounts/pub-77/reports:generate") {
       return json({
@@ -74,10 +76,14 @@ let headers: Record<string, string>;
 let cookie: string;
 let ws: string;
 let storeId: string;
+let nango: FakeNango;
 
 beforeEach(async () => {
   await clean(ctx);
   ctx.setEnv(KEYS);
+  forgetNangoToken();
+  nango = fakeNango();
+  usePlatform(async () => json({ error: { message: "no platform in this test" } }, 400));
   const u = await signIn(ctx, "ads-owner", "owner@x.com");
   headers = u.headers;
   cookie = u.cookie;
@@ -85,28 +91,26 @@ beforeEach(async () => {
   storeId = (await createStore(ws, "ads-shop.myshopify.com", ["read_orders"], { currency: "USD" })).id;
 });
 
-const connect = (provider: string, h = headers) => ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/${provider}/connect`, headers: h });
+/** The platform's own API (Nango's answered by the fake Nango in front of it). */
+const usePlatform = (platform: FetchLike) => ctx.setFetch(nango.fetch(platform));
 
-/** Start a connect and follow the platform back to our callback. */
-async function connectFlow(provider: "meta" | "google" | "adsense", query: Record<string, string> = { code: "CODE" }) {
-  const start = await connect(provider);
-  expect(start.statusCode).toBe(200);
-  const state = new URL(start.json().url).searchParams.get("state")!;
-  const cb = await ctx.app.inject({
-    method: "GET",
-    url: `/ads/${provider}/callback?${new URLSearchParams({ state, ...query })}`,
-    headers: { cookie: `${cookie}; ads_oauth_state=${state}` },
-  });
-  return { start, cb, state };
+/** "Continue with …" pressed: the Nango connect session. */
+const connect = (provider: string, h = headers) => ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/${provider}/nango/session`, headers: h, payload: {} });
+
+/** Connect as a merchant does: the session, authorizing at Nango, the consent coming back, the finish. */
+async function connectFlow(provider: NangoPlatform) {
+  const flow = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider, headers });
+  expect(flow.start.statusCode).toBe(200);
+  return { ...flow, finish: flow.finish! };
 }
 
 const pendingUrl = (pick: string) => `/workspaces/${ws}/stores/${storeId}/ads/pending/${pick}`;
-const pickOf = (location: string) => new URL(location).searchParams.get("choose");
+const pickOf = (finish: { json(): { choose?: string } }) => finish.json().choose ?? null;
 
 /** Connect, and when the platform shows several accounts, choose them all (as the picker does by default). */
-async function connectAll(provider: "meta" | "google" | "adsense") {
+async function connectAll(provider: NangoPlatform) {
   const flow = await connectFlow(provider);
-  const pick = pickOf(flow.cb.headers.location as string);
+  const pick = pickOf(flow.finish);
   if (pick) {
     const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers });
     const ids = (list.json().accounts as Array<{ accountId: string }>).map((a) => a.accountId);
@@ -127,12 +131,19 @@ describe("connecting ad accounts", () => {
       // The Google Ads demo (docs/ads-demo.md) is offered only when switched on; the real sign-in says what it lacks.
       demo: { google: false },
       missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },
-      // Nango (docs/nango.md) only with bizinsights' Nango key, and only for a platform whose own app is set up.
-      nango: { meta: false, google: false, adsense: false },
     });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);
     expect(res.json().error).toBe("not_configured");
+    expect(nango.sessions).toHaveLength(0);
+  });
+
+  it("offers only a platform whose integration Nango really holds", async () => {
+    nango.integrations.delete("google");
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().configured).toEqual({ meta: true, google: false, adsense: true });
+    expect((await connect("google")).json().error).toBe("not_configured");
+    expect(nango.sessions).toHaveLength(0);
   });
 
   it("says Meta only lets the app's testers in until Meta grants Advanced Access to ads_read, and still offers the button", async () => {
@@ -146,21 +157,17 @@ describe("connecting ad accounts", () => {
     expect(await restricted()).toEqual({ meta: false, google: false, adsense: false });
   });
 
-  it("Continue with Meta Ads: read-only access, the person chooses accounts, each saved with an encrypted token, history fetched", async () => {
-    ctx.setFetch(metaPlatform);
-    const { start, cb } = await connectFlow("meta");
-    const url = new URL(start.json().url);
-    expect(url.origin).toBe("https://www.facebook.com");
-    expect(url.searchParams.get("scope")).toBe("ads_read");
-    expect(url.searchParams.get("auth_type")).toBe("rerequest");
-    expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/meta/callback");
+  it("Continue with Meta Ads: read-only access, the person chooses accounts, each read through Nango, history fetched", async () => {
+    usePlatform(metaPlatform);
+    const { start, finish, connectionId } = await connectFlow("meta");
+    // The session can connect only Meta's integration, asks Meta again for a permission declined before, and carries ids only.
+    expect(nango.sessions[0]).toMatchObject({ allowed_integrations: ["bizinsights-meta-ads"], integrations_config_defaults: { "bizinsights-meta-ads": { authorization_params: { auth_type: "rerequest" } } } });
+    expect(start.body).not.toContain("META_LONG_SECRET");
 
     // Two accounts: nothing is connected until the person chooses, on the integrations page.
-    expect(cb.statusCode).toBe(302);
-    const location = new URL(cb.headers.location as string);
-    expect(location.pathname).toBe("/settings/ads");
-    expect(location.searchParams.get("store")).toBe(storeId);
-    const pick = location.searchParams.get("choose")!;
+    expect(finish.statusCode).toBe(200);
+    const pick = pickOf(finish)!;
+    expect(pick).toBeTruthy();
     expect(await systemDb.adConnection.count()).toBe(0);
     const offered = await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers });
     expect(offered.statusCode).toBe(200);
@@ -171,11 +178,13 @@ describe("connecting ad accounts", () => {
     expect(chose.json()).toEqual({ provider: "meta", connected: 2 });
 
     const rows = await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } });
-    expect(rows.map((r) => [r.provider, r.accountId, r.accountName, r.currency, r.enabled, r.status])).toEqual([
-      ["meta", "act_1", "Shop ads", "USD", true, "active"],
-      ["meta", "act_2", "EU ads", "EUR", true, "active"],
+    expect(rows.map((r) => [r.provider, r.accountId, r.accountName, r.currency, r.enabled, r.status, r.source, r.sourceLoginId])).toEqual([
+      ["meta", "act_1", "Shop ads", "USD", true, "active", "nango", connectionId],
+      ["meta", "act_2", "EU ads", "EUR", true, "active", "nango", connectionId],
     ]);
+    // No token is kept here: only which Nango connection to ask, sealed.
     expect(JSON.stringify(rows)).not.toContain("META_LONG_SECRET");
+    expect(rows.every((r) => r.refreshTokenEnc === null)).toBe(true);
     expect(await adAccessToken(rows[0]!)).toBe("META_LONG_SECRET");
     expect(rows[0]!.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 86_400_000);
 
@@ -183,76 +192,65 @@ describe("connecting ad accounts", () => {
     const jobs = ctx.deps.queues.sent.sync as unknown as AdsSyncData[];
     expect(jobs).toHaveLength(2);
     expect(jobs[0]).toMatchObject({ kind: "ads", connectionId: rows[0]!.id, until: localDay(new Date(), "UTC"), since: addDays(localDay(new Date(), "UTC"), -89) });
-    expect(await systemDb.auditLog.count({ where: { action: "ads.connected" } })).toBe(1);
+    expect(await systemDb.auditLog.findFirst({ where: { action: "ads.connected" } })).toMatchObject({ metadata: { provider: "meta", accounts: 2, source: "nango" } });
 
-    // The list the settings page shows: no tokens.
+    // The list the settings page shows: no tokens, and not the Nango connection either.
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
     expect(list.body).not.toContain("Enc");
-    expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active" });
+    expect(list.body).not.toContain(connectionId!);
+    expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active", source: "nango" });
     expect(list.json().connections[0].accessExpiresAt).toBeTruthy();
   });
 
-  it("Continue with Google: offline access, a manager's client reached through it", async () => {
-    ctx.setFetch(async (input, init) => {
+  it("Continue with Google Ads: through Nango too, a manager's client reached through it", async () => {
+    usePlatform(async (input, init) => {
       const u = new URL(String(input));
-      if (u.host === "oauth2.googleapis.com") return json({ access_token: "G_ACCESS", refresh_token: "G_REFRESH_SECRET", expires_in: 3599 });
       if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: ["customers/900"] });
       const query = (JSON.parse(String(init?.body)) as { query: string }).query;
       if (query.endsWith("FROM customer")) return json([{ results: [{ customer: { id: "900", descriptiveName: "Agency", manager: true } }] }]);
       return json([{ results: [{ customerClient: { id: "901", descriptiveName: "Store search", currencyCode: "USD", timeZone: "UTC", manager: false } }] }]);
     });
-    const { start, cb } = await connectFlow("google");
-    const url = new URL(start.json().url);
-    expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords openid");
+    const { finish, connectionId } = await connectFlow("google");
+    expect(nango.sessions[0]).toMatchObject({ allowed_integrations: ["bizinsights-google-ads"] });
     // One account: nothing to choose, straight to the numbers.
-    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=google&accounts=1&store=${storeId}`);
+    expect(finish.json()).toEqual({ connected: 1, provider: "google" });
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
-    expect(row).toMatchObject({ accountId: "901", accountName: "Store search", loginCustomerId: "900" });
-    expect(row.refreshTokenEnc).toBeTruthy();
-    expect(JSON.stringify(row)).not.toContain("G_REFRESH_SECRET");
+    expect(row).toMatchObject({ accountId: "901", accountName: "Store search", loginCustomerId: "900", source: "nango", sourceLoginId: connectionId, refreshTokenEnc: null, externalUserId: "100200300" });
+    expect(row.grantedScopes).toContain("https://www.googleapis.com/auth/adwords");
+    expect(await adAccessToken(row)).toBe("G_ACCESS");
   });
 
   it("Continue with Google AdSense: needs only the Google OAuth client, asks read-only, saves the account", async () => {
     // Google Ads not switched on (its Cloud project isn't approved for real accounts yet): AdSense still connects.
-    ctx.setEnv({ ...NO_KEYS, GOOGLE_ADS_CLIENT_ID: "g_client", GOOGLE_ADS_CLIENT_SECRET: "g_secret" });
+    ctx.setEnv({ ...KEYS, GOOGLE_ADS_ENABLED: "" });
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
-    expect(list.json().configured).toEqual({ meta: false, google: false, adsense: true });
+    expect(list.json().configured).toEqual({ meta: true, google: false, adsense: true });
     expect((await connect("google")).statusCode).toBe(503);
 
-    ctx.setFetch(adsensePlatform());
-    const { start, cb } = await connectFlow("adsense");
-    const url = new URL(start.json().url);
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly openid");
-    expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/adsense/callback");
-    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=adsense&accounts=1&store=${storeId}`);
+    usePlatform(adsensePlatform());
+    const { finish } = await connectFlow("adsense");
+    expect(finish.json()).toEqual({ connected: 1, provider: "adsense" });
 
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId } });
-    expect(row).toMatchObject({ provider: "adsense", accountId: "pub-77", accountName: "Shop site", currency: null, timezone: "UTC", enabled: true });
-    expect(row.refreshTokenEnc).toBeTruthy();
-    expect(JSON.stringify(row)).not.toContain("AS_REFRESH_SECRET");
+    expect(row).toMatchObject({ provider: "adsense", accountId: "pub-77", accountName: "Shop site", currency: null, timezone: "UTC", enabled: true, source: "nango" });
     expect(await adAccessToken(row)).toBe("AS_ACCESS");
     const jobs = ctx.deps.queues.sent.sync as unknown as AdsSyncData[];
     expect(jobs).toEqual([expect.objectContaining({ kind: "ads", connectionId: row.id, since: addDays(localDay(new Date(), "UTC"), -89) })]);
   });
 
-  it("a Google login with no AdSense account is told so", async () => {
-    ctx.setFetch(async (input) => {
-      const u = new URL(String(input));
-      if (u.host === "oauth2.googleapis.com") return json({ access_token: "AT", refresh_token: "RT", expires_in: 3599 });
-      return json({ error: { code: 403, message: "User does not have an AdSense account.", status: "PERMISSION_DENIED" } }, 403);
-    });
-    const { cb } = await connectFlow("adsense");
-    expect(cb.headers.location).toContain("error=no_accounts");
-    expect(cb.headers.location).toContain("provider=adsense");
+  it("a Google login with no AdSense account is told so, and its Nango connection isn't kept", async () => {
+    usePlatform(async () => json({ error: { code: 403, message: "User does not have an AdSense account.", status: "PERMISSION_DENIED" } }, 403));
+    const { finish, connectionId } = await connectFlow("adsense");
+    expect(finish.statusCode).toBe(409);
+    expect(finish.json().error).toBe("no_accounts");
     expect(await systemDb.adConnection.count()).toBe(0);
+    expect(nango.deleted).toEqual([connectionId]);
   });
 
   it("choosing accounts: only the ticked ones are connected, a choice is this person's and works once", async () => {
-    ctx.setFetch(metaPlatform);
-    const { cb } = await connectFlow("meta");
-    const pick = pickOf(cb.headers.location as string)!;
+    usePlatform(metaPlatform);
+    const { finish } = await connectFlow("meta");
+    const pick = pickOf(finish)!;
     // Someone else in the workspace can't see or use it.
     const other = await signIn(ctx, "ads-admin", "admin@x.com");
     const me = await systemDb.user.findFirstOrThrow({ where: { email: "admin@x.com" } });
@@ -266,30 +264,31 @@ describe("connecting ad accounts", () => {
     expect((await systemDb.adConnection.findMany()).map((r) => r.accountId)).toEqual(["act_2"]);
     expect((await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1"] } })).statusCode).toBe(404);
 
-    // Reconnecting shows the one already chosen as connected, and Cancel drops the sign-in.
+    // Reconnecting shows the one already chosen as connected, and Cancel drops the sign-in and its Nango connection.
     const again = await connectFlow("meta");
-    const pick2 = pickOf(again.cb.headers.location as string)!;
+    const pick2 = pickOf(again.finish)!;
     const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pick2), headers });
     expect(list.json().accounts.map((a: { accountId: string; connected: boolean }) => [a.accountId, a.connected])).toEqual([["act_1", false], ["act_2", true]]);
     expect((await ctx.app.inject({ method: "DELETE", url: pendingUrl(pick2), headers })).statusCode).toBe(200);
     expect((await ctx.app.inject({ method: "GET", url: pendingUrl(pick2), headers })).statusCode).toBe(404);
     expect(await systemDb.adConnection.count()).toBe(1);
+    expect(nango.deleted).toEqual([again.connectionId]);
   });
 
   it("the choice decides what shows: an unticked connected account is hidden, a ticked hidden one comes back", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     // Their first syncs have run (a sync someone is waiting for isn't asked for twice).
     await systemDb.adConnection.updateMany({ data: { syncRequestedAt: null } });
     await systemDb.adConnection.updateMany({ where: { accountId: "act_1" }, data: { enabled: false } });
     // A third account appears, so reconnecting asks again.
-    ctx.setFetch(async (input) => {
+    usePlatform(async (input) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [{ id: "act_1", currency: "USD" }, { id: "act_2", currency: "EUR" }, { id: "act_3", currency: "USD" }] });
       return metaPlatform(input);
     });
-    const { cb } = await connectFlow("meta");
-    const pick = pickOf(cb.headers.location as string)!;
+    const { finish } = await connectFlow("meta");
+    const pick = pickOf(finish)!;
     ctx.deps.queues.clear();
     const ok = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1", "act_3"] } });
     expect(ok.json()).toEqual({ provider: "meta", connected: 2 });
@@ -299,41 +298,41 @@ describe("connecting ad accounts", () => {
     expect((ctx.deps.queues.sent.sync as unknown as AdsSyncData[]).map((j) => j.connectionId).sort()).toEqual([rows[0]!.id, rows[2]!.id].sort());
   });
 
-  it("a reconnect that sees nothing new skips the choice and goes back to the dashboard", async () => {
-    ctx.setFetch(metaPlatform);
+  it("a reconnect that sees nothing new skips the choice, keeps the rows and their days, and adds no duplicate", async () => {
+    usePlatform(metaPlatform);
     await connectAll("meta");
+    const before = await systemDb.adConnection.findMany({ orderBy: { accountId: "asc" } });
+    await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: before[0]!.id, provider: "meta", accountId: "act_1", campaignId: "c", campaignName: "C", day: "2026-10-01", spend: 5 } });
     await systemDb.adConnection.updateMany({ data: { status: "reconnect", lastError: "Session has expired" } });
-    const { cb } = await connectFlow("meta");
-    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=meta&accounts=2&store=${storeId}`);
-    expect((await systemDb.adConnection.findMany()).every((r) => r.status === "active" && r.lastError === null)).toBe(true);
+    const { finish, connectionId } = await connectFlow("meta");
+    expect(finish.json()).toEqual({ connected: 2, provider: "meta" });
+    const after = await systemDb.adConnection.findMany({ orderBy: { accountId: "asc" } });
+    expect(after.map((r) => r.id)).toEqual(before.map((r) => r.id));
+    expect(after.every((r) => r.status === "active" && r.lastError === null && r.sourceLoginId === connectionId)).toBe(true);
+    expect(await systemDb.adCampaignDaily.count()).toBe(1);
+    // The Nango connection the accounts read through before is let go.
+    expect(nango.deleted).toEqual([before[0]!.sourceLoginId]);
   });
 
   it("a permission left unticked on the platform's screen is named, and nothing is connected", async () => {
-    ctx.setFetch(metaPlatformWith("declined"));
+    usePlatform(metaPlatformWith("declined"));
     const meta = await connectFlow("meta");
-    expect(meta.cb.headers.location).toContain("error=permission_missing");
-    expect(meta.cb.headers.location).toContain("provider=meta");
-    ctx.setFetch(async (input) => {
-      const u = new URL(String(input));
-      if (u.host === "oauth2.googleapis.com") return json({ access_token: "AT", refresh_token: "RT", expires_in: 3599, scope: "openid email" });
-      return json({ error: { message: "should not be asked" } }, 500);
-    });
-    const sense = await connectFlow("adsense");
-    expect(sense.cb.headers.location).toContain("error=permission_missing");
+    expect(meta.finish.statusCode).toBe(409);
+    expect(meta.finish.json().error).toBe("permission_missing");
     expect(await systemDb.adConnection.count()).toBe(0);
+    expect(nango.deleted).toEqual([meta.connectionId]);
   });
 
-  it("Facebook Login for Business: a configuration id replaces scope when it's set", async () => {
+  it("Facebook Login for Business: Nango is asked to send the configuration id", async () => {
     ctx.setEnv({ ...KEYS, META_CONFIG_ID: "cfg_123" });
-    const url = new URL((await connect("meta")).json().url);
-    expect(url.searchParams.get("config_id")).toBe("cfg_123");
-    expect(url.searchParams.get("scope")).toBeNull();
+    expect((await connect("meta")).statusCode).toBe(200);
+    expect(nango.sessions[0]).toMatchObject({ integrations_config_defaults: { "bizinsights-meta-ads": { authorization_params: { config_id: "cfg_123" } } } });
   });
 
   it("refresh can be for one platform", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
-    ctx.setFetch(adsensePlatform());
+    usePlatform(adsensePlatform());
     await connectAll("adsense");
     // Connecting asked for each account's catch-up: Refresh while those are on their way sends nothing more.
     ctx.deps.queues.clear();
@@ -355,30 +354,18 @@ describe("connecting ad accounts", () => {
     ]);
   });
 
-  it("refuses a callback that isn't this browser's, isn't this person's, or was cancelled", async () => {
-    ctx.setFetch(metaPlatform);
-    // Cancelled on Meta's screen.
-    const denied = await connectFlow("meta", { error: "access_denied", error_reason: "user_denied" });
-    expect(denied.cb.headers.location).toContain("error=denied");
-    // A state from another browser (no cookie).
-    const start = await connect("meta");
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const noCookie = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state}&code=C`, headers: { cookie } });
-    expect(noCookie.headers.location).toContain("error=state_mismatch");
-    // Someone else signed in by the time it comes back.
-    const other = await signIn(ctx, "someone-else", "else@x.com");
-    const start2 = await connect("meta");
-    const state2 = new URL(start2.json().url).searchParams.get("state")!;
-    const wrongUser = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state2}&code=C`, headers: { cookie: `${other.cookie}; ads_oauth_state=${state2}` } });
-    expect(wrongUser.headers.location).toContain("error=session_mismatch");
-    // Used once only.
-    const replay = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state2}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state2}` } });
-    expect(replay.headers.location).toContain("error=state_expired");
+  it("the old direct sign-in is gone: its start answers nothing, and a browser coming back to its callback is asked to connect again", async () => {
+    usePlatform(metaPlatform);
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/connect`, headers })).statusCode).toBe(404);
+    const back = await ctx.app.inject({ method: "GET", url: "/ads/meta/callback?state=old-state&code=CODE", headers: { cookie: `${cookie}; ads_oauth_state=old-state` } });
+    expect(back.statusCode).toBe(302);
+    expect(back.headers.location).toBe("http://localhost:3001/settings/ads?error=state_expired&provider=meta");
+    expect((await ctx.app.inject({ method: "GET", url: "/ads/elsewhere/callback?code=C" })).headers.location).toBe("http://localhost:3001/settings/ads?error=unknown_provider");
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 
   it("lets owners and admins connect, hide and disconnect; analysts and viewers only look", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const [a, b] = await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } });
     await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: b!.id, provider: "meta", accountId: "act_2", campaignId: "c", campaignName: "C", day: "2026-10-01", spend: 5 } });
@@ -402,6 +389,8 @@ describe("connecting ad accounts", () => {
     expect(del.statusCode).toBe(200);
     expect(await systemDb.adCampaignDaily.count()).toBe(0);
     expect(await systemDb.adConnection.count()).toBe(1);
+    // The other account still reads through the same Nango connection: it stays.
+    expect(nango.deleted).toEqual([]);
 
     const me = await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } });
     await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: me.id } }, data: { role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
@@ -411,127 +400,9 @@ describe("connecting ad accounts", () => {
   });
 });
 
-describe("the database dropping out while the person comes back from the platform", () => {
-  afterEach(() => {
-    ctx.deps.dbHealthy = undefined;
-    vi.restoreAllMocks();
-  });
-
-  /** Meta with one ad account: a connect with nothing to choose, which lands on the dashboard. */
-  const metaOneAccount: FetchLike = async (input) => {
-    const u = new URL(String(input));
-    if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [{ id: "act_1", name: "Shop ads", currency: "USD", timezone_name: "UTC" }] });
-    return metaPlatform(input);
-  };
-
-  /** Run `fn` with the database unreachable (nothing listens on port 1), as while the tunnel is down. */
-  const dbDown = <T>(fn: () => Promise<T>) => withDb({ system: "postgresql://app:app@127.0.0.1:1/outage_test" }, fn);
-
-  /** Every look finds the database down, and the callback's whole wait passes with each one. */
-  function stayingDown() {
-    let skipped = 0;
-    const now = Date.now.bind(Date);
-    vi.spyOn(Date, "now").mockImplementation(() => now() + skipped);
-    ctx.deps.dbHealthy = async () => {
-      skipped += 30_000;
-      return false;
-    };
-  }
-
-  async function callback(state: string) {
-    return ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state}&code=CODE`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-  }
-  const stateOf = async () => new URL((await connect("meta")).json().url).searchParams.get("state")!;
-
-  it("a drop of a moment is waited out, and the connect finishes", async () => {
-    ctx.setFetch(metaOneAccount);
-    const state = await stateOf();
-    // The tunnel drops just as the person lands back from Meta, and is back a second later.
-    const users = systemDb.user as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    const findUnique = users.findUnique!;
-    let calls = 0;
-    users.findUnique = async (...a) => {
-      if (calls++ === 0) throw new Error("Connection terminated unexpectedly");
-      return findUnique(...a);
-    };
-    const looks = [false, true];
-    ctx.deps.dbHealthy = async () => looks.shift() ?? true;
-    try {
-      const cb = await callback(state);
-      expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=meta&accounts=1&store=${storeId}`);
-    } finally {
-      users.findUnique = findUnique;
-    }
-    expect((await systemDb.adConnection.findMany()).map((r) => r.accountId)).toEqual(["act_1"]);
-  });
-
-  it("still down after the wait: the sign-in is held for its person, who finishes it once the database is back", async () => {
-    ctx.setFetch(metaOneAccount);
-    const state = await stateOf();
-    stayingDown();
-    const cb = await dbDown(() => callback(state));
-    vi.restoreAllMocks();
-    ctx.deps.dbHealthy = undefined;
-
-    const location = new URL(cb.headers.location as string);
-    expect(location.pathname).toBe("/settings/ads");
-    expect(location.searchParams.get("provider")).toBe("meta");
-    expect(location.searchParams.get("store")).toBe(storeId);
-    expect(location.searchParams.get("error")).toBeNull();
-    const pick = location.searchParams.get("choose")!;
-    expect(await systemDb.adConnection.count()).toBe(0);
-
-    // Who came back couldn't be checked then, so it is checked now: only the person who started it can finish it.
-    const other = await signIn(ctx, "ads-admin", "admin@x.com");
-    await systemDb.membership.create({ data: { workspaceId: ws, userId: other.user.id, role: "admin" } });
-    expect((await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers: other.headers })).statusCode).toBe(404);
-    const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers });
-    expect(list.json().accounts.map((a: { accountId: string }) => a.accountId)).toEqual(["act_1"]);
-    const done = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1"] } });
-    expect(done.json()).toEqual({ provider: "meta", connected: 1 });
-  });
-
-  it("down only after the platform answered: the sign-in is held the same way", async () => {
-    ctx.setFetch(metaOneAccount);
-    const state = await stateOf();
-    const conns = systemDb.adConnection as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    const findMany = conns.findMany!;
-    conns.findMany = async () => {
-      throw new Error("Connection terminated unexpectedly");
-    };
-    stayingDown();
-    try {
-      const cb = await callback(state);
-      expect(pickOf(cb.headers.location as string)).toBeTruthy();
-    } finally {
-      conns.findMany = findMany;
-    }
-    expect(await systemDb.adConnection.count()).toBe(0);
-  });
-
-  it("a failure while the database answers is not waited on", async () => {
-    ctx.setFetch(metaOneAccount);
-    const state = await stateOf();
-    const conns = systemDb.adConnection as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    const findMany = conns.findMany!;
-    conns.findMany = async () => {
-      throw new Error("a bug of ours");
-    };
-    let looks = 0;
-    ctx.deps.dbHealthy = async () => (looks++, true);
-    try {
-      const cb = await callback(state);
-      expect(cb.headers.location).toBe("http://localhost:3001/settings/ads?error=temporarily_unavailable&provider=meta");
-    } finally {
-      conns.findMany = findMany;
-    }
-    expect(looks).toBe(1);
-  });
-});
-
 describe("ads on the dashboard", () => {
   it("adds up spend and results for the dates, in one currency, against the store's sales", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const usd = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
     const eur = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_2" } });
@@ -586,12 +457,12 @@ describe("AdSense on the dashboard", () => {
     const today = localDay(new Date(), "UTC");
     const day = (n: number) => addDays(today, -n);
     // An ad account that spends...
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const usd = await systemDb.adConnection.update({ where: { id: (await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } })).id }, data: { historyFrom: day(89), syncedThrough: today, lastSyncedAt: new Date() } });
     await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: usd.id, provider: "meta", accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(1), spend: 30, clicks: 10 } });
     // ...and an AdSense account that earns, synced through the real client.
-    ctx.setFetch(
+    usePlatform(
       adsensePlatform("USD", [
         [day(1), "ads-shop.example.com", "12.5", "5000", "9000", "20"],
         [day(1), "blog.example.com", "2.5", "1000", "2000", "5"],
@@ -691,7 +562,7 @@ describe("the Meta Ads report", () => {
     };
 
   async function connectedMeta() {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     return systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
   }
@@ -701,7 +572,7 @@ describe("the Meta Ads report", () => {
   it("asks Meta for exactly those dates: account reach, campaigns biggest first with their status, read-only, cached", async () => {
     const conn = await connectedMeta();
     const calls: string[] = [];
-    ctx.setFetch(reportPlatform(calls));
+    usePlatform(reportPlatform(calls));
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -730,7 +601,7 @@ describe("the Meta Ads report", () => {
 
   it("is only for the workspace and store the account belongs to", async () => {
     const conn = await connectedMeta();
-    ctx.setFetch(reportPlatform([]));
+    usePlatform(reportPlatform([]));
     const other = await signIn(ctx, "ads-other", "other@y.com");
     const otherWs = await createWorkspace(ctx, other.headers, "Other");
     const otherStore = (await createStore(otherWs, "other-shop.myshopify.com", ["read_orders"], { currency: "USD" })).id;
@@ -747,21 +618,21 @@ describe("the Meta Ads report", () => {
 
   it("access Meta took back marks the account 'reconnect' and says so, instead of showing old numbers as current", async () => {
     const conn = await connectedMeta();
-    ctx.setFetch(reportPlatform([], { revoked: true }));
+    usePlatform(reportPlatform([], { revoked: true }));
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("reconnect");
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("reconnect");
     // From then on it doesn't ask Meta at all until it's reconnected.
     const calls: string[] = [];
-    ctx.setFetch(reportPlatform(calls));
+    usePlatform(reportPlatform(calls));
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers })).statusCode).toBe(409);
     expect(calls).toEqual([]);
   });
 
   it("refuses dates that aren't a real range of up to a year, and levels it doesn't know", async () => {
     const conn = await connectedMeta();
-    ctx.setFetch(reportPlatform([]));
+    usePlatform(reportPlatform([]));
     const bad: Array<Record<string, string>> = [{ from: "2026-09-30", to: "2026-09-01" }, { from: "2024-01-01", to: "2026-09-30" }, { from: "2026-02-31" }, { level: "account" }];
     for (const q of bad) {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
@@ -774,7 +645,7 @@ describe("what Settings shows of a connection", () => {
   const listAds = (h = headers) => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers: h });
 
   it("every field: the status worded by its own code (or the status's own words), the platform's reason only cleaned, who connected it", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const me = await systemDb.user.update({ where: { email: "owner@x.com" }, data: { displayName: "Olive Owner" } });
     const [a, b] = await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } });
@@ -834,7 +705,7 @@ describe("what Settings shows of a connection", () => {
   });
 
   it("a Google Ads account reached through a manager says which, as Google writes it", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const a = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
     await systemDb.adConnection.update({ where: { id: a.id }, data: { provider: "google", accountId: "9876543210", loginCustomerId: "1234567890" } });
@@ -843,7 +714,7 @@ describe("what Settings shows of a connection", () => {
   });
 
   it("AdSense: the store's sites are chosen from the ones AdSense reported (host names only); a change brings the account up to date", async () => {
-    ctx.setFetch(adsensePlatform());
+    usePlatform(adsensePlatform());
     await connectAll("adsense");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { syncRequestedAt: null } });
@@ -884,7 +755,7 @@ describe("what Settings shows of a connection", () => {
     expect((await ctx.app.inject({ method: "PATCH", url, headers, payload: { sites: [] } })).json().connection.sites).toEqual([]);
 
     // Only AdSense accounts have sites.
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const meta = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "meta" } });
     const refused = await ctx.app.inject({ method: "PATCH", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${meta.id}`, headers, payload: { sites: ["shop.example.com"] } });
@@ -895,10 +766,10 @@ describe("what Settings shows of a connection", () => {
 
 describe("the account choice", () => {
   it("says which accounts are connected and which are shown (only those are ticked again), and each one's state at the platform", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     await systemDb.adConnection.updateMany({ where: { accountId: "act_1" }, data: { enabled: false } });
-    ctx.setFetch(async (input) => {
+    usePlatform(async (input) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("/me/adaccounts")) {
         return json({
@@ -911,8 +782,8 @@ describe("the account choice", () => {
       }
       return metaPlatform(input);
     });
-    const { cb } = await connectFlow("meta");
-    const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pickOf(cb.headers.location as string)!), headers });
+    const { finish } = await connectFlow("meta");
+    const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pickOf(finish)!), headers });
     expect(list.json()).toMatchObject({
       provider: "meta",
       truncated: false,
@@ -923,12 +794,12 @@ describe("the account choice", () => {
       ],
     });
     // Choosing it stores what Meta said about the account.
-    await ctx.app.inject({ method: "POST", url: pendingUrl(pickOf(cb.headers.location as string)!), headers, payload: { accountIds: ["act_2", "act_3"] } });
+    await ctx.app.inject({ method: "POST", url: pendingUrl(pickOf(finish)!), headers, payload: { accountIds: ["act_2", "act_3"] } });
     expect(await systemDb.adConnection.findFirstOrThrow({ where: { accountId: "act_3" } })).toMatchObject({ accountStatus: "disabled", accountStatusDetail: "Because of a payment problem" });
   });
 
   it("a list the platform cut short goes to the choice, which says so", async () => {
-    ctx.setFetch(async (input) => {
+    usePlatform(async (input) => {
       const u = new URL(String(input));
       if (u.pathname.endsWith("/me/adaccounts")) {
         // An agency login: Meta always has another page.
@@ -937,8 +808,8 @@ describe("the account choice", () => {
       }
       return metaPlatform(input);
     });
-    const { cb } = await connectFlow("meta");
-    const pick = pickOf(cb.headers.location as string);
+    const { finish } = await connectFlow("meta");
+    const pick = pickOf(finish);
     expect(pick).toBeTruthy();
     const list = (await ctx.app.inject({ method: "GET", url: pendingUrl(pick!), headers })).json();
     expect(list.truncated).toBe(true);
@@ -958,9 +829,9 @@ describe("starting a sign-in", () => {
 
 describe("Refresh", () => {
   it("catches up every account that can be read, asks the others only whether they're back, and leaves one waiting for a reconnect", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
-    ctx.setFetch(adsensePlatform());
+    usePlatform(adsensePlatform());
     await connectAll("adsense");
     await systemDb.adConnection.updateMany({ data: { syncRequestedAt: null } });
     await systemDb.adConnection.updateMany({ where: { accountId: "act_1" }, data: { status: "permission", errorCode: "no_access" } });
@@ -984,52 +855,39 @@ describe("Refresh", () => {
 });
 
 describe("the sign-in coming back with a platform problem", () => {
-  /** Google's token endpoint, tokeninfo and revoke (recorded), and Google Ads answering `ads` for the account list. */
+  /** Google's revoke (recorded), and Google Ads answering `ads` for the account list. Nango's token is G_ACCESS. */
   const googleWith = (ads: () => Response, revoked: string[]): FetchLike => async (input, init) => {
     const u = new URL(String(input));
-    if (u.host === "oauth2.googleapis.com" && u.pathname === "/token") return json({ access_token: "G_ACCESS", refresh_token: "G_REFRESH", expires_in: 3599, scope: "https://www.googleapis.com/auth/adwords" });
-    if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") return json({ aud: "g_client", sub: "4242" });
     if (u.host === "oauth2.googleapis.com" && u.pathname === "/revoke") {
       revoked.push(new URLSearchParams(String(init?.body)).get("token")!);
       return json({});
     }
     return ads();
   };
-  const errorOf = (cb: { headers: Record<string, string> }) => new URL(cb.headers.location as string).searchParams.get("error");
 
   it("says when to try again (rate limited, or no answer), and gives the grant it made back to Google", async () => {
     const revoked: string[] = [];
-    ctx.setFetch(googleWith(() => json({ error: { code: 429, message: "Too many requests", status: "RESOURCE_EXHAUSTED" } }, 429), revoked));
-    expect(errorOf((await connectFlow("google")).cb)).toBe("rate_limited");
-    ctx.setFetch(googleWith(() => json({ error: { code: 503, message: "The service is currently unavailable.", status: "UNAVAILABLE" } }, 503), revoked));
-    expect(errorOf((await connectFlow("google")).cb)).toBe("temporarily_unavailable");
-    // Nothing connected, nothing else relies on that person's grant: given back each time.
-    expect(revoked).toEqual(["G_REFRESH", "G_REFRESH"]);
+    usePlatform(googleWith(() => json({ error: { code: 429, message: "Too many requests", status: "RESOURCE_EXHAUSTED" } }, 429), revoked));
+    const first = await connectFlow("google");
+    expect([first.finish.statusCode, first.finish.json().error]).toEqual([503, "rate_limited"]);
+    usePlatform(googleWith(() => json({ error: { code: 503, message: "The service is currently unavailable.", status: "UNAVAILABLE" } }, 503), revoked));
+    const second = await connectFlow("google");
+    expect([second.finish.statusCode, second.finish.json().error]).toEqual([503, "temporarily_unavailable"]);
+    // Nothing connected, nothing else relies on that person's grant: given back each time, and the Nango connections deleted.
+    expect(revoked).toEqual(["G_ACCESS", "G_ACCESS"]);
+    expect(nango.deleted).toEqual([first.connectionId, second.connectionId]);
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 
-  it("a platform taken off this server mid sign-in is ours to say; new Google Ads connections switched off still lets one already started finish", async () => {
+  it("a platform taken off this server mid sign-in is ours to say, and nothing is connected", async () => {
     const revoked: string[] = [];
-    ctx.setFetch(googleWith(() => json({ error: { message: "unexpected" } }, 400), revoked));
+    usePlatform(googleWith(() => json({ error: { message: "unexpected" } }, 400), revoked));
     const start = await connect("google");
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    ctx.setEnv({ ...KEYS, GOOGLE_ADS_CLIENT_SECRET: "" });
-    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    expect(errorOf(cb)).toBe("not_configured");
-
-    ctx.setEnv(KEYS);
-    ctx.setFetch(async (input, init) => {
-      const u = new URL(String(input));
-      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: ["customers/901"] });
-      if (u.pathname.endsWith("googleAds:searchStream")) return json([{ results: [{ customer: { id: "901", descriptiveName: "Store search", currencyCode: "USD", timeZone: "UTC", manager: false } }] }]);
-      return googleWith(() => json({}), revoked)(input, init);
-    });
-    const start2 = await connect("google");
-    const state2 = new URL(start2.json().url).searchParams.get("state")!;
-    ctx.setEnv({ ...KEYS, GOOGLE_ADS_ENABLED: "" });
-    const cb2 = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state2}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state2}` } });
-    expect(new URL(cb2.headers.location as string).pathname).toBe("/dashboard");
-    expect(revoked).toEqual([]);
+    expect(start.statusCode).toBe(200);
+    ctx.setEnv({ ...KEYS, NANGO_PROVIDERS: "meta,adsense" });
+    const finish = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/nango/finish`, headers, payload: { nonce: start.json().nonce, connectionId: "conn-x" } });
+    expect([finish.statusCode, finish.json().error]).toEqual([503, "not_configured"]);
+    expect(await systemDb.adConnection.count()).toBe(0);
   });
 });
 
@@ -1057,7 +915,7 @@ describe("the AdSense report", () => {
   };
 
   async function connectedAdsense() {
-    ctx.setFetch(adsensePlatform());
+    usePlatform(adsensePlatform());
     await connectAll("adsense");
     return systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
   }
@@ -1067,7 +925,7 @@ describe("the AdSense report", () => {
     const conn = await connectedAdsense();
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { sites: ["shop.example.com"] } });
     const seen: URL[] = [];
-    ctx.setFetch(adsenseReports(seen));
+    usePlatform(adsenseReports(seen));
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
@@ -1092,7 +950,7 @@ describe("the AdSense report", () => {
     const conn = await connectedAdsense();
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { sites: ["shop.example.com"] } });
     const seen: URL[] = [];
-    ctx.setFetch(adsenseReports(seen, { refuse: true }));
+    usePlatform(adsenseReports(seen, { refuse: true }));
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
     expect(res.statusCode).toBe(502);
     expect(res.json().error).toBe("adsense_error");
@@ -1102,7 +960,7 @@ describe("the AdSense report", () => {
 
   it("an unknown connection, or one of another platform, is not found", async () => {
     await connectedAdsense();
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const meta = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "meta" } });
     for (const id of ["nope", meta.id]) {
@@ -1132,11 +990,11 @@ describe("the Meta Ads report compared with other dates", () => {
   const reportUrl = (connection: string, q: Record<string, string>) => `/workspaces/${ws}/stores/${storeId}/ads/meta/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
 
   it("both ranges at once, each cached on its own; the comparison's totals and rows by id", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
     const asked: string[] = [];
-    ctx.setFetch(insights(asked, { "2026-09-01": "100", "2026-08-01": "80" }));
+    usePlatform(insights(asked, { "2026-09-01": "100", "2026-08-01": "80" }));
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { cfrom: "2026-08-01", cto: "2026-08-30" }), headers });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -1164,7 +1022,7 @@ describe("the Meta Ads report compared with other dates", () => {
   });
 
   it("a report Meta is still preparing when the request's time is up says so, apart from Meta being busy", async () => {
-    ctx.setFetch(metaPlatform);
+    usePlatform(metaPlatform);
     await connectAll("meta");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
     // Meta asks for a report job ("reduce the amount of data"), and by then the request's time has gone.
@@ -1172,7 +1030,7 @@ describe("the Meta Ads report compared with other dates", () => {
     let skew = 0;
     vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
     try {
-      ctx.setFetch(async (input) => {
+      usePlatform(async (input) => {
         const u = new URL(String(input));
         if (u.pathname.endsWith("/act_1/insights")) {
           skew = 45_000;
@@ -1189,7 +1047,7 @@ describe("the Meta Ads report compared with other dates", () => {
     // Nothing about the account: it stays as it was.
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
     // Meta itself throttling is "busy".
-    ctx.setFetch(async (input) => (new URL(String(input)).pathname.endsWith("/act_1/insights") ? json({ error: { message: "User request limit reached", code: 17 } }, 400) : metaPlatform(input)));
+    usePlatform(async (input) => (new URL(String(input)).pathname.endsWith("/act_1/insights") ? json({ error: { message: "User request limit reached", code: 17 } }, 400) : metaPlatform(input)));
     const busy = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, {}), headers });
     expect(busy.statusCode).toBe(503);
     expect(busy.json().error).toBe("meta_busy");
