@@ -12,7 +12,8 @@ import { availableTopics, useDetailView } from "@/components/dashboard/topics";
 import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/Overview";
 import { AdvertisingSection } from "@/components/dashboard/Advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { KpiCard, SummaryCard, TrendCharts } from "@/components/dashboard/HomeCards";
+import { KpiCard, SummaryCard } from "@/components/dashboard/HomeCards";
+import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
@@ -156,9 +157,7 @@ function DashboardSkeleton() {
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-32" />)}
       </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        {[0, 1].map((i) => <div key={i} className="skeleton h-80" />)}
-      </div>
+      {[0, 1].map((i) => <div key={i} className="skeleton h-96 rounded-2xl" />)}
       <div className="grid gap-4 lg:grid-cols-5">
         <div className="skeleton h-40 lg:col-span-3" />
         <div className="skeleton h-40 lg:col-span-2" />
@@ -427,10 +426,11 @@ export default function DashboardPage() {
 
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
-      {/* The page says each thing once: four numbers, their trend, one health check and one
-          sentence, then one card per area of the store (worst first). Every number and card opens
-          the full details (components/dashboard/TopicDetail.tsx), so nothing is lost by keeping
-          this page short. */}
+      {/* The page says each thing once: four numbers, sales day by day and month by month against
+          the years before (the owner's design, components/dashboard/OverviewCharts.tsx), one health
+          check and one sentence, then one card per area of the store (worst first). Every number
+          and card opens the full details (components/dashboard/TopicDetail.tsx), so nothing is
+          lost by keeping this page short. */}
       {s && (
         <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
@@ -465,7 +465,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {ov && s && <TrendCharts ov={ov} currency={cur} />}
+      {ov && s && <OverviewCharts ov={ov} currency={cur} />}
 
       {ov && (
         <div className="grid gap-4 lg:grid-cols-5">

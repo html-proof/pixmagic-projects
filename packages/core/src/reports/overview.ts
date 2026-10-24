@@ -1,5 +1,5 @@
 import type { Store, Tx } from "@app/db";
-import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { comparisonImported, delta, localDay, pastYearBreakdown, resolveCapabilities, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
@@ -98,6 +98,9 @@ export async function storeOverview(
     // While the range is still running, the comparison stops at the same time of day (Shopify's like-for-like).
     const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), previousImported ? comparisonRows(tx, ws, storeId, previous, store.timezone) : []]);
     rangeRows = cur;
+    // This calendar year and the two before it, month by month, whatever the dates picked: one read
+    // from the January two years back (this year's January compares with the December before).
+    const yearRows = enabled.has("sales_overview") ? await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 2}-01-01`, to: today }) : [];
     const c = summarize(cur);
     const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
@@ -143,9 +146,9 @@ export async function storeOverview(
           units: change(c.units, p.units),
         },
         series: dailySeries(cur, range),
-        // This calendar year month by month, whatever the dates picked. Reaches back to the
-        // December before so January has something to compare with.
-        year: yearBreakdown(await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }), today, data.historyFrom),
+        // This calendar year month by month, and the same months of the two years before, whole
+        // (the dashboard's monthly comparison): each month not imported is said to be so.
+        year: { ...yearBreakdown(yearRows, today, data.historyFrom), past: [1, 2].map((back) => pastYearBreakdown(yearRows, today, back, data.historyFrom)) },
         // The store's own calculation from those lines: which it counts and whether the dashboard
         // shows it. Restored for everyone who opens the dashboard; Shopify's figures above never change.
         calculation: await storeSalesCalculation(tx, scope),

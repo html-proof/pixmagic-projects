@@ -6,9 +6,11 @@ import {
   eachDay,
   NET_SALES_MONTHS,
   niceRound,
+  pastYearBreakdown,
   SHOPIFY_STANDARD,
   splitTotal,
   tierOf,
+  TOTAL_SALES_MONTHS,
   weekdayOf,
   yearBreakdown,
   yearFigures,
@@ -178,6 +180,42 @@ describe("year breakdown", () => {
     const march = yearBreakdown([row("2026-02-10", 100), row("2026-03-30", 50)], "2026-03-30", null).months.at(-1)!;
     expect(march.comparedWith).toEqual({ from: "2026-02-01", to: "2026-02-28" });
     expect(march.change).toBe(-0.5);
+  });
+});
+
+describe("the same months of the years before", () => {
+  const rows = [row("2024-02-29", 40), row("2024-03-05", 60), row("2025-02-10", 100), row("2025-02-28", 25), row("2025-03-31", 70), row("2025-04-01", 999), row("2026-02-10", 10)];
+
+  it("covers January to this month, each month whole, none of them running", () => {
+    const y = pastYearBreakdown(rows, "2026-02-18", 1, null);
+    expect(y.year).toBe(2025);
+    expect(y.months.map((m) => [m.month, m.from, m.to, m.current])).toEqual([
+      ["2025-01", "2025-01-01", "2025-01-31", false],
+      ["2025-02", "2025-02-01", "2025-02-28", false],
+    ]);
+    // All of February 2025, though February 2026 is only at the 18th.
+    expect(y.months[1]).toMatchObject({ netSales: 125, orders: 2 });
+    expect(y.total).toBe(125);
+    // A leap year's February runs to the 29th.
+    expect(pastYearBreakdown(rows, "2026-02-18", 2, null).months[1]).toMatchObject({ to: "2024-02-29", netSales: 40 });
+    // Nothing after this month's end comes in (April 2025 against a March 2026).
+    expect(pastYearBreakdown(rows, "2026-03-02", 1, null).total).toBe(195);
+  });
+
+  it("says which of those months weren't imported", () => {
+    const y = pastYearBreakdown(rows, "2026-03-02", 2, "2024-03-01");
+    expect(y.months.map((m) => m.coverage)).toEqual(["none", "none", "full"]);
+    expect(y.months[1]).toMatchObject({ netSales: 0, orders: 0 });
+    expect(y.total).toBe(60);
+  });
+});
+
+describe("total sales month by month", () => {
+  it("compares a month's total sales on those of the dates it is compared with", () => {
+    const y = yearBreakdown([row("2026-01-10", 100), row("2026-02-03", 150, { totalSales: 180 })], "2026-02-28", null);
+    expect(y.months.map(TOTAL_SALES_MONTHS.value)).toEqual([100, 180]);
+    expect(TOTAL_SALES_MONTHS.change(y.months[1]!)).toBe(0.8);
+    expect(yearFigures(y.months, TOTAL_SALES_MONTHS).total).toBe(280);
   });
 });
 

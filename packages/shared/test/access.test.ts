@@ -233,6 +233,25 @@ describe("redactOverview", () => {
     expect(report().modules.sales_overview.year.months[0]!.taxes).toBe(5);
   });
 
+  it("redacts the years this year is compared with as it does this year's months", () => {
+    const withPast = () => {
+      const r = report();
+      const y = r.modules.sales_overview.year;
+      const past = { ...y, year: 2025, months: y.months.map((m) => ({ ...m, month: "2025-10", current: false })) };
+      return { ...r, modules: { ...r.modules, sales_overview: { ...r.modules.sales_overview, year: { ...y, past: [past] } } } };
+    };
+    type WithPast = ReturnType<typeof withPast>;
+    const reports = redactOverview(withPast(), member(["analytics.sales", "finance.reports"])) as WithPast;
+    const past = reports.modules.sales_overview.year.past[0]!;
+    expect(past).toMatchObject({ year: 2025, total: 100 });
+    expect(past.months[0]).toMatchObject({ month: "2025-10", netSales: 100, orders: 3 });
+    for (const k of [...MONTH_LINES, "refunds"]) expect(past.months[0]).not.toHaveProperty(k);
+
+    const all = redactOverview(withPast(), member(["analytics.sales", "finance.reports", "finance.breakdown", "finance.refunds"])) as WithPast;
+    expect(all.modules.sales_overview.year.past[0]!.months[0]).toEqual(withPast().modules.sales_overview.year.past[0]!.months[0]);
+    expect(redactOverview(withPast(), member(["analytics.sales"])).modules.sales_overview).not.toHaveProperty("year");
+  });
+
   it("keeps each month's refunds only with View refunds", () => {
     const reports = redactOverview(report(), member(["analytics.sales", "finance.reports"])) as ReturnType<typeof report>;
     for (const m of reports.modules.sales_overview.year.months) expect(m).not.toHaveProperty("refunds");

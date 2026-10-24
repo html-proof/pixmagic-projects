@@ -551,6 +551,16 @@ function omit(o: unknown, keys: readonly string[]): unknown {
 }
 
 /**
+ * `year` (this year month by month) without `keys` in any month: its own months and those of the
+ * years before it it is compared with (`past`). Anything else comes back as it is.
+ */
+function omitFromMonths(year: unknown, keys: readonly string[]): unknown {
+  const cut = (y: unknown) => (isObj(y) && Array.isArray(y.months) ? { ...y, months: y.months.map((m: unknown) => omit(m, keys)) } : y);
+  const out = cut(year);
+  return isObj(out) && Array.isArray(out.past) ? { ...out, past: out.past.map(cut) } : out;
+}
+
+/**
  * The fields inside a module that need a permission of their own, and the parts of the module they
  * live in. Applied after the modules themselves are cut down.
  */
@@ -571,7 +581,7 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, lines));
       // This year month by month ("View financial reports") keeps its net sales, without the lines.
-      if (isObj(s.year) && Array.isArray(s.year.months)) s.year = { ...s.year, months: s.year.months.map((m: unknown) => omit(m, MONTH_LINES)) };
+      if (s.year !== undefined) s.year = omitFromMonths(s.year, MONTH_LINES);
       delete s.calculation;
     }
     if (!g.has("finance.reports")) delete s.year;
@@ -579,7 +589,7 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
     if (!g.has("finance.refunds")) {
       s = { ...s, current: omit(s.current, ["returns"]) };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
-      if (isObj(s.year) && Array.isArray(s.year.months)) s.year = { ...s.year, months: s.year.months.map((m: unknown) => omit(m, ["refunds"])) };
+      if (s.year !== undefined) s.year = omitFromMonths(s.year, ["refunds"]);
     }
     out.sales_overview = s;
   }

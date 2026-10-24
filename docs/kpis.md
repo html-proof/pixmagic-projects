@@ -298,6 +298,29 @@ measure net sales only.
 
 **Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 
+## Sales panels (dashboard overview)
+
+Reference implementation: `apps/web/src/components/dashboard/OverviewCharts.tsx`, in the owner's
+design (2026-10-24). Two panels under the headline numbers, each with its total in large type, a
+line on what is in it, a key, and the running total drawn as a violet line over the columns, read
+off its own scale on the right (its labels sit on the left scale's gridlines). The Sales section's
+cards above keep the running total in a strip of its own.
+
+- **Daily** (the dates picked): Total sales per day by default (Custom sales while the store shows
+  it), or Net sales, Orders or Returns ("Sales chart shows"). Sales days are coloured by the day
+  tiers above (best green, strong yellow, the rest cyan); today is light cyan (not over yet). Each
+  column carries its figure when every figure fits, otherwise only the best day's and today's;
+  weekend dates are in orange. Finished days with nothing are named in the line under the total.
+- **Monthly comparison** (this calendar year, January to the current month): each month beside the
+  same month of the two years before, **whole** (`pastYearBreakdown`: August last year is all of
+  August, while this August is so far), so a year's columns read as the month to beat. Total sales
+  by default, or Custom sales or Net sales ("Comparison shows"; Net sales only without
+  `finance.breakdown`). The percentage over this year's columns is the change on the month before,
+  as Month by month's (the current month on the same days of the month before). A year with nothing
+  imported isn't drawn; a month not imported has no column, a partly imported one is lighter.
+  Team & Access: the whole panel needs `finance.reports`, as Month by month does; the earlier
+  years' lines and refunds are redacted as this year's months are (`redactOverview`).
+
 ## Business overview (health check)
 
 Reference implementation: the grading rules in `packages/shared/src/health.ts` (unit-tested), applied by `businessHealth` in `apps/web/src/components/dashboard/Overview.tsx`. Each area gets one of four labels, always shown as words beside a colored dot:
