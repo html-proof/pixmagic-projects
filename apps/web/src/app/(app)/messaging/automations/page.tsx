@@ -1,6 +1,6 @@
 "use client";
-import { AutomatedWorkflows } from "@/components/messaging/Automations";
+import { SmsAutomations } from "@/components/messaging/Automations";
 
-export default function AutomatedWorkflowsPage() {
-  return <AutomatedWorkflows />;
+export default function AutomationsPage() {
+  return <SmsAutomations />;
 }

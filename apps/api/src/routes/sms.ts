@@ -45,7 +45,8 @@ import { smsSetupRoutes } from "./smsSetup.js";
 /**
  * Customer Messaging: the overview, the sender, test numbers, templates and one-off sends
  * (docs/sms.md). Rules, segments and campaigns are in smsOps.ts; history, figures, billing and
- * consent in smsActivity.ts; the customers' opt-out page in smsPublic.ts.
+ * consent in smsActivity.ts; Set up SMS in smsSetup.ts; the automation builder in
+ * smsAutomations.ts; the customers' opt-out page in smsPublic.ts.
  *
  * Seeing it needs Marketing → campaigns; numbers and consent also "View contact information";
  * changing what customers receive (and approving it) is for owners and admins.

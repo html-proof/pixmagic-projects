@@ -10,7 +10,7 @@ import type { MessageEvent, SmsMessage, SmsTemplate } from "./types";
 
 const PURPOSES = [
   ["", "Everything"],
-  ["automation", "Automated workflows"],
+  ["automation", "Automations"],
   ["campaign", "Campaigns"],
   ["manual", "Sent from Send SMS"],
   ["test", "Test texts"],

@@ -1725,7 +1725,10 @@ export function checkAutomationMessage(body: string, trigger: SmsTrigger, discou
       message: `"${automationTriggerCard(trigger).label}" texts have no ${missing.map((m) => SMS_VARIABLE_INFO[m].label.toLowerCase()).join(" or ")} to fill in: take ${missing.map((m) => `{{${m}}}`).join(", ")} out.`,
     });
   }
-  if (templateVariables(body).used.includes("discount_code") && !discountCode?.trim()) out.push({ level: "error", code: "discount_code", message: "The text shows a discount code: enter the code (create it in Shopify first)." });
+  // (An order update can't show one at all: checkTemplate says so.)
+  if (TRIGGER_INFO[trigger].category === "marketing" && templateVariables(body).used.includes("discount_code") && !discountCode?.trim()) {
+    out.push({ level: "error", code: "discount_code", message: "The text shows a discount code: enter the code (create it in Shopify first)." });
+  }
   return out;
 }
 

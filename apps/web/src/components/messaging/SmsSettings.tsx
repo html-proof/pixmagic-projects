@@ -182,7 +182,7 @@ export function SmsSettings() {
             ))}
         </ul>
         <p className="text-xs text-muted">
-          More texts and conditions: <Link className="underline" href="/messaging/automations">Automated Workflows</Link> · all message templates: <Link className="underline" href="/messaging/templates">Message Templates</Link>.
+          More texts and conditions: <Link className="underline" href="/messaging/automations">Automations</Link> · all message templates: <Link className="underline" href="/messaging/templates">Message Templates</Link>.
         </p>
       </Section>
 
