@@ -193,6 +193,28 @@ Meta's `WA_EMBEDDED_SIGNUP` message is only read from `facebook.com`. The server
 
 A sign-up that fails part-way can simply be repeated: the connection is one row per store, upserted.
 
+### Through Nango (the manual connect's token)
+
+bizinsights' Nango environment ([nango.md](nango.md)) holds an integration **`whatsapp-business`**, made in Nango's
+dashboard from Nango's WhatsApp Business provider. It is an API-key integration: no client id, secret or scopes, and
+its Connect UI asks for one "API Key", the merchant's system-user access token. When Nango holds it
+(`whatsappNangoReady`, asked of Nango and kept 5 minutes), step 1 of the manual connect offers **Add your token**,
+which opens Nango's window; the token box stays as "Paste it here instead". The rest of the connect is unchanged.
+
+- `POST …/whatsapp/nango/session` (integrations.manage): a Connect UI session limited to `whatsapp-business`,
+  tagged with ids only and a single-use nonce (state in the coordinator, 30 minutes).
+- `POST …/whatsapp/nango/finish` `{ nonce, connectionId }`: the session must be this person's for this store and
+  the connection must carry its tags as Nango holds them. The token is read once (`GET /connections/{id}`,
+  `credentials.apiKey`), **the connection is deleted at Nango whatever the outcome**, the numbers are found as in
+  `/manual/discover`, and the token is held sealed (`waEncrypt`, AAD `wa:<storeId>:access`) for 30 minutes under a
+  `tokenHandle` for that person and store. The browser never holds the token.
+- `/manual/discover` and `/manual` take `tokenHandle` in place of `accessToken` (one or the other); `/manual` drops
+  the held token once the connection saved its own copy, and audits `token: "nango"`.
+- A connection left in `whatsapp-business` for over 30 minutes (the page closed before the finish) is deleted by the
+  cron's Nango sweep (`sweepWhatsappNangoLeftovers`, from `sweepNangoLeftovers`). bizinsights keeps none there, so
+  none counts toward Nango's plan, and Nango's auth webhooks for it are logged and ignored.
+- `/privacy` names Nango as a service provider.
+
 ### Health check
 
 Every 15-minute tick checks up to 20 connected numbers whose last check is over 6 hours old (`checkConnections`

@@ -4,7 +4,8 @@ import type { Tone } from "@/components/dashboard/Primitives";
 /** Shapes the WhatsApp API returns, and small helpers for showing them. */
 
 export interface Overview {
-  platform: { embeddedSignup: boolean; appId?: string; configId?: string; version?: string };
+  /** `nango`: the manual connect's token can be added in Nango's window (managers only). */
+  platform: { embeddedSignup: boolean; appId?: string; configId?: string; version?: string; nango?: boolean };
   webhookUrl: string;
   enabled: boolean;
   connection: Connection | null;

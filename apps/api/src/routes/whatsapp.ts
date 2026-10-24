@@ -27,6 +27,9 @@ import {
   connectionToken,
   numberOptedOut,
   syncTemplates,
+  dropHeldWhatsappToken,
+  heldWhatsappToken,
+  whatsappNangoReady,
 } from "@app/core";
 import {
   allows,
@@ -45,7 +48,8 @@ import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../conte
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { whatsappOpsRoutes } from "./whatsappOps.js";
-import { base, publicConnection, publicTemplate, waStore } from "./whatsappCommon.js";
+import { whatsappNangoRoutes, tokenHandleSchema } from "./whatsappNango.js";
+import { base, connectError, publicConnection, publicTemplate, waStore } from "./whatsappCommon.js";
 
 /**
  * WhatsApp for a store, for the signed-in merchant: connect the number (Meta's Embedded Signup,
@@ -70,14 +74,12 @@ function templateCheck(templates: WhatsappTemplate[], s: KindSetting): { state: 
   return { state: "ready", problem: null, category: t.category };
 }
 
-/** Meta refused a connect step: say so with Meta's reason (WhatsappConnectError answers itself, as a 400). */
-const connectError = (err: unknown): never => {
-  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-  throw err;
-};
-
 const idSchema = z.string().trim().regex(/^\d{5,25}$/, "must be the numeric id from WhatsApp Manager");
 const accessTokenSchema = z.string().trim().min(20).max(1000).regex(/^[A-Za-z0-9_-]+$/, "doesn't look like a Meta access token");
+/** A manual step's token: pasted here, or the handle of one added in Nango's window (whatsappNango.ts). */
+const tokenFields = { accessToken: accessTokenSchema.optional(), tokenHandle: tokenHandleSchema.optional() };
+const oneToken = (v: { accessToken?: string; tokenHandle?: string }) => !!v.accessToken !== !!v.tokenHandle;
+const ONE_TOKEN = { message: "Paste the access token, or add it in Nango's window" };
 
 export function whatsappRoutes(app: App, deps: Deps) {
   /** Everything the WhatsApp overview needs, in one call. */
@@ -115,8 +117,10 @@ export function whatsappRoutes(app: App, deps: Deps) {
       return { kind: k, enabled: s.enabled, templateName: s.templateName, check: templateCheck(data.templates, s) };
     });
     const platform = waPlatformConfig();
+    // Whether the manual connect's token can be added in Nango's window (whatsappNango.ts): for managers only.
+    const nango = manage && (await whatsappNangoReady(deps.coord, deps.fetchImpl));
     return c.json({
-      platform: platform ? { embeddedSignup: true, appId: platform.appId, configId: platform.configId, version: platform.version } : { embeddedSignup: false },
+      platform: platform ? { embeddedSignup: true, appId: platform.appId, configId: platform.configId, version: platform.version, nango } : { embeddedSignup: false, nango },
       webhookUrl: `${env().API_URL}/webhooks/whatsapp`,
       enabled: !!data.settings,
       connection: data.conn ? publicConnection(data.conn, manage) : null,
@@ -227,10 +231,11 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/manual/discover`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "integrations.manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const { accessToken } = z.object({ accessToken: accessTokenSchema }).parse(await body(c));
+    const input = z.object(tokenFields).refine(oneToken, ONE_TOKEN).parse(await body(c));
+    const accessToken = input.tokenHandle ? await heldWhatsappToken(deps.coord, input.tokenHandle, { userId: access.user!.id, storeId }) : input.accessToken!;
     const found = await discoverWhatsapp(accessToken, deps.fetchImpl).catch(connectError);
     return c.json(found);
   });
@@ -249,16 +254,28 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .object({
         wabaId: idSchema,
         phoneNumberId: idSchema,
-        accessToken: accessTokenSchema,
+        ...tokenFields,
         // Without it, bizinsights can't verify Meta's deliveries, so it would never hear STOP replies.
         appSecret: z.string().trim().regex(/^[a-f0-9]{32}$/i, "must be the 32-character app secret from your Meta app's Basic settings"),
       })
+      .refine(oneToken, ONE_TOKEN)
       .parse(await body(c));
-    const appId = await checkManualApp(input.accessToken, input.appSecret, deps.fetchImpl).catch(connectError);
-    let conn = await connectWhatsapp({ store, mode: "manual", ...input, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
+    const { tokenHandle, accessToken: pasted, ...ids } = input;
+    const accessToken = tokenHandle ? await heldWhatsappToken(deps.coord, tokenHandle, { userId: access.user!.id, storeId }) : pasted!;
+    const appId = await checkManualApp(accessToken, input.appSecret, deps.fetchImpl).catch(connectError);
+    let conn = await connectWhatsapp({ store, mode: "manual", ...ids, accessToken, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
+    if (tokenHandle) await dropHeldWhatsappToken(deps.coord, tokenHandle);
     const webhook = appId ? await setupManualWebhook(conn, appId, input.appSecret, deps.fetchImpl) : "failed";
     if (webhook === "verified") conn = (await systemDb.whatsappConnection.findUnique({ where: { id: conn.id } })) ?? conn;
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "manual", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, webhook }, ip: clientIp(c) });
+    await audit({
+      workspaceId: ws,
+      actorUserId: access.user!.id,
+      action: "whatsapp.connected",
+      targetType: "store",
+      targetId: storeId,
+      metadata: { mode: "manual", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, webhook, token: tokenHandle ? "nango" : "pasted" },
+      ip: clientIp(c),
+    });
     return c.json({ connection: publicConnection(conn, true), webhook });
   });
 
@@ -567,5 +584,6 @@ export function whatsappRoutes(app: App, deps: Deps) {
   });
 
   whatsappOpsRoutes(app, deps);
+  whatsappNangoRoutes(app, deps);
 }
 

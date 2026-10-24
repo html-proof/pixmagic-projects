@@ -421,6 +421,10 @@ describe("templates", () => {
     expect(p.html).toContain("Alex");
     expect(p.html).toContain("Unsubscribe");
     expect(p.text).toContain("1 Main St");
+    // A new template in the editor, before it has a name.
+    const unnamed = await api("POST", "/templates/preview", { name: "", description: null, replyTo: null, category: "transactional", eventType: "order.paid", subject: "Order {{order.id}}", html: "<p>Hi</p>", text: "" });
+    expect(unnamed.statusCode).toBe(200);
+    expect(unnamed.json().preview.subject).toBe("Order #1001");
   });
 });
 

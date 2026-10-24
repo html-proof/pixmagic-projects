@@ -162,9 +162,16 @@ those routes makes the current page preload Geist and its stylesheet, and Chrome
 were "preloaded but not used", and warns again a few seconds after every later request while they
 stay unused. So a link from any other page to one of them is `<Link prefetch={false}>`. Geist Mono is
 the landing page's alone: each font has its own CSS chunk (`cssChunking` in next.config.ts), so the
-sign-in and legal pages' links to `/` are `prefetch={false}` too. The build fails if a page preloads a
-font its markup doesn't use (scripts/check-font-preloads.mjs), and e2e/console.spec.ts fails on any
-unused preload or CSP report on the signed-in, sign-in and legal pages.
+sign-in and legal pages' links to `/` (header and footer) are `prefetch={false}` too. The build fails
+if a page preloads a font its markup doesn't use (scripts/check-font-preloads.mjs), and
+e2e/console.spec.ts fails on any unused preload, CSP report or console error on the signed-in,
+sign-in and legal pages.
+
+**A clean console.** Chrome logs every response of 400 or more as a console error, so a state the
+page expects is not an error response. Who is signed in comes from `getMe()` (lib/apiClient.ts):
+GET /auth/whoami answers a visitor with `user: null` and a 200, where /me would answer 401 on every
+app page a signed-out visitor opens. A refusal (a wrong code, a cancelled sign-in, an expired link)
+stays a 4xx.
 
 **Business logic.** Pages and components format and arrange what the API returns; rules and
 calculations belong in `@app/shared` (shared with the API) or the API itself. The dashboard's
