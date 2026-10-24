@@ -21,6 +21,7 @@ import {
   metaAccountHealth,
   metaCampaignDays,
   metaGrantedPermissions,
+  metaStatuses,
   type AdAccountHealth,
   type AdFailure,
   type MetaConfig,
@@ -106,7 +107,55 @@ export async function storeAdDays(conn: AdConnection, since: string, until: stri
     if (connectionGone(err)) return null;
     throw err;
   }
+  await storeCampaigns(conn, rows).catch((err: unknown) => {
+    if (!connectionGone(err)) logger.warn({ err, connectionId: conn.id }, "ad campaigns' statuses not stored");
+  });
   return inRange.length;
+}
+
+/** How long a sync waits for Meta's campaign list (the statuses) before going on without them. */
+const META_STATUS_BUDGET_MS = 20_000;
+
+/**
+ * Meta's insights don't carry a campaign's delivery status: read from the account's campaign list
+ * (metaStatuses: stops once every campaign is found). Best effort: without it the days are stored all
+ * the same and the statuses stay as last read.
+ */
+async function withMetaStatuses(cfg: MetaConfig, token: string, accountId: string, rows: AdDayRow[]): Promise<AdDayRow[]> {
+  const ids = [...new Set(rows.map((r) => r.campaignId))];
+  if (!ids.length) return rows;
+  try {
+    const statuses = await metaStatuses(cfg, token, accountId, "campaign", ids, { deadline: Date.now() + META_STATUS_BUDGET_MS });
+    return rows.map((r) => (statuses.has(r.campaignId) ? { ...r, campaignStatus: statuses.get(r.campaignId)! } : r));
+  } catch (err) {
+    logger.info({ err, accountId }, "meta: campaign statuses not read this sync");
+    return rows;
+  }
+}
+
+/**
+ * Keep each campaign the platform reported as it last described it (ad_campaigns): the name of its
+ * latest day, and its status when this sync read one (an unread status leaves the one stored).
+ */
+async function storeCampaigns(conn: AdConnection, rows: AdDayRow[]) {
+  const latest = new Map<string, AdDayRow>();
+  for (const r of rows) {
+    const before = latest.get(r.campaignId);
+    if (!before || r.day >= before.day) latest.set(r.campaignId, { ...r, campaignStatus: r.campaignStatus ?? before?.campaignStatus });
+  }
+  if (!latest.size) return;
+  const now = new Date();
+  await systemDb.$transaction(
+    [...latest.values()].map((r) => {
+      const name = r.campaignName.slice(0, 500);
+      const status = r.campaignStatus === undefined ? undefined : (r.campaignStatus?.slice(0, 64) ?? null);
+      return systemDb.adCampaign.upsert({
+        where: { connectionId_campaignId: { connectionId: conn.id, campaignId: r.campaignId } },
+        create: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: conn.provider, accountId: conn.accountId, campaignId: r.campaignId, name, status: status ?? null, checkedAt: now },
+        update: { name, ...(status !== undefined ? { status, checkedAt: now } : {}) },
+      });
+    }),
+  );
 }
 
 /**
@@ -274,7 +323,7 @@ async function fetchAndStore(conn: AdConnection, token: string, since: string, u
     } catch (err) {
       throw await metaPermissionProblem(cfg, token, err);
     }
-    return storeAdDays(conn, since, until, rows);
+    return storeAdDays(conn, since, until, await withMetaStatuses(cfg, token, conn.accountId, rows));
   }
   if (conn.provider === "google") {
     // A demo connection reads bizinsights' generator; a real one Google, through the OAuth client (ads/googleAdsSource.ts).

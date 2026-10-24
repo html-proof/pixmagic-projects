@@ -157,7 +157,8 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
     case "ads_campaigns": {
       const a = isObj(modules.ads) ? modules.ads : {};
       const campaigns = list(a.campaigns);
-      const header = ["Platform", "Account", "Campaign", ...AD_COLUMNS.slice(2).map(([label]) => label), "Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"];
+      // The status is the platform's own word (ENABLED, PAUSED, ACTIVE, ARCHIVED...), as of the account's last sync; empty: not read yet.
+      const header = ["Platform", "Account", "Campaign", "Status", ...AD_COLUMNS.slice(2).map(([label]) => label), "Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"];
       const rows = campaigns.map((c): Cell[] => {
         const change = isObj(c.change) ? c.change : null;
         const before = change && isObj(change.previous) ? change.previous : {};
@@ -166,6 +167,7 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
           platformName(c.provider, c.accountId === DEMO_ACCOUNT_ID),
           val(c, "accountId"),
           val(c, "name"),
+          val(c, "status"),
           ...AD_COLUMNS.slice(2).map(([, k]) => val(c, k)),
           change ? val(before, "spend") : null,
           change ? pct(deltas.spend) : null,

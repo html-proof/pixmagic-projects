@@ -58,6 +58,11 @@ test("the Advertising area sets the store's sales against the spend, compares it
       [ws, storeId, conn, day(n), n >= -7 ? 10 : 5],
     );
   }
+  // As the last sync read it at Meta: running.
+  await db.query(
+    `INSERT INTO ad_campaigns (workspace_id, store_id, connection_id, provider, account_id, campaign_id, name, status, checked_at) VALUES ($1, $2, $3, 'meta', 'act_1', '1', 'Spring', 'ACTIVE', now())`,
+    [ws, storeId, conn],
+  );
   // The dates picked (the last seven whole days): an order from a Facebook ad and a direct one. The seven before: one direct order.
   await seedOrder(ws, storeId, "F1", day(-5), 100, { source: "facebook", medium: "paid" });
   await seedOrder(ws, storeId, "D1", day(-3), 60, { source: "direct", medium: "direct" });
@@ -112,6 +117,17 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(row).toContainText("$70.00");
   await expect(row).toContainText("Shop ads");
   await expect(row).toContainText("▲ 100%");
+  await expect(row).toContainText("Active");
+  // Filtered by status and by name: none paused; found by part of its name; back to every campaign.
+  await page.getByRole("combobox", { name: "Campaign status" }).selectOption("paused");
+  await expect(page.getByTestId("campaign-row")).toHaveCount(0);
+  await expect(page.getByTestId("campaign-filter-empty")).toBeVisible();
+  await page.getByRole("button", { name: "Show every campaign" }).click();
+  await page.getByTestId("campaign-search").fill("spr");
+  await expect(page.getByTestId("campaign-row")).toHaveCount(1);
+  await page.getByTestId("campaign-search").fill("summer");
+  await expect(page.getByTestId("campaign-row")).toHaveCount(0);
+  await page.getByTestId("campaign-search").fill("");
 
   // Reports: the campaigns table as it downloads, and the download for the same question.
   await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Reports" }).click();

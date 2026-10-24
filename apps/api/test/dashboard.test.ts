@@ -712,6 +712,25 @@ describe("ad figures only for the days the accounts have stored", () => {
     expect(dash.ads.campaigns[0]).not.toHaveProperty("change");
   });
 
+  it("gives each campaign its status as the last sync read it, for the campaign filters; one not read yet has none", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const google = await adAccount(store, "google", "123");
+    await spendDays(store, meta, d(-6), today, 10);
+    await spendDays(store, google, d(-6), today, 5);
+    await systemDb.adCampaign.create({ data: { workspaceId: ws, storeId: store.id, connectionId: meta.id, provider: "meta", accountId: "act_1", campaignId: "1", name: "Spring", status: "CAMPAIGN_PAUSED", checkedAt: new Date() } });
+    const campaigns = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Array<{ provider: string; status: string | null; statusGroup: string | null }>;
+    const by = Object.fromEntries(campaigns.map((c) => [c.provider, [c.status, c.statusGroup]]));
+    expect(by).toEqual({ meta: ["CAMPAIGN_PAUSED", "paused"], google: [null, null] });
+    // Another workspace's campaign of the same id never lends its status.
+    const otherWs = (await systemDb.workspace.create({ data: { name: "B" } })).id;
+    const otherStore = await createStore(otherWs, "b.myshopify.com", ALL_SCOPES, { timezone: TZ });
+    const theirs = await adAccount(otherStore, "google", "123");
+    await systemDb.adCampaign.create({ data: { workspaceId: otherWs, storeId: otherStore.id, connectionId: theirs.id, provider: "google", accountId: "123", campaignId: "1", name: "Spring", status: "ENABLED", checkedAt: new Date() } });
+    const again = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Array<{ provider: string; status: string | null }>;
+    expect(again.find((c) => c.provider === "google")!.status).toBeNull();
+  });
+
   it("never shows 0 for an account whose access ended or that was never read, and keeps a healthy platform's figures", async () => {
     const { a, ws, store } = await owner();
     const meta = await adAccount(store, "meta", "act_1");

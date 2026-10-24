@@ -112,15 +112,17 @@ describe("the Advertising area's reports", () => {
     const t = exportTable("ads_campaigns", {
       ads: {
         campaigns: [
-          { provider: "meta", accountId: "act_1", campaignId: "1", name: "Spring", ...totals, complete: true, change: { from: "2026-10-06", to: "2026-10-11", previous: { spend: 20, roas: 3 }, deltas: { spend: 1, roas: 0.5 } } },
+          { provider: "meta", accountId: "act_1", campaignId: "1", name: "Spring", status: "ACTIVE", statusGroup: "active", ...totals, complete: true, change: { from: "2026-10-06", to: "2026-10-11", previous: { spend: 20, roas: 3 }, deltas: { spend: 1, roas: 0.5 } } },
           { provider: "google", accountId: "111", campaignId: "7", name: "Brand", ...totals, complete: false, change: null },
         ],
       },
     });
-    expect(t.header.slice(0, 3)).toEqual(["Platform", "Account", "Campaign"]);
+    expect(t.header.slice(0, 4)).toEqual(["Platform", "Account", "Campaign", "Status"]);
     expect(t.header.slice(-5)).toEqual(["Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"]);
-    expect(t.rows[0]).toEqual(["Meta Ads", "act_1", "Spring", 40, 4000, 100, 80, 5, 200, 4, 180, 4.5, 20, 100, 3, 50, "yes"]);
+    expect(t.rows[0]).toEqual(["Meta Ads", "act_1", "Spring", "ACTIVE", 40, 4000, 100, 80, 5, 200, 4, 180, 4.5, 20, 100, 3, 50, "yes"]);
     expect(t.rows[1]!.slice(-5)).toEqual([null, null, null, null, "no"]);
+    // A status not read yet is an empty cell.
+    expect(t.rows[1]![3]).toBeNull();
   });
 
   it("AdSense by day: earnings per day, a day without figures said so", () => {
