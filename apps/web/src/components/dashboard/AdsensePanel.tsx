@@ -113,7 +113,7 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
   const qs = chosen ? new URLSearchParams({ connection: chosen.id, level, from: ov.range.from, to: ov.range.to }) : null;
   const report = useApi<AdsenseReportAnswer>(qs ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/adsense/report?${qs}` : null);
   if (!chosen) return null;
-  const r = report.data;
+  const r = report.data?.report;
   const money = (n: number | null) => (n === null ? "—" : fmtMoney(n, r?.currency ?? chosen.currency ?? currency));
   const notThere = report.error instanceof ApiError && report.error.status === 404;
   const one = REPORT_LEVELS.find((l) => l.id === (r?.level ?? level))?.one ?? "Split";

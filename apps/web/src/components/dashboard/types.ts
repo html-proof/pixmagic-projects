@@ -282,6 +282,14 @@ export interface AdsenseModule extends AdFigures<AdsenseTotals> {
 
 /** GET .../ads/adsense/report: one AdSense account split by country or device type, asked of AdSense for exactly these dates. */
 export interface AdsenseReportAnswer {
+  account: { id: string; accountId: string; name: string | null };
+  today: string;
+  cached: boolean;
+  report: AdsenseReport;
+}
+
+/** The report itself (AdsenseLiveReport in @app/core). */
+export interface AdsenseReport {
   level: AdsenseReportLevel;
   since: string;
   until: string;
