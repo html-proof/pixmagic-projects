@@ -201,7 +201,8 @@ export async function connectCloudApi(deps: Pick<WaDeps, "fetchImpl" | "coord">,
     await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.connected", targetType: "store", targetId: input.store.id, metadata: { provider: "cloud_api", wabaId: d.wabaId }, ip: input.ip });
     return updated;
   } catch (e) {
-    await systemDb.wappConnection.update({ where: { id: conn.id }, data: { status: "failed", statusReason: "create_failed", instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null } });
+    // The number is let go: another attempt, or another store, may connect it.
+    await systemDb.wappConnection.update({ where: { id: conn.id }, data: { status: "failed", statusReason: "create_failed", instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null, phoneNumberId: null } });
     throw providerProblem(e);
   }
 }
@@ -304,7 +305,9 @@ export async function applyMetaWebhook(deps: Pick<WaDeps, "queues">, raw: unknow
         skipped++;
         continue;
       }
-      if (conn.status !== "connected") await systemDb.wappConnection.update({ where: { id: conn.id }, data: { status: "connected", statusReason: null, downSince: null } });
+      // Meta reaching bizinsights about the number brings a connection back, but only one that still has
+      // its instance to send through (a failed setup has none, and stays failed).
+      if (conn.status !== "connected" && conn.instanceName) await systemDb.wappConnection.update({ where: { id: conn.id }, data: { status: "connected", statusReason: null, downSince: null } });
       await systemDb.wappConnection.update({ where: { id: conn.id }, data: { lastEventAt: new Date() } });
       for (const s of Array.isArray(v.statuses) ? v.statuses : []) {
         const st = statusSchema.safeParse(s);

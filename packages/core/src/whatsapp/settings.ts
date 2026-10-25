@@ -8,6 +8,7 @@ import { systemDb, type Store, type WappSettings } from "@app/db";
 import { isTimeZone, maskPhone, normalizePhone, renderWaText, waSampleValues, waSettingsSchema, WA_DAILY_LIMIT, type WaProvider } from "@app/shared";
 import { audit } from "../notify.js";
 import { businessNameOf, liveConnection, settingsOf, waDecrypt, waEncrypt, waPhoneHash, WhatsappError, type WaDeps } from "./common.js";
+import { onDoNotMessageList } from "./contacts.js";
 import { queueMessage } from "./messages.js";
 import { templateUsable } from "./templates.js";
 
@@ -65,9 +66,12 @@ export async function startTestVerification(deps: Pick<WaDeps, "queues" | "coord
   if (!conn || conn.status !== "connected") throw new WhatsappError("Connect WhatsApp first: the code is sent from your connected number.", 409, "not_connected");
   const phone = normalizePhone(input.phone, input.country ?? null);
   if (!phone) throw new WhatsappError("Enter your number with its country code, for example +61 412 345 678.", 400, "invalid_phone");
+  const phoneHash = waPhoneHash(input.store.id, phone.waId);
+  if (await onDoNotMessageList(input.store.id, phoneHash, "transactional")) {
+    throw new WhatsappError("That number asked not to get WhatsApp messages from this store (it replied STOP). Use another number, or reply START from it first.", 409, "suppressed");
+  }
   if ((await deps.coord.hit(`wapp:verify:${input.store.id}`, 3600)) > CODES_PER_HOUR) throw new WhatsappError("Too many codes sent in the last hour. Try again later.", 429, "rate_limited");
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-  const phoneHash = waPhoneHash(input.store.id, phone.waId);
   const expiresAt = new Date(Date.now() + CODE_TTL_MS);
   const fields = {
     testPhoneHash: phoneHash,
@@ -89,6 +93,8 @@ export async function startTestVerification(deps: Pick<WaDeps, "queues" | "coord
     category: "transactional",
     phone,
     payload: { text: `Your bizinsights code for ${name}'s WhatsApp is ${code}. It expires in 10 minutes. If you didn't ask for it, ignore this message.` },
+    // The code isn't kept in the history, where anyone who may read messages would see it.
+    preview: `A bizinsights verification code for ${name}'s test number (the code isn't kept here).`,
     idempotencyKey: `verify:${phoneHash.slice(0, 16)}:${Date.now()}`,
     createdByUserId: input.userId,
   });

@@ -353,8 +353,14 @@ export async function runAutomations(deps: Pick<WaDeps, "queues">, s: Automation
       }
       to = test;
     }
-    const run = await recordRun(a, { store: s.store, key, label: s.label }, "queued", a.testMode ? "test_mode" : null, { contactId: contact.id, testMode: a.testMode });
-    if (!run) continue; // this automation already ran for this subject
+    let run = await recordRun(a, { store: s.store, key, label: s.label }, "queued", a.testMode ? "test_mode" : null, { contactId: contact.id, testMode: a.testMode });
+    if (!run) {
+      // This automation already ran for this subject. A run whose message was never linked (an earlier
+      // try failed between the two) is finished now: its message has one idempotency key, so one message.
+      const earlier = await systemDb.wappAutomationRun.findUnique({ where: { automationId_subjectKey: { automationId: a.id, subjectKey: key } } });
+      if (!earlier || earlier.outcome !== "queued" || earlier.messageId) continue;
+      run = earlier;
+    }
     const due = new Date(s.occurredAt.getTime() + a.delayMinutes * 60_000);
     const { message } = await queueMessage(deps, {
       store: s.store,

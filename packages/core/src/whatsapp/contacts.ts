@@ -67,6 +67,18 @@ export async function suppressionsOf(storeId: string, phoneHash: string): Promis
   return new Set(rows.map((r) => r.scope as WaSuppressionScope));
 }
 
+/**
+ * Whether a number asked not to get this store's messages: it is on the do-not-message list (for
+ * everything, or for marketing when the message is marketing), or its contact opted out. Checked for
+ * every message, the store's own numbers' (tests, codes, team alerts) included.
+ */
+export async function onDoNotMessageList(storeId: string, phoneHash: string, category: "transactional" | "marketing"): Promise<boolean> {
+  const scopes = await suppressionsOf(storeId, phoneHash);
+  if (scopes.has("all") || (category === "marketing" && scopes.has("marketing"))) return true;
+  const c = await systemDb.wappContact.findUnique({ where: { storeId_phoneHash: { storeId, phoneHash } }, select: { optedOut: true } });
+  return !!c?.optedOut;
+}
+
 /** What consent says about a contact, for a message of `category`. */
 export async function consentFacts(c: WappContact, category: "transactional" | "marketing"): Promise<WaConsentFacts> {
   const scopes = await suppressionsOf(c.storeId, c.phoneHash);

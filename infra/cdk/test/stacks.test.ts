@@ -1219,6 +1219,8 @@ describe("the WhatsApp stack (Evolution API)", () => {
     // The database's address is put together inside the container, from the secret.
     expect(c.Command[0]).toContain("DATABASE_CONNECTION_URI=");
     expect(c.Command[0]).toContain("unset EVO_DB_PASSWORD");
+    // Only Evolution's own log lines reach CloudWatch: its stray console.log calls print customers' messages.
+    expect(c.Command[0]).toContain("exec node --require /tmp/quiet-console.cjs dist/main");
   });
 
   it("lets only the functions in (8080), and itself into the database (5432)", () => {

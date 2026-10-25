@@ -42,7 +42,7 @@ Hub image:
 | Message statuses | `PENDING` (accepted), `SERVER_ACK` (sent), `DELIVERY_ACK`, `READ`, `PLAYED`, `ERROR`. |
 | State | Sessions in PostgreSQL (`DATABASE_SAVE_DATA_INSTANCE`); instances belong to a `DATABASE_CONNECTION_CLIENT_NAME`, which allows shards. |
 | Checked running | 2.3.7 built from its source with the ECS task's settings on PostgreSQL 18, driven by bizinsights' own client (`evolution.ts`): create, webhook, a real QR code from WhatsApp on the first `connect` (and the same code again while pairing, not a restart), `connectionState`, a wrong token refused (401), logout, delete; its `CONNECTION_UPDATE` and `QRCODE_UPDATED` webhooks verified with `verifyEvolutionJwt` (and refused with another key). It showed three things the source reading hadn't: **`CORS_ORIGIN` must be `*`** (any other value answers 500 to a call without an `Origin` header, which is every server's call and the health check); delete answers before the instance is gone (it goes a moment later); a send to an instance still pairing waits for the client's timeout instead of failing (bizinsights only sends once the provider said "open"). `fetchInstances` returns instance tokens to the global key (server side only; webhooks carry none). |
-| Quirks handled | The image's time zone is São Paulo and `date_time` carries a "Z": the task sets `TZ=UTC`. Its start script prints `DATABASE_URL`: only `DATABASE_CONNECTION_URI` is set. At LOG level it prints QR codes and at INFO numbers: `LOG_LEVEL=ERROR,WARN`. Its SQS mode needs static AWS keys and drops failures: webhooks are used instead. Its Cloud integration answers Meta's errors with a 2xx and stores every sent message: the client treats such an answer as a refusal, and the nightly cron prunes Evolution's own message rows after 7 days. |
+| Quirks handled | The image's time zone is São Paulo and `date_time` carries a "Z": the task sets `TZ=UTC`. Its start script prints `DATABASE_URL`: only `DATABASE_CONNECTION_URI` is set. At LOG level it prints QR codes and at INFO numbers: `LOG_LEVEL=ERROR,WARN`. Its SQS mode needs static AWS keys and drops failures: webhooks are used instead. Its Cloud integration answers Meta's errors with a 2xx and stores every sent message: the client treats such an answer as a refusal, and the nightly cron prunes Evolution's own message rows after 7 days. Its code `console.log`s every message received (number and text) whatever `LOG_LEVEL` says: the task loads a filter (`/tmp/quiet-console.cjs`) that lets only its logger's own lines through, so customers' messages never reach CloudWatch. |
 
 ## Architecture
 
@@ -137,8 +137,10 @@ One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; af
      off, whether Shopify's text-message consent covers WhatsApp, sending hours and time zone, daily
      limit, per-customer daily limit, how long message texts are kept.
   4. **Test and activate**: the merchant's own number, verified with a 6-digit code sent over the
-     connected WhatsApp; then a test message, whose real status the page follows. The step is done
-     only when WhatsApp reports it **sent** (not when Evolution accepted it). Then a completion screen.
+     connected WhatsApp (the code isn't kept in bizinsights' history; on a linked phone it is also in
+     that phone's own chat, so there the check is that the number is right and on WhatsApp); then a
+     test message, whose real status the page follows. The step is done only when WhatsApp reports
+     it **sent** (not when Evolution accepted it). Then a completion screen.
 - **Overview**: connection health as last reported (Check again), the automation state, sent today
   against the limit, what waits and why, 7- and 30-day counts from each message's own record, the
   latest messages.
@@ -264,7 +266,10 @@ may have replied STOP in between):
   marketing template must say how to stop.
 
 STOP (and "unsubscribe", "opt out"…) from **anyone** puts the number on the store's do-not-message
-list by its keyed hash, and one confirmation is sent; START undoes it. The linked phone may be
+list by its keyed hash, and one confirmation is sent; START undoes it. The list is checked for
+**every** message, the store's own numbers' too (tests, codes, stock alerts, automations in test
+mode). A STOP is applied even when the first try to record it failed halfway (the retry finds the
+message recorded and still opts the customer out). The linked phone may be
 someone's personal WhatsApp, so other messages are recorded only from numbers that are already the
 store's contacts, and dropped unread otherwise. Group chats, statuses and broadcasts are ignored.
 
@@ -281,8 +286,10 @@ seconds apart; the Cloud API: 20 a second). Then one call to Evolution.
   from WhatsApp's reports (`MESSAGES_UPDATE`, or Meta's statuses), recorded once each, and a message
   never moves backwards.
 - **A number not on WhatsApp** is skipped and remembered for 30 days.
-- **Unreachable / 5xx**: retried after 30 s, 2 min, 10 min, 30 min, then failed with the reason.
-- **A send that timed out may have gone**: it is marked failed ("uncertain") and **never retried
+- **The service couldn't be reached at all** (the connection was refused, the name didn't resolve):
+  nothing was sent, so it is retried after 30 s, 2 min, 10 min, 30 min, then failed with the reason.
+- **A send that may have gone** (it timed out, the connection dropped after the request went out,
+  or the service answered 5xx): it is marked failed ("uncertain") and **never retried
   automatically**; the merchant decides (Retry). A send that never finished (the worker died) is
   marked the same way by the sweep.
 - Limits: daily per store (linked phone default 200, at most 1,000; Cloud API 1,000 / 100,000),

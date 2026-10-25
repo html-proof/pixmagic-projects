@@ -156,9 +156,13 @@ interface CallOptions {
   query?: Record<string, string>;
   /** Retry network errors and 5xx (reads only). */
   retry?: boolean;
-  /** A send: a timeout means it may have gone out. */
+  /** A send: anything but a connection that certainly never opened means it may have gone out. */
   send?: boolean;
 }
+
+/** Network errors after which the request certainly never reached the server (a send may be tried again). */
+const NEVER_CONNECTED = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
+const neverConnected = (err: unknown) => NEVER_CONNECTED.has(String((err as { cause?: { code?: unknown } } | null)?.cause?.code ?? ""));
 
 /**
  * The client for one shard's server. `fetchImpl` is the app's (with its own timeout on AWS), and
@@ -186,9 +190,13 @@ export function evolutionClient(shard: string, fetchImpl: FetchLike) {
       } catch (err) {
         clearTimeout(timer);
         const aborted = ac.signal.aborted || (err as Error)?.name === "AbortError" || (err as Error)?.name === "TimeoutError";
-        last = aborted ? new EvolutionError("timeout", 0, "Evolution API didn't answer in time", !!o.send) : new EvolutionError("unreachable", 0, "Evolution API couldn't be reached");
+        // A send whose connection dropped after the request went out (a reset, the task restarting) may
+        // have reached WhatsApp: uncertain, never sent again by itself.
+        last = aborted
+          ? new EvolutionError("timeout", 0, "Evolution API didn't answer in time", !!o.send)
+          : new EvolutionError("unreachable", 0, "Evolution API couldn't be reached", !!o.send && !neverConnected(err));
         logger.warn({ shard, path: o.path.replace(/\/[^/]+$/, "/:instance"), attempt, kind: last.kind }, "evolution call failed");
-        if (aborted && o.send) throw last;
+        if (last.uncertain) throw last;
         if (attempt < attempts) await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
         continue;
       }
@@ -203,7 +211,8 @@ export function evolutionClient(shard: string, fetchImpl: FetchLike) {
       if (res.ok) return body;
       const detail = messageOf(body) || `HTTP ${res.status}`;
       const kind: EvolutionErrorKind = res.status === 401 || res.status === 403 ? "unauthorized" : res.status === 404 ? "not_found" : res.status >= 500 ? "server" : "bad_request";
-      last = new EvolutionError(kind, res.status, detail, false, res.status === 400 && notOnWhatsapp(body));
+      // A send the server failed on (5xx) may have gone out before it failed: uncertain too.
+      last = new EvolutionError(kind, res.status, detail, !!o.send && kind === "server", res.status === 400 && notOnWhatsapp(body));
       if (kind !== "server" || attempt >= attempts) throw last;
       await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
     }

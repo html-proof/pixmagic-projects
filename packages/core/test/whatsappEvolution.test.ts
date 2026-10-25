@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac } from "node:crypto";
 import { eventName, evolutionClient, EvolutionError, evolutionStatus, isNotConnected, jidNumber, resetEnvCache, verifyEvolutionJwt } from "../src/index.js";
 import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, evolutionJwt, QR_PNG } from "../../../test-support/evolutionFake.js";
 
@@ -33,6 +34,11 @@ describe("the webhook's JWT", () => {
     expect(verifyEvolutionJwt(evolutionJwt(key, { iat: now + 600, exp: now + 1200 }), key)).toBe(false);
     expect(verifyEvolutionJwt(evolutionJwt(key, { iat: now, exp: now + 86_400 }), key)).toBe(false);
     for (const bad of ["", "a.b", "a.b.c", `${evolutionJwt(key)}x`]) expect(verifyEvolutionJwt(bad, key), bad).toBe(false);
+    // JSON that isn't an object (null, a number) is refused, not a crash.
+    for (const part of ["null", "1"]) {
+      const b = Buffer.from(part).toString("base64url");
+      expect(verifyEvolutionJwt(`${b}.${b}.${createHmac("sha256", key).update(`${b}.${b}`).digest("base64url")}`, key)).toBe(false);
+    }
     // A signature for one body can't be reused with another payload.
     const [h, , s] = evolutionJwt(key).split(".");
     const forged = Buffer.from(JSON.stringify({ iat: now, exp: now + 600, app: "evolution", action: "webhook", extra: 1 })).toString("base64url");
@@ -96,6 +102,16 @@ describe("the Evolution API client", () => {
     const before = f.calls.length;
     await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toMatchObject({ kind: "timeout", uncertain: true });
     expect(f.calls.length - before).toBe(1);
+    // A connection dropped mid-send, or the server failing on it, may have sent it too.
+    for (const fail of ["reset", 500] as const) {
+      f.sendFails = fail;
+      const m = f.calls.length;
+      await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toMatchObject({ uncertain: true });
+      expect(f.calls.length - m, String(fail)).toBe(1);
+    }
+    // A connection that never opened sent nothing: the sender may try again.
+    f.sendFails = "refused";
+    await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toMatchObject({ kind: "unreachable", uncertain: false });
     f.sendFails = null;
     f.down = "unreachable";
     const n = f.calls.length;

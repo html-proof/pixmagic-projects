@@ -77,7 +77,10 @@ export async function applyInbound(deps: Pick<WaDeps, "queues">, conn: WappConne
   }
 
   const settings = await settingsOf(store);
-  // Each message once: Evolution's retries and a replayed event find it recorded.
+  // Each message once: Evolution's retries and a replayed event find it recorded. A STOP or START is
+  // applied again all the same while the contact doesn't show it yet: a try that failed after the
+  // message was recorded must not lose the customer's opt-out.
+  let duplicate = false;
   try {
     await systemDb.wappMessage.create({
       data: {
@@ -100,10 +103,11 @@ export async function applyInbound(deps: Pick<WaDeps, "queues">, conn: WappConne
       },
     });
   } catch (e) {
-    if ((e as { code?: string }).code === "P2002") return "duplicate";
-    throw e;
+    if ((e as { code?: string }).code !== "P2002") throw e;
+    duplicate = true;
   }
-  await systemDb.wappContact.update({ where: { id: contact.id }, data: { lastInboundAt: msg.at } });
+  if (duplicate && !(stop && !contact.optedOut) && !(start && contact.optedOut)) return "duplicate";
+  if (!contact.lastInboundAt || contact.lastInboundAt < msg.at) await systemDb.wappContact.update({ where: { id: contact.id }, data: { lastInboundAt: msg.at } });
 
   const name = businessNameOf(store, settings);
   if (stop) {

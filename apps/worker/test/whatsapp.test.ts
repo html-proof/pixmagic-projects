@@ -95,17 +95,18 @@ describe("the whatsapp queue", () => {
     const o = await connectedStore();
     const m = await waiting(o);
     queues.clear();
-    evo.sendFails = 500;
+    // Refused: the request never reached the service, so it is safe to try again.
+    evo.sendFails = "refused";
     // The job itself succeeds: the row carries the retry, so the queue never sends the same job twice.
     expect(await deliver({ kind: "wapp_send", messageId: m.id })).toEqual({ acked: true, retried: null });
     const r = await systemDb.wappMessage.findUniqueOrThrow({ where: { id: m.id } });
-    expect(r).toMatchObject({ status: "queued", attempts: 1, errorCode: "server" });
+    expect(r).toMatchObject({ status: "queued", attempts: 1, errorCode: "unreachable" });
     expect(queues.sentOpts.whatsapp.at(-1)).toEqual({ delaySeconds: 30 });
     // Its last try (the linked phone's pace between messages waived): failed, with what happened.
     await systemDb.wappMessage.update({ where: { id: m.id }, data: { attempts: 5, sendAfter: new Date() } });
     await coord.release(`wapp:pace:${o.conn.id}`);
     await deliver({ kind: "wapp_send", messageId: m.id });
-    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: m.id } })).toMatchObject({ status: "failed", reason: "gave_up", errorCode: "server" });
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: m.id } })).toMatchObject({ status: "failed", reason: "gave_up", errorCode: "unreachable" });
     expect(evo.sends).toHaveLength(0);
   });
 

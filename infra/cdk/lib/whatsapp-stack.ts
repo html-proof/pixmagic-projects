@@ -67,7 +67,14 @@ const START = [
   'export DATABASE_CONNECTION_URI="postgresql://${EVO_DB_USER}:${EVO_DB_PASSWORD}@${EVO_DB_HOST}:${EVO_DB_PORT}/evolution?schema=public&connection_limit=5&${TLS}"',
   "unset EVO_DB_PASSWORD",
   ". ./Docker/scripts/deploy_database.sh",
-  "exec node dist/main",
+  // Evolution's own logger (LOG_COLOR=false) starts every line with "[Evolution API]"; its stray
+  // console.log calls print every message received, numbers and text, whatever LOG_LEVEL says
+  // (whatsapp.baileys.service.ts in 2.3.7). Only the logger's lines reach CloudWatch; errors
+  // (console.error) are left alone.
+  "cat > /tmp/quiet-console.cjs <<'JS'",
+  'const log = console.log; console.log = (...a) => { if (a[0] === "[Evolution API]") log(...a); };',
+  "JS",
+  "exec node --require /tmp/quiet-console.cjs dist/main",
 ].join("\n");
 
 /** The container's health: its HTTP server answers (a missing asset is a quick 404, nothing outside is asked). */

@@ -301,6 +301,10 @@ describe("the test number and the test message (Step 4)", () => {
     expect(codeMsg).toMatchObject({ instance: name, path: "sendText", body: { number: "61400111222" } });
     const code = /is (\d{6})\./.exec(String(codeMsg.body.text))![1]!;
     expect(ok(await o.call("POST", "/test-number/verify", { code: code === "000000" ? "111111" : "000000" }), 400).error).toBe("wrong_code");
+    // The code is on the phone it went to, not in bizinsights' history.
+    const [codeRow] = ok(await o.call("GET", "/messages?source=verification")).messages;
+    expect(codeRow.preview).toMatch(/code isn't kept here/);
+    expect(JSON.stringify(ok(await o.call("GET")))).not.toContain(code);
     ok(await o.call("POST", "/test-number/verify", { code }));
 
     const { messageId } = ok(await o.call("POST", "/test-message", {}), 201);
@@ -389,17 +393,25 @@ describe("sending from the dashboard", () => {
     expect(await drain()).toEqual(["accepted"]);
   });
 
-  it("retries when the service is unreachable, without sending twice", async () => {
+  it("retries a send that never reached the service, and never one that may have gone", async () => {
     const o = await owner();
     await connect(o);
     await configure(o);
     ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: "retry-0000001", customerAsked: true }), 201);
-    evo.sendFails = 500;
+    evo.sendFails = "refused";
     expect(await drain()).toEqual(["retry"]);
     const m = await systemDb.wappMessage.findFirstOrThrow({ where: { storeId: o.store.id } });
-    expect(m).toMatchObject({ status: "queued", attempts: 1, errorCode: "server" });
+    expect(m).toMatchObject({ status: "queued", attempts: 1, errorCode: "unreachable" });
     expect(m.sendAfter.getTime()).toBeGreaterThan(Date.now() + 20_000);
     expect(evo.sends).toHaveLength(0);
+    // The connection dropped after the request went out, or the service failed on it: it may be on the
+    // customer's phone, so it is never sent again by itself.
+    for (const [fail, key] of [["reset", "retry-0000002"], [500, "retry-0000003"]] as const) {
+      evo.sendFails = fail;
+      const sent = ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: key }), 201).message;
+      expect(await drain()).toEqual(["failed"]);
+      expect(ok(await o.call("GET", `/messages/${sent.id}`)).message).toMatchObject({ status: "failed", errorCode: "uncertain" });
+    }
   });
 });
 
@@ -455,6 +467,37 @@ const ORDER = (id: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+describe("the do-not-message list", () => {
+  it("stops tests and codes to a number that replied STOP, and a STOP survives a try that failed halfway", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    await configure(o);
+    await finishSetup(o);
+    // The test number replies STOP (it isn't a customer): nothing more goes to it, not even a test.
+    await deliver(inbound(name, TEST_PHONE, "STOP"));
+    expect(await drain()).toEqual(["stop_unknown"]);
+    const { messageId } = ok(await o.call("POST", "/test-message", {}), 201);
+    expect(await drain()).toEqual(["skipped"]);
+    expect(ok(await o.call("GET", `/messages/${messageId}`)).message).toMatchObject({ status: "skipped", reason: "suppressed" });
+    expect(ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }), 409).error).toBe("suppressed");
+
+    // A customer's STOP whose first try recorded the message and then failed: the retry still opts them out.
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Shipped.", idempotencyKey: "dnm-00000001", customerAsked: true }), 201);
+    await drain();
+    const contact = await systemDb.wappContact.findFirstOrThrow({ where: { storeId: o.store.id } });
+    const conn = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+    await systemDb.wappMessage.create({
+      data: { workspaceId: o.ws, storeId: o.store.id, connectionId: conn.id, direction: "in", contactId: contact.id, phoneHash: contact.phoneHash, phoneMasked: contact.phoneMasked, source: "inbound", type: "conversation", status: "received", providerMessageId: "INSTOP0001", acceptedAt: new Date(), finalAt: new Date(), sendAfter: new Date() },
+    });
+    await deliver(inbound(name, CUSTOMER, "STOP", { id: "INSTOP0001" }));
+    expect(await drain()).toEqual(["stop", "accepted"]);
+    expect(await systemDb.wappContact.findUniqueOrThrow({ where: { id: contact.id } })).toMatchObject({ optedOut: true });
+    // Delivered once more, it changes nothing.
+    await deliver(inbound(name, CUSTOMER, "STOP", { id: "INSTOP0001" }));
+    expect(await drain()).toEqual(["duplicate"]);
+  });
+});
+
 describe("automations from Shopify's events", () => {
   async function ready() {
     const o = await owner();
@@ -493,6 +536,18 @@ describe("automations from Shopify's events", () => {
     expect(await drain()).toEqual([]);
     const reasons = (await systemDb.wappAutomationRun.findMany({ where: { automationId: automation.id }, orderBy: { createdAt: "asc" } })).map((r) => `${r.subjectKey}:${r.reason ?? r.outcome}`);
     expect(reasons).toEqual(["order:1001:test_mode", "order:1002:queued", "order:1003:stale_event", "order:1005:automation_paused"]);
+  });
+
+  it("finishes a run whose message an earlier try never linked, with one message", async () => {
+    const { store, automation } = await ready();
+    await systemDb.wappAutomationRun.create({
+      data: { workspaceId: store.workspaceId, storeId: store.id, automationId: automation.id, automationVersion: 1, trigger: "order_created", subjectKey: "order:2001", subjectLabel: "Order #2001", outcome: "queued", testMode: true },
+    });
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(2001), ctx.deps);
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(2001), ctx.deps);
+    const run = await systemDb.wappAutomationRun.findUniqueOrThrow({ where: { automationId_subjectKey: { automationId: automation.id, subjectKey: "order:2001" } } });
+    expect(run.messageId).not.toBeNull();
+    expect(await systemDb.wappMessage.count({ where: { storeId: store.id, idempotencyKey: `auto:${automation.id}:order:2001` } })).toBe(1);
   });
 
   it("can't be switched on before the setup is done, and says why", async () => {

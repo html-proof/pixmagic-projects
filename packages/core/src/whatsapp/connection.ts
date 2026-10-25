@@ -363,7 +363,8 @@ async function endConnection(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnecti
   await dropInstance(conn, deps);
   const updated = await systemDb.wappConnection.update({
     where: { id: conn.id },
-    data: { status: "disconnected", statusReason: reason, instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null, disconnectedAt: new Date(), downSince: null },
+    // A Cloud API number is let go too: it may be connected again here or to another store.
+    data: { status: "disconnected", statusReason: reason, instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null, phoneNumberId: null, disconnectedAt: new Date(), downSince: null },
   });
   const cancelled = await systemDb.wappMessage.updateMany({ where: { storeId: conn.storeId, direction: "out", status: { in: ["queued", "sending"] } }, data: { status: "cancelled", reason: "not_connected", finalAt: new Date(), payloadEnc: null } });
   await systemDb.wappAutomation.updateMany({ where: { storeId: conn.storeId, status: "active" }, data: { status: "paused" } });

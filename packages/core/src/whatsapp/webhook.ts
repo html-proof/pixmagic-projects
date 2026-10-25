@@ -50,6 +50,7 @@ export function verifyEvolutionJwt(token: string, key: string, nowMs = Date.now(
   } catch {
     return false;
   }
+  if (!header || typeof header !== "object" || !payload || typeof payload !== "object") return false;
   if (header.alg !== "HS256") return false;
   const expected = createHmac("sha256", key).update(`${h}.${p}`).digest();
   const given = Buffer.from(sig, "base64url");
@@ -180,9 +181,11 @@ export async function processWebhookEvent(deps: Pick<WaDeps, "queues">, eventId:
   const d = parsePayload("Evolution", upsertDataSchema, body.data, ev.event, { connectionId: conn.id });
   if (!d) return done("ignored", "invalid");
   const ts = d.messageTimestamp != null ? Number(d.messageTimestamp) : NaN;
+  // A chat WhatsApp addresses by LID carries the number in remoteJidAlt (Evolution swaps it in when it has it).
+  const alt = (d.key as { remoteJidAlt?: unknown }).remoteJidAlt;
   const r = await applyInbound(deps, conn, {
     id: d.key.id,
-    remoteJid: d.key.remoteJid,
+    remoteJid: d.key.remoteJid.endsWith("@lid") && typeof alt === "string" ? alt : d.key.remoteJid,
     fromMe: d.key.fromMe,
     messageType: d.messageType ?? null,
     text: textOf(d.message ?? null),

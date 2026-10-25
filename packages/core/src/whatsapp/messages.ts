@@ -36,7 +36,7 @@ import {
 } from "@app/shared";
 import { providerDetail } from "../errors.js";
 import { logger } from "../logger.js";
-import { consentFacts } from "./contacts.js";
+import { consentFacts, onDoNotMessageList } from "./contacts.js";
 import { dailyLimitOf, DOWN_GRACE_MS, settingsOf, storeById, WA_MAX_QUEUE_DELAY_S, waDecrypt, waEncrypt, waPhoneHash, waQueue, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
 import { checkConnection, clientFor, instanceToken } from "./connection.js";
 import { EvolutionError, isNotConnected } from "./evolution.js";
@@ -68,6 +68,8 @@ export interface QueueInput {
   sendAfter?: Date;
   /** Queued later by the caller (a campaign batch): not enqueued here. */
   noEnqueue?: boolean;
+  /** What the history shows instead of the text (a verification code is never kept there). */
+  preview?: string;
 }
 
 /** The longest text the history keeps of a message. */
@@ -102,7 +104,7 @@ export async function queueMessage(deps: Pick<WaDeps, "queues">, input: QueueInp
         type: input.payload.attachment ? input.payload.attachment.kind : "text",
         templateId: input.templateId ?? null,
         payloadEnc: waEncrypt(input.store.id, "payload", JSON.stringify(input.payload)),
-        previewEnc: waEncrypt(input.store.id, "preview", previewOf(input.payload)),
+        previewEnc: waEncrypt(input.store.id, "preview", input.preview ?? previewOf(input.payload)),
         status: "queued",
         sendAfter,
         createdByUserId: input.createdByUserId ?? null,
@@ -212,6 +214,10 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
     const block = await consentBlock(contact, (m.category ?? "transactional") as WaTemplateCategory, settings, { reply: m.source === "reply" });
     if (block) return end("skipped", block);
     if (contact?.notOnWhatsappAt && now.getTime() - contact.notOnWhatsappAt.getTime() < 30 * 86_400_000) return end("skipped", "not_on_whatsapp");
+  } else if (!confirmsStop && m.phoneHash && (await onDoNotMessageList(m.storeId, m.phoneHash, (m.category ?? "transactional") as WaTemplateCategory))) {
+    // The store's own numbers (a test, a code, a team alert, an automation in test mode) still never
+    // get a message once that number asked not to (it replied STOP, or is on the do-not-message list).
+    return end("skipped", "suppressed");
   }
   if (timed(m.source) && !inSendWindow(now, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end)) {
     return hold(deps, m.id, nextSendTime(now, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end), null);
@@ -265,8 +271,8 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
       return end("skipped", "not_on_whatsapp", { errorCode: "not_on_whatsapp" });
     }
     if (e.uncertain) {
-      logger.warn({ messageId: m.id, storeId: m.storeId }, "whatsapp send timed out: it may have been sent, not retried");
-      return end("failed", "gave_up", { errorCode: "uncertain", errorDetail: "WhatsApp's service didn't answer in time. The message may have reached the customer: check the chat on your phone before sending it again." });
+      logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status }, "whatsapp send unconfirmed: it may have been sent, not retried");
+      return end("failed", "gave_up", { errorCode: "uncertain", errorDetail: "WhatsApp's service didn't confirm the send. The message may have reached the customer: check the chat on your phone before sending it again." });
     }
     if (isNotConnected(e)) {
       // The provider lost the phone: hold, and ask it for the state so the page shows it.
@@ -326,6 +332,8 @@ export async function retryMessage(deps: Pick<WaDeps, "queues">, store: Pick<Sto
   const m = await systemDb.wappMessage.findFirst({ where: { id, storeId: store.id } });
   if (!m || m.direction !== "out") throw new WhatsappError("Not found", 404, "not_found");
   if (m.status !== "failed" || !m.phoneEnc) throw new WhatsappError("Only a failed message can be sent again.", 409, "not_failed");
+  // Its code isn't kept (the history shows a placeholder): a new code is the way.
+  if (m.source === "verification") throw new WhatsappError("Send a new code from Step 4 instead.", 409, "not_retryable");
   if (!m.payloadEnc && m.type === "text") {
     // The text was cleared when it failed: rebuild the payload from the preview.
     if (!m.previewEnc) throw new WhatsappError("This message's text is no longer kept, so it can't be sent again.", 409, "text_gone");

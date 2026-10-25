@@ -33,10 +33,10 @@ export interface EvolutionFake {
   calls: Array<{ method: string; path: string; apikey: string | null }>;
   /** Numbers the fake says aren't on WhatsApp. */
   notOnWhatsapp: Set<string>;
-  /** Every call fails this way (null: none). */
-  down: null | "unreachable" | "timeout" | 500;
+  /** Every call fails this way (null: none): "refused" never connects, "unreachable" drops the connection. */
+  down: null | "refused" | "unreachable" | "timeout" | 500;
   /** Sends fail this way (null: they work). */
-  sendFails: null | "timeout" | 500;
+  sendFails: null | "refused" | "reset" | "timeout" | 500;
   fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   /** The phone scanned: the instance opens. */
   open(name: string, phone?: string, profileName?: string): void;
@@ -88,7 +88,8 @@ export function evolutionFake(): EvolutionFake {
       const method = init?.method ?? "GET";
       const apikey = new Headers(init?.headers).get("apikey");
       f.calls.push({ method, path: u.pathname, apikey });
-      if (f.down === "unreachable") throw new TypeError("fetch failed");
+      if (f.down === "refused") throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) });
+      if (f.down === "unreachable") throw new TypeError("fetch failed", { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
       if (f.down === "timeout") {
         const e = new Error("aborted");
         e.name = "AbortError";
@@ -145,6 +146,8 @@ export function evolutionFake(): EvolutionFake {
         return json({ status: "SUCCESS", error: false, response: { message: "Instance deleted" } });
       }
       if (area === "message") {
+        if (f.sendFails === "refused") throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) });
+        if (f.sendFails === "reset") throw new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
         if (f.sendFails === "timeout") {
           const e = new Error("aborted");
           e.name = "AbortError";
