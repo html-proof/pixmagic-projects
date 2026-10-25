@@ -1213,6 +1213,8 @@ describe("the WhatsApp stack (Evolution API)", () => {
       WEBHOOK_GLOBAL_ENABLED: "false",
       CACHE_REDIS_ENABLED: "false",
       QRCODE_LIMIT: "6",
+      // A server's call has no Origin, which Evolution refuses unless CORS allows any (src/main.ts).
+      CORS_ORIGIN: "*",
     });
     // The database's address is put together inside the container, from the secret.
     expect(c.Command[0]).toContain("DATABASE_CONNECTION_URI=");

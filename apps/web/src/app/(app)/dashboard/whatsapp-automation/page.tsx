@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { SectionLayout, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
@@ -49,8 +49,11 @@ function WhatsappAutomation() {
   const data = overview.data;
   const tabs = TABS.filter(([key]) => key !== "customers" || data?.can.contacts);
   const asked = params.get("tab");
-  // Before anything is connected, the page opens on the setup.
-  const fallback: Tab = data && !data.connection ? "setup" : "overview";
+  // Without ?tab=, the page opens on the setup until its four steps are done, else the overview: chosen
+  // once per store, so finishing a step (which reloads the overview) doesn't move the page away.
+  const [opened, setOpened] = useState<{ base: string; tab: Tab } | null>(null);
+  if (data && base && opened?.base !== base) setOpened({ base, tab: data.setup.current ? "setup" : "overview" });
+  const fallback: Tab = opened?.base === base ? opened.tab : data?.setup.current ? "setup" : "overview";
   const tab: Tab = tabs.some(([key]) => key === asked) ? (asked as Tab) : fallback;
   const items = tabs.map(([key, label]) => ({ href: waHref(key), label, active: key === tab }));
   const title = "WhatsApp Automation";

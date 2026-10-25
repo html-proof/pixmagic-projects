@@ -1,622 +1,409 @@
 # WhatsApp Automation
 
-bizinsights sends a store's customers WhatsApp messages from the store's own WhatsApp Business
-number, through Meta's official **WhatsApp Business Platform (Cloud API)**. The merchant connects
-the number with Meta's own sign-up window ("Connect WhatsApp Business"), writes or picks message
-templates, builds workflows (trigger → conditions → template or reply → timing), answers customers
-who write in, runs campaigns, and reads every message's delivery in the history. There is no
-WhatsApp Web automation, no browser session, and nobody ever pastes a token, an app secret or a
-webhook URL.
+bizinsights sends a store's customers WhatsApp messages about their orders, automatically
+(automations started by Shopify's events), personally (a message from the dashboard) and in bulk
+(campaigns to customers who agreed to marketing), and records every message's real delivery as
+WhatsApp reports it. The page is **WhatsApp Automation** at `/dashboard/whatsapp-automation` (the
+sidebar's "WhatsApp"; the old `/whatsapp` redirects there).
 
-**Today (2026-10-25) every setting is in place**: WhatsApp runs on the Meta app "Insights"
-(971575545351940, business portfolio "bizinsights.io"), whose secret and the webhook verify token
-are set, and `WHATSAPP_CONFIG_ID` is its Embedded Signup configuration "bizinsights WhatsApp Signup"
-(`2228218088074576`). Until Meta approves business verification and App Review, only people with a
-role on the app can get through Meta's window ([Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 7).
+Since 2026-10-26 it runs on **[Evolution API](https://github.com/evolution-foundation/evolution-api)**,
+an open-source WhatsApp gateway that bizinsights hosts itself as a private service on AWS. A store
+connects in one of two ways, and chooses knowingly (the page shows both side by side, with what each
+means, before anything is created):
 
-This page replaced the earlier WhatsApp feature (2026-10-10 to 2026-10-24) on 2026-10-25: see
-[The old WhatsApp tables](#the-old-whatsapp-tables) for what happened to it.
+- **Link a WhatsApp phone with a QR code** (Evolution's Baileys integration). The store scans a code
+  with the WhatsApp or WhatsApp Business app on its phone, as with WhatsApp Web. Quick, no Meta
+  account needed; **not** Meta's official business API, so the page says so and asks the merchant to
+  tick that they understand before the code is shown. bizinsights paces and caps what a linked phone
+  sends to protect the number.
+- **Official WhatsApp Business Platform (Cloud API)** (Evolution's WHATSAPP-BUSINESS integration).
+  The store signs in with Meta's Embedded Signup and picks its WhatsApp Business account and number;
+  bizinsights then sends through Evolution with that business's token. Meta's preferred way for
+  businesses, with templates Meta approves. Meta onboards other businesses only once bizinsights is
+  an approved Tech Provider ([Owner's steps](#owners-steps-cloud-api)); until then the option says
+  so.
 
-## What was verified before building it (2026-10-25)
+It replaced the Meta-only design of 2026-10-25 (Embedded Signup with the token kept at Nango,
+release 119), which itself replaced the 2026-10-10 feature. Both earlier designs' tables are kept,
+erase-only, until a later drop ([The old tables](#the-old-tables)).
 
-| Question | Answer, and where it came from |
+## What was verified first (2026-10-25)
+
+Read from Evolution's source at tag `2.3.7` (the release tarball, not the docs site) and its Docker
+Hub image:
+
+| Question | Answer |
 | --- | --- |
-| Does Nango have a WhatsApp integration? | Yes, `whatsapp-business`, but its auth mode is **API_KEY** (Nango's `providers.yaml`; its setup guide says "Add your access token as the API key"). Its Connect UI would ask the merchant to paste a token. It has no Embedded Signup, and no pre-built syncs or actions. |
-| Can Nango store a token bizinsights got some other way? | Yes: `POST /connections` imports a connection with `credentials: { type: "API_KEY", apiKey }` and up to 10 tags, and updates one with the same id instead of making a second ([Nango API reference](https://nango.dev/docs/reference/api/connection/post)). |
-| How does a business connect its WhatsApp to a platform? | Meta's **Embedded Signup** (current version v4; v2 and v3 were retired on 2026-10-15): the JavaScript SDK's `FB.login` with a Facebook Login for Business configuration (`config_id`, `response_type: "code"`, `override_default_response_type: true`, `extras.setup`). It returns a code that lives **30 seconds**, and a `WA_EMBEDDED_SIGNUP` window message (from `facebook.com`) with `waba_id`, `phone_number_id`, `business_id` and how it finished (`FINISH`, `FINISH_ONLY_WABA`, `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, `CANCEL` with `current_step`). |
-| What must a Tech Provider do after it? | Server side: exchange the code (`GET /oauth/access_token` with the app id and secret) for the **business token**; subscribe the app to the account's webhooks (`POST /{waba}/subscribed_apps`); register the number (`POST /{phone}/register` with a 6-digit PIN, which becomes its two-step verification PIN). The business adds a payment method in WhatsApp Manager. ([Meta: onboarding customers as a Tech Provider](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-tech-provider)) |
+| Which release? | **2.3.7** (2025-12-05), the latest release; 2.4.0-rc2 is a pre-release. Image `evoapicloud/evolution-api:v2.3.7`, multi-arch (amd64 and arm64), pinned by digest `sha256:1bd8afc4…d339` (`infra/cdk/lib/whatsapp-stack.ts`, `docker-compose.yml`). |
+| Licence? | Apache 2.0 with conditions: a **usage notification** visible to administrators (shown on the page's Settings tab: `EVOLUTION_NOTICE` in `@app/shared/whatsapp`), and the logo kept in its manager UI (not used: the manager is disabled). |
+| Authentication? | An `apikey` header: the global key (Secrets Manager), or an instance's own token, set when bizinsights creates the instance. bizinsights uses each instance's own token for everything but creating and listing instances. |
+| Endpoints used | `POST /instance/create`, `POST /webhook/set/{i}`, `GET /instance/connect/{i}` (QR or pairing code), `GET /instance/connectionState/{i}`, `POST /instance/restart/{i}`, `DELETE /instance/logout/{i}`, `DELETE /instance/delete/{i}`, `GET /instance/fetchInstances`, `POST /message/sendText/{i}`, `POST /message/sendMedia/{i}`, `POST /message/sendTemplate/{i}`, `POST /template/create/{i}`, `GET /template/find/{i}`, `POST /chat/whatsappNumbers/{i}`. Answers and errors as `packages/core/src/whatsapp/evolution.ts` reads them (an error is `{status, error, response: {message}}`; a number not on WhatsApp is a 400 with `exists: false`; a closed connection is "Connection Closed"). |
+| Webhooks? | Per instance, the events bizinsights asks for, as `{event, instance, data, date_time, …}`. **No body signature.** A `jwt_key` in the webhook's headers makes Evolution send `Authorization: Bearer <HS256 JWT>` (claims `app: "evolution"`, `action: "webhook"`, valid 10 minutes). Retries 10 times with backoff; 4xx other than 429 aren't retried. |
+| Message statuses | `PENDING` (accepted), `SERVER_ACK` (sent), `DELIVERY_ACK`, `READ`, `PLAYED`, `ERROR`. |
+| State | Sessions in PostgreSQL (`DATABASE_SAVE_DATA_INSTANCE`); instances belong to a `DATABASE_CONNECTION_CLIENT_NAME`, which allows shards. |
+| Checked running | 2.3.7 built from its source with the ECS task's settings on PostgreSQL 18, driven by bizinsights' own client (`evolution.ts`): create, webhook, a real QR code from WhatsApp on the first `connect` (and the same code again while pairing, not a restart), `connectionState`, a wrong token refused (401), logout, delete; its `CONNECTION_UPDATE` and `QRCODE_UPDATED` webhooks verified with `verifyEvolutionJwt` (and refused with another key). It showed three things the source reading hadn't: **`CORS_ORIGIN` must be `*`** (any other value answers 500 to a call without an `Origin` header, which is every server's call and the health check); delete answers before the instance is gone (it goes a moment later); a send to an instance still pairing waits for the client's timeout instead of failing (bizinsights only sends once the provider said "open"). `fetchInstances` returns instance tokens to the global key (server side only; webhooks carry none). |
+| Quirks handled | The image's time zone is São Paulo and `date_time` carries a "Z": the task sets `TZ=UTC`. Its start script prints `DATABASE_URL`: only `DATABASE_CONNECTION_URI` is set. At LOG level it prints QR codes and at INFO numbers: `LOG_LEVEL=ERROR,WARN`. Its SQS mode needs static AWS keys and drops failures: webhooks are used instead. Its Cloud integration answers Meta's errors with a 2xx and stores every sent message: the client treats such an answer as a refusal, and the nightly cron prunes Evolution's own message rows after 7 days. |
 
-So the design is: **Meta's Embedded Signup runs on bizinsights' page; bizinsights' server exchanges
-the code and checks the token; Nango keeps the token** (one Nango connection per store, imported as
-an API key into bizinsights' `whatsapp-business` integration); bizinsights calls the Cloud API
-with its own client, asking Nango for the token right before each call. Nango manages the connection
-(storage, encryption at rest, deletion, its dashboard); it does not run the sign-up or send messages.
+## Architecture
+
+```
+Browser ──HTTPS──> CloudFront ──> api Lambda (Hono, apps/api)
+                                      │  tenant check, permissions, rate limits
+                                      ▼
+                         core whatsapp/* (packages/core) ──> RDS PostgreSQL (wapp_* tables, RLS)
+                                      │                 ──> SQS "whatsapp" queue ──> jobs Lambda (apps/worker)
+                                      ▼
+                   Evolution API (ECS Fargate, private subnets, no public address, no load balancer)
+                   http://evolution-a.whatsapp.production.insights.internal:8080 (Cloud Map)
+                                      │  its own database "evolution" on the same RDS instance
+                                      ▼
+                        WhatsApp (Baileys) / Meta Graph API (Cloud API), through the NAT instances
+
+Evolution ──webhook (JWT)──> https://bizinsights.io/api/webhooks/whatsapp/evolution/<instance>
+Meta (Cloud API numbers) ──webhook (X-Hub-Signature-256)──> https://bizinsights.io/api/webhooks/whatsapp
+```
+
+- **The browser never reaches Evolution.** Only the Lambda functions can (its security group admits
+  port 8080 from theirs alone); its global key lives in Secrets Manager (`insights/<env>/evolution-api`)
+  and in the task's secrets, never in a response, a log or the browser.
+- **Reused, not duplicated:** the app's RDS instance (one more database and role), its VPC, NAT
+  instances, SQS (one more queue), DynamoDB coordination (locks, rate limits, the send pace),
+  Secrets Manager, CloudWatch alarms and the alarm topic, the cron's sweeps.
+- **No ElastiCache:** one task keeps its sessions in memory (`CACHE_LOCAL_ENABLED`); bizinsights'
+  own coordination is the DynamoDB table it already has. Redis would only be needed for several
+  tasks sharing instances, which Evolution's sessions can't do anyway (see [Scaling](#scaling)).
+- **No S3 for media:** attachments (3 MB at most) are kept in the payloads bucket only until they
+  are sent (`wapp-media/<message>`), and Evolution is told not to store media.
+
+### Cost
+
+On-demand in Sydney, from AWS's price list (2026-10-25), before GST:
+
+| Part | Month |
+| --- | --- |
+| Fargate task, 0.5 vCPU + 1 GB on Graviton, always on (0.5 × US$0.03885 + 1 × US$0.00426 per hour) | US$17.29 |
+| Route 53 private hosted zone (Cloud Map's namespace) + one registered instance | ~US$0.60 |
+| Two secrets (`evolution-api`, `evolution-db`) | US$0.80 |
+| Three alarms (service down, memory, unreachable) | US$0.30 |
+| Logs (errors and warnings only), the DB-init function, SQS | cents |
+| **Total** | **~US$19** |
+
+Fargate Spot would bring the task to about US$5: `whatsapp.spot: true` in `infra/cdk/lib/config.ts`
+(staging uses it). Production runs on demand because a Spot interruption drops every linked phone
+for the minute or two the replacement takes; that is the owner's call.
 
 ## Where things live
 
 | Part | Code |
 | --- | --- |
-| Pure rules: templates and their checks, variables, consent, statuses, Meta's error codes, workflow triggers and conditions, campaign audiences, Embedded Signup's window messages | `packages/shared/src/whatsapp.ts` (`@app/shared/whatsapp`); phone numbers and sending hours, shared with SMS, in `packages/shared/src/messaging.ts` |
-| Dependencies, errors, encryption, bizinsights' Meta app settings, queue jobs | `packages/core/src/whatsapp/common.ts` |
-| Meta Graph API client (code exchange, token inspector, account, numbers, webhooks, registration, templates, sending) | `whatsapp/graph.ts`, over the transport the ads share (`core/metaGraph.ts`) |
-| The token at Nango | `whatsapp/nango.ts`; what happens when access ends: `whatsapp/tokens.ts` |
-| Connecting, the number, the PIN, the health check, disconnecting | `whatsapp/connect.ts` |
-| Contacts and consent | `whatsapp/contacts.ts` |
-| Templates | `whatsapp/templates.ts` |
-| The queue and the sender | `whatsapp/messages.ts`; one message from the dashboard and team alerts: `whatsapp/manual.ts` |
-| Meta's webhooks | `whatsapp/webhook.ts` (payload schemas: `whatsapp/metaPayloads.ts`) |
-| Workflows, which triggers a store can use, replies to customers' messages, custom events, the event key | `whatsapp/workflows.ts`; Shopify's events → workflows: `whatsapp/events.ts` |
-| "Pause all automation", the Meta app webhook's last check | `whatsapp/automation.ts` |
+| Pure rules: providers and their disclosures, statuses, consent, templates and variables, triggers and conditions, audiences, limits, the setup's steps | `packages/shared/src/whatsapp.ts` (`@app/shared/whatsapp`) |
+| Tables (12, all with RLS on `workspace_id`) | `packages/db/prisma/schema.prisma` (`Wapp*`, `wapp_*`); migration `20261026120000_whatsapp_evolution` |
+| Evolution API client (timeouts, retries for reads only, typed errors, Zod-checked answers) | `packages/core/src/whatsapp/evolution.ts` |
+| Connecting, pairing, connection events, reconnect, disconnect, the reconcile | `whatsapp/connection.ts`; the Cloud API: `whatsapp/cloud.ts` |
+| Contacts, consent, the do-not-message list | `whatsapp/contacts.ts` |
+| The queue and the sender; delivery statuses | `whatsapp/messages.ts`; a message from the dashboard: `whatsapp/send.ts` |
+| Evolution's webhook (JWT, storage, dedupe) | `whatsapp/webhook.ts`; customers' messages, STOP and START: `whatsapp/inbound.ts` |
+| Automations; Shopify's events → automations | `whatsapp/automations.ts`, `whatsapp/events.ts` |
+| Templates (and Meta's review on the Cloud API) | `whatsapp/templates.ts` |
 | Campaigns | `whatsapp/campaigns.ts` |
-| The 15-minute sweep and retention | `whatsapp/sweep.ts` |
-| Privacy (export, customers/redact, key rotation); erasing a store | `whatsapp/privacy.ts`, `whatsapp/purge.ts`; the old tables: `whatsapp/legacy.ts` |
-| Merchant API | `apps/api/src/routes/whatsapp.ts` (overview, connecting, settings, templates, messages, contacts, test events), `whatsappAutomation.ts` (workflows, campaigns), `whatsappCommon.ts` |
-| Public endpoints (Meta's webhook, custom events) | `apps/api/src/routes/whatsappWebhook.ts` |
-| Background jobs | `apps/worker/src/handlers/integrations.ts` (`runWhatsappJob`), `apps/worker/src/index.ts` (the `*/15` cron runs `sweepWhatsapp`), `handlers/webhooks.ts` (Shopify topics, GDPR) |
-| Dashboard | `apps/web/src/app/(app)/whatsapp/page.tsx` (one page, tabs in `?tab=`), `apps/web/src/components/whatsapp/*` (status tiles, health, pause: `Status.tsx`; "Send test message": `SendTest.tsx`) |
-| Tests | `packages/shared/test/whatsapp.test.ts`, `packages/core/test/whatsappAppSecret.test.ts`, `apps/api/test/whatsapp.test.ts`, `apps/worker/test/whatsapp.test.ts`, `apps/web/e2e/whatsapp.spec.ts` |
+| Settings, the test number, Pause all automation | `whatsapp/settings.ts` |
+| The 15-minute sweep, retention | `whatsapp/sweep.ts` |
+| Privacy (export, customers/redact, key rotation), erasing a store, the old tables | `whatsapp/privacy.ts`, `whatsapp/purge.ts`, `whatsapp/legacy.ts` |
+| Merchant API | `apps/api/src/routes/whatsapp.ts`; machine endpoints: `whatsappWebhook.ts` |
+| Jobs | `apps/worker/src/handlers/integrations.ts` (`runWhatsappJob`), `apps/worker/src/index.ts` (queue, sweep) |
+| Evolution's database (role, database, nightly prune) | `apps/aws/src/evolutionDb.ts`, the cron's `evolution-db` action |
+| Infrastructure | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-<env>`), secrets in `data-stack.ts`, queue/env/alarms in `app-stack.ts` |
+| Dashboard | `apps/web/src/app/(app)/dashboard/whatsapp-automation/page.tsx`, `apps/web/src/components/whatsapp/*` |
+| Local service | `docker-compose.yml`, profile `whatsapp` (`docker compose --profile whatsapp up -d evolution`) |
 
 ## The page
 
-**WhatsApp Automation** (`/whatsapp`, the sidebar's "WhatsApp"), one page with tabs:
+One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; afterwards on
+**Overview**. Every state on it comes from the API, which asks the provider: nothing says
+"connected", "sent" or "delivered" before WhatsApp did, and no figure is made up.
 
-- **Overview.** Four status tiles, the same whether connected or not and always read from what the
-  API stored: the connection, automation (Active, Paused, Needs attention, No workflow on,
-  Disconnected; `automationState` in `@app/shared/whatsapp`), the last update from WhatsApp, and
-  what is waiting to send (and why any of it is held).
-  - Not connected: the **Connect WhatsApp Business** button, how connecting works in three lines,
-    and what Meta will ask the business for (with Meta's own pages). While the server isn't set up
-    the button is disabled and the page says exactly that: bizinsights' own Meta app isn't set up
-    yet, nothing is connected, nothing is sent, and there is nothing to change in the merchant's
-    accounts. People who may connect also see each missing setting and what it is.
-  - Connected: the account (verified name, number, the business portfolio, WhatsApp Business account
-    and phone number ids, quality, daily limit), **Manage automation** and **Send test message**,
-    what needs attention (reconnect, an account problem with a link to WhatsApp Manager, a step to
-    finish, replies not arriving, a switched-on workflow that can't send, automation paused, low
-    quality, failures of the last 7 days, the consent choice not made), the automation card with
-    **Pause all automation** / **Resume**, the connection's health check by check (access, both
-    permissions, account standing, number registered, webhooks and the last update, the last check,
-    with **Check again**), what is waiting and the last week's failures with Meta's reason, a setup
-    checklist, sent / delivered / read / failed / waiting / received for 7 and 30 days, and the
-    latest messages. People who may connect see whether bizinsights' Meta app webhook points here,
-    as Meta last answered.
-  - **Send test message**: an approved template, with sample values, to the merchant's own test
-    number only, after they press Send; the dialog then follows that message's real status every 3
-    seconds for two minutes (queued → accepted → sent → delivered → read, or failed with Meta's
-    reason). "Accepted" is never shown as delivered.
-- **Templates.** What the account holds, with Meta's status and reasons; Refresh; delete; send a test
-  to yourself; a writer that starts from a starter (order confirmation, shipping update, abandoned
-  checkout, follow-up, welcome, appointment reminder, promotion, stock alert to your team) or blank,
-  checks what Meta would refuse as you type, previews it, and submits it for review.
-- **Workflows.** Ready-made ones (order confirmation, shipping update, abandoned checkout, follow-up,
-  welcome, appointment reminder, support auto-reply, away message) and a four-step builder
-  (trigger, conditions, message, timing), each step explained, then a review that lists anything
-  stopping it from being switched on. A trigger the store can't use is shown with why and can't be
-  picked (see [Which triggers a store can use](#which-triggers-a-store-can-use)). Switch on, pause,
-  test, delete; each workflow's runs (what happened each time, and to its message).
-- **Campaigns.** Audience (country, new or returning customers, ordered within / not for N days,
-  minimum orders or spend) with a live count of opted-in customers; an approved Marketing template;
-  preview; test to yourself; schedule now or later after confirming the exact count; cancel; a
-  delivery report.
-- **Activity** ("Message history"). Every message, sent and received, filtered by status, direction,
-  source, workflow, reason or error, template, store-time days, and (for people who may see contact
-  information) a customer's number, matched by its keyed hash. Each message shows its delivery
-  reports, bizinsights' and Meta's message ids, when it was created, accepted, delivered, read or
-  failed, its tries and its workflow; Retry for a failed one; and **Send a message** (an approved
-  template, or a free-form reply within the customer's 24-hour window).
-- **Contacts** (with "View contact information"). Customers' consent and its history; record consent
-  or an opt-out given another way (with a note).
-- **Settings.** The connection and its ids, **Reconnect WhatsApp** (refreshes bizinsights' access
-  through Meta's window; the same connection is updated), Disconnect, the number's PIN (owners and
-  admins), the connection's health with Check again (which also retries a failed setup step:
-  webhooks, registration), Pause all automation / Resume, links to templates and to customers'
-  consent and opt-outs, how customers agree to updates, whether Shopify's text-message consent
-  covers WhatsApp, sending hours, a daily limit, your own test number, and the custom-event key.
+- **Setup**, four steps, each marked done from stored facts:
+  1. **Connect**: the two ways, side by side, with what each gives and its limits; the QR way needs
+     the "I understand" box ticked.
+  2. **Authorize**: the QR code Evolution got from WhatsApp (a PNG data URL, polled every 3 seconds
+     while pairing; "Code n of 6"), or an 8-character pairing code for the number typed in, or Meta's
+     Embedded Signup window. It moves on when the provider says the connection is open.
+  3. **Configure**: business name, how customers agree to order updates (required), marketing on or
+     off, whether Shopify's text-message consent covers WhatsApp, sending hours and time zone, daily
+     limit, per-customer daily limit, how long message texts are kept.
+  4. **Test and activate**: the merchant's own number, verified with a 6-digit code sent over the
+     connected WhatsApp; then a test message, whose real status the page follows. The step is done
+     only when WhatsApp reports it **sent** (not when Evolution accepted it). Then a completion screen.
+- **Overview**: connection health as last reported (Check again), the automation state, sent today
+  against the limit, what waits and why, 7- and 30-day counts from each message's own record, the
+  latest messages.
+- **Messages**: every message, filtered by status, direction, source, automation, campaign, dates
+  and (with contact access) a customer's number; each one's status history; **Retry** for a failed
+  one; **Send a message** (reason, consent attestation, text or template, optional image or PDF).
+- **Automations**: trigger → conditions → template → recipient → delay and sending hours; ready-made
+  presets; switching on lists every reason it can't; **test mode is on for every new automation**
+  (it sends only to the verified test number until switched off); each automation's runs and why
+  each one did or didn't send.
+- **Templates**: write with variables, checked as you type (unknown variables, marketing without a
+  way to stop, link shorteners); starters; on the Cloud API, submit to Meta and follow its review.
+- **Campaigns**: an audience of customers who agreed to marketing (country, new or returning,
+  ordered within / not for N days, minimum orders or spend), a live count for the chosen template,
+  launch now or later **only with the exact count confirmed**, cancel, a delivery report.
+- **Customers** (with "View contact information"): consent and its history, recording consent or an
+  opt-out given another way, the do-not-message list.
+- **Settings**: Step 3's settings, Pause all automation / Resume, Reconnect, Disconnect, and
+  Evolution API's licence notice.
 
-Who sees what: reading needs **View campaigns** (`marketing.campaigns`); connecting and
-disconnecting **Manage integrations**; templates, workflows, campaigns, settings and sends the
-store's **owners and admins**; customers' numbers, names and what was said **View contact
-information** as well. A shared-link session and API keys only read.
+## Connecting
 
-## Connecting ("Connect WhatsApp")
+**QR or pairing code.** `POST …/whatsapp/connection` makes a new Evolution instance named `bi_` + 24
+random hex characters, with a random token of its own and a random webhook key, both kept encrypted
+(AES-GCM with the token keyring, bound to the store). The row is written **before** the instance is
+created, so its first webhook always finds it. Then the webhook is set (the events bizinsights needs:
+`CONNECTION_UPDATE`, `QRCODE_UPDATED`, `LOGOUT_INSTANCE`, `REMOVE_INSTANCE`, `MESSAGES_UPSERT`,
+`MESSAGES_UPDATE`) and `connect` asks WhatsApp for the first code. A store already connected is
+refused; one still pairing gets its current code; ten starts an hour at most per store. Pairing
+gives up after 10 minutes, or when Evolution's six codes run out ("Get a new code").
 
-```
-Browser                                  bizinsights API                          Meta / Nango
-  Connect WhatsApp
-  POST …/whatsapp/connect/start   ──►    nonce (20 min, bound to person + store),
-                                  ◄──    appId, configId, version
-  load connect.facebook.net SDK, FB.login({config_id, response_type: code, ...})
-  Meta's window: sign in, business portfolio, WhatsApp Business account, number (new or existing)
-  window message WA_EMBEDDED_SIGNUP (origin facebook.com only): FINISH + waba_id, phone_number_id
-  authResponse.code (30 s)
-  POST …/whatsapp/connect/finish  ──►    take the nonce (same person, same store)
-                                         exchange the code                         ──► GET /oauth/access_token
-                                         inspect the token (bizinsights' app token) ──► GET /debug_token
-                                           app_id = ours, both WhatsApp permissions,
-                                           the account among those granted
-                                         the account and its numbers                ──► GET /{waba}, /{waba}/phone_numbers
-                                           the number in the account, not another store's
-                                         token to Nango (connection wa-<storeId>)   ──► POST api.nango.dev/connections
-                                         webhooks to bizinsights' app               ──► POST /{waba}/subscribed_apps
-                                         register a new number with a random PIN    ──► POST /{phone}/register
-                                         templates                                  ──► GET /{waba}/message_templates
-                                  ◄──    the connection (never the token)
-```
+The connection is **connected only** when Evolution's `CONNECTION_UPDATE` says `open`, or when
+`connectionState` says so (the page's poll, Check again, the sweep). The linked number (masked) and
+profile name come from Evolution. A close with status 401 or 403 means WhatsApp logged the device
+out: the connection becomes **logged out**, an alert is raised ("Link WhatsApp again"), and messages
+wait. Other closes are **reconnecting** (Baileys reconnects by itself). A connection down 48 hours
+has its waiting messages and running campaigns cancelled, and says so.
 
-A window that closes is never a connection: only the server's answer is. Every refusal says what to
-do in plain words: the sign-in wasn't started here or took too long; the code expired; the token
-isn't for bizinsights' app; a permission was unticked; the account wasn't granted; the number isn't
-in it, or is already another store's. Nothing goes to Nango until every check passed.
+**Reconnect** restarts the instance with its saved session (no new code). **Disconnect** logs the
+phone out (WhatsApp removes the linked device), deletes the instance and its session at Evolution,
+cancels what waits, pauses automations and keeps the history. Uninstalling the Shopify app
+disconnects the same way; erasing a store (shop/redact) deletes its instance first.
 
-What can still be needed afterwards (`step`, shown on the Overview with its fix):
+**Cloud API.** The page opens Meta's Embedded Signup (v4) with bizinsights' Meta app and its
+configuration. The server then: exchanges the code (it lives 30 seconds) for the business's token;
+checks with Meta's token inspector that it was issued to bizinsights' app with
+`whatsapp_business_management` and `whatsapp_business_messaging` for the account chosen; checks the
+number belongs to that account; subscribes the account's webhooks to bizinsights' app; registers the
+number (a random 6-digit PIN, kept encrypted); and makes an Evolution `WHATSAPP-BUSINESS` instance
+with the token. The token (60 days, the configuration's setting) is renewed by the sweep 30 days
+before it ends. Meta's webhooks for these numbers (statuses, customers' messages, template reviews)
+come to bizinsights directly, signed with the app secret.
 
-| Step | When | Fix |
-| --- | --- | --- |
-| `choose_number` | The account has several numbers and Meta didn't say which | Pick one (`POST …/connect/number`) |
-| `no_number` | Meta finished without a number (`FINISH_ONLY_WABA`) | Add one in WhatsApp Manager, then Check again |
-| `pin_required` | The number already has its own two-step PIN (Meta 133005) | Enter that PIN (`POST …/connect/pin`) |
-| `business_app_number` | A WhatsApp Business app number (coexistence) not on the Cloud API yet | bizinsights never registers it (that would take it off the app); Check again once Meta has moved it |
-| `register_failed` | Meta refused or didn't answer the registration | Check again (it tries again) |
+## Webhooks and security
 
-The PIN bizinsights sets is kept encrypted; owners and admins can see it (audited) to move the number
-to another provider.
+**Evolution → bizinsights** (`POST /api/webhooks/whatsapp/evolution/:instance`). Evolution 2.3.7
+**cannot sign a webhook's body**. What it can do, and bizinsights uses: each connection has a random
+32-byte key (`jwt_key`), and every delivery carries an HS256 JWT made from it. A delivery is accepted
+only when:
 
-**Health check.** Every 15-minute tick checks up to 20 connections last checked over 6 hours ago:
-the token works, bizinsights is still subscribed to the account (subscribed again if not), the
-number's registration, quality, name and limit, and the templates. Meta refusing the token puts the
-connection on **Reconnect** (an alert to owners and admins); a rate limit or an outage waits for the
-next check.
+- the path names an existing connection's instance (random names; an unknown name, a wrong key, a
+  missing or expired token all get the same 401, so nothing tells a caller which names exist);
+- the JWT verifies with **that connection's** key (HS256 only, constant-time compare), claims
+  `app: "evolution"` and `action: "webhook"`, is not expired (30 seconds' slack), not issued in the
+  future, and lives at most an hour;
+- the body is JSON within 256 KB, fits the envelope's schema, and names the same instance;
+- the instance sends fewer than 1,200 a minute (then 429, which Evolution retries); per source
+  address, 300 refused deliveries a minute before it is answered 429 without logging.
 
-**Tokens that expire.** bizinsights' Embedded Signup configuration issues system user tokens that
-last 60 days (Meta offered this app only its template, whose expiry can't be changed). So each
-health check first asks Meta's token inspector when the store's token expires, and with under 30
-days left exchanges it for a fresh 60-day one (`GET /oauth/access_token`, `grant_type=fb_exchange_token`,
-`set_token_expires_in_60_days=true`; Meta: "Install Apps, Generate, Refresh, and Revoke Tokens") and
-hands that to Nango under the same connection (`refreshIfExpiring` in `connect.ts`). A refresh that
-fails keeps the old token, which still works, and the next check tries again: with checks every 6
-hours there are about 120 tries before a token runs out. A token that never expires is left alone.
+**The limitation, plainly:** the JWT authenticates the sender (only Evolution and bizinsights know
+the key) but **does not bind the body**: someone who could read one delivery in flight could replay
+its token with another body for up to 10 minutes. The compensating controls: Evolution posts over
+HTTPS to bizinsights' public address (TLS end to end through CloudFront), so a token can't be read
+in flight; the 10-minute expiry is the replay window; each message event's body is stored once by its
+SHA-256 (a replay of the same body is a duplicate); every field is schema-checked and only the
+instance's own events are applied; connection events can only move a connection to what the
+provider then confirms (`connectionState` is asked again on any doubt); statuses only move forward.
+Nothing in the code or the page claims a signature is verified.
 
-**Reconnect** is the same button: the row is updated in place (the same Nango connection, a new
-token), and messages held while it was needed are sent if that happens within 48 hours.
+**Meta → bizinsights** (`/api/webhooks/whatsapp`): `X-Hub-Signature-256` HMAC with bizinsights' Meta
+app secret, checked before anything is read; the subscription handshake answers only the verify
+token (constant-time).
 
-**Disconnect** unsubscribes bizinsights from the account's webhooks, deletes the Nango connection
-(the token with it), cancels what was waiting and every running campaign, and keeps the history. The
-number keeps working in WhatsApp. To remove bizinsights from the business entirely, the merchant
-removes the app in Meta Business Suite → Settings → Integrations (Meta then sends `PARTNER_REMOVED`,
-which puts a connection still here on Reconnect).
+**Tenancy and secrets.**
+
+- Every merchant route is `/workspaces/:ws/stores/:storeId/whatsapp/…`: the workspace comes from the
+  path and is checked against the signed-in member (`requireWorkspace`), and the store must belong
+  to it. Queries run under row-level security for that workspace, and every row carries
+  `workspace_id` and `store_id`. A browser-supplied id is never trusted alone.
+- Instance names, instance tokens, webhook keys, the global key, QR codes (except to the person
+  pairing, with `cache-control: no-store`), the PIN, Meta tokens and full phone numbers never
+  appear in an answer; numbers are masked, stored encrypted and matched by a keyed hash.
+- The logger redacts `apikey`, `token`, `jwt_key`, `qrcode`, `base64`, `pairingCode`, `remoteJid`,
+  `ownerJid`, `wuid`, `text`.
+
+## Who may do what
+
+| Action | Needs |
+| --- | --- |
+| See the page and its data | **View campaigns** (`marketing.campaigns`) |
+| See how the connection stands (Settings → Integrations) | **View integration connection status** too: the overview answers that person with the connection alone |
+| See customers' numbers, names, what was said; the Customers tab | **View contact information** as well |
+| Change what customers receive: settings, test number, templates, automations, campaigns, sends, retries, consent records, the do-not-message list | The store's **owners and admins** (`stores:manage`), signed in themselves |
+| Connect, reconnect, disconnect | **Manage integrations**, signed in themselves |
+
+A shared dashboard link never administers WhatsApp, whatever it was given (only "Check again"
+refreshes the connection's state), and neither does a workspace API key. Every route is in
+`apps/api/test/routeAccess.test.ts`'s deny-by-default matrix.
 
 ## Consent
 
-Meta requires that customers agree before a business messages them, and the category Meta gave a
-template (not the one asked for) decides which rule applies (`consentProblem` in
-`@app/shared/whatsapp`):
+Two separate permissions, checked when a message is queued and **again when it is sent** (a customer
+may have replied STOP in between):
 
-- **STOP** (or "unsubscribe", "opt out"...) stops everything; only the customer's **START** undoes
-  it, never the store or Shopify. "cancel" isn't a stop word: about an order it usually means the order.
-- **Marketing** templates (campaigns, checkout reminders, welcome and follow-up messages) go only to
-  customers who opted in to marketing: START, WhatsApp's own marketing setting, a "yes" the store
-  recorded (with a note, audited), a custom event saying so, or Shopify's text-message marketing
-  consent when the store says its wording covers WhatsApp (Settings). "Stop promotions" and Meta's
-  marketing opt-out (error 131050 or the `user_preferences` webhook) stop marketing only.
-- **Order and service updates** (Utility templates) go to customers who opted in, or to everyone
-  with a number when the store attests its checkout or terms tell customers about WhatsApp updates
-  (`checkout_notice`, audited with who chose it). Until the store chooses, none are sent.
-- **Free-form replies** (text, image, document, video) only within 24 hours of the customer's last
-  message (Meta's customer service window).
+- **Order updates** (transactional): only under the store's chosen basis: "Customers told at
+  checkout" (everyone with a number, unless they reply STOP) or "Only customers who agreed" (opted in,
+  replied START, or the merchant recorded it). Unset: nothing goes. A customer who wrote in the last
+  24 hours may be answered.
+- **Marketing**: marketing switched on in Settings **and** the customer's own marketing yes. Every
+  marketing template must say how to stop.
 
-Every change is a row in `wa_consent_events` (scope, status, source, who, note, when). A change older
-than the last one recorded (Meta and Shopify redeliver late) changes nothing; an opt-out cancels what
-was waiting for that customer.
+STOP (and "unsubscribe", "opt out"…) from **anyone** puts the number on the store's do-not-message
+list by its keyed hash, and one confirmation is sent; START undoes it. The linked phone may be
+someone's personal WhatsApp, so other messages are recorded only from numbers that are already the
+store's contacts, and dropped unread otherwise. Group chats, statuses and broadcasts are ignored.
 
 ## Sending
 
-1. Something queues a message (a workflow, a campaign, a person, a test, a stock alert): a row in
-   `wa_messages` with an idempotency key unique per store (`wf:<workflow>:<order>`,
-   `campaign:<id>:<contact>`, `manual:<request id>`...), so Shopify's retries, duplicate queue
-   deliveries and double clicks make one message.
-2. Due within 12 hours: on the existing `insights-sync` queue (`kind: "whatsapp"`); later ones and
-   lost queue messages: the sweep.
-3. Right before sending, everything is checked again: the connection, the store still installed,
-   consent by the template's current category, the 24-hour window, the template still approved, the
-   workflow still on, the campaign not cancelled, sending hours, the store's daily limit (Meta's tier
-   or the store's own cap, counted as distinct customers messaged with templates in 24 hours), and
-   the number's pace (20 a second).
-4. The row is claimed (`queued → sending`) before Meta is called. The send carries
-   `biz_opaque_callback_data` = the message's id, so its status webhooks find it even before its
-   Meta id is stored. Meta's answer:
-   - accepted → `accepted` with Meta's id (only now is it "sent" anywhere in the dashboard);
-   - rate limits and Meta busy → tried again after 30 s, 2 min, 10 min, 30 min, 2 h (with jitter), then failed;
-     a refusal that holds for the whole number (Meta's throttles 4, 80007, 130429, 131048; Meta
-     busy 1, 2, 131000, 133004; a 429 or 5xx without a code) also trips the number's **circuit
-     breaker**: its other waiting messages wait it out (30 s, doubling to 10 minutes while Meta keeps
-     refusing, no attempt spent, reason "meta_throttled") instead of each being refused in turn; the
-     next message Meta takes closes it;
-   - the token refused → the connection on Reconnect, the message held (cancelled after 48 hours);
-   - an account problem (no payment method, restricted, not registered) → failed with the reason, and an alert;
-   - the customer stopped marketing → recorded, failed;
-   - anything else → failed with Meta's reason in plain words (`metaErrorExplanation`);
-   - **no answer at all** → failed as "uncertain" and never repeated on its own (Meta may have it);
-     the merchant can Retry it.
-5. Meta's status webhooks move it on: `sent`, `delivered`, `read`, `failed`. Statuses only move
-   forward (`statusAfterEvent`): a late "sent" after "delivered" changes nothing; "failed" after
-   "delivered" changes nothing; "delivered" after "failed" wins.
+`queueMessage` makes one row per purpose (`idempotencyKey`, unique per store), so Shopify's retries,
+a duplicate queue delivery or a double press send once. The `whatsapp` queue's `wapp_send` job claims
+the row and checks, in order: the connection is up (else held, cancelled after 48 hours), the
+automation or campaign still runs, automation isn't paused, consent, the sending hours (store time),
+the store's daily limit, the customer's daily limit, and the pace (a linked phone: one at a time, 4–8
+seconds apart; the Cloud API: 20 a second). Then one call to Evolution.
 
-Media: free-form replies take an image, document or video by its https link (Meta fetches it); a
-template with a media header created in WhatsApp Manager takes the link at send time. Templates
-written here have a text header or none (Meta's media-header examples need its upload API).
+- Evolution's answer makes the message **accepted**; **sent**, **delivered** and **read** come only
+  from WhatsApp's reports (`MESSAGES_UPDATE`, or Meta's statuses), recorded once each, and a message
+  never moves backwards.
+- **A number not on WhatsApp** is skipped and remembered for 30 days.
+- **Unreachable / 5xx**: retried after 30 s, 2 min, 10 min, 30 min, then failed with the reason.
+- **A send that timed out may have gone**: it is marked failed ("uncertain") and **never retried
+  automatically**; the merchant decides (Retry). A send that never finished (the worker died) is
+  marked the same way by the sweep.
+- Limits: daily per store (linked phone default 200, at most 1,000; Cloud API 1,000 / 100,000),
+  per customer 3 a day (at most 10), 20 dashboard messages a minute, campaigns at most 250
+  recipients on a linked phone.
 
-## Workflows
+## Automations
 
-Trigger → conditions (all must hold) → an approved template with each variable mapped (or, for a
-customer's message, the merchant's own reply) → timing.
+Triggers: an order is placed, paid, ships (once per order, the first parcel), is cancelled; a
+checkout is left unfinished (timed from the customer's last change; the order cancels it); a customer
+signs up (needs `read_customers`; bizinsights subscribes `customers/create` for the store when one
+is switched on); a customer sends a message (with a cool-down). Shopify's webhooks arrive verified
+(HMAC, dedupe, shop binding) and are applied after the analytics write.
 
-| Trigger | Started by | Can use |
-| --- | --- | --- |
-| New order | `orders/create` | name, store, order number, total, status page, products |
-| Order paid | `orders/paid` | the same |
-| Order shipped | `orders/fulfilled`, `orders/partially_fulfilled` (once per order) | the same + tracking number, link, courier |
-| Order cancelled | `orders/cancelled` (it also cancels what other workflows still wait to send about that order) | the same |
-| Checkout abandoned | `checkouts/create`, `checkouts/update` with a phone number; timed from the customer's latest change; the order (its `checkout_token`) or `completed_at` cancels it | name, store, products, total, the checkout link |
-| New customer | `customers/create` (the store is subscribed per store when such a workflow is switched on; needs `read_customers`) | name, store |
-| Custom event | the store's own tools, with its event key; or "Send a test event" | name, store, event date and time, any value sent |
-| Customer sends a message | a customer's message in Meta's webhook (never STOP, START or "stop promotions", reactions or system notices) | sends the merchant's own text (up to 1,000 characters), no template |
-
-Conditions: order total at least / at most, customer's country in / not in, a product's name
-contains, new or returning customer, order tag has / lacks, payment method contains; for a
-customer's message, its words contain any of a list (any case), and it arrives outside / within
-store-time hours (an away message). Timing: at once or N minutes after the trigger, or (custom
-events with a time) N minutes before it; a reply within 12 hours; marketing workflows default to
-sending hours 09:00-20:00 store time. Checkout reminders and welcome messages must use a Marketing
-template; a workflow using a Utility template can't be switched on until the store chose how
-customers agree.
-
-A workflow runs **at most once per order, checkout, customer, event or message** (`wa_workflow_runs`
-unique on workflow and subject). A run that doesn't send says why (conditions, no number, consent,
-template, a missing value, stale, automation paused, replied recently). Events older than 48 hours
-start nothing. Workflows never trigger each other.
-
-### Replies to customers' messages (support auto-replies)
-
-A "Customer sends a message" workflow answers a customer who writes to the store's number with the
-merchant's own text. WhatsApp allows that without a template because the customer has just written
-(its 24-hour window is open; the sender checks the window again right before it goes, and Meta
-would refuse otherwise). It is a service message, so no marketing or order-update consent is
-needed, but a customer who replied STOP gets nothing.
-
-- **Once per message**: the run is keyed `message:<Meta's id>`, so Meta redelivering the webhook (or
-  a retry after a failure part-way) answers nothing twice.
-- **Once per customer in its cool-down** (default 24 hours, 0 = every message): a lease per workflow
-  and customer stops two messages answered at the same moment, and the run history stops it across
-  leases; the run says "replied recently".
-- A message more than an hour old when it is applied (Meta held the webhook back) gets no reply.
-- Switching one on needs WhatsApp's webhooks to reach bizinsights (the connection subscribed).
-- Ready-made: **Support auto-reply** (any message, once a day) and **Away message** (outside 9am to
-  5pm store time, at most every 12 hours). The workflow's Test sends its text to the merchant's own
-  number, which WhatsApp delivers only if that number wrote to the business in the last 24 hours.
-
-### Which triggers a store can use
-
-`triggerAvailability` in `workflows.ts` (the builder shows it; Activate refuses anything else):
-
-- Shopify's order and checkout triggers only where the store's Shopify app receives those topics
-  (`APP_WEBHOOK_TOPICS`): a store connected through the App Store app gets none until Shopify
-  approves protected customer data, and the builder says so instead of offering them.
-- **New customer** needs `read_customers` (and subscribes the store to `customers/create` when it is
-  switched on).
-- **Customer sends a message** needs the connection subscribed to Meta's webhooks.
-- Custom events always work. A store without Shopify can't open WhatsApp Automation at all: the
-  page asks to connect a store first.
-
-A switched-on workflow that something later stops (a template Meta rejects, the consent choice
-undone, a trigger no longer received) is listed on the Overview, and automation shows **Needs
-attention** rather than Active (`blockedActiveWorkflows`).
-
-## Pausing all automation
-
-Settings or the Overview → **Pause all automation** (owners and admins, confirmed, audited
-`whatsapp.automation_paused` / `.automation_resumed`; `wa_settings.automation_paused_at`):
-
-- workflows start nothing: each trigger is still recorded as a run that sent nothing
-  ("automation_paused"), so the merchant sees what was missed;
-- messages workflows and campaigns were already waiting to send are held (no attempt spent);
-- due campaigns don't start, sending ones make no more batches; scheduling one keeps it scheduled;
-- tests, messages a person sends from the dashboard and team alerts still go (explicit actions);
-- **Resume** releases what was held at once, carries on sending campaigns and starts due ones;
-- held for more than 48 hours, a message is cancelled ("automation paused") rather than sent late.
-
-**Custom events** (appointment and service reminders, sign-ups from another tool): Settings → Event
-key makes a `whev_...` key (shown once; only its SHA-256 is kept; a new one replaces it). Then:
-
-```bash
-curl -X POST https://bizinsights.io/api/whatsapp/events -H "Authorization: Bearer whev_..." -H "Content-Type: application/json" -d '{"event":"appointment_booked","eventId":"bk_1042","phone":"+61412345678","firstName":"Priya","at":"2026-11-03T10:30:00+11:00","values":{"service":"Haircut"}}'
-```
-
-The answer says how many workflows it started. The same `eventId` again starts nothing.
-`marketingConsent: true` records the customer's marketing consent ("recorded by your team").
-
-## Campaigns
-
-An approved **Marketing** template to the customers who agreed to WhatsApp marketing and never
-replied STOP, filtered by the audience. Scheduling needs a working, registered number subscribed to
-its webhooks (so STOP replies arrive), every variable filled (a campaign knows the customer's first
-name, the store's name and fixed text), and the merchant confirming the exact count the estimate
-showed. At its time it starts: its messages are made in batches of 500 (idempotent per campaign and
-customer), spread at 10 a second, each checked again right before it goes. Cancel stops what hasn't
-gone to Meta. A campaign reaches at most 100,000 customers. The report counts each status and the
-commonest failure reasons.
-
-## Meta's webhooks
-
-`GET /api/webhooks/whatsapp` answers Meta's handshake only with `WHATSAPP_WEBHOOK_VERIFY_TOKEN`.
-`POST /api/webhooks/whatsapp`:
-
-1. `X-Hub-Signature-256` (HMAC-SHA256 of the raw body with bizinsights' app secret) is checked
-   before anything is read. Every number is connected through bizinsights' app, so its secret
-   vouches for every delivery. Refusals are limited per IP.
-2. The body is stored once in `wa_webhook_events`, keyed by its SHA-256 (Meta retries the same body),
-   **encrypted** (it carries numbers and messages), and queued (`kind: "whatsapp_webhook"`). Meta
-   gets its 200 at once.
-3. The worker applies it: statuses (by our id, then Meta's; another store's message or one sent
-   another way is left alone), customers' messages (stored once per Meta id; STOP / START /
-   Stop promotions; the 24-hour window; then the store's "Customer sends a message" workflows, once
-   per message even when Meta redelivers), `user_preferences`, template reviews, categories and
-   quality, the number's quality, limit and name, and `account_update` (`PARTNER_REMOVED` →
-   Reconnect; disabled or restricted → account problem). Each change applies only to the store whose
-   number (or account) it names. The body is cleared once applied.
-4. A delivery that fails is retried by the queue; one that keeps failing (6 tries) is set aside
-   (`dead`), and the stores it names get an alert. The sweep queues again anything left waiting.
+Each automation runs **at most once per order, checkout, customer or message window** (a unique run
+row), records why it didn't send when it didn't (conditions, consent, no phone, stale event over 48
+hours, missing values, paused…), never triggers another, and starts in **test mode**. A trigger the
+store can't receive (the App Store app before Shopify approves protected customer data, no
+`read_customers`) is shown with why and can't be switched on.
 
 ## Data and retention
 
-Every `wa_*` table except `wa_webhook_events` carries `workspace_id` with the tenant RLS policy; the
-merchant API reads through `withTenant` *and* filters by workspace and store; webhooks and jobs use
-the owner role and are scoped by number, account, signature or row id.
+Tables (`wapp_*`): connections, settings, templates, contacts, consent events, suppressions,
+messages, message events, webhook events, automations, automation runs, campaigns. Message texts are
+kept for the store's retention (default 90 days, 7–365), then only the record; records 400 days;
+a webhook event's body until it is applied (the row 7 days, a set-aside one 30); attachments until
+sent. Evolution's own database
+keeps sessions and, for Cloud API numbers, sent messages, pruned nightly after 7 days.
+`customers/redact` erases a customer's WhatsApp data by hash (also in the old tables); a data request
+exports it; `shop/redact` and erasing a store delete everything, the instance first. Rotating
+`TOKEN_ENCRYPTION_KEYS` re-encrypts every `wapp_*` secret; the retired tables are only erased by
+hash, never decrypted, so they aren't re-encrypted (a rollback past this release after a key
+rotation would find their old ciphertext unreadable).
 
-| Table | Holds |
-| --- | --- |
-| `wa_connections` | The store's number (one per store): status and step, account and number ids and names, quality, limit, registration, the Nango connection id, the PIN (encrypted), when subscribed, checked, last heard from |
-| `wa_settings` | How customers agree to updates (who chose, when), Shopify consent covers WhatsApp, sending hours, daily limit, the test number (encrypted), the event key's hash, since when automation is paused (and by whom) |
-| `wa_templates` | The account's templates as Meta last reported them |
-| `wa_contacts` | A customer's number (encrypted), first name (encrypted), masked number, keyed hash, country, consent, last message, Shopify's order count and spend |
-| `wa_consent_events` | Every consent change, with its source |
-| `wa_messages` | Every message, sent and received: the queue and the history. A campaign's recipients are its messages |
-| `wa_message_events` | Meta's delivery reports, once per message and status |
-| `wa_webhook_events` | Meta's deliveries until applied (body encrypted, then cleared) |
-| `wa_workflows`, `wa_workflow_runs` | Workflows (a reply workflow keeps its text and cool-down; its template columns are empty) and each time one fired |
-| `wa_campaigns` | Campaigns |
+## Scaling
 
-- Numbers: `HMAC(CUSTOMER_HASH_KEY, "wa:<storeId>:<digits>")` finds a contact without decrypting
-  (the same hash the earlier feature used, so a recorded privacy request finds both); ciphertexts
-  are AES-256-GCM under `TOKEN_ENCRYPTION_KEYS` with AAD `wa2:<storeId>:<kind>`.
-- The dashboard shows masked numbers (`+61 •••••• 678`); message text only to people with "View
-  contact information".
-- Retention (`RETENTION` in `sweep.ts`, daily): messages and their reports 365 days after they ended;
-  a failed message's details 7 days (for Retry); applied webhook bodies are cleared at once, the rows
-  go after 7 days (set-aside ones 30); workflow runs 90 days; consent records as long as the contact.
-- `customers/redact` deletes the customer's contact, consent records, messages and runs (and their
-  records in the old tables); `shop/redact` deletes every WhatsApp record of the store and its token at
-  Nango; `customers/data_request` exports the contact, consent history and messages, and how many
-  records the old tables still hold. `/privacy` says all of this, and names Nango as a sub-processor.
-- Key rotation (`ops:reencrypt`) re-encrypts every WhatsApp Automation ciphertext; the old tables are
-  left as they are (nothing reads them).
+One task serves every session of its shard: Baileys sessions are stateful sockets, so two tasks can't
+share an instance, and a deployment stops the old task before starting the new one (`minHealthyPercent
+0`, `maxHealthyPercent 100`): a minute or two without WhatsApp, after which sessions resume from the
+database without a new QR code. Send pacing, idempotency and retries live in bizinsights (SQS,
+DynamoDB), not in Evolution, so the functions scale as usual.
 
-## Security
+More stores than one task holds (watch the `whatsapp-service-memory` alarm; roughly a few hundred
+idle sessions per GB) → **a second shard**: another `WhatsappStack` service with
+`DATABASE_CONNECTION_CLIENT_NAME=insights_b`, its own Cloud Map name and URL, `EVOLUTION_SHARD`
+handled by `evolutionServer()` in `evolution.ts`, and new connections assigned to it. Existing
+connections keep their shard (stored on the row).
 
-- Tokens never reach the browser or a log; the business token lives at Nango, fetched per call and
-  kept in memory for 4 minutes. Every business-token call carries `appsecret_proof`.
-- Embedded Signup: a single-use nonce bound to the person and store; window messages read only from
-  `facebook.com`; Meta's token inspector confirms the token is for bizinsights' app with both
-  permissions and the account granted; one number per store (a unique index).
-- Webhooks: signature first; stored once; per-IP limits on refusals.
-- Custom events: a per-store key (only its hash kept), limited per key and per IP for unknown keys.
-- Every change a merchant makes is audited (`whatsapp.connected`, `.disconnected`,
-  `.settings_changed`, `.template_submitted`, `.workflow_*`, `.campaign_*`, `.consent_recorded`,
-  `.message_sent`, `.pin_viewed`, `.event_key_*`...).
-- Rate limits per store (connect, Check again, templates, tests, estimates, sends) and per user (PIN).
-- Logs redact phone numbers, `wa_id`, PINs and Meta tokens (`core/logger.ts`).
+## Settings and secrets
 
-## Scale
+| Setting | Where | What |
+| --- | --- | --- |
+| `EVOLUTION_API_URL` | CDK (`app-stack.ts`), every function | Evolution's private address |
+| `EVOLUTION_API_KEY` | Secrets Manager `insights/<env>/evolution-api`, generated by CloudFormation; read by name at cold start (`EVOLUTION_SECRET_ARN`) | The global key; the task gets it as `AUTHENTICATION_API_KEY` |
+| `EVOLUTION_DB_USER`, `EVOLUTION_DB_PASSWORD` | Secrets Manager `insights/<env>/evolution-db`, generated; the cron and the task only | Evolution's own database role |
+| `EVOLUTION_SHARD` | default `a` | The shard new connections go to |
+| `EVOLUTION_WEBHOOK_URL` | optional | Where Evolution posts (default `API_URL`); local development only |
+| `EVOLUTION_TIMEOUT_MS` | default 15000 | Per call to Evolution |
+| `WHATSAPP_CONFIG_ID`, `WHATSAPP_APP_ID` (empty: `META_APP_ID`), `WHATSAPP_API_VERSION` | `apps/aws/src/settings.ts` | Cloud API: Embedded Signup's configuration on the Meta app "Insights" 971575545351940 (`2228218088074576`) |
+| `META_APP_SECRET` (or `WHATSAPP_APP_SECRET`), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Secrets Manager `insights/<env>/app` | Cloud API: code exchange, webhook signatures, the handshake |
 
-Built to grow without a redesign, not proven at a million users. The API and worker are stateless
-Lambda functions; sends, webhook deliveries and campaign batches are SQS jobs with retries and a
-dead-letter queue (alarms on its depth and on each queue's oldest job, and the CloudWatch dashboard's
-queue-depth graph, in `infra/cdk/lib/app-stack.ts`); everything is idempotent (unique keys, claims,
-monotonic statuses); lists are cursor-paged; the hot paths are indexed (`status, send_after`;
-`store_id, created_at`; `campaign_id, status`; the unique keys); per-store limits cap what one store
-can use (rate limits on every merchant action, the daily cap, Meta's tier), each number is paced at
-20 sends a second, and a number Meta throttles waits behind its circuit breaker instead of being
-hammered. Retries are classified (retry, reconnect, account, opt-out, fail, uncertain) and bounded
-with exponential backoff and jitter. The limits that bind first:
+Nothing is pasted by a merchant. The Deploy run's config check prints "WhatsApp service on, Cloud API
+off (needs …)" while a Cloud API setting is missing; the page then offers only the QR way.
 
-- **Meta**: each number's messaging tier (250 → 1K → 10K → 100K → unlimited new customers a day,
-  growing with quality) and about 80 messages a second per number; bizinsights paces each number at
-  20 a second and campaigns at 10.
-- **Nango**: the free plan holds 10 connections in all (ad accounts included); each WhatsApp store
-  is one more. Past that it is Nango's paid plan (from US$50 a month), and token reads go through its
-  API (cached 4 minutes per process).
-- **The jobs Lambda's concurrency and RDS** (`db.t4g.micro` today): a 100,000-recipient campaign is
-  100,000 sends plus their status webhooks over about three hours.
+## Owner's steps (Cloud API)
 
-Before claiming production readiness for a million users: load-test the send and webhook paths
-against Meta's test number, test failure recovery (Meta down, Nango down, RDS failover), and plan
-capacity (RDS class, Lambda concurrency, Nango plan, SQS throughput).
+The QR way needs nothing from the owner. The Cloud API needs bizinsights' Meta app to be a **Tech
+Provider**, which only the owner can do in Meta's consoles (never automated: it has blocked the admin
+account before). Already done on 2026-10-25: WhatsApp added to the app "Insights" (971575545351940),
+Facebook Login for Business settings and domains, the Embedded Signup configuration
+`2228218088074576` (60-day system-user token, WhatsApp Cloud API only), the webhook verify token.
+Still the owner's:
 
-## Setting it up (the owner; none of this can be done from code)
+1. **Business verification** of Zodiix Pty Ltd (Business settings → Security Center), for the
+   portfolio the app is linked to (bizinsights.io).
+2. **App Review**: Advanced Access for `whatsapp_business_messaging` and
+   `whatsapp_business_management` (and `public_profile` if not granted), with screencasts of a
+   message sent from bizinsights arriving and a template created in bizinsights.
+3. In **WhatsApp → Configuration**, the app's webhook: `https://bizinsights.io/api/webhooks/whatsapp`
+   with the verify token, fields `messages` and `message_template_status_update`.
 
-What the server needs, and where each goes. Public ids live in `apps/aws/src/settings.ts` (they
-reach the browser anyway: Meta's SDK needs them); secrets live only in AWS Secrets Manager
-(`insights/<env>/app`), set with `node infra/cdk/scripts/put-secrets.mjs --env production --set NAME`
-(`--set` reads the value from the clipboard, or a prompt that shows only `*`, prints no value, and
-refuses a Meta secret Meta says isn't that app's). There is no `.env` in production. Development and staging use their
-own Meta app (or none) and their own `insights/<env>/app` secret: never production's values.
+Until then Meta's window refuses anyone without a role on the app ("can't onboard customers right
+now"); people with a role (admins, developers, testers) can connect their own business.
 
-| Setting | What it is | Where | How to get it | Today (production) |
-| --- | --- | --- | --- | --- |
-| `WHATSAPP_APP_ID` | The Meta app every store connects through (empty: `META_APP_ID`) | settings.ts | Meta app dashboard → App settings → Basic → App ID | **empty since 2026-10-25**: WhatsApp runs on the Meta Ads app **"Insights" `971575545351940`** (portfolio Zodiix Pty Ltd). It ran on "pixmagic" `1799660384680551` before; nothing was ever connected through it |
-| `WHATSAPP_CONFIG_ID` | The Insights app's Facebook Login for Business configuration of the Embedded Signup variation: what Meta's window shows and grants | settings.ts | Step 4 below (Configurations → its ID) | `2228218088074576` ("bizinsights WhatsApp Signup", 2026-10-25) |
-| `WHATSAPP_APP_SECRET` | The app's secret when WhatsApp runs on an app of its own: exchanges the sign-up code, signs `appsecret_proof`, and is what Meta signs every webhook with (`X-Hub-Signature-256`) | secret | — | **not needed**: on the Insights app, `META_APP_SECRET` (set) does all three. Leave it unset: when set it wins over `META_APP_SECRET` |
-| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | A random string Meta repeats back (`hub.verify_token`) when it checks the webhook address; `GET /api/webhooks/whatsapp` answers the challenge only for it (constant-time compare) | secret | Generated, never chosen: `put-secrets.mjs --env production --generate WHATSAPP_WEBHOOK_VERIFY_TOKEN` | set (release 116's config check no longer lists it) |
-| `NANGO_SECRET_KEY` | Nango's key: Nango keeps each store's WhatsApp token | secret | Nango dashboard (prod environment) → Environment settings | set (the ad platforms use it) |
-| `WHATSAPP_API_VERSION` | The Graph API version every call uses | settings.ts | Meta's changelog | `v26.0` |
+## Runbook
 
-Until every one is set the page says connecting isn't available yet (and, to people who may
-connect, which settings are missing and what each is), `POST …/connect/start` answers 503
-`not_configured`, the Deploy run's config check names what is missing ("WhatsApp Embedded Signup off
-(needs ...)") as a warning on the run, and nothing pretends to be connected. A secret changed in
-Secrets Manager reaches the functions on their next start: run **Deploy to AWS** (Actions → Run
-workflow, on main) after setting one.
+- **`whatsapp-service-down`** (no task running) or **`whatsapp-service-unreachable`** (the sweep
+  couldn't reach it): ECS console → cluster `insights-production-whatsapp` → service
+  `insights-production-evolution-a` → its stopped tasks' reason; logs in `/ecs/insights-production-evolution`.
+  A task that can't reach its database fails its migration at start: check the `evolution` database
+  and role (re-run: invoke `insights-production-cron` with `{"action":"evolution-db"}`). Messages
+  wait meanwhile; stores see "WhatsApp messages are waiting".
+- **A store logged out**: only its owner can link again (new QR code). Messages wait 48 hours.
+- **Upgrading Evolution**: test the new tag locally (`docker compose --profile whatsapp up -d
+  evolution`, then the API tests' calls by hand), pin its digest in `whatsapp-stack.ts` and
+  `docker-compose.yml`, merge; the deploy replaces the task (a minute or two without WhatsApp).
+- **Rotating the global key**: Secrets Manager → `insights/production/evolution-api` → rotate
+  (or put a new value), then run Deploy to AWS: the task and functions read it at start. Instance
+  tokens are bizinsights' own and stay valid.
+- **Orphaned instances** (a crash between creating an instance and saving it): the sweep deletes
+  `bi_` instances no connection holds.
 
-In Meta (developers.facebook.com and business.facebook.com, in a browser; automating these consoles
-has blocked the admin account before, so the owner clicks). Checked against Meta's docs on
-2026-10-25 ([Embedded Signup implementation](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation/),
-[Embedded Signup v4](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-4),
-[Facebook Login for Business](https://developers.facebook.com/documentation/facebook-login/facebook-login-for-business),
-[Become a Tech Provider](https://developers.facebook.com/documentation/business-messaging/whatsapp/solution-providers/get-started-for-tech-providers));
-Meta renames buttons now and then, so a label may differ slightly.
+## Deployment, migration and rollback
 
-1. **Open the app.** Sign in to [developers.facebook.com/apps](https://developers.facebook.com/apps/)
-   with the Facebook account that administers **"Insights" (App ID 971575545351940)**
-   (sebanceo@gmail.com) and open it.
-2. **Add WhatsApp to it.** Left menu **Use cases** → **Add use case** (on older dashboards: **Add
-   product** → WhatsApp → **Set up**) → **Connect with customers through WhatsApp** → add it. Done
-   2026-10-25. Its setup asks for a business portfolio (the app's is **bizinsights.io**) and, to
-   claim a free test number, accepts Meta's WhatsApp Business Platform and Cloud API terms; on
-   2026-10-25 "Claim test number" answered "An error occurred while creating the test account" (not
-   needed for Embedded Signup).
-3. **Facebook Login for Business → Settings.** Under **Client OAuth settings** set to **Yes**: Client
-   OAuth login, Web OAuth login, Enforce HTTPS, Embedded Browser OAuth Login, Use Strict Mode for
-   redirect URIs, **Login with the JavaScript SDK**. Add `https://bizinsights.io/` to **Allowed
-   Domains for the JavaScript SDK** and to **Valid OAuth Redirect URIs** (keep every entry already
-   there: Meta Ads' sign-in through Nango uses them). Embedded Signup returns
-   nothing to a page whose domain isn't in both. Press the page's own **Save changes** at the bottom
-   (the toast after typing a URI doesn't save it), then reload to check it stayed. Done 2026-10-25
-   (and checked after a reload).
-4. **Create the configuration** (this is `WHATSAPP_CONFIG_ID`). Meta offers the WhatsApp Embedded
-   Signup variation only to an app linked to a business portfolio (Review → Verification →
-   Business portfolio). On 2026-10-25 the Insights app had none; it was linked to **bizinsights.io**
-   (business 1415197520268134, the only portfolio its admin has; shown "Unverified" then). Even then,
-   **+ Create configuration** offered only the "General" variation, so the configuration was made
-   with **Templates → WhatsApp Embedded Signup Configuration With 60 Expiration Token → Use template**
-   and then **Edit**ed:
-   - Name: `bizinsights WhatsApp Signup` (Meta allows 30 characters).
-   - Login variation: **WhatsApp Embedded Signup** (fixed by the template).
-   - Products: **WhatsApp Cloud API** only (untick "Marketing Messages API for WhatsApp", which Meta
-     ticks with it). Selecting products is what makes it a **v4** configuration (v2 and v3 stopped
-     working on 2026-10-15).
-   - Access token: **System-user access token**, expiring after **60 days**. The template fixes both
-     ("can't be changed later"), so the health check refreshes each store's token
-     ([Tokens that expire](#connecting-connect-whatsapp)). Once the app is a Tech Provider and Meta offers
-     the variation under **+ Create configuration**, a configuration with expiration **Never** can
-     replace it: a new id in `WHATSAPP_CONFIG_ID` serves new connections, and tokens already issued
-     keep being refreshed.
-   - Assets: **WhatsApp accounts** only (Meta's six WhatsApp account tasks, which the template sets).
-   - Permissions: `whatsapp_business_management` and `whatsapp_business_messaging`, nothing else.
-   - Its **Configuration ID** is in the Configurations list. It is not a secret: it goes in
-     `WHATSAPP_CONFIG_ID` in `apps/aws/src/settings.ts`, in a pull request merged on green.
-5. **Deploy and check.** Once a release with the configuration id is live, `/whatsapp` shows **Connect
-   WhatsApp Business** instead of "not available yet", and within 15 minutes the sweep points the
-   app's WhatsApp webhook at `https://bizinsights.io/api/webhooks/whatsapp` (`ensureAppWebhook`, then
-   every 6 hours; Meta calls the URL with the verify token before it accepts, so "set" proves Meta
-   can reach it). The Overview shows people who may connect how Meta last answered. If the app's
-   webhook already points somewhere else it is left alone and logged: then set it by hand in
-   **WhatsApp → Configuration** with the verify token. Nothing to do in AWS: `META_APP_SECRET` and
-   `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are already set.
-6. **Connect your own business first.** With Standard Access, people with a role on the app (App roles
-   → Roles: admins, developers, testers) can already go through Embedded Signup with their own
-   business. Do that for PixMagic, add a payment method in WhatsApp Manager, get a template approved
-   and send yourself a test (the merchant guide below).
-7. **Open it to every business (Tech Provider).** Meta's two steps:
-   - **Business verification** of Zodiix Pty Ltd (Business settings → Security Center): submitted
-     2026-10-20, waiting for Meta. App Review can't start before it's approved. The app's portfolio
-     must be the verified one: on 2026-10-25 the only portfolio the app's admin could pick was
-     **bizinsights.io** ("Unverified"), and the app was linked to it. If Zodiix Pty Ltd's
-     verification belongs to another portfolio, check in business.facebook.com that it is this one
-     (renamed) before App Review.
-   - **App Review**: Advanced Access for `whatsapp_business_messaging` and
-     `whatsapp_business_management` (and `public_profile`, which a Facebook Login for Business app
-     needs before it serves other businesses, if it isn't granted yet), with two screencasts: a
-     message sent from bizinsights arriving in WhatsApp, and a message template created in
-     bizinsights. Meta's changelog says Access Verification is no longer required for Tech Providers.
-   Until both are done, Meta's window refuses anyone without a role on the app.
+1. Migration `20261026120000_whatsapp_evolution` is additive: 12 new tables with RLS, no change to
+   any existing table. It also marks resolved any open alert of the retired module (`wa_reconnect`,
+   `wa_account`, `wa_webhook_failed`), which nothing can resolve any more.
+2. The new stack `InsightsWhatsapp-production` deploys after the App stack: its custom resource
+   invokes the cron's `evolution-db` action (role and database, idempotent) and fails the deploy if
+   that fails; the ECS service has a circuit breaker with rollback. The secrets come with
+   `InsightsData-production`.
+3. Rollback: Deploy to AWS moves the functions back to their previous versions; they read only the
+   old tables, which this release doesn't touch. The release of 2026-10-25 (Meta + Nango) keeps
+   working where it was; no store had connected through it.
+4. Nothing of the previous design is copied over: its tokens (at Nango) and secrets are not reused.
+   A store that had connected there would connect again; none had.
 
-Meta's permissions this needs: `whatsapp_business_management` (read the account, its numbers and
-templates; subscribe to its webhooks; submit templates) and `whatsapp_business_messaging` (send).
-Both need Advanced Access (App Review) for businesses without a role on the app. Meta's webhook
-fields bizinsights subscribes: `messages`, `message_template_status_update`,
-`message_template_quality_update`, `template_category_update`, `phone_number_quality_update`,
-`phone_number_name_update`, `account_update`, `user_preferences`.
+## The old tables
 
-Nango needs nothing more: the `whatsapp-business` integration (provider `whatsapp-business`) is
-already in the prod environment (made in Nango's dashboard on 2026-10-24); bizinsights would make it
-itself if it were missing. Watch the plan's connection count.
+Two earlier designs, both erase-only now (`whatsapp/legacy.ts`): customers/redact and shop/redact
+erase there, a data request counts what they hold, and a store's retired Nango token is deleted when
+the store is erased.
 
-Shopify: the order and checkout topics are already in the apps' tomls; "New customer" workflows
-subscribe `customers/create` per store (with `read_customers`). Live stores need **protected
-customer data Level 2** (name, phone, address) approved, or Shopify redacts the phone number and the
-runs say "No phone number on the order". Development stores are exempt, which is how to test.
+- 2026-10-10 to 2026-10-24: `whatsapp_*`, `order_trackings`, `order_tracking_events`,
+  `abandoned_checkouts`, `customer_reviews`.
+- 2026-10-25: `wa_*` (Meta Cloud API, the token at Nango).
 
-## Deployment checklist
-
-1. The migration `20261024200000_whatsapp_automation` is additive (11 new tables with RLS, no change to
-   any existing table); Deploy to AWS applies it after the deploy. Rollback is safe: the release
-   before reads only the old tables, which are untouched. `20261025120000_whatsapp_pause_and_replies`
-   adds four nullable columns (`wa_settings.automation_paused_at/_by`, `wa_workflows.reply_text`,
-   `reply_cooldown_minutes`); a reply workflow keeps empty template columns, so the release before
-   still reads every row (it just never runs a trigger it doesn't know).
-2. Merge to `main`; check the Deploy run succeeded and `/api/version` serves the merge commit.
-3. Smoke: `GET https://bizinsights.io/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=1`
-   answers 403; an unsigned `POST /api/webhooks/whatsapp` answers 401; `POST /api/whatsapp/events`
-   without a key answers 401.
-4. The owner's Meta steps above, then the secrets and `WHATSAPP_CONFIG_ID` (a settings.ts change goes
-   out with the next deploy).
-5. A first real connect on a development store with Meta's test number or a spare number; a template
-   approved; a test message to the owner's own phone; one workflow on; one delivery report seen in
-   Activity.
-
-## Connecting WhatsApp and sending your first message (for merchants)
-
-1. Open **WhatsApp** in the menu and press **Connect WhatsApp Business**. Allow pop-ups if the browser asks.
-2. In Meta's window, sign in with the Facebook account that manages your business, choose (or create)
-   your business portfolio and WhatsApp Business account, then add or pick the phone number customers
-   will see, verify it with the code Meta sends, and keep both permissions ticked.
-3. Back on bizinsights, wait a few seconds while it checks and sets up the number. If it asks for one
-   more thing (choose a number, your existing 6-digit PIN), do that on the same page.
-4. In WhatsApp Manager, add a **payment method** for the account (Meta charges for business-started
-   conversations), if you haven't yet.
-5. **Settings**: add your own WhatsApp number as the test number, and choose how customers agree to
-   order updates.
-6. **Templates**: pick "Order confirmation", check the wording, and submit it. Meta usually reviews it
-   within minutes, sometimes up to a day.
-7. Once it shows **Approved**, press **Send test message** on the Overview: the dialog shows it
-   accepted by WhatsApp, then delivered to your phone (or what went wrong).
-8. **Workflows**: choose "Order confirmation", check the steps, and switch it on. From the next order,
-   customers who can receive it get it; **Message history** shows each message and whether it was
-   delivered. "Support auto-reply" or "Away message" answers customers who write to you.
-9. Need a break (a sale gone wrong, a holiday)? **Pause all automation** on the Overview or in
-   Settings; **Resume** when you're ready. Settings also has **Reconnect WhatsApp** (refresh access)
-   and **Disconnect WhatsApp**.
-
-If something doesn't work, the Overview says what and what to do: the connection's health, check
-by check, with **Check again**; anything Meta asks for (a payment method, a display-name review, a
-restricted account) with a link to WhatsApp Manager.
-
-## The old WhatsApp tables
-
-The earlier feature's tables (`whatsapp_connections`, `whatsapp_settings`, `whatsapp_templates`,
-`whatsapp_contacts`, `whatsapp_messages`, `whatsapp_message_events`, `whatsapp_campaigns`,
-`whatsapp_automation_rules`, `whatsapp_automation_runs`, `order_trackings`, `order_tracking_events`,
-`abandoned_checkouts`, `customer_reviews`) are no longer read or written, except: shop/redact and
-customers/redact still erase from them, the data request export counts what they hold about a
-customer, and a store that had a connection there is told it was retired and must connect again
-(its token, a pasted one under the merchant's own Meta app, is not carried over: the new design
-only connects through bizinsights' app). Its pages (order tracking `/track`, reviews `/review`,
-tracked links `/api/r/...`, the published reviews API) are gone; links already sent stop working.
-
-They are kept so a rollback to the release before the rebuild still works. **Next step (a follow-up
-pull request, after this release has been live and is the one a failed deploy rolls back to):** a
-migration that drops them, removes their models from `schema.prisma`, and removes `whatsapp/legacy.ts`
-and the two `purgeLegacyWhatsappOps` / `legacyRecordCount` uses. Before it, back up their row counts
-(`SELECT count(*)` per table through the admin host) in case anyone needs to be told.
+**Next step, a follow-up pull request** once this release is the one a failed deploy rolls back to:
+drop both sets (after recording their row counts), remove their models and `legacy.ts`.
 
 ## Testing
 
@@ -625,28 +412,30 @@ pnpm --filter @app/shared test
 ```
 
 ```bash
-TEST_PG_PORT=5487 TEST_PG_PASSWORD=app PGREQUIREAUTH=scram-sha-256 TEST_DB=wa_test pnpm --filter @app/api exec vitest run test/whatsapp.test.ts
+pnpm --filter @app/core exec vitest run test/whatsappEvolution.test.ts
 ```
 
 ```bash
-TEST_PG_PORT=5487 TEST_PG_PASSWORD=app PGREQUIREAUTH=scram-sha-256 TEST_DB=wa_test pnpm --filter @app/worker exec vitest run test/whatsapp.test.ts
+TEST_PG_PORT=5463 TEST_PG_PASSWORD=app TEST_DB=wapp_test pnpm --filter @app/api exec vitest run test/whatsapp.test.ts
 ```
 
-Use a throwaway Postgres for `TEST_PG_PORT`. Meta and Nango are faked; no message leaves the machine.
-The API test connects through the whole Embedded Signup finish (code exchange, token inspector,
-account, numbers, Nango import, webhooks, registration, templates), the PIN and choose-a-number
-steps, refusals (state, code, app, permissions, account), tenant isolation (another workspace gets
-404, a viewer only reads, one number per store), webhooks (signature, dedupe, statuses out of order,
-STOP), sending (retry, the circuit breaker, reconnect hold, uncertain, Retry), templates, workflows
-(once per order, conditions, consent choice, checkout reminder cancelled by its order), which
-triggers a store can use (an App Store store, no `read_customers`, no webhooks yet), replies to
-customers' messages (once per message, the cool-down, conditions, never STOP, nothing to someone
-who stopped), pausing (runs recorded, messages held and released, cancelled after 48 hours), the
-history's filters, campaigns (exact count, opted-in only), custom events (key, idempotency,
-before-the-event timing) and disconnect.
+```bash
+TEST_PG_PORT=5463 TEST_PG_PASSWORD=app TEST_DB=wapp_test pnpm --filter @app/worker exec vitest run test/whatsapp.test.ts
+```
 
-The page in a real browser, with Meta's SDK stubbed: `apps/web/e2e/whatsapp.spec.ts`.
+Evolution is `test-support/evolutionFake.ts` (answers as 2.3.7 does, signs webhooks as it does);
+nothing leaves the machine. The API test covers pairing with the provider's QR, "connected" only on
+the provider's word, every way a webhook is refused, the test number and the test's real status,
+sends (consent, idempotency, attachments, uncertain sends, retries), STOP and START from anyone,
+automations from Shopify's events (once per order, test mode, stale and paused), campaigns (exact
+count, greeted by name), tenant isolation, viewers, a shared link, secrets never in answers, and
+disconnecting. The worker test covers the queue (duplicate deliveries, retries, events set aside) and
+the sweep (uncertain sends, the reconcile, the service down, 48 hours down, retention). The CDK test
+covers the stack (pinned image, private, secrets only by reference, the database's CA).
 
-For a real end-to-end check, use a development store, Meta's test phone number (WhatsApp → API
-Setup) and your own phone as the only recipient. Don't send promotional messages to real customers
-while testing.
+In a real browser, with `apps/web/e2e/evolution-stub.mjs` as Evolution:
+`apps/web/e2e/whatsapp.spec.ts` (the four steps end to end).
+
+With a real phone: run Evolution locally (`docker compose --profile whatsapp up -d evolution`, or the
+deployed one), link a spare number, send to your own number only. Don't message real customers while
+testing.

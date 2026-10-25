@@ -137,7 +137,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     natGateways: 2,
     natInstanceType: "t4g.nano",
     logRetentionDays: 90,
-    // ~US$14.4/month on demand in Sydney (0.5 vCPU + 1 GB, ARM): see docs/whatsapp.md, "Cost".
+    // US$17.29/month on demand in Sydney (0.5 vCPU + 1 GB on Graviton; AWS price list 2026-10-25): docs/whatsapp.md, "Cost".
     whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: false },
     domain: {
       name: "bizinsights.io",

@@ -21,7 +21,9 @@ export async function ensureEvolutionDb(input: { databaseUrl: string; user: stri
   try {
     const hasRole = (await client.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [input.user])).rowCount! > 0;
     // A literal in DDL (no bind parameters there), quoted the way Postgres does.
-    if (hasRole) await client.query(`ALTER ROLE "${input.user}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD ${quoteLiteral(input.password)}`);
+    // RDS's master isn't a superuser: it may set a role's SUPERUSER or REPLICATION when creating it,
+    // never change them afterwards (a role it made has neither).
+    if (hasRole) await client.query(`ALTER ROLE "${input.user}" WITH LOGIN NOCREATEDB NOCREATEROLE PASSWORD ${quoteLiteral(input.password)}`);
     else await client.query(`CREATE ROLE "${input.user}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD ${quoteLiteral(input.password)}`);
     const hasDb = (await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [input.database])).rowCount! > 0;
     if (!hasDb) {

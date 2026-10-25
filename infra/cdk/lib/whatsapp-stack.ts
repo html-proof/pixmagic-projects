@@ -153,7 +153,11 @@ export class WhatsappStack extends Stack {
         SERVER_DISABLE_DOCS: "true",
         // No web console: nothing but the functions talks to it.
         SERVER_DISABLE_MANAGER: "true",
-        CORS_ORIGIN: cfg.domain ? `https://${cfg.domain.name}` : "https://invalid.example",
+        // Evolution refuses (500) any request whose Origin isn't listed, and a server's call has no
+        // Origin: anything but "*" breaks every call from the functions and the health check
+        // (src/main.ts, checked on 2.3.7 running). CORS only binds browsers, which never reach this
+        // service: its security group and the API key are what keep others out.
+        CORS_ORIGIN: "*",
         EVO_DB_HOST: data.db.dbInstanceEndpointAddress,
         EVO_DB_PORT: data.db.dbInstanceEndpointPort,
         ...(ca ? { RDS_CA_PEM: ca } : {}),
@@ -172,7 +176,7 @@ export class WhatsappStack extends Stack {
         // One task: its own memory is the cache (bizinsights' coordination is DynamoDB's).
         CACHE_REDIS_ENABLED: "false",
         CACHE_LOCAL_ENABLED: "true",
-        // Instance keys never come back in answers or webhooks.
+        // Webhooks carry no instance key (their apikey field is null).
         AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false",
         // Errors and warnings only: at LOG level Evolution prints each QR code, at INFO the linked number.
         LOG_LEVEL: "ERROR,WARN",
