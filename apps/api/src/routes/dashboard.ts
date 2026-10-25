@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
+import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
 import {
   audit,
   latestReconciliation,
@@ -46,24 +46,31 @@ export const adsViewQuery = {
 /**
  * What the Shopping Funnel page narrows the visit figures to (FunnelFilter in @app/shared):
  * `device=mobile|tablet|desktop|unknown`, `visitor=new|returning`, `landing=<site section>`,
- * `country=<ISO 3166 code>`.
+ * `country=<ISO 3166 code>`, `source=<traffic source>`.
  */
 export const funnelQuery = {
   device: z.enum(FUNNEL_DEVICES).optional(),
   visitor: z.enum(VISITOR_KINDS).optional(),
   landing: z.enum(SITE_SECTIONS).optional(),
   country: z.string().regex(COUNTRY_CODE).optional(),
+  source: z.enum(TRAFFIC_SOURCES).optional(),
 };
 type FunnelQuery = z.infer<z.ZodObject<typeof funnelQuery>>;
 
-/** The Shopping Funnel page's question, for the member asking: product sales only with the top products permission. */
+/**
+ * The Shopping Funnel page's question, for the member asking: product sales only with the top
+ * products permission, and visits by traffic source only with the traffic sources one (without it
+ * a `source` asked for is left out, and the answer's `filter` says what was applied).
+ */
 export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
+  const sources = seesModule(access, "traffic");
   const filter: FunnelFilter = {};
   if (q.device) filter.device = q.device;
   if (q.visitor) filter.visitor = q.visitor;
   if (q.landing) filter.landing = q.landing;
   if (q.country) filter.country = q.country;
-  return { filter, productSales: seesModule(access, "top_products") };
+  if (q.source && sources) filter.source = q.source;
+  return { filter, productSales: seesModule(access, "top_products"), sources };
 }
 
 /**

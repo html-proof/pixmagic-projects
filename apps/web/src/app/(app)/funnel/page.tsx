@@ -53,6 +53,7 @@ const FILTER_WORDS: Array<[keyof FunnelFilter, SegmentDimension]> = [
   ["visitor", "visitor"],
   ["landing", "landing"],
   ["country", "country"],
+  ["source", "source"],
 ];
 
 function FunnelView() {
@@ -67,7 +68,8 @@ function FunnelView() {
     setStage(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  const filterWords = FILTER_WORDS.filter(([k]) => s.filter[k]).map(([k, dim]) => segmentLabel(dim, s.filter[k]!));
+  // A traffic source applies only for members who see sources (the answer then has their segment); the API leaves it out otherwise.
+  const filterWords = FILTER_WORDS.filter(([k]) => s.filter[k] && (k !== "source" || f?.segments.source)).map(([k, dim]) => segmentLabel(dim, s.filter[k]!));
 
   return (
     <div className="space-y-5" data-print-root>
@@ -103,7 +105,7 @@ function FunnelView() {
 
       {ov && f && (
         <>
-          {s.filtered && (
+          {filterWords.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm" role="status" data-testid="funnel-filter-banner">
               <span>
                 Showing only <strong>{filterWords.join(" · ")}</strong>. Every visit figure is narrowed to them; orders, revenue and product sales are for all orders.

@@ -6,7 +6,7 @@ import { FUNNEL_STEPS, type FunnelStep, type SiteSection } from "@app/shared/jou
 import { SECTION_LABEL } from "@/components/dashboard/Funnel";
 import type { FunnelPageModule, Overview } from "@/components/dashboard/types";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtPts, segmentLabel, type SegmentDimension } from "./FunnelUi";
+import { filterable, fmtPts, segmentLabel, type SegmentDimension } from "./FunnelUi";
 import { FORMULAS, STAGES } from "./stageGuide";
 
 /** A panel over the page's right side, closed by its X, Escape or a click outside; keyboard focus stays inside while it's open. */
@@ -107,8 +107,8 @@ function Rows({ rows, empty }: { rows: Array<[ReactNode, ReactNode]>; empty: str
  */
 function segmentDifferences(segments: FunnelPageModule["segments"], k: number) {
   const out: Array<{ good: boolean; text: string }> = [];
-  for (const dim of ["device", "visitor", "landing"] as const satisfies readonly SegmentDimension[]) {
-    const list = segments[dim].filter((s) => s.key !== "not_recorded");
+  for (const dim of ["device", "visitor", "landing", "source"] as const satisfies readonly SegmentDimension[]) {
+    const list = (segments[dim] ?? []).filter((s) => s.key !== "not_recorded");
     const total = list.reduce((a, s) => ({ from: a.from + s.reached[k - 1]!, to: a.to + s.reached[k]! }), { from: 0, to: 0 });
     for (const s of list) {
       const from = s.reached[k - 1]!;
@@ -156,7 +156,7 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
 
   const actions = FUNNEL_ACTIONS.filter((a) => a.step === step);
   const done = new Set(f.actions.map((a) => a.id));
-  const products = (by: "viewed" | "added") =>
+  const products = (by: "viewed" | "added" | "checkouts" | "purchased") =>
     f.products
       .filter((p) => (p[by] ?? 0) > 0)
       .sort((a, b) => (b[by] ?? 0) - (a[by] ?? 0))
@@ -164,7 +164,7 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
       .map((p): [ReactNode, ReactNode] => [p.title ?? p.handle, `${fmtNum(p[by])} visits`]);
   const segmentRows = (dim: SegmentDimension, list: SegmentFunnel[]) =>
     list.slice(0, 6).map((x): [ReactNode, ReactNode] => [
-      x.key === "not_recorded" || (dim === "country" && (x.key === "unknown" || x.key === "other")) ? (
+      !filterable(dim, x.key) ? (
         segmentLabel(dim, x.key)
       ) : (
         <button type="button" className="text-left underline decoration-border underline-offset-2 hover:decoration-text" onClick={() => onFilter(dim, x.key)}>
@@ -276,7 +276,13 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
             <Rows rows={segmentRows("landing", f.segments.landing)} empty="No landing pages recorded." />
             <p className="text-xs font-medium text-muted">By device</p>
             <Rows rows={segmentRows("device", f.segments.device)} empty="No devices recorded." />
-            <p className="text-xs text-muted">Visits by traffic source aren&apos;t recorded by the pixel; the Breakdown section shows your orders by source.</p>
+            {f.segments.source && (
+              <>
+                <p className="text-xs font-medium text-muted">By traffic source</p>
+                <Rows rows={segmentRows("source", f.segments.source)} empty="No visits in these dates." />
+                {!f.sourcesFrom && <p className="text-xs text-muted">Traffic sources are recorded once your store runs the updated bizinsights pixel; the Breakdown section shows your orders by source meanwhile.</p>}
+              </>
+            )}
           </>
         )}
         {step === "viewed_product" && (
@@ -299,6 +305,8 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
           <>
             <p className="text-xs font-medium text-muted">Last page of visits that added to cart but didn&apos;t start checkout</p>
             <Rows rows={lastPages(f.steps[2]!.leftFrom)} empty="Nobody stopped here." />
+            <p className="text-xs font-medium text-muted">Products most often taken to checkout</p>
+            <Rows rows={products("checkouts")} empty={f.sourcesFrom ? "No checkout started in these dates." : "Checkouts per product are recorded once your store runs the updated bizinsights pixel."} />
             <p className="text-xs font-medium text-muted">Checkout start by device</p>
             <Rows rows={segmentRows("device", f.segments.device)} empty="No devices recorded." />
           </>
@@ -307,6 +315,8 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
           <>
             <p className="text-xs font-medium text-muted">Landing pages whose visits bought</p>
             <Rows rows={f.entryPages.filter((p) => p.purchases > 0).map((p): [ReactNode, ReactNode] => [p.path === "/" ? "Home page" : p.path, `${fmtNum(p.purchases)} of ${fmtNum(p.visits)} visits bought`])} empty="No visit that bought started on one of the top landing pages." />
+            <p className="text-xs font-medium text-muted">Products tracked visits bought most often</p>
+            <Rows rows={products("purchased")} empty={f.sourcesFrom ? "No tracked purchase in these dates." : "Purchases per product are recorded once your store runs the updated bizinsights pixel."} />
             {ov.modules.traffic && (
               <>
                 <p className="text-xs font-medium text-muted">Orders by traffic source (Shopify&apos;s record of each order&apos;s last visit)</p>

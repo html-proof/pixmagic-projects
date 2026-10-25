@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Info } from "lucide-react";
 import { FUNNEL_DEVICE_LABEL, SITE_SECTION_LABEL, VISITOR_KIND_LABEL, type FunnelDevice, type VisitorKind } from "@app/shared/funnel";
 import type { SiteSection } from "@app/shared/journey";
+import { TRAFFIC_LABEL, type TrafficSource } from "@app/shared/traffic";
 
 // ---------------------------------------------------------------------------
 // Small pieces the Shopping Funnel page's sections share: an information tip, a section card with
@@ -92,7 +93,7 @@ export function countryName(code: string): string {
   }
 }
 
-export type SegmentDimension = "device" | "country" | "landing" | "visitor";
+export type SegmentDimension = "device" | "country" | "landing" | "visitor" | "source";
 
 /** The words for a segment (funnelDetail's segment keys). */
 export function segmentLabel(dimension: SegmentDimension, key: string): string {
@@ -100,13 +101,14 @@ export function segmentLabel(dimension: SegmentDimension, key: string): string {
   if (dimension === "device") return FUNNEL_DEVICE_LABEL[key as FunnelDevice] ?? key;
   if (dimension === "landing") return SITE_SECTION_LABEL[key as SiteSection] ?? key;
   if (dimension === "visitor") return VISITOR_KIND_LABEL[key as VisitorKind] ?? key;
+  if (dimension === "source") return TRAFFIC_LABEL[key as TrafficSource] ?? key;
   if (key === "unknown") return "Country unknown";
   if (key === "other") return "Other countries";
   return countryName(key);
 }
 
 /** A segment the filter can narrow to (not "Not recorded", "Other countries" or an unknown country). */
-export const filterable = (dimension: SegmentDimension, key: string) => key !== "not_recorded" && !(dimension === "country" && (key === "unknown" || key === "other"));
+export const filterable = (dimension: SegmentDimension, key: string) => key !== "not_recorded" && !(dimension === "country" && (key === "unknown" || key === "other")) && !(dimension === "source" && key === "unknown");
 
 /** A rate's change in percentage points: "+3.1 pts", "−0.4 pts". */
 export function fmtPts(change: number): string {

@@ -7,14 +7,12 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { filterable, FunnelSection, segmentLabel, type SegmentDimension } from "./FunnelUi";
 import { STAGES } from "./stageGuide";
 
-type Tab = SegmentDimension | "source";
-
-const TABS: Array<[Tab, string]> = [
+const TABS: Array<[SegmentDimension, string]> = [
   ["device", "Device"],
   ["country", "Country"],
   ["landing", "Landing page"],
   ["visitor", "New vs returning"],
-  ["source", "Traffic source (orders)"],
+  ["source", "Traffic source"],
 ];
 
 const WHAT: Record<SegmentDimension, string> = {
@@ -22,6 +20,8 @@ const WHAT: Record<SegmentDimension, string> = {
   country: "The country each visit came from, as our network placed it. No address is kept.",
   landing: "The part of your store each visit started on.",
   visitor: "Returning visits are browsers the pixel saw on an earlier day; a shopper on a new device, or who cleared their cookies, counts as new.",
+  source:
+    "Where each visit came from: the site that linked to your store and the link's tags, sorted by the same rules as your orders' sources below. A visit typed in, bookmarked or opened from an app without tags is Direct. A shopper who comes back from somewhere else the same day keeps the first source.",
 };
 
 /** Up to three segments' progression at each step, side by side: the device comparison. */
@@ -126,21 +126,75 @@ function SegmentTable({ dim, segments, onFilter, f }: { dim: SegmentDimension; s
         {segments.some((s) => s.key === "not_recorded") && (dim === "device" || dim === "country")
           ? ` "Not recorded" is visits from before devices and countries were recorded${f.detailsFrom ? ` (from ${fmtDay(f.detailsFrom, { year: true })})` : ""}.`
           : ""}
+        {segments.some((s) => s.key === "not_recorded") && dim === "source"
+          ? ` "Not recorded" is visits from before traffic sources were recorded${f.sourcesFrom ? ` (from ${fmtDay(f.sourcesFrom, { year: true })})` : ""}, and visits whose first tracked page wasn't the one they arrived on (tracking accepted on a later page).`
+          : ""}
       </p>
     </>
   );
 }
 
+/** The store's orders by traffic source (Shopify's record of each order's last visit), beside the visits by source: never divided by them. */
+function OrdersBySource({ ov }: { ov: Overview }) {
+  const traffic = ov.modules.traffic;
+  if (!traffic) return null;
+  const currency = ov.store.currency;
+  return (
+    <div className="mt-6 border-t border-border pt-4">
+      <h3 className="text-sm font-medium">Orders by traffic source</h3>
+      <p className="mb-3 text-xs text-muted">
+        Where your orders&apos; shoppers came from, as Shopify recorded each order&apos;s last visit before buying: every order in these dates, tracked or not, so the filter above doesn&apos;t apply to it. A different measure from the visits above, so read the two side by side rather than as a rate.
+      </p>
+      {traffic.items.length === 0 ? (
+        <p className="text-sm text-muted">No orders with a recorded source in these dates.</p>
+      ) : (
+        <div className="-mx-1 overflow-x-auto">
+          <table className="w-full min-w-[30rem] text-sm" data-testid="funnel-orders-by-source">
+            <thead className="text-left text-xs text-muted">
+              <tr>
+                <th className="px-2 pb-2 font-normal">Source</th>
+                <th className="px-2 pb-2 text-right font-normal">Orders</th>
+                <th className="px-2 pb-2 text-right font-normal">Net sales</th>
+                <th className="px-2 pb-2 font-normal">Share of sales</th>
+              </tr>
+            </thead>
+            <tbody>
+              {traffic.items.map((t) => (
+                <tr key={t.id} className="border-t border-border">
+                  <td className="px-2 py-2 font-medium">{t.label}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtNum(t.orders)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtMoney(t.sales, currency)}</td>
+                  <td className="px-2 py-2">
+                    <span className="flex items-center gap-2">
+                      <span aria-hidden className="h-1.5 w-20 rounded-full bg-bg">
+                        <span className="block h-1.5 rounded-full bg-accent" style={{ width: `${(t.share ?? 0) * 100}%` }} />
+                      </span>
+                      <span className="tabular-nums">{fmtPct(t.share)}</span>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {traffic.pending > 0 && <p className="mt-2 text-xs text-muted">{fmtNum(traffic.pending)} orders&apos; sources haven&apos;t been read from Shopify yet.</p>}
+    </div>
+  );
+}
+
 /**
- * The funnel by segment: device, country, landing page, new or returning visitors (each a funnel of
- * its own, on the same visits), and the store's orders by traffic source, which the pixel can't
- * split visits by. Selecting a segment narrows the whole page to it.
+ * The funnel by segment: device, country, landing page, new or returning visitors and traffic
+ * source (each a funnel of its own, on the same visits), with the store's orders by traffic source
+ * beside the visits by source. Selecting a segment narrows the whole page to it.
  */
 export function Breakdown({ f, ov, onFilter }: { f: FunnelPageModule; ov: Overview; onFilter: (dim: SegmentDimension, key: string) => void }) {
-  const [tab, setTab] = useState<Tab>("device");
-  const traffic = ov.modules.traffic;
-  const tabs = TABS.filter(([t]) => t !== "source" || traffic);
-  const currency = ov.store.currency;
+  const [tab, setTab] = useState<SegmentDimension>("device");
+  // Where visitors came from is shown only to members who see traffic sources.
+  const tabs = TABS.filter(([t]) => t !== "source" || f.segments.source);
+  const segments = f.segments[tab] ?? [];
+  // Visits by source weren't recorded in these dates (a pixel from before it sent them).
+  const noSources = tab === "source" && !segments.some((s) => s.key !== "not_recorded");
   return (
     <FunnelSection id="breakdown" title="Funnel performance breakdown" sub="Compare how different kinds of visits move through the funnel, and which bring more completed purchases.">
       <div role="tablist" aria-label="Break the funnel down by" className="flex flex-wrap gap-1 rounded-xl border border-border bg-bg p-1" data-print-hide>
@@ -160,55 +214,17 @@ export function Breakdown({ f, ov, onFilter }: { f: FunnelPageModule; ov: Overvi
         ))}
       </div>
       <div role="tabpanel" id={`breakdown-panel-${tab}`} aria-labelledby={`breakdown-tab-${tab}`} className="mt-4">
-        {tab === "source" ? (
-          traffic && (
-            <>
-              <p className="mb-3 text-sm text-muted">
-                Where your orders&apos; shoppers came from, as Shopify recorded each order&apos;s last visit before buying. The pixel doesn&apos;t record where visits come from, so this shows completed purchases only, from all your orders, and the filter above doesn&apos;t apply to it.
-              </p>
-              {traffic.items.length === 0 ? (
-                <p className="text-sm text-muted">No orders with a recorded source in these dates.</p>
-              ) : (
-                <div className="-mx-1 overflow-x-auto">
-                  <table className="w-full min-w-[30rem] text-sm" data-testid="funnel-segments-source">
-                    <thead className="text-left text-xs text-muted">
-                      <tr>
-                        <th className="px-2 pb-2 font-normal">Source</th>
-                        <th className="px-2 pb-2 text-right font-normal">Orders</th>
-                        <th className="px-2 pb-2 text-right font-normal">Net sales</th>
-                        <th className="px-2 pb-2 font-normal">Share of sales</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {traffic.items.map((t) => (
-                        <tr key={t.id} className="border-t border-border">
-                          <td className="px-2 py-2 font-medium">{t.label}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtNum(t.orders)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtMoney(t.sales, currency)}</td>
-                          <td className="px-2 py-2">
-                            <span className="flex items-center gap-2">
-                              <span aria-hidden className="h-1.5 w-20 rounded-full bg-bg">
-                                <span className="block h-1.5 rounded-full bg-accent" style={{ width: `${(t.share ?? 0) * 100}%` }} />
-                              </span>
-                              <span className="tabular-nums">{fmtPct(t.share)}</span>
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {traffic.pending > 0 && <p className="mt-2 text-xs text-muted">{fmtNum(traffic.pending)} orders&apos; sources haven&apos;t been read from Shopify yet.</p>}
-            </>
-          )
-        ) : (
-          <>
-            <p className="mb-3 text-sm text-muted">{WHAT[tab]}</p>
-            <SegmentTable dim={tab} segments={f.segments[tab]} onFilter={onFilter} f={f} />
-            <ProgressionBars segments={f.segments[tab]} dim={tab} />
-          </>
+        <p className="mb-3 text-sm text-muted">{WHAT[tab]}</p>
+        {noSources && (
+          <p className="mb-3 rounded-lg border border-border bg-bg p-3 text-sm text-muted" data-testid="funnel-sources-not-recorded">
+            {f.sourcesFrom
+              ? `Traffic sources are recorded from ${fmtDay(f.sourcesFrom, { year: true })}: the visits in these dates are from before.`
+              : "Traffic sources are recorded once your store runs the updated bizinsights pixel. Until then visits show as \u201cNot recorded\u201d, and your orders by source are shown below."}
+          </p>
         )}
+        <SegmentTable dim={tab} segments={segments} onFilter={onFilter} f={f} />
+        <ProgressionBars segments={segments} dim={tab} />
+        {tab === "source" && <OrdersBySource ov={ov} />}
       </div>
     </FunnelSection>
   );

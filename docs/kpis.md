@@ -573,6 +573,7 @@ visits in the same dates and filter, so no rate mixes two sources:
 | Conversion rate | Visits that completed checkout ÷ visits |
 | Checkout completion | Visits that completed checkout ÷ visits that started checkout |
 | View to cart rate (a product) | Visits that added the product to cart on its page ÷ visits that viewed its page |
+| Checkout completion (a product) | Visits that bought the product ÷ visits that started a checkout holding it (`checkoutCompletion`; every buying visit started that checkout) |
 | Change of a stage | (visits now − visits then) ÷ visits then, against the comparison (`stepDeltas`) |
 
 - **Largest drop-off**: the transition that lost the most visits (`largestDropOff`; a tie goes to the
@@ -589,32 +590,57 @@ visits in the same dates and filter, so no rate mixes two sources:
   and reasons are offered as things to check, never as measured causes.
 - **Segments** (each a funnel of its own on the same visits): device, country, landing page (the
   section the visit started on), new or returning (returning: the same hashed browser has a visit on
-  an earlier day since the pixel's history began). The **filter** (`device`, `visitor`, `landing`,
-  `country`) narrows every visit figure on the page, the CSV included. Orders, revenue and product
-  sales are never narrowed: the orders carry no device or visit.
+  an earlier day since the pixel's history began), traffic source. The **filter** (`device`,
+  `visitor`, `landing`, `country`, `source`) narrows every visit figure on the page, the CSV included.
+  Orders, revenue and product sales are never narrowed: the orders carry no device or visit.
 - **Device and country** come from the pixel's own request: the browser's User-Agent read into
   mobile, tablet, desktop or unknown (`funnelDevice`; an iPad asking for desktop sites counts as a
   desktop), and the country the edge placed the request in (`locationOf`). Kept as one word each on
   the visit (`funnel_visits.device`, `.country`), from the visit's first batch. Visits from before
   2026-10-24 have neither: they show as "Not recorded", from `detailsFrom` on they have them.
-- **Products** (`funnel_product_visits`, one row per visit and product page): bit 0 the page was
-  viewed, bit 1 added to cart on that page. An add from a collection page or cart drawer names no
-  product page, so it isn't put down to any product. Beside them, each product's orders, units (net
+- **Traffic source** (`funnel_visits.source`, one of `TRAFFIC_SOURCES` in
+  packages/shared/src/traffic.ts): with the page view of a page reached from outside the store, the
+  pixel sends the referring site's host, the link's `utm_source` and `utm_medium` (cut to 100
+  characters) and the names of the ad click ids it carried (`gclid`, `gbraid`, `wbraid`, `fbclid`,
+  `ttclid`, `msclkid`; never their values). `arrivalSource` sorts that by the same rules as an
+  order's last visit (`classifyVisit`), so visits and orders by source use the same words; an arrival
+  with no referrer and no tags is Direct. Only the word is kept, and nothing of the referrer, tags or
+  address. Not an arrival: a page whose referrer is the store's own host (the pixel leaves those
+  out), checkout, thank-you and account pages (reached back from a payment provider or a sign-in),
+  and referrers on `myshopify.com` or `shopify.com`. A visit keeps its **first** arrival
+  (`COALESCE`, as the device): a shopper who comes back from elsewhere the same day keeps the first
+  source. Null shows as "Not recorded": visits from before the pixel sent arrivals (`sourcesFrom` is
+  the first day one has a source), and visits whose first tracked page wasn't the one they arrived on
+  (tracking accepted on a later page). Visits by source are the traffic sources permission's
+  (`analytics.traffic`, as orders by source): without it the segment isn't computed for the member,
+  `source` is dropped from their filter (`funnelViewOf`), and `redactOverview` removes both. The
+  Breakdown's Traffic source tab shows the store's orders by source under the visits, never divided
+  by them.
+- **Products** (`funnel_product_visits`, one row per visit and product; `productStepsOf`): bit 0
+  (1) the product page was viewed, bit 1 (2) added to cart on that page, bit 2 (4) added to cart
+  anywhere else (a quick add from a collection, search or cart drawer, or another product's page),
+  bit 3 (8) in a checkout the visit started, bit 4 (16) in a checkout the visit completed (16 sets 8
+  too). Bits 2-4 come from the products the pixel names with an add (the cart line's product) and a
+  checkout (its line items), by the handle in the product's storefront address; an older pixel names
+  none, so its add is put down to the product page it happened on and its quick adds to no product.
+  Quick adds, checkouts and purchases are null ("Not recorded", the column hidden) for dates before
+  `sourcesFrom`, which the same pixel release starts. Beside them, each product's orders, units (net
   of returns) and net sales come from the store's orders in the dates (only for members with the top
-  products permission), never divided by views: checkout isn't recorded per product, and a visit
-  that viewed a product may have bought another. `productSuggestion` names what to look at: a page
-  added to cart less often than the others (z-test, 20 viewing visits or more), added from its page
-  by 10 visits or more with no order holding it, a landing page that visits leave from more often
-  than the store's other product pages' (z-test), or ordered with no tracked view.
-- **Not measured**: where each visit came from (the pixel sends no referrer; the page shows orders by
-  traffic source, Shopify's record of each order's last visit), checkout per product, people across
-  devices, and Shopify Analytics' own sessions without `read_reports`.
+  products permission), never divided by views or tracked purchases: orders count every order,
+  tracked or not. `productSuggestion` names what to look at: a page added to cart less often than
+  the others (z-test, 20 viewing visits or more), added from its page by 10 visits or more with no
+  order holding it, a landing page that visits leave from more often than the store's other product
+  pages' (z-test), or ordered with no tracked view, quick add or checkout.
+- **Not measured**: paid or unpaid per visit (only the source word is kept), a visit's purchase
+  matched to its order, people across devices, and Shopify Analytics' own sessions without
+  `read_reports`. Traffic sources and checkouts per product need the updated pixel released to each
+  app (`shopify app deploy`, docs/shopify-setup.md); until then they show as "Not recorded".
 - **Checklist**: `FUNNEL_ACTIONS`, ticked per store by any member who sees the funnel
   (`PUT …/funnel/actions/:id`, `funnel_action_checks`; audited as `funnel.action_done` /
   `funnel.action_undone`). A shared, view-only dashboard and API keys can't tick.
 - **Download**: `GET …/export?section=funnel` with the dates and filter: the dates, the filter, the
-  funnel now and before, every transition, every day, every segment and the product pages. "Print or
-  save as PDF" prints the page.
+  funnel now and before, every transition, every day, every segment and the products (with quick
+  adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
 
 ## Shopify's own reports (sessions, gross profit, the check)
 

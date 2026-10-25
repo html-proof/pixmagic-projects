@@ -1,6 +1,7 @@
 /**
  * The Shopping Funnel page's maths: what the pixel ingest records beyond the visit itself (the kind
- * of device, the products a visit looked at), the filters, each step-to-step transition with its
+ * of device, where the visit came from, the products a visit looked at, added to cart, took to
+ * checkout and bought), the filters, each step-to-step transition with its
  * progression and drop-off, funnels per segment, the observations the page makes (only where the
  * numbers support them) and its checklist of recommended actions. Shared by the ingest, the report
  * (packages/core/src/reports/funnel.ts) and the web app.
@@ -14,6 +15,7 @@
  */
 import { describeDevice, type DeviceInfo } from "./device";
 import { cleanPath, FUNNEL_STEPS, PURCHASED_STEP, type FunnelStep, type PixelEventName, type SiteSection } from "./journey";
+import { classifyVisit, type TrafficSource } from "./traffic";
 
 // ---- Names ---------------------------------------------------------------------------------
 
@@ -56,10 +58,62 @@ export function funnelDevice(info: DeviceInfo, mobileHint?: string | null): Funn
   return mobileHint?.trim() === "?1" ? "mobile" : "unknown";
 }
 
+/**
+ * Ad click ids the pixel says a landing link carried, by name only (never the value): the ones
+ * classifyVisit reads in an order's landing page.
+ */
+export const CLICK_IDS = ["gclid", "gbraid", "wbraid", "fbclid", "ttclid", "msclkid"] as const;
+export type ClickId = (typeof CLICK_IDS)[number];
+
+/**
+ * What the pixel sends about how a shopper arrived, with the page view of a page reached from
+ * outside the store (another site, or none: typed, bookmarked, an app): the referring site's host,
+ * the landing link's utm_source and utm_medium, and which ad click ids it carried. Never a URL or a
+ * query string. Pixels released before it send none.
+ */
+export interface PixelArrival {
+  ref?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  click?: ClickId[];
+}
+
+/** Shopify's own hosts: the store's myshopify.com address and Shopify's customer accounts are the store, not a source. */
+const SHOPIFY_HOST = /(^|\.)(myshopify\.com|shopify\.com)$/;
+
+/**
+ * Where a visit came from, from the pixel's arrival on the page at `path`: the same sources, by the
+ * same rules, as an order's last visit (classifyVisit), so visits and orders by source read alike.
+ * An arrival with no referrer and no tags is direct. Null when the page isn't really an arrival:
+ * checkout, thank-you and account pages are reached back from a payment provider or a sign-in.
+ */
+export function arrivalSource(a: PixelArrival, path: string | undefined): TrafficSource | null {
+  if (path) {
+    const { section } = cleanPath(path);
+    if (section === "checkout" || section === "account") return null;
+  }
+  const ref = (a.ref ?? "").trim().toLowerCase().replace(/^www\./, "");
+  if (ref && SHOPIFY_HOST.test(ref)) return null;
+  // classifyVisit reads click ids from the landing page's query: only their names are known here.
+  const clicks = new URLSearchParams();
+  for (const c of a.click ?? []) clicks.set(c, "1");
+  return classifyVisit({ referrerUrl: ref ? `https://${ref}/` : null, landingPage: `/?${clicks}`, utmParameters: { source: a.utmSource ?? null, medium: a.utmMedium ?? null } }, "web").source;
+}
+
 /** `funnel_product_visits.steps`: the product page was viewed. */
 export const PRODUCT_VIEWED = 1;
 /** `funnel_product_visits.steps`: added to cart from the product's own page. */
 export const PRODUCT_ADDED = 2;
+/**
+ * `funnel_product_visits.steps`: added to cart somewhere other than its own page (a quick add from a
+ * collection or search, a cart drawer, another product's page). Only pixels that name the product
+ * added (the release that sends arrivals) record it.
+ */
+export const PRODUCT_QUICK_ADDED = 4;
+/** `funnel_product_visits.steps`: in a checkout the visit started (pixels that name products only). */
+export const PRODUCT_CHECKOUT = 8;
+/** `funnel_product_visits.steps`: in a checkout the visit completed (likewise); a completed checkout was started, so 8 is set too. */
+export const PRODUCT_PURCHASED = 16;
 
 /** The product a storefront page is for, by its handle: "/products/tee" and "/collections/x/products/tee" → "tee". */
 export function productHandle(path: string | null | undefined): string | null {
@@ -69,15 +123,31 @@ export function productHandle(path: string | null | undefined): string | null {
 }
 
 /**
- * What one pixel event says about a product: a product viewed on its page, or added to cart on it
- * (which also means its page was seen). An add from anywhere else (a collection's quick add, a
- * cart drawer) names no product page, so it isn't put down to any product.
+ * What one pixel event says about products. A view is the product page's. An add names its product
+ * (`products`, newer pixels): added on that product's own page, or quickly from anywhere
+ * else, and the page it happened on was seen. An older pixel names none, so its add is the product
+ * page's it happened on, and an add from anywhere else isn't put down to any product. A checkout
+ * started or completed names every product it held.
  */
-export function productStepsOf(name: PixelEventName, path: string | undefined): { handle: string; steps: number } | null {
-  if (name !== "product_viewed" && name !== "product_added_to_cart") return null;
-  const handle = productHandle(path);
-  if (!handle) return null;
-  return { handle, steps: name === "product_added_to_cart" ? PRODUCT_VIEWED | PRODUCT_ADDED : PRODUCT_VIEWED };
+export function productStepsOf(name: PixelEventName, path: string | undefined, products?: readonly string[]): Array<{ handle: string; steps: number }> {
+  const page = productHandle(path);
+  // The same handle as a product page's address gives, so both read alike.
+  const named = [...new Set((products ?? []).map((h) => productHandle(`/products/${h}`)).filter((h): h is string => !!h))];
+  switch (name) {
+    case "product_viewed":
+      return page ? [{ handle: page, steps: PRODUCT_VIEWED }] : [];
+    case "product_added_to_cart": {
+      if (!named.length) return page ? [{ handle: page, steps: PRODUCT_VIEWED | PRODUCT_ADDED }] : [];
+      const out = named.map((handle) => ({ handle, steps: handle === page ? PRODUCT_VIEWED | PRODUCT_ADDED : PRODUCT_QUICK_ADDED }));
+      return page && !named.includes(page) ? [...out, { handle: page, steps: PRODUCT_VIEWED }] : out;
+    }
+    case "checkout_started":
+      return named.map((handle) => ({ handle, steps: PRODUCT_CHECKOUT }));
+    case "checkout_completed":
+      return named.map((handle) => ({ handle, steps: PRODUCT_CHECKOUT | PRODUCT_PURCHASED }));
+    default:
+      return [];
+  }
 }
 
 // ---- Filters --------------------------------------------------------------------------------
@@ -88,7 +158,8 @@ export const VISITOR_KIND_LABEL: Record<VisitorKind, string> = { new: "New visit
 
 /**
  * Narrows every visit figure on the page to some of the visits. `returning`: the same browser was
- * tracked on an earlier day; `landing`: the part of the store the visit started on.
+ * tracked on an earlier day; `landing`: the part of the store the visit started on; `source`: where
+ * the visit came from (arrivalSource; only for members who see traffic sources).
  */
 export interface FunnelFilter {
   device?: FunnelDevice;
@@ -96,6 +167,7 @@ export interface FunnelFilter {
   landing?: SiteSection;
   /** An ISO 3166 code. */
   country?: string;
+  source?: TrafficSource;
 }
 
 export const COUNTRY_CODE = /^[A-Z]{2}$/;
@@ -368,11 +440,11 @@ export type ProductSuggestion = "review_page" | "check_checkout" | "landing_exit
  *   same dates (only when the member sees product sales).
  * - `landing_exits`: visits that start on its page leave the store from that same page (without
  *   buying) more often than visits that start on the store's other product pages (proportionZ).
- * - `sold_untracked`: ordered, yet no tracked visit viewed it (links to checkout, other channels,
- *   shoppers who declined tracking).
+ * - `sold_untracked`: ordered, yet no tracked visit viewed it, added it from elsewhere or took it to
+ *   checkout (links to checkout, other channels, shoppers who declined tracking).
  */
 export function productSuggestion(
-  p: { viewed: number | null; added: number | null; landed: number; landedLeft: number; orders?: number },
+  p: { viewed: number | null; added: number | null; landed: number; landedLeft: number; orders?: number; quickAdded?: number | null; checkouts?: number | null },
   others: { viewed: number; added: number; landed: number; landedLeft: number },
 ): ProductSuggestion | null {
   const viewed = p.viewed ?? 0;
@@ -384,7 +456,7 @@ export function productSuggestion(
   if (p.orders !== undefined && added >= 10 && p.orders === 0) return "check_checkout";
   const zl = proportionZ(p.landedLeft, p.landed, others.landedLeft, others.landed);
   if (zl !== null && zl >= Z_95) return "landing_exits";
-  if (p.viewed === 0 && (p.orders ?? 0) > 0) return "sold_untracked";
+  if (p.viewed === 0 && !p.quickAdded && !p.checkouts && (p.orders ?? 0) > 0) return "sold_untracked";
   return null;
 }
 

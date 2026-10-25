@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Store } from "@app/db";
 import { recomputeDays } from "@app/core";
+import { sha256Hex } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
-// The Shopping Funnel page: what the pixel records beyond the visit (device, country, product
-// pages), the page's report (GET …/overview?parts=funnel), its checklist and its download.
+// The Shopping Funnel page: what the pixel records beyond the visit (device, country, traffic
+// source, products), the page's report (GET …/overview?parts=funnel), its checklist and its download.
 
 let ctx: TestCtx;
 beforeAll(async () => (ctx = await setup()));
@@ -43,6 +44,55 @@ describe("pixel ingest: device, country and product pages", () => {
     ]);
   });
 
+  it("keeps where a visit came from, from its first arrival, and the products its adds and checkouts name", async () => {
+    const u = await signIn(ctx, "u1", "a@x.com");
+    const store = await createStore(await createWorkspace(ctx, u.headers), "a.myshopify.com", SCOPES, { pixelInstalled: true });
+    const key = store.pixelIngestKey!;
+    const phone = { "user-agent": IPHONE };
+    const page = (id: string, min: number, path: string, arrival?: object, clientId = "c1") => ({ ...ev(id, "page_viewed", min, path), clientId, ...(arrival ? { arrival } : {}) });
+    const named = (id: string, name: string, min: number, path: string, products: string[]) => ({ ...ev(id, name, min, path), products });
+    // c1 lands from a Google ad, quick-adds a mug from a collection, adds the tee on its page…
+    const first = [
+      page("1", 0, "/", { ref: "www.google.com", click: ["gclid"] }),
+      page("2", 1, "/collections/kitchen"),
+      named("3", "product_added_to_cart", 2, "/collections/kitchen", ["mug"]),
+      ev("4", "product_viewed", 3, "/products/tee"),
+      named("5", "product_added_to_cart", 4, "/products/tee", ["tee"]),
+    ];
+    expect((await post(key, first, phone)).json().accepted).toBe(5);
+    // …checks out with both, comes back from PayPal to the thank-you page, buys the tee, and returns from Facebook later
+    // the same day: the visit keeps Google.
+    const second = [
+      named("6", "checkout_started", 5, "/checkouts/cn/abc", ["tee", "mug"]),
+      page("7", 6, "/checkouts/cn/abc/thank-you", { ref: "www.paypal.com" }),
+      named("8", "checkout_completed", 6, "/checkouts/cn/abc/thank-you", ["tee"]),
+      page("9", 30, "/", { ref: "facebook.com" }),
+    ];
+    expect((await post(key, second, phone)).json().accepted).toBe(4);
+    // c2 typed the address in; c3's pixel is older and sends no arrival; c4 was first seen back from a payment page.
+    await post(key, [page("10", 0, "/", {}, "c2"), page("11", 0, "/", undefined, "c3"), page("12", 0, "/checkouts/cn/x/thank-you", { ref: "www.paypal.com" }, "c4")], phone);
+
+    const visits = await systemDb.funnelVisit.findMany({ where: { storeId: store.id } });
+    const sourceOf = (clientId: string) => visits.find((v) => v.visitor === sha256Hex(clientId))?.source;
+    expect([sourceOf("c1"), sourceOf("c2"), sourceOf("c3"), sourceOf("c4")]).toEqual(["google", "direct", null, null]);
+    const products = await systemDb.funnelProductVisit.findMany({ where: { storeId: store.id }, orderBy: { handle: "asc" } });
+    // mug: a quick add (4), in the checkout (8). tee: viewed and added on its page (1 + 2), in the checkout and bought (8 + 16).
+    expect(products.map((p) => [p.handle, p.steps])).toEqual([
+      ["mug", 4 | 8],
+      ["tee", 1 | 2 | 8 | 16],
+    ]);
+  });
+
+  it("refuses arrival and product fields beyond what the pixel sends, and takes events without them", async () => {
+    const u = await signIn(ctx, "u1", "a@x.com");
+    const store = await createStore(await createWorkspace(ctx, u.headers), "a.myshopify.com", SCOPES, { pixelInstalled: true });
+    const key = store.pixelIngestKey!;
+    for (const bad of [{ arrival: { click: ["utm_id"] } }, { arrival: { utmSource: "x".repeat(101) } }, { products: Array(51).fill("tee") }]) {
+      expect((await post(key, [{ ...ev("1", "page_viewed", 0, "/"), ...bad }], {})).statusCode, JSON.stringify(bad).slice(0, 40)).toBe(400);
+    }
+    expect((await post(key, [ev("1", "page_viewed", 0, "/")], {})).json().accepted).toBe(1);
+  });
+
   it("records an unknown device and no country when the request says neither", async () => {
     const u = await signIn(ctx, "u1", "a@x.com");
     const store = await createStore(await createWorkspace(ctx, u.headers), "a.myshopify.com", SCOPES, { pixelInstalled: true });
@@ -54,26 +104,31 @@ describe("pixel ingest: device, country and product pages", () => {
 /** Five visits on 1 Oct and two on 30 Sep, with what the page groups them by; product pages; two orders. */
 async function seedStore(store: Store) {
   const ws = store.workspaceId;
-  const visit = (day: string, visitor: string, step: number, v: { device?: string | null; country?: string | null; entry?: string; entryPath?: string; exitPath?: string } = {}) =>
+  const visit = (day: string, visitor: string, step: number, v: { device?: string | null; country?: string | null; source?: string | null; entry?: string; entryPath?: string; exitPath?: string } = {}) =>
     systemDb.funnelVisit.create({
-      data: { workspaceId: ws, storeId: store.id, day, visitor, furthestStep: step, device: v.device ?? null, country: v.country ?? null, entrySection: v.entry ?? "home", entryPath: v.entryPath ?? "/", exitPath: v.exitPath ?? null, enteredAt: new Date(`${day}T10:00:00Z`), exitedAt: new Date(`${day}T10:30:00Z`) },
+      data: { workspaceId: ws, storeId: store.id, day, visitor, furthestStep: step, device: v.device ?? null, country: v.country ?? null, source: v.source ?? null, entrySection: v.entry ?? "home", entryPath: v.entryPath ?? "/", exitPath: v.exitPath ?? null, enteredAt: new Date(`${day}T10:00:00Z`), exitedAt: new Date(`${day}T10:30:00Z`) },
     });
-  await visit(DAY, "c1", 4, { device: "mobile", country: "AU" });
-  await visit(DAY, "c2", 2, { device: "mobile", country: "AU", entry: "product", entryPath: "/products/tee" });
-  await visit(DAY, "c3", 1, { device: "desktop", country: "US", entry: "collection", entryPath: "/collections/all", exitPath: "/products/mug" });
-  // Recorded before devices were: not recorded, rather than guessed.
+  await visit(DAY, "c1", 4, { device: "mobile", country: "AU", source: "google" });
+  await visit(DAY, "c2", 2, { device: "mobile", country: "AU", source: "google", entry: "product", entryPath: "/products/tee" });
+  await visit(DAY, "c3", 1, { device: "desktop", country: "US", source: "direct", entry: "collection", entryPath: "/collections/all", exitPath: "/products/mug" });
+  // Recorded before devices and sources were: not recorded, rather than guessed.
   await visit(DAY, "c4", 0);
+  // The pixel reported no arrival for this visit: no source.
   await visit(DAY, "c5", 3, { device: "desktop" });
   // c5 was here before: a returning visit.
   await visit("2026-09-20", "c5", 0);
   await visit("2026-09-30", "p1", 4);
   await visit("2026-09-30", "p2", 0);
-  const product = (visitor: string, handle: string, steps: number) => systemDb.funnelProductVisit.create({ data: { workspaceId: ws, storeId: store.id, day: DAY, visitor, handle, steps } });
-  await product("c1", "tee", 3);
+  const product = (visitor: string, handle: string, steps: number, day = DAY) => systemDb.funnelProductVisit.create({ data: { workspaceId: ws, storeId: store.id, day, visitor, handle, steps } });
+  // c1 viewed and added the tee on its page, quick-added the mug, and bought both; c5 took the mug to checkout.
+  await product("c1", "tee", 1 | 2 | 8 | 16);
+  await product("c1", "mug", 4 | 8 | 16);
   await product("c2", "tee", 3);
   await product("c3", "tee", 1);
   await product("c3", "mug", 1);
-  await product("c5", "mug", 1);
+  await product("c5", "mug", 1 | 8);
+  // Before sources (and so quick adds and checkouts) were recorded.
+  await product("p1", "tee", 3, "2026-09-30");
   for (const [id, handle, title] of [["101", "tee", "Linen Tee"], ["102", "mug", "Mug"], ["103", "cap", "Cap"]] as const) {
     await systemDb.product.create({ data: { workspaceId: ws, storeId: store.id, shopifyId: id, handle, title, shopifyUpdatedAt: new Date() } });
   }
@@ -136,6 +191,7 @@ describe("the Shopping Funnel report (parts=funnel)", () => {
     expect(f.transitions[0].previous).toEqual({ fromCount: 2, toCount: 1, progression: 0.5 });
     expect(f.daily).toEqual([{ day: DAY, reached: [5, 4, 3, 2, 1] }]);
     expect(f.detailsFrom).toBe(DAY);
+    expect(f.sourcesFrom).toBe(DAY);
     expect(f.lastEventAt).toBe(`${DAY}T10:30:00.000Z`);
     // Five visits are too few to say anything about.
     expect(f.insights).toEqual([]);
@@ -153,10 +209,28 @@ describe("the Shopping Funnel report (parts=funnel)", () => {
     expect(visits(segments.visitor)).toEqual({ new: 4, returning: 1 });
     const mobile = segments.device.find((s: { key: string }) => s.key === "mobile");
     expect(mobile).toMatchObject({ reached: [2, 2, 2, 1, 1], conversionRate: 0.5, checkoutCompletion: 1 });
+    expect(visits(segments.source)).toEqual({ google: 2, direct: 1, not_recorded: 2 });
+    expect(segments.source.find((s: { key: string }) => s.key === "google")).toMatchObject({ reached: [2, 2, 2, 1, 1] });
+  });
+
+  it("shows traffic sources only to members who see them", async () => {
+    const { ws, store } = await funnelStore();
+    const member = await signIn(ctx, "um", "m@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: member.user.id, role: "custom", permissions: ["analytics.conversion"] } });
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/overview?${qs("&parts=funnel&source=google")}`, headers: member.headers });
+    expect(res.statusCode, res.body).toBe(200);
+    const f = res.json().modules.funnel;
+    expect(Object.keys(f.segments).sort()).toEqual(["country", "device", "landing", "visitor"]);
+    // The source asked for is left out, and the answer says so.
+    expect(f.filter).toEqual({});
+    expect(f.visits).toBe(5);
   });
 
   it("narrows every visit figure to the filter", async () => {
     const { page } = await funnelStore();
+    const google = (await page("&source=google")).modules.funnel;
+    expect(google.filter).toEqual({ source: "google" });
+    expect(google.steps.map((s: { reached: number }) => s.reached)).toEqual([2, 2, 2, 1, 1]);
     const mobile = (await page("&device=mobile")).modules.funnel;
     expect(mobile.filter).toEqual({ device: "mobile" });
     expect(mobile.steps.map((s: { reached: number }) => s.reached)).toEqual([2, 2, 2, 1, 1]);
@@ -168,15 +242,28 @@ describe("the Shopping Funnel report (parts=funnel)", () => {
     expect((await page("&visitor=new&landing=home&country=AU")).modules.funnel.visits).toBe(1);
   });
 
-  it("lists product pages with their views and adds, and the store's sales of each", async () => {
+  it("lists products with their views, adds, checkouts and purchases, and the store's sales of each", async () => {
     const { page } = await funnelStore();
     const products = (await page()).modules.funnel.products;
+    const product = { imageUrl: null, url: null };
     expect(products).toEqual([
-      { handle: "tee", productId: "101", title: "Linen Tee", imageUrl: null, url: null, viewed: 3, added: 2, addRate: 2 / 3, landed: 1, landedLeft: 0, exits: 0, orders: 1, units: 2, netSales: 40 },
-      { handle: "mug", productId: "102", title: "Mug", imageUrl: null, url: null, viewed: 2, added: 0, addRate: 0, landed: 0, landedLeft: 0, exits: 1, orders: 0, units: 0, netSales: 0 },
+      { handle: "tee", productId: "101", title: "Linen Tee", ...product, viewed: 3, added: 2, addRate: 2 / 3, quickAdded: 0, checkouts: 1, purchased: 1, checkoutCompletion: 1, landed: 1, landedLeft: 0, exits: 0, orders: 1, units: 2, netSales: 40 },
+      // Quick-added from elsewhere by c1, taken to checkout by c1 and c5, bought by c1.
+      { handle: "mug", productId: "102", title: "Mug", ...product, viewed: 2, added: 0, addRate: 0, quickAdded: 1, checkouts: 2, purchased: 1, checkoutCompletion: 0.5, landed: 0, landedLeft: 0, exits: 1, orders: 0, units: 0, netSales: 0 },
       // Sold, but no tracked visit viewed it.
-      { handle: "cap", productId: "103", title: "Cap", imageUrl: null, url: null, viewed: 0, added: 0, addRate: null, landed: 0, landedLeft: 0, exits: 0, orders: 1, units: 1, netSales: 15 },
+      { handle: "cap", productId: "103", title: "Cap", ...product, viewed: 0, added: 0, addRate: null, quickAdded: 0, checkouts: 0, purchased: 0, checkoutCompletion: null, landed: 0, landedLeft: 0, exits: 0, orders: 1, units: 1, netSales: 15 },
     ]);
+  });
+
+  it("says where traffic sources, quick adds and checkouts weren't recorded yet", async () => {
+    const { u, ws, store } = await funnelStore();
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/overview?preset=custom&from=2026-09-30&to=2026-09-30&parts=funnel`, headers: u.headers });
+    expect(res.statusCode, res.body).toBe(200);
+    const f = res.json().modules.funnel;
+    expect(f.sourcesFrom).toBe(DAY);
+    expect(f.segments.source.map((s: { key: string; visits: number }) => [s.key, s.visits])).toEqual([["not_recorded", 2]]);
+    // An older pixel's add on the tee's page is known; quick adds, checkouts and purchases aren't.
+    expect(f.products[0]).toMatchObject({ handle: "tee", viewed: 1, added: 1, quickAdded: null, checkouts: null, purchased: null, checkoutCompletion: null });
   });
 
   it("rejects a filter it doesn't know", async () => {
@@ -218,17 +305,19 @@ describe("the funnel checklist", () => {
 describe("the funnel download", () => {
   it("holds the dates, the filter, the funnel, every segment and the product pages", async () => {
     const { u, ws, store } = await funnelStore();
-    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=funnel&${qs("&device=mobile")}`, headers: u.headers });
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=funnel&${qs("&device=mobile&source=google")}`, headers: u.headers });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers["content-type"]).toContain("text/csv");
     expect(res.headers["content-disposition"]).toContain(`funnel-${DAY}-to-${DAY}.csv`);
     const csv = res.body;
     expect(csv).toContain("2026-10-01 to 2026-10-01");
-    expect(csv).toContain(`"Filter","Device: Mobile"`);
+    expect(csv).toContain(`"Filter","Device: Mobile; Traffic source: Google"`);
     expect(csv).toContain(`"Funnel","These dates",2,2,2,1,1,50`);
     expect(csv).toContain(`"Step to step","Added to cart → Started checkout",2,,,,,,1,50,50`);
     expect(csv).toContain(`"Device","Mobile",2,2,2,1,1,50`);
-    expect(csv).toContain(`"Product","Linen Tee",,,,,,,,,,2,2,100,1,2,40`);
-    expect(await systemDb.auditLog.findFirst({ where: { workspaceId: ws, action: "report.exported" } })).toMatchObject({ metadata: { section: "funnel", filter: { device: "mobile" } } });
+    expect(csv).toContain(`"Traffic source","Google",2,2,2,1,1,50`);
+    // Viewed, added on its page, view to cart, orders, units, net sales, then quick adds, checkouts and purchases.
+    expect(csv).toContain(`"Product","Linen Tee",,,,,,,,,,2,2,100,1,2,40,0,1,1`);
+    expect(await systemDb.auditLog.findFirst({ where: { workspaceId: ws, action: "report.exported" } })).toMatchObject({ metadata: { section: "funnel", filter: { device: "mobile", source: "google" } } });
   });
 });

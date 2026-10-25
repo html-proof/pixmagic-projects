@@ -1,6 +1,7 @@
 "use client";
 import { COUNTRY_CODE, FUNNEL_DEVICES, VISITOR_KINDS, type FunnelDevice, type FunnelFilter, type VisitorKind } from "@app/shared/funnel";
 import { SITE_SECTIONS, type SiteSection } from "@app/shared/journey";
+import { TRAFFIC_SOURCES, type TrafficSource } from "@app/shared/traffic";
 import { useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
 import { useDateRange, type Shown } from "@/components/dashboard/DateRange";
@@ -9,7 +10,7 @@ import { apiHref, useLiveApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // What the Shopping Funnel page asks: the dashboard's dates (the same address-bar state as every
-// dashboard page), the filter (?device=&visitor=&landing=&country=, so a link reproduces the view),
+// dashboard page), the filter (?device=&visitor=&landing=&country=&source=, so a link reproduces the view),
 // and the dashboard's own answer narrowed to the page (GET …/overview?parts=funnel,
 // apps/api/src/routes/dashboard.ts). Every figure is worked out by the API, never here.
 // ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@ const isDevice = (v: string): v is FunnelDevice => (FUNNEL_DEVICES as readonly s
 const isVisitor = (v: string): v is VisitorKind => (VISITOR_KINDS as readonly string[]).includes(v);
 const isLanding = (v: string): v is SiteSection => (SITE_SECTIONS as readonly string[]).includes(v);
 const isCountry = (v: string): v is string => COUNTRY_CODE.test(v);
+const isSource = (v: string): v is TrafficSource => (TRAFFIC_SOURCES as readonly string[]).includes(v);
 
 export type FunnelFilterKey = keyof FunnelFilter;
 
@@ -32,18 +34,21 @@ export function useFunnel() {
   const [visitor, setVisitor] = useQueryParam("visitor", isVisitor);
   const [landing, setLanding] = useQueryParam("landing", isLanding);
   const [country, setCountry] = useQueryParam("country", isCountry);
-  const filter: FunnelFilter = { ...(device ? { device } : {}), ...(visitor ? { visitor } : {}), ...(landing ? { landing } : {}), ...(country ? { country } : {}) };
+  const [source, setSource] = useQueryParam("source", isSource);
+  const filter: FunnelFilter = { ...(device ? { device } : {}), ...(visitor ? { visitor } : {}), ...(landing ? { landing } : {}), ...(country ? { country } : {}), ...(source ? { source } : {}) };
   const setFilter = (key: FunnelFilterKey, value: string | null) => {
     if (key === "device") setDevice(value && isDevice(value) ? value : null);
     if (key === "visitor") setVisitor(value && isVisitor(value) ? value : null);
     if (key === "landing") setLanding(value && isLanding(value) ? value : null);
     if (key === "country") setCountry(value && isCountry(value) ? value : null);
+    if (key === "source") setSource(value && isSource(value) ? value : null);
   };
   const clearFilter = () => {
     setDevice(null);
     setVisitor(null);
     setLanding(null);
     setCountry(null);
+    setSource(null);
   };
   const filterQs = (Object.entries(filter) as Array<[string, string]>).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
   /** The question as the API takes it (…/overview?<query>, …/export?section=funnel&<query>). */

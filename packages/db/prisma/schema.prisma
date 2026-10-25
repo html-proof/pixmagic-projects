@@ -1037,6 +1037,11 @@ model FunnelVisit {
   // (2026-10-24): `device` is always set from then on, so it also says whether a visit has them.
   device       String?
   country      String?
+  // Where the visit came from: one of TRAFFIC_SOURCES (packages/shared/src/traffic.ts), classified by
+  // arrivalSource from the first arrival the pixel reports (a referring host, a link's utm_source,
+  // utm_medium and click id names; none of them kept). Null: the pixel reported no arrival, as every
+  // pixel did before it sent them.
+  source       String?
 
   @@id([storeId, day, visitor])
   @@index([workspaceId])
@@ -1045,9 +1050,12 @@ model FunnelVisit {
   @@map("funnel_visits")
 }
 
-// Which products a visit looked at: one row per visit (as in funnel_visits) and product page.
+// Which products a visit looked at, added, took to checkout and bought: one row per visit (as in
+// funnel_visits) and product.
 // `handle` is the product's from its storefront address (/products/<handle>); `steps` bit 0: the
-// product page was viewed, bit 1: added to cart from that page (packages/shared/src/funnel.ts).
+// product page was viewed, bit 1: added to cart from that page, bit 2: added to cart elsewhere (a
+// quick add), bit 3: in a checkout the visit started, bit 4: in one it completed. Bits 2-4 only from
+// pixels that name the products (packages/shared/src/funnel.ts, productStepsOf).
 model FunnelProductVisit {
   workspaceId String @map("workspace_id")
   storeId     String @map("store_id")

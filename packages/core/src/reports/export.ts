@@ -6,6 +6,7 @@ import {
   FUNNEL_DEVICE_LABEL,
   FUNNEL_STEP_LABEL,
   SITE_SECTION_LABEL,
+  TRAFFIC_LABEL,
   VISITOR_KIND_LABEL,
   type AccessKey,
   type Comparison,
@@ -14,6 +15,7 @@ import {
   type FunnelStep,
   type SalesCalculation,
   type SiteSection,
+  type TrafficSource,
   type VisitorKind,
 } from "@app/shared";
 
@@ -214,6 +216,7 @@ const FUNNEL_HEADER = [
   "Section", "Name", "Visits", "Viewed a product", "Added to cart", "Started checkout", "Completed a purchase", "Conversion rate (%)",
   "Visits lost", "Progression (%)", "Drop-off (%)",
   "Product page viewed (visits)", "Added to cart from its page (visits)", "View to cart rate (%)", "Orders", "Units sold", "Net sales",
+  "Added to cart elsewhere (visits)", "Started checkout with it (visits)", "Bought it (visits)",
 ];
 
 /** Words for a segment's key (packages/core/src/reports/funnel.ts, funnelDetail's segments). */
@@ -222,23 +225,27 @@ function segmentName(dimension: string, key: string): string {
   if (dimension === "device") return FUNNEL_DEVICE_LABEL[key as FunnelDevice] ?? key;
   if (dimension === "landing") return SITE_SECTION_LABEL[key as SiteSection] ?? key;
   if (dimension === "visitor") return VISITOR_KIND_LABEL[key as VisitorKind] ?? key;
+  if (dimension === "source") return TRAFFIC_LABEL[key as TrafficSource] ?? key;
   return key === "unknown" ? "Unknown country" : key === "other" ? "Other countries" : key;
 }
 
 /**
  * The Shopping Funnel page as one table: the dates and filter, the funnel now and in the dates
  * compared with (one row each, visits reached per step), each step to the next, every day, every
- * segment, then the product pages. Columns a row has no figure for are empty.
+ * segment, then the products. Columns a row has no figure for are empty, as are a product's quick
+ * adds, checkouts and purchases in dates they weren't recorded.
  */
 function funnelTable(f: Obj | null, dates?: { range: DateRange; previous: Comparison }) {
   const blank = (n: number) => Array<Cell>(n).fill(null);
+  // A row's figures, then empty cells to the header's width.
+  const fill = (...cells: Cell[]): Cell[] => [...cells, ...blank(FUNNEL_HEADER.length - cells.length)];
   const rows: Cell[][] = [];
   const funnelRow = (section: string, name: string, reached: unknown): Cell[] => {
     const r = Array.isArray(reached) ? (reached as number[]) : null;
     const conv = r && r[0] ? r[4]! / r[0] : null;
-    return [section, name, ...(r ? r.slice(0, 5) : blank(5)), pct(conv), ...blank(9)];
+    return fill(section, name, ...(r ? r.slice(0, 5) : blank(5)), pct(conv));
   };
-  if (dates) rows.push(["Dates", `${dates.range.from} to ${dates.range.to}, compared with ${dates.previous.from} to ${dates.previous.to}${dates.previous.until ? ` up to ${dates.previous.until}` : ""}`, ...blank(15)]);
+  if (dates) rows.push(fill("Dates", `${dates.range.from} to ${dates.range.to}, compared with ${dates.previous.from} to ${dates.previous.to}${dates.previous.until ? ` up to ${dates.previous.until}` : ""}`));
   if (!f) return { header: FUNNEL_HEADER, rows };
   const filter = isObj(f.filter) ? f.filter : {};
   const parts = [
@@ -246,21 +253,22 @@ function funnelTable(f: Obj | null, dates?: { range: DateRange; previous: Compar
     typeof filter.visitor === "string" ? segmentName("visitor", filter.visitor) : null,
     typeof filter.landing === "string" ? `Landed on: ${segmentName("landing", filter.landing)}` : null,
     typeof filter.country === "string" ? `Country: ${filter.country}` : null,
+    typeof filter.source === "string" ? `Traffic source: ${segmentName("source", filter.source)}` : null,
   ].filter(Boolean);
-  rows.push(["Filter", parts.length ? parts.join("; ") : "All tracked visits", ...blank(15)]);
+  rows.push(fill("Filter", parts.length ? parts.join("; ") : "All tracked visits"));
   rows.push(funnelRow("Funnel", "These dates", list(f.steps).map((s) => num(s, "reached"))));
   const previous = isObj(f.previous) ? f.previous : {};
-  rows.push(Array.isArray(previous.reached) ? funnelRow("Funnel", "Dates compared with", previous.reached) : ["Funnel", "Dates compared with: no earlier data", ...blank(15)]);
+  rows.push(Array.isArray(previous.reached) ? funnelRow("Funnel", "Dates compared with", previous.reached) : fill("Funnel", "Dates compared with: no earlier data"));
   for (const t of list(f.transitions)) {
-    rows.push(["Step to step", `${FUNNEL_STEP_LABEL[t.from as FunnelStep]} → ${FUNNEL_STEP_LABEL[t.to as FunnelStep]}`, val(t, "fromCount"), ...blank(5), val(t, "lost"), pct(t.progression), pct(t.dropOff), ...blank(6)]);
+    rows.push(fill("Step to step", `${FUNNEL_STEP_LABEL[t.from as FunnelStep]} → ${FUNNEL_STEP_LABEL[t.to as FunnelStep]}`, val(t, "fromCount"), ...blank(5), val(t, "lost"), pct(t.progression), pct(t.dropOff)));
   }
-  for (const d of list(f.daily)) rows.push(d.reached === null ? ["Day", `${String(d.day)} (not recorded)`, ...blank(15)] : funnelRow("Day", String(d.day), d.reached));
+  for (const d of list(f.daily)) rows.push(d.reached === null ? fill("Day", `${String(d.day)} (not recorded)`) : funnelRow("Day", String(d.day), d.reached));
   const segments = isObj(f.segments) ? f.segments : {};
-  for (const [dimension, label] of [["device", "Device"], ["country", "Country"], ["landing", "Landing page"], ["visitor", "Visitors"]] as const) {
+  for (const [dimension, label] of [["device", "Device"], ["country", "Country"], ["landing", "Landing page"], ["visitor", "Visitors"], ["source", "Traffic source"]] as const) {
     for (const s of list(segments[dimension])) rows.push(funnelRow(label, segmentName(dimension, String(s.key)), s.reached));
   }
   for (const p of list(f.products)) {
-    rows.push(["Product", val(p, "title") ?? val(p, "handle"), ...blank(9), val(p, "viewed"), val(p, "added"), pct(p.addRate), val(p, "orders"), val(p, "units"), val(p, "netSales")]);
+    rows.push(fill("Product", val(p, "title") ?? val(p, "handle"), ...blank(9), val(p, "viewed"), val(p, "added"), pct(p.addRate), val(p, "orders"), val(p, "units"), val(p, "netSales"), val(p, "quickAdded"), val(p, "checkouts"), val(p, "purchased")));
   }
   return { header: FUNNEL_HEADER, rows };
 }

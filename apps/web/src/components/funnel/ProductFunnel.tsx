@@ -14,10 +14,10 @@ const SUGGESTION: Record<ProductSuggestion, { short: string; long: string }> = {
   review_page: { short: "Review the product page", long: "Visits that view it add it to cart less often than your other products. Check its price, photos, description, sizes and shipping information." },
   check_checkout: { short: "Check why carts don't become orders", long: "Shoppers add it to cart from its page, but no order holds it in these dates. Check its stock, variants, shipping options and price at checkout." },
   landing_exits: { short: "Improve it as a landing page", long: "Visits that start on this page leave the store from it more often than visits that start on your other product pages. Make sure it matches the ads or links that send shoppers there, and offers a clear next step." },
-  sold_untracked: { short: "Sells without tracked views", long: "It was ordered, but no tracked visit viewed its page: likely bought through links straight to checkout, other sales channels, or by shoppers who declined tracking." },
+  sold_untracked: { short: "Sells without tracked views", long: "It was ordered, but no tracked visit viewed its page, added it to cart or took it to checkout: likely bought through links straight to checkout, other sales channels, or by shoppers who declined tracking." },
 };
 
-type SortKey = "viewed" | "added" | "addRate" | "orders" | "units" | "netSales" | "title";
+type SortKey = "viewed" | "added" | "addRate" | "checkouts" | "orders" | "units" | "netSales" | "title";
 type Show = "all" | "viewed_not_added" | "sold_untracked" | "suggested";
 const PAGE = 10;
 
@@ -39,6 +39,9 @@ function ProductDetail({ p, f, suggestion, shop, currency, onClose }: { p: Funne
   const rows: Array<[string, string, string?]> = [
     ["Visits that viewed its page", p.viewed === null ? "Not recorded" : fmtNum(p.viewed)],
     ["Added it to cart from its page", p.added === null ? "Not recorded" : fmtNum(p.added), p.addRate !== null ? `${fmtPct(p.addRate)} of viewing visits` : undefined],
+    ["Added it to cart from elsewhere (quick adds)", p.quickAdded === null ? "Not recorded" : fmtNum(p.quickAdded), p.quickAdded !== null ? "From a collection, search, cart drawer or another product's page" : undefined],
+    ["Started a checkout with it", p.checkouts === null ? "Not recorded" : fmtNum(p.checkouts)],
+    ["Bought it", p.purchased === null ? "Not recorded" : fmtNum(p.purchased), p.checkoutCompletion !== null ? `${fmtPct(p.checkoutCompletion)} of the visits that started a checkout with it` : undefined],
     ["Visits that started on its page", fmtNum(p.landed), p.landed ? `${fmtNum(p.landedLeft)} of them left the store from it without buying` : undefined],
     ["Visits that left the store from its page without buying", fmtNum(p.exits)],
     ...(f.productSales && p.orders !== undefined
@@ -82,7 +85,7 @@ function ProductDetail({ p, f, suggestion, shop, currency, onClose }: { p: Funne
         <p className="mt-1 text-muted">{suggestion ? SUGGESTION[suggestion].long : "Its numbers are in line with your other products, or there are too few visits to compare."}</p>
       </div>
       <p className="text-xs text-muted">
-        Views and adds are tracked visits (one shopper on one day), counted from its product page. Checkout isn&apos;t recorded per product, and a visit that viewed it may have bought something else, so orders are shown beside the views, never divided by them. View to cart rate = {FORMULAS.viewToCart}.
+        Every figure above the orders is tracked visits (one shopper on one day). Views and adds on its page are counted from its product page; quick adds, checkouts and purchases from the products the cart and checkout held{f.sourcesFrom ? `, recorded from ${fmtDay(f.sourcesFrom, { year: true })}` : ", which the updated pixel records"}. Orders count every order, tracked or not, so they are shown beside the visits, never divided by them. View to cart rate = {FORMULAS.viewToCart}.
       </p>
     </Drawer>
   );
@@ -104,13 +107,15 @@ export function ProductFunnel({ f, shop, currency }: { f: FunnelPageModule; shop
     () => f.products.reduce((a, p) => ({ viewed: a.viewed + (p.viewed ?? 0), added: a.added + (p.added ?? 0), landed: a.landed + p.landed, landedLeft: a.landedLeft + p.landedLeft }), { viewed: 0, added: 0, landed: 0, landedLeft: 0 }),
     [f.products],
   );
+  // Checkouts and purchases per product were recorded in these dates: their column is shown.
+  const carts = f.products.some((p) => p.checkouts !== null);
   // Each product against the store's other product pages.
   const suggestionOf = (p: FunnelProduct) =>
     productSuggestion(p, { viewed: totals.viewed - (p.viewed ?? 0), added: totals.added - (p.added ?? 0), landed: totals.landed - p.landed, landedLeft: totals.landedLeft - p.landedLeft });
   const q = search.trim().toLowerCase();
   const list = f.products
     .filter((p) => !q || (p.title ?? "").toLowerCase().includes(q) || p.handle.includes(q))
-    .filter((p) => (show === "viewed_not_added" ? (p.viewed ?? 0) > 0 && p.added === 0 : show === "sold_untracked" ? p.viewed === 0 && (p.orders ?? 0) > 0 : show === "suggested" ? suggestionOf(p) !== null : true))
+    .filter((p) => (show === "viewed_not_added" ? (p.viewed ?? 0) > 0 && p.added === 0 && !p.quickAdded : show === "sold_untracked" ? p.viewed === 0 && (p.orders ?? 0) > 0 : show === "suggested" ? suggestionOf(p) !== null : true))
     .sort((a, b) => {
       const av = value(a, sort.key);
       const bv = value(b, sort.key);
@@ -148,9 +153,10 @@ export function ProductFunnel({ f, shop, currency }: { f: FunnelPageModule; shop
       sub="Which products get attention, which get added to cart, and which sell. Select a product to see its journey."
       aside={
         <InfoTip label="How product figures are counted">
-          <p>Viewed and Added count tracked visits (one shopper on one day) on the product&apos;s own page; an add from a collection page isn&apos;t put down to any product.</p>
+          <p>Viewed and Added count tracked visits (one shopper on one day) on the product&apos;s own page. Quick adds (from a collection, search or cart drawer) are counted under Added once the updated pixel names the product added; before that they aren&apos;t put down to any product.</p>
           <p className="mt-1">View to cart = {FORMULAS.viewToCart}.</p>
-          <p className="mt-1 text-muted">Orders, units and net sales come from all your Shopify orders in these dates and aren&apos;t narrowed by the filter. Checkout isn&apos;t recorded per product.</p>
+          <p className="mt-1">Checkout counts tracked visits that started a checkout holding the product, and under it those that completed one; shown for dates the pixel recorded them.</p>
+          <p className="mt-1 text-muted">Orders, units and net sales come from all your Shopify orders in these dates and aren&apos;t narrowed by the filter.</p>
         </InfoTip>
       }
     >
@@ -203,6 +209,7 @@ export function ProductFunnel({ f, shop, currency }: { f: FunnelPageModule; shop
                   {header("viewed", "Viewed (visits)")}
                   {header("added", "Added to cart")}
                   {header("addRate", "View to cart")}
+                  {carts && header("checkouts", "Checkout (visits)")}
                   {f.productSales && header("orders", "Orders")}
                   {f.productSales && header("units", "Units sold")}
                   {f.productSales && header("netSales", "Net sales")}
@@ -224,8 +231,17 @@ export function ProductFunnel({ f, shop, currency }: { f: FunnelPageModule; shop
                         </button>
                       </td>
                       <td className="px-2 py-2 text-right tabular-nums">{p.viewed === null ? "—" : fmtNum(p.viewed)}</td>
-                      <td className="px-2 py-2 text-right tabular-nums">{p.added === null ? "—" : fmtNum(p.added)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {p.added === null ? "—" : fmtNum(p.added)}
+                        {!!p.quickAdded && <span className="block text-[11px] text-muted">+{count(p.quickAdded, "quick add")}</span>}
+                      </td>
                       <td className="px-2 py-2 text-right tabular-nums">{fmtPct(p.addRate)}</td>
+                      {carts && (
+                        <td className="px-2 py-2 text-right tabular-nums">
+                          {p.checkouts === null ? "—" : fmtNum(p.checkouts)}
+                          {p.purchased !== null && <span className="block text-[11px] text-muted">{fmtNum(p.purchased)} bought</span>}
+                        </td>
+                      )}
                       {f.productSales && <td className="px-2 py-2 text-right tabular-nums">{fmtNum(p.orders ?? 0)}</td>}
                       {f.productSales && <td className="px-2 py-2 text-right tabular-nums">{fmtNum(p.units ?? 0)}</td>}
                       {f.productSales && <td className="px-2 py-2 text-right tabular-nums">{fmtMoney(p.netSales ?? 0, currency)}</td>}
