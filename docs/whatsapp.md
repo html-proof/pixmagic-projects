@@ -187,7 +187,10 @@ configuration. The server then: exchanges the code (it lives 30 seconds) for the
 checks with Meta's token inspector that it was issued to bizinsights' app with
 `whatsapp_business_management` and `whatsapp_business_messaging` for the account chosen; checks the
 number belongs to that account; subscribes the account's webhooks to bizinsights' app; registers the
-number (a random 6-digit PIN, kept encrypted); and makes an Evolution `WHATSAPP-BUSINESS` instance
+number when it isn't on the Cloud API yet (with a random 6-digit two-step verification PIN that
+bizinsights doesn't keep: reconnecting the same number never asks for it, and moving the number
+elsewhere later means resetting two-step verification in WhatsApp Manager); and makes an Evolution
+`WHATSAPP-BUSINESS` instance
 with the token. The token (60 days, the configuration's setting) is renewed by the sweep 30 days
 before it ends. Meta's webhooks for these numbers (statuses, customers' messages, template reviews)
 come to bizinsights directly, signed with the app secret.
@@ -229,7 +232,7 @@ token (constant-time).
   to it. Queries run under row-level security for that workspace, and every row carries
   `workspace_id` and `store_id`. A browser-supplied id is never trusted alone.
 - Instance names, instance tokens, webhook keys, the global key, QR codes (except to the person
-  pairing, with `cache-control: no-store`), the PIN, Meta tokens and full phone numbers never
+  pairing, with `cache-control: no-store`), Meta tokens and full phone numbers never
   appear in an answer; numbers are masked, stored encrypted and matched by a keyed hash.
 - The logger redacts `apikey`, `token`, `jwt_key`, `qrcode`, `base64`, `pairingCode`, `remoteJid`,
   `ownerJid`, `wuid`, `text`.

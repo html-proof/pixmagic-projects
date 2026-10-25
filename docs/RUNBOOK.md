@@ -2,7 +2,7 @@
 
 For on-call. Each entry: **symptom → check → fix**.
 
-Production runs on AWS, see [aws-deployment.md](aws-deployment.md): the Lambda functions `insights-production-api` (UI + API, behind CloudFront and WAF), `-jobs` (the SQS queues) and `-cron` (the schedules and maintenance actions), RDS PostgreSQL, SQS with a dead-letter queue, and a DynamoDB coordinator table. `aws` commands assume `aws login --region ap-southeast-2`. Logs are in CloudWatch Logs, one group per function: `/aws/lambda/insights-production-api`, `-jobs`, `-cron`. The schedules are off until cutover (aws-deployment.md), so the `*/15` and nightly sweeps mentioned below don't run on AWS yet.
+Production runs on AWS, see [aws-deployment.md](aws-deployment.md): the Lambda functions `insights-production-api` (UI + API, behind CloudFront and WAF), `-jobs` (the SQS queues) and `-cron` (the schedules and maintenance actions), RDS PostgreSQL, SQS with a dead-letter queue, a DynamoDB coordinator table, and WhatsApp's Evolution API service on ECS Fargate ([whatsapp.md](whatsapp.md)). `aws` commands assume `aws login --region ap-southeast-2`. Logs are in CloudWatch Logs, one group per function: `/aws/lambda/insights-production-api`, `-jobs`, `-cron`; the WhatsApp service's in `/ecs/insights-production-evolution`. The schedules are off until cutover (aws-deployment.md), so the `*/15` and nightly sweeps mentioned below don't run on AWS yet.
 
 Secrets are in Secrets Manager (`insights/production/app`), set with `node infra/cdk/scripts/put-secrets.mjs --set NAME`; the functions read them when an instance starts (aws-deployment.md says how to get fresh instances). SQL runs as the owner role through the admin host (the database is private): start it, `aws ssm start-session --target <instance id>`, credentials from the `insights/production/db-owner` secret; stop it afterwards (aws-deployment.md, "Database").
 
@@ -13,7 +13,7 @@ Secrets are in Secrets Manager (`insights/production/app`), set with `node infra
 | `GET <APP_URL>/api/readyz` | `200 {"ok":true,"checks":{"db":true,"coord":true,"tenantDb":true}}` |
 | Alarms and the CloudWatch dashboard `insights-production` | no alarm in `ALARM` |
 | Live logs: `aws logs tail /aws/lambda/insights-production-api --follow` (and `-jobs`, `-cron`) | no `"level":"error"` bursts |
-| Queue backlog: dashboard → Queue depth (`insights-production-sync`, `-webhooks`, `-aggregate`, `-email`) | draining; `insights-production-dlq` empty |
+| Queue backlog: dashboard → Queue depth (`insights-production-sync`, `-webhooks`, `-aggregate`, `-email`, `-whatsapp`) | draining; `insights-production-dlq` empty |
 | Failed webhooks: `SELECT count(*) FROM webhook_events WHERE status='failed' AND received_at > now() - interval '1 day';` | ~0 |
 | Stores in error: `SELECT shop_domain FROM stores WHERE status='error';` | none |
 | Open alerts: `SELECT * FROM alerts WHERE resolved_at IS NULL ORDER BY created_at DESC;` | none critical |
@@ -42,6 +42,11 @@ The check found figures it couldn't match or repair. Read its row (`reconciliati
 1. `SELECT topic, error, attempts FROM webhook_events WHERE status='failed' ORDER BY received_at DESC LIMIT 50;`
 2. `Order … not found for refund …`: refund arrived before its order and the order never came. The daily reconcile fixes it; to fix now, re-sync the store.
 3. To replay a single event you need the payload, which isn't stored. Re-sync (orders are re-pulled from Shopify) instead.
+
+### `whatsapp-service-down`, `whatsapp-service-unreachable`, `whatsapp-service-memory` (alarms)
+WhatsApp's Evolution API service: no task running, the sweep couldn't reach it, or its memory is
+nearly full. Messages wait meanwhile. Steps in [whatsapp.md](whatsapp.md), "Runbook" (and
+"Scaling" for memory).
 
 ### Webhooks returning 401 en masse
 `SHOPIFY_API_SECRET` doesn't match the app (secret rotated in the Partner dashboard but not in the app secret, or vice versa). `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET`, then get fresh function instances (it takes effect only there). Shopify retries failed deliveries for 48 h, so nothing is lost if fixed promptly.
@@ -116,7 +121,7 @@ half hour, or Settings → Shopify → Reconnect).
 | Task | What it does |
 | --- | --- |
 | `ops:recompute` | Rebuilds `daily_store_metrics` for `OPS_SHOP` from its orders and refunds. |
-| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, and WhatsApp Automation's number PIN, test number, contacts (number, first name), messages (number, send details, text) and webhook bodies waiting to be applied (the old WhatsApp tables, read by nothing, are left as they are; docs/whatsapp.md). Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). Ad connections are picked by both ciphertexts (access and refresh token), not by `token_key_version`, and each sign-in's rows are rewritten together, only over what was read. |
+| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp Automation's connections (instance token, webhook key, linked number), test number, contacts (number, first name), messages (number, send details, text) and webhook bodies waiting to be applied (the older `whatsapp_*` and `wa_*` tables, read by nothing, are left as they are; docs/whatsapp.md), and the inventory alerts' WhatsApp numbers. Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). Ad connections are picked by both ciphertexts (access and refresh token), not by `token_key_version`, and each sign-in's rows are rewritten together, only over what was read. |
 | `ops:ad-persons` | Fills in who granted access (`ad_connections.external_user_id`: Google's account id, Meta's app-scoped user id) for ad connections that don't know it, one look-up per sign-in (Google: a token refresh first). Until a connection knows, a Disconnect looks the unknown ones up itself (10 sign-ins at most) and keeps the grant at Google or Meta for any it can't place, so run this once after this version is deployed, and again while it prints connections still without a person. A token that no longer works marks its connections "reconnect"; ones the platform wouldn't place stay unknown (their next sync tries again). Safe to repeat (`OPS_LIMIT` caps the sign-ins per run, default 200). |
 | `ops:ad-health` | Reads only: how the ad connections stand (packages/core/src/adConnections/health.ts). Connections per platform, how each was authorized (`nango`, or the older `direct` sign-in) and status; error codes; how many are still to move to Nango (docs/nango.md) and how many wait for a reconnect; the shown, active ones without a successful sync for a day (or never, an hour after connecting) and the ones failing 3+ syncs in a row, by connection id, platform account id, workspace and store; the last 24 hours of syncs by outcome and platform with the commonest failure codes; and whether `NANGO_SECRET_KEY` is set and Nango holds each platform's integration (asked when the env file has the key). Ids and counts only: no token, ciphertext, Nango connection id, email or account name, so its output can go into a ticket. Uses the same env file as the other tasks; it decrypts nothing. |
 

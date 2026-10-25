@@ -18,7 +18,8 @@ tokens, bizinsights reads the platforms itself): [nango.md](nango.md).
    2026-10-23 design: `components/integrations/IntegrationRow.tsx`, `AdRow.tsx`) shows a card each for Google Ads,
    Shopify, WhatsApp, Meta Ads and Google AdSense with a **Connect** button that goes straight to the platform's
    sign-in, and once connected each card links to Settings → Advertising
-   (**Manage**, or **Fix it** when an account needs attention). Signing in with Google is on Settings → Security.
+   (**Manage**, or **Fix it** when an account needs attention). WhatsApp's card is the exception: both open the
+   WhatsApp Automation page (`/dashboard/whatsapp-automation`, Connect on its Setup tab; docs/whatsapp.md). Signing in with Google is on Settings → Security.
 3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (or
    **Connect** on Settings → Integrations): Nango's window opens over the page, and they approve on the platform's
    own screen in it. Connecting needs the integrations permission (`integrations.manage`:
@@ -164,7 +165,9 @@ the people who manage integrations, and closes it when the connection works agai
 - **Meta `appsecret_proof`**: every Graph call made with a person's token carries it (HMAC of the token with
   `META_APP_SECRET`, `packages/core/src/metaGraph.ts`), so a leaked token is useless without the secret. Once this
   is deployed, **"Require App Secret"** can be turned on in the Meta app (App settings → Advanced → Security).
-  WhatsApp sends none (a merchant's own WhatsApp app has a secret we don't hold).
+  WhatsApp's Cloud API option runs on the same app: bizinsights' own calls for it (Embedded Signup, registering the
+  number) carry the proof, but its messages go to Meta through Evolution API, which this repository doesn't show
+  sending one, so check Cloud API sends still work before turning that switch on (docs/whatsapp.md).
 - **Meta tokens** last about 60 days and can't be renewed silently: Settings warns from 14 days before, the alert from
   7. When it ends the account shows Reconnect required; history is kept.
 
@@ -229,9 +232,9 @@ project's Google Ads API access starts at Test (test accounts only). The Google 
 **The app:** "Insights", App ID `971575545351940`, owned by the Facebook account sebanceo@gmail.com, Development mode,
 use case "Measure ad performance data with Marketing API" (`ads_read` ready for testing = Standard Access). Facebook
 Login for Business configuration "Insights ads reporting" `1521935306664882` (user access token, ad accounts, ads_read
-only) = `META_CONFIG_ID`. No business portfolio yet. WhatsApp Automation runs on this app too since 2026-10-25
+only) = `META_CONFIG_ID`. No business portfolio yet. WhatsApp Automation's Cloud API option runs on this app too since 2026-10-25
 (`WHATSAPP_APP_ID` empty; its own Embedded Signup configuration is `WHATSAPP_CONFIG_ID`, docs/whatsapp.md); it used
-the separate app "pixmagic" (1799660384680551) before.
+the separate app "pixmagic" (1799660384680551) before. Linking a phone with a QR code uses no Meta app.
 
 To set up a new app from scratch:
 

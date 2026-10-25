@@ -14,11 +14,10 @@ There is no other way in any more: bizinsights' own OAuth (consent URLs, code ex
 routes) was removed on 2026-10-24. Connections made by it before then are moved to Nango by themselves
 (below, "Connections made before Nango").
 
-WhatsApp is connected differently: Meta's Embedded Signup runs on bizinsights' page and bizinsights
-imports the business token into Nango's `whatsapp-business` integration (provider
-`whatsapp-business`, API key), one connection per store (`wa-<storeId>`); bizinsights makes that
-integration itself if it is ever missing. [whatsapp.md](whatsapp.md) explains why (Nango's WhatsApp
-integration is API-key only, with no Embedded Signup) and how.
+WhatsApp doesn't use Nango. It runs on bizinsights' own Evolution API service, and a Cloud API
+number's token, from Meta's Embedded Signup, is kept encrypted by bizinsights
+([whatsapp.md](whatsapp.md)). The design of 2026-10-25 kept that token at Nango; it was replaced
+before any store connected through it.
 
 What Nango does **not** change: Meta's App Review / Advanced Access for `ads_read` and Google's
 verification are about bizinsights' app, which Nango signs in with. Until Meta grants Advanced Access, only
@@ -35,10 +34,10 @@ AdSense has neither limit (`adsense.readonly` is non-sensitive and the consent s
 | Google AdSense | `bizinsights-google-adsense` | `google` | `https://www.googleapis.com/auth/adsense.readonly,openid` | AdSense Management API v2 |
 
 The same environment also holds **`whatsapp-business`** (provider `whatsapp-business`, an API-key integration made in
-Nango's dashboard on 2026-10-24, not by nango-setup.mjs): each store's WhatsApp token, imported by bizinsights after
-Meta's Embedded Signup, as the connection `wa-<storeId>` ([whatsapp.md](whatsapp.md)). Any other connection in it (a
-token the earlier "add your token in Nango's window" flow left behind) is deleted by the hourly sweep once 30
-minutes old.
+Nango's dashboard on 2026-10-24, not by nango-setup.mjs), where the retired 2026-10-25 WhatsApp design kept each
+store's token as the connection `wa-<storeId>`. Nothing writes to it any more; erasing a store still deletes that
+store's retired token there (`whatsapp/purge.ts`), so keep it until the old WhatsApp tables are dropped
+([whatsapp.md](whatsapp.md), "The old tables").
 
 `openid` is who the Google account is: Google's tokeninfo didn't name the person for an
 adsense.readonly-only token (first real connect, 2026-10-22), so its disconnect couldn't revoke the grant.

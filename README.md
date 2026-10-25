@@ -4,7 +4,7 @@ A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merch
 
 Merchants can also connect Google Ads, Google AdSense and Meta Ads, read-only, to see their advertising next to their sales ([docs/ads-setup.md](docs/ads-setup.md)).
 
-Runs on **AWS** at https://bizinsights.io (DNS at Cloudflare; pages asked for on CloudFront's own address or on www redirect there): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB and S3; email goes through Resend, with SES as the fallback. Every merge to `main` deploys it ([docs/aws-deployment.md](docs/aws-deployment.md)). Locally the same code runs as one Node process.
+Runs on **AWS** at https://bizinsights.io (DNS at Cloudflare; pages asked for on CloudFront's own address or on www redirect there): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB and S3, plus one ECS Fargate service for WhatsApp (Evolution API); email goes through Resend, with SES as the fallback. Every merge to `main` deploys it ([docs/aws-deployment.md](docs/aws-deployment.md)). Locally the same code runs as one Node process.
 
 ```
 apps/aws       The host: Lambda entry, AWS adapters (SQS, DynamoDB, S3, SES), app settings, and the local server
@@ -41,7 +41,7 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Shopify app configuration | [docs/shopify-setup.md](docs/shopify-setup.md) |
 | Single test store, no publishing | [docs/test-store.md](docs/test-store.md) |
 | Webhooks | [docs/webhooks.md](docs/webhooks.md) |
-| WhatsApp Automation (Cloud API, Embedded Signup, Nango): setup, flows, data | [docs/whatsapp.md](docs/whatsapp.md) |
+| WhatsApp Automation (Evolution API: a phone linked by QR code, or Meta's Cloud API): setup, automations, data | [docs/whatsapp.md](docs/whatsapp.md) |
 | Staff Management, attendance and payroll | [docs/staff.md](docs/staff.md) |
 | Email integrations and automation (Gmail, Microsoft 365, SMTP) | [docs/email.md](docs/email.md) · API: [docs/email-api.yaml](docs/email-api.yaml) |
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
