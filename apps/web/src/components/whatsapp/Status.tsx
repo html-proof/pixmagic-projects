@@ -22,6 +22,7 @@ export const META_LINKS = {
   businessSuite: "https://business.facebook.com/",
   whatsappManager: "https://business.facebook.com/wa/manage/home/",
   businessSettings: "https://business.facebook.com/settings",
+  businessSupport: "https://business.facebook.com/business-support-home/",
   appDashboard: "https://developers.facebook.com/apps/",
   platformDocs: "https://developers.facebook.com/docs/whatsapp/",
 } as const;
@@ -131,6 +132,22 @@ export function MetaRequirements() {
         </li>
       </ul>
     </section>
+  );
+}
+
+/**
+ * Meta's window stopped before a WhatsApp Business account was made or chosen
+ * (`signupMayBeMetaLimit`): Meta's own limits on the business portfolio, which its window doesn't
+ * always manage to show, and where the merchant sees and lifts them.
+ */
+export function MetaLimitHelp({ className = "" }: { className?: string }) {
+  return (
+    <p className={`text-sm text-muted ${className}`} data-testid="wa-meta-limit">
+      Did Meta&apos;s window show an error or go blank? Meta limits some business portfolios: an unverified business can create only a few WhatsApp Business accounts, and a restricted one, or one still
+      being verified, none. See what applies to yours in <External href={META_LINKS.businessSupport}>Business Support Home</External>, remove an account you don&apos;t use in{" "}
+      <External href={META_LINKS.whatsappManager}>WhatsApp Manager</External>, or verify the business (Security Center, in <External href={META_LINKS.businessSettings}>Business settings</External>).
+      Then try again, or pick another portfolio in Meta&apos;s window.
+    </p>
   );
 }
 

@@ -108,8 +108,18 @@ test("not connected: the real state, the button and what Meta asks; a blocked or
   await button.click();
   await expect(status).toContainText("Finish the steps in Meta's window.");
   await expect(button).toBeDisabled();
-  await expect(status).toContainText("closed while adding or verifying the phone number before the setup finished. Nothing was connected.");
+  await expect(status).toContainText("closed while adding the phone number before the setup finished. Nothing was connected.");
   await expect(button).toBeEnabled();
+  // Past the portfolio: nothing about Meta's limits on it.
+  await expect(page.getByTestId("wa-meta-limit")).toHaveCount(0);
+
+  // Closed on the portfolio (Meta's window can crash there on its own limit screen): where to see and lift Meta's limits.
+  await scenario(page, { kind: "window", message: { type: "WA_EMBEDDED_SIGNUP", event: "CANCEL", data: { current_step: "BUSINESS_ACCOUNT_SELECTION" } } });
+  await button.click();
+  await expect(status).toContainText("closed while choosing the business portfolio before the setup finished.");
+  const limit = page.getByTestId("wa-meta-limit");
+  await expect(limit).toContainText("an unverified business can create only a few WhatsApp Business accounts");
+  await expect(limit.getByRole("link", { name: /Business Support Home/ })).toHaveAttribute("href", "https://business.facebook.com/business-support-home/");
 });
 
 test("Meta's finish (only from facebook.com) is sent to the server with the nonce; its refusal is shown and nothing is claimed", async ({ page }) => {

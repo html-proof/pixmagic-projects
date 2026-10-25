@@ -1,9 +1,10 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link2 } from "lucide-react";
-import { parseEmbeddedSignupMessage, signupStepLabel, type EmbeddedSignupEvent } from "@app/shared/whatsapp";
+import { parseEmbeddedSignupMessage, signupMayBeMetaLimit, signupStepLabel, type EmbeddedSignupEvent } from "@app/shared/whatsapp";
 import { useToast } from "@/components/AppUi";
 import { api } from "@/lib/api";
+import { MetaLimitHelp } from "./Status";
 import type { WaConnection, WaPlatform } from "./types";
 import { waError, WhatsappIcon } from "./WaUi";
 
@@ -61,7 +62,13 @@ function loadFacebookSdk(appId: string, version: string): Promise<FbSdk> {
   return sdk;
 }
 
-type Phase = { kind: "idle" } | { kind: "opening" } | { kind: "authorizing" } | { kind: "configuring" } | { kind: "stopped"; text: string; tone: "info" | "error" };
+type Phase =
+  | { kind: "idle" }
+  | { kind: "opening" }
+  | { kind: "authorizing" }
+  | { kind: "configuring" }
+  /** `metaLimit`: Meta's window stopped where Meta's limits on the business portfolio may be why. */
+  | { kind: "stopped"; text: string; tone: "info" | "error"; metaLimit?: boolean };
 
 /** Under this, a window that "closed" never really opened: the browser blocked it. */
 const BLOCKED_MS = 1500;
@@ -90,15 +97,15 @@ export function ConnectWhatsApp({
   const code = useRef<string | null>(null);
   const finished = useRef<Extract<EmbeddedSignupEvent, { type: "finish" }> | null>(null);
   const cancelled = useRef<{ step: string | null } | null>(null);
-  const failed = useRef<string | null>(null);
+  const failed = useRef<{ message: string; code: string | null } | null>(null);
   const done = useRef(false);
   const openedAt = useRef(0);
   const waitTimer = useRef<number | undefined>(undefined);
 
-  const stop = useCallback((text: string, tone: "info" | "error" = "error") => {
+  const stop = useCallback((text: string, tone: "info" | "error" = "error", metaLimit = false) => {
     done.current = true;
     window.clearTimeout(waitTimer.current);
-    setPhase({ kind: "stopped", text, tone });
+    setPhase({ kind: "stopped", text, tone, metaLimit });
   }, []);
 
   /** Send the code (and the ids Meta posted, when they came) to the server: only its answer connects anything. */
@@ -147,7 +154,7 @@ export function ConnectWhatsApp({
       } else if (m.type === "cancel") {
         cancelled.current = { step: m.step };
       } else {
-        failed.current = m.message ?? "unknown error";
+        failed.current = { message: m.message ?? "unknown error", code: m.code };
       }
     };
     window.addEventListener("message", onMessage);
@@ -194,11 +201,14 @@ export function ConnectWhatsApp({
           if (done.current) return;
           // The window closed without a code: nothing is connected.
           const c = cancelled.current;
-          if (failed.current) stop(`Meta reported a problem: ${failed.current}. Nothing was connected; please try again.`);
+          const f = failed.current;
+          if (f) stop(`Meta reported a problem: ${f.message}${f.code ? ` (Meta's error ${f.code})` : ""}. Nothing was connected.`, "error", true);
           else if (Date.now() - openedAt.current < BLOCKED_MS && !c) stop("Meta's window didn't open. Allow pop-ups for this site in your browser, then try again.");
           else {
+            // Meta's window can also crash on its own screen about the portfolio's limits and post
+            // nothing: the step it was closed at is all this page learns (signupMayBeMetaLimit).
             const where = signupStepLabel(c?.step);
-            stop(`Meta's window was closed${where ? ` while ${where}` : ""} before the setup finished. Nothing was connected.`, "info");
+            stop(`Meta's window was closed${where ? ` while ${where}` : ""} before the setup finished. Nothing was connected.`, "info", signupMayBeMetaLimit(c?.step));
           }
         },
         { config_id: configId, response_type: "code", override_default_response_type: true, extras: { setup: {} } },
@@ -248,6 +258,7 @@ export function ConnectWhatsApp({
           <span>{status}</span>
         </p>
       )}
+      {phase.kind === "stopped" && phase.metaLimit && <MetaLimitHelp className={look === "row" ? "max-w-xs" : "max-w-md"} />}
     </div>
   );
 }

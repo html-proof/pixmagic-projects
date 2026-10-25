@@ -18,6 +18,8 @@ import {
   MissingValueError,
   parseEmbeddedSignupMessage,
   renderTemplate,
+  signupMayBeMetaLimit,
+  signupStepLabel,
   STARTER_TEMPLATES,
   statusAfterEvent,
   statusBucket,
@@ -205,6 +207,19 @@ describe("Embedded Signup's window messages", () => {
     expect(parseEmbeddedSignupMessage("not json")).toBeNull();
     // An id that isn't Meta's numeric id is dropped.
     expect(parseEmbeddedSignupMessage({ type: "WA_EMBEDDED_SIGNUP", event: "FINISH", data: { waba_id: "../x" } })).toMatchObject({ wabaId: null });
+  });
+  it("names each of Meta's screens, and says where Meta's limits on the portfolio may have stopped it", () => {
+    expect(signupStepLabel("BUSINESS_ACCOUNT_SELECTION")).toBe("choosing the business portfolio");
+    expect(signupStepLabel("WABA_PHONE_PROFILE_PICKER")).toBe("choosing the WhatsApp Business account");
+    expect(signupStepLabel("WHATSAPP_BUSINESS_PROFILE_SETUP")).toBe("creating the WhatsApp Business account");
+    expect(signupStepLabel("PHONE_NUMBER_SETUP")).toBe("adding the phone number");
+    expect(signupStepLabel("PHONE_NUMBER_VERIFICATION")).toBe("verifying the phone number");
+    expect(signupStepLabel("PERMISSIONS")).toBe("reviewing permissions");
+    expect(signupStepLabel("SOME_NEW_STEP")).toBe("some new step");
+    expect(signupStepLabel(null)).toBeNull();
+    // Closed before Meta said where (its window crashed on the limit screen and posted nothing), or before the account existed.
+    for (const step of [null, "BUSINESS_ACCOUNT_SELECTION", "WABA_PHONE_PROFILE_PICKER", "WHATSAPP_BUSINESS_PROFILE_SETUP", "SOME_NEW_STEP"]) expect(signupMayBeMetaLimit(step), String(step)).toBe(true);
+    for (const step of ["PHONE_NUMBER_SETUP", "PHONE_NUMBER_VERIFICATION", "PERMISSIONS"]) expect(signupMayBeMetaLimit(step), step).toBe(false);
   });
 });
 

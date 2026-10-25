@@ -148,6 +148,21 @@ do in plain words: the sign-in wasn't started here or took too long; the code ex
 isn't for bizinsights' app; a permission was unticked; the account wasn't granted; the number isn't
 in it, or is already another store's. Nothing goes to Nango until every check passed.
 
+**Meta's window stops on the business portfolio.** Meta limits some portfolios before a WhatsApp
+Business account can be made or chosen: an unverified business may create only a few (Meta's error
+2388098), one whose verification is still pending none (2494030), a restricted one none (Meta's
+"Embedded Signup Flow Errors" page lists them all). Meta's window is meant to say so, but on
+2026-10-25 it crashed instead: a blank or stuck screen, and in that window's own console
+`Uncaught Error: Unexpected null value [WhatsAppBizxPlatformMetaBusinessAccountIntegrityLimitView.react][#10]`.
+That is Meta's code on facebook.com; nothing bizinsights sends causes or can fix it (the `FB.login`
+call is exactly Meta's documented one), and such a window posts nothing to this page. So when
+Meta's window closes without finishing anywhere but the phone number or permissions screens, or
+before Meta said where (`signupMayBeMetaLimit` in `@app/shared/whatsapp`), the button's note adds
+where the merchant sees and lifts Meta's limits: Business Support Home (restrictions), WhatsApp
+Manager (remove an unused account), Business settings → Security Center (verification); then try
+again, or pick or create another portfolio in Meta's window. An error Meta does post
+(`WA_EMBEDDED_SIGNUP` CANCEL with `error_message`) is shown with its code and the same note.
+
 What can still be needed afterwards (`step`, shown on the Overview with its fix):
 
 | Step | When | Fix |
@@ -595,6 +610,11 @@ runs say "No phone number on the order". Development stores are exempt, which is
 9. Need a break (a sale gone wrong, a holiday)? **Pause all automation** on the Overview or in
    Settings; **Resume** when you're ready. Settings also has **Reconnect WhatsApp** (refresh access)
    and **Disconnect WhatsApp**.
+
+If Meta's window shows an error or goes blank while you choose the business portfolio or the
+WhatsApp Business account, Meta is limiting that portfolio (not verified yet, verification still
+pending, too many accounts, or a restriction): see it in Business Support Home, then try again or
+choose another portfolio. The note under the button links each place.
 
 If something doesn't work, the Overview says what and what to do: the connection's health, check
 by check, with **Check again**; anything Meta asks for (a payment method, a display-name review, a

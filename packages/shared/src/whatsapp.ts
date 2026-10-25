@@ -843,15 +843,34 @@ export function parseEmbeddedSignupMessage(data: unknown): EmbeddedSignupEvent |
   return null;
 }
 
+/** Meta's screens in its window (a CANCEL's `current_step`, as Meta's "Embedded Signup Flow Errors" lists them), in words. */
+const SIGNUP_STEPS: Record<string, string> = {
+  BUSINESS_ACCOUNT_SELECTION: "choosing the business portfolio",
+  WABA_PHONE_PROFILE_PICKER: "choosing the WhatsApp Business account",
+  WHATSAPP_BUSINESS_PROFILE_SETUP: "creating the WhatsApp Business account",
+  PHONE_NUMBER_SETUP: "adding the phone number",
+  PHONE_NUMBER_VERIFICATION: "verifying the phone number",
+  PERMISSIONS: "reviewing permissions",
+};
+
 /** Meta's screens in its window, in words (the step a person closed it at). */
 export function signupStepLabel(step: string | null | undefined): string | null {
   if (!step) return null;
-  const s = step.toUpperCase();
-  if (s.includes("PHONE") || s.includes("VERIFY")) return "adding or verifying the phone number";
-  if (s.includes("WABA") || s.includes("ACCOUNT")) return "choosing the WhatsApp Business account";
-  if (s.includes("BUSINESS")) return "choosing the business portfolio";
-  if (s.includes("PERMISSION")) return "reviewing permissions";
-  return step.toLowerCase().replace(/_/g, " ");
+  return SIGNUP_STEPS[step.toUpperCase()] ?? step.toLowerCase().replace(/_/g, " ");
+}
+
+/**
+ * Whether Meta's window may have stopped on Meta's own limits for the business portfolio rather
+ * than been closed by choice: anywhere but the phone number and permissions, or before Meta said
+ * where. An unverified business may create only a few WhatsApp Business accounts, one whose
+ * verification is still pending none, a restricted one none; and Meta's window has been seen
+ * crashing while it tried to say so (a blank screen, "Unexpected null value
+ * [WhatsAppBizxPlatformMetaBusinessAccountIntegrityLimitView.react]" in its console, 2026-10-25),
+ * with no message for this page. Only Meta's side can lift those limits.
+ */
+export function signupMayBeMetaLimit(step: string | null | undefined): boolean {
+  const s = step?.toUpperCase() ?? "";
+  return !s.includes("PHONE_NUMBER") && s !== "PERMISSIONS";
 }
 
 // ---------------------------------------------------------------------------
