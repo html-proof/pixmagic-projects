@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_GEO_HEADER, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
-import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
+import { configReport, defaultShard, evolutionStatus, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { productCheck, shopifyCheckReport } from "@app/core/reports";
 import { systemDb } from "@app/db";
 import { apiDeps, originCheck } from "./app.js";
@@ -292,7 +292,10 @@ export const handler = async (event: unknown, context: unknown) => {
     // What this deployment has set up (core configReport.ts): booleans and setting names, never a
     // value. The deploy's smoke test warns about each provider whose secret is missing.
     await ensureSecrets();
-    return configReport();
+    const report = configReport();
+    // The WhatsApp service is private: only from in here can the deploy see that the functions reach it.
+    if (report.whatsapp.evolution) report.whatsapp.service = await evolutionStatus(defaultShard(), fetch);
+    return report;
   }
   if (action === "evolution-db") {
     // The WhatsApp service's own database and role (evolutionDb.ts): CloudFormation invokes this before

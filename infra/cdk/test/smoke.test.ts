@@ -67,6 +67,15 @@ describe("the configuration check", () => {
     );
   });
 
+  it("says whether the functions reach the WhatsApp service, and warns when they don't", () => {
+    const reached = { ...REPORT, whatsapp: { ...REPORT.whatsapp, service: { reachable: true, version: "2.3.7" } } };
+    expect(configCheck(answers(ok(reached)).invoke, "production").detail).toContain("WhatsApp service on (Evolution 2.3.7 answers), Cloud API off");
+    const lost = { ...REPORT, whatsapp: { ...REPORT.whatsapp, service: { reachable: false, version: null } } };
+    const { detail, warnings } = configCheck(answers(ok(lost)).invoke, "production");
+    expect(detail).toContain("WhatsApp service on but NOT reachable");
+    expect(warnings.at(-1)).toContain("::warning title=WhatsApp's service doesn't answer::The functions can't reach Evolution API (stack InsightsWhatsapp-production)");
+  });
+
   it("sends another environment's owner to that environment's secret and deploy, never production's", () => {
     const { warnings } = configCheck(answers(ok()).invoke, "staging");
     expect(warnings).toHaveLength(1);

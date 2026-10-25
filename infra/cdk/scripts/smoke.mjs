@@ -90,11 +90,20 @@ export function configCheck(invoke, envName) {
         `Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --env ${envName} --set ${c.secretSetting}, then ${restart} so the functions read it (docs/aws-deployment.md).`,
     ),
   );
+  // The WhatsApp service is private: the cron function says whether it reaches it.
+  if (report.whatsapp.service && !report.whatsapp.service.reachable) {
+    warnings.push(
+      warning(
+        "WhatsApp's service doesn't answer",
+        `The functions can't reach Evolution API (stack InsightsWhatsapp-${envName}), so no store can connect WhatsApp or send. Check its ECS service and logs (docs/whatsapp.md, Runbook).`,
+      ),
+    );
+  }
   const on = (flags) => Object.keys(flags).filter((k) => flags[k]).join("+") || "none";
   const needs = (list) => (Array.isArray(list) && list.length ? ` (needs ${list.join(", ")})` : "");
   const detail = [
     `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)}${report.ads.nango ? `, through Nango ${on(report.ads.nango)}` : ""})`,
-    `WhatsApp service ${report.whatsapp.evolution ? "on" : `off${needs(report.whatsapp.evolutionNeeds)}`}, Cloud API ${report.whatsapp.embeddedSignup ? "on" : `off${needs(report.whatsapp.embeddedSignupNeeds)}`}`,
+    `WhatsApp service ${!report.whatsapp.evolution ? `off${needs(report.whatsapp.evolutionNeeds)}` : !report.whatsapp.service ? "on" : report.whatsapp.service.reachable ? `on (Evolution ${report.whatsapp.service.version ?? "?"} answers)` : "on but NOT reachable"}, Cloud API ${report.whatsapp.embeddedSignup ? "on" : `off${needs(report.whatsapp.embeddedSignupNeeds)}`}`,
     `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
     `Google sign-in ${report.auth.google ? "on" : "off"}`,
     `emailed sign-in code ${report.auth.loginCode ? "on" : "off"}`,
@@ -269,6 +278,10 @@ async function main() {
     const r = await get(`${base}/api/me`, { headers: { origin: "https://evil.example" } });
     const acao = r.headers.get("access-control-allow-origin");
     expect(!acao || (acao !== "*" && acao !== "https://evil.example"), `access-control-allow-origin ${acao}`);
+  });
+  await check("WhatsApp service's webhook without its token is refused", async () => {
+    const r = await get(`${base}/api/webhooks/whatsapp/evolution/bi_000000000000000000000000`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(r.status === 401, `status ${r.status}`);
   });
   await check("Shopify webhook with a bad signature is refused", async () => {
     const r = await get(`${base}/api/webhooks/shopify`, {

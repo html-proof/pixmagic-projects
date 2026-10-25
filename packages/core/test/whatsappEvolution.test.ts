@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { eventName, evolutionClient, EvolutionError, isNotConnected, jidNumber, resetEnvCache, verifyEvolutionJwt } from "../src/index.js";
+import { eventName, evolutionClient, EvolutionError, evolutionStatus, isNotConnected, jidNumber, resetEnvCache, verifyEvolutionJwt } from "../src/index.js";
 import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, evolutionJwt, QR_PNG } from "../../../test-support/evolutionFake.js";
 
 /**
@@ -118,6 +118,18 @@ describe("the Evolution API client", () => {
   it("turns Evolution's Cloud API answer with Meta's error (a 201 without a message) into a refusal", async () => {
     const fetchImpl = async () => new Response(JSON.stringify({ message: "(#131030) Recipient phone number not in allowed list", type: "OAuthException", code: 131030, error_data: { details: "Recipient not allowed" } }), { status: 201 });
     await expect(evolutionClient("a", fetchImpl).sendText("bi_1", "t", { number: "1", text: "x" })).rejects.toSatisfy((e: unknown) => e instanceof EvolutionError && e.kind === "bad_request" && /not in allowed list/.test(e.detail));
+  });
+
+  it("says whether the service answers, and its version, without ever throwing", async () => {
+    const seen: string[] = [];
+    const up = async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push(`${String(input)} ${new Headers(init?.headers).get("apikey") === EVOLUTION_KEY}`);
+      return new Response(JSON.stringify({ status: 200, message: "Welcome to the Evolution API, it is working!", version: "2.3.7", clientName: "insights_a" }), { status: 200 });
+    };
+    expect(await evolutionStatus("a", up)).toEqual({ reachable: true, version: "2.3.7" });
+    expect(seen).toEqual(["http://evolution.test:8080/ true"]);
+    expect(await evolutionStatus("a", async () => Promise.reject(new TypeError("fetch failed")))).toEqual({ reachable: false, version: null });
+    expect(await evolutionStatus("b", up)).toEqual({ reachable: false, version: null });
   });
 
   it("refuses to run without its settings, and knows only its own shard", () => {

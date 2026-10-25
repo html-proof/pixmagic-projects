@@ -6,7 +6,8 @@
  *  - every connection is checked against Evolution API (a missed webhook, a pairing left behind,
  *    instances nobody owns), and one down past the grace period has its waiting messages cancelled;
  *  - webhook events that weren't applied are retried, then set aside;
- *  - retention: message texts after the store's retention, the records themselves after 400 days;
+ *  - retention: message texts after the store's retention, the records themselves after a year,
+ *    automation runs after 90 days;
  *  - Cloud API connections: Meta's review of submitted templates.
  */
 import { systemDb } from "@app/db";
@@ -22,7 +23,9 @@ import { WEBHOOK_MAX_ATTEMPTS } from "./webhook.js";
 import { renewCloudToken } from "./cloud.js";
 
 const LEASE_MS = 14 * 60_000;
-const KEEP_RECORDS_MS = 400 * 86_400_000;
+/** What the privacy policy promises (apps/web/src/app/privacy/page.tsx): message records a year, automation runs 90 days. */
+const KEEP_RECORDS_MS = 365 * 86_400_000;
+const KEEP_RUNS_MS = 90 * 86_400_000;
 
 export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | "mailer" | "coord">): Promise<Record<string, number | boolean> | null> {
   if (!(await deps.coord.acquire("sweep:whatsapp", LEASE_MS))) return null;
@@ -135,7 +138,7 @@ export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | 
     if (oldIds.length) {
       await systemDb.$transaction([systemDb.wappMessageEvent.deleteMany({ where: { messageId: { in: oldIds } } }), systemDb.wappMessage.deleteMany({ where: { id: { in: oldIds } } })]);
     }
-    await systemDb.wappAutomationRun.deleteMany({ where: { createdAt: { lt: old } } });
+    await systemDb.wappAutomationRun.deleteMany({ where: { createdAt: { lt: new Date(now - KEEP_RUNS_MS) } } });
     await systemDb.wappWebhookEvent.deleteMany({ where: { OR: [{ status: { in: ["processed", "ignored"] }, receivedAt: { lt: new Date(now - 7 * 86_400_000) } }, { status: "dead", receivedAt: { lt: new Date(now - 30 * 86_400_000) } }] } });
     await systemDb.wappSettings.updateMany({ where: { testCodeExpiresAt: { lt: new Date(now) } }, data: { testCodeHash: null, testCodeExpiresAt: null } });
     return cleared + oldIds.length;

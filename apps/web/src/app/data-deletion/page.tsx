@@ -15,7 +15,7 @@ export const metadata: Metadata = {
  * Google Ads / AdSense. Every step here is what the code does: disconnecting deletes the encrypted
  * token and the data fetched with it, then revokes the platform grant once no other connection relies
  * on it (apps/api/src/routes/ads.ts DELETE .../ads/connections/:id, adConnections.ts
- * revokeAdAccessIfUnused; packages/core/src/whatsapp/connect.ts disconnect), and access the
+ * revokeAdAccessIfUnused; packages/core/src/whatsapp/connection.ts disconnectWhatsapp), and access the
  * person removes at Google turns the connection to "reconnect" at its next use. Removing bizinsights in
  * Facebook calls Meta's deauthorize callback (POST /webhooks/meta/deauthorize: reading stops at once),
  * and Facebook's data deletion request calls POST /webhooks/meta/data-deletion, which deletes the Meta
@@ -72,10 +72,10 @@ export default function DataDeletionPage() {
             Your ads keep running.
           </li>
           <li>
-            <strong>WhatsApp</strong> — the access token (held for bizinsights by Nango) is deleted, bizinsights unsubscribes from your
-            WhatsApp Business account&apos;s updates, and messages waiting to be sent and running campaigns are cancelled. Message history
-            and your number&apos;s registration PIN are kept for your records (the history for 365 days) and then deleted, or immediately on
-            request (see step 3).
+            <strong>WhatsApp</strong> — a linked phone is logged out (it disappears from Linked devices on the phone) and its session is
+            deleted; for a WhatsApp Business Platform number, bizinsights&apos; access token is deleted. Messages waiting to be sent and
+            running campaigns are cancelled. Message history is kept for your records (each record for 365 days) and then deleted, or
+            immediately on request (see step 3).
           </li>
         </ul>
       </LegalSection>

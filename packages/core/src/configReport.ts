@@ -36,7 +36,15 @@ export interface ConfigReport {
    * URL and key are set), connecting through Meta's Cloud API (Embedded Signup; the settings it still
    * lacks, empty once it can be offered), and the verify token of Meta's webhook.
    */
-  whatsapp: { evolution: boolean; evolutionNeeds: string[]; embeddedSignup: boolean; embeddedSignupNeeds: string[]; webhookVerifyToken: boolean };
+  whatsapp: {
+    evolution: boolean;
+    evolutionNeeds: string[];
+    embeddedSignup: boolean;
+    embeddedSignupNeeds: string[];
+    webhookVerifyToken: boolean;
+    /** Whether the functions reach the service (the cron's "config" action asks it; absent elsewhere). */
+    service?: { reachable: boolean; version: string | null };
+  };
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */

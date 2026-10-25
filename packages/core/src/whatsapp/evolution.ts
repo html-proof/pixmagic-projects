@@ -57,6 +57,21 @@ export const evolutionConfigured = () => !!env().EVOLUTION_API_URL && !!env().EV
 export const defaultShard = () => env().EVOLUTION_SHARD;
 
 /**
+ * Whether a shard's server answers, and its version (its root answers with it): the deploy's check,
+ * asked from inside the VPC by the cron's "config" action. Never throws.
+ */
+export async function evolutionStatus(shard: string, fetchImpl: FetchLike): Promise<{ reachable: boolean; version: string | null }> {
+  try {
+    const s = evolutionServer(shard);
+    const r = await fetchImpl(`${s.url}/`, { headers: { apikey: s.apiKey }, signal: AbortSignal.timeout(5_000) });
+    const body = (await r.json().catch(() => null)) as { version?: unknown } | null;
+    return { reachable: r.ok, version: typeof body?.version === "string" ? body.version.slice(0, 20) : null };
+  } catch {
+    return { reachable: false, version: null };
+  }
+}
+
+/**
  * The server that holds a shard's instances. One shard today (EVOLUTION_SHARD at EVOLUTION_API_URL);
  * a second server is a second ECS service with its own DATABASE_CONNECTION_CLIENT_NAME, and its
  * own URL and key here (docs/whatsapp.md, "Scaling").

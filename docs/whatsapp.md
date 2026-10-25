@@ -66,6 +66,11 @@ Meta (Cloud API numbers) ──webhook (X-Hub-Signature-256)──> https://bizi
 - **The browser never reaches Evolution.** Only the Lambda functions can (its security group admits
   port 8080 from theirs alone); its global key lives in Secrets Manager (`insights/<env>/evolution-api`)
   and in the task's secrets, never in a response, a log or the browser.
+- **HTTPS wherever traffic leaves the VPC**: the browser to CloudFront, Evolution's webhooks to
+  bizinsights' public address, Evolution to WhatsApp and Meta, the database (TLS, its certificate
+  checked). The one hop inside the VPC, functions → Evolution, is plain HTTP to a private address
+  only the functions' security group may open. TLS on it would need a private certificate authority
+  (US$400 a month) or an internal load balancer (about US$20) for traffic that never leaves the VPC.
 - **Reused, not duplicated:** the app's RDS instance (one more database and role), its VPC, NAT
   instances, SQS (one more queue), DynamoDB coordination (locks, rate limits, the send pace),
   Secrets Manager, CloudWatch alarms and the alarm topic, the cron's sweeps.
@@ -299,7 +304,7 @@ store can't receive (the App Store app before Shopify approves protected custome
 
 Tables (`wapp_*`): connections, settings, templates, contacts, consent events, suppressions,
 messages, message events, webhook events, automations, automation runs, campaigns. Message texts are
-kept for the store's retention (default 90 days, 7–365), then only the record; records 400 days;
+kept for the store's retention (default 90 days, 7–365), then only the record; records 365 days and automation runs 90 days (what the privacy policy says);
 a webhook event's body until it is applied (the row 7 days, a set-aside one 30); attachments until
 sent. Evolution's own database
 keeps sessions and, for Cloud API numbers, sent messages, pruned nightly after 7 days.
