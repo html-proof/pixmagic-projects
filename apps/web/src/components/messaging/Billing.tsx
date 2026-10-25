@@ -59,7 +59,7 @@ export function SmsBillingPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="SMS Billing"
+        title="Messaging costs & limit"
         sub="AWS prices each text in US dollars when it reports the delivery. Texts it hasn't priced yet count at their estimate until it does, so you see them against the budget straight away. Months are calendar months in UTC, as AWS bills them."
         actions={
           <label className="flex items-center gap-2 text-sm">

@@ -5,6 +5,7 @@ import {
   addTestNumber,
   createTemplate,
   ensureSmsWebhooks,
+  messagingReadiness,
   readiness,
   removeTestNumber,
   saveSender,
@@ -68,7 +69,8 @@ export function smsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     await requireWorkspace(c, deps, ws, SMS_READ);
     const store = await smsStore(ws, storeId);
-    return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain, timezone: store.timezone, currency: store.currency }, ...(await smsOverview(store)) });
+    const [overview, ready] = await Promise.all([smsOverview(store), messagingReadiness(store, smsDeps(deps))]);
+    return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain, timezone: store.timezone, currency: store.currency }, ...overview, readiness: ready });
   });
 
   /** Variables, triggers and country rules: what the editors build on (no store data). */

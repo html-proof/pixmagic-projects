@@ -32,7 +32,7 @@ Nothing reaches a customer until all of these are true, and none is true by defa
 | Figures (overview, analytics, billing); GDPR | `analytics.ts`, `privacy.ts` |
 | Set up SMS (the five-step setup) and SMS Settings | `setup.ts`; rules in `@app/shared/sms` (`checkSenderName`, `SENDER_ID_SUPPORT`, `SETUP_AUTOMATIONS`); API `apps/api/src/routes/smsSetup.ts`; pages `/messaging/setup`, `/messaging/settings` (`components/messaging/Setup.tsx`, `SmsSettings.tsx`, `PhonePreview.tsx`) |
 | The Automations hub (one setup and history over SMS and email, [automations.md](automations.md)) | `packages/core/src/automations/sms.ts` calls the builder below; nothing else |
-| Automations (the four-step builder) | `builder.ts`; rules in `@app/shared/sms` (`AUTOMATION_TRIGGER_CARDS`, `TRIGGER_SOURCES`, `AUTOMATION_STARTERS`, `smsAutomationSchema`, `checkAutomationMessage`); each app's toml topics in core `apps.ts` (`APP_WEBHOOK_TOPICS`); API `apps/api/src/routes/smsAutomations.ts`; pages `/messaging/automations`, `/messaging/automations/edit` (`components/messaging/Automations.tsx`, `AutomationBuilder.tsx`, `AutomationUi.tsx`) |
+| Automations (Create SMS Automation: when, who, message, test, review) | `builder.ts`, `readiness.ts`; rules in `@app/shared/sms` (`AUTOMATION_TRIGGER_CARDS`, `TRIGGER_SOURCES`, `AUTOMATION_STARTERS`, `smsAutomationSchema`, `smsAudienceSchema`, `segmentConditions`, `checkAutomationMessage`, `SKIP_LABEL`); each app's toml topics in core `apps.ts` (`APP_WEBHOOK_TOPICS`); API `apps/api/src/routes/smsAutomations.ts`; pages `/messaging`, `/messaging/automations`, `/messaging/automations/edit`, `/messaging/history`, `/messaging/settings` (`components/messaging/Overview.tsx`, `Automations.tsx`, `AutomationBuilder.tsx`, `AutomationAudience.tsx`, `AutomationReview.tsx`, `AutomationUi.tsx`, `History.tsx`, `SmsSettings.tsx`) |
 | AWS adapter (signed calls to sms-voice) | `apps/aws/src/smsProvider.ts` |
 | API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts` |
 | Worker | `apps/worker/src/handlers/integrations.ts` (`runSmsJob`, `runSmsEvent`), `webhooks.ts`, `index.ts` (sweep) |
@@ -164,13 +164,15 @@ delivery events and the audit trail are append-only for tenant requests (migrati
 
 ## Set up SMS (for merchants)
 
-Customer Messaging → **Set up SMS** (`/messaging/setup`) is the simple way in: five steps next to a
+Customer Messaging → **Set up SMS** (`/messaging/setup`, the menu's *Setup guide* under Advanced) is the one-time setup: five steps next to a
 phone showing the text as a customer gets it, with **Save draft** and **Continue later** (the step
 and everything typed are kept in `sms_setups`). It drives the same rows as the advanced pages
 (sender, templates, rules, test texts), with the same checks; nothing is sent another way.
-**SMS Settings** (`/messaging/settings`) shows the result: the connection (with Disconnect and
-Reconnect), the sender name and its approval, the messages and automatic texts, the last test,
-recent texts with their delivery status, and this month's spend.
+**Settings** (`/messaging/settings`) shows the result in plain words: the SMS setup (sender,
+messaging verification, customer messaging permissions, monthly messaging limit, account), the
+Automatic SMS switch and the test recipients; under **Advanced** (owners and admins) links to the
+specialist pages, the provider configuration (the connection, with Disconnect and Reconnect) and the
+activity log (`GET …/sms/audit`).
 
 1. **Connect.** The API asks AWS End User Messaging SMS about the platform's account with the
    function's role (`DescribeAccountAttributes`, `DescribeSpendLimits`). The merchant has no AWS
@@ -217,59 +219,148 @@ cancelled, refunded, filled by `runSmsRules`).
 
 ## Automations (for merchants)
 
-Customer Messaging → **Automations** (`/messaging/automations`) lists every automation of the store
-(made here, in Set up SMS or in the advanced editor alike) as a card: its trigger, its message, its
-status, its last text and the last 30 days' outcomes, with search, status and trigger filters, a
-switch, Edit, Duplicate, Delete and Advanced (the WHEN / IF / WAIT / THEN editor with priority,
-version history and "Test with recent orders"). Above the cards: what stops the store's texts
-reaching anyone right now (`sendingProblems`: test mode, no approved sender, Automatic SMS off, a
-budget of 0, no basis for order updates, marketing switched off), each with the page that fixes it.
+Since 2026-10-25 Customer Messaging is built around one button. A merchant goes from the overview to
+an active automation without meeting the provider: **Create SMS Automation** → when → who → the
+message → a test → review and activate. The one-time setup (sender, verification, monthly limit,
+customer permissions, test recipients) is asked for once, under Settings and the Advanced pages, and
+an automation's review lists only what is still missing, each with a **Fix this** link.
 
-**Create automation** (`/messaging/automations/edit`; `?id=` edits one, `?trigger=` starts from a
-trigger) is four steps beside a phone showing the text with a sample customer:
+The menu is **Overview**, **Automations**, **Message History**, **Settings**; under **Advanced**
+(owners and admins; members who can't change anything see only Campaigns and Delivery analytics,
+under **More**): Setup guide (Set up SMS), SMS Sender (Sender Configuration), Customer permissions
+(Consent & Suppression), Messaging costs (Billing), Message templates, Campaigns, Customer
+segments, Send one SMS, Delivery analytics. The words the merchant reads: *SMS sender*, *Messaging
+verification*, *Monthly messaging limit*, *Test recipient*, *Customer messaging permissions*,
+*Activate automation*; "AWS" appears only on the advanced pages and under a message's *Technical
+details*.
 
-1. **Trigger.** Cards for Order placed, Order paid, Order shipped or fulfilled, Order delivered,
-   Abandoned checkout, Customer registered and Custom event, and under *More triggers* Order
-   cancelled, Refund issued, Inactive customer, VIP customer and Customer birthday. Each says
-   whether Shopify sends its event for this store (`triggerCapabilities`), from:
-   - the topics the store's app subscribes to in its toml (`APP_WEBHOOK_TOPICS`, kept equal to the
-     tomls by `appConfig.test.ts`): a store connected through an App Store app gets no order,
-     refund or checkout topics until Shopify approves protected customer data, so those triggers
-     are *Not available for your store*;
-   - for Customer registered, `customers/create` subscribed for the store (`checkSmsWebhooks`): it
-     needs `read_customers` (*Give permission in Shopify* asks for it) and Shopify's acceptance of
-     the subscription, asked for on the page, on activation and daily, and kept 26 hours in the
-     coordinator (`sms:webhooks:<storeId>`);
-   - the last event of the trigger's topics that reached bizinsights for the store (90 days of
-     `webhook_events`), shown as evidence.
+### How the pieces depend on each other
 
-   Custom event and Customer birthday can't be chosen: bizinsights receives no event of the
-   merchant's own, and Shopify customers have no birthday.
-2. **Message.** The sender (approved by AWS, or the sender name to ask for, checked as typed with
-   `checkSenderName` and requested through Set up SMS's endpoints: the sender is the store's, the
-   same for all its texts), ready-made messages per trigger (`AUTOMATION_STARTERS`), the editor with
-   a button per detail the trigger can fill (`automationVariables`), the characters and SMS parts,
-   and `checkAutomationMessage`: an opt-out link on marketing, no marketing details on order
-   updates, no detail the trigger can't fill, a discount code entered when the text shows one.
-3. **Timing.** Send immediately or after a delay (up to 30 days); everyone or only when conditions
-   hold (only the facts the trigger's event has: `TRIGGER_CONDITION_FIELDS`); the consent rule and
-   duplicate protection said in words; and under *Advanced settings* quiet hours (the store's by
-   default), the customer's time zone, the per-customer cap (`automationCapDefaults`: order updates
-   10 a day, each event once; marketing once in 30 days) and a practice run. *Save and continue*
-   saves it: the message as the automation's own template (a draft version), the settings as its
-   rule (a draft, or a new version of a running one).
-4. **Test and activate.** The summary, the checks, what still stops texts reaching customers, a test
-   text to a verified number (one `requestId` per press, followed to AWS's delivery event), and the
-   switch. On asks first, then (`activateAutomation`) needs `confirm`, a trigger Shopify sends for
-   the store and a message without errors, and approves the template's latest version and the
-   rule's in the member's name (audited `automation_activated`, `automation_republished` for
-   changes put live). Store-wide problems don't stop it: they stop its texts, and every page says
-   which. Off pauses it (its waiting texts are cancelled). Edits of a running automation wait under
-   *Changes not live* until *Put changes live*.
+```
+Pages (apps/web/src/components/messaging/*: Overview, Automations, AutomationBuilder,
+       AutomationAudience, AutomationReview, History, SmsSettings)
+  → API (apps/api/src/routes/sms.ts overview + readiness, smsAutomations.ts: list, triggers,
+         audience, audience/customers, :id/checks, save, activate, pause, duplicate, delete, test;
+         smsActivity.ts: messages with automation and customer names)
+  → messaging service (packages/core/src/sms):
+      readiness.ts  messagingReadiness (the overview's status), validateAutomation (the review's
+                    checks), accountStatus (the provider's account tier, cached 10 minutes)
+      builder.ts    save / activate / pause / duplicate / delete / test, sendingProblems,
+                    setupBlockers, audienceProblem, estimateAudience
+      automations.ts  the rule engine: runSmsRules → conditions → audiencePasses → consent → dedupe
+      messages.ts   scheduleSms → the send path's checks → the provider → classifySendError
+      delivery.ts   the provider's delivery events → statuses, cost, budget alerts
+  → provider (apps/aws/src/smsProvider.ts: AWS End User Messaging SMS, signed calls)
+  → database (sms_automation_rules, sms_templates, sms_segments, sms_contacts, sms_message_jobs…)
+```
 
-Delete cancels its waiting texts, removes the rule (its texts stay in Message History, its audit
-trail stays, `rule_deleted` with its last settings) and archives its template unless another rule
-or a campaign uses it. Duplicate makes a draft with a template of its own.
+An event runs: Shopify webhook (or the daily sweep) → `runSmsRules` → the rule's conditions → its
+audience → consent and opt-outs (`mayReceive`) → duplicate checks → `scheduleSms` (recorded in
+Message History, whatever happens next) → at send time the send path checks again: the number, the
+customer's consent and opt-outs, the store's sending switch, the sender, the country, quiet hours,
+caps, the monthly limit and the platform's ceiling → the provider → its answer (`classifySendError`)
+→ delivery events. A text that can't legally or technically go is never sent; its reason is in
+Message History in words.
+
+### Errors in plain words
+
+The provider's exception and reason are logged server-side (`sms send refused`, with the job id)
+and kept as the message's `errorCode`; the merchant reads `skipLabel(code)` (`SKIP_LABEL` in
+`@app/shared/sms`: every reason the module records and every code `classifySendError` returns) and,
+where they can fix it, `skipFix(code)`. A code nobody listed reads "The SMS provider didn't accept
+this text", never the code. API refusals are `SmsError`s written for the merchant
+(`setup_incomplete`: "SMS sending isn't ready yet. Your SMS sender still needs to be verified.").
+
+### The overview
+
+**Status** is `messagingReadiness`: *Ready*; *Setup required* (one of the store's steps is missing,
+or the account is still being verified: "Your SMS account is still being verified. Test messages
+can be sent to approved numbers until verification is complete." with *View setup requirements*);
+*Action required* (something temporary: sending held after a provider problem, this month's limit
+used up). Then **Create SMS Automation**, View Automations, Message History and Settings; active and
+paused automations; messages sent this month, the delivery rate, and messages against the cap
+(`monthlyMessageQuota`) or the monthly limit; the store's automations; and only the setup items still
+missing (SMS sender, Messaging verification, Customer messaging permissions, Monthly messaging limit,
+Automatic SMS; Test recipient is optional), each with **Fix this**.
+
+### Create SMS Automation (`/messaging/automations/edit`)
+
+`?id=` opens one on its review (or `?step=` on another step, as the checks' *Fix this* links do);
+`?trigger=` starts a new one from a trigger. Five steps beside a phone showing the text with a sample
+customer (Sarah, order #1042), updated as it is typed:
+
+1. **When.** Trigger cards: Order placed, Order paid, Order shipped or fulfilled, Order delivered,
+   Abandoned checkout, Customer registered, Customer joins a segment, Scheduled message, Custom event;
+   under *More triggers* Order cancelled, Refund issued, Inactive customer, VIP customer, Customer
+   birthday. Each says whether Shopify sends its event for this store (`triggerCapabilities`: the
+   app's toml topics `APP_WEBHOOK_TOPICS`, per-store subscriptions such as `customers/create` with
+   `read_customers` and Shopify's acceptance, kept 26 hours in `sms:webhooks:<storeId>`, and the last
+   event received). *Scheduled message* is a campaign (a one-off text to a segment, approved and
+   scheduled with its count confirmed): the card links to Campaigns. *Custom event* and *Customer
+   birthday* can't be chosen (no event of the merchant's own; no birthday on Shopify customers).
+   *Customer joins a segment* (`customer_segment`, marketing) asks for the segment here. Then: send
+   immediately or after a delay (up to 30 days), the name, and under *More timing options* quiet
+   hours, the customer's time zone, the per-customer cap (`automationCapDefaults`) and a practice run.
+2. **Who.** The automation's audience (`smsAudienceSchema`): *the customer the event is about*
+   (default), *Customer segment* (only if that customer is in a saved segment, judged on the event's
+   facts when it happens: `segmentConditions`; refused when the segment compares what the trigger's
+   event lacks, `segmentMisfit`), or *Specific customers* (up to 50, chosen by first name or the
+   number's last digits; needs "View contact information"). **Recipients** is the API's count
+   (`estimateAudience`): "1 customer per event", or those of the segment or choice who could get this
+   kind of text today. Optional conditions (*Only when…*) as before. A segment used by an automation
+   can't be deleted.
+3. **Message.** Ready-made messages (`AUTOMATION_STARTERS`), the editor, **Personalize** (the
+   details the trigger's event has, grouped Customer / Order / Store / Links / Offer:
+   `SMS_VARIABLE_GROUP`), *Characters* and *Estimated SMS segments* with a warning when it takes more
+   than one, and `checkAutomationMessage`. Other tools' names (`{{customer.first_name}}`,
+   `{{order.number}}`…) are aliases: named in the error and fixed with *Fix them*. *Save and
+   continue* saves it (the message as the automation's own template, the settings as its rule).
+4. **Test.** The saved message to an approved test recipient (a code is texted to a new number
+   first: in the provider's sandbox only such numbers receive texts), one `requestId` per press,
+   followed to the delivery event: "✓ Test message sent" or "⚠ Test message could not be sent" with
+   the reason in words. Can be skipped.
+5. **Review and activate.** The automation as a flow (WHEN → WHO → SEND → MESSAGE → TIMING →
+   STATUS), each block opening its step; its name, estimated recipients and status; and the API's
+   checks (`GET …/automations/:id/checks`, `validateAutomation`, read-only: it never asks Shopify,
+   activating does): trigger, recipients, message,
+   personal details, SMS sender, sender can send, messaging verification, monthly limit, customer
+   messaging permissions, opt-outs, mobile numbers, provider connection, account can send. Failing
+   ones first with *Fix this*; passing ones folded. **Activate Automation** asks first, then
+   `activateAutomation` needs `confirm`, a trigger Shopify sends, a valid message and audience, and,
+   **with `SMS_MODE=live`, the store's own setup done** (`setupBlockers`: no sender, not verified, no
+   countries, Automatic SMS off, a limit of 0, no basis for order updates; for marketing, marketing
+   off). In test mode it may be activated (its texts are recorded, not sent), and the review says
+   so. A hold or a used-up month doesn't block it. Activation approves the template's and the
+   rule's latest versions in the member's name (audited `automation_activated`,
+   `automation_republished`). *Pause* cancels its waiting texts; edits of a running automation wait
+   under *Changes not live* until *Put changes live*.
+
+The list (`/messaging/automations`) shows each automation as a card: what starts it and when, who
+gets it, its message, ✓ Active or ● Paused, the texts it sent in 30 days, its last text, a switch,
+Edit, and a menu: **Duplicate** (a draft named "… — Copy", "… — Copy 2"…, with a template of its own,
+opened on its review to change and activate), **View history** (Message History for it, `?ruleId=`),
+**Advanced settings** (the WHEN / IF / WAIT / THEN editor: priority, version history, "Test with
+recent orders"), **Delete** (its waiting texts cancelled, its texts kept in history, its template
+archived unless something else uses it). Search and filters appear past four automations.
+
+**Message History** reads Customer (first name, with "View contact information"), Message,
+Automation (by its name now), Status, Sent, Delivery; a message's details add the recipient, the
+trigger, the failure reason in words and the message id, and under **Technical details** (owners and
+admins) the provider's status, error code and message id, the template version, parts, cost and
+delivery reports. Only the builder changes who an automation texts: the advanced rule editor
+shows the audience and sends it back unchanged, the rules routes drop any audience they're sent
+(`withoutAudience` in `smsOps.ts`), and a client that sends none (the hub's editor) keeps the
+automation's own (`saveAutomation`, `updateRule`).
+
+**Customer joins a segment** runs in the daily sweep (`customerRules`): each subscribed customer in
+the segment who passes the automation's conditions (both in the query, `segmentWhere` +
+`contactConditionsWhere`), once per automation, including those already in it when it is switched on.
+Contacts are read in pages of 500 with the ones it already recorded left out, so the day's 500 reach
+new members and no query grows with history. A practice run (the rule's, or the platform's test mode)
+records under its own key (`segment:<contact>:practice`), so the real text still goes once the platform
+is live. A deleted segment stops it. Like VIP texts, "once" lasts as long as the history (400 days).
+The same daily run now holds each inactive and VIP automation to its own threshold, so a second VIP
+automation never texts a customer who only reached the first one's.
 
 ### Sender names from Set up SMS (platform owner)
 

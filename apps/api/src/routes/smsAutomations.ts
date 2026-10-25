@@ -3,28 +3,34 @@ import { withTenant } from "@app/db";
 import {
   activateAutomation,
   automationOf,
+  contactFirstName,
   deleteAutomation,
   duplicateAutomation,
+  estimateAudience,
   listAutomations,
+  messagingReadiness,
   pauseAutomation,
   saveAutomation,
   sendingProblems,
   smsMode,
   testAutomation,
   triggerCapabilities,
+  validateAutomation,
   verifyTriggerSubscriptions,
 } from "@app/core/sms";
+import { CONSENT_LABEL, SMS_TRIGGERS, smsAudienceSchema } from "@app/shared/sms";
 import { body, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { actorOf, base, publicMessage, SMS_MANAGE, SMS_READ, smsDeps, smsStore } from "./smsCommon.js";
+import { actorOf, base, publicMessage, requireSmsContacts, SMS_MANAGE, SMS_READ, smsDeps, smsStore } from "./smsCommon.js";
 
 /**
- * Automations, the four-step builder (packages/core/src/sms/builder.ts): which triggers the
- * store's Shopify connection delivers, the automations with their real state and last result,
- * and saving, testing, activating, pausing, copying and deleting them. Looking needs Marketing →
- * campaigns; every change is for owners and admins, like the rest of Customer Messaging's.
- * Access is checked before any input is read.
+ * Automations, the builder (packages/core/src/sms/builder.ts): which triggers the store's Shopify
+ * connection delivers, the automations with their real state and last result, who they text, the
+ * checks before one is switched on (readiness.ts), and saving, testing, activating, pausing,
+ * copying and deleting them. Looking needs Marketing → campaigns (choosing customers by name also
+ * "View contact information"); every change is for owners and admins, like the rest of Customer
+ * Messaging's. Access is checked before any input is read.
  */
 export function smsAutomationRoutes(app: App, deps: Deps) {
   const auto = `${base}/automations`;
@@ -42,11 +48,45 @@ export function smsAutomationRoutes(app: App, deps: Deps) {
     return { ws, store, actor: actorOf(c, a) };
   };
 
-  /** The list: every automation, and what stops the store's texts reaching anyone right now. */
+  /** The list: every automation, what stops the store's texts reaching anyone right now, and the store's readiness in a word. */
   app.get(auto, async (c) => {
     const { store } = await reader(c);
-    const [automations, problems] = await Promise.all([listAutomations(store), sendingProblems(store)]);
-    return c.json({ mode: smsMode(), timezone: store.timezone, automations, problems });
+    const [automations, problems, readiness] = await Promise.all([listAutomations(store), sendingProblems(store), messagingReadiness(store, smsDeps(deps))]);
+    return c.json({ mode: smsMode(), timezone: store.timezone, automations, problems, readiness });
+  });
+
+  /** Step 2: about how many customers a segment or a choice of customers could reach now (an estimate: changes nothing). */
+  app.post(`${auto}/audience`, async (c) => {
+    const { store } = await reader(c);
+    await limit(deps.coord, `rl:sms-estimate:${store.id}`, LIMITS.smsEstimate);
+    const input = z.object({ trigger: z.enum(SMS_TRIGGERS), audience: smsAudienceSchema }).parse(await body(c));
+    return c.json(await estimateAudience(store.id, input.trigger, input.audience));
+  });
+
+  /**
+   * Step 2's "Specific customers": the store's customers with a mobile number, by first name or the
+   * number's last digits (masked), or the ones with these ids. Names and numbers need "View contact
+   * information".
+   */
+  app.get(`${auto}/audience/customers`, async (c) => {
+    const ws = c.req.param("ws")!;
+    await requireSmsContacts(c, deps, ws);
+    const store = await smsStore(ws, c.req.param("storeId")!);
+    const q = (c.req.query("q") ?? "").trim().toLowerCase().slice(0, 40);
+    const ids = (c.req.query("ids") ?? "").split(",").filter((x) => /^[a-z0-9]{1,40}$/i.test(x)).slice(0, 50);
+    const digits = q.replace(/\D/g, "");
+    // Names are encrypted: the most recent customers are read and matched here.
+    const rows = await withTenant(ws, (tx) =>
+      tx.smsContact.findMany({
+        where: { workspaceId: ws, storeId: store.id, ...(ids.length ? { id: { in: ids } } : digits.length >= 2 && digits.length === q.length ? { phoneMasked: { endsWith: digits.slice(-3) } } : {}) },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: ids.length ? ids.length : 1000,
+      }),
+    );
+    const found = rows
+      .map((r) => ({ id: r.id, name: contactFirstName(r), number: r.phoneMasked, country: r.country, consent: r.consentState, consentLabel: CONSENT_LABEL[r.consentState as keyof typeof CONSENT_LABEL] ?? r.consentState, optedOut: r.suppressedAll, orders: r.ordersCount }))
+      .filter((r) => ids.length || !q || digits.length === q.length || (r.name ?? "").toLowerCase().startsWith(q));
+    return c.json({ customers: found.slice(0, 50) });
   });
 
   /** Step 1: each trigger and whether Shopify sends it for this store, with the evidence. */
@@ -66,6 +106,14 @@ export function smsAutomationRoutes(app: App, deps: Deps) {
   app.get(`${auto}/:id`, async (c) => {
     const { store } = await reader(c);
     return c.json({ automation: await automationOf(store, c.req.param("id")) });
+  });
+
+  /** The review step's checks, in words, and whether switching it on would be accepted now (activate refuses the same). */
+  app.get(`${auto}/:id/checks`, async (c) => {
+    const { store } = await reader(c);
+    const id = c.req.param("id");
+    await automationOf(store, id);
+    return c.json(await validateAutomation(store, id, smsDeps(deps)));
   });
 
   app.post(auto, async (c) => {

@@ -10,21 +10,30 @@
  *  - the message saved with the rule in one go, and both approved and started together by an
  *    owner or admin who confirms it (audited in their name, as Set up SMS does);
  *  - each automation's real state: its rule's status, whether the store can text anyone now, and
- *    the outcome of its last text. "Active" is the rule's status as stored, never the page's.
+ *    the outcome of its last text. "Active" is the rule's status as stored, never the page's;
+ *  - who it texts (its audience: the event's customer, only those in a segment, or chosen ones),
+ *    checked when it is saved and again when it is switched on;
+ *  - on a live platform, no switching on while the store's own setup stops every text it would
+ *    send (no sender, not verified, no monthly limit…): the merchant is told what to fix instead.
+ *    In test mode it may be switched on, since nothing reaches customers anyway.
  */
 import { systemDb, type SmsAutomationRule, type Store } from "@app/db";
 import { expandScopes } from "@app/shared";
 import {
   AUTOMATION_TRIGGER_CARDS,
+  audienceWords,
   automationRule,
   automationTriggerCard,
   checkAutomationMessage,
   hasErrors,
+  RULE_CONDITION_LABEL,
+  segmentMisfit,
   skipLabel,
   SMS_STATUS_LABEL,
   smsAutomationSchema,
   TRIGGER_INFO,
   TRIGGER_SOURCES,
+  type SmsAudience,
   type SmsAutomationInput,
   type SmsCategory,
   type SmsRuleInput,
@@ -37,8 +46,9 @@ import { storeGraphql } from "../inventory/shopify.js";
 import { logger } from "../logger.js";
 import { StoreDisconnectedError } from "../tokens.js";
 import { countStatuses } from "./analytics.js";
-import { awaitingApproval, createRule, hasUnapprovedVersion, parseRule, ruleAction, ruleOf, updateRule } from "./automations.js";
-import { marketingSwitchedOn, senderOf, senderProblem, smsAudit, SmsError, smsMode, transactionalBasisOf, type SmsDeps } from "./common.js";
+import { awaitingApproval, createRule, hasUnapprovedVersion, parseRule, ruleAction, ruleOf, segmentFilterOf, updateRule } from "./automations.js";
+import { marketingSwitchedOn, monthSpend, senderOf, senderProblem, smsAudit, SmsError, smsMode, transactionalBasisOf, type SmsDeps } from "./common.js";
+import { segmentWhere } from "./campaigns.js";
 import { checkSmsWebhooks, lastSmsWebhookCheck } from "./events.js";
 import { sendTestSms } from "./messages.js";
 import { approveLatestVersion, createTemplate, templateAction, templateOf, updateTemplate, type Actor } from "./templates.js";
@@ -128,7 +138,7 @@ export async function verifyTriggerSubscriptions(store: Store, deps: Pick<SmsDep
 }
 
 /** The capability of one trigger (activation refuses anything but ready, or an app whose topics aren't known but whose events arrive). */
-async function capabilityOf(store: Store, trigger: SmsTrigger, deps: Pick<SmsDeps, "coord" | "fetchImpl">): Promise<TriggerCapability> {
+export async function capabilityOf(store: Store, trigger: SmsTrigger, deps: Pick<SmsDeps, "coord" | "fetchImpl">): Promise<TriggerCapability> {
   const find = (all: TriggerCapability[]) => all.find((c) => c.trigger === trigger)!;
   const now = find(await triggerCapabilities(store, deps.coord));
   // Not asked yet: ask Shopify once now (that also subscribes the store).
@@ -148,36 +158,62 @@ async function capabilityOf(store: Store, trigger: SmsTrigger, deps: Pick<SmsDep
 
 export interface SendingProblem {
   code: string;
+  /** In the merchant's words: what bizinsights or the SMS provider calls it never shows here. */
   message: string;
   /** Which texts it stops: all of them, or only order updates or marketing. */
   stops: "all" | SmsCategory;
+  /**
+   * setup: the store's own one-time setup, which an owner or admin fixes (switching an automation
+   * on waits for it on a live platform). temporary: it clears by itself or once the month ends.
+   * platform: bizinsights' own switches (test mode), nothing the store can do.
+   */
+  kind: "setup" | "temporary" | "platform";
   /** Where it is fixed. */
   fix: { label: string; href: string } | null;
 }
+
+const setupFix = (step: string, label: string) => ({ label, href: `/messaging/setup?step=${step}` });
 
 /** What stands between this store's automations and its customers' phones, now. Empty: texts go out. */
 export async function sendingProblems(store: BuilderStore): Promise<SendingProblem[]> {
   const out: SendingProblem[] = [];
   const mode = smsMode();
-  if (mode === "off") out.push({ code: "platform_off", stops: "all", fix: null, message: "SMS isn't switched on for bizinsights yet, so nothing is sent to anyone." });
+  if (mode === "off") out.push({ code: "platform_off", stops: "all", kind: "platform", fix: null, message: "SMS isn't available for your account yet, so nothing is sent to anyone." });
   if (mode === "sandbox")
-    out.push({ code: "test_mode", stops: "all", fix: null, message: "bizinsights is in test mode: what an automation would send is recorded in Message History instead of reaching customers. Test texts still reach your verified numbers." });
+    out.push({
+      code: "test_mode",
+      stops: "all",
+      kind: "platform",
+      fix: { label: "View setup requirements", href: "/messaging/settings" },
+      message: "Your SMS account is still being verified. Until then, automations record what they would send in Message History, and test messages reach your approved test recipients.",
+    });
   const sender = await senderOf(store.id);
   const problem = senderProblem(sender);
-  const setup = (step: string, label: string) => ({ label, href: `/messaging/setup?step=${step}` });
-  if (problem === "missing") out.push({ code: "no_sender", stops: "all", fix: setup("sender", "Choose a sender name"), message: "Your store has no sender yet." });
-  if (problem === "unverified") out.push({ code: "sender_unverified", stops: "all", fix: setup("sender", "Check your sender name"), message: "AWS hasn't approved your sender yet." });
-  if (problem === "no_countries") out.push({ code: "no_countries", stops: "all", fix: { label: "Sender Configuration", href: "/messaging/sender" }, message: "No destination country is switched on for your sender." });
-  if (problem === "held") out.push({ code: "held", stops: "all", fix: { label: "Sender Configuration", href: "/messaging/sender" }, message: "Sending is held for a while after a problem at AWS." });
+  if (problem === "missing") out.push({ code: "no_sender", stops: "all", kind: "setup", fix: setupFix("sender", "Choose an SMS sender"), message: "Your store has no SMS sender yet." });
+  if (problem === "unverified") out.push({ code: "sender_unverified", stops: "all", kind: "setup", fix: setupFix("sender", "Check your SMS sender"), message: "Your SMS sender still needs to be verified." });
+  if (problem === "no_countries") out.push({ code: "no_countries", stops: "all", kind: "setup", fix: { label: "Choose your countries", href: "/messaging/sender" }, message: "Your SMS sender has no countries to send to yet." });
+  if (problem === "held") out.push({ code: "held", stops: "all", kind: "temporary", fix: { label: "SMS Sender", href: "/messaging/sender" }, message: "Sending is paused for a short while after a problem with your SMS sender. Texts go out once it ends; nothing is lost." });
   if (sender && problem !== "missing") {
-    if (!sender.sendingEnabled) out.push({ code: "sending_off", stops: "all", fix: setup("automate", "Turn on Automatic SMS"), message: "Automatic SMS is switched off for your store." });
-    if (Number(sender.monthlyBudgetUsd) <= 0) out.push({ code: "no_budget", stops: "all", fix: setup("automate", "Set a monthly limit"), message: "Your monthly SMS spending limit is 0, so nothing can be sent." });
+    if (!sender.sendingEnabled) out.push({ code: "sending_off", stops: "all", kind: "setup", fix: setupFix("automate", "Turn on automatic SMS"), message: "Automatic SMS is switched off for your store." });
+    const budget = Number(sender.monthlyBudgetUsd);
+    if (budget <= 0) out.push({ code: "no_budget", stops: "all", kind: "setup", fix: setupFix("automate", "Set a monthly limit"), message: "Your monthly messaging limit is 0, so nothing can be sent." });
+    else if (sender.hardStop || sender.monthlyMessageQuota) {
+      // As the send path decides: the spend only with the hard stop, the cap on texts always.
+      const spend = await monthSpend(store.id);
+      if ((sender.hardStop && spend.totalUsd >= budget) || (sender.monthlyMessageQuota && spend.messages >= sender.monthlyMessageQuota))
+        out.push({ code: "budget_used", stops: "all", kind: "temporary", fix: setupFix("automate", "Change your monthly limit"), message: "This month's messaging limit is used up: texts wait until next month or a higher limit." });
+    }
     if (transactionalBasisOf(sender) === "none")
-      out.push({ code: "no_basis", stops: "transactional", fix: setup("automate", "Choose how customers agreed"), message: "Order updates go to no one until you choose how your customers agreed to get them by text." });
-    if (!sender.marketingEnabled) out.push({ code: "marketing_off", stops: "marketing", fix: { label: "Sender Configuration", href: "/messaging/sender" }, message: "Marketing texts are switched off for your store." });
+      out.push({ code: "no_basis", stops: "transactional", kind: "setup", fix: setupFix("automate", "Choose how customers agreed"), message: "Order updates go to no one until you say how your customers agreed to get them by text." });
+    if (!sender.marketingEnabled) out.push({ code: "marketing_off", stops: "marketing", kind: "setup", fix: { label: "Turn on marketing texts", href: "/messaging/sender" }, message: "Marketing texts are switched off for your store." });
   }
-  if (!marketingSwitchedOn()) out.push({ code: "marketing_platform_off", stops: "marketing", fix: null, message: "Marketing texts (reminders, welcome and win-back texts) aren't switched on for bizinsights yet." });
+  if (!marketingSwitchedOn()) out.push({ code: "marketing_platform_off", stops: "marketing", kind: "platform", fix: null, message: "Marketing texts (reminders, welcome and win-back texts) aren't available for your account yet." });
   return out;
+}
+
+/** The store's own setup problems that keep an automation of this category from being switched on while the platform is live. */
+export function setupBlockers(problems: SendingProblem[], category: SmsCategory): SendingProblem[] {
+  return smsMode() === "live" ? problems.filter((p) => p.kind === "setup" && (p.stops === "all" || p.stops === category)) : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +234,9 @@ export interface AutomationView {
   dryRun: boolean;
   /** What the builder edits (null when the saved settings no longer validate). */
   config: SmsAutomationInput | null;
+  /** Who it texts, in a sentence, and the name of its segment (null: none, or it was deleted). */
+  audienceLabel: string | null;
+  segmentName: string | null;
   templateId: string | null;
   /** The message's text with its variables: the latest saved, and the one that sends now. */
   body: string | null;
@@ -229,6 +268,7 @@ function inputOf(cfg: SmsRuleInput, body: string): SmsAutomationInput {
     inactiveDays: cfg.inactiveDays ?? null,
     vipMinOrders: cfg.vipMinOrders ?? null,
     vipMinSpent: cfg.vipMinSpent ?? null,
+    audience: cfg.audience,
   };
 }
 
@@ -237,12 +277,15 @@ async function views(store: BuilderStore, rules: SmsAutomationRule[]): Promise<A
   const cfgs = new Map(rules.map((r) => [r.id, parseRule(r.config)]));
   const templateIds = [...new Set([...cfgs.values()].map((c) => c?.templateId).filter((x): x is string => !!x))];
   const since = new Date(Date.now() - 30 * 86400_000);
-  const [templates, groups, lasts] = await Promise.all([
+  const segmentIds = [...new Set([...cfgs.values()].flatMap((c) => (c?.audience.kind === "segment" ? [c.audience.segmentId] : [])))];
+  const [templates, groups, lasts, segments] = await Promise.all([
     systemDb.smsTemplate.findMany({ where: { storeId: store.id, id: { in: templateIds } }, include: { versions: { orderBy: { version: "desc" } } } }),
     systemDb.smsMessageJob.groupBy({ by: ["ruleId", "status"], where: { storeId: store.id, ruleId: { in: rules.map((r) => r.id) }, createdAt: { gte: since } }, _count: true }),
     Promise.all(rules.map((r) => systemDb.smsMessageJob.findFirst({ where: { storeId: store.id, ruleId: r.id }, orderBy: { createdAt: "desc" }, select: { status: true, reason: true, createdAt: true, dryRun: true } }))),
+    segmentIds.length ? systemDb.smsSegment.findMany({ where: { storeId: store.id, id: { in: segmentIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
   ]);
   const templateById = new Map(templates.map((t) => [t.id, t]));
+  const segmentName = new Map(segments.map((x) => [x.id, x.name]));
   return rules.map((r, i) => {
     const cfg = cfgs.get(r.id) ?? null;
     const t = cfg ? templateById.get(cfg.templateId) : undefined;
@@ -250,6 +293,7 @@ async function views(store: BuilderStore, rules: SmsAutomationRule[]): Promise<A
     const live = t?.versions.find((v) => v.version === t.approvedVersion);
     const last = lasts[i];
     const status = last?.status as SmsStatus | undefined;
+    const seg = cfg?.audience.kind === "segment" ? (segmentName.get(cfg.audience.segmentId) ?? null) : null;
     return {
       id: r.id,
       name: r.name,
@@ -261,6 +305,8 @@ async function views(store: BuilderStore, rules: SmsAutomationRule[]): Promise<A
       pendingChanges: r.activeVersion !== null && (hasUnapprovedVersion(r) || (!!latest && latest.status !== "approved")),
       dryRun: parseRule(r.activeConfig)?.dryRun ?? cfg?.dryRun ?? false,
       config: cfg && latest ? inputOf(cfg, latest.body) : null,
+      audienceLabel: cfg ? audienceWords(cfg.trigger, cfg.audience, seg) : null,
+      segmentName: seg,
       templateId: cfg?.templateId ?? null,
       body: latest?.body ?? null,
       liveBody: r.status === "active" || r.status === "paused" ? (live?.body ?? null) : null,
@@ -308,6 +354,48 @@ async function newTemplate(store: BuilderStore, name: string, category: SmsCateg
   throw new SmsError("Couldn't name the message's template: rename the automation and try again.", 409, "template_exists");
 }
 
+/**
+ * The audience's problems that stop it being saved or switched on: a segment that isn't the
+ * store's, or compares what this trigger's event doesn't have (a new account has no order count),
+ * and chosen customers who aren't the store's.
+ */
+export async function audienceProblem(storeId: string, trigger: SmsTrigger, a: SmsAudience): Promise<string | null> {
+  if (a.kind === "segment") {
+    const filter = await segmentFilterOf(storeId, a.segmentId);
+    if (!filter) return "That customer segment doesn't exist any more: choose another one.";
+    const misfit = segmentMisfit(filter, trigger);
+    if (misfit.length) return `This segment looks at ${misfit.map((f) => RULE_CONDITION_LABEL[f].toLowerCase()).join(" and ")}, which "${automationTriggerCard(trigger).label}" events don't have: choose another segment or trigger.`;
+  }
+  if (a.kind === "customers") {
+    const found = await systemDb.smsContact.count({ where: { storeId, id: { in: a.contactIds } } });
+    if (found !== a.contactIds.length) return "Some of the customers you chose aren't in your store any more: choose them again.";
+  }
+  return null;
+}
+
+/**
+ * About how many customers an automation could text now. Event triggers answer one customer per
+ * event (`perEvent`), so only a segment or chosen customers give a number: those of them who could
+ * get this kind of text today (marketing needs their consent; an opt-out always leaves them out).
+ * The daily triggers count who qualifies today.
+ */
+export async function estimateAudience(storeId: string, trigger: SmsTrigger, a: SmsAudience): Promise<{ customers: number | null; perEvent: boolean }> {
+  const marketing = TRIGGER_INFO[trigger].category === "marketing";
+  const eligible = marketing ? { consentState: "subscribed", suppressedAll: false, suppressedMarketing: false } : { suppressedAll: false };
+  const daily = !!TRIGGER_SOURCES[trigger]?.daily;
+  if (a.kind === "customers") return { customers: await systemDb.smsContact.count({ where: { storeId, id: { in: a.contactIds }, ...eligible } }), perEvent: !daily };
+  if (a.kind === "segment") {
+    const filter = await segmentFilterOf(storeId, a.segmentId);
+    return { customers: filter ? await systemDb.smsContact.count({ where: segmentWhere(storeId, filter, new Date(), marketing ? "marketing" : "any") }) : 0, perEvent: !daily };
+  }
+  return { customers: null, perEvent: true };
+}
+
+async function refuseAudience(storeId: string, trigger: SmsTrigger, a: SmsAudience) {
+  const why = await audienceProblem(storeId, trigger, a);
+  if (why) throw new SmsError(why, 400, "audience_invalid");
+}
+
 /** The message's problems that stop it being saved, as one refusal with all of them. */
 function refuseMessage(a: SmsAutomationInput) {
   const issues = checkAutomationMessage(a.body, a.trigger, a.discountCode);
@@ -321,11 +409,13 @@ function refuseMessage(a: SmsAutomationInput) {
  * was activated until the changes are activated too. Nothing new is sent by saving.
  */
 export async function saveAutomation(store: BuilderStore, id: string | null, raw: unknown, actor: Actor): Promise<AutomationView> {
-  const a = smsAutomationSchema.parse(raw);
-  refuseMessage(a);
-  const category = TRIGGER_INFO[a.trigger].category;
   const rule = id ? await ruleOf(store.id, id) : null;
   const current = rule ? parseRule(rule.config) : null;
+  // A client that doesn't send an audience (the hub's builder) keeps the automation's own.
+  const a = smsAutomationSchema.parse(current && raw && typeof raw === "object" && !("audience" in raw) ? { ...raw, audience: current.audience } : raw);
+  refuseMessage(a);
+  await refuseAudience(store.id, a.trigger, a.audience);
+  const category = TRIGGER_INFO[a.trigger].category;
   let templateId: string | null = current?.templateId ?? null;
   if (templateId) {
     const t = await systemDb.smsTemplate.findFirst({ where: { id: templateId, storeId: store.id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
@@ -361,6 +451,9 @@ export async function activateAutomation(store: Store, id: string, input: { conf
   if (cap.state !== "ready") throw new SmsError(cap.reason ?? "Shopify doesn't send this trigger for your store.", 409, "trigger_unavailable", { state: cap.state });
   const t = await templateOf(store.id, cfg.templateId);
   refuseMessage(inputOf(cfg, t.versions[0]!.body));
+  await refuseAudience(store.id, cfg.trigger, cfg.audience);
+  const blockers = setupBlockers(await sendingProblems(store), TRIGGER_INFO[cfg.trigger].category);
+  if (blockers.length) throw new SmsError(`SMS sending isn't ready yet. ${blockers[0]!.message}`, 409, "setup_incomplete", { problems: blockers });
   // Already running: this puts its saved changes live.
   const wasActive = rule.status === "active";
   await approveLatestVersion(store, cfg.templateId, actor, "Approved when the automation was turned on");
@@ -382,11 +475,15 @@ export async function pauseAutomation(store: BuilderStore, id: string, actor: Ac
   return automationOf(store, id);
 }
 
-/** A copy as a draft, with a template of its own ("… (copy)"). */
+/** A copy as a draft, with a template of its own ("… — Copy", then "… — Copy 2"…), its trigger, audience, message and timing all its own to change. */
 export async function duplicateAutomation(store: BuilderStore, id: string, actor: Actor): Promise<AutomationView> {
   const src = await automationOf(store, id);
   if (!src.config) throw new SmsError("This automation's settings are no longer valid: edit and save it before copying it.", 409, "rule_invalid");
-  return saveAutomation(store, null, { ...src.config, name: `${src.config.name.slice(0, 73)} (copy)` }, actor);
+  const stem = `${src.config.name.replace(/ — Copy( \d+)?$/, "").slice(0, 70)} — Copy`;
+  const taken = new Set((await systemDb.smsAutomationRule.findMany({ where: { storeId: store.id, name: { startsWith: stem } }, select: { name: true } })).map((r) => r.name));
+  let name = stem;
+  for (let n = 2; taken.has(name) && n < 100; n++) name = `${stem} ${n}`;
+  return saveAutomation(store, null, { ...src.config, name }, actor);
 }
 
 /**

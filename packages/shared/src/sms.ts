@@ -148,7 +148,26 @@ export const SMS_VARIABLE_INFO: Record<SmsVariable, VariableInfo> = {
   opt_out_url: { label: "Opt-out link", sample: "https://bizinsights.io/stop?c=Ab3dE9xYz1", maxLength: 80, kind: "url", description: "A link that stops your marketing texts to this number at once. Required in every marketing message." },
 };
 
-const PLACEHOLDER = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+/** Where each variable sits in the editor's Personalize list. */
+export type SmsVariableGroup = "Customer" | "Order" | "Store" | "Links" | "Offer";
+export const SMS_VARIABLE_GROUP: Record<SmsVariable, SmsVariableGroup> = {
+  customer_name: "Customer",
+  store_name: "Store",
+  business_name: "Store",
+  order_number: "Order",
+  order_status: "Order",
+  order_total: "Order",
+  currency: "Order",
+  product_name: "Order",
+  tracking_url: "Links",
+  discount_code: "Offer",
+  checkout_url: "Links",
+  opt_out_url: "Links",
+};
+export const SMS_VARIABLE_GROUPS: readonly SmsVariableGroup[] = ["Customer", "Order", "Store", "Links", "Offer"];
+
+/** `{{name}}`, and the dotted names other tools use (`{{customer.first_name}}`), which are aliases to fix. */
+const PLACEHOLDER = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}/g;
 
 export interface TemplateVariables {
   /** Known variables, each once, in the order they first appear. */
@@ -195,6 +214,30 @@ export const SMS_VARIABLE_ALIASES: Record<string, SmsVariable> = {
   tracking_link: "tracking_url",
   tracking: "tracking_url",
   product: "product_name",
+  // The dotted names of other messaging tools (Shopify's Liquid, Klaviyo…).
+  "customer.first_name": "customer_name",
+  "customer.firstname": "customer_name",
+  "customer.name": "customer_name",
+  "order.number": "order_number",
+  "order.name": "order_number",
+  "order.id": "order_number",
+  "order.status": "order_status",
+  "order.total": "order_total",
+  "order.total_price": "order_total",
+  "order.currency": "currency",
+  "order.tracking_url": "tracking_url",
+  "order.tracking_link": "tracking_url",
+  "fulfillment.tracking_url": "tracking_url",
+  "order.product": "product_name",
+  "product.name": "product_name",
+  "product.title": "product_name",
+  "store.name": "store_name",
+  "shop.name": "store_name",
+  "business.name": "business_name",
+  "checkout.url": "checkout_url",
+  "checkout.recovery_url": "checkout_url",
+  "discount.code": "discount_code",
+  "unsubscribe_url": "opt_out_url",
 };
 
 /** The body with every aliased placeholder written as the variable it means ({{order_id}} → {{order_number}}). */
@@ -463,6 +506,7 @@ export const SMS_TRIGGERS = [
   "customer_birthday",
   "customer_inactive",
   "customer_vip",
+  "customer_segment",
 ] as const;
 export type SmsTrigger = (typeof SMS_TRIGGERS)[number];
 
@@ -534,6 +578,14 @@ export const TRIGGER_INFO: Record<SmsTrigger, TriggerInfo> = {
     label: "VIP customer",
     category: "marketing",
     source: "Daily check: a customer with marketing consent whose orders or spend reach what you set",
+    variables: ["customer_name", "store_name", "discount_code", "opt_out_url"],
+    available: true,
+    defaultDelay: 0,
+  },
+  customer_segment: {
+    label: "Customer joins a segment",
+    category: "marketing",
+    source: "Daily check: a customer with marketing consent who matches the saved segment the automation names",
     variables: ["customer_name", "store_name", "discount_code", "opt_out_url"],
     available: true,
     defaultDelay: 0,
@@ -726,8 +778,8 @@ export const DELIVERY_EXPLANATION: Record<string, string> = {
   CARRIER_UNREACHABLE: "The recipient's mobile network had a problem.",
   TTL_EXPIRED: "It couldn't be delivered in time and was dropped.",
   FAILED: "The carrier couldn't deliver it.",
-  UNROUTABLE: "AWS couldn't route it: the sender isn't set up for this country.",
-  PROTECT_BLOCKED: "AWS's SMS Protect rules blocked it.",
+  UNROUTABLE: "It couldn't be routed: your SMS sender isn't set up for this country.",
+  PROTECT_BLOCKED: "The SMS provider's fraud protection blocked it.",
   UNKNOWN: "The carrier never said whether it arrived.",
   SUCCESSFUL: "The carrier accepted it; this network doesn't confirm delivery to the phone.",
   DELIVERED: "The phone confirmed delivery.",
@@ -804,39 +856,93 @@ export function retryDelaySeconds(attempt: number, random: () => number = Math.r
   return Math.max(5, Math.round(ceiling * (0.5 + random() / 2)));
 }
 
+/**
+ * Why a text wasn't sent, or didn't arrive, in the merchant's words: the module's own reasons and
+ * the SMS provider's (classifySendError's codes). The provider's exception and reason are logged
+ * server-side and kept as the message's errorCode, which admins see under Technical details; a
+ * code not listed here reads as a provider refusal, never as the code itself.
+ */
 export const SKIP_LABEL: Record<string, string> = {
   no_phone: "No mobile number on the order",
   invalid_number: "Not a valid mobile number",
   country_not_enabled: "Sending to this country isn't switched on",
   suppressed: "The customer opted out",
-  no_marketing_consent: "No marketing consent",
-  no_transactional_basis: "No basis for order updates chosen in Sender settings",
+  no_marketing_consent: "The customer hasn't agreed to marketing texts",
+  no_transactional_basis: "You haven't said how customers agreed to order updates by text",
   consent_redacted: "The customer's data was erased",
-  missing_variable: "A value the template needs is missing",
-  invalid_variable: "A value the template needs isn't usable (for example a broken link)",
-  template_not_approved: "The template has no approved version",
-  template_category_changed: "The template's approved version is now of the other category: approve the rule again",
-  sender_not_ready: "The sender isn't set up or verified",
-  sending_disabled: "Sending is switched off for this store",
+  missing_variable: "A detail the message needs is missing",
+  invalid_variable: "A detail the message needs isn't usable (for example a broken link)",
+  template_not_approved: "The message isn't approved",
+  template_category_changed: "The message was approved as the other kind (order update or marketing): turn the automation on again",
+  sender_not_ready: "Your SMS sender isn't ready",
+  sending_disabled: "Automatic SMS is switched off for your store",
   marketing_disabled: "Marketing texts are switched off",
   platform_off: "SMS isn't switched on for bizinsights yet",
-  sandbox_unverified: "AWS's test mode only reaches verified test numbers",
+  sandbox_unverified: "Until your SMS account is verified, texts only reach approved test recipients",
   quiet_hours: "Would have arrived in quiet hours",
   frequency_cap: "The customer already got the most texts allowed",
-  rule_cap: "The rule already reached this customer",
-  budget_reached: "The monthly SMS budget is used up",
-  account_limit: "The account's SMS spending limit is reached",
+  rule_cap: "The automation already reached this customer",
+  budget_reached: "Your monthly messaging limit is used up",
+  account_limit: "The SMS account's monthly spending limit is reached",
   checkout_completed: "The customer finished their order",
   order_cancelled: "The order was cancelled",
-  rule_inactive: "The rule was paused or changed",
+  rule_inactive: "The automation was paused or changed",
   campaign_stopped: "The campaign was paused or cancelled",
   dlt_mismatch: "The text doesn't match its registered DLT template",
   dlt_missing: "No DLT template for India",
   stale: "The event was too old to announce",
   too_long: "The text is longer than allowed",
+  duplicate_template: "The customer already got this message for this order",
+  rule_dry_run: "Practice run: recorded, not sent",
+  platform_dry_run: "Test mode: recorded, not sent to the customer",
+  store_gone: "The store was disconnected",
+  contact_gone: "The customer's details were removed",
+  no_final_event: "The carrier never said whether it arrived",
+  segment_missing: "The automation's customer segment was deleted",
+  values_unreadable: "The text's details couldn't be read, so it wasn't sent",
+  conditions: "Its conditions didn't match",
+  not_in_audience: "The customer isn't one the automation is for",
+  // The SMS provider's answers (classifySendError).
+  aws_opt_out: "The customer replied STOP or opted out with their carrier",
+  opted_out: "The customer replied STOP or opted out with their carrier",
+  country_blocked: "Texts to this country aren't allowed for your SMS sender",
+  destination_not_verified: "Until your SMS account is verified, texts only reach approved test recipients",
+  over_max_price: "The text would have cost more than the highest price allowed",
+  rejected: "The SMS provider didn't accept this text",
+  conflict: "The SMS provider didn't accept this text",
+  sender_not_found: "Your SMS sender is no longer available",
+  sender_not_allowed: "Your SMS sender isn't allowed to send right now",
+  aws_spend_limit: "The SMS account's monthly spending limit is reached",
+  aws_quota: "The SMS provider's sending limit was reached",
+  throttled: "The SMS provider asked to slow down",
+  network_not_sent: "The SMS provider couldn't be reached",
+  too_many_retries: "The SMS provider stayed busy for too long",
+  aws_internal_error: "The SMS provider had a problem, and may have sent it: it isn't sent again",
+  timeout: "No answer from the SMS provider, which may have sent it: it isn't sent again",
+  no_answer: "No answer from the SMS provider, which may have sent it: it isn't sent again",
+  cut_off: "The send was cut off, and may have gone: it isn't sent again",
 };
 
-export const skipLabel = (code: string | null | undefined) => (code ? (SKIP_LABEL[code] ?? code.replace(/_/g, " ")) : null);
+/** A reason in words (null: there is none). Never the bare code. */
+export const skipLabel = (code: string | null | undefined) => (code ? (SKIP_LABEL[code] ?? "The SMS provider didn't accept this text") : null);
+
+/** What to do about a reason, where the merchant can fix it. */
+export const SKIP_FIX: Record<string, { label: string; href: string }> = {
+  no_transactional_basis: { label: "Choose how customers agreed", href: "/messaging/setup?step=automate" },
+  sender_not_ready: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
+  sender_not_found: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
+  sender_not_allowed: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
+  sending_disabled: { label: "Turn on automatic SMS", href: "/messaging/settings" },
+  marketing_disabled: { label: "Turn on marketing texts", href: "/messaging/sender" },
+  budget_reached: { label: "Change your monthly limit", href: "/messaging/setup?step=automate" },
+  country_not_enabled: { label: "Choose your countries", href: "/messaging/sender" },
+  country_blocked: { label: "Choose your countries", href: "/messaging/sender" },
+  sandbox_unverified: { label: "Add a test recipient", href: "/messaging/settings#test-recipients" },
+  destination_not_verified: { label: "Add a test recipient", href: "/messaging/settings#test-recipients" },
+  template_not_approved: { label: "Review your automations", href: "/messaging/automations" },
+  template_category_changed: { label: "Review your automations", href: "/messaging/automations" },
+};
+export const skipFix = (code: string | null | undefined) => (code ? (SKIP_FIX[code] ?? null) : null);
 
 // ---------------------------------------------------------------------------
 // Budgets and cost
@@ -1003,6 +1109,62 @@ export function evaluateRuleConditions(conditions: RuleCondition[], f: RuleFacts
 
 const hour = z.number().int().min(0).max(23);
 
+/** Most customers an automation can be limited to by name ("Specific customers"). */
+export const SMS_AUDIENCE_MAX_CUSTOMERS = 50;
+
+/**
+ * Who an automation texts. Always the customer its event is about (an automation answers one
+ * customer's event, never a list), and with "segment" or "customers" only when that customer is in
+ * the saved segment (by its rules at the time of the event) or is one of those chosen. Consent and
+ * opt-outs are checked on top, whatever this says. For "Customer joins a segment" the segment is
+ * the trigger itself.
+ */
+export const smsAudienceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("trigger") }),
+  z.object({ kind: z.literal("segment"), segmentId: z.string().min(1).max(40) }),
+  z.object({
+    kind: z.literal("customers"),
+    contactIds: z
+      .array(z.string().min(1).max(40))
+      .min(1, "Choose at least one customer.")
+      .max(SMS_AUDIENCE_MAX_CUSTOMERS, `Choose at most ${SMS_AUDIENCE_MAX_CUSTOMERS} customers.`)
+      .transform((ids) => [...new Set(ids)]),
+  }),
+]);
+export type SmsAudience = z.infer<typeof smsAudienceSchema>;
+export type SmsAudienceKind = SmsAudience["kind"];
+const audienceDefault = (): SmsAudience => ({ kind: "trigger" });
+
+/** Who each trigger's event is about: the one customer an automation answers it with. */
+export const TRIGGER_SUBJECT: Record<SmsTrigger, string> = {
+  order_created: "The customer who placed the order",
+  payment_completed: "The customer who paid",
+  fulfillment_created: "The customer whose order shipped",
+  delivery_confirmed: "The customer whose order was delivered",
+  order_cancelled: "The customer whose order was cancelled",
+  refund_issued: "The customer who was refunded",
+  checkout_abandoned: "The customer who left checkout",
+  customer_registered: "The customer who created an account",
+  customer_birthday: "The customer whose birthday it is",
+  customer_inactive: "Each customer who stops ordering",
+  customer_vip: "Each customer who becomes a VIP",
+  customer_segment: "Each customer who joins the segment",
+};
+
+/** Who an automation texts, in a sentence ("The customer who placed the order, if they're in VIP customers"). */
+export function audienceWords(trigger: SmsTrigger, a: SmsAudience, segmentName?: string | null): string {
+  const who = TRIGGER_SUBJECT[trigger];
+  if (trigger === "customer_segment") return a.kind === "segment" ? `Each customer who joins "${segmentName ?? "a deleted segment"}"` : who;
+  if (a.kind === "segment") return `${who}, if they're in "${segmentName ?? "a deleted segment"}"`;
+  if (a.kind === "customers") return `${who}, if they're ${a.contactIds.length === 1 ? "the customer" : `one of the ${a.contactIds.length} customers`} you chose`;
+  return who;
+}
+
+/** The audience problems every automation and rule refuses. */
+function refineAudience(trigger: SmsTrigger, audience: SmsAudience, ctx: z.RefinementCtx) {
+  if (trigger === "customer_segment" && audience.kind !== "segment") ctx.addIssue({ code: "custom", path: ["audience"], message: "Choose the segment customers join." });
+}
+
 /** A rule as the merchant edits it. */
 export const smsRuleSchema = z
   .object({
@@ -1032,8 +1194,10 @@ export const smsRuleSchema = z
     inactiveDays: z.number().int().min(14).max(1095).nullish(),
     vipMinOrders: z.number().int().min(2).max(10_000).nullish(),
     vipMinSpent: z.number().min(1).max(1e9).nullish(),
+    audience: smsAudienceSchema.default(audienceDefault),
   })
   .superRefine((r, ctx) => {
+    refineAudience(r.trigger, r.audience, ctx);
     if (r.trigger === "customer_inactive" && !r.inactiveDays) ctx.addIssue({ code: "custom", path: ["inactiveDays"], message: "Say after how many days without an order a customer counts as inactive." });
     if (r.trigger === "customer_vip" && !r.vipMinOrders && !r.vipMinSpent) ctx.addIssue({ code: "custom", path: ["vipMinOrders"], message: "Say how many orders or how much spend makes a VIP." });
     if (!TRIGGER_INFO[r.trigger].available) ctx.addIssue({ code: "custom", path: ["trigger"], message: TRIGGER_INFO[r.trigger].unavailableReason ?? "This event isn't available." });
@@ -1088,6 +1252,41 @@ export function describeSegment(f: SegmentFilter): string {
   if (f.orderedWithinDays != null) parts.push(`who ordered in the last ${f.orderedWithinDays} days`);
   if (f.inactiveForDays != null) parts.push(`with no order for ${f.inactiveForDays}+ days`);
   return parts.join(" ");
+}
+
+/** A segment's rules alone, without the marketing consent a campaign adds ("5+ orders, in AU"); "Every customer" without any. */
+export function describeSegmentRules(f: SegmentFilter): string {
+  const parts: string[] = [];
+  if (f.countries.length) parts.push(`in ${f.countries.join(", ")}`);
+  if (f.minOrders != null && f.maxOrders != null) parts.push(`${f.minOrders}-${f.maxOrders} orders`);
+  else if (f.minOrders != null) parts.push(`${f.minOrders}+ orders`);
+  else if (f.maxOrders != null) parts.push(`at most ${f.maxOrders} orders`);
+  if (f.minSpent != null) parts.push(`spent ${f.minSpent}+`);
+  if (f.orderedWithinDays != null) parts.push(`ordered in the last ${f.orderedWithinDays} days`);
+  if (f.inactiveForDays != null) parts.push(`no order for ${f.inactiveForDays}+ days`);
+  return parts.length ? parts.join(", ") : "Every customer";
+}
+
+/**
+ * A segment's rules as rule conditions, so an automation limited to a segment is judged on its
+ * event's facts like any condition (a fact the event lacks fails it). The same reading as
+ * campaigns' segmentWhere: ordered within N days = last order at most N days ago.
+ */
+export function segmentConditions(f: SegmentFilter): RuleCondition[] {
+  const out: RuleCondition[] = [];
+  if (f.countries.length) out.push({ field: "country", op: "in", value: f.countries });
+  if (f.minOrders != null) out.push({ field: "customer_orders", op: "gte", value: f.minOrders });
+  if (f.maxOrders != null) out.push({ field: "customer_orders", op: "lte", value: f.maxOrders });
+  if (f.minSpent != null) out.push({ field: "customer_spent", op: "gte", value: f.minSpent });
+  if (f.orderedWithinDays != null) out.push({ field: "days_since_last_order", op: "lte", value: f.orderedWithinDays });
+  if (f.inactiveForDays != null) out.push({ field: "days_since_last_order", op: "gte", value: f.inactiveForDays });
+  return out;
+}
+
+/** What a segment compares that a trigger's event doesn't have (empty: it fits). */
+export function segmentMisfit(f: SegmentFilter, trigger: SmsTrigger): RuleConditionField[] {
+  const allowed = new Set(TRIGGER_CONDITION_FIELDS[trigger]);
+  return [...new Set(segmentConditions(f).map((c) => c.field))].filter((x) => !allowed.has(x));
 }
 
 export const SMS_CAMPAIGN_STATUSES = ["draft", "pending_approval", "approved", "scheduled", "sending", "paused", "completed", "cancelled"] as const;
@@ -1488,8 +1687,8 @@ export type SmsSetupDraft = z.infer<typeof smsSetupDraftSchema>;
 // Automations: the four-step builder (trigger, message, timing, test and activate)
 // ---------------------------------------------------------------------------
 
-/** The builder's steps, in order. */
-export const AUTOMATION_STEPS = ["trigger", "message", "timing", "activate"] as const;
+/** The builder's steps, in order: when, who, what, a test, then the review that switches it on. */
+export const AUTOMATION_STEPS = ["trigger", "audience", "message", "test", "review"] as const;
 export type AutomationStep = (typeof AUTOMATION_STEPS)[number];
 
 /**
@@ -1516,10 +1715,11 @@ export const TRIGGER_SOURCES: Record<SmsTrigger, TriggerSource | null> = {
   customer_birthday: null,
   customer_inactive: { topics: ["orders/create"], daily: true },
   customer_vip: { topics: ["orders/create"], daily: true },
+  customer_segment: { topics: ["orders/create"], daily: true },
 };
 
 /** The icons the trigger cards use (lucide names; the dashboard draws them). */
-export type AutomationIcon = "shopping-bag" | "credit-card" | "truck" | "package-check" | "shopping-cart" | "user-plus" | "webhook" | "circle-x" | "undo" | "moon" | "crown" | "cake";
+export type AutomationIcon = "shopping-bag" | "credit-card" | "truck" | "package-check" | "shopping-cart" | "user-plus" | "webhook" | "circle-x" | "undo" | "moon" | "crown" | "cake" | "users" | "calendar-clock";
 
 export interface AutomationTriggerCard {
   /** The trigger, or "custom_event" (no trigger behind it). */
@@ -1534,6 +1734,8 @@ export interface AutomationTriggerCard {
   note?: string;
   /** Why it can't be chosen at all (there is no such event). */
   unavailable?: string;
+  /** Where to do it instead, when another part of Customer Messaging does it. */
+  instead?: { label: string; href: string };
 }
 
 /** Step 1's cards, in the order they are shown. Whether each works for a store is the API's answer (core sms/builder.ts). */
@@ -1575,6 +1777,25 @@ export const AUTOMATION_TRIGGER_CARDS: AutomationTriggerCard[] = [
     icon: "user-plus",
     main: true,
     note: "A welcome text is marketing: only customers subscribed to your SMS marketing get it.",
+  },
+  {
+    key: "customer_segment",
+    trigger: "customer_segment",
+    label: "Customer joins a segment",
+    description: "Once a customer matches one of your customer segments (checked daily).",
+    icon: "users",
+    main: true,
+    note: "Checked once a day. When you switch it on, customers already in the segment get it too, once each. It's marketing: only customers subscribed to your SMS marketing get it.",
+  },
+  {
+    key: "scheduled_message",
+    trigger: null,
+    label: "Scheduled message",
+    description: "A one-off text to a customer segment, at a date and time you choose.",
+    icon: "calendar-clock",
+    main: true,
+    unavailable: "A one-off text to many customers is a campaign: it's written, approved and scheduled on the Campaigns page, with the exact number of customers confirmed before it goes.",
+    instead: { label: "Schedule a campaign", href: "/messaging/campaigns" },
   },
   {
     key: "custom_event",
@@ -1620,6 +1841,10 @@ export const AUTOMATION_STARTERS: Record<SmsTrigger, Array<{ name: string; body:
   customer_birthday: [],
   customer_inactive: [{ name: "We miss you", body: "Hi {{customer_name}}, we miss you at {{business_name}}! Here's a code for your next order: {{discount_code}}. Opt out: {{opt_out_url}}" }],
   customer_vip: [{ name: "Thank you", body: "Hi {{customer_name}}, thank you for being one of {{business_name}}'s best customers! Here's a code just for you: {{discount_code}}. Opt out: {{opt_out_url}}" }],
+  customer_segment: [
+    { name: "Thank you", body: "Hi {{customer_name}}, thank you for shopping with {{business_name}}! We'll keep you posted on new arrivals. Opt out: {{opt_out_url}}" },
+    { name: "A code for them", body: "Hi {{customer_name}}, a little thank-you from {{business_name}}: use {{discount_code}} on your next order. Opt out: {{opt_out_url}}" },
+  ],
 };
 
 /** The conditions that mean something for each trigger: the facts its event has (a fact it lacks makes a condition fail). */
@@ -1635,6 +1860,7 @@ export const TRIGGER_CONDITION_FIELDS: Record<SmsTrigger, RuleConditionField[]> 
   customer_birthday: [],
   customer_inactive: ["country", "customer_orders", "customer_spent", "days_since_last_order"],
   customer_vip: ["country", "customer_orders", "customer_spent", "days_since_last_order"],
+  customer_segment: ["country", "customer_orders", "customer_spent", "days_since_last_order"],
 };
 
 /**
@@ -1673,8 +1899,11 @@ export const smsAutomationSchema = z
     inactiveDays: z.number().int().min(14).max(1095).nullish(),
     vipMinOrders: z.number().int().min(2).max(10_000).nullish(),
     vipMinSpent: z.number().min(1).max(1e9).nullish(),
+    /** Who it texts (step 2). Left out on a save: the automation keeps the one it has. */
+    audience: smsAudienceSchema.default(audienceDefault),
   })
   .superRefine((a, ctx) => {
+    refineAudience(a.trigger, a.audience, ctx);
     const allowed = new Set(TRIGGER_CONDITION_FIELDS[a.trigger]);
     a.conditions.forEach((c, i) => {
       if (!allowed.has(c.field)) ctx.addIssue({ code: "custom", path: ["conditions", i, "field"], message: `"${automationTriggerCard(a.trigger).label}" events have no ${RULE_CONDITION_LABEL[c.field].toLowerCase()} to compare.` });
@@ -1705,6 +1934,7 @@ export function automationRule(a: SmsAutomationInput, templateId: string): SmsRu
     inactiveDays: a.trigger === "customer_inactive" ? a.inactiveDays : null,
     vipMinOrders: a.trigger === "customer_vip" ? a.vipMinOrders : null,
     vipMinSpent: a.trigger === "customer_vip" ? a.vipMinSpent : null,
+    audience: a.audience,
   });
 }
 

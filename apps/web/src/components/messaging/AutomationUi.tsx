@@ -1,6 +1,6 @@
 "use client";
-import { Cake, CircleX, CreditCard, Crown, Moon, PackageCheck, ShoppingBag, ShoppingCart, Truck, Undo2, UserPlus, Webhook, type LucideIcon } from "lucide-react";
-import { automationTriggerCard, ORDER_STATUS_WORD, previewSms, RULE_CONDITION_LABEL, TRIGGER_INFO, type AutomationIcon, type RuleCondition, type SmsAutomationInput, type SmsTrigger } from "@app/shared/sms";
+import { CalendarClock, Cake, CircleX, CreditCard, Crown, Moon, PackageCheck, ShoppingBag, ShoppingCart, Truck, Undo2, UserPlus, Users, Webhook, type LucideIcon } from "lucide-react";
+import { AUTOMATION_TRIGGER_CARDS, automationTriggerCard, ORDER_STATUS_WORD, previewSms, RULE_CONDITION_LABEL, TRIGGER_INFO, type AutomationIcon, type RuleCondition, type SmsAutomationInput, type SmsTrigger } from "@app/shared/sms";
 import { ConfirmDialog } from "@/components/AppUi";
 import type { Tone } from "@/components/dashboard/Primitives";
 import { fmtDelay, fmtHour } from "./MessagingUi";
@@ -25,10 +25,14 @@ export const TRIGGER_ICON: Record<AutomationIcon, LucideIcon> = {
   moon: Moon,
   crown: Crown,
   cake: Cake,
+  users: Users,
+  "calendar-clock": CalendarClock,
 };
 
-export function TriggerIcon({ trigger, className = "h-5 w-5" }: { trigger: SmsTrigger | null; className?: string }) {
-  const Icon = trigger ? TRIGGER_ICON[automationTriggerCard(trigger).icon] : Webhook;
+/** A trigger's icon (or, for a card with no trigger behind it, that card's). */
+export function TriggerIcon({ trigger, card, className = "h-5 w-5" }: { trigger: SmsTrigger | null; card?: string; className?: string }) {
+  const icon = trigger ? automationTriggerCard(trigger).icon : AUTOMATION_TRIGGER_CARDS.find((c) => c.key === card)?.icon;
+  const Icon = icon ? TRIGGER_ICON[icon] : Webhook;
   return <Icon aria-hidden className={className} strokeWidth={1.8} />;
 }
 
@@ -101,15 +105,15 @@ export function ActivateDialog({
 }) {
   const blocking = trigger ? problemsFor(problems, TRIGGER_INFO[trigger].category).filter((p) => p.code !== "test_mode" && p.code !== "platform_off") : [];
   return (
-    <ConfirmDialog open={open} title={republish ? `Put your changes to "${name}" live?` : `Turn on "${name}"?`} confirmLabel={republish ? "Put changes live" : "Turn on"} busy={busy} onConfirm={onConfirm} onCancel={onCancel}>
+    <ConfirmDialog open={open} title={republish ? `Put your changes to "${name}" live?` : `Activate "${name}"?`} confirmLabel={republish ? "Put changes live" : "Activate"} busy={busy} onConfirm={onConfirm} onCancel={onCancel}>
       {trigger && (
         <p>
           <strong className="text-text">{automationTriggerCard(trigger).label}.</strong> {automationTriggerCard(trigger).description} From now on, the customer gets:
         </p>
       )}
       {body && trigger && <div className="whitespace-pre-wrap rounded-xl border border-border bg-bg px-3 py-2 text-text">{previewText(body, trigger, business)}</div>}
-      <p>It goes to real customers who may receive it, and turning it on approves this message in your name.</p>
-      {mode !== "live" && <p className="text-warn">bizinsights is in test mode: no customer is texted yet. What would be sent is recorded in Message History.</p>}
+      <p>It goes to real customers who may receive it, and activating it approves this message in your name.</p>
+      {mode !== "live" && <p className="text-warn">Your SMS account is still being verified, so no customer is texted yet: what would be sent is recorded in Message History.</p>}
       {blocking.length > 0 && (
         <div>
           <p className="font-medium text-text">Texts won&apos;t reach customers until:</p>

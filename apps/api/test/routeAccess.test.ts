@@ -129,6 +129,7 @@ const READ_ONLY_POSTS = new Set([
   "POST /workspaces/:ws/stores/:storeId/sms/rules/:id/dry-run",
   "POST /workspaces/:ws/stores/:storeId/sms/segments/estimate",
   "POST /workspaces/:ws/stores/:storeId/sms/campaigns/estimate",
+  "POST /workspaces/:ws/stores/:storeId/sms/automations/audience",
   "POST /workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate",
   "POST /workspaces/:ws/stores/:storeId/whatsapp/workflows/check",
   "POST /workspaces/:ws/email/templates/:id/preview",

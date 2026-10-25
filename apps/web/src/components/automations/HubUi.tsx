@@ -1,23 +1,5 @@
 "use client";
-import {
-  CalendarClock,
-  CircleX,
-  Crown,
-  CreditCard,
-  Mail,
-  MessageCircle,
-  MessageCircleReply,
-  MessageSquareText,
-  Moon,
-  PackageCheck,
-  ShoppingBag,
-  ShoppingCart,
-  Truck,
-  Undo2,
-  UserPlus,
-  Webhook,
-  type LucideIcon,
-} from "lucide-react";
+import { CalendarClock, CircleX, CreditCard, Crown, Mail, MessageCircle, MessageCircleReply, MessageSquareText, Moon, PackageCheck, ShoppingBag, ShoppingCart, Truck, Undo2, UserPlus, Users, Webhook, type LucideIcon } from "lucide-react";
 import { HUB_AUTOMATION_STATUS_INFO, HUB_STATUS_INFO, type HubAutomationStatus, type HubChannel, type HubStatus, type HubTone, type HubTriggerIcon } from "@app/shared/automations";
 import { useApp } from "@/components/AppContext";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
@@ -76,6 +58,7 @@ const TRIGGER_ICON: Record<HubTriggerIcon, LucideIcon> = {
   "calendar-clock": CalendarClock,
   "message-circle-reply": MessageCircleReply,
   webhook: Webhook,
+  users: Users,
 };
 
 export function HubTriggerIconView({ icon, className = "h-5 w-5" }: { icon: HubTriggerIcon; className?: string }) {

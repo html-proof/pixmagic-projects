@@ -49,6 +49,67 @@ export interface SmsOverview {
   subscribed: number;
   attention: Record<string, number>;
   spend: { month: string; totalUsd: number; budgetUsd: number; usedPct: number | null };
+  /** The store's calendar month so far, and the cap on texts a month (null: no cap). */
+  thisMonth: StatusCounts & { deliveryRate: number | null; from: string; quota: number | null };
+  readiness: MessagingReadiness;
+}
+
+/** packages/core/src/sms/readiness.ts: the store's messaging in a word, and only what's missing. */
+export interface ReadinessItem {
+  key: "sender" | "verification" | "permissions" | "limit" | "sending" | "account" | "test_recipient";
+  label: string;
+  ok: boolean;
+  detail: string;
+  fix: { label: string; href: string } | null;
+  optional: boolean;
+  /** bizinsights and the SMS provider are finishing it: nothing for the store to do. */
+  waiting: boolean;
+}
+
+export interface MessagingReadiness {
+  status: "ready" | "setup_required" | "action_required";
+  ready: boolean;
+  testMode: boolean;
+  sender: boolean;
+  verification: boolean;
+  budget: boolean;
+  consent: boolean;
+  sending: boolean;
+  testNumber: boolean;
+  items: ReadinessItem[];
+  problems: SendingProblem[];
+}
+
+/** GET …/automations/:id/checks: the review step's checks, and whether switching on would be accepted now. */
+export interface AutomationCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  message: string;
+  fix: { label: string; href: string } | null;
+  blocking: boolean;
+}
+export interface AutomationChecks {
+  canActivate: boolean;
+  checks: AutomationCheck[];
+}
+
+/** POST …/automations/audience. */
+export interface AudienceEstimate {
+  customers: number | null;
+  perEvent: boolean;
+}
+
+/** GET …/automations/audience/customers: customers to choose by name (masked numbers). */
+export interface AudienceCustomer {
+  id: string;
+  name: string | null;
+  number: string;
+  country: string | null;
+  consent: string;
+  consentLabel: string;
+  optedOut: boolean;
+  orders: number;
 }
 
 export interface PublicSender {
@@ -187,6 +248,10 @@ export interface SmsMessage {
   attempts: number;
   createdAt: string;
   text: string | null;
+  /** The automation's or campaign's name now, and the customer's first name (with "View contact information"). */
+  automationName?: string | null;
+  campaignName?: string | null;
+  customerName?: string | null;
 }
 
 export interface MessageEvent {
@@ -422,7 +487,7 @@ export interface SmsSetupState {
 }
 
 // ---------------------------------------------------------------------------
-// Automations, the four-step builder (apps/api/src/routes/smsAutomations.ts)
+// Automations, the builder (apps/api/src/routes/smsAutomations.ts)
 // ---------------------------------------------------------------------------
 
 export type TriggerState = "ready" | "needs_permission" | "unchecked" | "not_subscribed" | "not_sent" | "unknown_app" | "unavailable";
@@ -448,6 +513,8 @@ export interface SendingProblem {
   code: string;
   message: string;
   stops: "all" | SmsCategory;
+  /** setup: the store's own (switching on waits for it when SMS is live); temporary: clears by itself; platform: bizinsights' own. */
+  kind: "setup" | "temporary" | "platform";
   fix: { label: string; href: string } | null;
 }
 
@@ -461,6 +528,8 @@ export interface AutomationView {
   pendingChanges: boolean;
   dryRun: boolean;
   config: SmsAutomationInput | null;
+  audienceLabel: string | null;
+  segmentName: string | null;
   templateId: string | null;
   body: string | null;
   liveBody: string | null;
@@ -476,4 +545,5 @@ export interface AutomationsResponse {
   timezone: string;
   automations: AutomationView[];
   problems: SendingProblem[];
+  readiness: MessagingReadiness;
 }

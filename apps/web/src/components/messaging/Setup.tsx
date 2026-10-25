@@ -624,7 +624,7 @@ export function SmsSetup() {
                   )}
                   {country === "IN" && (
                     <p className="text-sm text-warn">
-                      Texts to India need your own DLT registration with an Indian operator: set them up in <Link className="underline" href="/messaging/sender">Sender Configuration</Link>.
+                      Texts to India need your own DLT registration with an Indian operator: set them up in <Link className="underline" href="/messaging/sender">SMS Sender</Link>.
                     </p>
                   )}
                 </div>
@@ -886,12 +886,12 @@ function AutomationConfirm({ data, trigger, body, business }: { data: SmsSetupSt
 }
 
 /** "Enable Automatic SMS": the store's sending switch, and what stands in its way. */
-export function MasterSwitch({ data, manage, busy, onToggle }: { data: SmsSetupState; manage: boolean; busy: string | null; onToggle: (on: boolean) => void }) {
+export function MasterSwitch({ data, manage, busy, onToggle, onText }: { data: SmsSetupState; manage: boolean; busy: string | null; onToggle: (on: boolean) => void; onText?: string }) {
   const on = data.sending.on;
   const blockers = [
-    data.connection.status !== "connected" ? "Connect SMS (step 1)." : null,
-    data.sender?.identityCheck !== "verified" ? "Your sender needs AWS's approval (step 2)." : null,
-    !((data.sending.monthlyBudgetUsd ?? 0) > 0) ? "Set a monthly spending limit above 0 and save it." : null,
+    data.connection.status !== "connected" ? "Connect SMS (step 1 of the setup guide)." : null,
+    data.sender?.identityCheck !== "verified" ? "Your SMS sender still needs to be verified (step 2 of the setup guide)." : null,
+    !((data.sending.monthlyBudgetUsd ?? 0) > 0) ? "Set a monthly messaging limit above 0 and save it." : null,
     data.sending.transactionalBasis === "none" ? "Choose how customers agreed to order updates and save it." : null,
   ].filter((x): x is string => !!x);
   const anyOn = data.automations.some((a) => a.on);
@@ -902,7 +902,7 @@ export function MasterSwitch({ data, manage, busy, onToggle }: { data: SmsSetupS
           <p className="flex items-center gap-2 text-base font-semibold">
             Enable Automatic SMS <Badge tone={on ? "good" : "neutral"}>{on ? "On" : "Off"}</Badge>
           </p>
-          <p className="text-sm text-muted">{on ? (anyOn ? "Your automatic texts that are on go out as orders happen." : "On, but none of the texts above is on yet.") : "Nothing is sent to customers while this is off."}</p>
+          <p className="text-sm text-muted">{on ? (onText ?? (anyOn ? "Your automatic texts that are on go out as orders happen." : "On, but none of the texts above is on yet.")) : "Nothing is sent to customers while this is off."}</p>
         </div>
         {manage && (
           <label className="inline-flex cursor-pointer items-center gap-2">

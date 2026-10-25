@@ -256,7 +256,7 @@ export async function requestSetupSender(store: Pick<Store, "id" | "workspaceId"
   const row = await setupRow(store);
   if (!row.country) throw new SmsError("Choose the country most of your customers are in first.", 400, "no_country");
   if (row.country === "IN") {
-    throw new SmsError("Texts to India need your own DLT registration with an Indian operator. Set them up in Sender Configuration with your DLT Principal Entity ID.", 409, "india_dlt");
+    throw new SmsError("Texts to India need your own DLT registration with an Indian operator. Set them up on the SMS Sender page with your DLT Principal Entity ID.", 409, "india_dlt");
   }
   const support = senderIdSupport(row.country);
   if (support !== "none") {

@@ -276,7 +276,7 @@ export function ConsentSuppression() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Consent & Suppression"
+        title="Customer messaging permissions"
         sub="Each customer's SMS marketing consent as Shopify reports it, how it changed, and the numbers that must not be texted."
       />
       <section className="card text-sm" aria-labelledby="c-rules-h">

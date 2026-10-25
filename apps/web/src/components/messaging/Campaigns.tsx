@@ -152,7 +152,7 @@ export function SmsCampaigns() {
         <Alert kind="info">
           Marketing texts are off for this store. Turn them on in{" "}
           <Link className="underline" href="/messaging/sender">
-            Sender Configuration
+            SMS Sender
           </Link>{" "}
           before scheduling a campaign.
         </Alert>

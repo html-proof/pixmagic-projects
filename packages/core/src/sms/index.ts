@@ -13,3 +13,4 @@ export * from "./analytics.js";
 export * from "./privacy.js";
 export * from "./setup.js";
 export * from "./builder.js";
+export * from "./readiness.js";

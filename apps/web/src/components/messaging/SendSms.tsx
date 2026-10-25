@@ -107,7 +107,7 @@ function SendTest({ base, templates }: { base: string; templates: SmsTemplate[] 
               <p className="mt-1 text-xs text-muted">
                 Add and verify one in{" "}
                 <Link className="text-accent underline" href="/messaging/sender">
-                  Sender Configuration
+                  SMS Sender
                 </Link>
                 .
               </p>

@@ -1,36 +1,54 @@
 "use client";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { Cloud } from "lucide-react";
-import { ORDER_STATUS_WORD, previewSms } from "@app/shared/sms";
+import { ArrowRight, BarChart3, Check, CircleAlert, Clock, Cloud, FileText, Gauge, History, Radio, ShieldCheck, Smartphone, UserCheck } from "lucide-react";
 import { ConfirmDialog, PageHeader, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { fmtMonth } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
 import { api, fmtPct, useApi } from "@/lib/api";
-import { countryName, fmtUsd, fmtWhen, ModeBanner, purposeLabel, SmsStatusBadge, TextBubble, useSms, useSmsAction } from "./MessagingUi";
-import { MasterSwitch, SENDER_STATUS } from "./Setup";
-import type { SmsMessage, SmsOverview, SmsSetupState } from "./types";
+import { actionLabel, fmtUsd, fmtWhen, usePagedList, useSms, useSmsAction } from "./MessagingUi";
+import { MasterSwitch } from "./Setup";
+import { TestNumbers } from "./TestNumbers";
+import type { ReadinessItem, SmsOverview, SmsSetupState } from "./types";
 
 /**
- * SMS Settings: everything Set up SMS set, on one page in plain words: the connection, the sender
- * name and its approval, the messages, the last test, the automatic texts, recent texts and what
- * they cost. Changes go through the same API as the setup; the advanced pages stay in the menu.
+ * Settings: the store's SMS setup in plain words, done once and used by every automation (sender,
+ * verification, customer permissions, the monthly limit, automatic SMS, test recipients), each
+ * with where it's changed. Under Advanced, for owners and admins: the specialist pages, the
+ * provider connection and the activity log. Changes go through the same API as the setup guide.
  */
 
 const CONNECTION: Record<SmsSetupState["connection"]["status"], { tone: Tone; label: string; help: string }> = {
   not_connected: { tone: "neutral", label: "Not connected", help: "Connect to start setting up SMS." },
-  connected: { tone: "good", label: "Connected", help: "bizinsights reaches AWS End User Messaging SMS for you. No keys are stored in your account or your browser." },
-  failed: { tone: "danger", label: "Connection failed", help: "AWS didn't answer the last check, or SMS isn't switched on for bizinsights yet. Try again in a few minutes." },
+  connected: { tone: "good", label: "Connected", help: "bizinsights reaches the SMS provider (AWS End User Messaging SMS) for you. No keys are stored in your account or your browser." },
+  failed: { tone: "danger", label: "Connection failed", help: "The provider didn't answer the last check, or SMS isn't switched on for bizinsights yet. Try again in a few minutes." },
   disconnected: { tone: "neutral", label: "Disconnected", help: "Nothing is sent. Your sender name, messages and history are kept: reconnect any time." },
 };
 
+/** Where each setup item is changed, when it's already done. */
+const CHANGE: Partial<Record<ReadinessItem["key"], { label: string; href: string }>> = {
+  sender: { label: "Change", href: "/messaging/setup?step=sender" },
+  verification: { label: "Details", href: "/messaging/setup?step=sender" },
+  permissions: { label: "Change", href: "/messaging/setup?step=automate" },
+  limit: { label: "Change", href: "/messaging/setup?step=automate" },
+};
+
+const ADVANCED: Array<{ href: string; title: string; help: string; icon: typeof Cloud }> = [
+  { href: "/messaging/sender", title: "SMS Sender", help: "Sender name or number, countries, quiet hours and daily caps.", icon: Radio },
+  { href: "/messaging/setup?step=sender", title: "Messaging verification", help: "Your sender name's registration and approval.", icon: ShieldCheck },
+  { href: "/messaging/billing", title: "Monthly messaging limit", help: "What texts cost this month, and the limit.", icon: Gauge },
+  { href: "/messaging/consent", title: "Customer messaging permissions", help: "Who agreed to texts, opt-outs and the do-not-text list.", icon: UserCheck },
+  { href: "/messaging/templates", title: "Message templates", help: "Every message, its versions and approvals.", icon: FileText },
+  { href: "/messaging/analytics", title: "Delivery analytics", help: "Delivery, cost and orders that followed a text.", icon: BarChart3 },
+];
+
 function Section({ id, title, action, children }: { id: string; title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="card animate-rise space-y-3" aria-labelledby={id}>
+    <section id={id} className="card animate-rise scroll-mt-4 space-y-3" aria-labelledby={`${id}-h`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id={id} className="font-semibold">
+        <h2 id={`${id}-h`} className="font-semibold">
           {title}
         </h2>
         {action}
@@ -40,240 +58,215 @@ function Section({ id, title, action, children }: { id: string; title: string; a
   );
 }
 
-const linkCls = "text-sm text-accent underline-offset-2 hover:underline";
+interface AuditEntry {
+  id: string;
+  action: string;
+  targetType: string | null;
+  version: number | null;
+  actor: string;
+  at: string;
+}
+
+/** Who changed what in Customer Messaging, newest first (owners and admins). */
+function ActivityLog() {
+  const { base, store } = useSms();
+  const list = usePagedList<AuditEntry>(base ? `${base}/audit?limit=20` : null, "entries");
+  if (list.error && !list.rows) return <p className="text-sm text-muted">Couldn&apos;t load the activity log.</p>;
+  if (!list.rows) return <div className="skeleton h-16" />;
+  if (!list.rows.length) return <p className="text-sm text-muted">Nothing changed yet.</p>;
+  return (
+    <>
+      <ul className="divide-y divide-border text-sm">
+        {list.rows.map((e) => (
+          <li key={e.id} className="flex flex-wrap items-baseline gap-x-3 py-2">
+            <span className="w-36 shrink-0 text-xs text-muted">{fmtWhen(e.at, store?.timezone)}</span>
+            <span className="min-w-0 flex-1">
+              {actionLabel(e.action)}
+              {e.targetType ? <span className="text-muted"> · {e.targetType.replace(/^sms_/, "").replace(/_/g, " ")}</span> : null}
+              {e.version ? <span className="text-muted"> (version {e.version})</span> : null}
+            </span>
+            <span className="text-xs text-muted">{e.actor}</span>
+          </li>
+        ))}
+      </ul>
+      {list.cursor && (
+        <button type="button" className="btn-secondary h-8 px-3 text-xs" disabled={list.loading} onClick={list.loadMore}>
+          {list.loading ? "Loading…" : "Load more"}
+        </button>
+      )}
+    </>
+  );
+}
 
 export function SmsSettings() {
   const { base, manage, store } = useSms();
   const tz = store?.timezone;
   const setup = useApi<SmsSetupState>(base ? `${base}/setup` : null);
   const overview = useApi<SmsOverview>(base);
-  const recent = useApi<{ messages: SmsMessage[] }>(base ? `${base}/messages?limit=5` : null);
   const { busy, run } = useSmsAction();
   const [confirm, setConfirm] = useState<"disconnect" | { master: boolean } | null>(null);
   if (setup.error) return <LoadError what="SMS settings" error={setup.error} onRetry={() => void setup.reload()} busy={setup.loading} />;
   const d = setup.data;
   if (!d || !base) return <Skeleton lines={8} />;
   const conn = CONNECTION[d.connection.status];
-  const status = SENDER_STATUS[d.senderName.status] ?? SENDER_STATUS.draft!;
+  const readiness = overview.data?.readiness;
   const spend = overview.data?.spend;
-  const business = d.businessName || d.defaultBusinessName;
+  const items = (readiness?.items ?? []).filter((i) => i.key !== "sending" && i.key !== "test_recipient");
 
   const connect = () =>
     run("connect", "connect", async () => {
       const r = await api<{ result: { connected: boolean }; setup: SmsSetupState }>(`${base}/setup/connect`, { method: "POST", body: {} });
       setup.setData(r.setup);
+      void overview.reload();
       return r.result.connected ? "Connected." : "The connection failed: see why below.";
+    });
+  const checkSender = () =>
+    run("check", "check your sender", async () => {
+      const r = await api<{ result: { status: string }; setup: SmsSetupState }>(`${base}/setup/sender/check`, { method: "POST", body: {} });
+      setup.setData(r.setup);
+      void overview.reload();
+      return r.result.status === "approved" ? "Your sender is verified." : "Checked: your sender isn't verified yet.";
     });
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="SMS Settings"
-        sub="Your SMS connection, sender name, messages and automatic texts, in one place."
+        title="Settings"
+        sub="Your store's SMS setup. It's done once: every automation uses it from then on."
         actions={
-          <Link href="/messaging/setup" className={d.completedAt ? "btn-secondary" : "btn-primary"}>
-            {d.completedAt ? "Open Set up SMS" : "Continue setup"}
-          </Link>
+          manage ? (
+            <Link href="/messaging/setup" className={d.completedAt ? "btn-secondary" : "btn-primary"}>
+              {d.completedAt ? "Open the setup guide" : "Continue setup"}
+            </Link>
+          ) : undefined
         }
       />
-      <ModeBanner mode={d.mode} />
+      {readiness?.testMode && (
+        <Alert kind="info">
+          <strong>Your SMS account is still being verified.</strong> Test messages can be sent to approved numbers until verification is complete; until then automations record what they would send.
+          bizinsights finishes this verification with the SMS provider: there&apos;s nothing to do on your side but the steps below.
+        </Alert>
+      )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Section
-          id="set-conn"
-          title="SMS provider"
-          action={<Badge tone={conn.tone}>{conn.label}</Badge>}
-        >
-          <div className="flex items-center gap-3">
-            <span aria-hidden className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/10 text-accent">
-              <Cloud className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 text-sm">
+      <Section id="set-setup" title="SMS setup" action={readiness ? <Badge tone={readiness.status === "ready" ? "good" : "warn"}>{readiness.status === "ready" ? "Ready" : readiness.status === "action_required" ? "Action required" : "Setup required"}</Badge> : undefined}>
+        {!readiness ? (
+          overview.error ? <p className="text-sm text-muted">Couldn&apos;t load your setup.</p> : <div className="skeleton h-24" />
+        ) : (
+          <ul className="divide-y divide-border">
+            {items.map((i) => {
+              const link = !i.ok ? i.fix : CHANGE[i.key];
+              return (
+                <li key={i.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                  <span aria-hidden className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${i.ok ? "bg-good/15 text-good" : i.waiting ? "bg-text/[0.06] text-muted" : "bg-warn/15 text-warn"}`}>
+                    {i.ok ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : i.waiting ? <Clock className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">{i.label}</span>
+                    <span className="block text-xs text-muted">{i.detail}</span>
+                  </span>
+                  {manage && i.key === "verification" && d.senderName.status !== "draft" && !i.ok && (
+                    <button type="button" className="btn-secondary h-8 px-3 text-xs" disabled={!!busy} onClick={() => void checkSender()}>
+                      {busy === "check" ? "Checking…" : "Check status"}
+                    </button>
+                  )}
+                  {manage && link && (
+                    <Link href={link.href} className="btn-secondary inline-flex h-8 items-center gap-1 px-3 text-xs" aria-label={`${i.ok ? link.label : "Fix this"}: ${i.label}`}>
+                      {i.ok ? link.label : "Fix this"} {!i.ok && <ArrowRight aria-hidden className="h-3.5 w-3.5" />}
+                    </Link>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {spend && spend.budgetUsd > 0 && (
+          <p className="text-xs text-muted">
+            {fmtUsd(spend.totalUsd)} used in {fmtMonth(spend.month, { year: true })} of your {fmtUsd(spend.budgetUsd)} limit{spend.usedPct !== null ? ` (${fmtPct(spend.usedPct / 100)})` : ""}. Amounts are in US dollars; texts not priced yet count at their estimate.
+          </p>
+        )}
+      </Section>
+
+      <Section id="set-auto" title="Automatic SMS">
+        <MasterSwitch data={d} manage={manage} busy={busy} onToggle={(on) => setConfirm({ master: on })} onText="Your automations that are active text customers as things happen in your store." />
+        <p className="text-sm text-muted">
+          The automations themselves are on the{" "}
+          <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/automations">
+            Automations
+          </Link>{" "}
+          page.
+        </p>
+      </Section>
+
+      {manage ? (
+        <TestNumbers mode={d.mode} />
+      ) : (
+        <Section id="test-recipients" title="Test recipients">
+          <p className="text-sm text-muted">Approved test numbers: {d.testNumbers.filter((t) => t.status === "verified").length || "none"}. Only owners and admins can add them.</p>
+        </Section>
+      )}
+
+      {manage && (
+        <section className="space-y-3" aria-labelledby="set-adv-h">
+          <div>
+            <h2 id="set-adv-h" className="font-semibold">
+              Advanced
+            </h2>
+            <p className="text-sm text-muted">For owners and admins. You don&apos;t need these to create an automation.</p>
+          </div>
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {ADVANCED.map((a) => (
+              <li key={a.href}>
+                <Link href={a.href} className="card flex h-full items-start gap-3 transition hover:border-accent/60">
+                  <a.icon aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{a.title}</span>
+                    <span className="block text-sm text-muted">{a.help}</span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+
+          <details className="card">
+            <summary className="flex cursor-pointer flex-wrap items-center gap-2 font-medium">
+              <Cloud aria-hidden className="h-4 w-4 text-accent" /> Provider configuration <Badge tone={conn.tone}>{conn.label}</Badge>
+            </summary>
+            <div className="mt-3 space-y-3 text-sm">
               <p className="font-medium">{d.connection.provider}</p>
               <p className="text-muted">
                 Region {d.connection.region}
                 {d.connection.connectedAt ? ` · connected ${fmtWhen(d.connection.connectedAt, tz)}` : ""}
                 {d.connection.checkedAt ? ` · checked ${fmtWhen(d.connection.checkedAt, tz)}` : ""}
               </p>
-            </div>
-          </div>
-          <p className="text-sm text-muted">{conn.help}</p>
-          {manage && (
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className={d.connection.status === "connected" ? "btn-secondary" : "btn-primary"} disabled={!!busy} onClick={() => void connect()}>
-                {busy === "connect" ? "Checking…" : d.connection.status === "connected" ? "Check connection" : d.connection.status === "disconnected" ? "Reconnect" : "Connect"}
-              </button>
-              {d.connection.status === "connected" && (
-                <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => setConfirm("disconnect")}>
-                  Disconnect
+              <p className="text-muted">{conn.help}</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={d.connection.status === "connected" ? "btn-secondary" : "btn-primary"} disabled={!!busy} onClick={() => void connect()}>
+                  {busy === "connect" ? "Checking…" : d.connection.status === "connected" ? "Check connection" : d.connection.status === "disconnected" ? "Reconnect" : "Connect"}
                 </button>
-              )}
+                {d.connection.status === "connected" && (
+                  <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => setConfirm("disconnect")}>
+                    Disconnect
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </Section>
+          </details>
 
-        <Section id="set-sender" title="Sender name" action={<Badge tone={status.tone}>{status.label}</Badge>}>
-          <dl className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <dt className="text-xs text-muted">Requested name</dt>
-              <dd className="font-mono">{d.senderName.support === "none" ? "A phone number" : (d.senderName.name ?? "—")}</dd>
+          <details className="card">
+            <summary className="flex cursor-pointer items-center gap-2 font-medium">
+              <History aria-hidden className="h-4 w-4 text-accent" /> Activity log
+            </summary>
+            <div className="mt-3 space-y-2">
+              <p className="text-sm text-muted">Who changed what in Customer Messaging: messages, automations, sender, approvals and opt-outs.</p>
+              <ActivityLog />
             </div>
-            <div>
-              <dt className="text-xs text-muted">Customers in</dt>
-              <dd>{d.senderName.country ? countryName(d.senderName.country) : "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">Texts come from now</dt>
-              <dd>{d.sender?.identityCheck === "verified" ? <strong>{d.sender.identityLabel}</strong> : "No approved sender yet"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">Last checked with AWS</dt>
-              <dd>{fmtWhen(d.senderName.checkedAt, tz)}</dd>
-            </div>
-          </dl>
-          <p className="text-sm text-muted">{status.help}</p>
-          <div className="flex flex-wrap gap-2">
-            {manage && d.senderName.status !== "draft" && (
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={!!busy}
-                onClick={() =>
-                  void run("check", "check with AWS", async () => {
-                    const r = await api<{ result: { status: string }; setup: SmsSetupState }>(`${base}/setup/sender/check`, { method: "POST", body: {} });
-                    setup.setData(r.setup);
-                    return `AWS check: ${SENDER_STATUS[r.result.status]?.label ?? r.result.status}.`;
-                  })
-                }
-              >
-                {busy === "check" ? "Checking…" : "Check status"}
-              </button>
-            )}
-            <Link className="btn-secondary" href="/messaging/setup?step=sender">
-              {d.senderName.name ? "Change sender name" : "Choose a sender name"}
-            </Link>
-          </div>
-        </Section>
-      </div>
+          </details>
 
-      <Section
-        id="set-auto"
-        title="Automatic SMS"
-        action={
-          <Link className={linkCls} href="/messaging/setup?step=automate">
-            Edit messages and rules
-          </Link>
-        }
-      >
-        <MasterSwitch data={d} manage={manage} busy={busy} onToggle={(on) => setConfirm({ master: on })} />
-        <ul className="divide-y divide-border">
-          {d.automations
-            .filter((a) => !a.unavailable)
-            .map((a) => (
-              <li key={a.key} className="flex flex-wrap items-start gap-3 py-3">
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    {a.label} <Badge tone={a.on ? "good" : "neutral"}>{a.on ? "On" : "Off"}</Badge>
-                    {a.templateStatus === "approved" ? <Badge tone="good">Message approved</Badge> : a.templateId ? <Badge tone="neutral">Message not approved yet</Badge> : null}
-                  </p>
-                  <TextBubble>{previewSms(a.body, { customer_name: "Sarah", order_number: "#1042", business_name: business, order_status: (a.trigger && ORDER_STATUS_WORD[a.trigger]) || "confirmed" })}</TextBubble>
-                </div>
-              </li>
-            ))}
-        </ul>
-        <p className="text-xs text-muted">
-          More texts and conditions: <Link className="underline" href="/messaging/automations">Automations</Link> · all message templates: <Link className="underline" href="/messaging/templates">Message Templates</Link>.
-        </p>
-      </Section>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Section
-          id="set-test"
-          title="Test SMS"
-          action={
-            <Link className={linkCls} href="/messaging/setup?step=test">
-              Send a test
-            </Link>
-          }
-        >
-          {d.lastTest ? (
-            <div className="space-y-1 text-sm">
-              <p className="flex flex-wrap items-center gap-2">
-                <SmsStatusBadge status={d.lastTest.status} why={d.lastTest.reasonLabel} />
-                {d.lastTest.to && <span className="text-muted">to {d.lastTest.to}</span>}
-                <span className="text-muted">· {fmtWhen(d.lastTest.createdAt, tz)}</span>
-              </p>
-              {d.lastTest.providerExplanation && <p className="text-muted">{d.lastTest.providerExplanation}</p>}
-            </div>
-          ) : (
-            <p className="text-sm text-muted">No test sent yet. Send one to your own phone to see exactly what customers get.</p>
-          )}
-          <p className="text-xs text-muted">
-            Verified test numbers: {d.testNumbers.filter((t) => t.status === "verified").length || "none"}
-            {d.testNumbers.length ? ` (${d.testNumbers.map((t) => t.number).join(", ")})` : ""}
+          <p className="flex items-center gap-1.5 text-xs text-muted">
+            <Smartphone aria-hidden className="h-3.5 w-3.5" /> Every text is checked right before it goes: the customer&apos;s permission, opt-outs, quiet hours and your monthly limit.
           </p>
-        </Section>
-
-        <Section
-          id="set-cost"
-          title="Usage and estimated costs"
-          action={
-            <Link className={linkCls} href="/messaging/billing">
-              SMS Billing
-            </Link>
-          }
-        >
-          {spend ? (
-            <div className="text-sm">
-              <p className="text-2xl font-semibold tabular-nums">{fmtUsd(spend.totalUsd)}</p>
-              <p className="text-muted">
-                spent in {fmtMonth(spend.month, { year: true })}
-                {spend.budgetUsd > 0 ? ` of your ${fmtUsd(spend.budgetUsd)} limit${spend.usedPct !== null ? ` (${fmtPct(spend.usedPct / 100)})` : ""}` : " · no monthly limit set, so nothing is sent"}
-              </p>
-            </div>
-          ) : overview.error ? (
-            <p className="text-sm text-muted">Couldn&apos;t load this month&apos;s spend.</p>
-          ) : (
-            <div className="skeleton h-12" />
-          )}
-          <p className="text-sm text-muted">
-            {d.price && d.price.perPartUsd > 0
-              ? `A one-part text to ${countryName(d.price.country)} costs about ${fmtUsd(d.price.perPartUsd)} (${d.price.source === "aws_billed" ? "the average AWS charged recently" : "AWS's price list"}).`
-              : "No price per text yet: it appears once AWS prices your first texts."}{" "}
-            Amounts are AWS&apos;s, in US dollars; texts not priced yet count at their estimate.
-          </p>
-        </Section>
-      </div>
-
-      <Section
-        id="set-history"
-        title="Recent messages and delivery"
-        action={
-          <Link className={linkCls} href="/messaging/history">
-            Message History
-          </Link>
-        }
-      >
-        {recent.error ? (
-          <p className="text-sm text-muted">Couldn&apos;t load recent messages.</p>
-        ) : !recent.data ? (
-          <div className="skeleton h-16" />
-        ) : !recent.data.messages.length ? (
-          <p className="text-sm text-muted">No texts yet.</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {recent.data.messages.map((m) => (
-              <li key={m.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
-                <span className="w-32 shrink-0 text-muted">{fmtWhen(m.createdAt, tz)}</span>
-                <span className="min-w-0 flex-1">{purposeLabel(m.purpose, m.trigger)}</span>
-                {m.to && <span className="font-mono text-xs text-muted">{m.to}</span>}
-                <SmsStatusBadge status={m.status} why={m.providerExplanation ?? m.reasonLabel} />
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="text-xs text-muted">&quot;Delivered&quot; only when the phone confirmed it; &quot;Accepted by AWS&quot; means AWS took it and the carrier hasn&apos;t answered yet.</p>
-      </Section>
+        </section>
+      )}
 
       {!manage && <Alert kind="info">Only owners and admins can change SMS settings.</Alert>}
 
@@ -290,12 +283,14 @@ export function SmsSettings() {
             void run("disconnect", "disconnect", async () => {
               setup.setData(await api<SmsSetupState>(`${base}/setup/disconnect`, { method: "POST", body: {} }));
               setConfirm(null);
+              void overview.reload();
               return "Disconnected. Nothing is sent until you reconnect.";
             }).then((ok) => !ok && setConfirm(null));
           else if (c)
             void run("master", c.master ? "turn automatic SMS on" : "turn automatic SMS off", async () => {
               setup.setData(await api<SmsSetupState>(`${base}/setup/automatic`, { method: "POST", body: { on: c.master } }));
               setConfirm(null);
+              void overview.reload();
               return c.master ? "Automatic SMS is on." : "Automatic SMS is off.";
             }).then((ok) => !ok && setConfirm(null));
         }}
@@ -303,7 +298,7 @@ export function SmsSettings() {
         {confirm === "disconnect" ? (
           <p>Texting stops at once and texts waiting to go are cancelled. Your sender name, messages and history are kept, so you can reconnect later.</p>
         ) : confirm?.master ? (
-          <p>Your automatic texts that are on start going to real customers as their orders happen{d.mode === "live" ? "." : ". bizinsights is in test mode for now, so they're recorded in Message History instead of sent."}</p>
+          <p>Your automations that are on start texting real customers as things happen{d.mode === "live" ? "." : ". While your SMS account is being verified, they're recorded in Message History instead of sent."}</p>
         ) : (
           <p>No more automatic texts go out. Texts waiting to go are cancelled.</p>
         )}

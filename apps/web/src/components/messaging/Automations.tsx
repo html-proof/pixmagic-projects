@@ -1,11 +1,13 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { CircleAlert, Copy, Pencil, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-react";
-import { AUTOMATION_TRIGGER_CARDS, isSmsVariable, SMS_VARIABLE_INFO, type SmsTrigger } from "@app/shared/sms";
+import { ArrowRight, CircleAlert, Copy, History, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Trash2, Users } from "lucide-react";
+import { AUTOMATION_TRIGGER_CARDS, fixVariableAliases, isSmsVariable, SMS_VARIABLE_INFO, type SmsTrigger } from "@app/shared/sms";
 import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/dashboard/Primitives";
+import { Menu } from "@/components/team/TeamUi";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, fmtNum, useApi } from "@/lib/api";
 import { ActivateDialog, AUTOMATION_STATUS, problemsFor, timingWords, TriggerIcon } from "./AutomationUi";
@@ -14,10 +16,10 @@ import { RuleEditor } from "./RuleEditor";
 import type { AutomationsResponse, AutomationView, SmsTemplate } from "./types";
 
 // ---------------------------------------------------------------------------
-// Automations: the store's SMS automations as cards (trigger, message, status, last run), with
-// search, filters and each one's switch, edit, copy and delete. Every state shown is the API's
-// (apps/api/src/routes/smsAutomations.ts): "Active" is the rule's stored status, and a text is
-// "Delivered" only on AWS's delivery event.
+// SMS Automations: one card each (what starts it, who gets it, its message, whether it's on and
+// what it sent), with its switch, Edit, and a menu to duplicate it, see its texts or delete it.
+// Every state shown is the API's (apps/api/src/routes/smsAutomations.ts): "Active" is the rule's
+// stored status, and a text is "Delivered" only on the carrier's delivery report.
 // ---------------------------------------------------------------------------
 
 type StatusFilter = "all" | "active" | "paused" | "draft" | "disabled";
@@ -29,13 +31,16 @@ const STATUS_FILTERS: Array<[StatusFilter, string]> = [
   ["disabled", "Disabled"],
 ];
 const inFilter = (a: AutomationView, f: StatusFilter) => f === "all" || (f === "draft" ? a.status === "draft" || a.status === "pending_approval" : a.status === f);
+/** With more than this many automations the list gets its search and filters. */
+const FILTER_FROM = 4;
 
 /** A message with its variables as labelled chips ("Hi [Customer first name], …"). */
 export function MessageWithVariables({ body }: { body: string }) {
   const parts: ReactNode[] = [];
+  const text = fixVariableAliases(body);
   let last = 0;
-  for (const m of body.matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g)) {
-    if (m.index! > last) parts.push(body.slice(last, m.index));
+  for (const m of text.matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}/g)) {
+    if (m.index! > last) parts.push(text.slice(last, m.index));
     const name = m[1]!;
     parts.push(
       <span key={m.index} className="mx-0.5 inline-block rounded bg-accent/10 px-1 text-[0.85em] font-medium text-accent">
@@ -44,26 +49,15 @@ export function MessageWithVariables({ body }: { body: string }) {
     );
     last = m.index! + m[0].length;
   }
-  parts.push(body.slice(last));
+  parts.push(text.slice(last));
   return <>{parts}</>;
 }
 
-/** The last 30 days in a line, from the API's counts: what was sent and how it ended. */
-function monthLine(a: AutomationView): string | null {
-  const c = a.last30Days;
-  const bits = [
-    c.accepted ? `${fmtNum(c.accepted)} sent` : null,
-    c.delivered + c.carrierAccepted ? `${fmtNum(c.delivered + c.carrierAccepted)} delivered` : null,
-    c.failed ? `${fmtNum(c.failed)} failed` : null,
-    c.notSent ? `${fmtNum(c.notSent)} not sent` : null,
-    c.dryRun ? `${fmtNum(c.dryRun)} recorded only` : null,
-    c.scheduled ? `${fmtNum(c.scheduled)} waiting` : null,
-  ].filter(Boolean);
-  return bits.length ? `Last 30 days: ${bits.join(" · ")}` : null;
-}
+type MenuAction = "duplicate" | "history" | "advanced" | "delete";
 
 export function SmsAutomations() {
   const { base, manage, store } = useSms();
+  const router = useRouter();
   const toast = useToast();
   const list = useApi<AutomationsResponse>(base ? `${base}/automations` : null);
   const templates = useApi<{ templates: SmsTemplate[] }>(base && manage ? `${base}/templates` : null);
@@ -71,7 +65,7 @@ export function SmsAutomations() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [trigger, setTrigger] = useState<SmsTrigger | "all">("all");
   const [busy, setBusy] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<{ text: string; fix?: { label: string; href: string } | null } | null>(null);
   const [activating, setActivating] = useState<AutomationView | null>(null);
   const [pausing, setPausing] = useState<AutomationView | null>(null);
   const [deleting, setDeleting] = useState<AutomationView | null>(null);
@@ -84,9 +78,8 @@ export function SmsAutomations() {
 
   if (list.error && !list.data) return <LoadError what="your automations" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />;
   if (!list.data || !base) return <Skeleton lines={6} />;
-  const { automations, problems, mode } = list.data;
-  // Only what stops the store's own automations (no marketing switch for a store with only order updates).
-  const relevant = problems.filter((p) => p.stops === "all" || automations.some((a) => a.category === p.stops));
+  const { automations, problems, mode, readiness } = list.data;
+  const missing = readiness.items.filter((i) => !i.ok && !i.optional && i.key !== "account");
   const triggersUsed = AUTOMATION_TRIGGER_CARDS.filter((c) => c.trigger && automations.some((a) => a.trigger === c.trigger));
   const business = store?.name ?? "your store";
 
@@ -100,37 +93,55 @@ export function SmsAutomations() {
       toast("success", done);
       return true;
     } catch (e) {
-      setProblem(smsError(e, what));
+      setProblem({ text: smsError(e, what), fix: missing[0]?.fix ?? null });
       return false;
     } finally {
       setBusy(null);
     }
   };
 
+  const duplicate = async (a: AutomationView) => {
+    setBusy(`dup:${a.id}`);
+    setProblem(null);
+    try {
+      const r = await api<{ automation: AutomationView }>(`${base}/automations/${a.id}/duplicate`, { method: "POST", body: {} });
+      toast("success", `Copied as "${r.automation.name}". Change what you need, then activate it.`);
+      router.push(`/messaging/automations/edit?id=${r.automation.id}&step=review`);
+    } catch (e) {
+      setProblem({ text: smsError(e, "copy the automation") });
+      setBusy(null);
+    }
+  };
+
+  const onMenu = (a: AutomationView) => (id: MenuAction) => {
+    if (id === "duplicate") void duplicate(a);
+    else if (id === "history") router.push(`/messaging/history?ruleId=${a.id}`);
+    else if (id === "advanced") setAdvanced(advanced?.id === a.id ? null : { id: a.id, key: Date.now() });
+    else setDeleting(a);
+  };
+
   const create = (
     <Link href="/messaging/automations/edit" className="btn-primary inline-flex items-center gap-1.5">
-      <Plus aria-hidden className="h-4 w-4" /> Create automation
+      <Plus aria-hidden className="h-4 w-4" /> Create Automation
     </Link>
   );
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Automations"
-        sub="Text customers automatically when something happens in your store. Choose a trigger, write the message, set the timing, then test it and switch it on."
-        actions={manage ? create : undefined}
-      />
+      <PageHeader title="SMS Automations" sub="Texts that go out by themselves when something happens in your store. Each one: what happened, who gets it, the message, and whether it's on." actions={manage ? create : undefined} />
 
-      {relevant.length > 0 && (
+      {missing.length > 0 && (
         <Alert kind="info">
           <p className="font-medium">Before your automations can text customers:</p>
           <ul className="mt-1 space-y-1">
-            {relevant.map((p) => (
-              <li key={p.code} className="flex flex-wrap items-baseline gap-x-2">
-                <span>{p.message}</span>
-                {p.fix && (
-                  <Link className="font-medium underline" href={p.fix.href}>
-                    {p.fix.label}
+            {missing.map((i) => (
+              <li key={i.key} className="flex flex-wrap items-baseline gap-x-2">
+                <span>
+                  {i.label}: {i.detail.toLowerCase()}.
+                </span>
+                {i.fix && manage && (
+                  <Link className="inline-flex items-center gap-0.5 font-medium underline" href={i.fix.href}>
+                    Fix this <ArrowRight aria-hidden className="h-3 w-3" />
                   </Link>
                 )}
               </li>
@@ -138,12 +149,29 @@ export function SmsAutomations() {
           </ul>
         </Alert>
       )}
-      {problem && <Alert onDismiss={() => setProblem(null)}>{problem}</Alert>}
+      {!missing.length && readiness.testMode && (
+        <Alert kind="info">
+          Your SMS account is still being verified: switched-on automations record what they would send in Message History, and test messages reach approved test recipients.{" "}
+          <Link className="font-medium underline" href="/messaging/settings">
+            View setup requirements
+          </Link>
+        </Alert>
+      )}
+      {problem && (
+        <Alert onDismiss={() => setProblem(null)}>
+          {problem.text}
+          {problem.fix && manage && (
+            <Link className="ml-2 font-medium underline" href={problem.fix.href}>
+              Fix this
+            </Link>
+          )}
+        </Alert>
+      )}
 
       {automations.length === 0 ? (
         <EmptyState
           title="No automations yet"
-          body="Start with an order confirmation or a shipping update with the tracking link: four short steps, and nothing is sent until you switch it on."
+          body="Start with a shipping update with the tracking link, or a reminder for abandoned checkouts. Nothing is sent until you activate it."
           action={
             manage ? (
               <div className="flex flex-wrap gap-2">
@@ -162,42 +190,44 @@ export function SmsAutomations() {
         />
       ) : (
         <>
-          <div className="card animate-rise flex flex-wrap items-end gap-3" role="search">
-            <div className="min-w-[12rem] flex-1">
-              <label className="label" htmlFor="auto-search">
-                Search automations
-              </label>
-              <div className="relative">
-                <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-                <input id="auto-search" className="input pl-9" type="search" placeholder="Name, trigger or message" value={query} onChange={(e) => setQuery(e.target.value)} />
+          {automations.length > FILTER_FROM && (
+            <div className="card animate-rise flex flex-wrap items-end gap-3" role="search">
+              <div className="min-w-[12rem] flex-1">
+                <label className="label" htmlFor="auto-search">
+                  Search automations
+                </label>
+                <div className="relative">
+                  <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                  <input id="auto-search" className="input pl-9" type="search" placeholder="Name, trigger or message" value={query} onChange={(e) => setQuery(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label className="label" htmlFor="auto-status">
+                  Status
+                </label>
+                <select id="auto-status" className="input" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+                  {STATUS_FILTERS.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label" htmlFor="auto-trigger">
+                  Trigger
+                </label>
+                <select id="auto-trigger" className="input" value={trigger} onChange={(e) => setTrigger(e.target.value as SmsTrigger | "all")}>
+                  <option value="all">All triggers</option>
+                  {triggersUsed.map((c) => (
+                    <option key={c.key} value={c.trigger!}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-            <div>
-              <label className="label" htmlFor="auto-status">
-                Status
-              </label>
-              <select id="auto-status" className="input" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-                {STATUS_FILTERS.map(([v, l]) => (
-                  <option key={v} value={v}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label" htmlFor="auto-trigger">
-                Trigger
-              </label>
-              <select id="auto-trigger" className="input" value={trigger} onChange={(e) => setTrigger(e.target.value as SmsTrigger | "all")}>
-                <option value="all">All triggers</option>
-                {triggersUsed.map((c) => (
-                  <option key={c.key} value={c.trigger!}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          )}
 
           {shown.length === 0 ? (
             <div className="card text-sm text-muted">
@@ -220,7 +250,7 @@ export function SmsAutomations() {
                 const s = AUTOMATION_STATUS[a.status] ?? AUTOMATION_STATUS.draft;
                 const on = a.status === "active";
                 const blocked = problemsFor(problems, a.category);
-                const month = monthLine(a);
+                const sent = a.last30Days.accepted;
                 return (
                   <li key={a.id} className={`card animate-rise flex flex-col gap-3 ${on ? "border-good/40" : ""}`} aria-label={a.name}>
                     <div className="flex items-start gap-3">
@@ -228,15 +258,10 @@ export function SmsAutomations() {
                         <TriggerIcon trigger={a.trigger} />
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="flex flex-wrap items-center gap-2 font-semibold">
-                          <span className="truncate">{a.name}</span>
-                          <Badge tone={s.tone}>{s.label}</Badge>
-                          {a.pendingChanges && <Badge tone="warn">Changes not live</Badge>}
-                          {a.dryRun && <Badge tone="neutral">Practice run</Badge>}
-                        </p>
+                        <p className="truncate font-semibold">{a.name}</p>
                         <p className="mt-0.5 text-sm text-muted">
-                          {a.triggerLabel ? `When: ${a.triggerLabel}` : "Its settings need fixing"}
-                          {a.config ? ` · ${timingWords(a.config)}` : ""}
+                          {a.triggerLabel ? `When: ${a.triggerLabel.toLowerCase()}` : "Its settings need fixing"}
+                          {a.config ? ` · ${timingWords(a.config).toLowerCase()}` : ""}
                         </p>
                       </div>
                       {manage && (
@@ -255,6 +280,18 @@ export function SmsAutomations() {
                       )}
                     </div>
 
+                    <p className="flex flex-wrap items-center gap-2 text-sm">
+                      <Badge tone={s.tone}>{on ? "✓ Active" : a.status === "paused" ? "● Paused" : s.label}</Badge>
+                      {a.pendingChanges && <Badge tone="warn">Changes not live</Badge>}
+                      {a.dryRun && <Badge tone="neutral">Practice run</Badge>}
+                    </p>
+                    {a.audienceLabel && (
+                      <p className="flex gap-1.5 text-xs text-muted">
+                        <Users aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        {a.audienceLabel}
+                      </p>
+                    )}
+
                     {a.body && (
                       <p className="line-clamp-3 rounded-xl border border-border bg-bg/60 px-3 py-2 text-sm leading-relaxed">
                         <MessageWithVariables body={a.body} />
@@ -262,6 +299,10 @@ export function SmsAutomations() {
                     )}
 
                     <div className="space-y-1 text-xs text-muted">
+                      <p className="font-medium text-text">
+                        {fmtNum(sent)} message{sent === 1 ? "" : "s"} sent <span className="font-normal text-muted">in the last 30 days</span>
+                        {a.last30Days.dryRun ? <span className="font-normal text-muted"> · {fmtNum(a.last30Days.dryRun)} recorded only</span> : null}
+                      </p>
                       <p className="flex flex-wrap items-center gap-1.5">
                         {a.lastResult ? (
                           <>
@@ -274,7 +315,6 @@ export function SmsAutomations() {
                           "Hasn't run yet"
                         )}
                       </p>
-                      {month && <p>{month}</p>}
                       {on && blocked.length > 0 && (
                         <p className="flex gap-1.5 text-warn">
                           <CircleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -284,30 +324,25 @@ export function SmsAutomations() {
                     </div>
 
                     {manage && (
-                      <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
+                      <div className="mt-auto flex items-center gap-2 border-t border-border pt-3">
                         <Link href={`/messaging/automations/edit?id=${a.id}`} className="btn-secondary inline-flex h-8 items-center gap-1.5 px-3 text-xs" aria-label={`Edit ${a.name}`}>
                           <Pencil aria-hidden className="h-3.5 w-3.5" /> Edit
                         </Link>
-                        <button
-                          type="button"
-                          className="btn-secondary inline-flex h-8 items-center gap-1.5 px-3 text-xs"
-                          disabled={!!busy || !a.config}
-                          aria-label={`Duplicate ${a.name}`}
-                          onClick={() => void act(`dup:${a.id}`, "copy the automation", () => api(`${base}/automations/${a.id}/duplicate`, { method: "POST", body: {} }), `Copied as a draft: "${a.name} (copy)".`)}
-                        >
-                          <Copy aria-hidden className="h-3.5 w-3.5" /> {busy === `dup:${a.id}` ? "Copying…" : "Duplicate"}
-                        </button>
-                        <button type="button" className="btn-secondary inline-flex h-8 items-center gap-1.5 px-3 text-xs" disabled={!!busy} aria-label={`Delete ${a.name}`} onClick={() => setDeleting(a)}>
-                          <Trash2 aria-hidden className="h-3.5 w-3.5" /> Delete
-                        </button>
-                        <button
-                          type="button"
-                          className="ml-auto inline-flex h-8 items-center gap-1.5 px-2 text-xs text-muted hover:text-text"
-                          aria-label={`Advanced settings for ${a.name}`}
-                          onClick={() => setAdvanced(advanced?.id === a.id ? null : { id: a.id, key: Date.now() })}
-                        >
-                          <SlidersHorizontal aria-hidden className="h-3.5 w-3.5" /> Advanced
-                        </button>
+                        {busy === `dup:${a.id}` && <span className="text-xs text-muted">Copying…</span>}
+                        <span className="ml-auto">
+                          <Menu<MenuAction>
+                            label={`More for ${a.name}`}
+                            items={[
+                              ...(a.config ? [{ id: "duplicate" as const, label: "Duplicate", icon: Copy }] : []),
+                              { id: "history", label: "View history", icon: History },
+                              { id: "advanced", label: "Advanced settings", icon: SlidersHorizontal },
+                              { id: "delete", label: "Delete", icon: Trash2, danger: true },
+                            ]}
+                            onPick={onMenu(a)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface text-muted transition-colors hover:bg-text/[0.04] hover:text-text"
+                            trigger={<MoreHorizontal aria-hidden className="h-4 w-4" />}
+                          />
+                        </span>
                       </div>
                     )}
                   </li>
@@ -323,8 +358,8 @@ export function SmsAutomations() {
       )}
 
       <p className="text-xs text-muted">
-        Each Shopify event texts a customer once per automation, however often Shopify reports it. Consent, opt-outs, quiet hours and your budget are checked again right before each text goes, and a text
-        counts as delivered only when the carrier confirms it.
+        Each Shopify event texts a customer once per automation, however often Shopify reports it. The customer&apos;s permission, opt-outs, quiet hours and your monthly limit are checked again right
+        before each text goes, and a text counts as delivered only when the carrier confirms it.
       </p>
 
       <ActivateDialog
@@ -339,7 +374,9 @@ export function SmsAutomations() {
         busy={busy === "activate"}
         onCancel={() => setActivating(null)}
         onConfirm={() =>
-          void act("activate", "turn the automation on", () => api(`${base}/automations/${activating!.id}/activate`, { method: "POST", body: { confirm: true } }), mode === "live" ? "Turned on." : "Turned on. In test mode its texts are recorded, not sent.").then(() => setActivating(null))
+          void act("activate", "activate the automation", () => api(`${base}/automations/${activating!.id}/activate`, { method: "POST", body: { confirm: true } }), mode === "live" ? "Activated." : "Activated. While your account is being verified, its texts are recorded, not sent.").then(() =>
+            setActivating(null),
+          )
         }
       />
       <ConfirmDialog

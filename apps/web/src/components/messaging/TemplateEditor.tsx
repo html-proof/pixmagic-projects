@@ -259,7 +259,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
           <p className="text-xs text-muted">
             {draft.category === "marketing"
               ? "Marketing texts only reach customers subscribed to your SMS marketing in Shopify, and must carry the opt-out link."
-              : "Order and delivery updates go to customers on the basis you chose in Sender Configuration. They can't carry discount codes or checkout links."}
+              : "Order and delivery updates go to customers on the basis you chose in your SMS settings. They can't carry discount codes or checkout links."}
           </p>
 
           <div>

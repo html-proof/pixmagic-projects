@@ -9,12 +9,12 @@
  *    suppression lists.
  * Each step runs on its own: one that throws is logged and the rest still run.
  */
-import { systemDb } from "@app/db";
+import { systemDb, type SmsContact } from "@app/db";
 import { billingMonth, FINAL_EVENT_WAIT_MS } from "@app/shared/sms";
 import { logger } from "../logger.js";
-import { parseRule, runSmsRules } from "./automations.js";
-import { completeCampaigns, startDueCampaigns } from "./campaigns.js";
-import { smsRegion, type SmsDeps } from "./common.js";
+import { parseRule, runSmsRules, segmentFilterOf } from "./automations.js";
+import { completeCampaigns, contactConditionsWhere, segmentWhere, startDueCampaigns } from "./campaigns.js";
+import { smsMode, smsRegion, type SmsDeps } from "./common.js";
 import { suppressNumber } from "./contacts.js";
 import { checkBudget } from "./delivery.js";
 import { enqueueSmsSend, settleStuckSends } from "./messages.js";
@@ -133,9 +133,13 @@ async function dailySms(deps: SmsDeps, now: Date) {
   return { customers, verified, budgets, retention, webhooks, month: billingMonth(now) };
 }
 
-/** Inactive and VIP customers: each rule reaches each customer once per inactive stretch (inactive) or once (VIP). */
+/**
+ * Inactive, VIP and segment customers: each rule reaches each customer once per inactive stretch
+ * (inactive) or once (VIP, and each customer who is in the rule's segment). A rule whose segment was
+ * deleted reaches nobody.
+ */
 async function customerRules(deps: SmsDeps, now: Date): Promise<number> {
-  const rules = await systemDb.smsAutomationRule.findMany({ where: { status: "active", activeTrigger: { in: ["customer_inactive", "customer_vip"] } } });
+  const rules = await systemDb.smsAutomationRule.findMany({ where: { status: "active", activeTrigger: { in: ["customer_inactive", "customer_vip", "customer_segment"] } } });
   let n = 0;
   for (const rule of rules) {
     const cfg = parseRule(rule.activeConfig);
@@ -143,13 +147,35 @@ async function customerRules(deps: SmsDeps, now: Date): Promise<number> {
     const store = await systemDb.store.findUnique({ where: { id: rule.storeId } });
     if (!store || store.status === "uninstalled") continue;
     const base = { storeId: store.id, consentState: "subscribed", suppressedAll: false, suppressedMarketing: false };
-    const contacts =
-      cfg.trigger === "customer_inactive"
-        ? await systemDb.smsContact.findMany({ where: { ...base, ordersCount: { gte: 1 }, lastOrderAt: { lt: new Date(now.getTime() - (cfg.inactiveDays ?? 90) * 86400_000) } }, take: 500 })
-        : await systemDb.smsContact.findMany({ where: { ...base, OR: [...(cfg.vipMinOrders ? [{ ordersCount: { gte: cfg.vipMinOrders } }] : []), ...(cfg.vipMinSpent ? [{ totalSpent: { gte: cfg.vipMinSpent } }] : [])] }, take: 500 });
+    // A practice run (the rule's, or the platform's test mode) records under keys of its own, so the
+    // real text still goes to each customer once the platform is live.
+    const real = smsMode() === "live" && !cfg.dryRun;
+    let contacts;
+    if (cfg.trigger === "customer_inactive") contacts = await systemDb.smsContact.findMany({ where: { ...base, ordersCount: { gte: 1 }, lastOrderAt: { lt: new Date(now.getTime() - (cfg.inactiveDays ?? 90) * 86400_000) } }, take: 500 });
+    else if (cfg.trigger === "customer_vip") contacts = await systemDb.smsContact.findMany({ where: { ...base, OR: [...(cfg.vipMinOrders ? [{ ordersCount: { gte: cfg.vipMinOrders } }] : []), ...(cfg.vipMinSpent ? [{ totalSpent: { gte: cfg.vipMinSpent } }] : [])] }, take: 500 });
+    else {
+      const filter = cfg.audience.kind === "segment" ? await segmentFilterOf(store.id, cfg.audience.segmentId) : null;
+      if (!filter) {
+        logger.warn({ ruleId: rule.id }, "sms segment rule's segment is gone; nobody qualifies");
+        continue;
+      }
+      // Members its conditions keep, page by page, without those it already recorded (sent, skipped
+      // or practised): the day's 500 go to members not reached yet, and no query grows with history.
+      const where = { AND: [segmentWhere(store.id, filter, now), contactConditionsWhere(cfg.conditions, now)] };
+      contacts = [];
+      let after: string | null = null;
+      for (let page = 0; page < 40 && contacts.length < 500; page++) {
+        const batch: SmsContact[] = await systemDb.smsContact.findMany({ where, orderBy: { id: "asc" }, take: 500, ...(after ? { cursor: { id: after }, skip: 1 } : {}) });
+        if (!batch.length) break;
+        after = batch[batch.length - 1]!.id;
+        const done = await systemDb.smsMessageJob.findMany({ where: { storeId: store.id, ruleId: rule.id, dryRun: !real, contactId: { in: batch.map((c) => c.id) } }, select: { contactId: true }, distinct: ["contactId"] });
+        const seen = new Set(done.map((d) => d.contactId));
+        contacts.push(...batch.filter((c) => !seen.has(c.id)).slice(0, 500 - contacts.length));
+      }
+    }
     for (const c of contacts) {
-      // Inactive: once per stretch without orders (keyed by the last order's day). VIP: once.
-      const key = cfg.trigger === "customer_inactive" ? `inactive:${c.id}:${c.lastOrderAt?.toISOString().slice(0, 10) ?? "never"}` : `vip:${c.id}`;
+      // Inactive: once per stretch without orders (keyed by the last order's day). VIP and segment: once.
+      const key = cfg.trigger === "customer_inactive" ? `inactive:${c.id}:${c.lastOrderAt?.toISOString().slice(0, 10) ?? "never"}` : cfg.trigger === "customer_vip" ? `vip:${c.id}` : `segment:${c.id}${real ? "" : ":practice"}`;
       const runs = await runSmsRules(
         cfg.trigger,
         {

@@ -9,11 +9,33 @@
  * Per event and rule there is one message at most (dedupe key rule:<id>:<subject>), so Shopify's
  * retries and duplicate deliveries never send twice; and the same template reaches a customer once
  * per subject even when two rules match.
+ *
+ * A rule's audience (smsAudienceSchema) narrows who its event may text: the customer must be in
+ * its saved segment (the segment's rules, judged on the event's facts when it happens) or one of
+ * the customers it names. A deleted segment lets nobody through.
  */
 import { systemDb, type SmsAutomationRule, type SmsContact, type Store } from "@app/db";
-import { evaluateRuleConditions, missingForTrigger, mayReceive, ORDER_STATUS_WORD, RULE_STATUS_AFTER, ruleCan, smsRuleSchema, TRIGGER_INFO, type RuleAction, type RuleFacts, type SmsRuleInput, type SmsTrigger, type SmsValues } from "@app/shared/sms";
+import {
+  evaluateRuleConditions,
+  missingForTrigger,
+  mayReceive,
+  ORDER_STATUS_WORD,
+  RULE_STATUS_AFTER,
+  ruleCan,
+  segmentConditions,
+  segmentFilterSchema,
+  smsRuleSchema,
+  TRIGGER_INFO,
+  type RuleAction,
+  type RuleFacts,
+  type SegmentFilter,
+  type SmsRuleInput,
+  type SmsTrigger,
+  type SmsValues,
+} from "@app/shared/sms";
 import { logger } from "../logger.js";
 import { senderOf, smsAudit, SmsError, smsMode, transactionalBasisOf, type SmsDeps } from "./common.js";
+import { segmentWhere } from "./campaigns.js";
 import { scheduleSms } from "./messages.js";
 import { approvedVersionOf, type Actor } from "./templates.js";
 
@@ -34,7 +56,51 @@ async function ruleProblems(storeId: string, cfg: SmsRuleInput): Promise<string[
     if (missing.length) out.push(`The template uses ${missing.map((m) => `{{${m}}}`).join(", ")}, which "${info.label}" can't fill.`);
     if (t.body.includes("{{discount_code}}") && !cfg.discountCode) out.push("The template shows a discount code: enter it on the rule.");
   }
+  if (cfg.audience.kind === "segment" && !(await systemDb.smsSegment.count({ where: { id: cfg.audience.segmentId, storeId } }))) out.push("Its customer segment was deleted: choose another one.");
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Audience: who a rule's event may text
+// ---------------------------------------------------------------------------
+
+/** A saved segment's filter (null: there is no such segment at this store). */
+export async function segmentFilterOf(storeId: string, segmentId: string): Promise<SegmentFilter | null> {
+  const seg = await systemDb.smsSegment.findFirst({ where: { id: segmentId, storeId }, select: { filter: true } });
+  if (!seg) return null;
+  const f = segmentFilterSchema.safeParse(seg.filter);
+  return f.success ? f.data : null;
+}
+
+/** Segment filters read once per run of a store's rules. */
+export type SegmentLookup = (segmentId: string) => Promise<SegmentFilter | null>;
+export function segmentLookup(storeId: string): SegmentLookup {
+  const seen = new Map<string, Promise<SegmentFilter | null>>();
+  return (id) => {
+    if (!seen.has(id)) seen.set(id, segmentFilterOf(storeId, id));
+    return seen.get(id)!;
+  };
+}
+
+/**
+ * Whether this event's customer is one the rule is for: anyone (the default), a customer matching
+ * its segment's rules on the event's facts, or one of the customers it names. Inactive and VIP rules
+ * also hold their own thresholds here, so another rule of the same trigger can't text a customer
+ * who only qualified for that one.
+ */
+export async function audiencePasses(cfg: SmsRuleInput, facts: RuleFacts, contactId: string | null, segments: SegmentLookup): Promise<{ pass: boolean; reason: string | null }> {
+  if (cfg.trigger === "customer_inactive" && cfg.inactiveDays && !((facts.daysSinceLastOrder ?? -1) >= cfg.inactiveDays)) return { pass: false, reason: "conditions" };
+  if (cfg.trigger === "customer_vip") {
+    const orders = cfg.vipMinOrders && (facts.customerOrders ?? -1) >= cfg.vipMinOrders;
+    const spent = cfg.vipMinSpent && (facts.customerSpent ?? -1) >= cfg.vipMinSpent;
+    if (!orders && !spent) return { pass: false, reason: "conditions" };
+  }
+  const a = cfg.audience;
+  if (a.kind === "trigger") return { pass: true, reason: null };
+  if (a.kind === "customers") return contactId && a.contactIds.includes(contactId) ? { pass: true, reason: null } : { pass: false, reason: "not_in_audience" };
+  const filter = await segments(a.segmentId);
+  if (!filter) return { pass: false, reason: "segment_missing" };
+  return evaluateRuleConditions(segmentConditions(filter), facts).pass ? { pass: true, reason: null } : { pass: false, reason: "not_in_audience" };
 }
 
 export async function createRule(store: Pick<Store, "id" | "workspaceId">, input: unknown, actor: Actor): Promise<SmsAutomationRule> {
@@ -58,7 +124,9 @@ export async function ruleOf(storeId: string, id: string) {
  */
 export async function updateRule(store: Pick<Store, "id" | "workspaceId">, id: string, input: unknown, actor: Actor): Promise<SmsAutomationRule> {
   const rule = await ruleOf(store.id, id);
-  const cfg = smsRuleSchema.parse(input);
+  // A client that doesn't know audiences (the advanced rule editor, the hub) keeps the rule's own.
+  const previous = parseRule(rule.config);
+  const cfg = smsRuleSchema.parse(previous && input && typeof input === "object" && !("audience" in input) ? { ...input, audience: previous.audience } : input);
   const version = rule.version + 1;
   const status = rule.status === "active" || rule.status === "paused" ? rule.status : "draft";
   const updated = await systemDb.smsAutomationRule.update({ where: { id }, data: { name: cfg.name, config: cfg as object, version, status, submittedAt: null, submittedBy: null } });
@@ -162,6 +230,7 @@ export async function runSmsRules(trigger: SmsTrigger, subject: RuleSubject, dep
   const basis = transactionalBasisOf(sender);
   const out: RuleRun[] = [];
   const templatesUsed = new Set<string>();
+  const segments = segmentLookup(subject.store.id);
   for (const rule of rules) {
     const cfg = parseRule(rule.activeConfig);
     if (!cfg) {
@@ -171,6 +240,12 @@ export async function runSmsRules(trigger: SmsTrigger, subject: RuleSubject, dep
     const cond = evaluateRuleConditions(cfg.conditions, subject.facts);
     if (!cond.pass) {
       out.push({ ruleId: rule.id, outcome: "conditions_failed" });
+      continue;
+    }
+    const audience = await audiencePasses(cfg, subject.facts, subject.contact?.id ?? null, segments);
+    if (!audience.pass) {
+      if (audience.reason === "segment_missing") logger.warn({ ruleId: rule.id }, "sms rule's segment is gone; nobody qualifies");
+      out.push({ ruleId: rule.id, outcome: "conditions_failed", reason: audience.reason });
       continue;
     }
     const version = await approvedVersionOf(subject.store.id, cfg.templateId);
@@ -243,31 +318,40 @@ export async function dryRunRule(store: Pick<Store, "id" | "workspaceId">, id: s
     customerSpent: Number(c.totalSpent),
     daysSinceLastOrder: c.lastOrderAt ? Math.floor((now - c.lastOrderAt.getTime()) / 86400_000) : null,
   });
-  const judge = (subject: string, c: SmsContact, f: RuleFacts) => {
+  const segments = segmentLookup(store.id);
+  const judge = async (subject: string, c: SmsContact, f: RuleFacts) => {
     const cond = evaluateRuleConditions(cfg.conditions, f);
+    const audience = cond.pass ? await audiencePasses(cfg, f, c.id, segments) : { pass: false, reason: "conditions" };
     const ok = mayReceive(category, { consent: c.consentState as never, suppressedAll: c.suppressedAll, suppressedMarketing: c.suppressedMarketing }, basis);
-    return { subject, pass: cond.pass && ok.ok, reason: !cond.pass ? "conditions" : ok.ok ? null : ok.reason };
+    return { subject, pass: cond.pass && audience.pass && ok.ok, reason: !cond.pass ? "conditions" : !audience.pass ? audience.reason : ok.ok ? null : ok.reason };
   };
   let results: Array<{ subject: string; pass: boolean; reason: string | null }>;
   if (cfg.trigger === "checkout_abandoned") {
     const checkouts = await systemDb.smsCheckout.findMany({ where: { storeId: store.id, contactId: { not: null } }, orderBy: { lastActivityAt: "desc" }, take: 20 });
     const contacts = await systemDb.smsContact.findMany({ where: { id: { in: checkouts.map((k) => k.contactId!) } } });
-    results = checkouts.flatMap((k) => {
-      const c = contacts.find((x) => x.id === k.contactId);
-      if (!c) return [];
-      if (k.status !== "open") return [{ subject: `Checkout ${c.phoneMasked}`, pass: false, reason: "checkout_completed" }];
-      return [judge(`Checkout ${c.phoneMasked}`, c, facts(c, k.total === null ? null : Number(k.total), k.productTitle ? [k.productTitle] : []))];
-    });
-  } else if (cfg.trigger === "customer_inactive" || cfg.trigger === "customer_vip") {
+    results = await Promise.all(
+      checkouts.flatMap((k) => {
+        const c = contacts.find((x) => x.id === k.contactId);
+        if (!c) return [];
+        if (k.status !== "open") return [Promise.resolve({ subject: `Checkout ${c.phoneMasked}`, pass: false, reason: "checkout_completed" })];
+        return [judge(`Checkout ${c.phoneMasked}`, c, facts(c, k.total === null ? null : Number(k.total), k.productTitle ? [k.productTitle] : []))];
+      }),
+    );
+  } else if (cfg.trigger === "customer_inactive" || cfg.trigger === "customer_vip" || cfg.trigger === "customer_segment") {
     const base = { storeId: store.id };
+    const filter = cfg.audience.kind === "segment" ? await segments(cfg.audience.segmentId) : null;
     const contacts =
       cfg.trigger === "customer_inactive"
         ? await systemDb.smsContact.findMany({ where: { ...base, ordersCount: { gte: 1 }, lastOrderAt: { lt: new Date(now - (cfg.inactiveDays ?? 90) * 86400_000) } }, orderBy: { lastOrderAt: "desc" }, take: 20 })
-        : await systemDb.smsContact.findMany({ where: { ...base, OR: [...(cfg.vipMinOrders ? [{ ordersCount: { gte: cfg.vipMinOrders } }] : []), ...(cfg.vipMinSpent ? [{ totalSpent: { gte: cfg.vipMinSpent } }] : [])] }, orderBy: { totalSpent: "desc" }, take: 20 });
-    results = contacts.map((c) => judge(`Customer ${c.phoneMasked}`, c, facts(c, null)));
+        : cfg.trigger === "customer_vip"
+          ? await systemDb.smsContact.findMany({ where: { ...base, OR: [...(cfg.vipMinOrders ? [{ ordersCount: { gte: cfg.vipMinOrders } }] : []), ...(cfg.vipMinSpent ? [{ totalSpent: { gte: cfg.vipMinSpent } }] : [])] }, orderBy: { totalSpent: "desc" }, take: 20 })
+          : filter
+            ? await systemDb.smsContact.findMany({ where: segmentWhere(store.id, filter), orderBy: { updatedAt: "desc" }, take: 20 })
+            : [];
+    results = await Promise.all(contacts.map((c) => judge(`Customer ${c.phoneMasked}`, c, facts(c, null))));
   } else {
     const orders = await systemDb.smsContactOrder.findMany({ where: { storeId: store.id }, orderBy: { placedAt: "desc" }, take: 20, include: { contact: true } });
-    results = orders.map((o) => judge(o.orderName ?? `Order ${o.shopifyOrderId}`, o.contact, facts(o.contact, Number(o.total))));
+    results = await Promise.all(orders.map((o) => judge(o.orderName ?? `Order ${o.shopifyOrderId}`, o.contact, facts(o.contact, Number(o.total)))));
   }
   return { checked: results.length, wouldSend: results.filter((r) => r.pass).length, results };
 }
