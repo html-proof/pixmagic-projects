@@ -140,6 +140,8 @@ export const LIMITS = {
   smsSetup: { max: 120, windowSec: 600 },
   /** One-off texts to a customer from the Send SMS page, per store. */
   smsManual: { max: 30, windowSec: 600 },
+  /** Sends to chosen customers (up to 200 each) from the Send SMS page, per store: with the monthly limit's hard stop, this keeps a stolen session from texting a store's whole list over and over. */
+  smsSend: { max: 10, windowSec: 600 },
   /** The template editor's live preview (as the merchant types), per store. */
   smsPreview: { max: 300, windowSec: 600 },
   /** Segment and campaign estimates and rule dry runs, per store. */

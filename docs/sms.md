@@ -5,9 +5,13 @@ win-back and VIP texts and merchant-written campaigns, sent by SMS through **AWS
 SMS** (the `pinpoint-sms-voice-v2` API) from bizinsights' own AWS account (605411278365,
 ap-southeast-2).
 
-Nothing reaches a customer until all of these are true, and none is true by default:
+Nothing reaches a customer until all of these are true:
 
-1. The platform is **live**: `SMS_MODE=live` (apps/aws/src/settings.ts). It ships as `sandbox`.
+1. The platform is **live**: `SMS_MODE=live` (apps/aws/src/settings.ts), since 2026-10-25. AWS
+   still decides who can receive: while bizinsights' AWS account is in the **SMS sandbox** (it was
+   on 2026-10-25: `ACCOUNT_TIER` SANDBOX, spending limit US$1 a month, no sender IDs, numbers or
+   registrations), only numbers verified with AWS get texts, and the dashboard says so ("Your SMS
+   account is still being verified"). The owner's steps to leave it are in "Going live" below.
 2. The store has a **sender** that AWS confirms exists and is tagged for its workspace, a monthly
    **budget** above 0, and **sending switched on** by an owner or admin.
 3. The **template** has an approved version, and the **rule** or **campaign** was approved.
@@ -27,6 +31,7 @@ Nothing reaches a customer until all of these are true, and none is true by defa
 | The queue and the send path | `messages.ts` |
 | AWS's delivery events, costs, budget alerts | `delivery.ts` |
 | Rules, segments and campaigns | `automations.ts`, `campaigns.ts` |
+| Send SMS: chosen customers, now or scheduled, followed and cancelled | `sends.ts`; rules in `@app/shared/sms` (`smsSendSchema`, `sendValueProblems`, `SMS_SEND_MAX_RECIPIENTS`, `smsStage`); API `apps/api/src/routes/smsSends.ts`; page `/messaging/send` (`components/messaging/SendSms.tsx`) |
 | Shopify events, consent webhooks | `events.ts` |
 | The 15-minute sweep, retention | `sweep.ts` |
 | Figures (overview, analytics, billing); GDPR | `analytics.ts`, `privacy.ts` |
@@ -34,11 +39,11 @@ Nothing reaches a customer until all of these are true, and none is true by defa
 | The Automations hub (one setup and history over SMS and email, [automations.md](automations.md)) | `packages/core/src/automations/sms.ts` calls the builder below; nothing else |
 | Automations (Create SMS Automation: when, who, message, test, review) | `builder.ts`, `readiness.ts`; rules in `@app/shared/sms` (`AUTOMATION_TRIGGER_CARDS`, `TRIGGER_SOURCES`, `AUTOMATION_STARTERS`, `smsAutomationSchema`, `smsAudienceSchema`, `segmentConditions`, `checkAutomationMessage`, `SKIP_LABEL`); each app's toml topics in core `apps.ts` (`APP_WEBHOOK_TOPICS`); API `apps/api/src/routes/smsAutomations.ts`; pages `/messaging`, `/messaging/automations`, `/messaging/automations/edit`, `/messaging/history`, `/messaging/settings` (`components/messaging/Overview.tsx`, `Automations.tsx`, `AutomationBuilder.tsx`, `AutomationAudience.tsx`, `AutomationReview.tsx`, `AutomationUi.tsx`, `History.tsx`, `SmsSettings.tsx`) |
 | AWS adapter (signed calls to sms-voice) | `apps/aws/src/smsProvider.ts` |
-| API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts` |
+| API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts`, `smsSends.ts` |
 | Worker | `apps/worker/src/handlers/integrations.ts` (`runSmsJob`, `runSmsEvent`), `webhooks.ts`, `index.ts` (sweep) |
 | Infrastructure | `infra/cdk/lib/app-stack.ts` (configuration set, events topic and queue, IAM, alarms) |
 | Dashboard | `apps/web/src/app/(app)/messaging/*`, `apps/web/src/components/messaging/*`; the customers' `/stop` page |
-| Tests | `packages/shared/test/sms.test.ts`, `apps/worker/test/sms.test.ts`, `apps/api/test/sms.test.ts`, `apps/api/test/smsSetup.test.ts`, `apps/api/test/smsAutomations.test.ts`, `apps/web/e2e/messaging.spec.ts`, `apps/aws/test/smsProvider.test.ts`, `infra/cdk/test/stacks.test.ts` |
+| Tests | `packages/shared/test/sms.test.ts`, `apps/worker/test/sms.test.ts`, `apps/api/test/sms.test.ts`, `apps/api/test/smsSetup.test.ts`, `apps/api/test/smsAutomations.test.ts`, `apps/api/test/smsReadiness.test.ts` (production readiness, below), `apps/web/e2e/messaging.spec.ts`, `apps/aws/test/smsProvider.test.ts`, `infra/cdk/test/stacks.test.ts` |
 
 The AWS calls are signed JSON requests (aws4fetch), the same API the AWS SDK calls, as the rest of
 `apps/aws` does for SQS, SES and DynamoDB: the SDK would add hundreds of milliseconds to every cold
@@ -71,13 +76,21 @@ AWS: configuration set ─► SNS topic (only sms-voice may publish) ─► smsE
 4. **Claim, then send.** `scheduled → sending` in one statement, so only one worker sends a row.
    `SendTextMessage` carries the configuration set, `MaxPrice` (`SMS_MAX_PRICE_PER_PART_USD` × parts),
    a TTL (24 h order updates, 4 h marketing), `Context {job, ws}` and India's DLT ids.
-5. **AWS's answer** (`classifySendError`):
+5. **AWS's answer** (`classifySendError`; AWS's `Reason` is read before the exception's name, since
+   one reason comes under several: the SMS sandbox refuses an unverified number with
+   `ConflictException DESTINATION_PHONE_NUMBER_NOT_VERIFIED`, which a DryRun from this account
+   returned on 2026-10-25):
    - `ThrottlingException`, or a request that never left (DNS, refused): retried with exponential
      backoff and full jitter (30 s doubling, capped at an hour), 6 attempts.
-   - `ConflictException … OPTED_OUT`: `opted_out`, and the number goes on the suppression list.
+   - `… OPTED_OUT`: `opted_out`, and the number goes on the suppression list.
+   - `… NOT_VERIFIED` (the sandbox): `failed`, "Until your SMS account is verified, texts only reach
+     approved test recipients". `DESTINATION_COUNTRY_BLOCKED`: `country_blocked`; a sender ID not
+     registered for the country: `sender_unregistered`; an identity that can't text the country:
+     `sender_not_for_country`. None of these suppresses the customer.
    - `ServiceQuotaExceededException … SPEND_LIMIT`: every text held for an hour, critical alert.
    - `ResourceNotFoundException` / `AccessDeniedException`: the store's sender held, alert.
-   - Validation failures: `failed` with the reason (an invalid number is suppressed until lifted).
+   - Other validation failures: `failed` with the reason; only a number AWS can't use
+     (`INVALID_PHONE_NUMBER`, `CANNOT_PARSE`…) is suppressed until lifted.
    - **A 500, a timeout, a cut connection: `uncertain`. Never re-sent on its own**: AWS may have
      the text, and a duplicate is worse than a gap. Five of these in 5 minutes open the circuit
      for 10 minutes (texts wait). A row stuck in `sending` for 10 minutes becomes `uncertain`.
@@ -88,6 +101,12 @@ AWS: configuration set ─► SNS topic (only sms-voice may publish) ─► smsE
    id in its context, so it also settles an `uncertain` row. Each event is stored once
    (message id, type, time): a replayed event changes nothing. No final event after 74 hours →
    `unknown`.
+   What the merchant reads (`smsStage`, `SMS_STAGE_LABEL`): **Queued** (scheduled), **Sending**,
+   **Sent** (AWS has it, or the carrier, without a receipt yet), **Delivered**, and for failures who
+   said no: **Rejected** (AWS refused the send, or the carrier blocked it or called it spam),
+   **Undeliverable** (the carrier couldn't reach the phone: unreachable, not a mobile, expired),
+   **Failed** (bizinsights gave up: the provider stayed busy); also *Unknown outcome*, *Opted out*,
+   *Not sent* (a check stopped it, with the reason), *Cancelled* and *Practice run*.
 7. **Cost.** The price AWS reports with the event (`totalMessagePrice` + `totalCarrierFee`, US$) is
    the message's cost, recorded once in `sms_cost_records`. Until then the estimate (the account's
    average billed price for that country, else `SMS_PRICE_TABLE`, else the maximum price) counts
@@ -216,6 +235,48 @@ activity log (`GET …/sms/audit`).
 New variables: `{{business_name}}` (the setup's business name, else the store's name, filled at
 send time) and `{{order_status}}` (`ORDER_STATUS_WORD`: confirmed, paid, shipped, delivered,
 cancelled, refunded, filled by `runSmsRules`).
+
+## Send SMS (for merchants)
+
+Customer Messaging → **Send SMS** (`/messaging/send`, in the main menu and on the overview): the
+merchant texts customers they choose, in four steps, without meeting AWS. Owners and admins only
+(`stores:manage`), with "View contact information" (the list shows masked numbers).
+
+1. **Choose customers.** What they're sending first: a *service message* (an order or an
+   appointment; it reaches customers under the store's basis for order updates) or a *marketing
+   message* (only customers subscribed to SMS marketing in Shopify, with an opt-out link). Then up
+   to 200 customers (`SMS_SEND_MAX_RECIPIENTS`; a bigger audience is a campaign), found by first
+   name or the number's last digits (`GET …/sms/sends/customers`). Each says whether they can get
+   that kind now, and why not ("The customer opted out", "Sending to this country isn't switched
+   on", "The number's country couldn't be told"…).
+2. **Choose message.** An approved saved message of that kind, or a new one written here (the
+   variables as buttons: `{{customer_name}}`, `{{business_name}}`, `{{date}}`, and for one customer
+   the order's details, typed in; with several customers only what is the same for everyone,
+   `sendValueProblems`). Characters and SMS parts as it is typed, with a warning when it takes more
+   than one part.
+3. **Preview** (`POST …/sms/sends/preview`, changes nothing): the text as the first customer will
+   read it (their first name, the date where they are), its parts, who won't get it and why, how
+   many fall in quiet hours at that time, the estimated cost and the month's limit, and what stops
+   the send altogether (`blockers`: the store's setup on a live platform, marketing switched off,
+   the SMS account still in AWS's sandbox).
+4. **Send or schedule** (`POST …/sms/sends`): now, or at a time up to 60 days ahead, after a
+   confirmation. `requestId` (one per press) makes a repeated request return the send already made;
+   a second request with the same id while the first is being made waits behind a lock and is
+   refused (`send_in_progress`). Refused up front, with nothing recorded: the setup or the account
+   (`setup_incomplete`, `account_sandbox`, `platform_off`, `marketing_platform_off`), a message that
+   doesn't pass its checks (`message_invalid`), nobody who can get it (`no_recipients`), more than
+   is left of the month's limit at the longest the text can be (`over_budget`). A message written
+   here is saved as a template and approved in the sender's name (audited).
+
+A send is a batch of ordinary messages (purpose `manual`, dedupe key `send:<id>:<contact>`,
+subject `send:<id>`): customers who can't get it are recorded as *Not sent* with the reason; the
+others are queued, spread to the sender's pace (`SMS_PARTS_PER_SECOND`), and go through every
+check of the send path again right before they go. The page follows the send
+(`GET …/sms/sends/:id`, every few seconds while texts wait or travel): each customer's stage, from
+Queued to Delivered. **Cancel** (`POST …/sms/sends/:id/cancel`) stops every text that hasn't gone
+(audited); one being handed to AWS at that moment still goes. *Your sends* lists the last 60
+days'. Rate limits: 10 sends per store per 10 minutes (`smsSend`), the preview as the template
+editor's. **Send yourself a test** (a test recipient, with sample details) is under the wizard.
 
 ## Automations (for merchants)
 
@@ -379,6 +440,30 @@ associate the sender ID. For a country without sender names, provision a number 
 (US: toll-free with verification, or 10DLC) and tag it the same way. Nothing else is needed in
 bizinsights: the merchant's *Check status* finds it by its tag.
 
+## Production readiness audit (2026-10-25)
+
+The owner asked for the test-mode SMS system to become a production one. What the audit of this
+module found, and what changed:
+
+| Checked | Found | Now |
+| --- | --- | --- |
+| Test-only code, mock APIs | The fake AWS (`fakeSmsProvider`) is wired only in tests and the local server, which refuses `NODE_ENV=production`; the Lambdas get `awsSmsProvider` (apps/aws/src/index.ts) | Unchanged: dev and production stay apart |
+| Fake delivery statuses | Only the local server's stand-in reports "delivered"; production statuses come from AWS's events | Unchanged |
+| Test mode in production | `SMS_MODE=sandbox`: automations and campaigns recorded dry runs | `SMS_MODE=live`, `SMS_MARKETING_ENABLED=1` |
+| Hardcoded numbers, credentials | None (placeholders in inputs only); AWS calls signed with the function role, no keys anywhere | Unchanged |
+| Client-side AWS credentials | None: the browser calls the API only | Unchanged |
+| Authentication, authorization | Every route behind a session and a permission (routeAccess.test.ts) | Send SMS routes added and classified |
+| Consent | Shopify's SMS marketing consent, the merchant's basis for order updates, suppression list, opt-out link, AWS opt-out list | Unchanged; checked again by the readiness suite |
+| Rate limits | Per-store limits on tests, one-off texts, previews, estimates | `smsSend` added; 200 customers per send |
+| Delivery tracking | AWS's events through SNS and SQS, statuses only forward | The merchant's words: Queued, Sending, Sent, Delivered, Rejected, Undeliverable, Failed (`smsStage`) |
+| Error handling | **Bug:** AWS's sandbox refusal (`ConflictException DESTINATION_PHONE_NUMBER_NOT_VERIFIED`, seen with a DryRun) read as "the provider didn't accept this text"; `DESTINATION_COUNTRY_BLOCKED` as an invalid number, which suppressed the customer | Reason read first (`classifySendError`); new reasons in words |
+| Idempotency | Automations, campaigns and tests keyed; one-off texts were not | `requestId` on one-off texts and on sends |
+| Country validation | E.164 with known calling codes, the sender's countries, India's DLT | Unknown countries said as such before sending |
+| One-click and bulk sending | One approved template to one customer, under Advanced | Send SMS: up to 200 chosen customers, a saved or new message, preview, now or scheduled, followed and cancelled |
+| Templates | No `{{date}}` | `{{date}}` (the day it goes, where the customer is); `{{order_id}}`, `{{company_name}}` are named and fixed as before |
+
+Not code: the AWS account itself ("Going live" below).
+
 ## Setting it up
 
 ### What exists in AWS after the deploy
@@ -434,20 +519,55 @@ submit, approve → send yourself a test → create a rule (it starts in dry-run
 → submit, approve → turn **Send texts** on. Marketing: turn on *Send marketing texts* (needs the
 platform switch too).
 
-### 4. Going live (owner, after 1 and 2)
+### 4. Going live
 
-1. In `apps/aws/src/settings.ts` set `SMS_MODE` to `"live"` (and, for campaigns and other marketing,
-   `SMS_MARKETING_ENABLED` to `"1"`), merge to `main`: the Deploy workflow ships it.
-2. One controlled real text: a test number of your own (Send SMS → Send a test), then one rule out
-   of dry-run for a development store with your own number as the customer. Check Message History
-   shows *Delivered* and its AWS events, and SMS billing shows AWS's price.
+The platform side is done: `SMS_MODE=live` and `SMS_MARKETING_ENABLED=1` ship in
+`apps/aws/src/settings.ts` since 2026-10-25. What AWS showed for account 605411278365 in
+ap-southeast-2 that day (`aws pinpoint-sms-voice-v2 describe-account-attributes`,
+`describe-spend-limits`, `describe-sender-ids`, `describe-phone-numbers`, `describe-registrations`):
+
+| | 2026-10-25 | Needed |
+| --- | --- | --- |
+| Account tier | SANDBOX | PRODUCTION (step 1) |
+| Text spending limit | US$1 a month (max US$1) | Raised by AWS Support (step 1) |
+| Sender IDs, phone numbers, pools | none | One per merchant, or one shared (step 2) |
+| Registrations | none | AU sender ID registration (ACMA), per sender (step 2) |
+| Verified destination numbers | none | Only for testing while in the sandbox |
+| Configuration set `insights-production-sms` | exists, `TEXT_ALL` → SNS | done |
+
+Until steps 1 and 2 are done no customer can receive a text, whatever the dashboard does: every
+send to a customer comes back from AWS as "Until your SMS account is verified…", and Send SMS
+refuses up front while AWS reports the sandbox.
+
+The production access request (AWS console → End User Messaging SMS → Account settings → *Request
+production access*, ap-southeast-2) asks for the use case. A draft of the answers, for the owner to
+check before sending:
+
+- Company: Zodiix Pty Ltd (ACN 613 577 834), Australia; the product is bizinsights (https://bizinsights.io).
+- Use: transactional order updates (order confirmed, paid, shipped, delivered) and opted-in
+  marketing texts that Shopify merchants send to their own customers from the bizinsights dashboard.
+- Opt-in: Shopify's own SMS marketing consent (the checkout's SMS box or the customer's account);
+  order updates only to customers the merchant's checkout tells that updates come by text. A
+  phone number on an order is never taken as marketing consent.
+- Opt-out: every marketing text carries a link (`https://bizinsights.io/stop?c=…`) that stops them
+  at once; AWS's opt-out list (STOP replies on two-way numbers) is synced every 15 minutes; an
+  opt-out wins over anything Shopify reports later.
+- Volumes: the owner's estimate (for example below 1,000 texts a month to start); per-store monthly limits and a
+  platform ceiling (`SMS_ACCOUNT_MONTHLY_LIMIT_USD`) stop sending before the account's limit.
+- Countries: Australia first; others only where a registered or permitted sender exists.
+
+Then, once AWS grants it: raise `SMS_ACCOUNT_MONTHLY_LIMIT_USD` (bizinsights' own ceiling, 20)
+below the new AWS limit if needed, register and tag a sender (step 2), and send one controlled
+real text: a test recipient of your own (Send SMS → Send yourself a test), then Send SMS to a
+development store's customer with your own number. Message History must show *Delivered* with
+AWS's events, and Messaging costs AWS's price, before calling it operational.
 
 ## Settings
 
 | Setting | Default | What |
 | --- | --- | --- |
-| `SMS_MODE` | `off` (production: `sandbox`) | off / sandbox (test texts only) / live |
-| `SMS_MARKETING_ENABLED` | empty | Marketing texts at all |
+| `SMS_MODE` | `off` (production: `live`; the local server and e2e: `sandbox`) | off / sandbox (texts to customers recorded, not sent; test texts go) / live |
+| `SMS_MARKETING_ENABLED` | empty (production: `1`) | Marketing texts at all (each store also turns them on) |
 | `SMS_ACCOUNT_MONTHLY_LIMIT_USD` | 20 | bizinsights' monthly ceiling for all stores together |
 | `SMS_MAX_PRICE_PER_PART_USD` | 0.25 | AWS refuses a dearer route (`MaxPrice`) |
 | `SMS_PRICE_TABLE` | `{}` | Per-part prices by country from AWS's price list (CSV on the pricing page), for estimates before AWS has billed any |
@@ -472,8 +592,9 @@ Monthly estimate = Σ over countries (texts × parts per text × price per part)
 
 ## Limits and what isn't done
 
-- **Not live yet**: production ships `SMS_MODE=sandbox`. The account's sandbox status, spending
-  limit and sender registration are the owner's steps above; no customer is texted before them.
+- **AWS's sandbox**: production is live, but the AWS account was still in the SMS sandbox with a
+  US$1 limit and no sender on 2026-10-25. Leaving it, the limit and sender registration are the
+  owner's steps above; no customer is texted before them.
 - Phone numbers on live stores need Shopify's protected customer data approval (Level 2).
 - India needs a configuration set in ap-south-1 for delivery events (none is created: Indian texts
   are sent, and stay "Accepted by AWS" until they become "Unknown" after 74 hours) and the merchant's DLT registration.
@@ -504,6 +625,37 @@ TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/s
 ```bash
 pnpm --filter @app/aws exec vitest run test/smsProvider.test.ts
 ```
+
+### Production readiness
+
+`apps/api/test/smsReadiness.test.ts` runs the module on a live platform (`SMS_MODE=live`, marketing
+on) end to end through the API, with only AWS faked at the provider interface and the queue drained
+as the jobs function drains it:
+
+```bash
+TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/smsReadiness.test.ts
+```
+
+| Area | What it proves |
+| --- | --- |
+| Authentication | Every Send SMS route answers 401 without a session |
+| Authorization | Viewers read sends without numbers; only owners and admins with contact rights send |
+| Tenant isolation | Another business gets 404 for this one's sends, customers and messages, and its ids are not found in its own store |
+| Phone validation | E.164 normalisation; unknown countries and countries the sender doesn't cover aren't texted, with the reason |
+| Consent | Marketing only with Shopify's consent; opted-out numbers never; an opt-out after scheduling stops the text; the platform's marketing switch |
+| Single SMS | Preview text (name, `{{date}}`), queue, the request AWS gets (identity, type, max price, context), Sent ≠ Delivered until the carrier's event, cost, audit |
+| Bulk SMS | Four customers paced to the sender's speed; delivered, rejected (BLOCKED) and undeliverable (UNREACHABLE) told apart |
+| Automation | A Shopify order texts its customer through the same queue; a webhook retry sends nothing twice |
+| New message | Saved and approved in the sender's name; order details only for one customer |
+| Setup gates | No sender, sending off, the AWS sandbox, the month's limit: refused before anything is recorded |
+| Scheduling | A scheduled send waits; Cancel stops it; nothing is left to send at its time; 60 days at most |
+| Failure handling | AWS's real sandbox refusal, a blocked country and an invalid number: Rejected in words, only the invalid number suppressed; a 500 is never re-sent and AWS's later event settles it |
+| Retries | Throttling backs off and goes; six throttles end as Failed |
+| Duplicates | A repeated request makes one send; a job run twice at once hands AWS one text; a replayed event changes nothing; the one-off endpoint's `requestId` |
+| Rate limiting | 10 sends per store per 10 minutes; 200 customers per send; the customer's daily cap |
+
+`apps/web/e2e/messaging.spec.ts` drives the Send SMS page itself (against the local server, in test
+mode). Real delivery can only be shown with a real text, after the owner's AWS steps ("Going live").
 
 AWS is faked in every test; nothing is texted. The local server (`pnpm --filter @app/aws dev`)
 uses the same fake with a shared sender `LOCALTEST` and reports each text delivered a moment later.

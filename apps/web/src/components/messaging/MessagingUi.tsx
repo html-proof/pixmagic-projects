@@ -159,12 +159,14 @@ const STATUS_TONE: Record<SmsStatus, Tone> = {
   dry_run: "neutral",
 };
 
-/** A text's status in words (with the reason as a tooltip when there is one). */
-export function SmsStatusBadge({ status, why }: { status: string; why?: string | null }) {
-  const label = SMS_STATUS_LABEL[status as SmsStatus] ?? status;
+/**
+ * A text's status in words (with the reason as a tooltip when there is one). `label` is the API's
+ * (statusLabel: Rejected or Undeliverable where a failure says which); without it, the status's own.
+ */
+export function SmsStatusBadge({ status, why, label }: { status: string; why?: string | null; label?: string | null }) {
   return (
     <span title={why ?? undefined}>
-      <Badge tone={STATUS_TONE[status as SmsStatus] ?? "neutral"}>{label}</Badge>
+      <Badge tone={STATUS_TONE[status as SmsStatus] ?? "neutral"}>{label ?? SMS_STATUS_LABEL[status as SmsStatus] ?? status}</Badge>
     </span>
   );
 }

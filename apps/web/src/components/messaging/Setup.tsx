@@ -1128,7 +1128,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
         {message && outcome && (
           <div className="rounded-lg border border-border bg-bg/50 p-3 text-sm" role="status" aria-live="polite">
             <p className="flex flex-wrap items-center gap-2">
-              <SmsStatusBadge status={message.status} why={message.reasonLabel} />
+              <SmsStatusBadge status={message.status} why={message.reasonLabel} label={message.statusLabel} />
               {message.to && <span className="text-muted">to {message.to}</span>}
               <span className="text-muted">· {fmtWhen(message.createdAt)}</span>
             </p>

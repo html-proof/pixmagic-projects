@@ -1,7 +1,7 @@
 import { systemDb, withTenant, type SmsMessageJob, type SmsSenderConfiguration, type SmsTemplate, type SmsTemplateVersion, type Store } from "@app/db";
 import { noSmsProvider, smsDecrypt, type Actor, type SmsDeps } from "@app/core/sms";
 import { allows } from "@app/shared";
-import { DELIVERY_EXPLANATION, skipLabel, SMS_STATUS_LABEL, type SmsStatus } from "@app/shared/sms";
+import { DELIVERY_EXPLANATION, skipLabel, SMS_STAGE_LABEL, smsStage, type SmsStatus } from "@app/shared/sms";
 import { clientIp, HttpError, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
 
 /** Helpers shared by the Customer Messaging routes (sms.ts, smsOps.ts, smsActivity.ts). */
@@ -129,7 +129,8 @@ export function publicMessage(m: SmsMessageJob, showText: boolean) {
     to: m.phoneMasked,
     country: m.destinationCountry,
     status,
-    statusLabel: SMS_STATUS_LABEL[status] ?? m.status,
+    stage: smsStage(m),
+    statusLabel: SMS_STAGE_LABEL[smsStage(m)],
     reason: m.reason,
     reasonLabel: skipLabel(m.reason),
     providerStatus: m.providerStatus,
