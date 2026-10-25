@@ -1,6 +1,6 @@
 /**
  * The one transport to Meta's Graph API (graph.facebook.com), used by the ad accounts (ads/meta.ts)
- * and WhatsApp (whatsapp/graph.ts) alike. It owns what every call must get right:
+ * and WhatsApp's Cloud API onboarding (whatsapp/cloud.ts, whatsapp/templates.ts) alike. It owns what every call must get right:
  *
  * - the access token travels in the Authorization header, never in a URL: URLs end up in logs,
  *   traces and error reports, headers don't;

@@ -17,7 +17,7 @@ browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTT
               everything else                            ──► static UI (apps/web, Next.js static export)
                                                              (if the function can't answer: apps/web's /unavailable page, from S3)
 
-jobs   SQS (sync, webhooks, aggregate, email, smsEvents) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
+jobs   SQS (sync, webhooks, aggregate, email, smsEvents, whatsapp) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
 cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
 
 apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsApp, email, staff, persistence)
@@ -48,7 +48,7 @@ Each package may import only the ones above it in this table, never one below.
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
 | `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
-| `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
+| `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth, WhatsApp and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
 Where a new piece of code goes:
@@ -102,10 +102,10 @@ Where a new piece of code goes:
   `MAX_ATTEMPTS` (the SQS queues' `maxReceiveCount` in infra/cdk stays above it), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and SQS both deliver at least once.
-- What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, Meta's WhatsApp
-  webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
-  (`parseShopify`, `parseShopifyList` for a page) and `core/whatsapp/metaPayloads.ts` (`parseMeta`,
-  applied by the worker to each stored delivery).
+- What Shopify, Meta and Evolution API send (webhook payloads, GraphQL pages, bulk JSONL, the
+  WhatsApp webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
+  (`parseShopify`, `parseShopifyList` for a page), `core/whatsapp/webhook.ts` (Evolution API's
+  deliveries) and `core/whatsapp/cloud.ts` (Meta's, for Cloud API numbers).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
   meet the same payload again. The WhatsApp and email automations read an order or checkout only
   once they are about to act on it, so a store that doesn't use them logs nothing about it. The
@@ -145,7 +145,7 @@ of truth and almost every screen is "load, show, edit, save".
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
 "load more", a request fired by a button), and then guard against late answers: keep the answer
 with the request it belongs to, or ignore any response that isn't the latest (see
-`components/dashboard/Contacts.tsx` and `components/whatsapp/Activity.tsx`).
+`components/dashboard/Contacts.tsx` and the audience count in `components/whatsapp/Campaigns.tsx`).
 
 The API response reader (`lib/apiResponse.ts`) owns `ApiError`, body parsing and error-envelope
 normalization. It has no React dependency, so response failures can be tested independently.
@@ -179,9 +179,9 @@ calculations belong in `@app/shared` (shared with the API) or the API itself. Th
 health grading lives in `@app/shared/health` and its drop-off and landing-page maths in
 `@app/shared/journey` (the Shopping Funnel page's transitions, segments, tests and observations in
 `@app/shared/funnel`); the repeated sentence pieces are in `components/dashboard/Narrative.tsx`.
-When a page needs to know what the API will allow (which campaign buttons to show, what a template
-draft breaks), it asks the same function the API uses (`campaignCan`, `checkTemplateDraft` in
-`@app/shared/whatsapp`) rather than writing the rule out again.
+When a page needs to know what the API will allow (what a template draft breaks), it asks the same
+function the API uses (`waTemplateIssues` in `@app/shared/whatsapp`) rather than writing the rule
+out again.
 Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code that only a click
 needs out of the page's first load.
 
@@ -250,7 +250,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
   use default exports.
 - **Errors**: `XxxError extends Error` (or `AppError`, for a rule the person broke) and sets
   `this.name`, so logs say which.
-- **API**: route files by area (`routes/whatsappAutomation.ts`), registration functions `<area>Routes`.
+- **API**: route files by area (`routes/smsAutomations.ts`), registration functions `<area>Routes`.
 - **Relative imports inside packages** use the `.js` extension (`./dates.js`), except in the
   `packages/shared` modules the UI imports by subpath (`ads.ts`, `sales.ts`): Next's bundler does
   not map `./dates.js` to `dates.ts` in a workspace package, so those stay extensionless.

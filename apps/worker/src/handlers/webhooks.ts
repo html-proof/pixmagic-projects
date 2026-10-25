@@ -1,6 +1,6 @@
 /** The webhooks queue: each Shopify topic applied to the store's data (orders, products, refunds, app and GDPR topics). */
 import { systemDb, type Store } from "@app/db";
-import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
+import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, dropStoreInstance, disconnectStore, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
 import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
 import { readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
@@ -42,6 +42,8 @@ const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify
  * outlives it (written for the erased workspace, it failed its foreign key and nothing was kept).
  */
 async function eraseStore(store: Store, deps: WorkerDeps): Promise<{ workspaceErased: boolean }> {
+  // The store's WhatsApp instance at Evolution API goes first (best effort), while its row says which.
+  await dropStoreInstance(store.id, deps);
   await purgeStoreData(store.id, deps.fetchImpl);
   await purgeEmailStoreData(store.id);
   // One transaction: a retry after a failure finds the store still there and does it all again.
@@ -284,6 +286,8 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // Shopify cancels an app's charges when it is uninstalled, and its app_subscriptions/update
         // saying so may never reach an app that is gone: the plan ends here.
         await endBillingForStore(store.id, "uninstalled");
+        // The store's WhatsApp goes with the app: the phone's linked device is logged out, nothing more is sent.
+        await disconnectStore(store.id, deps, "uninstalled").catch((err: unknown) => logger.warn({ err, storeId: store.id }, "whatsapp not disconnected on uninstall; the sweep finds it"));
         break;
       }
       case "app/scopes_update": {

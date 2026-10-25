@@ -11,9 +11,10 @@ switches and reads *their* rows, through *their* functions, with every one of th
 store never gets two systems sending the same message, and an automation made in the hub also
 shows (and can be edited) on the channel's own pages, and the other way round.
 
-WhatsApp has its own pages (`/whatsapp`, [whatsapp.md](whatsapp.md)), and its module is being
-rebuilt in another branch: the hub shows it as a card pointing there and doesn't read or change
-its tables. It joins as a third adapter once that lands ([WhatsApp](#whatsapp)).
+WhatsApp has its own page (WhatsApp Automation, `/dashboard/whatsapp-automation`,
+[whatsapp.md](whatsapp.md)) with its own automations, templates and campaigns: the hub shows it as
+a card pointing there and doesn't read or change its tables. It may join later as a third adapter
+([WhatsApp](#whatsapp)).
 
 ## Contents
 
@@ -106,7 +107,7 @@ SMS; Turn on, Pause, Resume for email), Edit, Messages and Delete, each behind a
                                hub.ts ── connections, triggers, automations, merged history + cursor, stats, audit
                                 ├─ sms.ts ───► packages/core/src/sms   (Customer Messaging: builder, rules, sends)
                                 ├─ email.ts ─► packages/core/src/email (accounts, rules, engine, delivery)
-                                └─ whatsapp.ts  card only (the WhatsApp pages own it)
+                                └─ whatsapp.ts  card only (the WhatsApp Automation page owns it)
                                        ▼
                               RDS PostgreSQL (RLS): sms_* and email_* tables (no new tables; two indexes)
  Shopify webhooks ─► SQS webhooks ─► Lambda "jobs" ─► smsOnShopifyEvent / emailOnShopifyEvent ─► rules
@@ -145,10 +146,10 @@ AWS with CDK (no second infrastructure framework was added).
 | DynamoDB | The coordinator table: rate limits, locks, OAuth state, holds and circuits | Tenant settings, automations, idempotency records and message metadata stay in PostgreSQL with row-level security: one tenant-isolated store, joins with orders and customers, and idempotency by unique keys (`sms_message_jobs (store_id, dedupe_key)`, `email_messages (workspace_id, idempotency_key)`, one execution per rule and event) plus conditional updates (`scheduled → sending`, `queued → processing`). A second store of the same facts would need its own tenancy and could disagree with the first. |
 | Secrets Manager / KMS | `insights/<env>/app` secret; tokens AES-256-GCM (`TOKEN_ENCRYPTION_KEYS`, rotatable); email credentials envelope-encrypted (`EMAIL_CREDENTIAL_KEYS`); RDS and SQS encrypted at rest | Existing ([security.md](security.md)). |
 | Amazon SES | Merchant email goes through the merchant's own mailbox (Gmail API, Microsoft Graph, SMTP). Platform mail (sign-in codes, invitations) goes through Resend. | Mail from the merchant's own address and domain reputation, with no per-merchant domain setup at AWS. bizinsights' SES production access was denied on 2026-10-16, so SES can only reach verified addresses today. An SES adapter for merchants would need production access and a verified identity per merchant domain. |
-| AWS End User Messaging Social (WhatsApp) | Not used: WhatsApp runs on Meta's WhatsApp Cloud API through the WhatsApp module (token added through Nango). | Linking a merchant's WhatsApp Business account to End User Messaging Social puts it inside bizinsights' AWS account (and Meta's conversation charges on bizinsights' AWS bill), which needs a per-merchant linking and billing story. To decide when the rebuilt WhatsApp module joins the hub. |
+| AWS End User Messaging Social (WhatsApp) | Not used: WhatsApp runs on Evolution API, which bizinsights hosts on ECS Fargate: a phone linked with a QR code, or Meta's WhatsApp Cloud API through Embedded Signup ([whatsapp.md](whatsapp.md)). | Linking a merchant's WhatsApp Business account to End User Messaging Social puts it inside bizinsights' AWS account (and Meta's conversation charges on bizinsights' AWS bill), which needs a per-merchant linking and billing story. To decide if WhatsApp joins the hub. |
 | AWS End User Messaging SMS | Used: the platform's account, `SendTextMessage` with a configuration set, events → SNS → SQS | [sms.md](sms.md). Sandbox until the owner's steps in "Going live". |
 | CloudWatch | Logs (redacted), queue-age and DLQ alarms, error lines, SMS holds, and the new `messaging-send-failures` alarm | Alarms email the alarm topic's subscribers. |
-| Nango | Meta Ads, AdSense, Google Ads and the WhatsApp token | Email sign-in stays direct OAuth (Google, Microsoft): no broker sees mail-sending tokens, and Nango's free plan has 10 connections. SMS has no merchant credentials at all. |
+| Nango | Meta Ads, AdSense and Google Ads (WhatsApp no longer uses it) | Email sign-in stays direct OAuth (Google, Microsoft): no broker sees mail-sending tokens, and Nango's free plan has 10 connections. SMS has no merchant credentials at all. |
 
 ## How one message travels
 
@@ -342,7 +343,8 @@ event data 35 days, events and executions 90, messages 180 ([sms.md](sms.md), [e
 alarm (~US$0.40 a month). Per message, unchanged: SMS is AWS's price per part for the country plus
 carrier fees (shown from AWS's events, billed to bizinsights' AWS account, counted against each
 store's budget); email costs nothing per message through the merchant's own mailbox; WhatsApp
-conversations are Meta's, billed on the merchant's Meta account.
+on a linked phone costs nothing per message, and Cloud API conversations are Meta's, billed on the
+merchant's Meta account.
 
 ## Setting up the providers
 
@@ -353,7 +355,8 @@ conversations are Meta's, billed on the merchant's Meta account.
 - **Email:** [email.md](email.md) sections 5–7: Google (Gmail API, `gmail.send`, verification) and
   Microsoft (Entra app, `Mail.Send`) OAuth clients (`EMAIL_GOOGLE_CLIENT_ID`/`SECRET`,
   `EMAIL_MICROSOFT_CLIENT_ID`/`SECRET`); SMTP needs nothing from the platform.
-- **WhatsApp:** [whatsapp.md](whatsapp.md) and [nango.md](nango.md).
+- **WhatsApp:** [whatsapp.md](whatsapp.md): the QR way needs nothing; the Cloud API needs the
+  owner's Meta steps ("Owner's steps (Cloud API)").
 - **Event API (external apps):** Settings → Email → Settings → event API keys; the sender's system
   posts to `/api/v1/events` ([email.md](email.md), "API").
 
@@ -376,13 +379,15 @@ The hub adds no environment variables.
 ## Runbook
 
 - **Alarm `messaging-send-failures`** (25+ refusals in 5 minutes, twice): open the jobs log group,
-  search `sms send refused` (its `type` and `reason` are AWS's) or `email send failed`
-  (`errorCode`); the hub's history filtered by *Failed* shows which store and automation. Common
+  search `sms send refused` (its `type` and `reason` are AWS's), `email send failed`
+  (`errorCode`) or `whatsapp send refused by the provider`; the hub's history filtered by *Failed*
+  shows which store and automation (WhatsApp's: the WhatsApp Automation page's Messages tab). Common
   causes: an SMS sender not found or not allowed (the store's sender is held, the merchant is
   alerted), AWS throttling (retries absorb it), a mailbox needing sign-in (alert
   `email_account_reauth`).
-- **Queue age alarms** (`queue-sync-age`, `queue-email-age`, `queue-smsEvents-age`): the jobs function
-  is failing or saturated; check its errors and throttles first.
+- **Queue age alarms** (`queue-sync-age`, `queue-email-age`, `queue-smsEvents-age`,
+  `queue-whatsapp-age`): the jobs function is failing or saturated; check its errors and throttles
+  first.
 - **Dead-letter queue** (`dlq-not-empty`): look first, then redrive once the cause is fixed. Every job
   is safe to run twice (claims and unique keys):
 
@@ -433,11 +438,13 @@ signatures, OAuth, SMTP): [sms.md](sms.md#testing), [email.md](email.md#13-tests
 
 ## WhatsApp
 
-The WhatsApp module is being rebuilt in its own branch (workflows, templates, Nango connect). When
-it lands, `packages/core/src/automations/whatsapp.ts` becomes an adapter like the other two over
-its public functions (connection, workflows, message history), and its triggers and statuses get
-their columns in `@app/shared/automations`. Meta's rules then apply in step 3: only approved
-templates outside the 24-hour customer service window.
+WhatsApp Automation runs on Evolution API, with its own automations, templates, campaigns and
+message history on its page (`/dashboard/whatsapp-automation`, [whatsapp.md](whatsapp.md)); the hub
+shows it as a card. To join the hub, `packages/core/src/automations/whatsapp.ts` would become an
+adapter like the other two over its public functions (connection, automations, message history),
+and its triggers and statuses would get their columns in `@app/shared/automations`. On the Cloud
+API, Meta's rules then apply in step 3: only approved templates outside the 24-hour customer
+service window.
 
 ## Limits and what isn't done
 

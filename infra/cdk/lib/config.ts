@@ -39,6 +39,15 @@ export interface EnvConfig {
   natInstanceType: string;
   logRetentionDays: number;
   /**
+   * WhatsApp Automation's Evolution API service (whatsapp-stack.ts): one ECS Fargate task on Graviton
+   * per shard, its size (Fargate's CPU units and MiB), how many run (1; 0 keeps everything in place
+   * with no task running), and Fargate Spot (about 70% cheaper; AWS may stop the task with two
+   * minutes' notice, and WhatsApp reconnects from the saved sessions when it is back). One task holds
+   * every store's WhatsApp session on its shard: never more than one at a time (a WhatsApp session
+   * can't be open in two places).
+   */
+  whatsapp: { cpu: 256 | 512 | 1024 | 2048; memoryMiB: number; tasks: 0 | 1; spot: boolean };
+  /**
    * The EventBridge schedules (token refresh, reconcile, ad syncs, email and WhatsApp sweeps).
    * OFF until this environment takes over from the old deployment (docs/aws-deployment.md,
    * Cutover): with production's data copied in and both sides running them, merchants' stores
@@ -128,6 +137,8 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     natGateways: 2,
     natInstanceType: "t4g.nano",
     logRetentionDays: 90,
+    // US$17.29/month on demand in Sydney (0.5 vCPU + 1 GB on Graviton; AWS price list 2026-10-25): docs/whatsapp.md, "Cost".
+    whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: false },
     domain: {
       name: "bizinsights.io",
       redirects: ["www.bizinsights.io"],
@@ -165,6 +176,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     natGateways: 1,
     natInstanceType: "t4g.nano",
     logRetentionDays: 30,
+    whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: true },
     cognitoDomainPrefix: "insights-staging-605411278365",
     // A few test emails a day fit Cognito's own sender, without a second KMS key.
     cognitoCustomEmail: false,

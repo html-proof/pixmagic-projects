@@ -158,7 +158,9 @@ which decides. `canOpenPage` (`apps/web/src/lib/access.ts`) says which pages a m
 path; the route guard (`useAccessGuard`, `components/AppShell.tsx`) sends anyone on a page they may
 not open (typed in, bookmarked, or just taken away) to where they can go, saying "You don't have
 access to that page.", before the page mounts, so it never asks for its data. The sidebar, the
-command palette and the section menus (Settings, WhatsApp) list only pages `canOpenPage` allows. An
+command palette and the section menus (Settings) list only pages `canOpenPage` allows; WhatsApp
+Automation is one page whose tabs follow what its API answer allows (Customers only with "View contact
+information"). An
 address with no page at all (`/dashboard/setting`) is the not-found page, outside the app.
 `apps/web/e2e/team.spec.ts` types the owners' and admins' pages into a shared dashboard and calls
 their APIs from it.

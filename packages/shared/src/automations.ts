@@ -57,7 +57,7 @@ export const CHANNEL_INFO: Record<HubChannel, ChannelInfo> = {
       "Customers who agreed to hear from you on WhatsApp.",
     ],
     permissions: ["Send messages and templates from your number", "Read delivery and read receipts for those messages"],
-    home: "/whatsapp",
+    home: "/dashboard/whatsapp-automation",
   },
   sms: {
     label: "SMS",
@@ -248,7 +248,7 @@ export const HUB_TRIGGER_INFO: Record<HubTrigger, HubTriggerInfo> = {
     smsUnavailable: INBOUND_SMS,
     email: null,
     emailUnavailable: INBOUND_EMAIL,
-    instead: { label: "WhatsApp handles replies on its own page", href: "/whatsapp" },
+    instead: { label: "WhatsApp handles replies on its own page", href: "/dashboard/whatsapp-automation" },
   },
   external_event: {
     key: "external_event",

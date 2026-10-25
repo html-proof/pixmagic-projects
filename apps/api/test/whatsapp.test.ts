@@ -1,900 +1,716 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { systemDb } from "@app/db";
-import { checkConnection, dispatchCampaign, processWebhookEvent, sendWaMessage, whatsappOnShopifyEvent, type FetchLike } from "@app/core";
-import { LEGACY_GRANTS, signMetaBody } from "@app/shared";
-import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { createHmac } from "node:crypto";
+import { systemDb, type Store } from "@app/db";
+import { dispatchCampaign, processWebhookEvent, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
+import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, QR_PNG, type EvolutionFake } from "../../../test-support/evolutionFake.js";
+import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
- * WhatsApp Automation end to end, with Meta's Graph API and Nango faked: connecting with Embedded
- * Signup (the code exchange, the token inspector, the account and number, the token kept at Nango,
- * webhooks, registration), the PIN step, tenant isolation, Meta's webhooks (signature, dedupe,
- * statuses out of order, STOP), sending, workflows from Shopify events, campaigns, custom events and
- * disconnecting. No message leaves the machine.
+ * WhatsApp Automation over Evolution API (apps/api/src/routes/whatsapp.ts, whatsappWebhook.ts;
+ * packages/core/src/whatsapp): connecting with the QR code WhatsApp issued, "connected" only on the
+ * provider's word, the webhook's per-connection JWT, the test number and the test message's real
+ * status, sends from the dashboard (consent, idempotency, attachments), customers' STOP and START,
+ * automations from Shopify's events, campaigns, disconnecting, and who may see and do what. Evolution
+ * API is test-support/evolutionFake.ts, which answers as Evolution 2.3.7 does.
  */
 
 let ctx: TestCtx;
-beforeAll(async () => (ctx = await setup()));
-afterAll(async () => teardown(ctx));
+let evo: EvolutionFake;
+const WEBHOOK_BASE = "https://bizinsights.test/api";
+const TEST_PHONE = "+61400111222";
+const CUSTOMER = "+61412345678";
 
-const APP_ID = "555000111";
-const APP_SECRET = "wa_app_secret_for_tests";
-const WABA = "1020304050";
-const PHONE = "9080706050";
-const TOKEN = "EAAGbusinessTokenForTests";
-const REFRESHED = "EAAGrefreshedTokenForTests";
-const ENV = {
-  WHATSAPP_APP_ID: APP_ID,
-  WHATSAPP_APP_SECRET: APP_SECRET,
-  WHATSAPP_CONFIG_ID: "cfg_123",
-  WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify_tok_123",
-  WHATSAPP_API_VERSION: "v26.0",
-  NANGO_SECRET_KEY: "nango_secret_for_tests",
-};
-const OFF = Object.fromEntries(Object.keys(ENV).map((k) => [k, ""]));
-
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-
-interface Fake {
-  nango: Map<string, { apiKey: string; tags: Record<string, string> }>;
-  nangoDeleted: string[];
-  integrationMade: boolean;
-  registered: Set<string>;
-  /** A PIN the number already has (registration with another one is refused, as Meta does). */
-  existingPin: string | null;
-  sends: Array<Record<string, unknown>>;
-  templates: Array<Record<string, unknown>>;
-  codes: Record<string, string>;
-  scopes: string[];
-  grantedWabas: string[];
-  appId: string;
-  phones: Array<{ id: string; display_phone_number: string; verified_name: string }>;
-  sendError: { status: number; body: unknown } | null;
-  subscribed: boolean;
-  /** The business token Meta accepts now (a refresh replaces it), and when it expires (Unix seconds; null: never). */
-  token: string;
-  tokenExpiresAt: number | null;
-  refreshes: number;
-  refreshFails: boolean;
-  fetch: FetchLike;
-}
-
-function fakeMeta(): Fake {
-  const f: Fake = {
-    nango: new Map(),
-    nangoDeleted: [],
-    integrationMade: false,
-    registered: new Set(),
-    existingPin: null,
-    sends: [],
-    templates: [{ id: "t1", name: "order_confirmation", language: "en", category: "UTILITY", status: "APPROVED", components: [{ type: "BODY", text: "Hi {{1}}, your order {{2}} is confirmed. Thank you!" }] }],
-    codes: { good_code_1234567890: TOKEN },
-    scopes: ["whatsapp_business_management", "whatsapp_business_messaging", "public_profile"],
-    grantedWabas: [WABA],
-    appId: APP_ID,
-    phones: [{ id: PHONE, display_phone_number: "+61 400 000 001", verified_name: "Acme" }],
-    sendError: null,
-    subscribed: false,
-    token: TOKEN,
-    tokenExpiresAt: null,
-    refreshes: 0,
-    refreshFails: false,
-    fetch: async (input, init) => {
-      const u = new URL(String(input));
-      const method = init?.method ?? "GET";
-      const auth = new Headers(init?.headers).get("authorization") ?? "";
-      if (u.host === "api.nango.dev") {
-        expect(auth).toBe(`Bearer ${ENV.NANGO_SECRET_KEY}`);
-        if (u.pathname === "/integrations/whatsapp-business") return f.integrationMade ? json({ data: { unique_key: "whatsapp-business", provider: "whatsapp-business" } }) : json({ error: { code: "not_found" } }, 404);
-        if (u.pathname === "/integrations" && method === "POST") {
-          expect(JSON.parse(String(init?.body))).toMatchObject({ unique_key: "whatsapp-business", provider: "whatsapp-business" });
-          f.integrationMade = true;
-          return json({ data: {} }, 201);
-        }
-        if (u.pathname === "/connections" && method === "POST") {
-          const b = JSON.parse(String(init?.body)) as { connection_id: string; provider_config_key: string; credentials: { type: string; apiKey: string }; tags: Record<string, string> };
-          expect(b.provider_config_key).toBe("whatsapp-business");
-          expect(b.credentials.type).toBe("API_KEY");
-          f.nango.set(b.connection_id, { apiKey: b.credentials.apiKey, tags: b.tags });
-          return json({}, 201);
-        }
-        const m = /^\/connections\/([^/]+)$/.exec(u.pathname);
-        if (m && method === "GET") {
-          const c = f.nango.get(decodeURIComponent(m[1]!));
-          return c ? json({ credentials: { type: "API_KEY", apiKey: c.apiKey } }) : json({ error: { code: "not_found" } }, 404);
-        }
-        if (m && method === "DELETE") {
-          f.nangoDeleted.push(decodeURIComponent(m[1]!));
-          f.nango.delete(decodeURIComponent(m[1]!));
-          return new Response(null, { status: 204 });
-        }
-        throw new Error(`unexpected Nango call ${method} ${u.pathname}`);
-      }
-      if (u.host !== "graph.facebook.com") throw new Error(`unexpected call ${u}`);
-      // Tokens travel in the header, never the URL.
-      expect(u.searchParams.has("access_token")).toBe(false);
-      const path = u.pathname.replace(/^\/v26\.0\//, "");
-      if (path === "oauth/access_token") {
-        expect(u.searchParams.get("client_secret")).toBe(APP_SECRET);
-        if (u.searchParams.get("grant_type") === "fb_exchange_token") {
-          expect(u.searchParams.get("set_token_expires_in_60_days")).toBe("true");
-          expect(u.searchParams.get("fb_exchange_token")).toBe(f.token);
-          if (f.refreshFails) return json({ error: { message: "Please retry your request later.", type: "OAuthException", code: 2 } }, 500);
-          f.refreshes++;
-          f.token = REFRESHED;
-          return json({ access_token: REFRESHED, token_type: "bearer", expires_in: 5183944 });
-        }
-        const t = f.codes[u.searchParams.get("code") ?? ""];
-        return t ? json({ access_token: t, token_type: "bearer" }) : json({ error: { message: "Invalid verification code", type: "OAuthException", code: 100 } }, 400);
-      }
-      if (path === "debug_token") {
-        expect(auth).toBe(`Bearer ${APP_ID}|${APP_SECRET}`);
-        return json({ data: { app_id: f.appId, is_valid: true, expires_at: f.tokenExpiresAt ?? 0, scopes: f.scopes, granular_scopes: f.scopes.filter((s) => s.startsWith("whatsapp")).map((scope) => ({ scope, target_ids: f.grantedWabas })) } });
-      }
-      // Every business-token call is the business's own and carries the proof.
-      expect(auth).toBe(`Bearer ${f.token}`);
-      expect(u.searchParams.get("appsecret_proof")).toMatch(/^[0-9a-f]{64}$/);
-      if (path === WABA) return json({ id: WABA, name: "Acme WhatsApp" });
-      if (path === `${WABA}/phone_numbers`) return json({ data: f.phones.map((p) => ({ ...p, platform_type: f.registered.has(p.id) ? "CLOUD_API" : "NOT_APPLICABLE", quality_rating: "GREEN" })) });
-      if (path === `${WABA}/subscribed_apps` && method === "POST") {
-        f.subscribed = true;
-        return json({ success: true });
-      }
-      if (path === `${WABA}/subscribed_apps` && method === "GET") return json({ data: f.subscribed ? [{ whatsapp_business_api_data: { id: APP_ID } }] : [] });
-      if (path === `${WABA}/subscribed_apps` && method === "DELETE") {
-        f.subscribed = false;
-        return json({ success: true });
-      }
-      if (path === `${WABA}/message_templates` && method === "GET") return json({ data: f.templates });
-      if (path === `${WABA}/message_templates` && method === "POST") {
-        const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        f.templates.push({ ...b, id: `t${f.templates.length + 1}`, status: "PENDING" });
-        return json({ id: `t${f.templates.length}`, status: "PENDING", category: b.category });
-      }
-      const phone = f.phones.find((p) => path === p.id || path.startsWith(`${p.id}/`));
-      if (phone && path === phone.id) {
-        return json({ ...phone, platform_type: f.registered.has(phone.id) ? "CLOUD_API" : "NOT_APPLICABLE", quality_rating: "GREEN", messaging_limit_tier: "TIER_1K", status: "CONNECTED" });
-      }
-      if (phone && path === `${phone.id}/register`) {
-        const { pin } = JSON.parse(String(init?.body)) as { pin: string };
-        if (f.existingPin && pin !== f.existingPin) return json({ error: { message: "Two step verification PIN Mismatch", code: 133005 } }, 400);
-        f.registered.add(phone.id);
-        return json({ success: true });
-      }
-      if (phone && path === `${phone.id}/messages`) {
-        if (f.sendError) return json(f.sendError.body, f.sendError.status);
-        const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        f.sends.push(b);
-        return json({ messaging_product: "whatsapp", messages: [{ id: `wamid.${f.sends.length}` }] });
-      }
-      throw new Error(`unexpected Graph call ${method} ${path}`);
-    },
-  };
-  return f;
-}
-
-let meta: Fake;
+beforeAll(async () => {
+  ctx = await setup();
+});
+afterAll(async () => {
+  ctx.setEnv({ EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "", EVOLUTION_WEBHOOK_URL: "", META_APP_ID: "", META_APP_SECRET: "", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "", WHATSAPP_CONFIG_ID: "" });
+  await teardown(ctx);
+});
 beforeEach(async () => {
   await clean(ctx);
-  ctx.setEnv(ENV);
-  meta = fakeMeta();
-  ctx.setFetch(meta.fetch);
+  evo = evolutionFake();
+  ctx.setFetch(evo.fetch);
+  ctx.setEnv({ ...EVOLUTION_ENV, EVOLUTION_WEBHOOK_URL: WEBHOOK_BASE });
 });
 
-async function owner(shop = "acme.myshopify.com", uid = "owner") {
-  const o = await signIn(ctx, uid, `${uid}@acme.test`);
-  const ws = await createWorkspace(ctx, o.headers);
-  const store = await createStore(ws, shop, ["read_orders", "read_customers"], { name: "Acme Store", timezone: "Australia/Melbourne" });
-  return { ...o, ws, store, base: `/workspaces/${ws}/stores/${store.id}/whatsapp` };
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+
+async function owner(uid = "u1", email = "o@shop.test") {
+  const s = await signIn(ctx, uid, email);
+  const ws = await createWorkspace(ctx, s.headers);
+  const store = await createStore(ws, `${uid}.myshopify.com`, ["read_orders", "read_customers"], { name: "Green Leaf", currency: "AUD" });
+  const base = `/workspaces/${ws}/stores/${store.id}/whatsapp`;
+  const call = (method: Method, path = "", payload?: unknown, headers = s.headers) => ctx.app.inject({ method, url: `${base}${path}`, headers, ...(payload === undefined ? {} : { payload }) });
+  return { ...s, ws, store, base, call };
+}
+type Owner = Awaited<ReturnType<typeof owner>>;
+
+function ok<T = any>(res: { statusCode: number; body: string; json(): any }, status = 200): T { // eslint-disable-line @typescript-eslint/no-explicit-any
+  expect(res.statusCode, res.body).toBe(status);
+  return res.json();
 }
 
-const call = (method: string, url: string, headers: Record<string, string>, payload?: unknown) => ctx.app.inject({ method, url, headers, ...(payload !== undefined ? { payload } : {}) });
+/** Delivers a webhook the way Evolution posts it. */
+const deliver = (w: { url: string; headers: Record<string, string>; body: string }) => ctx.app.inject({ method: "POST", url: w.url, headers: w.headers, payload: w.body });
 
-async function connect(o: Awaited<ReturnType<typeof owner>>, finish: Record<string, unknown> = {}) {
-  const start = await call("POST", `${o.base}/connect/start`, o.headers);
-  expect(start.statusCode).toBe(200);
-  const { nonce } = start.json();
-  return call("POST", `${o.base}/connect/finish`, o.headers, { nonce, code: "good_code_1234567890", flow: "cloud_api", wabaId: WABA, phoneNumberId: PHONE, businessId: "777", ...finish });
+/** The instance this store's connection uses at the provider. */
+async function instanceOf(o: Owner) {
+  const conn = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+  return conn.instanceName!;
 }
 
-/** Run every queued WhatsApp job the way the worker does (sends and webhook deliveries), until none is left. */
-async function drain() {
-  for (let i = 0; i < 20; i++) {
-    const jobs = ctx.deps.queues.sent.sync.splice(0) as unknown as Array<{ kind: string; messageId?: string; eventId?: string; campaignId?: string; storeId?: string }>;
-    if (!jobs.length) return;
-    for (const j of jobs) {
-      if (j.kind === "whatsapp") await sendWaMessage(j.messageId!, ctx.deps);
-      else if (j.kind === "whatsapp_webhook") await processWebhookEvent(j.eventId!, ctx.deps);
-      else if (j.kind === "whatsapp_dispatch") await dispatchCampaign({ campaignId: j.campaignId!, storeId: j.storeId! }, ctx.deps);
-    }
-  }
+/** Step 1-2: a QR pairing, then the phone scans and Evolution's webhook says the connection is open. */
+async function connect(o: Owner, phone = "61400000099") {
+  ok(await o.call("POST", "/connection", { method: "qr" }), 201);
+  const name = await instanceOf(o);
+  evo.open(name, phone, "Green Leaf");
+  const res = await deliver(evo.webhook(name, "connection.update", { instance: name, wuid: `${phone}@s.whatsapp.net`, profileName: "Green Leaf", state: "open", statusReason: 200 }));
+  expect(res.json()).toEqual({ ok: true, outcome: "applied" });
+  return name;
 }
 
-const signedWebhook = (body: unknown) => {
-  const raw = JSON.stringify(body);
-  return call("POST", "/webhooks/whatsapp", { "content-type": "application/json", "x-hub-signature-256": signMetaBody(raw, APP_SECRET) }, raw);
+const SETTINGS = {
+  businessName: "Green Leaf",
+  orderUpdates: "checkout_notice",
+  marketingEnabled: true,
+  shopifySmsConsent: false,
+  sendWindow: { start: 0, end: 24 },
+  timeZone: "UTC",
+  dailyLimit: 200,
+  perCustomerDailyLimit: 3,
+  retentionDays: 90,
 };
 
-describe("connecting", () => {
-  it("says it isn't switched on until every setting is there, and names them only to who can fix it", async () => {
-    ctx.setEnv(OFF);
-    const o = await owner();
-    const r = (await call("GET", o.base, o.headers)).json();
-    expect(r.platform).toEqual({ ready: false, missing: ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhook: null });
-    expect(r.connection).toBeNull();
-    // Nothing pretends to be connected or running.
-    expect(r.automation).toMatchObject({ state: "disconnected", label: "Disconnected" });
-    expect(r.queue).toEqual({ waiting: 0, held: 0, heldReasons: [], nextDueAt: null });
-    expect((await call("POST", `${o.base}/connect/start`, o.headers)).json()).toMatchObject({ error: "not_configured" });
-  });
+/** Step 3. */
+const configure = async (o: Owner, extra: Record<string, unknown> = {}) => ok(await o.call("PUT", "/settings", { ...SETTINGS, ...extra }));
 
-  it("connects with Embedded Signup: token to Nango, webhooks, registration, templates", async () => {
-    const o = await owner();
-    const res = await connect(o);
-    expect(res.statusCode).toBe(200);
-    const { connection } = res.json();
-    expect(connection).toMatchObject({ status: "active", wabaId: WABA, wabaName: "Acme WhatsApp", phoneNumberId: PHONE, displayPhoneNumber: "+61 400 000 001", registered: true, subscribed: true, hasPin: true, dailyConversationLimit: 1000 });
-    // The token is at Nango, under the store's own connection, tagged with ids only.
-    expect(meta.integrationMade).toBe(true);
-    expect(meta.nango.get(`wa-${o.store.id}`)).toEqual({ apiKey: TOKEN, tags: { end_user_id: o.user.id, organization_id: o.ws, bi_store: o.store.id, bi_provider: "whatsapp", bi_waba: WABA } });
-    const row = await systemDb.waConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
-    expect(JSON.stringify(row)).not.toContain(TOKEN);
-    expect(row.pinEnc).toBeTruthy();
-    expect(await systemDb.waTemplate.count({ where: { storeId: o.store.id, status: "APPROVED" } })).toBe(1);
-    expect(await systemDb.auditLog.count({ where: { workspaceId: o.ws, action: "whatsapp.connected" } })).toBe(1);
-    // Nothing the browser sees carries a token or the PIN.
-    const overview = await call("GET", o.base, o.headers);
-    expect(overview.body).not.toContain(TOKEN);
-    expect(overview.json().checklist).toMatchObject({ connected: true, registered: true, subscribed: true, approvedTemplates: 1, consentChosen: false });
-    // The PIN is shown to owners only, and audited.
-    const pin = await call("POST", `${o.base}/pin`, o.headers);
-    expect(pin.json().pin).toMatch(/^\d{6}$/);
-    expect(await systemDb.auditLog.count({ where: { workspaceId: o.ws, action: "whatsapp.pin_viewed" } })).toBe(1);
-  });
-
-  it("refuses a sign-in it didn't start, an expired code, another app's token, missing permissions and an account not granted", async () => {
-    const o = await owner();
-    const other = await signIn(ctx, "intruder", "intruder@acme.test");
-    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: other.user.id, role: "admin" } });
-    const { nonce } = (await call("POST", `${o.base}/connect/start`, o.headers)).json();
-    // The nonce is the starter's own.
-    expect((await call("POST", `${o.base}/connect/finish`, other.headers, { nonce, code: "good_code_1234567890", wabaId: WABA, phoneNumberId: PHONE })).json().error).toBe("state_mismatch");
-    // And single-use: taken by that try.
-    expect((await call("POST", `${o.base}/connect/finish`, o.headers, { nonce, code: "good_code_1234567890", wabaId: WABA, phoneNumberId: PHONE })).json().error).toBe("state_mismatch");
-    expect((await connect(o, { code: "expired_code_1234567890" })).json().error).toBe("code_rejected");
-    meta.appId = "999";
-    expect((await connect(o)).json().error).toBe("wrong_app");
-    meta.appId = APP_ID;
-    meta.scopes = ["whatsapp_business_management"];
-    expect((await connect(o)).json().error).toBe("permission_missing");
-    meta.scopes = ["whatsapp_business_management", "whatsapp_business_messaging"];
-    expect((await connect(o, { wabaId: "1111111111" })).json().error).toBe("waba_not_granted");
-    expect(await systemDb.waConnection.count()).toBe(0);
-    // Nothing was handed to Nango for any of them.
-    expect(meta.nango.size).toBe(0);
-  });
-
-  it("asks for the number's own PIN when it has one, and finishes with it", async () => {
-    const o = await owner();
-    meta.existingPin = "246810";
-    const { connection } = (await connect(o)).json();
-    expect(connection).toMatchObject({ status: "action_required", step: "pin_required", registered: false, hasPin: false });
-    expect((await call("POST", `${o.base}/connect/pin`, o.headers, { pin: "111111" })).json().error).toBe("pin_mismatch");
-    const done = await call("POST", `${o.base}/connect/pin`, o.headers, { pin: "246810" });
-    expect(done.json().connection).toMatchObject({ status: "active", step: null, registered: true });
-  });
-
-  it("lets the merchant choose among several numbers", async () => {
-    const o = await owner();
-    meta.phones.push({ id: "9080706051", display_phone_number: "+61 400 000 002", verified_name: "Acme 2" });
-    const { connection } = (await connect(o, { phoneNumberId: null })).json();
-    expect(connection).toMatchObject({ status: "action_required", step: "choose_number", phoneNumberId: null });
-    const numbers = (await call("GET", `${o.base}/connect/numbers`, o.headers)).json().numbers;
-    expect(numbers.map((n: { id: string }) => n.id)).toEqual([PHONE, "9080706051"]);
-    const chosen = await call("POST", `${o.base}/connect/number`, o.headers, { phoneNumberId: "9080706051" });
-    expect(chosen.json().connection).toMatchObject({ status: "active", phoneNumberId: "9080706051", registered: true });
-  });
-  it("refreshes a token that expires well before it does, and leaves one that doesn't alone", async () => {
-    const o = await owner();
-    expect((await connect(o)).statusCode).toBe(200);
-    const check = async () => checkConnection(ctx.deps, await systemDb.waConnection.findUniqueOrThrow({ where: { storeId: o.store.id } }));
-    const inDays = (d: number) => Math.floor(Date.now() / 1000) + d * 86_400;
-    // A token that never expires, and one with 50 days left: nothing to do.
-    expect((await check()).status).toBe("active");
-    meta.tokenExpiresAt = inDays(50);
-    expect((await check()).status).toBe("active");
-    expect(meta.refreshes).toBe(0);
-    // Meta refusing the refresh changes nothing: the old token still works, the next check tries again.
-    meta.tokenExpiresAt = inDays(20);
-    meta.refreshFails = true;
-    expect((await check()).status).toBe("active");
-    expect(meta.nango.get(`wa-${o.store.id}`)?.apiKey).toBe(TOKEN);
-    // 20 days left: a fresh token goes to Nango (same connection, same tags) and is used from then on.
-    meta.refreshFails = false;
-    expect((await check()).status).toBe("active");
-    expect(meta.refreshes).toBe(1);
-    expect(meta.nango.get(`wa-${o.store.id}`)).toEqual({ apiKey: REFRESHED, tags: { end_user_id: o.user.id, organization_id: o.ws, bi_store: o.store.id, bi_provider: "whatsapp", bi_waba: WABA } });
-    meta.tokenExpiresAt = inDays(60);
-    expect((await check()).status).toBe("active");
-    expect(meta.refreshes).toBe(1);
-    const overview = await call("GET", o.base, o.headers);
-    expect(overview.body).not.toContain(REFRESHED);
-  });
-});
-
-describe("tenant isolation", () => {
-  it("keeps one workspace's WhatsApp out of another's reach", async () => {
-    const a = await owner();
-    await connect(a);
-    const b = await owner("other.myshopify.com", "owner2");
-    // B can't read or act on A's store by its id.
-    for (const [m, path] of [
-      ["GET", a.base],
-      ["GET", `${a.base}/messages`],
-      ["POST", `${a.base}/connect/start`],
-      ["DELETE", a.base],
-      ["POST", `${a.base}/pin`],
-      ["POST", `${a.base}/automation/pause`],
-      ["GET", `${a.base}/workflows`],
-    ] as const) {
-      expect((await call(m, path, b.headers)).statusCode, `${m} ${path}`).toBe(404);
+/**
+ * The worker, in-process: sends what waits on the whatsapp queue, and applies stored webhook events
+ * and campaign batches, until nothing is left. The pace between a linked phone's messages is waived;
+ * a job SQS would deliver later (a retry, a hold: more than a campaign's few seconds) isn't due yet.
+ */
+async function drain(): Promise<string[]> {
+  const out: string[] = [];
+  for (let round = 0; round < 20; round++) {
+    const sent = ctx.deps.queues.sent.whatsapp.splice(0);
+    const opts = ctx.deps.queues.sentOpts.whatsapp.splice(0);
+    const jobs = sent.filter((_, i) => (opts[i]?.delaySeconds ?? 0) <= 10);
+    if (!jobs.length) break;
+    for (const j of jobs) {
+      if (j.kind === "wapp_send") {
+        for (const c of await systemDb.wappConnection.findMany({ select: { id: true } })) await ctx.deps.coord.release(`wapp:pace:${c.id}`);
+        out.push(await sendQueuedMessage(ctx.deps, j.messageId));
+      } else if (j.kind === "wapp_event") out.push(await processWebhookEvent(ctx.deps, j.eventId));
+      else out.push(await dispatchCampaign(ctx.deps, j.campaignId));
     }
-    // And the same number can't be connected to B's store too.
-    expect((await connect(b)).json().error).toBe("number_in_use");
-    expect((await systemDb.waConnection.findUniqueOrThrow({ where: { storeId: a.store.id } })).status).toBe("active");
+  }
+  return out;
+}
+
+/** Step 4: the test number verified with the code WhatsApp delivered, and a test message WhatsApp reported sent. */
+async function finishSetup(o: Owner) {
+  ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }));
+  await drain();
+  const code = /is (\d{6})\./.exec(String(evo.sends.at(-1)!.body.text))![1];
+  ok(await o.call("POST", "/test-number/verify", { code }));
+  const { messageId } = ok(await o.call("POST", "/test-message", {}), 201);
+  await drain();
+  const sent = evo.sends.at(-1)!;
+  await deliver(evo.webhook(sent.instance, "messages.update", { keyId: sent.id, remoteJid: `${sent.body.number}@s.whatsapp.net`, fromMe: true, status: "SERVER_ACK" }));
+  await drain();
+  expect(ok(await o.call("GET", `/messages/${messageId}`)).message.status).toBe("sent");
+}
+
+/** A customer's message to the store's number, as Evolution reports it. */
+const inbound = (name: string, from: string, text: string, opts: { id?: string; jid?: string; fromMe?: boolean } = {}) =>
+  evo.webhook(name, "messages.upsert", {
+    key: { remoteJid: opts.jid ?? `${from.replace(/^\+/, "")}@s.whatsapp.net`, fromMe: opts.fromMe ?? false, id: opts.id ?? `IN${Math.random().toString(16).slice(2, 14).toUpperCase()}` },
+    pushName: "Pat",
+    message: { conversation: text },
+    messageType: "conversation",
+    messageTimestamp: Math.floor(Date.now() / 1000),
   });
 
-  it("lets members do only what they were granted", async () => {
+/** Everything secret this store's connection holds, to look for in answers. */
+async function secretsOf(o: Owner) {
+  const name = await instanceOf(o);
+  const inst = evo.instances.get(name)!;
+  return [EVOLUTION_KEY, inst.token, inst.webhook!.jwtKey, name, QR_PNG.slice(30)];
+}
+
+describe("connecting a phone (Steps 1-2)", () => {
+  it("shows the QR code Evolution issued and is connected only when the provider says the connection is open", async () => {
     const o = await owner();
-    await connect(o);
-    const v = await signIn(ctx, "viewer", "viewer@acme.test");
-    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer, "marketing.campaigns"] } });
-    const r = await call("GET", o.base, v.headers);
-    expect(r.statusCode).toBe(200);
-    expect(r.json().can).toEqual({ connect: false, manage: false, contacts: false, pin: false });
-    expect(r.json().platform.missing).toBeUndefined();
-    expect((await call("GET", `${o.base}/contacts`, v.headers)).statusCode).toBe(403);
-    expect((await call("POST", `${o.base}/connect/start`, v.headers)).statusCode).toBe(403);
-    expect((await call("DELETE", o.base, v.headers)).statusCode).toBe(403);
-    expect((await call("PUT", `${o.base}/settings`, v.headers, { orderUpdates: "checkout_notice" })).statusCode).toBe(403);
-    expect((await call("POST", `${o.base}/automation/pause`, v.headers)).statusCode).toBe(403);
-    expect((await call("POST", `${o.base}/automation/resume`, v.headers)).statusCode).toBe(403);
-    // Searching the history by a customer's number needs "View contact information".
-    expect((await call("GET", `${o.base}/messages?phone=%2B61412345678`, v.headers)).statusCode).toBe(403);
-    // Someone who may only see how integrations stand (Settings → Integrations' card): the connection, no messages.
-    const i = await signIn(ctx, "integrations", "integrations@acme.test");
-    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: i.user.id, role: "custom", permissions: ["integrations.status"] } });
-    const card = await call("GET", o.base, i.headers);
-    expect(card.statusCode).toBe(200);
-    expect(card.json()).toMatchObject({ connection: { status: "active" }, recent: [], can: { connect: false, manage: false } });
-    expect((await call("GET", `${o.base}/messages`, i.headers)).statusCode).toBe(403);
-  });
-});
+    const before = ok(await o.call("GET"));
+    expect(before).toMatchObject({ connection: null, platform: { evolution: true }, can: { connect: true, manage: true, contacts: true }, setup: { current: "connect" } });
 
-describe("Meta's webhooks", () => {
-  it("answers the verification handshake only with bizinsights' verify token", async () => {
-    const ok = await call("GET", "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify_tok_123&hub.challenge=abc123", {});
-    expect(ok.statusCode).toBe(200);
-    expect(ok.body).toBe("abc123");
-    expect((await call("GET", "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=nope&hub.challenge=abc123", {})).statusCode).toBe(403);
-  });
+    const started = await o.call("POST", "/connection", { method: "qr" });
+    const { pairing } = ok(started, 201);
+    expect(started.headers["cache-control"]).toBe("no-store");
+    expect(pairing).toMatchObject({ status: "pairing", qr: QR_PNG, pairingCode: null });
+    // One instance at the provider, made with the global key, with a key and a webhook of its own.
+    const name = await instanceOf(o);
+    expect(name).toMatch(/^bi_[0-9a-f]{24}$/);
+    const inst = evo.instances.get(name)!;
+    expect(inst).toMatchObject({ integration: "WHATSAPP-BAILEYS", state: "connecting" });
+    expect(inst.token).not.toBe(EVOLUTION_KEY);
+    expect(inst.webhook).toMatchObject({ url: `${WEBHOOK_BASE}/webhooks/whatsapp/evolution/${name}`, events: expect.arrayContaining(["CONNECTION_UPDATE", "MESSAGES_UPSERT", "MESSAGES_UPDATE"]) });
+    expect(evo.calls[0]).toMatchObject({ method: "POST", path: "/instance/create", apikey: EVOLUTION_KEY });
+    expect(evo.calls.slice(1).every((c) => c.apikey === inst.token)).toBe(true);
+    // The keys are kept encrypted.
+    const row = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+    expect(row.instanceTokenEnc).not.toContain(inst.token);
+    expect(row.webhookKeyEnc).not.toContain(inst.webhook!.jwtKey);
 
-  it("stores a signed delivery once, applies statuses forward only, and records STOP", async () => {
-    const o = await owner();
-    await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice", testPhone: "+61411222333" });
-    // A message to a customer, sent (accepted by Meta).
-    const sent = await call("POST", `${o.base}/messages`, o.headers, {
-      requestId: "8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d11",
-      to: { phone: "+61 412 345 678" },
-      message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1001" }], buttons: [] } },
-    });
-    expect(sent.statusCode).toBe(202);
-    await drain();
-    const m = await systemDb.waMessage.findFirstOrThrow({ where: { storeId: o.store.id, source: "manual" } });
-    expect(m).toMatchObject({ status: "accepted", wamid: "wamid.1", payloadEnc: null });
-    expect(meta.sends[0]).toMatchObject({ to: "61412345678", type: "template", biz_opaque_callback_data: m.id, template: { name: "order_confirmation", language: { code: "en" } } });
+    // While the phone hasn't scanned: the provider's current code, still "pairing", however often it's asked.
+    const polled = ok(await o.call("GET", "/connection/pairing")).pairing;
+    expect(polled).toMatchObject({ status: "pairing", qr: QR_PNG, qrCount: 0 });
+    expect((await deliver(evo.webhook(name, "qrcode.updated", { qrcode: { instance: name, pairingCode: null, code: "2@x", base64: QR_PNG } }))).json().outcome).toBe("applied");
+    expect((await deliver(evo.webhook(name, "connection.update", { instance: name, state: "connecting", statusReason: 200 }))).json().outcome).toBe("applied");
+    expect(ok(await o.call("GET")).connection).toMatchObject({ status: "pairing", qrCount: 1, phone: null });
 
-    const status = (s: string, ts: number) => ({
-      object: "whatsapp_business_account",
-      entry: [{ id: WABA, changes: [{ field: "messages", value: { metadata: { phone_number_id: PHONE }, statuses: [{ id: "wamid.1", status: s, timestamp: String(ts), biz_opaque_callback_data: m.id }] } }] }],
-    });
-    // Unsigned: refused before anything is read.
-    expect((await call("POST", "/webhooks/whatsapp", { "content-type": "application/json", "x-hub-signature-256": "sha256=00" }, JSON.stringify(status("read", 3)))).statusCode).toBe(401);
-    // Delivered arrives before sent; then a late failure. Meta also redelivers the same body.
-    expect((await signedWebhook(status("delivered", 1_800_000_002))).statusCode).toBe(200);
-    expect((await signedWebhook(status("delivered", 1_800_000_002))).json()).toMatchObject({ duplicate: true });
-    expect((await signedWebhook(status("sent", 1_800_000_001))).statusCode).toBe(200);
-    expect((await signedWebhook(status("failed", 1_800_000_003))).statusCode).toBe(200);
-    expect(await systemDb.waWebhookEvent.count()).toBe(3);
-    await drain();
-    const after = await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } });
-    expect(after.status).toBe("delivered");
-    expect(after.sentAt?.getTime()).toBe(1_800_000_001_000);
-    expect(after.deliveredAt?.getTime()).toBe(1_800_000_002_000);
-    expect(await systemDb.waMessageEvent.count({ where: { messageId: m.id } })).toBe(3);
-    // Processed deliveries keep no body.
-    expect(await systemDb.waWebhookEvent.count({ where: { status: "processed", bodyEnc: null } })).toBe(3);
+    // Evolution says it's open: connected, with the number WhatsApp linked (masked).
+    evo.open(name, "61400000099", "Green Leaf");
+    const done = ok(await o.call("GET", "/connection/pairing")).pairing;
+    expect(done).toMatchObject({ status: "connected", qr: null, profileName: "Green Leaf" });
+    expect(done.phone).toMatch(/^\+61 [•]+ 099$/);
+    const after = ok(await o.call("GET"));
+    expect(after.connection).toMatchObject({ provider: "qr", status: "connected", statusLabel: expect.any(String) });
+    expect(after.setup.current).toBe("configure");
 
-    // The customer replies STOP: nothing more is sent to them, and their waiting message is cancelled.
-    await call("POST", `${o.base}/messages`, o.headers, {
-      requestId: "8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d12",
-      to: { phone: "+61412345678" },
-      message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1002" }], buttons: [] } },
-    });
-    await signedWebhook({
-      object: "whatsapp_business_account",
-      entry: [{ id: WABA, changes: [{ field: "messages", value: { metadata: { phone_number_id: PHONE }, messages: [{ id: "wamid.in1", from: "61412345678", timestamp: "1800000010", type: "text", text: { body: "STOP" } }] } }] }],
-    });
-    // The webhook is applied before the queued send runs.
-    const jobs = ctx.deps.queues.sent.sync.splice(0) as unknown as Array<{ kind: string; messageId?: string; eventId?: string }>;
-    for (const j of jobs.filter((x) => x.kind === "whatsapp_webhook")) await processWebhookEvent(j.eventId!, ctx.deps);
-    for (const j of jobs.filter((x) => x.kind === "whatsapp")) await sendWaMessage(j.messageId!, ctx.deps);
-    const contact = await systemDb.waContact.findFirstOrThrow({ where: { storeId: o.store.id } });
-    expect(contact.optedOut).toBe(true);
-    expect(await systemDb.waConsentEvent.count({ where: { contactId: contact.id, source: "whatsapp_stop" } })).toBe(1);
-    expect(await systemDb.waMessage.count({ where: { storeId: o.store.id, direction: "in" } })).toBe(1);
-    expect(meta.sends).toHaveLength(1);
-    const refused = await call("POST", `${o.base}/messages`, o.headers, {
-      requestId: "8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d13",
-      to: { contactId: contact.id },
-      message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1003" }], buttons: [] } },
-    });
-    expect(refused.json().error).toBe("opted_out");
-  });
-});
-
-describe("sending", () => {
-  it("retries rate limits, holds for a reconnect, and never repeats a send that got no answer", async () => {
-    const o = await owner();
-    await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice", testPhone: "+61411222333" });
-    const send = (id: string) =>
-      call("POST", `${o.base}/messages`, o.headers, {
-        requestId: id,
-        to: { phone: "+61412345678" },
-        message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1" }], buttons: [] } },
-      });
-    // Rate limited: back to the queue for later, one attempt spent.
-    meta.sendError = { status: 400, body: { error: { message: "Rate limit hit", code: 130429 } } };
-    await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d21");
-    await drain();
-    let m = await systemDb.waMessage.findFirstOrThrow({ where: { storeId: o.store.id } });
-    expect(m).toMatchObject({ status: "queued", attempts: 1 });
-    expect(m.sendAfter.getTime()).toBeGreaterThan(Date.now() + 20_000);
-    // The same click twice makes one message.
-    await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d21");
-    expect(await systemDb.waMessage.count({ where: { storeId: o.store.id } })).toBe(1);
-    // The throttle tripped the number's circuit breaker: due again at once, it waits it out without asking
-    // Meta (no attempt spent), and so does every other message from the number.
-    const passThrough = meta.fetch;
-    let calls = 0;
-    ctx.setFetch(async (input, init) => {
-      if (new URL(String(input)).pathname.endsWith(`${PHONE}/messages`)) calls++;
-      return passThrough(input, init);
-    });
-    await systemDb.waMessage.update({ where: { id: m.id }, data: { sendAfter: new Date() } });
-    await sendWaMessage(m.id, ctx.deps);
-    m = await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } });
-    expect(m).toMatchObject({ status: "queued", reason: "meta_throttled", attempts: 1 });
-    expect(m.sendAfter.getTime()).toBeGreaterThan(Date.now() + 20_000);
-    expect(calls).toBe(0);
-    ctx.setFetch(meta.fetch);
-    // Its wait over (the breaker's record expired).
-    ctx.deps.coord.clear();
-
-    // Meta no longer accepts the token: the connection waits for a reconnect, the message is held.
-    meta.sendError = { status: 401, body: { error: { message: "Error validating access token", type: "OAuthException", code: 190 } } };
-    await systemDb.waMessage.update({ where: { id: m.id }, data: { sendAfter: new Date() } });
-    await sendWaMessage(m.id, ctx.deps);
-    m = await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } });
-    expect(m).toMatchObject({ status: "queued", reason: "waiting_for_connection" });
-    expect((await systemDb.waConnection.findUniqueOrThrow({ where: { storeId: o.store.id } })).status).toBe("reconnect");
-    expect(await systemDb.alert.count({ where: { storeId: o.store.id, code: "wa_reconnect", resolvedAt: null } })).toBe(1);
-
-    // Reconnecting puts it back; a send with no answer is failed as uncertain and never repeated by itself.
-    expect((await connect(o)).json().connection.status).toBe("active");
-    expect(await systemDb.alert.count({ where: { storeId: o.store.id, code: "wa_reconnect", resolvedAt: null } })).toBe(0);
-    meta.sendError = null;
-    const realFetch = meta.fetch;
-    ctx.setFetch(async (input, init) => {
-      if (new URL(String(input)).pathname.endsWith(`${PHONE}/messages`)) throw new TypeError("socket hang up");
-      return realFetch(input, init);
-    });
-    await systemDb.waMessage.update({ where: { id: m.id }, data: { sendAfter: new Date() } });
-    await sendWaMessage(m.id, ctx.deps);
-    m = await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } });
-    expect(m).toMatchObject({ status: "failed", reason: "uncertain" });
-    ctx.setFetch(realFetch);
-    // The merchant may retry it.
-    const retried = await call("POST", `${o.base}/messages/${m.id}/retry`, o.headers);
-    expect(retried.json().message.status).toBe("queued");
-    await drain();
-    expect((await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } })).status).toBe("accepted");
-  });
-
-  it("refuses a free-form reply outside the customer's 24-hour window", async () => {
-    const o = await owner();
-    await connect(o);
-    const r = await call("POST", `${o.base}/messages`, o.headers, { requestId: "8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d31", to: { phone: "+61412345678" }, message: { kind: "text", body: "Hello!" } });
-    expect(r.json().error).toBe("outside_window");
-  });
-});
-
-describe("templates", () => {
-  it("submits a template for review, refuses one Meta would, and follows Meta's decision", async () => {
-    const o = await owner();
-    await connect(o);
-    const bad = await call("POST", `${o.base}/templates`, o.headers, { name: "x", language: "en", category: "UTILITY", header: { type: "none" }, body: "{{1}} is here", bodyExamples: ["a"] });
-    expect(bad.json().error).toBe("invalid_template");
-    const good = await call("POST", `${o.base}/templates`, o.headers, {
-      name: "Shipping update",
-      language: "en",
-      category: "UTILITY",
-      header: { type: "none" },
-      body: "Hi {{1}}, your order {{2}} has shipped today.",
-      bodyExamples: ["Priya", "#1042"],
-    });
-    expect(good.statusCode).toBe(201);
-    expect(good.json().template).toMatchObject({ name: "shipping_update", status: "PENDING", madeHere: true });
-    expect(meta.templates.at(-1)).toMatchObject({ name: "shipping_update", category: "UTILITY", components: [{ type: "BODY", example: { body_text: [["Priya", "#1042"]] } }] });
-    await signedWebhook({ object: "whatsapp_business_account", entry: [{ id: WABA, changes: [{ field: "message_template_status_update", value: { event: "APPROVED", message_template_id: "t2", message_template_name: "shipping_update", message_template_language: "en" } }] }] });
-    await drain();
-    expect((await systemDb.waTemplate.findFirstOrThrow({ where: { storeId: o.store.id, name: "shipping_update" } })).status).toBe("APPROVED");
-  });
-});
-
-describe("workflows", () => {
-  const order = (over: Record<string, unknown> = {}) => ({
-    id: 5001,
-    name: "#1001",
-    created_at: new Date().toISOString(),
-    processed_at: new Date().toISOString(),
-    total_price: "80.00",
-    currency: "AUD",
-    phone: "+61412345678",
-    customer: { id: 77, first_name: "Pat", orders_count: 1 },
-    shipping_address: { country_code: "AU", first_name: "Pat" },
-    line_items: [{ title: "Cardamom 200g", quantity: 1, price: "80.00" }],
-    tags: "",
-    checkout_token: "chk_1",
-    order_status_url: "https://acme.example/orders/abc",
-    ...over,
-  });
-
-  it("runs once per order, only when its conditions hold, and only after the store chose how customers agree", async () => {
-    const o = await owner();
-    await connect(o);
-    const create = await call("POST", `${o.base}/workflows`, o.headers, {
-      name: "Order confirmation",
-      trigger: "order_created",
-      conditions: [{ field: "order_total", op: "gte", value: 50 }],
-      template: { name: "order_confirmation", language: "en" },
-      mapping: { body: [{ source: "customer_first_name" }, { source: "order_number" }], buttons: [] },
-      timing: { mode: "after_trigger", minutes: 0 },
-    });
-    expect(create.statusCode).toBe(201);
-    const id = create.json().workflow.id;
-    // Utility messages need the store's consent choice first.
-    const refused = await call("POST", `${o.base}/workflows/${id}/activate`, o.headers);
-    expect(refused.json()).toMatchObject({ error: "workflow_problems" });
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    expect((await call("POST", `${o.base}/workflows/${id}/activate`, o.headers)).json().workflow.status).toBe("active");
-
-    const store = await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } });
-    await whatsappOnShopifyEvent(store, "orders/create", order(), ctx.deps);
-    await whatsappOnShopifyEvent(store, "orders/create", order(), ctx.deps); // Shopify redelivers
-    await whatsappOnShopifyEvent(store, "orders/create", order({ id: 5002, name: "#1002", total_price: "20.00" }), ctx.deps);
-    await drain();
-    const runs = await systemDb.waWorkflowRun.findMany({ where: { workflowId: id }, orderBy: { subjectKey: "asc" } });
-    expect(runs.map((r) => [r.subjectKey, r.outcome])).toEqual([
-      ["order:5001", "scheduled"],
-      ["order:5002", "skipped"],
-    ]);
-    expect(runs[1]!.reason).toContain("Order total is at least 50");
-    expect(meta.sends).toHaveLength(1);
-    expect(meta.sends[0]).toMatchObject({ to: "61412345678", template: { components: [{ type: "body", parameters: [{ type: "text", text: "Pat" }, { type: "text", text: "#1001" }] }] } });
-
-    // The workflow's page shows each run with what happened to its message.
-    const detail = (await call("GET", `${o.base}/workflows/${id}`, o.headers)).json();
-    expect(detail.runs.map((r: { outcome: string }) => r.outcome).sort()).toEqual(["scheduled", "skipped"]);
-    expect(detail.workflow.stats).toMatchObject({ sent: 1, skipped: 1 });
-  });
-
-  it("cancels a waiting reminder when the checkout becomes an order", async () => {
-    const o = await owner();
-    meta.templates.push({ id: "t9", name: "checkout_reminder", language: "en", category: "MARKETING", status: "APPROVED", components: [{ type: "BODY", text: "Hi {{1}}, you left items in your cart at {{2}}." }] });
-    await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice", shopifySmsConsent: true });
-    const wf = (
-      await call("POST", `${o.base}/workflows`, o.headers, {
-        name: "Checkout reminder",
-        trigger: "checkout_abandoned",
-        template: { name: "checkout_reminder", language: "en" },
-        mapping: { body: [{ source: "customer_first_name" }, { source: "store_name" }], buttons: [] },
-        timing: { mode: "after_trigger", minutes: 60 },
-        sendWindow: null,
-      })
-    ).json().workflow;
-    expect((await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers)).statusCode).toBe(200);
-    const store = await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } });
-    const checkout = { token: "chk_1", phone: "+61412345678", updated_at: new Date().toISOString(), buyer_accepts_sms_marketing: true, customer: { id: 77, first_name: "Pat" }, line_items: [{ title: "Tea", quantity: 1 }], total_price: "10.00" };
-    await whatsappOnShopifyEvent(store, "checkouts/update", checkout, ctx.deps);
-    const m = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } });
-    expect(m.status).toBe("queued");
-    // Shopify's SMS consent covered WhatsApp (the store said so): recorded, with its source.
-    expect(await systemDb.waConsentEvent.count({ where: { source: "shopify_sms" } })).toBe(1);
-    await whatsappOnShopifyEvent(store, "orders/create", order(), ctx.deps);
-    expect((await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } })).status).toBe("cancelled");
-  });
-});
-
-describe("campaigns", () => {
-  it("sends an approved marketing template to opted-in customers only, after the exact count is confirmed", async () => {
-    const o = await owner();
-    meta.templates.push({ id: "t8", name: "store_promotion", language: "en", category: "MARKETING", status: "APPROVED", components: [{ type: "BODY", text: "Hi {{1}}, something new at {{2}} this week." }] });
-    await connect(o);
-    // Two customers who agreed (START), one who didn't.
-    for (const [from, words] of [
-      ["61411000001", "START"],
-      ["61411000002", "START"],
-      ["61411000003", "hello"],
-    ] as const) {
-      await signedWebhook({ object: "whatsapp_business_account", entry: [{ id: WABA, changes: [{ field: "messages", value: { metadata: { phone_number_id: PHONE }, messages: [{ id: `wamid.in.${from}`, from, timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body: words } }] } }] }] });
+    // No answer carries a key, the instance's name, the QR code or the full number.
+    const secrets = await secretsOf(o);
+    for (const res of [await o.call("GET"), await o.call("GET", "/connection/pairing"), await o.call("POST", "/connection/check")]) {
+      for (const s of secrets) expect(res.body, s).not.toContain(s);
+      expect(res.body).not.toContain("61400000099");
     }
-    await drain();
-    const estimate = await call("POST", `${o.base}/campaigns/estimate`, o.headers, { audience: { countries: ["AU"] } });
-    expect(estimate.json().count).toBe(2);
-    const made = await call("POST", `${o.base}/campaigns`, o.headers, { name: "Spring", template: { name: "store_promotion", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "store_name" }], buttons: [] }, audience: { countries: ["AU"] } });
-    const id = made.json().campaign.id;
-    expect((await call("POST", `${o.base}/campaigns/${id}/schedule`, o.headers, { scheduledAt: null, confirmRecipients: 3 })).json().error).toBe("recipients_changed");
-    const scheduled = await call("POST", `${o.base}/campaigns/${id}/schedule`, o.headers, { scheduledAt: null, confirmRecipients: 2 });
-    expect(scheduled.json().campaign.status).toBe("sending");
-    await drain();
-    expect(meta.sends.map((s) => s.to).sort()).toEqual(["61411000001", "61411000002"]);
-    const detail = (await call("GET", `${o.base}/campaigns/${id}`, o.headers)).json();
-    expect(detail.report).toMatchObject({ total: 2, sent: 2 });
-    // Still sending (the sweep marks it completed): it can be cancelled, which stops nothing already sent.
-    expect((await call("POST", `${o.base}/campaigns/${id}/cancel`, o.headers)).statusCode).toBe(200);
-    expect((await systemDb.waCampaign.findUniqueOrThrow({ where: { id } })).status).toBe("cancelled");
   });
-});
 
-describe("custom events", () => {
-  it("starts a workflow from the store's own tool with its event key", async () => {
+  it("gives a pairing code for a number, and refuses a second phone while one is linked", async () => {
     const o = await owner();
-    meta.templates.push({ id: "t7", name: "appointment_reminder", language: "en", category: "UTILITY", status: "APPROVED", components: [{ type: "BODY", text: "Hi {{1}}, see you on {{2}} at {{3}} for your visit." }] });
-    await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    const wf = (
-      await call("POST", `${o.base}/workflows`, o.headers, {
-        name: "Reminder",
-        trigger: "custom_event",
-        eventName: "appointment_booked",
-        template: { name: "appointment_reminder", language: "en" },
-        mapping: { body: [{ source: "customer_first_name" }, { source: "event_date" }, { source: "event_time" }], buttons: [] },
-        timing: { mode: "before_event", minutes: 24 * 60 },
-      })
-    ).json().workflow;
-    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
-    const { key } = (await call("POST", `${o.base}/settings/event-key`, o.headers)).json();
-    expect(key).toMatch(/^whev_/);
-    const at = new Date(Date.now() + 3 * 86_400_000).toISOString();
-    const event = { event: "appointment_booked", eventId: "bk_1", phone: "+61412345678", firstName: "Pat", at };
-    expect((await call("POST", "/whatsapp/events", { authorization: "Bearer whev_wrong" }, event)).statusCode).toBe(401);
-    const r = await call("POST", "/whatsapp/events", { authorization: `Bearer ${key}` }, event);
-    expect(r.json()).toEqual({ workflows: 1, scheduled: 1, skipped: 0 });
-    // Sent again (a retry in the store's tool): nothing new.
-    expect((await call("POST", "/whatsapp/events", { authorization: `Bearer ${key}` }, event)).json()).toEqual({ workflows: 1, scheduled: 0, skipped: 0 });
-    const m = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } });
-    // A day before the appointment.
-    expect(Math.abs(m.sendAfter.getTime() - (new Date(at).getTime() - 86_400_000))).toBeLessThan(1000);
+    const { pairing } = ok(await o.call("POST", "/connection", { method: "code", phone: "+61 400 000 099" }), 201);
+    expect(pairing).toMatchObject({ status: "pairing", pairingCode: "WZYEH1YY", qr: QR_PNG });
+    expect(evo.calls.find((c) => c.path.startsWith("/instance/connect"))).toBeTruthy();
+    expect(ok(await o.call("POST", "/connection", { method: "code", phone: "12" }), 400).error).toBe("invalid_phone");
+    const name = await instanceOf(o);
+    evo.open(name);
+    await deliver(evo.webhook(name, "connection.update", { instance: name, state: "open", wuid: "61400000099@s.whatsapp.net" }));
+    expect(ok(await o.call("POST", "/connection", { method: "qr" }), 409).error).toBe("already_connected");
+  });
+
+  it("says plainly when the WhatsApp service is down, and pretends nothing", async () => {
+    const o = await owner();
+    evo.down = "unreachable";
+    expect(ok(await o.call("POST", "/connection", { method: "qr" }), 503).error).toBe("provider_unavailable");
+    const row = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+    expect(row).toMatchObject({ status: "failed", instanceName: null, instanceTokenEnc: null });
+    expect(ok(await o.call("GET")).connection).toMatchObject({ status: "failed" });
+    // Without the service's settings, nothing starts.
+    ctx.setEnv({ EVOLUTION_API_KEY: "" });
+    evo.down = null;
+    expect(ok(await o.call("GET")).platform.evolution).toBe(false);
+    expect(ok(await o.call("POST", "/connection", { method: "qr" }), 503).error).toBe("provider_not_configured");
+  });
+
+  it("records the phone logging out, raises an alert, and holds messages until it is linked again", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    await configure(o);
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Your order is ready.", idempotencyKey: "logout-0001", customerAsked: true }), 201);
+    await deliver(evo.webhook(name, "connection.update", { instance: name, state: "close", statusReason: 401 }));
+    const ov = ok(await o.call("GET"));
+    expect(ov.connection).toMatchObject({ status: "logged_out" });
+    expect(await systemDb.alert.count({ where: { storeId: o.store.id, code: "whatsapp_logged_out", resolvedAt: null } })).toBe(1);
+    expect(await drain()).toEqual(["held"]);
+    const m = await systemDb.wappMessage.findFirstOrThrow({ where: { storeId: o.store.id } });
+    expect(m).toMatchObject({ status: "queued", reason: "not_connected" });
+    expect(evo.sends).toHaveLength(0);
+    expect(ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: "logout-0002" }), 409).error).toBe("not_connected");
+    expect(ok(await o.call("POST", "/connection/reconnect"), 409).error).toBe("needs_pairing");
   });
 });
 
-const confirmation = { template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "order_number" }], buttons: [] } };
-const anOrder = (id: number) => ({
+describe("the provider's webhook", () => {
+  it("accepts only a JWT made from this connection's own key, for this instance, in time, and each body once", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    const good = evo.webhook(name, "connection.update", { instance: name, state: "open" });
+    const refused = [
+      { ...good, headers: { "content-type": "application/json" } },
+      evo.webhook(name, "connection.update", { state: "close", statusReason: 401 }, { key: "someone-elses-key" }),
+      evo.webhook(name, "connection.update", { state: "close", statusReason: 401 }, { expiresIn: -120 }),
+      { ...good, url: "/webhooks/whatsapp/evolution/bi_0123456789abcdef01234567" },
+      { ...good, url: "/webhooks/whatsapp/evolution/not-an-instance" },
+    ];
+    for (const w of refused) {
+      const res = await deliver(w);
+      expect(res.statusCode, w.url).toBe(401);
+      expect(res.json()).toEqual({ error: "unauthenticated" });
+    }
+    // Signed right, but the body names another instance.
+    expect(ok(await deliver(evo.webhook(name, "connection.update", { state: "close" }, { instance: "bi_ffffffffffffffffffffffff" })), 400).error).toBe("invalid");
+    // Not JSON, too big.
+    expect((await deliver({ ...good, body: "{nope" })).statusCode).toBe(400);
+    expect((await deliver({ ...good, body: JSON.stringify({ event: "x", instance: name, data: "x".repeat(300 * 1024) }) })).statusCode).toBe(413);
+    // None of that changed the connection.
+    expect(ok(await o.call("GET")).connection.status).toBe("connected");
+
+    // A message event is stored once: Evolution's retry of the same body is a duplicate.
+    const at = new Date();
+    const first = await deliver(evo.webhook(name, "messages.update", { keyId: "3EB0X", fromMe: true, status: "DELIVERY_ACK" }, { at }));
+    const again = await deliver(evo.webhook(name, "messages.update", { keyId: "3EB0X", fromMe: true, status: "DELIVERY_ACK" }, { at }));
+    expect([first.json().outcome, again.json().outcome]).toEqual(["stored", "duplicate"]);
+    expect(await systemDb.wappWebhookEvent.count({ where: { storeId: o.store.id } })).toBe(1);
+    // Stored encrypted.
+    const ev = await systemDb.wappWebhookEvent.findFirstOrThrow({ where: { storeId: o.store.id } });
+    expect(ev.bodyEnc).not.toContain("3EB0X");
+    // A message bizinsights doesn't know changes nothing; the body is dropped once applied.
+    expect(await drain()).toEqual(["unknown"]);
+    expect(await systemDb.wappWebhookEvent.findFirstOrThrow({ where: { storeId: o.store.id } })).toMatchObject({ status: "processed", bodyEnc: null });
+  });
+
+  it("checks Meta's signature on the Cloud API webhook and its verify token", async () => {
+    ctx.setEnv({ META_APP_ID: "971575545351940", META_APP_SECRET: "meta-secret-for-tests", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-me", WHATSAPP_CONFIG_ID: "2228218088074576" });
+    const body = JSON.stringify({ object: "whatsapp_business_account", entry: [{ id: "waba-unknown", changes: [] }] });
+    const sig = (b: string, key = "meta-secret-for-tests") => `sha256=${createHmac("sha256", key).update(b).digest("hex")}`;
+    const post = (headers: Record<string, string>) => ctx.app.inject({ method: "POST", url: "/webhooks/whatsapp", headers: { "content-type": "application/json", ...headers }, payload: body });
+    expect((await post({})).statusCode).toBe(401);
+    expect((await post({ "x-hub-signature-256": sig(body, "wrong") })).statusCode).toBe(401);
+    expect(ok(await post({ "x-hub-signature-256": sig(body) }))).toMatchObject({ ok: true });
+    const verify = (token: string) => ctx.app.inject({ method: "GET", url: `/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=${token}&hub.challenge=12345` });
+    expect((await verify("wrong")).statusCode).toBe(403);
+    const v = await verify("verify-me");
+    expect([v.statusCode, v.body]).toEqual([200, "12345"]);
+  });
+});
+
+describe("the test number and the test message (Step 4)", () => {
+  it("verifies the number with a code sent over WhatsApp, and is done only when WhatsApp reports the test sent", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    await configure(o);
+    expect(ok(await o.call("GET")).setup.current).toBe("test");
+    expect(ok(await o.call("POST", "/test-message", {}), 409).error).toBe("no_test_number");
+
+    const sent = ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }));
+    expect(sent.phone).toMatch(/222$/);
+    expect(sent.phone).not.toContain("400111");
+    expect(await drain()).toEqual(["accepted"]);
+    const codeMsg = evo.sends.at(-1)!;
+    expect(codeMsg).toMatchObject({ instance: name, path: "sendText", body: { number: "61400111222" } });
+    const code = /is (\d{6})\./.exec(String(codeMsg.body.text))![1]!;
+    expect(ok(await o.call("POST", "/test-number/verify", { code: code === "000000" ? "111111" : "000000" }), 400).error).toBe("wrong_code");
+    // The code is on the phone it went to, not in bizinsights' history.
+    const [codeRow] = ok(await o.call("GET", "/messages?source=verification")).messages;
+    expect(codeRow.preview).toMatch(/code isn't kept here/);
+    expect(JSON.stringify(ok(await o.call("GET")))).not.toContain(code);
+    ok(await o.call("POST", "/test-number/verify", { code }));
+
+    const { messageId } = ok(await o.call("POST", "/test-message", {}), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    // Evolution took it ("PENDING"): accepted, not sent; the step isn't done on an HTTP answer.
+    expect(ok(await o.call("GET", `/messages/${messageId}`)).message).toMatchObject({ status: "accepted", providerMessageId: evo.sends.at(-1)!.id });
+    expect(ok(await o.call("GET")).setup.current).toBe("test");
+
+    const report = (status: string) => deliver(evo.webhook(name, "messages.update", { keyId: evo.sends.at(-1)!.id, remoteJid: "61400111222@s.whatsapp.net", fromMe: true, status }));
+    await report("SERVER_ACK");
+    await drain();
+    expect(ok(await o.call("GET", `/messages/${messageId}`)).message.status).toBe("sent");
+    const ov = ok(await o.call("GET"));
+    expect(ov.setup.current).toBeNull();
+    await report("DELIVERY_ACK");
+    await report("SERVER_ACK");
+    await drain();
+    const detail = ok(await o.call("GET", `/messages/${messageId}`));
+    // A late report never moves a message back.
+    expect(detail.message.status).toBe("delivered");
+    expect(detail.events.map((e: { status: string }) => e.status)).toEqual(["accepted", "sent", "delivered"]);
+  });
+
+  it("allows three codes an hour and five tries at one", async () => {
+    const o = await owner();
+    await connect(o);
+    await configure(o);
+    for (let i = 0; i < 3; i++) ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }));
+    expect(ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }), 429).error).toBe("rate_limited");
+    for (let i = 0; i < 5; i++) ok(await o.call("POST", "/test-number/verify", { code: "999999" }), 400);
+    expect(ok(await o.call("POST", "/test-number/verify", { code: "999999" }), 429).error).toBe("too_many_tries");
+  });
+});
+
+describe("sending from the dashboard", () => {
+  it("sends once per key, only with the customer's consent, and records the merchant's word as consent", async () => {
+    const o = await owner();
+    await connect(o);
+    await configure(o, { orderUpdates: "opt_in_only" });
+    const msg = (extra: Record<string, unknown> = {}) => ({ phone: CUSTOMER, reason: "order_update", text: "Your order is on its way.", idempotencyKey: "send-00000001", ...extra });
+
+    const refused = ok(await o.call("POST", "/messages", msg()), 409);
+    expect(refused).toMatchObject({ error: "not_allowed", detail: { reason: "no_consent" } });
+    expect(await systemDb.wappMessage.count({ where: { storeId: o.store.id } })).toBe(0);
+
+    const first = ok(await o.call("POST", "/messages", msg({ customerAsked: true })), 201).message;
+    const again = ok(await o.call("POST", "/messages", msg({ customerAsked: true })), 201).message;
+    expect(again.id).toBe(first.id);
+    expect(first).toMatchObject({ status: "queued", source: "manual", preview: "Your order is on its way." });
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends).toEqual([expect.objectContaining({ path: "sendText", body: expect.objectContaining({ number: "61412345678", text: "Your order is on its way." }) })]);
+    const consent = await systemDb.wappConsentEvent.findFirstOrThrow({ where: { storeId: o.store.id } });
+    expect(consent).toMatchObject({ scope: "order_updates", status: "opted_in", source: "merchant", actorUserId: o.user.id });
+
+    // Marketing needs the customer's own yes to marketing.
+    expect(ok(await o.call("POST", "/messages", msg({ reason: "marketing", text: "Sale!", idempotencyKey: "send-00000002" })), 409).detail.reason).toBe("no_marketing_consent");
+    // A number not on WhatsApp is reported as such, not as sent.
+    evo.notOnWhatsapp.add("61498765432");
+    ok(await o.call("POST", "/messages", msg({ phone: "+61498765432", idempotencyKey: "send-00000003", customerAsked: true })), 201);
+    expect(await drain()).toEqual(["skipped"]);
+    expect(await systemDb.wappMessage.findFirstOrThrow({ where: { storeId: o.store.id, idempotencyKey: "manual:send-00000003" } })).toMatchObject({ status: "skipped", reason: "not_on_whatsapp" });
+  });
+
+  it("sends a real image as media, refuses a file that isn't what it claims, and never retries a send that may have gone", async () => {
+    const o = await owner();
+    await connect(o);
+    await configure(o);
+    const png = QR_PNG.split(",")[1]!;
+    const base = { phone: CUSTOMER, reason: "order_update", customerAsked: true };
+    expect(ok(await o.call("POST", "/messages", { ...base, idempotencyKey: "att-00000001", attachment: { name: "x.png", mime: "image/png", data: Buffer.from("not a png").toString("base64") } }), 400).error).toBe("attachment_invalid");
+    const m = ok(await o.call("POST", "/messages", { ...base, idempotencyKey: "att-00000002", text: "Your receipt", attachment: { name: "receipt.png", mime: "image/png", data: png } }), 201).message;
+    expect(await ctx.deps.payloads.get(`wapp-media/${m.id}`)).toBe(png);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)).toMatchObject({ path: "sendMedia", body: { mediatype: "image", mimetype: "image/png", media: png, caption: "Your receipt" } });
+    expect(await ctx.deps.payloads.get(`wapp-media/${m.id}`)).toBeNull();
+
+    evo.sendFails = "timeout";
+    const t = ok(await o.call("POST", "/messages", { ...base, idempotencyKey: "att-00000003", text: "Hello" }), 201).message;
+    expect(await drain()).toEqual(["failed"]);
+    const failed = ok(await o.call("GET", `/messages/${t.id}`)).message;
+    expect(failed).toMatchObject({ status: "failed", errorCode: "uncertain" });
+    expect(failed.errorDetail).toMatch(/may have reached the customer/);
+    // The merchant may send it again, deliberately.
+    evo.sendFails = null;
+    expect(ok(await o.call("POST", `/messages/${t.id}/retry`)).message.status).toBe("queued");
+    expect(await drain()).toEqual(["accepted"]);
+  });
+
+  it("retries a send that never reached the service, and never one that may have gone", async () => {
+    const o = await owner();
+    await connect(o);
+    await configure(o);
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: "retry-0000001", customerAsked: true }), 201);
+    evo.sendFails = "refused";
+    expect(await drain()).toEqual(["retry"]);
+    const m = await systemDb.wappMessage.findFirstOrThrow({ where: { storeId: o.store.id } });
+    expect(m).toMatchObject({ status: "queued", attempts: 1, errorCode: "unreachable" });
+    expect(m.sendAfter.getTime()).toBeGreaterThan(Date.now() + 20_000);
+    expect(evo.sends).toHaveLength(0);
+    // The connection dropped after the request went out, or the service failed on it: it may be on the
+    // customer's phone, so it is never sent again by itself.
+    for (const [fail, key] of [["reset", "retry-0000002"], [500, "retry-0000003"]] as const) {
+      evo.sendFails = fail;
+      const sent = ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: key }), 201).message;
+      expect(await drain()).toEqual(["failed"]);
+      expect(ok(await o.call("GET", `/messages/${sent.id}`)).message).toMatchObject({ status: "failed", errorCode: "uncertain" });
+    }
+  });
+});
+
+describe("customers' replies", () => {
+  it("honours STOP and START from anyone, and keeps only the store's customers' messages", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    await configure(o);
+    // Someone who isn't a customer: their message is dropped unread; their STOP is kept by hash only.
+    await deliver(inbound(name, "+61411000000", "hello, is this Sam?"));
+    await deliver(inbound(name, "+61411000000", "STOP"));
+    expect(await drain()).toEqual(["not_a_customer", "stop_unknown"]);
+    expect(await systemDb.wappContact.count({ where: { storeId: o.store.id } })).toBe(0);
+    expect(await systemDb.wappMessage.count({ where: { storeId: o.store.id } })).toBe(0);
+    expect(await systemDb.wappSuppression.findFirstOrThrow({ where: { storeId: o.store.id } })).toMatchObject({ scope: "all", reason: "stop_reply" });
+    // Group chats, statuses and the store's own messages start nothing.
+    await deliver(inbound(name, "+61411000001", "STOP", { jid: "120363000000000000@g.us" }));
+    await deliver(inbound(name, CUSTOMER, "STOP", { fromMe: true }));
+    expect(await drain()).toEqual(["not_a_person", "own_message"]);
+
+    // A customer bizinsights messaged.
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Your order shipped.", idempotencyKey: "reply-0000001" }), 201);
+    await drain();
+    await deliver(inbound(name, CUSTOMER, "Thanks! When will it arrive?"));
+    await deliver(inbound(name, CUSTOMER, "STOP"));
+    expect(await drain()).toEqual(["recorded", "stop", "accepted"]);
+    expect(evo.sends.at(-1)!.body.text).toBe("You won't get WhatsApp messages from Green Leaf any more. Reply START if you change your mind.");
+    const inMessages = ok(await o.call("GET", "/messages?direction=in")).messages;
+    expect(inMessages.map((m: { preview: string }) => m.preview)).toEqual(["STOP", "Thanks! When will it arrive?"]);
+    expect(ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: "reply-0000002" }), 409).detail.reason).toBe("opted_out");
+    expect(ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: "reply-0000003", customerAsked: true }), 409).error).toBe("opted_out");
+
+    await deliver(inbound(name, CUSTOMER, "start"));
+    expect(await drain()).toEqual(["start", "accepted"]);
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Welcome back", idempotencyKey: "reply-0000004" }), 201);
+    const history = ok(await o.call("GET", "/contacts")).contacts[0].history.map((h: { source: string; status: string }) => `${h.source}:${h.status}`);
+    expect(history).toEqual(["whatsapp_start:opted_in", "whatsapp_stop:opted_out"]);
+  });
+});
+
+const ORDER = (id: number, extra: Record<string, unknown> = {}) => ({
   id,
   name: `#${id}`,
   created_at: new Date().toISOString(),
   processed_at: new Date().toISOString(),
-  total_price: "80.00",
+  updated_at: new Date().toISOString(),
   currency: "AUD",
-  phone: "+61412345678",
+  total_price: "58.00",
+  phone: CUSTOMER,
   customer: { id: 77, first_name: "Pat", orders_count: 1 },
-  shipping_address: { country_code: "AU", first_name: "Pat" },
-  line_items: [{ title: "Tea", quantity: 1, price: "80.00" }],
-  tags: "",
+  shipping_address: { first_name: "Pat", country_code: "AU", phone: CUSTOMER },
+  line_items: [{ product_id: 1, title: "Linen shirt", quantity: 1, price: "58.00" }],
+  ...extra,
 });
 
-describe("pausing all automation", () => {
-  it("records what it stopped, holds what was waiting, and sends it on resume", async () => {
+describe("the do-not-message list", () => {
+  it("stops tests and codes to a number that replied STOP, and a STOP survives a try that failed halfway", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    await configure(o);
+    await finishSetup(o);
+    // The test number replies STOP (it isn't a customer): nothing more goes to it, not even a test.
+    await deliver(inbound(name, TEST_PHONE, "STOP"));
+    expect(await drain()).toEqual(["stop_unknown"]);
+    const { messageId } = ok(await o.call("POST", "/test-message", {}), 201);
+    expect(await drain()).toEqual(["skipped"]);
+    expect(ok(await o.call("GET", `/messages/${messageId}`)).message).toMatchObject({ status: "skipped", reason: "suppressed" });
+    expect(ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }), 409).error).toBe("suppressed");
+
+    // A customer's STOP whose first try recorded the message and then failed: the retry still opts them out.
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Shipped.", idempotencyKey: "dnm-00000001", customerAsked: true }), 201);
+    await drain();
+    const contact = await systemDb.wappContact.findFirstOrThrow({ where: { storeId: o.store.id } });
+    const conn = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+    await systemDb.wappMessage.create({
+      data: { workspaceId: o.ws, storeId: o.store.id, connectionId: conn.id, direction: "in", contactId: contact.id, phoneHash: contact.phoneHash, phoneMasked: contact.phoneMasked, source: "inbound", type: "conversation", status: "received", providerMessageId: "INSTOP0001", acceptedAt: new Date(), finalAt: new Date(), sendAfter: new Date() },
+    });
+    await deliver(inbound(name, CUSTOMER, "STOP", { id: "INSTOP0001" }));
+    expect(await drain()).toEqual(["stop", "accepted"]);
+    expect(await systemDb.wappContact.findUniqueOrThrow({ where: { id: contact.id } })).toMatchObject({ optedOut: true });
+    // Delivered once more, it changes nothing.
+    await deliver(inbound(name, CUSTOMER, "STOP", { id: "INSTOP0001" }));
+    expect(await drain()).toEqual(["duplicate"]);
+  });
+});
+
+describe("automations from Shopify's events", () => {
+  async function ready() {
     const o = await owner();
     await connect(o);
-    expect((await call("GET", o.base, o.headers)).json().automation.state).toBe("idle");
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { name: "Order confirmation", trigger: "order_created", ...confirmation, timing: { mode: "after_trigger", minutes: 0 } })).json().workflow;
-    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
-    expect((await call("GET", o.base, o.headers)).json().automation).toMatchObject({ state: "active", label: "Active", pausedAt: null, blocked: [] });
-    const store = await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } });
-    // An order before the pause: its message is queued (the queue hasn't run yet).
-    await whatsappOnShopifyEvent(store, "orders/create", anOrder(6001), ctx.deps);
+    await configure(o);
+    await finishSetup(o);
+    const template = ok(await o.call("POST", "/templates", { name: "Order thanks", category: "transactional", body: "Hi {{customer_first_name}}, thanks for order {{order_number}} from {{store_name}}." }), 201).template;
+    const automation = ok(await o.call("POST", "/automations", { name: "Thank you", trigger: "order_created", templateId: template.id }), 201).automation;
+    expect(automation).toMatchObject({ status: "draft", testMode: true, problems: [] });
+    ok(await o.call("POST", `/automations/${automation.id}/activate`));
+    const store = (await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } })) as Store;
+    return { o, store, template, automation };
+  }
 
-    const paused = await call("POST", `${o.base}/automation/pause`, o.headers);
-    expect(paused.statusCode).toBe(200);
-    const pausedAt = paused.json().settings.automationPausedAt;
-    expect(pausedAt).toBeTruthy();
-    // Pausing again keeps the first time.
-    expect((await call("POST", `${o.base}/automation/pause`, o.headers)).json().settings.automationPausedAt).toBe(pausedAt);
-    // An order during the pause starts nothing (and says so); the waiting message is held, not sent.
-    await whatsappOnShopifyEvent(store, "orders/create", anOrder(6002), ctx.deps);
-    await drain();
-    expect(meta.sends).toHaveLength(0);
-    const runs = await systemDb.waWorkflowRun.findMany({ where: { workflowId: wf.id }, orderBy: { subjectKey: "asc" } });
-    expect(runs.map((r) => [r.subjectKey, r.outcome, r.reason])).toEqual([
-      ["order:6001", "scheduled", null],
-      ["order:6002", "skipped", "automation_paused"],
+  it("runs once per order, in test mode only to the verified number, then to the customer", async () => {
+    const { o, store, automation } = await ready();
+    evo.sends.length = 0;
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(1001), ctx.deps);
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(1001), ctx.deps);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends).toEqual([expect.objectContaining({ body: expect.objectContaining({ number: "61400111222", text: "Hi Pat, thanks for order #1001 from Green Leaf." }) })]);
+    const runs = ok(await o.call("GET", `/automations/${automation.id}`)).runs;
+    expect(runs).toEqual([expect.objectContaining({ subject: "Order #1001", outcome: "queued", testMode: true, messageStatus: "accepted" })]);
+
+    // Test mode off: the customer gets it.
+    ok(await o.call("PUT", `/automations/${automation.id}`, { ...automationBody(automation), testMode: false }));
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(1002), ctx.deps);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)!.body).toMatchObject({ number: "61412345678", text: "Hi Pat, thanks for order #1002 from Green Leaf." });
+
+    // Old news, an order already cancelled, a paused store: nothing goes.
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(1003, { created_at: "2026-01-01T00:00:00Z", processed_at: "2026-01-01T00:00:00Z" }), ctx.deps);
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(1004, { cancelled_at: new Date().toISOString() }), ctx.deps);
+    ok(await o.call("POST", "/settings/pause", { paused: true }));
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(1005), ctx.deps);
+    expect(await drain()).toEqual([]);
+    const reasons = (await systemDb.wappAutomationRun.findMany({ where: { automationId: automation.id }, orderBy: { createdAt: "asc" } })).map((r) => `${r.subjectKey}:${r.reason ?? r.outcome}`);
+    expect(reasons).toEqual(["order:1001:test_mode", "order:1002:queued", "order:1003:stale_event", "order:1005:automation_paused"]);
+  });
+
+  it("finishes a run whose message an earlier try never linked, with one message", async () => {
+    const { store, automation } = await ready();
+    await systemDb.wappAutomationRun.create({
+      data: { workspaceId: store.workspaceId, storeId: store.id, automationId: automation.id, automationVersion: 1, trigger: "order_created", subjectKey: "order:2001", subjectLabel: "Order #2001", outcome: "queued", testMode: true },
+    });
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(2001), ctx.deps);
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(2001), ctx.deps);
+    const run = await systemDb.wappAutomationRun.findUniqueOrThrow({ where: { automationId_subjectKey: { automationId: automation.id, subjectKey: "order:2001" } } });
+    expect(run.messageId).not.toBeNull();
+    expect(await systemDb.wappMessage.count({ where: { storeId: store.id, idempotencyKey: `auto:${automation.id}:order:2001` } })).toBe(1);
+  });
+
+  it("can't be switched on before the setup is done, and says why", async () => {
+    const o = await owner();
+    await connect(o);
+    const template = ok(await o.call("POST", "/templates", { name: "Shipped", category: "transactional", body: "Your order {{order_number}} is on its way: {{tracking_url}}" }), 201).template;
+    const a = ok(await o.call("POST", "/automations", { name: "Shipped", trigger: "order_created", templateId: template.id }), 201).automation;
+    expect(a.problems).toEqual(expect.arrayContaining([expect.stringMatching(/Step 3/), expect.stringMatching(/Step 4/), expect.stringMatching(/\{\{tracking_url\}\}/)]));
+    const res = ok(await o.call("POST", `/automations/${a.id}/activate`), 409);
+    expect(res.error).toBe("automation_blocked");
+    expect(res.detail.problems.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+function automationBody(a: { name: string; trigger: string; templateId: string; conditions: unknown[]; recipient: string; delayMinutes: number; sendWindow: unknown; testMode: boolean; cooldownMinutes: number | null; description: string | null }) {
+  return { name: a.name, description: a.description, trigger: a.trigger, templateId: a.templateId, conditions: a.conditions, recipient: a.recipient, delayMinutes: a.delayMinutes, sendWindow: a.sendWindow, testMode: a.testMode, ...(a.cooldownMinutes != null ? { cooldownMinutes: a.cooldownMinutes } : {}) };
+}
+
+describe("campaigns", () => {
+  it("launches only with the exact count the merchant confirmed, to customers who agreed to marketing and can be greeted", async () => {
+    const o = await owner();
+    await connect(o);
+    await configure(o);
+    await finishSetup(o);
+    evo.sends.length = 0;
+    const marketing = ok(await o.call("POST", "/templates", { name: "Spring sale", category: "marketing", body: "Hi {{customer_first_name}}, 20% off at {{store_name}} this week. Reply STOP to unsubscribe." }), 201).template;
+    const transactional = ok(await o.call("POST", "/templates", { name: "Plain", category: "transactional", body: "Hello from {{store_name}}." }), 201).template;
+    for (const [phone, name] of [["+61412000001", "Sam"], ["+61412000002", "Alex"], ["+61412000004", null]] as const) {
+      const { contact } = ok(await o.call("POST", "/contacts/consent", { phone, scope: "marketing", status: "opted_in", note: "Asked at the counter" }));
+      if (name) await systemDb.wappContact.update({ where: { id: contact.id }, data: { firstNameEnc: waEncrypt(o.store.id, "name", name) } });
+    }
+    // One who agreed and then said STOP isn't in the audience.
+    ok(await o.call("POST", "/contacts/consent", { phone: "+61412000003", scope: "marketing", status: "opted_in" }));
+    ok(await o.call("POST", "/contacts/consent", { phone: "+61412000003", scope: "all", status: "opted_out" }));
+
+    expect(ok(await o.call("POST", "/campaigns/estimate", { audience: {} })).count).toBe(3);
+    // The template greets them by name: the one without a name is left out of the count, not dropped later.
+    expect(ok(await o.call("POST", "/campaigns/estimate", { audience: {}, templateId: marketing.id })).count).toBe(2);
+    expect(ok(await o.call("POST", "/campaigns", { name: "Plain", templateId: transactional.id, audience: {} }), 400).error).toBe("not_marketing");
+    const c = ok(await o.call("POST", "/campaigns", { name: "Spring", templateId: marketing.id, audience: {} }), 201).campaign;
+    expect(c).toMatchObject({ status: "draft", audienceLabel: "Customers who agreed to marketing messages" });
+    expect(ok(await o.call("POST", `/campaigns/${c.id}/launch`, { confirmRecipients: 3 }), 409)).toMatchObject({ error: "count_changed", detail: { count: 2 } });
+    expect(ok(await o.call("POST", `/campaigns/${c.id}/launch`, { confirmRecipients: 2 })).campaign.status).toBe("scheduled");
+    expect(ok(await o.call("POST", `/campaigns/${c.id}/launch`, { confirmRecipients: 2 }), 409).error).toBe("not_draft");
+    expect(await drain()).toEqual(["materialized", "accepted", "accepted"]);
+    expect(evo.sends.map((s) => [s.body.number, s.body.text]).sort()).toEqual([
+      ["61412000001", "Hi Sam, 20% off at Green Leaf this week. Reply STOP to unsubscribe."],
+      ["61412000002", "Hi Alex, 20% off at Green Leaf this week. Reply STOP to unsubscribe."],
     ]);
-    const held = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } });
-    expect(held).toMatchObject({ status: "queued", reason: "automation_paused", attempts: 0 });
-    const ov = (await call("GET", o.base, o.headers)).json();
-    expect(ov.automation.state).toBe("paused");
-    expect(ov.problems[0]).toMatchObject({ key: "paused" });
-    expect(ov.queue).toMatchObject({ waiting: 1, held: 1, heldReasons: [{ reason: "automation_paused", count: 1 }] });
-
-    // Resume: the held message goes now.
-    const resumed = await call("POST", `${o.base}/automation/resume`, o.headers);
-    expect(resumed.json()).toMatchObject({ released: 1, settings: { automationPausedAt: null } });
-    await drain();
-    expect(meta.sends).toHaveLength(1);
-    expect((await systemDb.waMessage.findUniqueOrThrow({ where: { id: held.id } })).status).toBe("accepted");
-    expect(await systemDb.auditLog.count({ where: { workspaceId: o.ws, action: { in: ["whatsapp.automation_paused", "whatsapp.automation_resumed"] } } })).toBe(2);
-  });
-
-  it("cancels what it held once the pause passes 48 hours, rather than sending old news", async () => {
-    const o = await owner();
-    await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { name: "Order confirmation", trigger: "order_created", ...confirmation, timing: { mode: "after_trigger", minutes: 0 } })).json().workflow;
-    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
-    await whatsappOnShopifyEvent(await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } }), "orders/create", anOrder(6101), ctx.deps);
-    await systemDb.waSettings.update({ where: { storeId: o.store.id }, data: { automationPausedAt: new Date(Date.now() - 49 * 3600_000) } });
-    await drain();
-    expect(meta.sends).toHaveLength(0);
-    expect(await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } })).toMatchObject({ status: "cancelled", reason: "automation_paused" });
+    const report = ok(await o.call("GET", `/campaigns/${c.id}`)).campaign;
+    expect(report).toMatchObject({ status: "sending", recipients: 2, confirmedRecipients: 2 });
   });
 });
 
-describe("customers' messages", () => {
-  const inbound = (id: string, from: string, text: string) => ({
-    object: "whatsapp_business_account",
-    entry: [{ id: WABA, changes: [{ field: "messages", value: { metadata: { phone_number_id: PHONE }, messages: [{ id, from, timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body: text } }] } }] }],
-  });
-  const reply = { name: "Support auto-reply", trigger: "message_received", conditions: [], template: null, mapping: { body: [], buttons: [] }, replyText: "Thanks! We'll reply soon.", replyCooldownMinutes: 24 * 60, timing: { mode: "after_trigger", minutes: 0 } };
+describe("who may see and do what", () => {
+  it("keeps every store's WhatsApp to its own workspace, including its webhook", async () => {
+    const a = await owner("a", "a@shop.test");
+    const nameA = await connect(a);
+    await configure(a);
+    const m = ok(await a.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Hi", idempotencyKey: "iso-00000001", customerAsked: true }), 201).message;
+    const b = await owner("b", "b@other.test");
+    const nameB = await connect(b, "61400000088");
 
-  it("answers once per message and once per customer in its cool-down, and never a STOP", async () => {
-    const o = await owner();
-    // A reply needs its words, and is the merchant's own text, not a template.
-    expect((await call("POST", `${o.base}/workflows`, o.headers, { ...reply, replyText: "" })).statusCode).toBe(400);
-    expect((await call("POST", `${o.base}/workflows`, o.headers, { ...reply, template: { name: "order_confirmation", language: "en" } })).statusCode).toBe(400);
-    const made = await call("POST", `${o.base}/workflows`, o.headers, reply);
-    expect(made.statusCode).toBe(201);
-    const id = made.json().workflow.id;
-    // Not connected yet: customers' messages don't reach bizinsights, so it can't be switched on.
-    expect((await call("POST", `${o.base}/workflows/${id}/activate`, o.headers)).json()).toMatchObject({ error: "workflow_problems" });
-    await connect(o);
-    expect((await call("POST", `${o.base}/workflows/${id}/activate`, o.headers)).json().workflow.status).toBe("active");
-
-    await signedWebhook(inbound("wamid.q1", "61412345678", "Hi, are you open on Sunday?"));
-    // Meta delivers the same body again: one reply.
-    await signedWebhook(inbound("wamid.q1", "61412345678", "Hi, are you open on Sunday?"));
-    await drain();
-    expect(meta.sends).toEqual([expect.objectContaining({ to: "61412345678", type: "text", text: { body: "Thanks! We'll reply soon.", preview_url: false } })]);
-    // A second message soon after gets no second auto-reply.
-    await signedWebhook(inbound("wamid.q2", "61412345678", "Also, do you ship to Perth?"));
-    await drain();
-    expect(meta.sends).toHaveLength(1);
-    const runs = await systemDb.waWorkflowRun.findMany({ where: { workflowId: id }, orderBy: { createdAt: "asc" } });
-    expect(runs.map((r) => [r.subjectKey, r.outcome, r.reason])).toEqual([
-      ["message:wamid.q1", "scheduled", null],
-      ["message:wamid.q2", "skipped", "recently_replied"],
-    ]);
-    const m = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: id } });
-    expect(m).toMatchObject({ type: "text", category: "SERVICE", status: "accepted" });
-
-    // STOP is consent, not a question: no reply, and someone who stopped gets none afterwards.
-    await signedWebhook(inbound("wamid.s1", "61499999999", "STOP"));
-    await drain();
-    await signedWebhook(inbound("wamid.s2", "61499999999", "ok but one question"));
-    await drain();
-    expect(meta.sends).toHaveLength(1);
-    expect(await systemDb.waWorkflowRun.count({ where: { workflowId: id, subjectKey: "message:wamid.s1" } })).toBe(0);
-    expect((await systemDb.waWorkflowRun.findFirstOrThrow({ where: { workflowId: id, subjectKey: "message:wamid.s2" } })).reason).toBe("opted_out");
+    // B can't reach A's store through A's workspace, nor through its own.
+    expect((await a.call("GET", "", undefined, b.headers)).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${b.ws}/stores/${a.store.id}/whatsapp`, headers: b.headers })).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${b.ws}/stores/${b.store.id}/whatsapp/messages/${m.id}`, headers: b.headers })).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${a.ws}/stores/${a.store.id}/whatsapp/connection`, headers: b.headers })).statusCode).toBe(404);
+    expect(ok(await b.call("GET", "/messages")).messages).toEqual([]);
+    // B's connection key doesn't open A's webhook.
+    const forged = evo.webhook(nameA, "connection.update", { state: "close", statusReason: 401 }, { key: evo.instances.get(nameB)!.webhook!.jwtKey });
+    expect((await deliver(forged)).statusCode).toBe(401);
+    expect(ok(await a.call("GET")).connection.status).toBe("connected");
   });
 
-  it("answers only the messages its conditions name", async () => {
+  it("lets a viewer look, without customers' details unless granted, and change nothing", async () => {
     const o = await owner();
     await connect(o);
-    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { ...reply, name: "Opening hours", conditions: [{ field: "message_text", op: "contains_any", value: ["open", "hours"] }], replyCooldownMinutes: 0 })).json().workflow;
-    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
-    await signedWebhook(inbound("wamid.c1", "61412345678", "What are your HOURS today?"));
-    await signedWebhook(inbound("wamid.c2", "61412345678", "Where is my parcel?"));
-    await drain();
-    expect(meta.sends).toHaveLength(1);
-    expect((await systemDb.waWorkflowRun.findFirstOrThrow({ where: { workflowId: wf.id, subjectKey: "message:wamid.c2" } })).reason).toContain("conditions_not_met");
+    await configure(o);
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Secret text", idempotencyKey: "view-00000001", customerAsked: true }), 201);
+    const v = await signIn(ctx, "v", "v@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "custom", permissions: ["marketing.campaigns"] } });
+    const ov = ok(await o.call("GET", "", undefined, v.headers));
+    expect(ov.can).toEqual({ connect: false, manage: false, contacts: false });
+    expect(ov.cloudSignup).toBeNull();
+    const [msg] = ok(await o.call("GET", "/messages", undefined, v.headers)).messages;
+    expect(msg).toMatchObject({ preview: null, contactId: null });
+    expect((await o.call("GET", "/contacts", undefined, v.headers)).statusCode).toBe(403);
+    expect((await o.call("GET", `/messages?phone=${encodeURIComponent(CUSTOMER)}`, undefined, v.headers)).statusCode).toBe(403);
+    for (const [method, path, payload] of [
+      ["POST", "/connection", { method: "qr" }],
+      ["DELETE", "/connection", undefined],
+      ["PUT", "/settings", SETTINGS],
+      ["POST", "/settings/pause", { paused: true }],
+      ["POST", "/test-number", { phone: TEST_PHONE }],
+      ["POST", "/messages", { phone: CUSTOMER, reason: "reply", text: "x", idempotencyKey: "view-00000002" }],
+      ["POST", "/templates", { name: "x", category: "transactional", body: "x" }],
+      ["POST", "/automations", {}],
+      ["POST", "/campaigns", {}],
+      ["POST", "/campaigns/estimate", { audience: {} }],
+      ["POST", "/suppressions", { phone: CUSTOMER, scope: "all" }],
+    ] as const) {
+      expect((await o.call(method, path, payload, v.headers)).statusCode, `${method} ${path}`).toBe(403);
+    }
+    // Nobody without "View campaigns" sees WhatsApp at all.
+    const w = await signIn(ctx, "w", "w@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: w.user.id, role: "custom", permissions: ["analytics.sales"] } });
+    expect((await o.call("GET", "", undefined, w.headers)).statusCode).toBe(403);
+    // Settings → Integrations for someone who may see how connections stand: the connection, and nothing else.
+    const s = await signIn(ctx, "s", "s@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: s.user.id, role: "custom", permissions: ["integrations.status"] } });
+    const status = ok(await o.call("GET", "", undefined, s.headers));
+    expect(Object.keys(status).sort()).toEqual(["can", "connection", "platform", "store"]);
+    expect(status.connection).toMatchObject({ status: "connected" });
+    for (const path of ["/messages", "/automations", "/templates", "/campaigns"]) expect((await o.call("GET", path, undefined, s.headers)).statusCode, path).toBe(403);
   });
-});
 
-describe("triggers", () => {
-  it("offers only the triggers this store can use, and refuses to switch on one it can't", async () => {
-    const o = await owner();
-    // An App Store store without read_customers.
-    await systemDb.store.update({ where: { id: o.store.id }, data: { shopifyAppKey: "appstore", grantedScopes: ["read_orders"] } });
-    type Trigger = { key: string; available: boolean; reason: string | null; fix: string | null };
-    const triggers = async () => (await call("GET", `${o.base}/workflows`, o.headers)).json().triggers as Trigger[];
-    const of = (all: Trigger[], key: string) => all.find((t) => t.key === key)!;
-    let all = await triggers();
-    expect(of(all, "message_received")).toMatchObject({ available: false, fix: "whatsapp_webhooks" });
-    await connect(o);
-    all = await triggers();
-    expect(of(all, "order_created")).toMatchObject({ available: false, fix: null });
-    expect(of(all, "order_created").reason).toContain("App Store app");
-    expect(of(all, "checkout_abandoned").available).toBe(false);
-    expect(of(all, "customer_created")).toMatchObject({ available: false, fix: "shopify_access" });
-    expect(of(all, "custom_event")).toMatchObject({ available: true, reason: null });
-    expect(of(all, "message_received")).toMatchObject({ available: true });
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { name: "Order confirmation", trigger: "order_created", ...confirmation, timing: { mode: "after_trigger", minutes: 0 } })).json().workflow;
-    const refused = (await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers)).json();
-    expect(refused.error).toBe("workflow_problems");
-    expect(refused.detail.problems.join(" ")).toContain("App Store app");
-  });
-});
-
-describe("message history", () => {
-  it("filters by number, template, error and date, and shows recent failures on the overview", async () => {
+  it("never lets a shared dashboard link administer WhatsApp, whatever it was given", async () => {
     const o = await owner();
     await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    const send = (id: string, phone: string) =>
-      call("POST", `${o.base}/messages`, o.headers, { requestId: id, to: { phone }, message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1" }], buttons: [] } } });
-    await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d51", "+61412345678");
-    await drain();
-    meta.sendError = { status: 400, body: { error: { message: "Message undeliverable", code: 131026 } } };
-    await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d52", "+61499888777");
-    await drain();
-    const list = async (q: string) => (await call("GET", `${o.base}/messages?${q}`, o.headers)).json().messages as Array<{ status: string; wamid: string | null; errorCode: string | null }>;
-    expect(await list("phone=%2B61%20412%20345%20678")).toMatchObject([{ status: "accepted", wamid: "wamid.1" }]);
-    expect(await list("errorCode=131026")).toMatchObject([{ status: "failed", errorCode: "131026" }]);
-    expect(await list("reason=refused")).toHaveLength(1);
-    expect(await list("template=order_confirmation")).toHaveLength(2);
-    expect(await list(`from=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`)).toHaveLength(0);
-    expect(await list(`to=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`)).toHaveLength(2);
-    const ov = (await call("GET", o.base, o.headers)).json();
-    expect(ov.recentFailures).toMatchObject([{ errorCode: "131026", errorTitle: "This number isn't on WhatsApp, or couldn't receive the message." }]);
-    expect(ov.connection.grantedScopes).toEqual(["whatsapp_business_management", "whatsapp_business_messaging"]);
+    ok(await ctx.app.inject({ method: "POST", url: `/workspaces/${o.ws}/team/invitations`, headers: o.headers, payload: { email: "guest@example.com", role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact", "integrations.status", "integrations.manage"] } }));
+    const mail = [...ctx.mailer.sent].reverse().find((x) => x.to === "guest@example.com")!;
+    const token = /#token=([A-Za-z0-9_-]+)/.exec(mail.text)![1];
+    const opened = ok(await ctx.app.inject({ method: "POST", url: "/invitations/open", headers: ORIGIN, payload: { token } }));
+    expect(opened.shared).toBe(true);
+    const link = { cookie: cookiesFrom(await ctx.app.inject({ method: "POST", url: "/invitations/open", headers: ORIGIN, payload: { token } })), ...ORIGIN };
+    const ov = ok(await o.call("GET", "", undefined, link));
+    expect(ov.can).toMatchObject({ connect: false, manage: false });
+    for (const [method, path, payload] of [
+      ["POST", "/connection", { method: "qr" }],
+      ["DELETE", "/connection", undefined],
+      ["POST", "/connection/reconnect", undefined],
+      ["PUT", "/settings", SETTINGS],
+      ["POST", "/templates", { name: "x", category: "transactional", body: "x" }],
+    ] as const) {
+      expect((await o.call(method, path, payload, link)).statusCode, `${method} ${path}`).toBe(403);
+    }
   });
 });
 
 describe("disconnecting", () => {
-  it("deletes bizinsights' access at Nango, cancels what was waiting, keeps the history", async () => {
+  it("logs the phone out, deletes the instance, cancels what waits, and keeps the history", async () => {
     const o = await owner();
-    await connect(o);
-    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
-    await call("POST", `${o.base}/messages`, o.headers, {
-      requestId: "8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d41",
-      to: { phone: "+61412345678" },
-      message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1" }], buttons: [] } },
-    });
-    expect((await call("DELETE", o.base, o.headers)).statusCode).toBe(200);
-    expect(meta.nangoDeleted).toEqual([`wa-${o.store.id}`]);
-    expect(meta.subscribed).toBe(false);
-    const conn = await systemDb.waConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
-    expect(conn).toMatchObject({ status: "disconnected", nangoConnectionId: null, phoneNumberId: null });
-    expect(await systemDb.waMessage.count({ where: { storeId: o.store.id, status: "cancelled", reason: "disconnected" } })).toBe(1);
+    const name = await connect(o);
+    await configure(o);
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Sent", idempotencyKey: "disc-00000001", customerAsked: true }), 201);
     await drain();
-    expect(meta.sends).toHaveLength(0);
-    // The number is free for another store now.
-    const b = await owner("other.myshopify.com", "owner2");
-    expect((await connect(b)).json().connection.status).toBe("active");
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "order_update", text: "Waiting", idempotencyKey: "disc-00000002" }), 201);
+    const res = ok(await o.call("DELETE", "/connection"));
+    expect(res.connection.status).toBe("disconnected");
+    expect(evo.instances.has(name)).toBe(false);
+    expect(evo.calls.slice(-2).map((c) => `${c.method} ${c.path.split("/").slice(0, 3).join("/")}`)).toEqual(["DELETE /instance/logout", "DELETE /instance/delete"]);
+    const rows = await systemDb.wappMessage.findMany({ where: { storeId: o.store.id }, orderBy: { createdAt: "asc" } });
+    expect(rows.map((r) => [r.status, r.reason])).toEqual([
+      ["accepted", null],
+      ["cancelled", "not_connected"],
+    ]);
+    expect(await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } })).toMatchObject({ instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null });
+    // The old instance's webhooks no longer get in.
+    expect((await deliver(evo.webhook(name, "connection.update", { state: "open" }, { key: "x" }))).statusCode).toBe(401);
+    expect(ok(await o.call("DELETE", "/connection"), 404).error).toBe("not_connected");
+    // Connecting again makes a new instance.
+    ok(await o.call("POST", "/connection", { method: "qr" }), 201);
+    expect(await instanceOf(o)).not.toBe(name);
   });
 });

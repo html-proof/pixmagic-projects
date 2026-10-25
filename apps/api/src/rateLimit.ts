@@ -106,22 +106,20 @@ export const LIMITS = {
   metaDeletionStatusIp: { max: 60, windowSec: 600 },
   /** Meta's callbacks refused (a signed_request that doesn't verify), per IP: past it they're answered 429 and no longer logged. Meta's own aren't counted. */
   metaCallbackRefusedIp: { max: 20, windowSec: 600 },
-  /** WhatsApp: starting and finishing Meta's sign-up, choosing a number, entering the PIN (Meta calls each), per store. */
+  /** WhatsApp: starting a pairing, a Cloud API sign-up, reconnecting or disconnecting (each calls Evolution API), per store. */
   waConnect: { max: 10, windowSec: 600 },
-  /** WhatsApp: "Check again" (the number, webhooks and templates from Meta), per store. */
-  waRefresh: { max: 6, windowSec: 600 },
-  /** WhatsApp: templates submitted for Meta's review or deleted, per store. */
-  waTemplateCreate: { max: 30, windowSec: 3600 },
-  /** WhatsApp: test messages to the merchant's own phone, per store. */
+  /** WhatsApp: the page polling the pairing code while the phone scans (each asks Evolution API), per store. */
+  waPairing: { max: 240, windowSec: 600 },
+  /** WhatsApp: "Check again" (asks Evolution API for the state), per store. */
+  waRefresh: { max: 12, windowSec: 600 },
+  /** WhatsApp: templates saved, submitted for Meta's review or deleted, per store. */
+  waTemplateCreate: { max: 60, windowSec: 3600 },
+  /** WhatsApp: test messages and verification codes to the merchant's own phone, per store. */
   waTest: { max: 10, windowSec: 600 },
   /** WhatsApp: campaign audience estimates (the builder asks as filters change), per store. */
   waEstimate: { max: 120, windowSec: 600 },
-  /** WhatsApp: messages a person sends from the dashboard (templates and replies), per store. */
+  /** WhatsApp: messages a person sends from the dashboard, per store. */
   waSend: { max: 60, windowSec: 600 },
-  /** WhatsApp: custom events a store's tools send with its event key, per key. */
-  waEvents: { max: 600, windowSec: 60 },
-  /** WhatsApp: the number's PIN shown, per user. */
-  waPin: { max: 5, windowSec: 3600 },
 
   // ---- Customer Messaging (SMS) ----
   /** "Check with AWS" on the sender (a few AWS calls each), per store. */
@@ -202,8 +200,6 @@ export const LIMITS = {
    * and no longer logged. Meta's own (signed) deliveries aren't counted.
    */
   waUnsignedIp: { max: 300, windowSec: 60 },
-  /** Custom events sent with a key that doesn't verify, per IP. */
-  waEventKeyIp: { max: 30, windowSec: 600 },
   /**
    * Password resets tried with one address's code, per address, whichever IPs they come from
    * (auth.ts, POST /auth/password/reset): codeVerifyIp alone lets guesses spread over many IPs,

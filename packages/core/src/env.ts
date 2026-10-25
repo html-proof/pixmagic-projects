@@ -175,11 +175,25 @@ const schema = z.object({
    */
   NANGO_PROVIDERS: z.string().optional().default("meta,google,adsense"),
   /**
-   * WhatsApp Automation (WhatsApp Business Platform, Cloud API; docs/whatsapp.md). "Connect WhatsApp"
-   * (Meta's Embedded Signup) needs the Meta app's id and secret (the ad accounts' Meta app is used
-   * when these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
-   * Signup variation, the webhook verify token, and NANGO_SECRET_KEY (Nango keeps each store's token).
-   * Until every one is set the page says connecting isn't switched on yet.
+   * WhatsApp Automation on Evolution API (docs/whatsapp.md): bizinsights' own Evolution API service.
+   * Its internal base URL (in AWS the ECS service's private DNS name, reachable only from the
+   * functions; locally the docker-compose service), its global API key (a secret, used only to
+   * create instances and list them), and the name of that server (shard) new connections go to.
+   * Without the URL or the key, connecting WhatsApp is off and the page says so.
+   */
+  EVOLUTION_API_URL: z.string().optional().default(""),
+  EVOLUTION_API_KEY: z.string().optional().default(""),
+  EVOLUTION_SHARD: z.string().default("a"),
+  /** Where Evolution API posts its webhooks: bizinsights' public API (empty: API_URL). Locally, an address the container can reach. */
+  EVOLUTION_WEBHOOK_URL: z.string().optional().default(""),
+  /** Each call to Evolution API gives up after this long (ms). */
+  EVOLUTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
+  /**
+   * The Cloud API way to connect (Meta's Embedded Signup, then Evolution API's WHATSAPP-BUSINESS
+   * integration sends through it): the Meta app's id and secret (the ad accounts' Meta app when
+   * these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
+   * Signup variation, and the verify token of Meta's webhook. Without them the page offers only the
+   * linked phone, and says why.
    */
   WHATSAPP_APP_ID: z.string().optional().default(""),
   WHATSAPP_APP_SECRET: z.string().optional().default(""),

@@ -24,7 +24,7 @@ async function ownerWithStore(page: Page, prefix: string) {
   return { email, ws, storeId };
 }
 
-/** The WhatsApp card loads Meta's SDK: answer it with nothing, so no page reaches facebook.net. */
+/** Meta's SDK (the Cloud API's sign-in for WhatsApp) is answered with nothing, so no page reaches facebook.net. */
 const quietMeta = (page: Page) => page.route("https://connect.facebook.net/**", (route) => route.fulfill({ status: 200, contentType: "text/javascript", body: "" }));
 
 const platform = (page: Page, testid: string) => page.getByTestId(testid).getByTestId("platform-state");
@@ -368,7 +368,7 @@ test("a member who may only view integrations gets no buttons; Manage integratio
   await expect(page.getByTestId("int-google-accounts")).toContainText("Account: Shop Search");
   await expect(page.getByText("needs the Manage integrations permission")).toBeVisible();
   await expect(platform(page, "int-whatsapp")).toHaveText("Not connected");
-  await expect(page.getByTestId("wa-connect")).toHaveCount(0);
+  await expect(page.getByTestId("int-whatsapp-connect")).toHaveCount(0);
   await page.goto("/settings/ads");
   await expect(account(page, "123-000-0001").getByTestId("account-state")).toHaveText("Connected");
   await expect(page.getByText("needs the Manage integrations permission")).toBeVisible();
@@ -378,7 +378,7 @@ test("a member who may only view integrations gets no buttons; Manage integratio
   // "Manage integrations" without being an owner or admin: the WhatsApp and ad buttons (the API allows them too).
   await grant(["integrations.status", "integrations.manage"]);
   await page.goto("/settings/integrations");
-  await expect(page.getByTestId("wa-connect")).toBeVisible();
+  await expect(page.getByTestId("int-whatsapp-connect")).toBeVisible();
   await expect(page.getByText("needs the Manage integrations permission")).toHaveCount(0);
   await page.goto("/settings/ads");
   await expect(page.getByRole("checkbox", { name: "Show on dashboard: Shop Search" })).toBeChecked();

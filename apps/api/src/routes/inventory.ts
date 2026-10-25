@@ -30,7 +30,7 @@ import {
   storeGraphql,
   toCsv,
 } from "@app/core";
-import { adjustmentSchema, allows, inventorySettingsSchema, localDay, resolveCapabilities, stockQuerySchema, templateShape, thresholdSchema, type TemplateComponent } from "@app/shared";
+import { adjustmentSchema, allows, inventorySettingsSchema, localDay, resolveCapabilities, stockQuerySchema, thresholdSchema } from "@app/shared";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -325,12 +325,6 @@ export function inventoryRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "inventory.alerts");
     const input = alertSettingsSchema.parse(await body(c));
     const store = await withTenant(ws, (tx) => loadStore(tx, ws, storeId));
-    if (input.whatsappAlerts && input.whatsappTemplate) {
-      const t = await withTenant(ws, (tx) => tx.whatsappTemplate.findFirst({ where: { workspaceId: ws, storeId, name: input.whatsappTemplate!, status: "APPROVED" } }));
-      if (!t || templateShape(t.components as unknown as TemplateComponent[]).bodyVars !== 2) {
-        throw new HttpError(400, "Pick an approved WhatsApp template with two variables: the store's name, then the alert.", "invalid_template");
-      }
-    }
     const current = await inventorySettings(store.id);
     const { whatsappTo: _t, storeId: _s, updatedAt: _u, ...keep } = current;
     const saved = await saveInventorySettings(store, { ...keep, ...input });
@@ -382,23 +376,5 @@ export function inventoryRoutes(app: App, deps: Deps) {
         };
       }),
     );
-  });
-
-  /** Approved WhatsApp templates the stock alert can be sent with (two body variables). */
-  app.get(`${base}/whatsapp-templates`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "inventory.alerts");
-    const rows = await withTenant(ws, async (tx) => {
-      await loadStore(tx, ws, storeId);
-      return tx.whatsappTemplate.findMany({ where: { workspaceId: ws, storeId, status: "APPROVED" }, orderBy: { name: "asc" } });
-    });
-    return c.json({
-      templates: rows
-        .filter((t) => {
-          const s = templateShape(t.components as unknown as TemplateComponent[]);
-          return s.bodyVars === 2 && s.headerFormat === "NONE" && !s.dynamicUrlButtons.length;
-        })
-        .map((t) => ({ name: t.name, language: t.language, category: t.category })),
-    });
   });
 }

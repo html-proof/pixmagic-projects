@@ -1,56 +1,358 @@
 "use client";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { CAMPAIGN_VARIABLES, describeAudience, type CampaignAudience, type TemplateMapping } from "@app/shared/whatsapp";
-import { ConfirmDialog, Skeleton } from "@/components/AppUi";
+import { useEffect, useRef, useState } from "react";
+import { describeWaAudience, renderWaText, WA_CAMPAIGN_MAX, type WaAudience } from "@app/shared/whatsapp";
+import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
+import { Badge } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
-import { Stat } from "@/components/dashboard/Primitives";
 import { Alert, EmptyState } from "@/components/ui";
-import { api, fmtNum, useApi } from "@/lib/api";
+import { api, ApiError, fmtNum, useApi } from "@/lib/api";
 import { CountryPicker, fmtWhen, plural } from "@/components/messaging/MessagingUi";
-import { fitMapping, MappingEditor } from "./MappingEditor";
-import type { WaCampaign, WaCampaignDetail, WaOverview, WaTemplatesAnswer } from "./types";
-import { CAMPAIGN_STATUS, Pill, problemsOf, reasonText, useWaAction, waError, waHref } from "./WaUi";
+import type { WaCampaign, WaOverview, WaTemplate, WaTemplatesResponse } from "./types";
+import { CAMPAIGN_STATUS, useWaAction, WaBubble, waError, waHref } from "./WaUi";
 
-const emptyAudience: CampaignAudience = { countries: [], customerType: "any", orderedWithinDays: null, notOrderedForDays: null, minOrders: null, minSpent: null };
+// ---------------------------------------------------------------------------
+// Campaigns (docs/whatsapp.md, "Campaigns"): a marketing template to the customers who agreed to
+// marketing messages. A campaign is saved as a draft, and launched only from its own dialog, which
+// shows the exact number of recipients and asks the merchant to confirm it; opening this tab never
+// sends anything. Results are counted by the API from the campaign's messages.
+// ---------------------------------------------------------------------------
 
-const num = (v: string) => (v.trim() === "" ? null : Math.max(0, Math.round(Number(v))) || null);
+interface AudienceDraft {
+  countries: string[];
+  customerType: "any" | "new" | "returning";
+  orderedWithinDays: string;
+  notOrderedForDays: string;
+  minOrders: string;
+  minSpent: string;
+}
 
-/** Write or edit a draft: the template and its blanks, and who receives it, with a live count. */
-function CampaignEditor({ base, editing, templates, onDone, onCancel }: { base: string; editing: WaCampaign | null; templates: WaTemplatesAnswer["templates"]; onDone: (id: string) => void; onCancel: () => void }) {
-  const marketing = templates.filter((t) => t.category === "MARKETING" && t.status === "APPROVED");
-  const [name, setName] = useState(editing?.name ?? "");
-  const [ref, setRef] = useState(editing ? `${editing.template.name}|${editing.template.language}` : "");
-  const template = marketing.find((t) => `${t.name}|${t.language}` === ref) ?? null;
-  const [mapping, setMapping] = useState<TemplateMapping>(editing?.mapping ?? { body: [], buttons: [] });
-  const [media, setMedia] = useState(editing?.headerMediaUrl ?? "");
-  const [audience, setAudience] = useState<CampaignAudience>(editing?.audience ?? emptyAudience);
-  const [estimate, setEstimate] = useState<number | null>(null);
+const blankAudience = (): AudienceDraft => ({ countries: [], customerType: "any", orderedWithinDays: "", notOrderedForDays: "", minOrders: "", minSpent: "" });
+
+const audienceDraftOf = (a: WaAudience): AudienceDraft => ({
+  countries: a.countries ?? [],
+  customerType: a.customerType ?? "any",
+  orderedWithinDays: a.orderedWithinDays != null ? String(a.orderedWithinDays) : "",
+  notOrderedForDays: a.notOrderedForDays != null ? String(a.notOrderedForDays) : "",
+  minOrders: a.minOrders != null ? String(a.minOrders) : "",
+  minSpent: a.minSpent != null ? String(a.minSpent) : "",
+});
+
+const num = (s: string) => (s.trim() === "" ? null : Number(s));
+
+/** The audience as the API takes it (waAudienceSchema). */
+function audienceOf(d: AudienceDraft): WaAudience {
+  return {
+    countries: d.countries,
+    customerType: d.customerType,
+    orderedWithinDays: num(d.orderedWithinDays),
+    notOrderedForDays: num(d.notOrderedForDays),
+    minOrders: num(d.minOrders),
+    minSpent: num(d.minSpent),
+  };
+}
+
+/** What's wrong with the audience's numbers, in words. */
+function audienceProblems(d: AudienceDraft): string[] {
+  const out: string[] = [];
+  const whole = (s: string, label: string, max: number) => {
+    if (s.trim() === "") return;
+    const n = Number(s);
+    if (!Number.isInteger(n) || n < 1 || n > max) out.push(`${label}: a whole number from 1 to ${max}.`);
+  };
+  whole(d.orderedWithinDays, "Ordered in the last … days", 3650);
+  whole(d.notOrderedForDays, "Haven't ordered for … days", 3650);
+  whole(d.minOrders, "At least … orders", 100_000);
+  if (d.minSpent.trim() !== "" && !(Number(d.minSpent) >= 0)) out.push("Spent at least: an amount of 0 or more.");
+  return out;
+}
+
+export function Campaigns({ base, overview }: { base: string; overview: WaOverview }) {
+  const list = useApi<{ campaigns: WaCampaign[] }>(`${base}/campaigns`);
+  const templates = useApi<WaTemplatesResponse>(`${base}/templates`);
+  const [editing, setEditing] = useState<WaCampaign | "new" | null>(null);
+  const [launching, setLaunching] = useState<WaCampaign | null>(null);
+  const [cancelling, setCancelling] = useState<WaCampaign | null>(null);
+  const [deleting, setDeleting] = useState<WaCampaign | null>(null);
+  const { busy, run } = useWaAction();
+  const manage = overview.can.manage;
+  const provider = overview.connection?.provider ?? "qr";
+  const cap = WA_CAMPAIGN_MAX[provider];
+  const tz = overview.store.timezone;
+
+  if (list.error && !list.data) return <LoadError what="campaigns" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />;
+  if (!list.data || !templates.data) return <Skeleton lines={5} />;
+  const marketing = templates.data.templates.filter((t) => t.category === "marketing");
+
+  if (editing) {
+    return (
+      <Editor
+        base={base}
+        campaign={editing === "new" ? null : editing}
+        templates={marketing}
+        samples={templates.data.samples as Record<string, string>}
+        cap={cap}
+        qr={provider === "qr"}
+        onDone={(saved) => {
+          setEditing(null);
+          void list.reload();
+          if (saved) setLaunching(saved);
+        }}
+      />
+    );
+  }
+
+  const campaigns = list.data.campaigns;
+  return (
+    <div className="space-y-4">
+      <div className="card animate-rise">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold">Campaigns</h2>
+            <p className="mt-1 text-sm text-muted">
+              Send a marketing message to customers who agreed to marketing messages. Customers who opted out, are on your do-not-message list, or aren&apos;t on WhatsApp are always left out.
+              Each campaign sends to at most {fmtNum(cap)} people on this connection.
+            </p>
+          </div>
+          {manage && (
+            <button type="button" className="btn-primary" onClick={() => setEditing("new")}>
+              New campaign
+            </button>
+          )}
+        </div>
+        {provider === "qr" && <QrWarning />}
+        {!overview.settings.marketingEnabled && (
+          <div className="mt-3">
+            <Alert kind="info">
+              Marketing messages are switched off in{" "}
+              <Link className="underline" href={waHref("settings")}>
+                Settings
+              </Link>
+              : campaigns can be written but not launched until they&apos;re on.
+            </Alert>
+          </div>
+        )}
+      </div>
+
+      {campaigns.length === 0 ? (
+        <EmptyState title="No campaigns yet" body="Write a marketing template first, then create a campaign, choose who it goes to, and launch it when you're ready." />
+      ) : (
+        <ul className="space-y-3">
+          {campaigns.map((c) => {
+            const st = CAMPAIGN_STATUS[c.status] ?? { tone: "neutral" as const, label: c.status };
+            const tpl = templates.data!.templates.find((t) => t.id === c.templateId);
+            return (
+              <li key={c.id} className="card">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{c.name}</span>
+                      <Badge tone={st.tone}>{st.label}</Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-muted">{c.audienceLabel}</p>
+                    <p className="mt-1 text-xs text-muted">
+                      Template: {tpl?.name ?? "deleted"}
+                      {c.status === "scheduled" && c.scheduledAt ? ` · starts ${fmtWhen(c.scheduledAt, tz)}` : ""}
+                      {c.startedAt ? ` · started ${fmtWhen(c.startedAt, tz)}` : ""}
+                      {c.completedAt ? ` · finished ${fmtWhen(c.completedAt, tz)}` : ""}
+                      {c.cancelledAt ? ` · cancelled ${fmtWhen(c.cancelledAt, tz)}` : ""}
+                    </p>
+                    {c.confirmedRecipients != null && <p className="mt-1 text-xs text-muted">{plural(c.confirmedRecipients, "recipient")} confirmed at launch · {plural(c.recipients, "message")} made so far</p>}
+                    {c.report && c.report.total > 0 && <Report report={c.report} />}
+                  </div>
+                  {manage && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {c.status === "draft" && (
+                        <>
+                          <button type="button" className="btn-primary h-8 px-3 text-xs" onClick={() => setLaunching(c)}>
+                            Launch…
+                          </button>
+                          <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing(c)}>
+                            Edit
+                          </button>
+                        </>
+                      )}
+                      {(c.status === "scheduled" || c.status === "sending") && (
+                        <button type="button" className="btn-danger h-8 px-3 text-xs" onClick={() => setCancelling(c)}>
+                          Cancel campaign
+                        </button>
+                      )}
+                      {(c.status === "draft" || c.status === "completed" || c.status === "cancelled") && (
+                        <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setDeleting(c)}>
+                          Delete
+                        </button>
+                      )}
+                      {c.status !== "draft" && (
+                        <Link className="btn-secondary h-8 px-3 text-xs" href={waHref("messages", { campaign: c.id })}>
+                          Messages
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {launching && (
+        <LaunchDialog
+          base={base}
+          campaign={launching}
+          template={templates.data.templates.find((t) => t.id === launching.templateId) ?? null}
+          cap={cap}
+          qr={provider === "qr"}
+          tz={tz}
+          onClose={(launched) => {
+            setLaunching(null);
+            if (launched) void list.reload();
+          }}
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!cancelling}
+        title={`Cancel "${cancelling?.name ?? ""}"?`}
+        confirmLabel="Cancel campaign"
+        danger
+        busy={busy === "cancel"}
+        onCancel={() => setCancelling(null)}
+        onConfirm={() =>
+          void run("cancel", "cancel the campaign", async () => {
+            const r = await api<{ cancelled: number }>(`${base}/campaigns/${cancelling!.id}/cancel`, { method: "POST" });
+            setCancelling(null);
+            void list.reload();
+            return `Campaign cancelled. ${plural(r.cancelled, "waiting message")} won't be sent.`;
+          })
+        }
+      >
+        <p>Messages still waiting are cancelled. Messages already sent can&apos;t be taken back.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={!!deleting}
+        title={`Delete "${deleting?.name ?? ""}"?`}
+        confirmLabel="Delete campaign"
+        danger
+        busy={busy === "delete"}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() =>
+          void run("delete", "delete the campaign", async () => {
+            await api(`${base}/campaigns/${deleting!.id}`, { method: "DELETE" });
+            setDeleting(null);
+            void list.reload();
+            return "Campaign deleted.";
+          })
+        }
+      >
+        <p>The campaign goes from this list. Its messages stay in Message history.</p>
+      </ConfirmDialog>
+    </div>
+  );
+}
+
+function QrWarning() {
+  return (
+    <div className="mt-3">
+      <Alert kind="info">
+        This store sends from a phone linked with a QR code, not Meta&apos;s official API. WhatsApp may restrict or ban a number it sees sending bulk or unwanted messages, so send campaigns only to
+        customers who asked for them. bizinsights paces them (a message every few seconds) and caps how many go out a day.
+      </Alert>
+    </div>
+  );
+}
+
+function Report({ report }: { report: NonNullable<WaCampaign["report"]> }) {
+  const cells: Array<[string, number]> = [
+    ["Waiting", report.waiting],
+    ["Sent", report.sent],
+    ["Delivered", report.delivered],
+    ["Read", report.read],
+    ["Failed", report.failed],
+    ["Not sent", report.notSent],
+  ];
+  return (
+    <dl className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
+      {cells.map(([label, n]) => (
+        <div key={label} className="rounded-lg border border-border px-2 py-1">
+          <dt className="text-[11px] text-muted">{label}</dt>
+          <dd className="text-sm font-semibold">{fmtNum(n)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * How many customers the audience reaches now with this template (POST campaigns/estimate), asked
+ * again as either changes. A template that greets customers by name leaves out those without one.
+ */
+function useEstimate(base: string, audience: WaAudience | null, templateId: string | null) {
+  const key = audience ? JSON.stringify({ audience, templateId: templateId || null }) : null;
+  const [state, setState] = useState<{ key: string; count: number | null; error: string | null } | null>(null);
+  const latest = useRef(0);
+  useEffect(() => {
+    if (!key) return;
+    const request = ++latest.current;
+    const t = window.setTimeout(() => {
+      api<{ count: number }>(`${base}/campaigns/estimate`, { method: "POST", body: JSON.parse(key) })
+        .then((r) => {
+          if (request === latest.current) setState({ key, count: r.count, error: null });
+        })
+        .catch((e: unknown) => {
+          if (request === latest.current) setState({ key, count: null, error: waError(e, "count the audience") });
+        });
+    }, 600);
+    return () => window.clearTimeout(t);
+  }, [base, key]);
+  return state && state.key === key ? state : null;
+}
+
+// ---------------------------------------------------------------------------
+// The editor (a draft)
+// ---------------------------------------------------------------------------
+
+function Editor({
+  base,
+  campaign,
+  templates,
+  samples,
+  cap,
+  qr,
+  onDone,
+}: {
+  base: string;
+  campaign: WaCampaign | null;
+  templates: WaTemplate[];
+  samples: Record<string, string>;
+  cap: number;
+  qr: boolean;
+  onDone: (saved: WaCampaign | null) => void;
+}) {
+  const [name, setName] = useState(campaign?.name ?? "");
+  const [templateId, setTemplateId] = useState(campaign?.templateId ?? "");
+  const [a, setA] = useState<AudienceDraft>(campaign ? audienceDraftOf(campaign.audience) : blankAudience());
   const [error, setError] = useState<string | null>(null);
   const { busy, run } = useWaAction();
+  const problems = audienceProblems(a);
+  const audience = problems.length ? null : audienceOf(a);
+  const estimate = useEstimate(base, audience, templateId);
+  const template = templates.find((t) => t.id === templateId) ?? null;
+  const unsupported = template ? template.variables.filter((v) => v !== "customer_first_name" && v !== "store_name") : [];
+  const set = (patch: Partial<AudienceDraft>) => setA((x) => ({ ...x, ...patch }));
+  const ready = !!name.trim() && !!templateId && !problems.length && !unsupported.length;
 
-  useEffect(() => {
-    let stale = false;
-    const t = window.setTimeout(() => {
-      api<{ count: number }>(`${base}/campaigns/estimate`, { method: "POST", body: { audience } })
-        .then((r) => !stale && setEstimate(r.count))
-        .catch(() => !stale && setEstimate(null));
-    }, 400);
-    return () => {
-      stale = true;
-      window.clearTimeout(t);
-    };
-  }, [audience, base]);
-
-  const save = () =>
+  const save = (thenLaunch: boolean) =>
     run("save", "save the campaign", async () => {
       setError(null);
-      const body = { name, template: template ? { name: template.name, language: template.language } : { name: "", language: "en" }, mapping, headerMediaUrl: media.trim() || null, audience };
       try {
-        const r = editing ? await api<{ campaign: { id: string } }>(`${base}/campaigns/${editing.id}`, { method: "PUT", body }) : await api<{ campaign: { id: string } }>(`${base}/campaigns`, { method: "POST", body });
-        onDone(r.campaign.id);
-        return "Campaign saved as a draft.";
+        const body = { name: name.trim(), templateId, audience: audienceOf(a) };
+        const r = campaign
+          ? await api<{ campaign: WaCampaign }>(`${base}/campaigns/${campaign.id}`, { method: "PUT", body })
+          : await api<{ campaign: WaCampaign }>(`${base}/campaigns`, { method: "POST", body });
+        onDone(thenLaunch ? r.campaign : null);
+        return thenLaunch ? undefined : "Campaign saved as a draft. Nothing has been sent.";
       } catch (e) {
         setError(waError(e, "save the campaign"));
         throw e;
@@ -59,433 +361,265 @@ function CampaignEditor({ base, editing, templates, onDone, onCancel }: { base: 
 
   return (
     <div className="space-y-4">
-      <section className="card animate-rise space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">{editing ? `Edit "${editing.name}"` : "New campaign"}</h2>
-          <button type="button" className="btn-secondary" onClick={onCancel}>
+      <div className="card animate-rise">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">{campaign ? `Edit "${campaign.name}"` : "New campaign"}</h2>
+            <p className="mt-1 text-sm text-muted">Saving keeps it as a draft. Nothing is sent until you launch it and confirm the number of recipients.</p>
+          </div>
+          <button type="button" className="btn-secondary" onClick={() => onDone(null)}>
             Back to campaigns
           </button>
         </div>
-        <div className="max-w-md">
-          <label className="label" htmlFor="cmp-name">
-            Name (only your team sees it)
+        {qr && <QrWarning />}
+      </div>
+
+      <div className="card space-y-4">
+        <div>
+          <label className="label" htmlFor="wa-camp-name">
+            Name
           </label>
-          <input id="cmp-name" className="input" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="Diwali offer" />
+          <input id="wa-camp-name" className="input" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Winter sale" />
         </div>
-      </section>
-      <section className="card animate-rise space-y-3" aria-labelledby="cmp-msg-h">
-        <h3 id="cmp-msg-h" className="font-semibold">
-          Message
-        </h3>
-        {!marketing.length ? (
-          <Alert kind="info">Campaigns need a template Meta approved as Marketing. Write one in Templates (the &ldquo;Promotion&rdquo; starter is a good start) and come back once it&apos;s approved.</Alert>
-        ) : (
-          <>
-            <div className="max-w-md">
-              <label className="label" htmlFor="cmp-tpl">
-                Approved marketing template
+        <div>
+          <label className="label" htmlFor="wa-camp-template">
+            Marketing template
+          </label>
+          <select id="wa-camp-template" className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+            <option value="">Choose a template…</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id} disabled={!t.usable}>
+                {t.name}
+                {t.usable ? "" : ` — ${t.unusableReason ?? "can't be used"}`}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-muted">
+            Only marketing templates: they tell customers how to stop (Reply STOP), and campaigns go only to customers who agreed to marketing. Campaigns can fill {"{{customer_first_name}}"} and{" "}
+            {"{{store_name}}"}.{" "}
+            <Link className="underline" href={waHref("templates")}>
+              Write a template
+            </Link>
+            .
+          </p>
+          {templates.length === 0 && <p className="mt-1 text-xs text-warn">This store has no marketing template yet.</p>}
+          {template && (
+            <div className="mt-3 space-y-2">
+              <WaBubble>{renderWaText(template.body, samples, { lenient: true })}</WaBubble>
+              {unsupported.length > 0 && <Alert kind="error">This template uses {unsupported.map((v) => `{{${v}}}`).join(", ")}, which a campaign can&apos;t fill. Pick another.</Alert>}
+            </div>
+          )}
+        </div>
+
+        <fieldset className="space-y-3">
+          <legend className="label">Who it goes to</legend>
+          <p className="text-xs text-muted">Always only customers who agreed to marketing messages; these narrow it further.</p>
+          <CountryPicker label="Countries (none: every country)" value={a.countries} onChange={(countries) => set({ countries })} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="wa-camp-type">
+                Customers
               </label>
-              <select
-                id="cmp-tpl"
-                className="input"
-                value={ref}
-                onChange={(e) => {
-                  setRef(e.target.value);
-                  const t = marketing.find((x) => `${x.name}|${x.language}` === e.target.value) ?? null;
-                  setMapping(fitMapping(t, null, CAMPAIGN_VARIABLES));
-                }}
-              >
-                <option value="">Choose a template…</option>
-                {marketing.map((t) => (
-                  <option key={t.id} value={`${t.name}|${t.language}`}>
-                    {t.name} ({t.language})
-                  </option>
-                ))}
+              <select id="wa-camp-type" className="input" value={a.customerType} onChange={(e) => set({ customerType: e.target.value as AudienceDraft["customerType"] })}>
+                <option value="any">Everyone</option>
+                <option value="new">With one order</option>
+                <option value="returning">With more than one order</option>
               </select>
             </div>
-            {template && <MappingEditor template={template} mapping={mapping} onChange={setMapping} allowed={CAMPAIGN_VARIABLES} headerMediaUrl={media} onHeaderMediaUrl={setMedia} />}
-          </>
-        )}
-      </section>
-      <section className="card animate-rise space-y-3" aria-labelledby="cmp-aud-h">
-        <h3 id="cmp-aud-h" className="font-semibold">
-          Who receives it
-        </h3>
-        <p className="text-sm text-muted">Only customers who agreed to WhatsApp marketing and never replied STOP. Narrow it down if you like.</p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="cmp-type">
-              Customers
-            </label>
-            <select id="cmp-type" className="input" value={audience.customerType} onChange={(e) => setAudience({ ...audience, customerType: e.target.value as CampaignAudience["customerType"] })}>
-              <option value="any">Everyone</option>
-              <option value="new">With one order</option>
-              <option value="returning">Who ordered more than once</option>
-            </select>
+            <div>
+              <label className="label" htmlFor="wa-camp-min-orders">
+                At least … orders
+              </label>
+              <input id="wa-camp-min-orders" className="input" inputMode="numeric" value={a.minOrders} onChange={(e) => set({ minOrders: e.target.value.replace(/[^\d]/g, "") })} />
+            </div>
+            <div>
+              <label className="label" htmlFor="wa-camp-within">
+                Ordered in the last … days
+              </label>
+              <input id="wa-camp-within" className="input" inputMode="numeric" value={a.orderedWithinDays} onChange={(e) => set({ orderedWithinDays: e.target.value.replace(/[^\d]/g, "") })} />
+            </div>
+            <div>
+              <label className="label" htmlFor="wa-camp-not-for">
+                Haven&apos;t ordered for … days
+              </label>
+              <input id="wa-camp-not-for" className="input" inputMode="numeric" value={a.notOrderedForDays} onChange={(e) => set({ notOrderedForDays: e.target.value.replace(/[^\d]/g, "") })} />
+            </div>
+            <div>
+              <label className="label" htmlFor="wa-camp-spent">
+                Spent at least
+              </label>
+              <input id="wa-camp-spent" className="input" inputMode="decimal" value={a.minSpent} onChange={(e) => set({ minSpent: e.target.value.replace(/[^\d.]/g, "") })} />
+            </div>
           </div>
-          <div>
-            <label className="label" htmlFor="cmp-within">
-              Ordered in the last … days
-            </label>
-            <input id="cmp-within" className="input" type="number" min={1} value={audience.orderedWithinDays ?? ""} onChange={(e) => setAudience({ ...audience, orderedWithinDays: num(e.target.value) })} />
+          {problems.length > 0 && (
+            <Alert kind="error">
+              <ul className="list-disc pl-5">
+                {problems.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </Alert>
+          )}
+          <div className="rounded-lg border border-border bg-bg p-3 text-sm" aria-live="polite">
+            {!audience ? (
+              <span className="text-muted">Fix the audience to see how many customers it reaches.</span>
+            ) : !estimate ? (
+              <span className="text-muted">Counting…</span>
+            ) : estimate.error ? (
+              <span className="text-danger">{estimate.error}</span>
+            ) : (
+              <>
+                <span className="font-semibold">{plural(estimate.count ?? 0, "customer")}</span> can receive it now. <span className="text-muted">{describeWaAudience(audience)}.</span>
+                {template?.variables.includes("customer_first_name") && <span className="text-muted"> Customers whose first name bizinsights doesn&apos;t have are left out: the template greets them by name.</span>}
+                {(estimate.count ?? 0) > cap && <span className="mt-1 block text-danger">That&apos;s more than the {fmtNum(cap)} one campaign can send to on this connection: narrow the audience.</span>}
+              </>
+            )}
           </div>
-          <div>
-            <label className="label" htmlFor="cmp-notfor">
-              Haven&apos;t ordered for … days
-            </label>
-            <input id="cmp-notfor" className="input" type="number" min={1} value={audience.notOrderedForDays ?? ""} onChange={(e) => setAudience({ ...audience, notOrderedForDays: num(e.target.value) })} />
-          </div>
-          <div>
-            <label className="label" htmlFor="cmp-minorders">
-              At least … orders
-            </label>
-            <input id="cmp-minorders" className="input" type="number" min={1} value={audience.minOrders ?? ""} onChange={(e) => setAudience({ ...audience, minOrders: num(e.target.value) })} />
-          </div>
-          <div>
-            <label className="label" htmlFor="cmp-minspent">
-              Spent at least
-            </label>
-            <input id="cmp-minspent" className="input" type="number" min={0} value={audience.minSpent ?? ""} onChange={(e) => setAudience({ ...audience, minSpent: e.target.value.trim() === "" ? null : Math.max(0, Number(e.target.value)) || null })} />
-          </div>
+        </fieldset>
+
+        {error && <Alert kind="error">{error}</Alert>}
+        <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+          <button type="button" className="btn-secondary" disabled={!ready || !!busy} onClick={() => void save(false)}>
+            {busy === "save" ? "Saving…" : "Save draft"}
+          </button>
+          <button type="button" className="btn-primary" disabled={!ready || !!busy} onClick={() => void save(true)}>
+            Save and review launch…
+          </button>
         </div>
-        <CountryPicker label="Only in these countries (none: any country)" value={audience.countries} onChange={(countries) => setAudience({ ...audience, countries })} />
-        <p className="text-sm" aria-live="polite">
-          {describeAudience(audience)}: <strong>{estimate === null ? "counting…" : plural(estimate, "customer")}</strong> today.
-        </p>
-      </section>
-      {error && <Alert>{error}</Alert>}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-primary" disabled={!name.trim() || !template || busy === "save"} onClick={() => void save()}>
-          {busy === "save" ? "Saving…" : "Save draft"}
-        </button>
-        <button type="button" className="btn-secondary" onClick={onCancel}>
-          Cancel
-        </button>
       </div>
     </div>
   );
 }
 
-/** A campaign: what it needs before it can be sent, a test, scheduling, cancelling, and how it went. */
-function CampaignView({ base, id, overview, onBack, onEdit, onDeleted }: { base: string; id: string; overview: WaOverview; onBack: () => void; onEdit: () => void; onDeleted: () => void }) {
-  const { data, error, loading, reload } = useApi<WaCampaignDetail>(`${base}/campaigns/${id}`);
-  const { busy, run } = useWaAction();
-  const [scheduling, setScheduling] = useState<{ count: number } | null>(null);
+// ---------------------------------------------------------------------------
+// Launching: the exact count, confirmed
+// ---------------------------------------------------------------------------
+
+function LaunchDialog({
+  base,
+  campaign,
+  template,
+  cap,
+  qr,
+  tz,
+  onClose,
+}: {
+  base: string;
+  campaign: WaCampaign;
+  template: WaTemplate | null;
+  cap: number;
+  qr: boolean;
+  tz: string;
+  onClose: (launched: boolean) => void;
+}) {
+  const estimate = useEstimate(base, campaign.audience, campaign.templateId);
+  const [count, setCount] = useState<number | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
   const [when, setWhen] = useState<"now" | "later">("now");
   const [at, setAt] = useState("");
-  const [confirmCancel, setConfirmCancel] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
-  const can = overview.can;
-  useEffect(() => {
-    if (data?.campaign.status !== "sending") return;
-    const t = window.setInterval(() => void reload(), 15_000);
-    return () => window.clearInterval(t);
-  }, [data?.campaign.status, reload]);
-  if (error) return <LoadError what="the campaign" error={error} onRetry={() => void reload()} busy={loading} />;
-  if (!data) return <Skeleton lines={5} />;
-  const { campaign: c, report: r } = data;
-  const list = problems.length ? problems : data.problems;
-  const tz = overview.store.timezone;
+  const { busy, run } = useWaAction();
+  // The count shown is the latest the API gave: the estimate first, then a launch's refusal.
+  const shown = count ?? estimate?.count ?? null;
+  const scheduledAt = when === "later" && at ? new Date(at) : null;
+  const badTime = when === "later" && (!scheduledAt || Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() < Date.now() + 60_000);
+  const tooMany = shown !== null && shown > cap;
+  const canLaunch = shown !== null && shown > 0 && !tooMany && confirmed && !badTime && !busy;
 
-  const startSchedule = () =>
-    run("estimate", "count the recipients", async () => {
-      const e = await api<{ count: number }>(`${base}/campaigns/estimate`, { method: "POST", body: { audience: c.audience } });
-      setScheduling({ count: e.count });
-    });
-  const schedule = () =>
-    run("schedule", "schedule the campaign", async () => {
+  const launch = () =>
+    run("launch", "launch the campaign", async () => {
+      setError(null);
+      setProblems([]);
       try {
-        await api(`${base}/campaigns/${c.id}/schedule`, { method: "POST", body: { scheduledAt: when === "later" && at ? new Date(at).toISOString() : null, confirmRecipients: scheduling!.count } });
+        await api(`${base}/campaigns/${campaign.id}/launch`, { method: "POST", body: { confirmRecipients: shown, scheduledAt: scheduledAt ? scheduledAt.toISOString() : null } });
       } catch (e) {
-        setProblems(problemsOf(e));
-        setScheduling(null);
+        if (e instanceof ApiError && e.code === "count_changed") {
+          const next = (e.data.detail as { count?: unknown } | undefined)?.count;
+          if (typeof next === "number") setCount(next);
+          setConfirmed(false);
+        }
+        const detail = e instanceof ApiError ? (e.data.detail as { problems?: unknown } | undefined) : undefined;
+        if (Array.isArray(detail?.problems)) setProblems(detail.problems.filter((p): p is string => typeof p === "string"));
+        setError(waError(e, "launch the campaign"));
         throw e;
       }
-      setScheduling(null);
-      await reload();
-      return when === "later" ? "Campaign scheduled." : "Campaign started: messages are going out now.";
+      onClose(true);
+      return scheduledAt ? `Scheduled for ${fmtWhen(scheduledAt.toISOString(), tz)}.` : "Launched. Messages go out a few seconds apart; follow them here and in Message history.";
     });
 
   return (
-    <div className="space-y-4">
-      <section className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <h2 className="flex flex-wrap items-center gap-2 font-semibold">
-              {c.name} <Pill map={CAMPAIGN_STATUS} status={c.status} />
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              {c.template.name} · {c.audienceText}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {c.status === "scheduled" && c.scheduledAt ? `Starts ${fmtWhen(c.scheduledAt, tz)}. ` : ""}
-              {c.startedAt ? `Started ${fmtWhen(c.startedAt, tz)}. ` : ""}
-              {c.completedAt ? `Finished ${fmtWhen(c.completedAt, tz)}. ` : ""}
-              {c.cancelledAt ? `Cancelled ${fmtWhen(c.cancelledAt, tz)}${c.cancelReason && c.cancelReason !== "merchant" ? ` (${reasonText(c.cancelReason) ?? c.cancelReason})` : ""}. ` : ""}
-            </p>
-          </div>
-          <button type="button" className="btn-secondary" onClick={onBack}>
-            Back to campaigns
-          </button>
+    <Dialog open title={`Launch "${campaign.name}"`} onClose={() => onClose(false)}>
+      <div className="space-y-3 text-sm">
+        <p className="text-muted">{campaign.audienceLabel}.</p>
+        {template && <WaBubble>{template.body}</WaBubble>}
+        <div className="rounded-lg border border-border bg-bg p-3" aria-live="polite">
+          {shown === null ? (
+            estimate?.error ? <span className="text-danger">{estimate.error}</span> : <span className="text-muted">Counting recipients…</span>
+          ) : (
+            <>
+              <span className="text-base font-semibold">{plural(shown, "customer")}</span> will receive it.
+              {count !== null && <span className="mt-1 block text-warn">The audience changed since you last looked: this is the new count.</span>}
+              {shown === 0 && <span className="mt-1 block text-muted">Nobody in this audience can receive marketing messages right now.</span>}
+              {tooMany && <span className="mt-1 block text-danger">More than the {fmtNum(cap)} one campaign may send to on this connection. Edit the audience to narrow it.</span>}
+            </>
+          )}
         </div>
-        {can.manage && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {c.can.schedule && (
-              <button type="button" className="btn-primary" onClick={() => void startSchedule()} disabled={!!list.length || busy === "estimate"}>
-                Schedule or send
-              </button>
-            )}
-            {c.can.test && (
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={busy === "test"}
-                onClick={() =>
-                  void run("test", "send the test", async () => {
-                    await api(`${base}/campaigns/${c.id}/test`, { method: "POST", body: {} });
-                    await reload();
-                    return "Test sent to your own number.";
-                  })
-                }
-              >
-                Send a test to me
-              </button>
-            )}
-            {c.can.edit && (
-              <button type="button" className="btn-secondary" onClick={onEdit}>
-                Edit
-              </button>
-            )}
-            {c.can.cancel && (
-              <button type="button" className="btn-secondary text-danger" onClick={() => setConfirmCancel(true)}>
-                Cancel campaign
-              </button>
-            )}
-            {c.can.delete && (
-              <button type="button" className="btn-secondary text-danger" onClick={() => setConfirmDelete(true)}>
-                Delete
-              </button>
-            )}
-          </div>
+        {qr && (
+          <Alert kind="info">
+            Sent from your linked phone, a message every few seconds, within your sending hours and daily limit. WhatsApp may restrict a number that sends unwanted bulk messages.
+          </Alert>
         )}
-        {c.can.schedule && !c.lastTestAt && can.manage && <p className="mt-2 text-xs text-muted">Tip: send yourself a test first to see exactly what customers will receive.</p>}
-      </section>
-      {c.can.schedule && list.length > 0 && (
-        <Alert kind="info">
-          <strong>Before it can be sent:</strong>
-          <ul className="mt-1 list-disc pl-5">
-            {list.map((p) => (
-              <li key={p}>{p}</li>
-            ))}
-          </ul>
-        </Alert>
-      )}
-      {c.status !== "draft" && (
-        <section aria-labelledby="cmp-report-h" className="space-y-2">
-          <h3 id="cmp-report-h" className="text-sm font-semibold">
-            Delivery report {c.status === "sending" ? <span className="font-normal text-muted">(updates by itself)</span> : null}
-          </h3>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Recipients" value={fmtNum(c.recipients || r.total)} note={c.status === "sending" && !c.materialized ? "Still adding recipients…" : c.estimatedRecipients ? `${fmtNum(c.estimatedRecipients)} when scheduled` : undefined} />
-            <Stat label="Sent" value={fmtNum(r.sent + r.delivered + r.read)} note={r.queued ? `${fmtNum(r.queued)} waiting` : undefined} />
-            <Stat label="Delivered" value={fmtNum(r.delivered + r.read)} tone={r.delivered + r.read ? "good" : undefined} note={r.read ? `${fmtNum(r.read)} read` : undefined} />
-            <Stat label="Failed" value={fmtNum(r.failed)} tone={r.failed ? "danger" : undefined} note={r.skipped + r.cancelled ? `${fmtNum(r.skipped + r.cancelled)} not sent` : undefined} />
-          </div>
-          {c.recipients > 0 && (
-            <div className="h-2 rounded-full bg-bg" aria-hidden>
-              <div className="h-2 rounded-full bg-accent" style={{ width: `${Math.min(100, Math.round(((r.total - r.queued) / Math.max(1, c.recipients)) * 100))}%` }} />
+        <fieldset className="space-y-2">
+          <legend className="label">When</legend>
+          <label className="flex items-center gap-2">
+            <input type="radio" name="when" className="accent-[var(--accent)]" checked={when === "now"} onChange={() => setWhen("now")} />
+            Now
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="radio" name="when" className="accent-[var(--accent)]" checked={when === "later"} onChange={() => setWhen("later")} />
+            Later
+          </label>
+          {when === "later" && (
+            <div>
+              <label className="sr-only" htmlFor="wa-camp-at">
+                Date and time
+              </label>
+              <input id="wa-camp-at" type="datetime-local" className="input max-w-xs" value={at} onChange={(e) => setAt(e.target.value)} />
+              <p className="mt-1 text-xs text-muted">In your browser&apos;s time zone. Messages still keep to the store&apos;s sending hours ({tz}).</p>
+              {badTime && at && <p className="mt-1 text-xs text-danger">Pick a time at least a minute from now.</p>}
             </div>
           )}
-          {r.failures.length > 0 && (
-            <div className="card">
-              <h4 className="text-sm font-semibold">Why some weren&apos;t sent</h4>
-              <ul className="mt-2 space-y-1 text-sm">
-                {r.failures.map((f, i) => (
-                  <li key={i}>
-                    {fmtNum(f.count)} · {f.title ?? reasonText(f.reason) ?? "WhatsApp couldn't send them"}
-                  </li>
+        </fieldset>
+        {shown !== null && shown > 0 && !tooMany && (
+          <label className="flex items-start gap-2 rounded-lg border border-border p-3">
+            <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+            <span>
+              Send this marketing message to <span className="font-semibold">{plural(shown, "customer")}</span>. They all agreed to marketing messages, and every message tells them how to stop.
+            </span>
+          </label>
+        )}
+        {error && (
+          <Alert kind="error">
+            {error}
+            {problems.length > 0 && (
+              <ul className="mt-1 list-disc pl-5">
+                {problems.map((p) => (
+                  <li key={p}>{p}</li>
                 ))}
               </ul>
-              <Link className="mt-2 inline-block text-sm text-accent underline-offset-2 hover:underline" href={waHref("activity", { campaignId: c.id, status: "failed" })}>
-                See the failed messages
-              </Link>
-            </div>
-          )}
-        </section>
-      )}
-      <ConfirmDialog
-        open={!!scheduling}
-        title={`Send to ${scheduling ? plural(scheduling.count, "customer") : ""}?`}
-        confirmLabel={when === "now" ? `Send to ${scheduling ? fmtNum(scheduling.count) : ""} now` : "Schedule"}
-        busy={busy === "schedule"}
-        confirmDisabled={when === "later" && !at}
-        onCancel={() => setScheduling(null)}
-        onConfirm={() => void schedule()}
-      >
-        <p>
-          {c.audienceText}: <strong>{scheduling ? plural(scheduling.count, "customer") : ""}</strong> right now. Each message is checked again right before it goes, so anyone who opts out meanwhile won&apos;t
-          receive it. Meta charges your business for each marketing conversation.
-        </p>
-        <fieldset className="space-y-2 text-text">
-          <label className="flex items-center gap-2">
-            <input type="radio" name="cmp-when" checked={when === "now"} onChange={() => setWhen("now")} /> Send now
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="radio" name="cmp-when" checked={when === "later"} onChange={() => setWhen("later")} /> Schedule for
-            <input type="datetime-local" className="input w-auto" aria-label="Date and time" value={at} onChange={(e) => setAt(e.target.value)} disabled={when !== "later"} />
-          </label>
-        </fieldset>
-      </ConfirmDialog>
-      <ConfirmDialog
-        open={confirmCancel}
-        title="Cancel this campaign?"
-        confirmLabel="Cancel campaign"
-        danger
-        busy={busy === "cancel"}
-        onCancel={() => setConfirmCancel(false)}
-        onConfirm={() =>
-          void run("cancel", "cancel the campaign", async () => {
-            const res = await api<{ cancelled: number }>(`${base}/campaigns/${c.id}/cancel`, { method: "POST", body: {} });
-            setConfirmCancel(false);
-            await reload();
-            return `Campaign cancelled. ${plural(res.cancelled, "waiting message")} won't be sent.`;
-          })
-        }
-      >
-        <p>Messages not yet handed to WhatsApp won&apos;t be sent. Messages already sent can&apos;t be called back.</p>
-      </ConfirmDialog>
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Delete this campaign?"
-        confirmLabel="Delete"
-        danger
-        busy={busy === "delete"}
-        onCancel={() => setConfirmDelete(false)}
-        onConfirm={() =>
-          void run("delete", "delete the campaign", async () => {
-            await api(`${base}/campaigns/${c.id}`, { method: "DELETE" });
-            setConfirmDelete(false);
-            onDeleted();
-            return "Campaign deleted.";
-          })
-        }
-      >
-        <p>The draft is deleted. Messages it already sent stay in the message history.</p>
-      </ConfirmDialog>
-    </div>
-  );
-}
-
-/** The store's campaigns, writing new ones, and each one's detail. */
-export function Campaigns({ base, overview }: { base: string; overview: WaOverview }) {
-  const router = useRouter();
-  const params = useSearchParams();
-  const view = params.get("campaign");
-  const edit = params.get("edit");
-  const { data, error, loading, reload } = useApi<{ campaigns: WaCampaign[] }>(`${base}/campaigns`);
-  const templates = useApi<WaTemplatesAnswer>(`${base}/templates`);
-  const go = (extra: Record<string, string>) => router.push(waHref("campaigns", extra));
-  const can = overview.can;
-  if (error || templates.error)
-    return (
-      <LoadError
-        what="your campaigns"
-        error={error ?? templates.error}
-        onRetry={() => {
-          void reload();
-          void templates.reload();
-        }}
-        busy={loading || templates.loading}
-      />
-    );
-  if (!data || !templates.data) return <Skeleton lines={5} />;
-  if (edit && can.manage) {
-    const editing = edit === "new" ? null : (data.campaigns.find((c) => c.id === edit) ?? null);
-    return (
-      <CampaignEditor
-        key={edit}
-        base={base}
-        editing={editing}
-        templates={templates.data.templates}
-        onCancel={() => go(editing ? { campaign: editing.id } : {})}
-        onDone={(id) => {
-          void reload();
-          go({ campaign: id });
-        }}
-      />
-    );
-  }
-  if (view)
-    return (
-      <CampaignView
-        key={view}
-        base={base}
-        id={view}
-        overview={overview}
-        onBack={() => {
-          void reload();
-          go({});
-        }}
-        onEdit={() => go({ edit: view })}
-        onDeleted={() => {
-          void reload();
-          go({});
-        }}
-      />
-    );
-  return (
-    <div className="space-y-4">
-      <section className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="font-semibold">Campaigns</h2>
-            <p className="mt-1 max-w-2xl text-sm text-muted">
-              Send an approved marketing template to customers who agreed to WhatsApp marketing, now or at a time you choose. You see the exact number of recipients before anything is sent.
-            </p>
-          </div>
-          {can.manage && (
-            <button type="button" className="btn-primary" onClick={() => go({ edit: "new" })}>
-              New campaign
-            </button>
-          )}
+            )}
+          </Alert>
+        )}
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={() => onClose(false)} disabled={!!busy}>
+            Not now
+          </button>
+          <button type="button" className="btn-primary" disabled={!canLaunch} onClick={() => void launch()}>
+            {busy === "launch" ? "Launching…" : when === "later" ? "Schedule campaign" : shown ? `Send to ${plural(shown, "customer")}` : "Send"}
+          </button>
         </div>
-      </section>
-      {!data.campaigns.length ? (
-        <EmptyState title="No campaigns yet" body="Customers join your audience when they agree to WhatsApp marketing: by replying START, at checkout (when you say Shopify's text-message consent covers WhatsApp), or when your team records it." />
-      ) : (
-        <div className="overflow-x-auto card">
-          <table className="w-full min-w-[36rem] text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted">
-                <th className="py-2 pr-3 font-medium">Campaign</th>
-                <th className="py-2 pr-3 font-medium">Status</th>
-                <th className="py-2 pr-3 font-medium">Recipients</th>
-                <th className="py-2 pr-3 font-medium">Delivered</th>
-                <th className="py-2 pr-3 font-medium">Failed</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {data.campaigns.map((c) => (
-                <tr key={c.id}>
-                  <td className="py-2 pr-3">
-                    <button type="button" className="text-left font-medium text-accent underline-offset-2 hover:underline" onClick={() => go({ campaign: c.id })}>
-                      {c.name}
-                    </button>
-                    <span className="block text-xs text-muted">{c.status === "scheduled" && c.scheduledAt ? `Starts ${fmtWhen(c.scheduledAt, overview.store.timezone)}` : c.template.name}</span>
-                  </td>
-                  <td className="py-2 pr-3">
-                    <Pill map={CAMPAIGN_STATUS} status={c.status} />
-                  </td>
-                  <td className="py-2 pr-3 tabular-nums">{c.recipients ? fmtNum(c.recipients) : c.estimatedRecipients ? `~${fmtNum(c.estimatedRecipients)}` : "—"}</td>
-                  <td className="py-2 pr-3 tabular-nums">{c.progress ? fmtNum(c.progress.delivered) : "—"}</td>
-                  <td className="py-2 pr-3 tabular-nums">{c.progress ? fmtNum(c.progress.failed) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+      </div>
+    </Dialog>
   );
 }

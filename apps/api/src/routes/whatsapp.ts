@@ -1,674 +1,679 @@
 import { z } from "zod";
-import { systemDb, withTenant, type Prisma } from "@app/db";
+import { systemDb, withTenant, type Prisma, type Store, type WappAutomation, type WappCampaign, type WappTemplate } from "@app/db";
 import {
-  accountNumbers,
-  appWebhookState,
-  audit,
-  blockedActiveWorkflows,
+  activateAutomation,
+  addWaSuppression,
+  automationInput,
+  automationProblemsFor,
+  campaignReport,
+  cancelCampaign,
   checkConnection,
+  confirmTestVerification,
+  connectCloudApi,
+  connectionOf,
+  createWaTemplate,
+  deleteAutomation,
+  deleteCampaign,
+  deleteWaTemplate,
+  disconnectWhatsapp,
+  ensureCustomerWebhook,
+  evolutionConfigured,
+  estimateWaAudience,
+  launchCampaign,
+  metaSignupConfig,
+  pairingState,
   pauseAutomation,
-  resumeAutomation,
-  chooseNumber,
-  disconnect,
-  finishSignup,
-  legacyConnection,
-  liveConnection,
-  receiveCustomEvent,
-  registerWithPin,
-  removeTemplate,
+  removeWaSuppression,
+  restartConnection,
   retryMessage,
-  revealPin,
-  revokeEventKey,
-  rotateEventKey,
-  sendManual,
-  sendTest,
-  setConsent,
-  settingsOf,
-  startSignup,
-  submitTemplate,
-  syncTemplates,
-  connectionToken,
-  waEncrypt,
+  saveAutomation,
+  saveCampaign,
+  saveWaSettings,
+  sendManualMessage,
+  sendTestMessage,
+  setAutomationPaused,
+  setConsentByMerchant,
+  storeGraphql,
+  startPairing,
+  startTestVerification,
+  submitTemplateToMeta,
+  templateUsable,
+  templateUsage,
+  testAutomation,
+  triggerAvailability,
+  updateWaTemplate,
+  waConnectionView,
+  waDecrypt,
+  waMessageView,
   waPhoneHash,
-  waPlatform,
-  waPlatformMissing,
-  waWebhookUrl,
+  whatsappOverview,
   WhatsappError,
-  contactFirstName,
-  messagePreview,
 } from "@app/core";
 import {
+  addDays,
   allows,
-  AUTOMATION_STATE_LABEL,
-  automationState,
-  customEventSchema,
-  mappingSchema,
-  maskPhone,
+  describeWaAudience,
+  describeWaCondition,
   normalizePhone,
-  ORDER_UPDATE_BASES,
-  sendWindowSchema,
-  STARTER_TEMPLATES,
-  statusBucket,
-  templateDraftSchema,
-  templateRefSchema,
-  templateShape,
+  startOfLocalDay,
+  variablesIn,
+  waSampleValues,
+  waSkipLabel,
+  WA_CONSENT_SOURCE_LABEL,
   WA_MESSAGE_STATUSES,
-  type TemplateComponent,
-  type TemplateMapping,
+  WA_TRIGGER_INFO,
+  type WaAudience,
+  type WaCondition,
+  type WaConsentSource,
 } from "@app/shared";
-import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { base, connectionView, messageView, requireContacts, requireWaConnect, requireWaManage, requireWaView, seesContacts, settingsJson, templateView, waCan, waStore } from "./whatsappCommon.js";
 
 /**
- * WhatsApp Automation for a store, for the signed-in merchant (docs/whatsapp.md): the overview,
- * connecting the number with Meta's Embedded Signup (its finish, a number to choose, the number's
- * PIN, "Check again", disconnect), settings, templates, the message history and sending, contacts
- * and their consent, and test events. Workflows and campaigns are in whatsappAutomation.ts.
- *
- * Reading needs "View campaigns"; anything that changes what customers receive needs the store's
- * owners or admins; connecting needs "Manage integrations". Tokens never reach the browser.
+ * WhatsApp Automation's merchant API (docs/whatsapp.md), one store at a time. Who may do what:
+ *  - read anything here: "View campaigns" (marketing.campaigns); how the connection stands (the
+ *    overview, cut down to it, for Settings → Integrations): "View integration connection status" too;
+ *  - customers' numbers, names and what was said: "View contact information" as well;
+ *  - change what customers receive (settings, templates, automations, campaigns, sends): the
+ *    store's owners and admins (stores:manage), signed in themselves; a shared link never can;
+ *  - connect and disconnect the number: "Manage integrations", signed in themselves.
+ * Instance keys, webhook keys, QR codes (except to the person pairing), tokens and full numbers are
+ * never in an answer.
  */
+const base = "/workspaces/:ws/stores/:storeId/whatsapp";
+const idParam = z.string().min(1).max(40);
 
-const DAY = 86_400_000;
-const idParam = z.string().trim().min(1).max(64);
-/** Why a waiting message is held rather than just not due yet (messages.ts). */
-const HELD_REASONS = new Set(["waiting_for_connection", "automation_paused", "daily_limit", "sending_hours", "meta_throttled"]);
+async function waStore(ws: string, storeId: string): Promise<Store> {
+  const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
+  if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
+  return store;
+}
+
+const requireView = (c: Ctx, deps: Deps, ws: string) => requireWorkspace(c, deps, ws, "marketing.campaigns");
+
+type SignedIn = WorkspaceAccess & { user: NonNullable<WorkspaceAccess["user"]> };
+
+async function requireSignedIn(c: Ctx, deps: Deps, ws: string, need: "stores:manage" | "integrations.manage"): Promise<SignedIn> {
+  const a = await requireWorkspace(c, deps, ws, need);
+  if (!a.user || a.link) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  return a as SignedIn;
+}
+const requireManage = (c: Ctx, deps: Deps, ws: string) => requireSignedIn(c, deps, ws, "stores:manage");
+const requireConnect = (c: Ctx, deps: Deps, ws: string) => requireSignedIn(c, deps, ws, "integrations.manage");
+
+const seesContacts = (a: WorkspaceAccess) => allows(a.access, "customers.contact");
+function requireContacts(a: WorkspaceAccess) {
+  if (!seesContacts(a)) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
+}
+
+/** What the browser may know of each permission, so it shows only the buttons that work. */
+function waCan(a: WorkspaceAccess) {
+  const signedIn = !!a.user && !a.link;
+  return { connect: signedIn && allows(a.access, "integrations.manage"), manage: signedIn && allows(a.access, "stores:manage"), contacts: seesContacts(a) };
+}
+
+function templateView(t: WappTemplate, conn: Awaited<ReturnType<typeof connectionOf>>, usage?: { automations: number; campaigns: number }) {
+  const usable = templateUsable(t, conn);
+  return {
+    id: t.id,
+    name: t.name,
+    category: t.category,
+    body: t.body,
+    active: t.active,
+    variables: variablesIn(t.body),
+    usable: usable.ok,
+    unusableReason: usable.reason,
+    meta: t.metaName ? { name: t.metaName, language: t.metaLanguage, status: t.metaStatus, reason: t.metaReason, checkedAt: t.metaCheckedAt } : null,
+    usedBy: usage ?? null,
+    updatedAt: t.updatedAt,
+  };
+}
+
+function automationView(a: WappAutomation, problems: string[] | null, stats?: { queued: number; skipped: number }) {
+  const input = automationInput(a);
+  return {
+    id: a.id,
+    ...input,
+    status: a.status,
+    version: a.version,
+    triggerLabel: WA_TRIGGER_INFO[input.trigger]?.label ?? input.trigger,
+    conditionLabels: input.conditions.map((x: WaCondition) => describeWaCondition(x)),
+    problems,
+    stats: stats ?? null,
+    activatedAt: a.activatedAt,
+    lastRunAt: a.lastRunAt,
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt,
+  };
+}
+
+function campaignView(c: WappCampaign, report?: Awaited<ReturnType<typeof campaignReport>>) {
+  const audience = c.audience as unknown as WaAudience;
+  return {
+    id: c.id,
+    name: c.name,
+    templateId: c.templateId,
+    audience,
+    audienceLabel: describeWaAudience(audience),
+    status: c.status,
+    scheduledAt: c.scheduledAt,
+    confirmedRecipients: c.confirmedRecipients,
+    recipients: c.recipients,
+    startedAt: c.startedAt,
+    completedAt: c.completedAt,
+    cancelledAt: c.cancelledAt,
+    cancelReason: c.cancelReason,
+    report: report ?? null,
+    createdAt: c.createdAt,
+  };
+}
+
+const messageFilters = z.object({
+  status: z.enum(["waiting", "sent", "delivered", "read", "failed", "not_sent", "received", ...WA_MESSAGE_STATUSES]).optional(),
+  direction: z.enum(["out", "in"]).optional(),
+  source: z.enum(["automation", "campaign", "manual", "test", "verification", "team_alert", "reply", "inbound"]).optional(),
+  automationId: idParam.optional(),
+  campaignId: idParam.optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  phone: z.string().trim().min(6).max(32).optional(),
+  cursor: z.string().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+const BUCKET_STATUSES: Record<string, string[]> = {
+  waiting: ["queued", "sending"],
+  sent: ["accepted", "sent"],
+  delivered: ["delivered"],
+  read: ["read"],
+  failed: ["failed"],
+  not_sent: ["skipped", "cancelled"],
+  received: ["received"],
+};
 
 export function whatsappRoutes(app: App, deps: Deps) {
-  /**
-   * Everything the WhatsApp Automation page opens with, in one call. Settings → Integrations reads it
-   * too, for people who may only see how connections stand: they get no message history.
-   */
+  // ---------------------------------------------------------------------------
+  // Overview
+  // ---------------------------------------------------------------------------
+
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
-    const seesCampaigns = allows(a.access, "marketing.campaigns");
     const store = await waStore(ws, storeId);
     const can = waCan(a);
-    const now = Date.now();
-    const data = await withTenant(ws, async (tx) => {
-      const [conn, templates, week, month, recent, workflows, campaigns, recentFailures, waiting] = await Promise.all([
-        tx.waConnection.findUnique({ where: { storeId } }),
-        tx.waTemplate.findMany({ where: { storeId, workspaceId: ws }, select: { status: true } }),
-        tx.waMessage.groupBy({ by: ["status", "direction"], where: { storeId, workspaceId: ws, createdAt: { gte: new Date(now - 7 * DAY) }, source: { not: "test" } }, _count: { _all: true } }),
-        tx.waMessage.groupBy({ by: ["status", "direction"], where: { storeId, workspaceId: ws, createdAt: { gte: new Date(now - 30 * DAY) }, source: { not: "test" } }, _count: { _all: true } }),
-        tx.waMessage.findMany({ where: { storeId, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 8 }),
-        tx.waWorkflow.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
-        tx.waCampaign.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
-        tx.waMessage.findMany({ where: { storeId, workspaceId: ws, direction: "out", status: "failed", createdAt: { gte: new Date(now - 7 * DAY) } }, orderBy: { createdAt: "desc" }, take: 5 }),
-        // The queue: what is waiting, why the held ones wait, and when the next one is due.
-        tx.waMessage.groupBy({ by: ["reason"], where: { storeId, workspaceId: ws, status: { in: ["queued", "sending"] } }, _count: { _all: true }, _min: { sendAfter: true } }),
-      ]);
-      const failures = await tx.waMessage.groupBy({
-        by: ["errorTitle", "reason"],
-        where: { storeId, workspaceId: ws, status: "failed", createdAt: { gte: new Date(now - 7 * DAY) } },
-        _count: { _all: true },
-        orderBy: { _count: { id: "desc" } },
-        take: 5,
-      });
-      return { conn, templates, week, month, recent, workflows, campaigns, failures, recentFailures, waiting };
-    });
-    const conn = data.conn;
-    const live = conn && conn.status !== "disconnected" ? conn : null;
-    const dead = live ? await systemDb.waWebhookEvent.count({ where: { status: "dead", wabaIds: { has: live.wabaId }, receivedAt: { gte: new Date(now - 7 * DAY) } } }) : 0;
-    const settings = await settingsOf(storeId);
-    const stats = (rows: typeof data.week) => {
-      const out = { pending: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, received: 0 };
-      for (const r of rows) {
-        if (r.direction === "in") {
-          out.received += r._count._all;
-          continue;
-        }
-        const b = statusBucket(r.status);
-        if (b === "pending") out.pending += r._count._all;
-        else if (b === "sent") out.sent += r._count._all;
-        else if (b === "delivered") {
-          out.delivered += r._count._all;
-          if (r.status === "read") out.read += r._count._all;
-        } else if (b === "failed") out.failed += r._count._all;
-        else if (r.status === "skipped") out.skipped += r._count._all;
-      }
-      return out;
-    };
-    const count = (rows: Array<{ status: string; _count: { _all: number } }>, s: string) => rows.find((r) => r.status === s)?._count._all ?? 0;
-    const approved = data.templates.filter((t) => t.status === "APPROVED").length;
-    const missing = waPlatformMissing();
-    const platform = waPlatform();
-    const legacy = live ? null : await legacyConnection(storeId);
-    const blocked = live ? await blockedActiveWorkflows(store) : [];
-    const activeWorkflows = count(data.workflows, "active");
-    const state = automationState({
-      connection: live ? { status: live.status, registered: live.registered, subscribed: !!live.subscribedAt } : null,
-      paused: !!settings.automationPausedAt,
-      activeWorkflows,
-      blockedWorkflows: blocked.length,
-    });
-    const waiting = data.waiting.reduce((s, r) => s + r._count._all, 0);
-    const heldReasons = data.waiting.filter((r) => r.reason && HELD_REASONS.has(r.reason)).map((r) => ({ reason: r.reason!, count: r._count._all }));
-    const nextDue = data.waiting.map((r) => r._min.sendAfter).filter((d): d is Date => !!d).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
-
-    // What needs the merchant, in the order it matters.
-    const problems: Array<{ key: string; title: string; detail: string }> = [];
-    if (live && settings.automationPausedAt) {
-      problems.push({ key: "paused", title: "All automation is paused", detail: "Workflows start nothing and campaigns wait until you resume it in Settings. Messages held for more than 48 hours are cancelled rather than sent late." });
+    // Settings → Integrations, for someone who may see only how connections stand: the connection, nothing else.
+    if (!allows(a.access, "marketing.campaigns")) {
+      return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain }, platform: { evolution: evolutionConfigured() }, connection: waConnectionView(await connectionOf(store.id)), can });
     }
-    for (const b of blocked) problems.push({ key: `workflow:${b.id}`, title: `"${b.name}" is on but can't send`, detail: b.problems[0]! });
-    if (live?.status === "reconnect") problems.push({ key: "reconnect", title: "Reconnect WhatsApp", detail: live.statusDetail ?? "Meta no longer accepts bizinsights' access. Nothing is sent until you reconnect." });
-    if (live?.status === "error") problems.push({ key: "account", title: "Problem with your WhatsApp account", detail: live.statusDetail ?? "Meta restricted the account. Check WhatsApp Manager." });
-    if (live?.status === "action_required" && live.statusDetail) problems.push({ key: `step:${live.step}`, title: "One more step", detail: live.statusDetail });
-    if (live && !live.subscribedAt) problems.push({ key: "webhooks", title: "Replies aren't reaching bizinsights yet", detail: "Press Check again. Until it works, delivery reports and STOP replies don't arrive, and campaigns can't be sent." });
-    if (live && live.qualityRating === "RED") problems.push({ key: "quality", title: "Your number's quality is low", detail: "Customers are blocking or reporting your messages. Send fewer marketing messages and make sure customers expect them, or Meta may limit the number." });
-    if (dead) problems.push({ key: "webhook_failed", title: "Some updates from WhatsApp couldn't be applied", detail: `${dead} update${dead === 1 ? "" : "s"} from Meta failed in the last 7 days. Delivery statuses may be out of date; contact support if this keeps happening.` });
-    for (const f of data.failures) problems.push({ key: `failed:${f.reason}:${f.errorTitle}`, title: `${f._count._all} message${f._count._all === 1 ? "" : "s"} failed`, detail: f.errorTitle ?? "WhatsApp couldn't send them." });
-    if (live && settings.orderUpdates === "unset") problems.push({ key: "consent", title: "Choose how customers agree to updates", detail: "Order and service updates go to nobody until you choose, in Settings." });
-
+    const overview = await whatsappOverview(store, { contacts: seesContacts(a) });
     return c.json({
-      // Public ids (Meta's SDK needs them in the page); the secret never leaves the server. Who may
-      // connect also sees what the server still lacks and how Meta last answered about the app's webhook.
-      platform: {
-        ready: !!platform,
-        ...(platform ? { appId: platform.appId, configId: platform.configId, version: platform.version } : {}),
-        ...(can.connect ? { missing, webhook: platform ? await appWebhookState(deps.coord) : null } : {}),
-      },
-      connection: connectionView(conn),
-      legacy,
+      ...overview,
       can,
-      store: { name: store.name ?? store.shopDomain, timezone: store.timezone, currency: store.currency },
-      settings: settingsJson(settings),
-      automation: { state, label: AUTOMATION_STATE_LABEL[state], pausedAt: settings.automationPausedAt, blocked: blocked.map((b) => ({ id: b.id, name: b.name, problem: b.problems[0]! })) },
-      queue: { waiting, held: heldReasons.reduce((s, r) => s + r.count, 0), heldReasons, nextDueAt: nextDue },
-      stats: { last7Days: stats(data.week), last30Days: stats(data.month) },
-      checklist: {
-        connected: !!live,
-        registered: !!live?.registered,
-        subscribed: !!live?.subscribedAt,
-        approvedTemplates: approved,
-        consentChosen: settings.orderUpdates !== "unset",
-        testPhone: settings.hasTestPhone,
-        activeWorkflows,
-      },
-      counts: {
-        templates: { approved, pending: data.templates.filter((t) => t.status === "PENDING" || t.status === "IN_APPEAL").length, rejected: data.templates.filter((t) => ["REJECTED", "PAUSED", "DISABLED"].includes(t.status)).length },
-        workflows: { active: count(data.workflows, "active"), total: data.workflows.reduce((s, r) => s + r._count._all, 0) },
-        campaigns: { scheduled: count(data.campaigns, "scheduled"), sending: count(data.campaigns, "sending"), total: data.campaigns.reduce((s, r) => s + r._count._all, 0) },
-      },
-      problems,
-      recent: seesCampaigns ? data.recent.map((m) => messageView(m, { contacts: can.contacts })) : [],
-      recentFailures: seesCampaigns ? data.recentFailures.map((m) => messageView(m, { contacts: can.contacts })) : [],
-      webhookUrl: waWebhookUrl(),
+      triggers: triggerAvailability(store),
+      // The Meta app's public ids, for Embedded Signup (only to those who may connect).
+      cloudSignup: can.connect ? metaSignupConfig() : null,
     });
   });
 
-  // ---------------------------------------------------------------- pausing all automation
+  // ---------------------------------------------------------------------------
+  // Connecting (Steps 1-2)
+  // ---------------------------------------------------------------------------
 
-  /** Pause all automation: workflows start nothing, campaigns wait, waiting messages are held. Audited. */
-  app.post(`${base}/automation/pause`, async (c) => {
+  app.post(`${base}/connection`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+    const a = await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const settings = await pauseAutomation({ store, userId: a.user.id, ip: clientIp(c) });
-    return c.json({ settings: settingsJson(settings) });
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const d = z.object({ method: z.enum(["qr", "code"]).default("qr"), phone: z.string().trim().max(32).nullable().optional(), country: z.string().trim().length(2).nullable().optional() }).parse(await body(c));
+    const pairing = await startPairing(deps, { store, userId: a.user.id, method: d.method, phone: d.phone, country: d.country, ip: clientIp(c) });
+    return c.json({ pairing }, 201, { "cache-control": "no-store" });
   });
 
-  /** Resume: what was held goes now, sending campaigns carry on, due ones start. Audited. */
-  app.post(`${base}/automation/resume`, async (c) => {
+  /** What the page polls while the phone scans: the provider's current code, or the state it reached. */
+  app.get(`${base}/connection/pairing`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+    await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const r = await resumeAutomation(deps, { store, userId: a.user.id, ip: clientIp(c) });
-    return c.json({ settings: settingsJson(r.settings), released: r.released, campaigns: r.campaigns });
+    await limit(deps.coord, `rl:wa-pairing:${store.id}`, LIMITS.waPairing);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ pairing: await pairingState(deps, conn) }, 200, { "cache-control": "no-store" });
   });
 
-  // ---------------------------------------------------------------- connecting
-
-  /** Start Meta's Embedded Signup: the ids its SDK needs and a nonce the finish brings back. */
-  app.post(`${base}/connect/start`, async (c) => {
+  app.post(`${base}/connection/cloud`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaConnect(c, deps, ws);
+    const a = await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect, "Too many tries. Wait a few minutes and press Connect WhatsApp again.");
-    return c.json(await startSignup(deps, { store, userId: a.user.id }));
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectCloudApi(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ connection: waConnectionView(conn) }, 201);
   });
 
-  /** Meta's window finished: exchange the code (it lives 30 seconds), check everything, save. */
-  app.post(`${base}/connect/finish`, async (c) => {
+  app.post(`${base}/connection/check`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaConnect(c, deps, ws);
+    await requireView(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const id = z.string().regex(/^\d{3,30}$/).nullish();
-    const input = z
-      .object({ nonce: z.string().uuid(), code: z.string().min(10).max(2000), flow: z.enum(["cloud_api", "only_waba", "business_app", "other"]).nullish(), wabaId: id, phoneNumberId: id, businessId: id })
-      .parse(await body(c));
-    const conn = await finishSignup(deps, {
-      store,
-      userId: a.user.id,
-      ip: clientIp(c),
-      nonce: input.nonce,
-      code: input.code,
-      flow: input.flow ?? null,
-      wabaId: input.wabaId ?? null,
-      phoneNumberId: input.phoneNumberId ?? null,
-      businessId: input.businessId ?? null,
-    });
-    return c.json({ connection: connectionView(conn) });
+    await limit(deps.coord, `rl:wa-refresh:${store.id}`, LIMITS.waRefresh);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await checkConnection(deps, conn)) });
   });
 
-  /** The numbers in the connected account (for "Choose a number"). */
-  app.get(`${base}/connect/numbers`, async (c) => {
+  app.post(`${base}/connection/reconnect`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWaConnect(c, deps, ws);
+    const a = await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    return c.json({ numbers: await accountNumbers(deps, store) });
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await restartConnection(deps, conn, { userId: a.user.id, ip: clientIp(c) })) });
   });
 
-  app.post(`${base}/connect/number`, async (c) => {
+  app.delete(`${base}/connection`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaConnect(c, deps, ws);
+    const a = await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const { phoneNumberId } = z.object({ phoneNumberId: z.string().regex(/^\d{3,30}$/) }).parse(await body(c));
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    return c.json({ connection: connectionView(await chooseNumber(deps, { store, userId: a.user.id, phoneNumberId, ip: clientIp(c) })) });
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectionOf(store.id);
+    if (!conn || conn.status === "disconnected") throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await disconnectWhatsapp(deps, conn, { userId: a.user.id, ip: clientIp(c) })) });
   });
 
-  /** The number's own two-step verification PIN, to finish registering it. */
-  app.post(`${base}/connect/pin`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaConnect(c, deps, ws);
-    const store = await waStore(ws, storeId);
-    const { pin } = z.object({ pin: z.string().regex(/^\d{6}$/, "The PIN is 6 digits") }).parse(await body(c));
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect, "Too many tries. Wait a few minutes before entering the PIN again.");
-    return c.json({ connection: connectionView(await registerWithPin(deps, { store, userId: a.user.id, pin, ip: clientIp(c) })) });
-  });
-
-  /** "Check again": the number, the webhooks and the templates, from Meta, now. */
-  app.post(`${base}/connect/check`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    await requireWaConnect(c, deps, ws);
-    await waStore(ws, storeId);
-    const conn = await liveConnection(storeId);
-    if (!conn) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh, "WhatsApp was checked a moment ago. Wait a few minutes before checking again.");
-    const result = await checkConnection(deps, conn);
-    return c.json({ connection: connectionView(await systemDb.waConnection.findUnique({ where: { storeId } })), templates: result.templates });
-  });
-
-  /** Disconnect: bizinsights' access is deleted, waiting messages and running campaigns cancelled, history kept. */
-  app.delete(base, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaConnect(c, deps, ws);
-    const store = await waStore(ws, storeId);
-    await disconnect(deps, { store, userId: a.user.id, ip: clientIp(c) });
-    return c.json({ ok: true });
-  });
-
-  /** The PIN bizinsights set on the number, for an owner or admin moving it to another provider. Audited. */
-  app.post(`${base}/pin`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
-    if (!waCan(a).pin) throw new HttpError(403, "Only owners and admins can see the PIN.", "forbidden");
-    const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-pin:${a.user.id}`, LIMITS.waPin);
-    const pin = await revealPin({ store, userId: a.user.id, ip: clientIp(c) });
-    if (!pin) throw new HttpError(404, "bizinsights didn't set this number's PIN: it is the one you chose in WhatsApp Manager.", "no_pin");
-    return c.json({ pin });
-  });
-
-  // ---------------------------------------------------------------- settings
-
-  app.get(`${base}/settings`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
-    return c.json(settingsJson(await settingsOf(storeId)));
-  });
+  // ---------------------------------------------------------------------------
+  // Settings and the test number (Steps 3-4)
+  // ---------------------------------------------------------------------------
 
   app.put(`${base}/settings`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const input = z
-      .object({
-        orderUpdates: z.enum(ORDER_UPDATE_BASES).optional(),
-        shopifySmsConsent: z.boolean().optional(),
-        sendWindow: sendWindowSchema.optional(),
-        dailyLimit: z.number().int().min(1).max(1_000_000).nullable().optional(),
-        /** The merchant's own WhatsApp number for tests; null removes it. */
-        testPhone: z.string().trim().max(40).nullable().optional(),
-        testPhoneCountry: z.string().regex(/^[A-Z]{2}$/).optional(),
-      })
-      .parse(await body(c));
-    const data: Prisma.WaSettingsUncheckedUpdateInput = { updatedByUserId: a.user.id };
-    const now = new Date();
-    if (input.orderUpdates !== undefined) Object.assign(data, { orderUpdates: input.orderUpdates, orderUpdatesSetBy: a.user.id, orderUpdatesSetAt: now });
-    if (input.shopifySmsConsent !== undefined) data.shopifySmsConsent = input.shopifySmsConsent;
-    if (input.sendWindow) Object.assign(data, { sendWindowStart: input.sendWindow.start, sendWindowEnd: input.sendWindow.end });
-    if (input.dailyLimit !== undefined) data.dailyLimit = input.dailyLimit;
-    if (input.testPhone !== undefined) {
-      if (input.testPhone === null || input.testPhone === "") Object.assign(data, { testPhoneEnc: null, testPhoneMasked: null });
-      else {
-        const phone = normalizePhone(input.testPhone, input.testPhoneCountry ?? null);
-        if (!phone) throw new HttpError(400, "That number can't be read. Use the international format, like +61412345678.", "invalid_phone");
-        Object.assign(data, { testPhoneEnc: waEncrypt(storeId, "test_phone", phone.e164), testPhoneMasked: maskPhone(phone.e164) });
-      }
-    }
-    const before = await settingsOf(storeId);
-    await systemDb.waSettings.upsert({ where: { storeId }, create: { ...(data as Prisma.WaSettingsUncheckedCreateInput), storeId, workspaceId: ws }, update: data });
-    await audit({
-      workspaceId: ws,
-      actorUserId: a.user.id,
-      action: "whatsapp.settings_changed",
-      targetType: "store",
-      targetId: store.id,
-      metadata: {
-        ...(input.orderUpdates !== undefined && input.orderUpdates !== before.orderUpdates ? { orderUpdates: { from: before.orderUpdates, to: input.orderUpdates } } : {}),
-        ...(input.shopifySmsConsent !== undefined ? { shopifySmsConsent: input.shopifySmsConsent } : {}),
-        ...(input.sendWindow ? { sendWindow: input.sendWindow } : {}),
-        ...(input.dailyLimit !== undefined ? { dailyLimit: input.dailyLimit } : {}),
-        ...(input.testPhone !== undefined ? { testPhone: input.testPhone ? "set" : "removed" } : {}),
-      },
-      ip: clientIp(c),
-    });
-    return c.json(settingsJson(await settingsOf(storeId)));
-  });
-
-  /** A new custom-event key (shown this once; the old one stops working). */
-  app.post(`${base}/settings/event-key`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
-    const store = await waStore(ws, storeId);
-    const key = await rotateEventKey({ store, userId: a.user.id, ip: clientIp(c) });
-    return c.json({ key, endpoint: `${waWebhookUrl().replace(/\/webhooks\/whatsapp$/, "")}/whatsapp/events` });
-  });
-
-  app.delete(`${base}/settings/event-key`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
-    const store = await waStore(ws, storeId);
-    await revokeEventKey({ store, userId: a.user.id, ip: clientIp(c) });
+    await saveWaSettings({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
-  // ---------------------------------------------------------------- templates
-
-  app.get(`${base}/templates`, async (c) => {
+  app.post(`${base}/settings/pause`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
-    const [templates, workflows, campaigns] = await withTenant(ws, (tx) =>
-      Promise.all([
-        tx.waTemplate.findMany({ where: { storeId, workspaceId: ws }, orderBy: [{ status: "asc" }, { name: "asc" }] }),
-        tx.waWorkflow.groupBy({ by: ["templateName", "templateLanguage"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
-        tx.waCampaign.groupBy({ by: ["templateName", "templateLanguage"], where: { storeId, workspaceId: ws, status: { in: ["draft", "scheduled", "sending"] } }, _count: { _all: true } }),
-      ]),
-    );
-    const used = (rows: typeof workflows, name: string, language: string) => rows.find((r) => r.templateName === name && r.templateLanguage === language)?._count._all ?? 0;
-    return c.json({
-      templates: templates.map((t) => templateView(t, { workflows: used(workflows, t.name, t.language), campaigns: used(campaigns, t.name, t.language) })),
-      starters: STARTER_TEMPLATES,
-    });
-  });
-
-  /** Write a template and submit it for Meta's review. */
-  app.post(`${base}/templates`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const draft = templateDraftSchema.parse(await body(c));
-    await limit(deps.coord, `rl:wa-template:${storeId}`, LIMITS.waTemplateCreate, "Too many templates submitted in an hour. Wait a little and try again.");
-    const t = await submitTemplate(deps, { store, draft, userId: a.user.id, ip: clientIp(c) });
-    return c.json({ template: templateView(t) }, 201);
+    const { paused } = z.object({ paused: z.boolean() }).parse(await body(c));
+    await setAutomationPaused({ store, userId: a.user.id, paused, ip: clientIp(c) });
+    return c.json({ ok: true, paused });
   });
 
-  /** Read the templates from Meta again now. */
-  app.post(`${base}/templates/sync`, async (c) => {
+  app.post(`${base}/test-number`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWaManage(c, deps, ws);
-    await waStore(ws, storeId);
-    const conn = await liveConnection(storeId);
-    if (!conn) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh, "Templates were refreshed a moment ago. Wait a few minutes.");
-    const token = await connectionToken(conn, deps);
-    const count = await syncTemplates(conn, token, deps.fetchImpl).catch((err: unknown) => {
-      throw err instanceof WhatsappError ? err : new HttpError(503, "WhatsApp didn't answer just now. Try again in a minute.", "meta_unavailable");
-    });
-    return c.json({ count });
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-test:${store.id}`, LIMITS.waTest);
+    const d = z.object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional() }).parse(await body(c));
+    return c.json(await startTestVerification(deps, { store, userId: a.user.id, phone: d.phone, country: d.country, ip: clientIp(c) }));
   });
 
-  app.delete(`${base}/templates/:id`, async (c) => {
-    const { ws, storeId, id } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+  app.post(`${base}/test-number/verify`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-template:${storeId}`, LIMITS.waTemplateCreate);
-    await removeTemplate(deps, { store, templateId: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    const { code } = z.object({ code: z.string().trim().min(6).max(10) }).parse(await body(c));
+    await confirmTestVerification({ store, userId: a.user.id, code, ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
-  /** An approved template to the merchant's own test number, with sample values (or the given mapping). */
-  app.post(`${base}/templates/:id/test`, async (c) => {
-    const { ws, storeId, id } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+  app.post(`${base}/test-message`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const t = await withTenant(ws, (tx) => tx.waTemplate.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } }));
-    if (!t) throw new HttpError(404, "That template wasn't found.", "not_found");
-    const input = z.object({ mapping: mappingSchema.optional(), headerMediaUrl: z.string().url().max(2000).nullish() }).parse(await body(c).catch(() => ({})));
-    await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest, "Too many test messages. Wait a few minutes.");
-    const shape = templateShape(t.components as unknown as TemplateComponent[]);
-    const sample: TemplateMapping = input.mapping ?? {
-      header: shape.headerVars ? { source: "custom_text", text: "Sample" } : null,
-      body: Array.from({ length: shape.bodyVars }, (_x, i) => ({ source: "custom_text" as const, text: `sample ${i + 1}` })),
-      buttons: shape.dynamicUrlButtons.map(() => ({ source: "custom_text" as const, text: "example" })),
-    };
-    const message = await sendTest(deps, { store, userId: a.user.id, template: { name: t.name, language: t.language }, mapping: sample, headerMediaUrl: input.headerMediaUrl ?? null, label: `template:${t.id}` });
-    return c.json({ message: messageView(message, { contacts: true }) }, 202);
+    await limit(deps.coord, `rl:wa-test:${store.id}`, LIMITS.waTest);
+    const d = z.object({ templateId: idParam.nullable().optional(), text: z.string().trim().max(1024).nullable().optional() }).parse(await body(c));
+    return c.json(await sendTestMessage(deps, { store, userId: a.user.id, templateId: d.templateId, text: d.text }), 201);
   });
 
-  // ---------------------------------------------------------------- messages
+  // ---------------------------------------------------------------------------
+  // Messages
+  // ---------------------------------------------------------------------------
 
   app.get(`${base}/messages`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
-    const q = z
-      .object({
-        status: z.enum(WA_MESSAGE_STATUSES).optional(),
-        direction: z.enum(["out", "in"]).optional(),
-        source: z.enum(["workflow", "campaign", "manual", "test", "team_alert", "inbound"]).optional(),
-        workflowId: idParam.optional(),
-        campaignId: idParam.optional(),
-        contactId: idParam.optional(),
-        /** Created from / before (ISO times; the page sends the store's days). */
-        from: z.string().datetime({ offset: true }).optional(),
-        to: z.string().datetime({ offset: true }).optional(),
-        /** One customer's number (needs "View contact information"): matched by its keyed hash, never stored as typed. */
-        phone: z.string().trim().min(6).max(40).optional(),
-        template: z.string().trim().min(1).max(512).optional(),
-        /** Why it failed, wasn't sent or waits (SKIP_REASONS and the sender's reasons), or Meta's error code. */
-        reason: z.string().trim().regex(/^[a-z0-9_]{1,40}$/).optional(),
-        errorCode: z.string().trim().regex(/^\d{1,10}$/).optional(),
-        cursor: idParam.optional(),
-        limit: z.coerce.number().int().min(1).max(100).default(50),
-      })
-      .parse(c.req.query());
-    if (q.contactId || q.phone) requireContacts(a);
-    const phone = q.phone ? normalizePhone(q.phone, null) : null;
-    if (q.phone && !phone) return c.json({ messages: [], nextCursor: null });
-    const rows = await withTenant(ws, (tx) =>
-      tx.waMessage.findMany({
-        where: {
-          storeId,
-          workspaceId: ws,
-          ...(q.status ? { status: q.status } : {}),
-          ...(q.direction ? { direction: q.direction } : {}),
-          ...(q.source ? { source: q.source } : {}),
-          ...(q.workflowId ? { workflowId: q.workflowId } : {}),
-          ...(q.campaignId ? { campaignId: q.campaignId } : {}),
-          ...(q.contactId ? { contactId: q.contactId } : {}),
-          ...(phone ? { phoneHash: waPhoneHash(storeId, phone.waId) } : {}),
-          ...(q.template ? { templateName: q.template } : {}),
-          ...(q.reason ? { reason: q.reason } : {}),
-          ...(q.errorCode ? { errorCode: q.errorCode } : {}),
-          ...(q.from || q.to ? { createdAt: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lt: new Date(q.to) } : {}) } } : {}),
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: q.limit + 1,
-        ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
-      }),
-    );
-    const page = rows.slice(0, q.limit);
-    return c.json({ messages: page.map((m) => messageView(m, { contacts: seesContacts(a) })), nextCursor: rows.length > q.limit ? page.at(-1)!.id : null });
+    const a = await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const f = messageFilters.parse(c.req.query());
+    if (f.phone) requireContacts(a);
+    const where: Prisma.WappMessageWhereInput = { storeId: store.id, workspaceId: ws };
+    if (f.status) where.status = { in: BUCKET_STATUSES[f.status] ?? [f.status] };
+    if (f.direction) where.direction = f.direction;
+    if (f.source) where.source = f.source;
+    if (f.automationId) where.automationId = f.automationId;
+    if (f.campaignId) where.campaignId = f.campaignId;
+    if (f.from || f.to) {
+      where.createdAt = { ...(f.from ? { gte: startOfLocalDay(f.from, store.timezone) } : {}), ...(f.to ? { lt: startOfLocalDay(addDays(f.to, 1), store.timezone) } : {}) };
+    }
+    if (f.phone) {
+      const p = normalizePhone(f.phone, null);
+      if (!p) throw new HttpError(400, "Search with a full international number (+61...).", "invalid_phone");
+      where.phoneHash = waPhoneHash(store.id, p.waId);
+    }
+    if (f.cursor) {
+      const [at, id] = f.cursor.split("_");
+      const t = new Date(Number(at));
+      if (!id || Number.isNaN(t.getTime())) throw new HttpError(400, "Bad cursor", "validation");
+      where.OR = [{ createdAt: { lt: t } }, { createdAt: t, id: { lt: id } }];
+    }
+    const rows = await withTenant(ws, (tx) => tx.wappMessage.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: f.limit + 1 }));
+    const page = rows.slice(0, f.limit);
+    const last = page.at(-1);
+    return c.json({ messages: page.map((m) => waMessageView(m, { contacts: seesContacts(a) })), nextCursor: rows.length > f.limit && last ? `${last.createdAt.getTime()}_${last.id}` : null });
   });
 
   app.get(`${base}/messages/:id`, async (c) => {
     const { ws, storeId, id } = c.req.param();
-    const a = await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
-    const found = await withTenant(ws, async (tx) => {
-      const m = await tx.waMessage.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } });
-      if (!m) return null;
-      const events = await tx.waMessageEvent.findMany({ where: { messageId: m.id, workspaceId: ws }, orderBy: { occurredAt: "asc" } });
-      return { m, events };
-    });
-    if (!found) throw new HttpError(404, "That message wasn't found.", "not_found");
-    return c.json({
-      message: messageView(found.m, { contacts: seesContacts(a) }),
-      events: found.events.map((e) => ({ status: e.status, at: e.occurredAt, errorCode: e.errorCode, errorTitle: e.errorTitle })),
-    });
+    const a = await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const m = await withTenant(ws, (tx) => tx.wappMessage.findFirst({ where: { id: idParam.parse(id), storeId: store.id, workspaceId: ws } }));
+    if (!m) throw new HttpError(404, "Not found", "not_found");
+    const events = await withTenant(ws, (tx) => tx.wappMessageEvent.findMany({ where: { messageId: m.id, workspaceId: ws }, orderBy: { occurredAt: "asc" } }));
+    return c.json({ message: waMessageView(m, { contacts: seesContacts(a) }), events: events.map((e) => ({ status: e.status, providerStatus: e.providerStatus, at: e.occurredAt })) });
+  });
+
+  app.post(`${base}/messages`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-send:${store.id}`, LIMITS.waSend);
+    const m = await sendManualMessage(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ message: waMessageView(m, { contacts: seesContacts(a) }) }, 201);
   });
 
   app.post(`${base}/messages/:id/retry`, async (c) => {
     const { ws, storeId, id } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-send:${storeId}`, LIMITS.waSend);
-    const m = await retryMessage(deps, { storeId: store.id, messageId: idParam.parse(id) });
-    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.message_retried", targetType: "whatsapp_message", targetId: m.id, ip: clientIp(c) });
-    return c.json({ message: messageView(m, { contacts: seesContacts(a) }) });
+    await limit(deps.coord, `rl:wa-send:${store.id}`, LIMITS.waSend);
+    const m = await retryMessage(deps, store, idParam.parse(id), { userId: a.user.id });
+    return c.json({ message: waMessageView(m, { contacts: seesContacts(a) }) });
   });
 
-  /** One message from the dashboard: an approved template, or a reply within the customer's 24-hour window. */
-  app.post(`${base}/messages`, async (c) => {
+  // ---------------------------------------------------------------------------
+  // Templates
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
-    requireContacts(a);
+    await requireView(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const https = z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "Links must start with https://");
-    const input = z
-      .object({
-        requestId: z.string().uuid(),
-        to: z.union([z.object({ contactId: idParam }), z.object({ phone: z.string().trim().min(6).max(40), country: z.string().regex(/^[A-Z]{2}$/).nullish() })]),
-        message: z.discriminatedUnion("kind", [
-          z.object({ kind: z.literal("template"), template: templateRefSchema, mapping: mappingSchema, headerMediaUrl: https.nullish() }),
-          z.object({ kind: z.literal("text"), body: z.string().trim().min(1).max(4096) }),
-          z.object({ kind: z.literal("media"), mediaType: z.enum(["image", "document", "video"]), link: https, caption: z.string().trim().max(1024).nullish(), filename: z.string().trim().max(200).nullish() }),
-        ]),
-      })
-      .parse(await body(c));
-    await limit(deps.coord, `rl:wa-send:${storeId}`, LIMITS.waSend, "Too many messages sent from here in a short time. Wait a few minutes.");
-    const message = await sendManual(deps, { store, userId: a.user.id, to: input.to, message: input.message, requestId: input.requestId });
-    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.message_sent", targetType: "whatsapp_message", targetId: message.id, metadata: { kind: input.message.kind }, ip: clientIp(c) });
-    return c.json({ message: messageView(message, { contacts: true }) }, 202);
+    const [rows, conn] = await Promise.all([withTenant(ws, (tx) => tx.wappTemplate.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { name: "asc" } })), connectionOf(store.id)]);
+    const usage = await templateUsage(store.id, rows.map((t) => t.id));
+    return c.json({ templates: rows.map((t) => templateView(t, conn, usage.get(t.id))), samples: waSampleValues(store.name) });
   });
 
-  // ---------------------------------------------------------------- contacts and consent
+  app.post(`${base}/templates`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const t = await createWaTemplate(store, { data: await body(c), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ template: templateView(t, await connectionOf(store.id)) }, 201);
+  });
+
+  app.put(`${base}/templates/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const t = await updateWaTemplate(store, idParam.parse(id), { data: await body(c), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ template: templateView(t, await connectionOf(store.id)) });
+  });
+
+  app.delete(`${base}/templates/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await deleteWaTemplate(store, idParam.parse(id), { userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  /** Cloud API: submit a template for Meta's review. */
+  app.post(`${base}/templates/:id/submit`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const conn = await connectionOf(store.id);
+    const t = await systemDb.wappTemplate.findFirst({ where: { id: idParam.parse(id), storeId: store.id } });
+    if (!t) throw new HttpError(404, "Not found", "not_found");
+    if (!conn || conn.provider !== "cloud_api" || conn.status !== "connected") throw new WhatsappError("Templates are reviewed by Meta only on a Cloud API connection.", 409, "not_cloud_api");
+    const updated = await submitTemplateToMeta(deps, conn, t, waSampleValues(store.name) as Record<string, string>);
+    return c.json({ template: templateView(updated, conn) });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Automations
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/automations`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const rows = await withTenant(ws, (tx) => tx.wappAutomation.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { createdAt: "asc" } }));
+    const since = new Date(Date.now() - 30 * 86_400_000);
+    const runs = await withTenant(ws, (tx) => tx.wappAutomationRun.groupBy({ by: ["automationId", "outcome"], where: { storeId: store.id, workspaceId: ws, createdAt: { gte: since } }, _count: { _all: true } }));
+    const out = [];
+    for (const r of rows) {
+      const stats = { queued: 0, skipped: 0 };
+      for (const x of runs.filter((x) => x.automationId === r.id)) stats[x.outcome === "queued" ? "queued" : "skipped"] += x._count._all;
+      out.push(automationView(r, await automationProblemsFor(store, r), stats));
+    }
+    return c.json({ automations: out, triggers: triggerAvailability(store) });
+  });
+
+  app.post(`${base}/automations`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await saveAutomation({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ automation: automationView(r, await automationProblemsFor(store, r)) }, 201);
+  });
+
+  app.get(`${base}/automations/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await withTenant(ws, (tx) => tx.wappAutomation.findFirst({ where: { id: idParam.parse(id), storeId: store.id, workspaceId: ws } }));
+    if (!r) throw new HttpError(404, "Not found", "not_found");
+    const runs = await withTenant(ws, (tx) => tx.wappAutomationRun.findMany({ where: { automationId: r.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 50 }));
+    const messages = await withTenant(ws, (tx) => tx.wappMessage.findMany({ where: { id: { in: runs.map((x) => x.messageId).filter((x): x is string => !!x) }, workspaceId: ws }, select: { id: true, status: true } }));
+    const statusOf = new Map(messages.map((m) => [m.id, m.status]));
+    return c.json({
+      automation: automationView(r, await automationProblemsFor(store, r)),
+      runs: runs.map((x) => ({ id: x.id, subject: x.subjectLabel, outcome: x.outcome, reason: x.reason, reasonLabel: waSkipLabel(x.reason), detail: x.detail, testMode: x.testMode, messageId: x.messageId, messageStatus: x.messageId ? (statusOf.get(x.messageId) ?? null) : null, at: x.createdAt })),
+    });
+  });
+
+  app.put(`${base}/automations/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await saveAutomation({ store, userId: a.user.id, id: idParam.parse(id), data: await body(c), ip: clientIp(c) });
+    return c.json({ automation: automationView(r, await automationProblemsFor(store, r)) });
+  });
+
+  app.delete(`${base}/automations/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await deleteAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  app.post(`${base}/automations/:id/activate`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await activateAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c), subscribeCustomers: () => ensureCustomerWebhook(store, storeGraphql(store, deps.coord, deps.fetchImpl)) });
+    return c.json({ automation: automationView(r, []) });
+  });
+
+  app.post(`${base}/automations/:id/pause`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await pauseAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ automation: automationView(r.automation, null), cancelled: r.cancelled });
+  });
+
+  app.post(`${base}/automations/:id/test`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-test:${store.id}`, LIMITS.waTest);
+    return c.json(await testAutomation(deps, { store, id: idParam.parse(id), userId: a.user.id }), 201);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Campaigns
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/campaigns`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const rows = await withTenant(ws, (tx) => tx.wappCampaign.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 100 }));
+    const out = [];
+    for (const r of rows) out.push(campaignView(r, r.status === "draft" ? undefined : await campaignReport(r.id)));
+    return c.json({ campaigns: out });
+  });
+
+  app.post(`${base}/campaigns/estimate`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-estimate:${store.id}`, LIMITS.waEstimate);
+    const { audience, templateId } = z.object({ audience: z.unknown(), templateId: idParam.nullable().optional() }).parse(await body(c));
+    const template = templateId ? await withTenant(ws, (tx) => tx.wappTemplate.findFirst({ where: { id: templateId, storeId: store.id, workspaceId: ws } })) : null;
+    return c.json({ count: await estimateWaAudience(store.id, audience, template) });
+  });
+
+  app.post(`${base}/campaigns`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    return c.json({ campaign: campaignView(await saveCampaign({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) })) }, 201);
+  });
+
+  app.get(`${base}/campaigns/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await withTenant(ws, (tx) => tx.wappCampaign.findFirst({ where: { id: idParam.parse(id), storeId: store.id, workspaceId: ws } }));
+    if (!r) throw new HttpError(404, "Not found", "not_found");
+    return c.json({ campaign: campaignView(r, await campaignReport(r.id)) });
+  });
+
+  app.put(`${base}/campaigns/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    return c.json({ campaign: campaignView(await saveCampaign({ store, userId: a.user.id, id: idParam.parse(id), data: await body(c), ip: clientIp(c) })) });
+  });
+
+  app.delete(`${base}/campaigns/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await deleteCampaign({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  /** Launch (now or later): only with the exact recipient count the merchant confirmed. */
+  app.post(`${base}/campaigns/:id/launch`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    return c.json({ campaign: campaignView(await launchCampaign(deps, { store, id: idParam.parse(id), userId: a.user.id, data: await body(c), ip: clientIp(c) })) });
+  });
+
+  app.post(`${base}/campaigns/:id/cancel`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await cancelCampaign({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ campaign: campaignView(r.campaign), cancelled: r.cancelled });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Customers: consent and the do-not-message list
+  // ---------------------------------------------------------------------------
 
   app.get(`${base}/contacts`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireWaView(c, deps, ws);
+    const a = await requireView(c, deps, ws);
     requireContacts(a);
-    await waStore(ws, storeId);
-    const q = z
-      .object({ consent: z.enum(["marketing", "opted_out", "any"]).default("any"), phone: z.string().trim().max(40).optional(), cursor: idParam.optional(), limit: z.coerce.number().int().min(1).max(100).default(50) })
-      .parse(c.req.query());
-    const phone = q.phone ? normalizePhone(q.phone, null) : null;
-    if (q.phone && !phone) return c.json({ contacts: [], nextCursor: null });
-    const rows = await withTenant(ws, (tx) =>
-      tx.waContact.findMany({
-        where: {
-          storeId,
-          workspaceId: ws,
-          ...(q.consent === "marketing" ? { marketing: "opted_in", optedOut: false } : q.consent === "opted_out" ? { optedOut: true } : {}),
-          ...(phone ? { phoneHash: waPhoneHash(storeId, phone.waId) } : {}),
-        },
-        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-        take: q.limit + 1,
-        ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
-      }),
-    );
-    const page = rows.slice(0, q.limit);
-    const now = Date.now();
-    return c.json({
-      contacts: page.map((ct) => ({
-        id: ct.id,
-        phone: ct.phoneMasked,
-        firstName: contactFirstName(ct),
-        country: ct.country,
-        optedOut: ct.optedOut,
-        optedIn: ct.optedIn,
-        marketing: ct.marketing,
-        lastInboundAt: ct.lastInboundAt,
-        windowOpen: !!ct.lastInboundAt && now - ct.lastInboundAt.getTime() < DAY,
-        ordersCount: ct.ordersCount,
-        lastOrderAt: ct.lastOrderAt,
-        createdAt: ct.createdAt,
-      })),
-      nextCursor: rows.length > q.limit ? page.at(-1)!.id : null,
-    });
-  });
-
-  app.get(`${base}/contacts/:id`, async (c) => {
-    const { ws, storeId, id } = c.req.param();
-    const a = await requireWaView(c, deps, ws);
-    requireContacts(a);
-    await waStore(ws, storeId);
-    const found = await withTenant(ws, async (tx) => {
-      const ct = await tx.waContact.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } });
-      if (!ct) return null;
-      const [consent, messages] = await Promise.all([
-        tx.waConsentEvent.findMany({ where: { contactId: ct.id, workspaceId: ws }, orderBy: { occurredAt: "desc" }, take: 50 }),
-        tx.waMessage.findMany({ where: { contactId: ct.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 30 }),
-      ]);
-      return { ct, consent, messages };
-    });
-    if (!found) throw new HttpError(404, "That customer wasn't found.", "not_found");
-    const { ct } = found;
-    return c.json({
-      contact: { id: ct.id, phone: ct.phoneMasked, firstName: contactFirstName(ct), country: ct.country, optedOut: ct.optedOut, optedIn: ct.optedIn, marketing: ct.marketing, lastInboundAt: ct.lastInboundAt, windowOpen: !!ct.lastInboundAt && Date.now() - ct.lastInboundAt.getTime() < DAY },
-      consent: found.consent.map((e) => ({ scope: e.scope, status: e.status, source: e.source, note: e.note, at: e.occurredAt })),
-      messages: found.messages.map((m) => ({ ...messageView(m, { contacts: true }), preview: messagePreview(m) })),
-    });
-  });
-
-  /**
-   * Record a customer's consent given another way (in the shop, on the phone), or their opt-out.
-   * A STOP can only be undone by the customer (START): recording it here is refused.
-   */
-  app.post(`${base}/contacts/:id/consent`, async (c) => {
-    const { ws, storeId, id } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
-    requireContacts(a);
-    await waStore(ws, storeId);
-    const input = z.object({ scope: z.enum(["all", "marketing"]), status: z.enum(["opted_in", "opted_out"]), note: z.string().trim().min(3, "Say how the customer told you").max(300) }).parse(await body(c));
-    const ct = await withTenant(ws, (tx) => tx.waContact.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } }));
-    if (!ct) throw new HttpError(404, "That customer wasn't found.", "not_found");
-    if (ct.optedOut && input.status === "opted_in") throw new HttpError(409, "This customer replied STOP. Only they can undo it, by replying START on WhatsApp.", "customer_stopped");
-    const { changed } = await setConsent(ct, { scope: input.scope, status: input.status, source: "merchant", at: new Date(), actorUserId: a.user.id, note: input.note });
-    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.consent_recorded", targetType: "whatsapp_contact", targetId: ct.id, metadata: { scope: input.scope, status: input.status, changed }, ip: clientIp(c) });
-    return c.json({ changed });
-  });
-
-  // ---------------------------------------------------------------- test events
-
-  /** A custom event from the dashboard (to try a workflow): the same path the store's tools use. */
-  app.post(`${base}/events`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const a = await requireWaManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const event = customEventSchema.parse(await body(c));
-    await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest, "Too many test events. Wait a few minutes.");
-    const result = await receiveCustomEvent(deps, { store, event });
-    await audit({ workspaceId: ws, actorUserId: a.user.id, action: "whatsapp.test_event", targetType: "store", targetId: store.id, metadata: { event: event.event, ...result }, ip: clientIp(c) });
-    return c.json(result);
+    const q = z.object({ phone: z.string().trim().min(6).max(32).optional(), consent: z.enum(["opted_in", "opted_out", "unknown"]).optional(), cursor: idParam.optional() }).parse(c.req.query());
+    const where: Prisma.WappContactWhereInput = { storeId: store.id, workspaceId: ws };
+    if (q.phone) {
+      const p = normalizePhone(q.phone, null);
+      if (!p) throw new HttpError(400, "Search with a full international number (+61...).", "invalid_phone");
+      where.phoneHash = waPhoneHash(store.id, p.waId);
+    }
+    if (q.consent === "opted_out") where.optedOut = true;
+    else if (q.consent) where.marketing = q.consent;
+    if (q.cursor) where.id = { lt: q.cursor };
+    const rows = await withTenant(ws, (tx) => tx.wappContact.findMany({ where, orderBy: { id: "desc" }, take: 51 }));
+    const page = rows.slice(0, 50);
+    const events = await withTenant(ws, (tx) => tx.wappConsentEvent.findMany({ where: { workspaceId: ws, contactId: { in: page.map((r) => r.id) } }, orderBy: { occurredAt: "desc" } }));
+    return c.json({
+      contacts: page.map((r) => ({
+        id: r.id,
+        phone: r.phoneMasked,
+        firstName: r.firstNameEnc ? waDecrypt(r.storeId, "name", r.firstNameEnc) : null,
+        country: r.country,
+        optedOut: r.optedOut,
+        optedIn: r.optedIn,
+        marketing: r.marketing,
+        lastInboundAt: r.lastInboundAt,
+        lastOutboundAt: r.lastOutboundAt,
+        ordersCount: r.ordersCount,
+        history: events.filter((e) => e.contactId === r.id).slice(0, 5).map((e) => ({ scope: e.scope, status: e.status, source: e.source, sourceLabel: WA_CONSENT_SOURCE_LABEL[e.source as WaConsentSource] ?? e.source, note: e.note, at: e.occurredAt })),
+      })),
+      nextCursor: rows.length > 50 ? page.at(-1)!.id : null,
+    });
+  });
+
+  app.post(`${base}/contacts/consent`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    const d = z
+      .object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional(), scope: z.enum(["all", "order_updates", "marketing"]), status: z.enum(["opted_in", "opted_out"]), note: z.string().trim().max(300).nullable().optional() })
+      .parse(await body(c));
+    const contact = await setConsentByMerchant(store, { ...d, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ contact: { id: contact.id, phone: contact.phoneMasked, optedOut: contact.optedOut, optedIn: contact.optedIn, marketing: contact.marketing } });
+  });
+
+  app.get(`${base}/suppressions`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireView(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    const rows = await withTenant(ws, (tx) => tx.wappSuppression.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 200 }));
+    return c.json({ suppressions: rows.map((r) => ({ id: r.id, phone: r.phoneMasked, scope: r.scope, reason: r.reason, note: r.note, createdAt: r.createdAt })) });
+  });
+
+  app.post(`${base}/suppressions`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const d = z.object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional(), scope: z.enum(["all", "marketing"]), note: z.string().trim().max(300).nullable().optional() }).parse(await body(c));
+    const row = await addWaSuppression(store, { ...d, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ suppression: { id: row.id, phone: row.phoneMasked, scope: row.scope } }, 201);
+  });
+
+  app.delete(`${base}/suppressions/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await removeWaSuppression(store, idParam.parse(id), { userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
   });
 }

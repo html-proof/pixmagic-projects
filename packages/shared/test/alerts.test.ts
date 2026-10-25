@@ -43,9 +43,9 @@ describe("describeAlert", () => {
     expect(describeAlert({ code: "email_account_reauth:acc1", severity: "warning", message: reauth })).toEqual({ severity: "warning", area: "email", title: "An email account needs reconnecting", body: reauth });
     expect(describeAlert({ code: "email_sender_rejected:snd1", severity: "warning", message: "x" }).area).toBe("email");
     expect(describeAlert({ code: "staff_open_shifts", severity: "warning", message: "2 shifts have been open" })).toMatchObject({ area: "staff", body: "2 shifts have been open" });
-    expect(describeAlert({ code: "wa_reconnect", severity: "warning", message: "WhatsApp needs reconnecting: token gone" })).toMatchObject({ area: "whatsapp", severity: "warning", title: "Reconnect WhatsApp" });
+    expect(describeAlert({ code: "whatsapp_logged_out", severity: "warning", message: "WhatsApp logged out the linked phone (close_401)" })).toMatchObject({ area: "whatsapp", severity: "warning", title: "Link WhatsApp again" });
     // The internal message never reaches the merchant.
-    expect(describeAlert({ code: "wa_account", severity: "warning", message: "internal detail" }).body).not.toContain("internal detail");
+    expect(describeAlert({ code: "whatsapp_provider_down", severity: "warning", message: "internal detail" }).body).not.toContain("internal detail");
   });
 
   it("words an ad account's alerts by kind, passes on the message core composes, and sends them to Settings → Advertising", () => {

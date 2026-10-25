@@ -26,7 +26,7 @@ async function scenario() {
   await systemDb.order.create({ data: { ...base, shopifyId: "1001", name: "#1001", customerKey: customerKey(store, "7") } });
   await systemDb.order.create({ data: { ...base, shopifyId: "1002", name: "#1002", customerKey: customerKey(store, "8") } });
   // WhatsApp Automation's contact for the customer, with a consent record.
-  const contact = await systemDb.waContact.create({
+  const contact = await systemDb.wappContact.create({
     data: {
       workspaceId: ws,
       storeId: store.id,
@@ -39,7 +39,7 @@ async function scenario() {
       marketing: "opted_in",
     },
   });
-  await systemDb.waConsentEvent.create({ data: { workspaceId: ws, storeId: store.id, contactId: contact.id, scope: "marketing", status: "opted_in", source: "whatsapp_start", occurredAt: new Date("2026-10-02T00:00:00Z") } });
+  await systemDb.wappConsentEvent.create({ data: { workspaceId: ws, storeId: store.id, contactId: contact.id, scope: "marketing", status: "opted_in", source: "whatsapp_start", occurredAt: new Date("2026-10-02T00:00:00Z") } });
   // And what the earlier WhatsApp feature still holds about them (found by the same hash).
   await systemDb.whatsappContact.create({
     data: { workspaceId: ws, storeId: store.id, phoneHash: waPhoneHash(store.id, "61412345678"), phoneEnc: "legacy", phoneMasked: "+61 •••••• 678", customerKey: customerKey(store, "7") },

@@ -7,6 +7,7 @@ import { CiStack } from "../lib/ci-stack.js";
 import { envConfig } from "../lib/config.js";
 import { DataStack } from "../lib/data-stack.js";
 import { EdgeStack } from "../lib/edge-stack.js";
+import { WhatsappStack } from "../lib/whatsapp-stack.js";
 
 /**
  * Insights on AWS. Stacks, deployed in this order (cdk works it out from the references):
@@ -14,6 +15,7 @@ import { EdgeStack } from "../lib/edge-stack.js";
  *   InsightsData-<env>  ap-southeast-2   VPC, NAT, RDS PostgreSQL, DynamoDB, S3 (and the Region's access log bucket), secrets, admin host
  *   InsightsApp-<env>   ap-southeast-2   SQS, Lambda (api, jobs, cron), CloudFront, schedules, alarms, budget
  *   InsightsAuth-<env>  ap-southeast-2   Cognito (infra/aws/cognito.yaml) + the runtime parameter
+ *   InsightsWhatsapp-<env> ap-southeast-2 WhatsApp's Evolution API service (ECS Fargate, Cloud Map), after App (its cron makes the service's database)
  *   InsightsCi-<env>    ap-southeast-2   GitHub OIDC deploy role
  *   InsightsAudit-production  ap-southeast-2   CloudTrail (all Regions), IAM Access Analyzer in every Region, access logs of CDK's bucket (account-wide, production only)
  * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...
@@ -35,6 +37,9 @@ new AuthStack(app, name("Auth"), cfg, {
   runtimeParam: appStack.runtimeParam,
   googleClientId: String(app.node.tryGetContext("googleClientId") ?? "") || undefined,
 });
+const whatsapp = new WhatsappStack(app, name("Whatsapp"), cfg, data, { env, description: "Insights: WhatsApp Automation's Evolution API service" });
+// Its database is made by the App stack's cron function (invoked by name, so no export ties them).
+whatsapp.addDependency(appStack);
 new CiStack(app, name("Ci"), cfg, { env, description: "Insights: GitHub Actions deploy role (OIDC)" });
 // Account-wide (one trail and one analyzer per Region is enough), so staging doesn't get a copy.
 if (cfg.name === "production") {

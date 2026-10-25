@@ -261,12 +261,12 @@ describe("the app stack", () => {
 
   it("gives every job queue a dead-letter queue and covers the jobs timeout", () => {
     const queues = Object.values(t.app.findResources("AWS::SQS::Queue")).filter((q) => q.Properties.RedrivePolicy);
-    expect(queues).toHaveLength(5);
+    expect(queues).toHaveLength(6);
     for (const q of queues) {
       expect(q.Properties.RedrivePolicy.maxReceiveCount).toBe(10);
       expect(q.Properties.VisibilityTimeout).toBeGreaterThanOrEqual(900);
     }
-    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 5);
+    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 6);
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
   });
 
@@ -313,9 +313,11 @@ describe("the app stack", () => {
       DestinationConfig: { OnFailure: { Destination: missed } },
     });
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-cron-missed-ticks" });
-    // Bursts of automated messages refused by SMS or email providers (the Automations hub).
+    // Bursts of automated messages refused by SMS, email or WhatsApp providers (the Automations hub).
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-messaging-send-failures", Threshold: 25, EvaluationPeriods: 2 });
-    t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '?"sms send refused" ?"email send failed"' });
+    t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '?"sms send refused" ?"email send failed" ?"whatsapp send refused by the provider"' });
+    // The functions can't reach WhatsApp's service.
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-whatsapp-service-unreachable" });
   });
 
   it("tells the alarm topic about the database's events", () => {
@@ -1153,5 +1155,123 @@ describe("config", () => {
     expect(vars.NODE_ENV).toBeUndefined();
     expect(Object.keys(vars).some((k) => k.startsWith("COGNITO_"))).toBe(false);
     expect(JSON.parse(vars.SHOPIFY_EXTRA_APPS!)).toBeInstanceOf(Array);
+  });
+});
+
+describe("the WhatsApp stack (Evolution API)", () => {
+  let w: Template;
+  let a: Template;
+  beforeAll(async () => {
+    const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
+    const app = new App();
+    const cfg = envConfig((k) => app.node.tryGetContext(k));
+    const env = { account: cfg.account, region: cfg.region };
+    const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
+    const data = new DataStack(app, "D", cfg, { env });
+    const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
+    w = Template.fromStack(new WhatsappStack(app, "W", cfg, data, { env }));
+    a = Template.fromStack(appStack);
+  });
+
+  const container = () => {
+    const [def] = Object.values(w.findResources("AWS::ECS::TaskDefinition"));
+    return { def: def!.Properties, c: def!.Properties.ContainerDefinitions[0] };
+  };
+
+  it("runs one pinned image on Graviton, privately, never two tasks at once", () => {
+    const { def, c } = container();
+    expect(c.Image).toMatch(/^evoapicloud\/evolution-api:v2\.3\.7@sha256:[0-9a-f]{64}$/);
+    expect(def.RuntimePlatform).toEqual({ CpuArchitecture: "ARM64", OperatingSystemFamily: "LINUX" });
+    expect([def.Cpu, def.Memory]).toEqual(["512", "1024"]);
+    w.hasResourceProperties("AWS::ECS::Service", {
+      DesiredCount: 1,
+      LaunchType: "FARGATE",
+      DeploymentConfiguration: { MinimumHealthyPercent: 0, MaximumPercent: 100, DeploymentCircuitBreaker: { Enable: true, Rollback: true } },
+      NetworkConfiguration: { AwsvpcConfiguration: Match.objectLike({ AssignPublicIp: "DISABLED" }) },
+    });
+    w.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 0);
+    w.hasResourceProperties("AWS::ServiceDiscovery::PrivateDnsNamespace", { Name: "whatsapp.production.insights.internal" });
+  });
+
+  it("takes its keys from Secrets Manager only, keeps no customer data, shows no console and prints no QR codes", () => {
+    const { c } = container();
+    expect(c.Secrets.map((s: { Name: string }) => s.Name).sort()).toEqual(["AUTHENTICATION_API_KEY", "EVO_DB_PASSWORD", "EVO_DB_USER"]);
+    const env = Object.fromEntries((c.Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
+    for (const name of ["AUTHENTICATION_API_KEY", "DATABASE_CONNECTION_URI", "DATABASE_URL", "EVO_DB_PASSWORD"]) expect(env[name], name).toBeUndefined();
+    expect(env).toMatchObject({
+      TZ: "UTC",
+      SERVER_DISABLE_MANAGER: "true",
+      SERVER_DISABLE_DOCS: "true",
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false",
+      DATABASE_SAVE_DATA_INSTANCE: "true",
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false",
+      DATABASE_SAVE_DATA_CONTACTS: "false",
+      DATABASE_SAVE_DATA_CHATS: "false",
+      DATABASE_SAVE_DATA_HISTORIC: "false",
+      LOG_LEVEL: "ERROR,WARN",
+      TELEMETRY_ENABLED: "false",
+      WEBHOOK_GLOBAL_ENABLED: "false",
+      CACHE_REDIS_ENABLED: "false",
+      QRCODE_LIMIT: "6",
+      // A server's call has no Origin, which Evolution refuses unless CORS allows any (src/main.ts).
+      CORS_ORIGIN: "*",
+    });
+    // The database's address is put together inside the container, from the secret.
+    expect(c.Command[0]).toContain("DATABASE_CONNECTION_URI=");
+    expect(c.Command[0]).toContain("unset EVO_DB_PASSWORD");
+    // Only Evolution's own log lines reach CloudWatch: its stray console.log calls print customers' messages.
+    expect(c.Command[0]).toContain("exec node --require /tmp/quiet-console.cjs dist/main");
+  });
+
+  it("lets only the functions in (8080), and itself into the database (5432)", () => {
+    const sgs = Object.entries(w.findResources("AWS::EC2::SecurityGroup"));
+    expect(sgs).toHaveLength(1);
+    const [sgId, sg] = sgs[0]!;
+    // Nothing in from an address range, here or as a rule of its own.
+    expect(sg.Properties.SecurityGroupIngress).toBeUndefined();
+    const rules = Object.values(w.findResources("AWS::EC2::SecurityGroupIngress")).map((x) => x.Properties);
+    expect(rules).toHaveLength(2);
+    for (const rule of rules) {
+      expect(rule.CidrIp).toBeUndefined();
+      expect(rule.CidrIpv6).toBeUndefined();
+      expect(rule.SourceSecurityGroupId).toBeDefined();
+    }
+    const into = (port: number) => rules.find((x) => x.FromPort === port && x.ToPort === port && x.IpProtocol === "tcp");
+    // Into the service: 8080 from the functions' group. Into the database: 5432 from the service's group.
+    expect(into(8080)!.GroupId).toEqual({ "Fn::GetAtt": [sgId, "GroupId"] });
+    expect(into(5432)!.SourceSecurityGroupId).toEqual({ "Fn::GetAtt": [sgId, "GroupId"] });
+  });
+
+  it("makes its database (the cron's evolution-db action) before the service starts, and fails the deploy if that fails", () => {
+    const [res] = Object.entries(w.findResources("AWS::CloudFormation::CustomResource"));
+    expect(res).toBeDefined();
+    const [svc] = Object.values(w.findResources("AWS::ECS::Service"));
+    expect(svc!.DependsOn).toEqual(expect.arrayContaining([res![0]]));
+    const [init] = Object.values(w.findResources("AWS::Lambda::Function", { Properties: { FunctionName: "insights-production-evolution-db-init" } }));
+    expect(init!.Properties.Code.ZipFile).toContain('action: "evolution-db"');
+    expect(init!.Properties.Code.ZipFile).toContain("if (r.FunctionError) throw");
+  });
+
+  it("raises an alarm when no task runs or memory runs short", () => {
+    for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) w.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: name });
+  });
+
+  it("tells every function the service's private address and the key's secret, and only the cron its database's", () => {
+    const fns = Object.values(a.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      expect(vars.EVOLUTION_API_URL).toBe("http://evolution-a.whatsapp.production.insights.internal:8080");
+      expect(vars.EVOLUTION_SECRET_ARN).toBeDefined();
+      expect(vars.EVOLUTION_API_KEY).toBeUndefined();
+      expect(vars.EVOLUTION_DB_SECRET_ARN !== undefined).toBe(String(f.Properties.FunctionName).endsWith("-cron"));
+    }
+  });
+
+  it("checks the database's certificate against the one RDS root that signs it", async () => {
+    const { rdsRootCa } = await import("../lib/whatsapp-stack.js");
+    const { X509Certificate } = await import("node:crypto");
+    const pem = rdsRootCa("ap-southeast-2", join(import.meta.dirname, "fixtures/rds-ap-southeast-2.pem"));
+    expect(new X509Certificate(pem!).subject).toContain("CN=Amazon RDS ap-southeast-2 Root CA RSA2048 G1");
+    expect(rdsRootCa("ap-southeast-2", join(import.meta.dirname, "fixtures/missing.pem"))).toBeNull();
   });
 });

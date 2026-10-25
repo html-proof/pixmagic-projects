@@ -17,6 +17,7 @@ docker compose up -d postgres mailpit cognito
 | Postgres 17 | 5434 | owner `app/app`; tenant role `app_rls/app_rls` created by `infra/postgres/init.sql` |
 | Mailpit | 8025 UI | every email (invites, alerts) lands at http://localhost:8025 (the server posts to Mailpit's HTTP API when `MAILPIT_URL` is set) |
 | Cognito emulator | 9229 | the app's user pool, ready to use ([infra/cognito-local](../infra/cognito-local/README.md)); codes it would email are in `docker compose logs cognito`. Without Docker: `node infra/cognito-local/start.mjs` |
+| Evolution API (WhatsApp; optional) | 8081 | only with `docker compose --profile whatsapp up -d evolution`: the release production runs, with a database of its own ([whatsapp.md](whatsapp.md)) |
 
 ## 2. Configure
 
@@ -30,7 +31,7 @@ Generate an encryption key and paste it into `TOKEN_ENCRYPTION_KEYS=1:<key>`:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-`.env.example` already points sign-in at the Cognito emulator and the database at `app_dev`. To use a real user pool instead (Google needs one), drop `COGNITO_ENDPOINT` and fill in that pool's settings ([cognito-setup.md](cognito-setup.md)). The settings every environment shares (Shopify app, ad platforms, WhatsApp) come from `apps/aws/src/settings.ts`; anything in `.env` overrides them, and the shell's environment overrides both. The UI needs no settings of its own.
+`.env.example` already points sign-in at the Cognito emulator and the database at `app_dev`. To use a real user pool instead (Google needs one), drop `COGNITO_ENDPOINT` and fill in that pool's settings ([cognito-setup.md](cognito-setup.md)). The settings every environment shares (Shopify app, ad platforms, WhatsApp's Cloud API) come from `apps/aws/src/settings.ts`; anything in `.env` overrides them, and the shell's environment overrides both. The UI needs no settings of its own. WhatsApp's own service is set in `.env` only: `EVOLUTION_API_URL=http://127.0.0.1:8081`, `EVOLUTION_API_KEY` (the compose file's) and `EVOLUTION_WEBHOOK_URL=http://host.docker.internal:8787/api`, so the container can reach this server; without the URL and key, connecting WhatsApp is off.
 
 The repo-root `.env` (from `.env.example`) is only for tools on this machine: docker compose, the Prisma CLI (`DATABASE_URL`, migrations) and the maintenance tasks in [RUNBOOK.md](RUNBOOK.md#maintenance-tasks). Which file configures what: [architecture.md](architecture.md#configuration).
 

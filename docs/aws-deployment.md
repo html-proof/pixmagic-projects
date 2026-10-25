@@ -16,7 +16,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | UI + API | Lambda `insights-production-api` (function URL, alias `live`) behind CloudFront + WAF | `apps/aws/src/index.ts` |
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Page while the server is down | A page request the function can't answer (connection failure, timeout, 429/5xx) fails over to the site's own "Service temporarily unavailable" page as a 503: a second distribution (stack output `FallbackDomain`) serves `_fallback/unavailable.html` from the same bucket for any path. The API's paths never fail over, so its own 502/503 messages reach the app. The smoke test fetches the page from the fallback. | `infra/cdk/lib/app-stack.ts`, `apps/web/src/app/unavailable`, `apps/aws/src/paths.ts` |
-| Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
+| Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: GitHub variable `AWS_SCHEDULES=on`) | `runScheduled()` in `apps/worker` |
 | Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
@@ -25,13 +25,16 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito,evolution-api,evolution-db}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 | Audit (whole account) | CloudTrail `insights-account` (every Region) → S3 `insights-account-trail-605411278365` (1 year); IAM Access Analyzer `insights-account` in all 18 enabled Regions (StackSet `insights-account-access-analyzer`); GuardDuty (turned on by hand) | `infra/cdk/lib/audit-stack.ts` |
 
-Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
-file uploads (exports are generated on request), so S3 holds only webhook bodies and dumps.
+Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination (the WhatsApp
+service keeps its sessions in its own memory and database). The only file uploads are WhatsApp
+attachments, kept in the payloads bucket until they are sent (exports are generated on request), so
+S3 holds only webhook bodies, those attachments and dumps.
 
 ## Deploy (from a PC)
 
@@ -77,13 +80,17 @@ secret among them:
 | --- | --- | --- |
 | `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
-| `WHATSAPP_CONFIG_ID` (set 2026-10-25), on the app `WHATSAPP_APP_ID` (empty, so `META_APP_ID`: WhatsApp runs on the Meta Ads app "Insights") | `META_APP_SECRET` while WhatsApp is on the Meta Ads app, as now (the check names it so); `WHATSAPP_APP_SECRET` only on an app of its own; `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `NANGO_SECRET_KEY` too | Connect WhatsApp (Embedded Signup) can't be turned on, and there is no other way to connect (docs/whatsapp.md) |
+| `WHATSAPP_CONFIG_ID` (set 2026-10-25), on the app `WHATSAPP_APP_ID` (empty, so `META_APP_ID`: WhatsApp's Cloud API option runs on the Meta Ads app "Insights") | `META_APP_SECRET` while WhatsApp is on the Meta Ads app, as now (the check names it so); `WHATSAPP_APP_SECRET` only on an app of its own; `WHATSAPP_WEBHOOK_VERIFY_TOKEN` too | WhatsApp's Cloud API option (Embedded Signup) can't be offered; linking a phone with a QR code still works (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
-Embedded Signup is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns about
-WhatsApp's secret: the check's line on the Deploy run names what it still needs instead. Since the
-configuration id was set (2026-10-25) the line should read "WhatsApp Embedded Signup on".
+WhatsApp's Cloud API option is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns
+about WhatsApp's Meta secret: the check's line on the Deploy run names what it still needs instead
+("WhatsApp service on, Cloud API off (needs …)"). The WhatsApp service itself needs
+`EVOLUTION_API_URL` and `EVOLUTION_API_KEY`, which the App stack and the secret
+`insights/<env>/evolution-api` give every function: nothing to set by hand. With the configuration
+id set (2026-10-25) the line should read "WhatsApp service on, Cloud API on"; Meta's own Tech
+Provider steps (docs/whatsapp.md, "Owner's steps (Cloud API)") are not something it can see.
 
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary
@@ -99,7 +106,8 @@ aws lambda invoke --function-name insights-production-cron:live --cli-binary-for
 ```
 
 `config.json` then says which ad platforms, email integrations and sign-in options are on, what
-WhatsApp Embedded Signup still needs (`whatsapp.embeddedSignupNeeds`), and lists under
+the WhatsApp service and its Cloud API option still need (`whatsapp.evolutionNeeds`,
+`whatsapp.embeddedSignupNeeds`), and lists under
 `halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
 **Deploy to AWS** (Actions → Run workflow, on `main`) so new instances read it. For another
 environment, pass `--env <name>` to `put-secrets.mjs` and use `insights-<name>-cron:live`, then
@@ -565,6 +573,9 @@ job signs in only with the OIDC deploy role and checks that it did.
   and stops the host. `--replace` wipes the AWS copy first (the final copy at cutover).
 - Migrations after a deploy: `aws lambda invoke --function-name insights-production-cron:live
   --cli-binary-format raw-in-base64-out --payload '{"action":"migrate"}' out.json`.
+- The WhatsApp service's own database `evolution` and its role (secret `insights/production/evolution-db`)
+  are made by the cron's `evolution-db` action, which the WhatsApp stack runs when it is first
+  deployed. Again by hand (idempotent): the same command with `{"action":"evolution-db"}`.
 - psql: start the admin host, then `aws ssm start-session --target <instance id>` (needs the Session
   Manager plugin), credentials from the `insights/production/db-owner` secret. Stop it afterwards.
 - Restore: RDS point-in-time restore (any second in the last 14 days) to a new instance, or a dump
@@ -892,6 +903,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   sign-in asks for the key).
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
+- **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
+  the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
+  (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
   US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
   Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so
@@ -945,9 +959,11 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
-| **Total** | **~87.5** (~96 with GST) |
+| WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, on demand, 17.29; Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 |
+| **Total** | **~106.5** (~117 with GST) |
 
-With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
+The figures in this paragraph leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
+(on Fargate Spot, `whatsapp.spot` in config.ts, its task would be about 5). With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
 brings it to ~72.8 (~80 with GST): that was the only combination under the US$80 budget before the
 audit stack. The owner chose to keep Advanced RDS (2026-10-18). The admin host adds
 ~3.9 while it runs. Before GuardDuty's trial ends the total is ~76. A paid **support plan** comes on
@@ -1050,6 +1066,9 @@ stopped the app. Now nothing the app needs is in one AZ only:
   CloudFormation moves the route only once the new one signals NAT is up). The public addresses
   are not fixed (nothing allowlists them); they change only when an instance is replaced.
 - **Functions** run in both AZs and Lambda uses the one that works.
+- **WhatsApp service**: one Fargate task (a WhatsApp session can't be open in two places), placed in
+  either AZ's private subnet. A task that stops is replaced, and sessions resume from its database
+  without a new QR code; meanwhile messages wait (docs/whatsapp.md, "Scaling").
 
 State on 2026-10-17 06:45Z (main 7379a95): RDS db.t4g.micro Multi-AZ (2a + standby 2b), NAT instances
 `insights-production-nat-a` (2a) and `-b` (2b), no NAT gateway. Trusted Advisor cleared the RDS finding at
@@ -1121,7 +1140,7 @@ What production does have, at no extra cost:
   `cron-missed-ticks`) and the next tick takes over.
 - Alarms on the topic `insights-production-alarms`: function errors (Cognito's email function too), throttles and latency, queue age,
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
-  and CPU, plus RDS's own events (availability, failure, failover, low storage, maintenance,
+  and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
 
 ## Security checks (Trusted Advisor)

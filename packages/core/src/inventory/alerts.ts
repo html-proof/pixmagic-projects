@@ -12,7 +12,7 @@ import { logger } from "../logger.js";
 import type { Mailer } from "../notify.js";
 import type { Queues } from "../queues.js";
 import { escapeHtml } from "@app/shared/email";
-import { queueTeamAlert } from "../whatsapp/manual.js";
+import { queueTeamAlert } from "../whatsapp/teamAlerts.js";
 import { inventorySettings } from "./settings.js";
 import { salesDays, soldCte, STATUS, stockScope, variantStockCte } from "./stock.js";
 
@@ -160,8 +160,8 @@ export async function notifyStockAlerts(deps: NotifyDeps, store: Pick<Store, "id
   const storeName = store.name ?? store.shopDomain;
 
   if (settings.emailAlerts) await emailTeam(deps.mailer, store, storeName, counts, lines);
-  if (settings.whatsappAlerts && settings.whatsappTemplate && settings.whatsappTo.length) {
-    await whatsappTeam(deps, store, settings.whatsappTemplate, settings.whatsappTo, stockSummary(counts), now).catch((err: unknown) =>
+  if (settings.whatsappAlerts && settings.whatsappTo.length) {
+    await whatsappTeam(deps, store, settings.whatsappTo, stockSummary(counts), now).catch((err: unknown) =>
       logger.error({ err, storeId: store.id }, "stock alert WhatsApp message could not be scheduled"),
     );
   }
@@ -244,12 +244,11 @@ ${more > 0 ? `<p style="margin:0 0 16px;font-size:14px;color:#6b6b63">And ${more
 }
 
 /**
- * One WhatsApp message per number, through the store's own WhatsApp connection and an approved
- * template with two body variables ({{1}} the store's name, {{2}} the summary; the starter "Stock
- * alert (to your team)"). Sent as the merchant's own messages to their own team (no customer, no
- * consent record), at most once per number and hour (whatsapp/manual.ts queueTeamAlert).
+ * One WhatsApp text per number, from the store's own connected WhatsApp (WhatsApp Automation).
+ * Sent as the merchant's own messages to their own team (no customer, no consent record), at most
+ * once per number and hour (whatsapp/teamAlerts.ts queueTeamAlert).
  */
-async function whatsappTeam(deps: NotifyDeps, store: Pick<Store, "id" | "workspaceId" | "name" | "shopDomain">, templateName: string, numbers: string[], summary: string, now: Date) {
-  const queued = await queueTeamAlert(deps, { store, templateName, numbers, summary, at: now });
-  if (!queued) logger.info({ storeId: store.id, templateName }, "stock alert WhatsApp not queued (not connected, template not approved or not shaped for it, or sent this hour)");
+async function whatsappTeam(deps: NotifyDeps, store: Pick<Store, "id">, numbers: string[], summary: string, now: Date) {
+  const queued = await queueTeamAlert(deps, { store, numbers, summary, at: now });
+  if (!queued) logger.info({ storeId: store.id }, "stock alert WhatsApp not queued (not connected, or already sent this hour)");
 }

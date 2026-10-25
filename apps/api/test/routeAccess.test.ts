@@ -69,8 +69,8 @@ const PUBLIC = new Set([
   "POST /webhooks/meta/data-deletion",
   "GET /webhooks/whatsapp",
   "POST /webhooks/whatsapp",
-  // A store's own tools send WhatsApp custom events with the store's event key (whev_...).
-  "POST /whatsapp/events",
+  // Evolution API's webhook: a JWT made from that connection's own key (core whatsapp/webhook.ts).
+  "POST /webhooks/whatsapp/evolution/:instance",
   "POST /pixel/:key",
   "OPTIONS /pixel/:key",
   "POST /v1/events",
@@ -132,7 +132,6 @@ const READ_ONLY_POSTS = new Set([
   "POST /workspaces/:ws/stores/:storeId/sms/automations/audience",
   "POST /workspaces/:ws/stores/:storeId/sms/sends/preview",
   "POST /workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate",
-  "POST /workspaces/:ws/stores/:storeId/whatsapp/workflows/check",
   "POST /workspaces/:ws/email/templates/:id/preview",
   // Asks for a one-time download link (a download, as GET /export is; a shared link keeps its export permissions).
   "POST /workspaces/:ws/staff/exports",
@@ -140,10 +139,11 @@ const READ_ONLY_POSTS = new Set([
 
 /**
  * Changes a shared link's session may make, being the person's own and nothing of the business's:
- * their notification settings, and asking for the store's stock to be read again from Shopify
- * (which changes nothing in Shopify or in what anyone sees but its freshness).
+ * their notification settings, and asking for the store's stock to be read again from Shopify, or
+ * WhatsApp's connection state from the provider (which changes nothing there or in what anyone sees
+ * but its freshness).
  */
-const LINK_MAY_WRITE = new Set(["PUT /workspaces/:ws/notifications", "POST /workspaces/:ws/stores/:storeId/inventory/sync"]);
+const LINK_MAY_WRITE = new Set(["PUT /workspaces/:ws/notifications", "POST /workspaces/:ws/stores/:storeId/inventory/sync", "POST /workspaces/:ws/stores/:storeId/whatsapp/connection/check"]);
 
 const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 const isWorkspaceRoute = (path: string) => path.includes("/:ws");
