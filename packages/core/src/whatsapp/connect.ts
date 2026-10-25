@@ -30,6 +30,7 @@ import {
   inspectToken,
   listPhones,
   PIN_MISMATCH_CODES,
+  refreshBusinessToken,
   registerPhone,
   REQUIRED_SCOPES,
   subscribeApp,
@@ -312,6 +313,35 @@ export interface CheckResult {
   templates: number | null;
 }
 
+/** A token with less than this left is refreshed by the health check (which runs every 6 hours). */
+export const TOKEN_REFRESH_WITHIN_MS = 30 * 86_400_000;
+
+/**
+ * Tokens that expire (bizinsights' configuration issues 60-day ones) are refreshed well before they
+ * do: the health check asks Meta's token inspector, and with under 30 days left hands Nango a fresh
+ * token. Anything going wrong keeps the old token, still valid, for the next check to try again.
+ */
+async function refreshIfExpiring(deps: WaDeps, conn: WaConnection, p: WaPlatform, token: string, now: Date): Promise<string> {
+  try {
+    const info = await inspectToken(p, token, deps.fetchImpl);
+    if (!info.valid || !info.expiresAt || info.expiresAt.getTime() - now.getTime() > TOKEN_REFRESH_WITHIN_MS) return token;
+    const fresh = await refreshBusinessToken(p, token, deps.fetchImpl);
+    await storeTokenInNango(
+      {
+        storeId: conn.storeId,
+        token: fresh.token,
+        tags: { ...(conn.connectedByUserId ? { end_user_id: conn.connectedByUserId } : {}), organization_id: conn.workspaceId, bi_store: conn.storeId, bi_provider: "whatsapp", bi_waba: conn.wabaId },
+      },
+      deps,
+    );
+    logger.info({ storeId: conn.storeId, expiresAt: fresh.expiresAt?.toISOString() ?? null }, "whatsapp: access token refreshed");
+    return fresh.token;
+  } catch (err) {
+    logger.warn({ err, storeId: conn.storeId }, "whatsapp: refreshing the access token failed; the next health check tries again");
+    return token;
+  }
+}
+
 /**
  * Ask Meta how the connection stands: the token still works, bizinsights is still subscribed to the
  * account, the number's quality, limit and registration, and the templates. Run by "Check again"
@@ -329,6 +359,7 @@ export async function checkConnection(deps: WaDeps, conn: WaConnection): Promise
     throw err;
   }
   const p = waPlatform();
+  if (p) token = await refreshIfExpiring(deps, conn, p, token, now);
   try {
     const data: Prisma.WaConnectionUpdateInput = { lastCheckedAt: now };
     if (p && !(await appSubscribed(p, conn.wabaId, token, deps.fetchImpl))) {

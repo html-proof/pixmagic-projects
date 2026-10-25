@@ -8,11 +8,11 @@ who write in, runs campaigns, and reads every message's delivery in the history.
 WhatsApp Web automation, no browser session, and nobody ever pastes a token, an app secret or a
 webhook URL.
 
-**Today (2026-10-25) connecting is not available in production**: WhatsApp runs on the Meta app
-"Insights" (971575545351940), whose secret and the webhook verify token are set; only
-`WHATSAPP_CONFIG_ID` is missing, which the owner creates in Meta's App Dashboard (see
-[Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 4). Until then the
-page says so, plainly, and nothing pretends to be connected.
+**Today (2026-10-25) every setting is in place**: WhatsApp runs on the Meta app "Insights"
+(971575545351940, business portfolio "bizinsights.io"), whose secret and the webhook verify token
+are set, and `WHATSAPP_CONFIG_ID` is its Embedded Signup configuration "bizinsights WhatsApp Signup"
+(`2228218088074576`). Until Meta approves business verification and App Review, only people with a
+role on the app can get through Meta's window ([Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 7).
 
 This page replaced the earlier WhatsApp feature (2026-10-10 to 2026-10-24) on 2026-10-25: see
 [The old WhatsApp tables](#the-old-whatsapp-tables) for what happened to it.
@@ -166,6 +166,15 @@ the token works, bizinsights is still subscribed to the account (subscribed agai
 number's registration, quality, name and limit, and the templates. Meta refusing the token puts the
 connection on **Reconnect** (an alert to owners and admins); a rate limit or an outage waits for the
 next check.
+
+**Tokens that expire.** bizinsights' Embedded Signup configuration issues system user tokens that
+last 60 days (Meta offered this app only its template, whose expiry can't be changed). So each
+health check first asks Meta's token inspector when the store's token expires, and with under 30
+days left exchanges it for a fresh 60-day one (`GET /oauth/access_token`, `grant_type=fb_exchange_token`,
+`set_token_expires_in_60_days=true`; Meta: "Install Apps, Generate, Refresh, and Revoke Tokens") and
+hands that to Nango under the same connection (`refreshIfExpiring` in `connect.ts`). A refresh that
+fails keeps the old token, which still works, and the next check tries again: with checks every 6
+hours there are about 120 tries before a token runs out. A token that never expires is left alone.
 
 **Reconnect** is the same button: the row is updated in place (the same Nango connection, a new
 token), and messages held while it was needed are sent if that happens within 48 hours.
@@ -444,7 +453,7 @@ own Meta app (or none) and their own `insights/<env>/app` secret: never producti
 | Setting | What it is | Where | How to get it | Today (production) |
 | --- | --- | --- | --- | --- |
 | `WHATSAPP_APP_ID` | The Meta app every store connects through (empty: `META_APP_ID`) | settings.ts | Meta app dashboard → App settings → Basic → App ID | **empty since 2026-10-25**: WhatsApp runs on the Meta Ads app **"Insights" `971575545351940`** (portfolio Zodiix Pty Ltd). It ran on "pixmagic" `1799660384680551` before; nothing was ever connected through it |
-| `WHATSAPP_CONFIG_ID` | The Insights app's Facebook Login for Business configuration of the Embedded Signup variation: what Meta's window shows and grants | settings.ts | Step 4 below (Configurations → its ID) | **missing**: the only thing left |
+| `WHATSAPP_CONFIG_ID` | The Insights app's Facebook Login for Business configuration of the Embedded Signup variation: what Meta's window shows and grants | settings.ts | Step 4 below (Configurations → its ID) | `2228218088074576` ("bizinsights WhatsApp Signup", 2026-10-25) |
 | `WHATSAPP_APP_SECRET` | The app's secret when WhatsApp runs on an app of its own: exchanges the sign-up code, signs `appsecret_proof`, and is what Meta signs every webhook with (`X-Hub-Signature-256`) | secret | — | **not needed**: on the Insights app, `META_APP_SECRET` (set) does all three. Leave it unset: when set it wins over `META_APP_SECRET` |
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | A random string Meta repeats back (`hub.verify_token`) when it checks the webhook address; `GET /api/webhooks/whatsapp` answers the challenge only for it (constant-time compare) | secret | Generated, never chosen: `put-secrets.mjs --env production --generate WHATSAPP_WEBHOOK_VERIFY_TOKEN` | set (release 116's config check no longer lists it) |
 | `NANGO_SECRET_KEY` | Nango's key: Nango keeps each store's WhatsApp token | secret | Nango dashboard (prod environment) → Environment settings | set (the ad platforms use it) |
@@ -469,32 +478,41 @@ Meta renames buttons now and then, so a label may differ slightly.
    with the Facebook account that administers **"Insights" (App ID 971575545351940)**
    (sebanceo@gmail.com) and open it.
 2. **Add WhatsApp to it.** Left menu **Use cases** → **Add use case** (on older dashboards: **Add
-   product** → WhatsApp → **Set up**) → **Connect with customers through WhatsApp** → add it. If Meta
-   asks for a business portfolio, choose **Zodiix Pty Ltd**. Meta may create a test WhatsApp Business
-   account and test number for the portfolio: harmless, and useful for a first test.
+   product** → WhatsApp → **Set up**) → **Connect with customers through WhatsApp** → add it. Done
+   2026-10-25. Its setup asks for a business portfolio (the app's is **bizinsights.io**) and, to
+   claim a free test number, accepts Meta's WhatsApp Business Platform and Cloud API terms; on
+   2026-10-25 "Claim test number" answered "An error occurred while creating the test account" (not
+   needed for Embedded Signup).
 3. **Facebook Login for Business → Settings.** Under **Client OAuth settings** set to **Yes**: Client
    OAuth login, Web OAuth login, Enforce HTTPS, Embedded Browser OAuth Login, Use Strict Mode for
    redirect URIs, **Login with the JavaScript SDK**. Add `https://bizinsights.io/` to **Allowed
    Domains for the JavaScript SDK** and to **Valid OAuth Redirect URIs** (keep every entry already
    there: Meta Ads' sign-in through Nango uses them). Embedded Signup returns
    nothing to a page whose domain isn't in both. Press the page's own **Save changes** at the bottom
-   (the toast after typing a URI doesn't save it), then reload to check it stayed.
-4. **Create the configuration** (this is `WHATSAPP_CONFIG_ID`). **Facebook Login for Business →
-   Configurations → + Create configuration** (not **Create from template**: the "WhatsApp Embedded
-   Signup Configuration With 60 Expiration Token" template's token expires after 60 days, which
-   would disconnect every store):
-   - Name: `bizinsights WhatsApp Embedded Signup`.
-   - Login variation: **WhatsApp Embedded Signup** (shown as **Embedded Signup** on newer dashboards).
-   - Products: **Cloud API** only. Selecting products is what makes it a **v4** configuration (v2 and
-     v3 stopped working on 2026-10-15); Meta then picks the permissions Cloud API needs.
-   - Access token, if asked: **System-user access token**, expiration **Never** (system-user tokens
-     never expire unless set to).
-   - Assets: **WhatsApp accounts** only (untick Catalogs, Pages or ad accounts if they are ticked:
-     extra assets make businesses abandon the window).
+   (the toast after typing a URI doesn't save it), then reload to check it stayed. Done 2026-10-25
+   (and checked after a reload).
+4. **Create the configuration** (this is `WHATSAPP_CONFIG_ID`). Meta offers the WhatsApp Embedded
+   Signup variation only to an app linked to a business portfolio (Review → Verification →
+   Business portfolio). On 2026-10-25 the Insights app had none; it was linked to **bizinsights.io**
+   (business 1415197520268134, the only portfolio its admin has; shown "Unverified" then). Even then,
+   **+ Create configuration** offered only the "General" variation, so the configuration was made
+   with **Templates → WhatsApp Embedded Signup Configuration With 60 Expiration Token → Use template**
+   and then **Edit**ed:
+   - Name: `bizinsights WhatsApp Signup` (Meta allows 30 characters).
+   - Login variation: **WhatsApp Embedded Signup** (fixed by the template).
+   - Products: **WhatsApp Cloud API** only (untick "Marketing Messages API for WhatsApp", which Meta
+     ticks with it). Selecting products is what makes it a **v4** configuration (v2 and v3 stopped
+     working on 2026-10-15).
+   - Access token: **System-user access token**, expiring after **60 days**. The template fixes both
+     ("can't be changed later"), so the health check refreshes each store's token
+     ([Tokens that expire](#connecting-connect-whatsapp)). Once the app is a Tech Provider and Meta offers
+     the variation under **+ Create configuration**, a configuration with expiration **Never** can
+     replace it: a new id in `WHATSAPP_CONFIG_ID` serves new connections, and tokens already issued
+     keep being refreshed.
+   - Assets: **WhatsApp accounts** only (Meta's six WhatsApp account tasks, which the template sets).
    - Permissions: `whatsapp_business_management` and `whatsapp_business_messaging`, nothing else.
-   - **Create**, then copy the **Configuration ID** shown for it in the Configurations list. It is not
-     a secret: send it to Claude (or put it in `WHATSAPP_CONFIG_ID` in `apps/aws/src/settings.ts`
-     yourself, in a pull request merged on green).
+   - Its **Configuration ID** is in the Configurations list. It is not a secret: it goes in
+     `WHATSAPP_CONFIG_ID` in `apps/aws/src/settings.ts`, in a pull request merged on green.
 5. **Deploy and check.** Once a release with the configuration id is live, `/whatsapp` shows **Connect
    WhatsApp Business** instead of "not available yet", and within 15 minutes the sweep points the
    app's WhatsApp webhook at `https://bizinsights.io/api/webhooks/whatsapp` (`ensureAppWebhook`, then
@@ -509,7 +527,11 @@ Meta renames buttons now and then, so a label may differ slightly.
    and send yourself a test (the merchant guide below).
 7. **Open it to every business (Tech Provider).** Meta's two steps:
    - **Business verification** of Zodiix Pty Ltd (Business settings → Security Center): submitted
-     2026-10-20, waiting for Meta. App Review can't start before it's approved.
+     2026-10-20, waiting for Meta. App Review can't start before it's approved. The app's portfolio
+     must be the verified one: on 2026-10-25 the only portfolio the app's admin could pick was
+     **bizinsights.io** ("Unverified"), and the app was linked to it. If Zodiix Pty Ltd's
+     verification belongs to another portfolio, check in business.facebook.com that it is this one
+     (renamed) before App Review.
    - **App Review**: Advanced Access for `whatsapp_business_messaging` and
      `whatsapp_business_management` (and `public_profile`, which a Facebook Login for Business app
      needs before it serves other businesses, if it isn't granted yet), with two screencasts: a

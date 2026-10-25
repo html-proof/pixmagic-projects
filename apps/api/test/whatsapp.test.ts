@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { dispatchCampaign, processWebhookEvent, sendWaMessage, whatsappOnShopifyEvent, type FetchLike } from "@app/core";
+import { checkConnection, dispatchCampaign, processWebhookEvent, sendWaMessage, whatsappOnShopifyEvent, type FetchLike } from "@app/core";
 import { LEGACY_GRANTS, signMetaBody } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -21,6 +21,7 @@ const APP_SECRET = "wa_app_secret_for_tests";
 const WABA = "1020304050";
 const PHONE = "9080706050";
 const TOKEN = "EAAGbusinessTokenForTests";
+const REFRESHED = "EAAGrefreshedTokenForTests";
 const ENV = {
   WHATSAPP_APP_ID: APP_ID,
   WHATSAPP_APP_SECRET: APP_SECRET,
@@ -49,6 +50,11 @@ interface Fake {
   phones: Array<{ id: string; display_phone_number: string; verified_name: string }>;
   sendError: { status: number; body: unknown } | null;
   subscribed: boolean;
+  /** The business token Meta accepts now (a refresh replaces it), and when it expires (Unix seconds; null: never). */
+  token: string;
+  tokenExpiresAt: number | null;
+  refreshes: number;
+  refreshFails: boolean;
   fetch: FetchLike;
 }
 
@@ -68,6 +74,10 @@ function fakeMeta(): Fake {
     phones: [{ id: PHONE, display_phone_number: "+61 400 000 001", verified_name: "Acme" }],
     sendError: null,
     subscribed: false,
+    token: TOKEN,
+    tokenExpiresAt: null,
+    refreshes: 0,
+    refreshFails: false,
     fetch: async (input, init) => {
       const u = new URL(String(input));
       const method = init?.method ?? "GET";
@@ -105,15 +115,23 @@ function fakeMeta(): Fake {
       const path = u.pathname.replace(/^\/v26\.0\//, "");
       if (path === "oauth/access_token") {
         expect(u.searchParams.get("client_secret")).toBe(APP_SECRET);
+        if (u.searchParams.get("grant_type") === "fb_exchange_token") {
+          expect(u.searchParams.get("set_token_expires_in_60_days")).toBe("true");
+          expect(u.searchParams.get("fb_exchange_token")).toBe(f.token);
+          if (f.refreshFails) return json({ error: { message: "Please retry your request later.", type: "OAuthException", code: 2 } }, 500);
+          f.refreshes++;
+          f.token = REFRESHED;
+          return json({ access_token: REFRESHED, token_type: "bearer", expires_in: 5183944 });
+        }
         const t = f.codes[u.searchParams.get("code") ?? ""];
         return t ? json({ access_token: t, token_type: "bearer" }) : json({ error: { message: "Invalid verification code", type: "OAuthException", code: 100 } }, 400);
       }
       if (path === "debug_token") {
         expect(auth).toBe(`Bearer ${APP_ID}|${APP_SECRET}`);
-        return json({ data: { app_id: f.appId, is_valid: true, scopes: f.scopes, granular_scopes: f.scopes.filter((s) => s.startsWith("whatsapp")).map((scope) => ({ scope, target_ids: f.grantedWabas })) } });
+        return json({ data: { app_id: f.appId, is_valid: true, expires_at: f.tokenExpiresAt ?? 0, scopes: f.scopes, granular_scopes: f.scopes.filter((s) => s.startsWith("whatsapp")).map((scope) => ({ scope, target_ids: f.grantedWabas })) } });
       }
       // Every business-token call is the business's own and carries the proof.
-      expect(auth).toBe(`Bearer ${TOKEN}`);
+      expect(auth).toBe(`Bearer ${f.token}`);
       expect(u.searchParams.get("appsecret_proof")).toMatch(/^[0-9a-f]{64}$/);
       if (path === WABA) return json({ id: WABA, name: "Acme WhatsApp" });
       if (path === `${WABA}/phone_numbers`) return json({ data: f.phones.map((p) => ({ ...p, platform_type: f.registered.has(p.id) ? "CLOUD_API" : "NOT_APPLICABLE", quality_rating: "GREEN" })) });
@@ -274,6 +292,32 @@ describe("connecting", () => {
     expect(numbers.map((n: { id: string }) => n.id)).toEqual([PHONE, "9080706051"]);
     const chosen = await call("POST", `${o.base}/connect/number`, o.headers, { phoneNumberId: "9080706051" });
     expect(chosen.json().connection).toMatchObject({ status: "active", phoneNumberId: "9080706051", registered: true });
+  });
+  it("refreshes a token that expires well before it does, and leaves one that doesn't alone", async () => {
+    const o = await owner();
+    expect((await connect(o)).statusCode).toBe(200);
+    const check = async () => checkConnection(ctx.deps, await systemDb.waConnection.findUniqueOrThrow({ where: { storeId: o.store.id } }));
+    const inDays = (d: number) => Math.floor(Date.now() / 1000) + d * 86_400;
+    // A token that never expires, and one with 50 days left: nothing to do.
+    expect((await check()).status).toBe("active");
+    meta.tokenExpiresAt = inDays(50);
+    expect((await check()).status).toBe("active");
+    expect(meta.refreshes).toBe(0);
+    // Meta refusing the refresh changes nothing: the old token still works, the next check tries again.
+    meta.tokenExpiresAt = inDays(20);
+    meta.refreshFails = true;
+    expect((await check()).status).toBe("active");
+    expect(meta.nango.get(`wa-${o.store.id}`)?.apiKey).toBe(TOKEN);
+    // 20 days left: a fresh token goes to Nango (same connection, same tags) and is used from then on.
+    meta.refreshFails = false;
+    expect((await check()).status).toBe("active");
+    expect(meta.refreshes).toBe(1);
+    expect(meta.nango.get(`wa-${o.store.id}`)).toEqual({ apiKey: REFRESHED, tags: { end_user_id: o.user.id, organization_id: o.ws, bi_store: o.store.id, bi_provider: "whatsapp", bi_waba: WABA } });
+    meta.tokenExpiresAt = inDays(60);
+    expect((await check()).status).toBe("active");
+    expect(meta.refreshes).toBe(1);
+    const overview = await call("GET", o.base, o.headers);
+    expect(overview.body).not.toContain(REFRESHED);
   });
 });
 
