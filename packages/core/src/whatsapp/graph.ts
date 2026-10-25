@@ -61,6 +61,21 @@ export async function exchangeSignupCode(p: WaPlatform, code: string, fetchImpl:
   return r.access_token;
 }
 
+/**
+ * A fresh token for one that expires (bizinsights' Embedded Signup configuration issues 60-day
+ * system user tokens): Meta's refresh of an expiring system user token. Each refresh starts another
+ * 60 days, and the old token keeps working until its own expiry.
+ */
+export async function refreshBusinessToken(p: WaPlatform, token: string, fetchImpl: FetchLike): Promise<{ token: string; expiresAt: Date | null }> {
+  const r = await graphCall<{ access_token?: string; expires_in?: number }>(
+    fetchImpl,
+    { version: p.version, method: "GET", path: "oauth/access_token", query: { grant_type: "fb_exchange_token", client_id: p.appId, client_secret: p.appSecret, set_token_expires_in_60_days: "true", fb_exchange_token: token } },
+    waError,
+  );
+  if (!r.access_token) throw new WhatsappApiError(400, null, null, "oauth", "Meta returned no token for the refresh");
+  return { token: r.access_token, expiresAt: r.expires_in ? new Date(Date.now() + r.expires_in * 1000) : null };
+}
+
 export interface TokenInfo {
   appId: string | null;
   valid: boolean;

@@ -125,9 +125,11 @@ export const APP_SETTINGS = {
   // (META_APP_ID, portfolio Zodiix Pty Ltd), so META_APP_SECRET serves and WHATSAPP_APP_SECRET stays
   // unset. It ran on "pixmagic" (1799660384680551, portfolio "Testbusiness") before; nothing was ever
   // connected through it. WHATSAPP_CONFIG_ID: the Insights app's Embedded Signup configuration
-  // (docs/whatsapp.md, "Setting it up", step 3).
+  // "bizinsights WhatsApp Signup" (made 2026-10-25 from Meta's template: Cloud API, WhatsApp
+  // accounts, both whatsapp_* permissions, a 60-day system user token the health check refreshes;
+  // docs/whatsapp.md, "Setting it up", step 4).
   "WHATSAPP_APP_ID": "",
-  "WHATSAPP_CONFIG_ID": "",
+  "WHATSAPP_CONFIG_ID": "2228218088074576",
   "WHATSAPP_API_VERSION": "v26.0",
   // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "sandbox": merchants can
   // set up senders, templates and rules and send test texts to numbers they verified with AWS;

@@ -38,17 +38,17 @@ describe("the shipped settings", () => {
       "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
       // Every ad platform connects through Nango (docs/nango.md): its key is a secret too.
       "Ad platforms through Nango: NANGO_SECRET_KEY",
+      // WhatsApp runs on the Meta Ads app, so that app's secret is WhatsApp's too.
+      "WhatsApp (Embedded Signup): META_APP_SECRET",
     ]);
   });
 
-  it("leave WhatsApp alone until its Embedded Signup configuration is set", () => {
-    // WhatsApp runs on the Meta Ads app (WHATSAPP_APP_ID empty) and WHATSAPP_CONFIG_ID is empty:
-    // Embedded Signup is off on purpose, so its secret missing is no warning. Once the configuration
-    // id is set, it is (until META_APP_SECRET, which then serves WhatsApp too, is there).
+  it("turn WhatsApp's Embedded Signup on, on the Meta Ads app, with that app's secret", () => {
+    // WHATSAPP_APP_ID empty: WhatsApp runs on the Meta Ads app, whose secret signs its calls and
+    // webhooks. WHATSAPP_CONFIG_ID set: Embedded Signup is on, so its secret missing is a warning.
     expect(APP_SETTINGS.WHATSAPP_APP_ID).toBe("");
-    expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toBe("");
-    const withSignup = { ...APP_SETTINGS, WHATSAPP_CONFIG_ID: "1234567890" };
-    expect(halfConfigured(withSignup).map((c) => c.provider)).toContain("WhatsApp (Embedded Signup)");
+    expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toMatch(/^\d+$/);
+    expect(halfConfigured({ ...APP_SETTINGS, ...SECRETS }).map((c) => c.provider)).not.toContain("WhatsApp (Embedded Signup)");
   });
 });
 
@@ -63,7 +63,7 @@ describe('the cron action {"action":"config"}', () => {
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: false, google: false, adsense: false } });
     expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
     // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed.
-    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhookVerifyToken: false });
+    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhookVerifyToken: false });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
     // The cold start already said it in the logs, once per provider.

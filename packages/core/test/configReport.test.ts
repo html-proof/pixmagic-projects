@@ -129,7 +129,8 @@ describe("which provider has its public id but not its secret", () => {
       "META_APP_ID/META_APP_SECRET",
       "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET",
       "GOOGLE_ADS_CLIENT_ID/NANGO_SECRET_KEY",
-      "WHATSAPP_CONFIG_ID/WHATSAPP_APP_SECRET",
+      // No WHATSAPP_APP_ID: WhatsApp runs on the Meta Ads app, with its secret.
+      "WHATSAPP_CONFIG_ID/META_APP_SECRET",
       "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
       "EMAIL_MICROSOFT_CLIENT_ID/EMAIL_MICROSOFT_CLIENT_SECRET",
     ]);
@@ -162,7 +163,10 @@ describe("which provider has its public id but not its secret", () => {
     // Manual connections bring their own app's secret, so nothing is missing for them.
     expect(half({ WHATSAPP_APP_ID: "1799660384680551" })).toEqual([]);
     expect(half({ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "public-wa-config-9999" })).toEqual(["WhatsApp (Embedded Signup)"]);
-    const wa = providerCredentials({ WHATSAPP_CONFIG_ID: "c" }).find((c) => c.secretSetting === "WHATSAPP_APP_SECRET")!;
+    const wa = providerCredentials({ WHATSAPP_CONFIG_ID: "c" }).find((c) => c.provider === "WhatsApp (Embedded Signup)")!;
+    // On the Meta Ads app (no id of its own) the secret to set is that app's.
+    expect(wa.secretSetting).toBe("META_APP_SECRET");
+    expect(providerCredentials({ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c" }).find((c) => c.provider === "WhatsApp (Embedded Signup)")!.secretSetting).toBe("WHATSAPP_APP_SECRET");
     expect(wa.effect).toBe("Connect WhatsApp (Embedded Signup) can't be turned on, and replies and delivery reports from connected numbers can't be checked");
   });
 

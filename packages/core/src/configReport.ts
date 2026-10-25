@@ -90,11 +90,13 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
   // WhatsApp's secret is used by Embedded Signup ("Connect WhatsApp") and the webhooks of the numbers
   // it connects. So its id here is WHATSAPP_CONFIG_ID, the setting that turns Embedded Signup on: an
   // app id picked (WHATSAPP_APP_ID) before its configuration exists is no reason to warn on every deploy.
+  // On the Meta Ads app the secret to set is META_APP_SECRET (WHATSAPP_APP_SECRET would win over it).
+  const onMetaApp = !vars.WHATSAPP_APP_ID || vars.WHATSAPP_APP_ID === vars.META_APP_ID;
   const whatsapp: ProviderCredentials = {
     ...pair(
       "WhatsApp (Embedded Signup)",
       "WHATSAPP_CONFIG_ID",
-      "WHATSAPP_APP_SECRET",
+      onMetaApp ? "META_APP_SECRET" : "WHATSAPP_APP_SECRET",
       "Connect WhatsApp (Embedded Signup) can't be turned on, and replies and delivery reports from connected numbers can't be checked",
     ),
     secretSet: waSecretSet(vars),
