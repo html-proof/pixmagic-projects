@@ -17,6 +17,7 @@ import {
   deleteWaTemplate,
   disconnectWhatsapp,
   ensureCustomerWebhook,
+  evolutionConfigured,
   estimateWaAudience,
   launchCampaign,
   metaSignupConfig,
@@ -71,7 +72,8 @@ import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * WhatsApp Automation's merchant API (docs/whatsapp.md), one store at a time. Who may do what:
- *  - read anything here: "View campaigns" (marketing.campaigns);
+ *  - read anything here: "View campaigns" (marketing.campaigns); how the connection stands (the
+ *    overview, cut down to it, for Settings → Integrations): "View integration connection status" too;
  *  - customers' numbers, names and what was said: "View contact information" as well;
  *  - change what customers receive (settings, templates, automations, campaigns, sends): the
  *    store's owners and admins (stores:manage), signed in themselves; a shared link never can;
@@ -197,10 +199,14 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const a = await requireView(c, deps, ws);
+    const a = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
     const store = await waStore(ws, storeId);
-    const overview = await whatsappOverview(store, { contacts: seesContacts(a) });
     const can = waCan(a);
+    // Settings → Integrations, for someone who may see only how connections stand: the connection, nothing else.
+    if (!allows(a.access, "marketing.campaigns")) {
+      return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain }, platform: { evolution: evolutionConfigured() }, connection: waConnectionView(await connectionOf(store.id)), can });
+    }
+    const overview = await whatsappOverview(store, { contacts: seesContacts(a) });
     return c.json({
       ...overview,
       can,
@@ -541,8 +547,9 @@ export function whatsappRoutes(app: App, deps: Deps) {
     await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-estimate:${store.id}`, LIMITS.waEstimate);
-    const { audience } = z.object({ audience: z.unknown() }).parse(await body(c));
-    return c.json({ count: await estimateWaAudience(store.id, audience) });
+    const { audience, templateId } = z.object({ audience: z.unknown(), templateId: idParam.nullable().optional() }).parse(await body(c));
+    const template = templateId ? await withTenant(ws, (tx) => tx.wappTemplate.findFirst({ where: { id: templateId, storeId: store.id, workspaceId: ws } })) : null;
+    return c.json({ count: await estimateWaAudience(store.id, audience, template) });
   });
 
   app.post(`${base}/campaigns`, async (c) => {

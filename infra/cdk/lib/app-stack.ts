@@ -149,9 +149,10 @@ export class AppStack extends Stack {
       SES_REGION: cfg.region,
       SMS_CONFIGURATION_SET: smsConfigurationSet,
       // WhatsApp Automation's Evolution API service (whatsapp-stack.ts): its private address, and its
-      // global key's secret (read at cold start like the others).
+      // global key's secret (read at cold start like the others), by name: an ARN would cost the
+      // 4 KB environment ~90 bytes more (Secrets Manager reads a secret by either).
       EVOLUTION_API_URL: evolutionUrl(cfg),
-      EVOLUTION_SECRET_ARN: data.evolutionSecret.secretArn,
+      EVOLUTION_SECRET_ARN: `insights/${cfg.name}/evolution-api`,
       // A domain is known before the deploy, so the functions get it with the release (no window in
       // which a fresh instance reads the previous address from the runtime parameter). Without one,
       // the address is CloudFront's, which the runtime parameter carries.
@@ -180,7 +181,7 @@ export class AppStack extends Stack {
           ...(name === "api" ? { COGNITO_WORKER_SECRET_ARN: cognitoSecret } : {}),
           ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
           // Only the cron makes the WhatsApp service's database role (its "evolution-db" action) and prunes its data.
-          ...(name === "cron" ? { EVOLUTION_DB_SECRET_ARN: data.evolutionDbSecret.secretArn } : {}),
+          ...(name === "cron" ? { EVOLUTION_DB_SECRET_ARN: `insights/${cfg.name}/evolution-db` } : {}),
         },
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },

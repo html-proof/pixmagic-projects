@@ -149,7 +149,7 @@ describe("rotating the token encryption key", () => {
     const meta = await systemDb.adConnection.create({
       data: { workspaceId: ws.id, storeId: store.id, provider: "meta", accountId: "act_1", currency: "USD", timezone: "UTC", ...encryptAdTokens(store.id, "meta", { accessToken: "EAA_ad", refreshToken: null, expiresAt: null }) },
     });
-    const contact = await systemDb.waContact.create({ data: { workspaceId: ws.id, storeId: store.id, phoneHash: "h", phoneEnc: waEncrypt(store.id, "phone", "919000000001"), phoneMasked: "001" } });
+    const contact = await systemDb.wappContact.create({ data: { workspaceId: ws.id, storeId: store.id, phoneHash: "h", phoneEnc: waEncrypt(store.id, "phone", "919000000001"), phoneMasked: "001" } });
     // And a store token that no key opens (damaged), which fails its part.
     const broken = await systemDb.store.create({
       data: { workspaceId: ws.id, shopDomain: "x.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-x", accessTokenEnc: encryptAdTokens(store.id, "meta", { accessToken: "x", refreshToken: null, expiresAt: null }).accessTokenEnc, tokenKeyVersion: 2 },
@@ -165,7 +165,7 @@ describe("rotating the token encryption key", () => {
     // The parts after the failing one ran all the same.
     useKeys(V3);
     expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: meta.id } }))).toBe("EAA_ad");
-    expect(waDecrypt(store.id, "phone", (await systemDb.waContact.findUniqueOrThrow({ where: { id: contact.id } })).phoneEnc)).toBe("919000000001");
+    expect(waDecrypt(store.id, "phone", (await systemDb.wappContact.findUniqueOrThrow({ where: { id: contact.id } })).phoneEnc)).toBe("919000000001");
     // Once the damaged row is dealt with, nothing is left.
     await systemDb.store.delete({ where: { id: broken.id } });
     useKeys(`${V3},${NEW}`);

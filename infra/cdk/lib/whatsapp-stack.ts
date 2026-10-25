@@ -30,25 +30,29 @@ export const evolutionNamespace = (cfg: Pick<EnvConfig, "name">) => `whatsapp.${
 /** The service's private address, the functions' EVOLUTION_API_URL (app-stack.ts). */
 export const evolutionUrl = (cfg: Pick<EnvConfig, "name">, shard = EVOLUTION_SHARD) => `http://evolution-${shard}.${evolutionNamespace(cfg)}:8080`;
 
+/** The database's certificate authority (data-stack.ts: caCertificate RDS_CA_RSA2048_G1). */
+const DB_CA = "RSA2048 G1";
+
 /**
- * Amazon RDS's root certificates for the database's Region, from the bundle the Lambda package
- * carries (apps/aws/scripts/build.mjs): Evolution's Prisma then checks the database's certificate
- * and host name. The whole global bundle is too big for an environment variable. Null without a
- * package (the CDK tests): the container then encrypts without checking.
+ * Amazon RDS's root certificate that signs the database's certificate, from the bundle the Lambda
+ * package carries (apps/aws/scripts/build.mjs): Evolution's Prisma then checks the database's
+ * certificate and host name. Exactly one root: Prisma's sslcert reads a single certificate, and the
+ * Region has three (RSA2048, RSA4096, ECC384). Null without a package (the CDK tests): the container
+ * then encrypts without checking.
  */
-function regionRdsCa(region: string): string | null {
-  const file = join(FUNCTION_DIR, "rds-ca.pem");
+export function rdsRootCa(region: string, file = join(FUNCTION_DIR, "rds-ca.pem")): string | null {
   if (!existsSync(file)) return null;
   const pems = readFileSync(file, "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
   const mine = pems.filter((pem) => {
     try {
       const c = new X509Certificate(pem);
-      return c.ca && c.subject.includes(region);
+      return c.ca && c.subject.split("\n").includes(`CN=Amazon RDS ${region} Root CA ${DB_CA}`);
     } catch {
       return false;
     }
   });
-  return mine.length ? mine.join("\n") : null;
+  if (mine.length > 1) throw new Error(`More than one RDS root CA "${DB_CA}" for ${region} in ${file}`);
+  return mine[0] ?? null;
 }
 
 /**
@@ -123,7 +127,7 @@ export class WhatsappStack extends Stack {
       memoryLimitMiB: cfg.whatsapp.memoryMiB,
       runtimePlatform: { cpuArchitecture: ecs.CpuArchitecture.ARM64, operatingSystemFamily: ecs.OperatingSystemFamily.LINUX },
     });
-    const ca = regionRdsCa(cfg.region);
+    const ca = rdsRootCa(cfg.region);
     task.addContainer("evolution", {
       containerName: "evolution",
       image: ecs.ContainerImage.fromRegistry(EVOLUTION_IMAGE),

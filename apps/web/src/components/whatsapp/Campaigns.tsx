@@ -284,16 +284,19 @@ function Report({ report }: { report: NonNullable<WaCampaign["report"]> }) {
   );
 }
 
-/** How many customers the audience reaches now (POST campaigns/estimate), asked again as it changes. */
-function useEstimate(base: string, audience: WaAudience | null) {
-  const key = audience ? JSON.stringify(audience) : null;
+/**
+ * How many customers the audience reaches now with this template (POST campaigns/estimate), asked
+ * again as either changes. A template that greets customers by name leaves out those without one.
+ */
+function useEstimate(base: string, audience: WaAudience | null, templateId: string | null) {
+  const key = audience ? JSON.stringify({ audience, templateId: templateId || null }) : null;
   const [state, setState] = useState<{ key: string; count: number | null; error: string | null } | null>(null);
   const latest = useRef(0);
   useEffect(() => {
     if (!key) return;
     const request = ++latest.current;
     const t = window.setTimeout(() => {
-      api<{ count: number }>(`${base}/campaigns/estimate`, { method: "POST", body: { audience: JSON.parse(key) } })
+      api<{ count: number }>(`${base}/campaigns/estimate`, { method: "POST", body: JSON.parse(key) })
         .then((r) => {
           if (request === latest.current) setState({ key, count: r.count, error: null });
         })
@@ -334,7 +337,7 @@ function Editor({
   const { busy, run } = useWaAction();
   const problems = audienceProblems(a);
   const audience = problems.length ? null : audienceOf(a);
-  const estimate = useEstimate(base, audience);
+  const estimate = useEstimate(base, audience, templateId);
   const template = templates.find((t) => t.id === templateId) ?? null;
   const unsupported = template ? template.variables.filter((v) => v !== "customer_first_name" && v !== "store_name") : [];
   const set = (patch: Partial<AudienceDraft>) => setA((x) => ({ ...x, ...patch }));
@@ -467,6 +470,7 @@ function Editor({
             ) : (
               <>
                 <span className="font-semibold">{plural(estimate.count ?? 0, "customer")}</span> can receive it now. <span className="text-muted">{describeWaAudience(audience)}.</span>
+                {template?.variables.includes("customer_first_name") && <span className="text-muted"> Customers whose first name bizinsights doesn&apos;t have are left out: the template greets them by name.</span>}
                 {(estimate.count ?? 0) > cap && <span className="mt-1 block text-danger">That&apos;s more than the {fmtNum(cap)} one campaign can send to on this connection: narrow the audience.</span>}
               </>
             )}
@@ -508,7 +512,7 @@ function LaunchDialog({
   tz: string;
   onClose: (launched: boolean) => void;
 }) {
-  const estimate = useEstimate(base, campaign.audience);
+  const estimate = useEstimate(base, campaign.audience, campaign.templateId);
   const [count, setCount] = useState<number | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [when, setWhen] = useState<"now" | "later">("now");

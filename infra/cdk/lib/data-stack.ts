@@ -164,6 +164,7 @@ export class DataStack extends Stack {
       // (CloudWatch Logs, RDSOSMetrics). Turning it on or off doesn't restart the database.
       monitoringInterval: Duration.seconds(60),
       cloudwatchLogsExports: ["postgresql"],
+      // whatsapp-stack.ts checks the database's certificate against this root alone (DB_CA there).
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
     this.dbSecret = this.db.secret!;
@@ -183,6 +184,7 @@ export class DataStack extends Stack {
     // Letters and digits only: they go into a URL and a header as they are. Never edit
     // generateSecretString (CloudFormation would generate new values; the instances' keys are their own).
     this.evolutionSecret = new secretsmanager.Secret(this, "EvolutionSecret", {
+      // The functions read it by this name (app-stack.ts EVOLUTION_SECRET_ARN): keep them the same.
       secretName: `insights/${cfg.name}/evolution-api`,
       description: "Insights WhatsApp: the Evolution API service's global API key (EVOLUTION_API_KEY)",
       generateSecretString: { secretStringTemplate: "{}", generateStringKey: "EVOLUTION_API_KEY", passwordLength: 48, excludePunctuation: true },

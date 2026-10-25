@@ -457,3 +457,7 @@ ALTER TABLE "wapp_automation_runs" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON "wapp_automation_runs" USING (workspace_id = current_setting('app.workspace_id', true)) WITH CHECK (workspace_id = current_setting('app.workspace_id', true));
 ALTER TABLE "wapp_campaigns" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON "wapp_campaigns" USING (workspace_id = current_setting('app.workspace_id', true)) WITH CHECK (workspace_id = current_setting('app.workspace_id', true));
+
+-- The retired WhatsApp module's alerts ("wa_reconnect", "wa_account", "wa_webhook_failed"): nothing
+-- raises or resolves them any more, so any still open would stay in the bell for good.
+UPDATE "alerts" SET "resolved_at" = now() WHERE "code" IN ('wa_reconnect', 'wa_account', 'wa_webhook_failed') AND "resolved_at" IS NULL;

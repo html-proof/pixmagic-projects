@@ -240,7 +240,7 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
   const { busy, run } = useWaAction();
   const [method, setMethod] = useState<"qr" | "code">(overview.connection?.pairingMethod ?? "qr");
   const [phone, setPhone] = useState("");
-  const [pairing, setPairing] = useState<WaPairing | null>(overview.connection?.status === "pairing" ? null : null);
+  const [pairing, setPairing] = useState<WaPairing | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const latest = useRef(0);
   const connectedOnce = useRef(false);
@@ -541,7 +541,7 @@ function Complete({ overview }: { overview: WaOverview }) {
         <CheckCircle2 size={20} className="text-good" aria-hidden /> WhatsApp Automation is set up
       </h2>
       <p className="text-sm text-muted">
-        Connected{overview.connection?.phone ? ` as ${overview.connection.phone}` : ""}, configured, and WhatsApp delivered your test. New automations start in test mode: they send only to your number until you switch test mode off.
+        Connected{overview.connection?.phone ? ` as ${overview.connection.phone}` : ""}, configured, and WhatsApp reported your test message sent. New automations start in test mode: they send only to your number until you switch test mode off.
       </p>
       <div className="flex flex-wrap gap-2">
         <Link href={waHref("automations", { new: "1" })} className="btn-primary">

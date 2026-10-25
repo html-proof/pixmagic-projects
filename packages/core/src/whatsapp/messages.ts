@@ -205,8 +205,10 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
   }
 
   const contact = m.contactId ? await systemDb.wappContact.findUnique({ where: { id: m.contactId } }) : null;
-  // An automation in test mode sends to the store's own verified number (no contact): no customer consent applies.
-  if (toCustomer(m.source) && !(m.source === "automation" && !m.contactId)) {
+  // An automation in test mode sends to the store's own verified number (no contact): no customer consent
+  // applies. Nor does it to the one reply confirming a customer's STOP (inbound.ts), which their opt-out would stop.
+  const confirmsStop = m.source === "reply" && !!m.idempotencyKey?.startsWith("stop:");
+  if (toCustomer(m.source) && !(m.source === "automation" && !m.contactId) && !confirmsStop) {
     const block = await consentBlock(contact, (m.category ?? "transactional") as WaTemplateCategory, settings, { reply: m.source === "reply" });
     if (block) return end("skipped", block);
     if (contact?.notOnWhatsappAt && now.getTime() - contact.notOnWhatsappAt.getTime() < 30 * 86_400_000) return end("skipped", "not_on_whatsapp");

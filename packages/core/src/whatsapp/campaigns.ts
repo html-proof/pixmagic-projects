@@ -10,7 +10,7 @@
  * hours, daily limits), and a cancelled campaign's waiting messages are cancelled with it. A linked
  * phone takes at most WA_CAMPAIGN_MAX.qr recipients: it isn't made for broadcasts.
  */
-import { Prisma, systemDb, type Store, type WappCampaign } from "@app/db";
+import { Prisma, systemDb, type Store, type WappCampaign, type WappTemplate } from "@app/db";
 import {
   QR_GAP_JITTER_MS,
   QR_MIN_GAP_MS,
@@ -40,9 +40,10 @@ const BATCH = 100;
 /**
  * The audience's contacts as SQL (one statement for the count and the batches): opted in to
  * marketing, not opted out, not on the do-not-message list (everything or marketing), not found
- * missing from WhatsApp in the last 30 days, plus the merchant's filters.
+ * missing from WhatsApp in the last 30 days, with a first name when the template greets customers by
+ * it (so the count the merchant confirms is the messages made), plus the merchant's filters.
  */
-function audienceSql(storeId: string, a: WaAudience, opts: { after?: string | null; limit?: number; count?: boolean }) {
+function audienceSql(storeId: string, a: WaAudience, opts: { after?: string | null; limit?: number; count?: boolean; firstName?: boolean }) {
   const now = Date.now();
   const where: Prisma.Sql[] = [
     Prisma.sql`c.store_id = ${storeId}`,
@@ -58,15 +59,20 @@ function audienceSql(storeId: string, a: WaAudience, opts: { after?: string | nu
   if (a.notOrderedForDays) where.push(Prisma.sql`(c.last_order_at IS NULL OR c.last_order_at < ${new Date(now - a.notOrderedForDays * 86_400_000)})`);
   if (a.minOrders) where.push(Prisma.sql`c.orders_count >= ${a.minOrders}`);
   if (a.minSpent != null) where.push(Prisma.sql`c.total_spent >= ${a.minSpent}`);
+  if (opts.firstName) where.push(Prisma.sql`c.first_name_enc IS NOT NULL`);
   if (opts.after) where.push(Prisma.sql`c.id > ${opts.after}`);
   const cond = Prisma.join(where, " AND ");
   if (opts.count) return Prisma.sql`SELECT count(*)::int AS n FROM wapp_contacts c WHERE ${cond}`;
   return Prisma.sql`SELECT c.id FROM wapp_contacts c WHERE ${cond} ORDER BY c.id LIMIT ${opts.limit ?? BATCH}`;
 }
 
-export async function estimateWaAudience(storeId: string, audience: unknown): Promise<number> {
+/** Whether a template's text needs the customer's first name (contacts without one can't get it). */
+const greetsByName = (t: Pick<WappTemplate, "body"> | null) => !!t && variablesIn(t.body).includes("customer_first_name");
+
+/** How many customers the audience reaches now, for this template when one is picked. */
+export async function estimateWaAudience(storeId: string, audience: unknown, template: Pick<WappTemplate, "body"> | null = null): Promise<number> {
   const a = waAudienceSchema.parse(audience);
-  const rows = await systemDb.$queryRaw<Array<{ n: number }>>(audienceSql(storeId, a, { count: true }));
+  const rows = await systemDb.$queryRaw<Array<{ n: number }>>(audienceSql(storeId, a, { count: true, firstName: greetsByName(template) }));
   return rows[0]?.n ?? 0;
 }
 
@@ -120,7 +126,7 @@ export async function launchCampaign(deps: Pick<WaDeps, "queues">, input: { stor
   if (!template || template.category !== "marketing") problems.push("Pick a marketing template.");
   else if (!templateUsable(template, conn).ok) problems.push(`The template can't be used: ${templateUsable(template, conn).reason}`);
   if (problems.length) throw new WhatsappError("This campaign can't be launched yet.", 409, "campaign_blocked", { problems });
-  const count = await estimateWaAudience(input.store.id, c.audience);
+  const count = await estimateWaAudience(input.store.id, c.audience, template);
   if (count !== l.confirmRecipients) throw new WhatsappError(`The audience now has ${count} recipients, not ${l.confirmRecipients}. Check it and confirm again.`, 409, "count_changed", { count });
   if (count < 1) throw new WhatsappError("Nobody in this audience can receive marketing messages.", 409, "empty_audience");
   const max = WA_CAMPAIGN_MAX[conn!.provider as WaProvider];
@@ -166,7 +172,7 @@ export async function dispatchCampaign(deps: Pick<WaDeps, "queues">, campaignId:
   }
   const settings = await settingsOf(store);
   const audience = waAudienceSchema.parse(c.audience);
-  const rows = await systemDb.$queryRaw<Array<{ id: string }>>(audienceSql(c.storeId, audience, { after: c.cursor, limit: BATCH }));
+  const rows = await systemDb.$queryRaw<Array<{ id: string }>>(audienceSql(c.storeId, audience, { after: c.cursor, limit: BATCH, firstName: greetsByName(template) }));
   const contacts = rows.length ? await systemDb.wappContact.findMany({ where: { id: { in: rows.map((r) => r.id) } }, orderBy: { id: "asc" } }) : [];
   const step = conn.provider === "qr" ? QR_MIN_GAP_MS + QR_GAP_JITTER_MS / 2 : Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
   // After the messages already made: a batch carries on where the last one's timing ended.

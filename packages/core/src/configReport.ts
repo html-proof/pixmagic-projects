@@ -147,7 +147,7 @@ export function evolutionNeeds(vars: Vars = process.env): string[] {
  */
 export function embeddedSignupNeeds(vars: Vars = process.env): string[] {
   return [
-    ...evolutionNeeds(vars).slice(0, 1),
+    ...evolutionNeeds(vars),
     !vars.WHATSAPP_APP_ID && !vars.META_APP_ID ? "WHATSAPP_APP_ID" : null,
     !vars.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
     !waSecretSet(vars) ? "WHATSAPP_APP_SECRET" : null,

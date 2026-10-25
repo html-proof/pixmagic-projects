@@ -4,17 +4,22 @@ import { defineConfig } from "@playwright/test";
 /**
  * E2E runs the real app on the local server (apps/aws/src/local.ts: static UI + API + jobs)
  * against its own Cognito emulator (started here, empty every run), a stand-in for the user pool's
- * managed login (e2e/fake-managed-login.mjs: "Continue with Google"), Mailpit and a dedicated
- * app_e2e database (docker compose up -d postgres mailpit first).
+ * managed login (e2e/fake-managed-login.mjs: "Continue with Google"), a stand-in for Evolution API
+ * (e2e/evolution-stub.mjs: WhatsApp Automation's provider), Mailpit and a dedicated app_e2e database
+ * (docker compose up -d postgres mailpit first).
  *
  * Ports default to the docker compose stack. Override them to run e2e beside a local demo, which
  * uses the same server port and Mailpit: global setup wipes every Mailpit message.
- *   E2E_PORT (8789), E2E_COGNITO_PORT (9249), E2E_LOGIN_PORT (9259), E2E_MAILPIT_URL (http://localhost:8025)
+ *   E2E_PORT (8789), E2E_COGNITO_PORT (9249), E2E_LOGIN_PORT (9259), E2E_EVOLUTION_PORT (9269),
+ *   E2E_MAILPIT_URL (http://localhost:8025)
  */
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8789);
 export const E2E_BASE_URL = `http://localhost:${E2E_PORT}`;
 export const E2E_COGNITO_PORT = Number(process.env.E2E_COGNITO_PORT ?? 9249);
 export const E2E_LOGIN_PORT = Number(process.env.E2E_LOGIN_PORT ?? 9259);
+/** The Evolution API stand-in; e2e/whatsapp.spec.ts plays the phone and WhatsApp through its /__control. */
+export const E2E_EVOLUTION_PORT = Number(process.env.E2E_EVOLUTION_PORT ?? 9269);
+export const E2E_EVOLUTION_URL = `http://127.0.0.1:${E2E_EVOLUTION_PORT}`;
 /** The emulator's working directory (its database: codes it "emails" are read from there). */
 export const E2E_COGNITO_DATA = resolve(import.meta.dirname, ".e2e/cognito");
 export const E2E_MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? "http://localhost:8025";
@@ -79,6 +84,13 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
+      // Evolution API, as far as the app can tell (its key is e2e/server.env's EVOLUTION_API_KEY).
+      command: `node e2e/evolution-stub.mjs ${E2E_EVOLUTION_PORT} e2e-evolution-key`,
+      port: E2E_EVOLUTION_PORT,
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
       // --assets must match NEXT_EXPORT_DIR above. e2e/server.env holds the settings; the
       // addresses follow the ports above (the environment wins over the env file). The server
       // keeps its state in memory, so each run starts empty: rate-limit windows kept from an
@@ -95,6 +107,7 @@ export default defineConfig({
         COGNITO_ENDPOINT,
         COGNITO_DOMAIN: `http://127.0.0.1:${E2E_LOGIN_PORT}`,
         COGNITO_IDENTITY_PROVIDERS: "Google",
+        EVOLUTION_API_URL: E2E_EVOLUTION_URL,
       },
       reuseExistingServer: false,
       // The build and the server's start: ~45 s on the PC runner awake and plugged in, 190 s on
