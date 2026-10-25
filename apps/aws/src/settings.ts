@@ -83,7 +83,7 @@ export const APP_SETTINGS = {
   // docs/ads-setup.md walks through all three.
   // Meta Ads: the Meta app "Insights" (971575545351940, Facebook account sebanceo@gmail.com, created 2026-10-11; use case
   // "Measure ad performance data with Marketing API"). Meta Ads stays "Coming soon" until META_APP_SECRET is set.
-  // WhatsApp runs on its own app (WHATSAPP_APP_ID below) and never borrows this app's secret.
+  // WhatsApp Automation runs on this app too (WHATSAPP_APP_ID below is empty), with this app's secret.
   "META_APP_ID": "971575545351940",
   // Marketing API v26.0 (2026-07-29). Every call and field the ads code uses was checked against its
   // changelog on 2026-10-19: none changed, except the multiple-id lookup (GET /?ids=), which v26.0
@@ -120,9 +120,13 @@ export const APP_SETTINGS = {
   // for Business configuration id of its WhatsApp Embedded Signup v4 variation (WHATSAPP_CONFIG_ID),
   // and the secrets WHATSAPP_APP_SECRET (or META_APP_SECRET), WHATSAPP_WEBHOOK_VERIFY_TOKEN and
   // NANGO_SECRET_KEY (Nango keeps each store's token). Until then the page says connecting isn't
-  // switched on yet; there is no other way to connect.
-  // WhatsApp's Meta app: "pixmagic" (1799660384680551, portfolio "Testbusiness", the imeseban@gmail.com Facebook account).
-  "WHATSAPP_APP_ID": "1799660384680551",
+  // available yet; there is no other way to connect.
+  // Empty since 2026-10-25 (the owner's choice): WhatsApp runs on the Meta Ads app "Insights"
+  // (META_APP_ID, portfolio Zodiix Pty Ltd), so META_APP_SECRET serves and WHATSAPP_APP_SECRET stays
+  // unset. It ran on "pixmagic" (1799660384680551, portfolio "Testbusiness") before; nothing was ever
+  // connected through it. WHATSAPP_CONFIG_ID: the Insights app's Embedded Signup configuration
+  // (docs/whatsapp.md, "Setting it up", step 3).
+  "WHATSAPP_APP_ID": "",
   "WHATSAPP_CONFIG_ID": "",
   "WHATSAPP_API_VERSION": "v26.0",
   // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "sandbox": merchants can

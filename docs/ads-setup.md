@@ -229,7 +229,9 @@ project's Google Ads API access starts at Test (test accounts only). The Google 
 **The app:** "Insights", App ID `971575545351940`, owned by the Facebook account sebanceo@gmail.com, Development mode,
 use case "Measure ad performance data with Marketing API" (`ads_read` ready for testing = Standard Access). Facebook
 Login for Business configuration "Insights ads reporting" `1521935306664882` (user access token, ad accounts, ads_read
-only) = `META_CONFIG_ID`. No business portfolio yet. WhatsApp runs on its own app ("pixmagic", `WHATSAPP_APP_ID`).
+only) = `META_CONFIG_ID`. No business portfolio yet. WhatsApp Automation runs on this app too since 2026-10-25
+(`WHATSAPP_APP_ID` empty; its own Embedded Signup configuration is `WHATSAPP_CONFIG_ID`, docs/whatsapp.md); it used
+the separate app "pixmagic" (1799660384680551) before.
 
 To set up a new app from scratch:
 

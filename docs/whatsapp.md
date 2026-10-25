@@ -8,10 +8,11 @@ who write in, runs campaigns, and reads every message's delivery in the history.
 WhatsApp Web automation, no browser session, and nobody ever pastes a token, an app secret or a
 webhook URL.
 
-**Today (2026-10-25) connecting is not available in production**: the server still lacks
-`WHATSAPP_CONFIG_ID`, `WHATSAPP_APP_SECRET` and `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, which only the
-owner can create in Meta's consoles and AWS (see [Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code)).
-Until then the page says so, plainly, and nothing pretends to be connected.
+**Today (2026-10-25) connecting is not available in production**: WhatsApp runs on the Meta app
+"Insights" (971575545351940), whose secret and the webhook verify token are set; only
+`WHATSAPP_CONFIG_ID` is missing, which the owner creates in Meta's App Dashboard (see
+[Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 4). Until then the
+page says so, plainly, and nothing pretends to be connected.
 
 This page replaced the earlier WhatsApp feature (2026-10-10 to 2026-10-24) on 2026-10-25: see
 [The old WhatsApp tables](#the-old-whatsapp-tables) for what happened to it.
@@ -442,10 +443,10 @@ own Meta app (or none) and their own `insights/<env>/app` secret: never producti
 
 | Setting | What it is | Where | How to get it | Today (production) |
 | --- | --- | --- | --- | --- |
-| `WHATSAPP_APP_ID` | The Meta app every store connects through | settings.ts | Meta app dashboard → App settings → Basic → App ID | `1799660384680551` ("pixmagic"); empty uses the Meta Ads app `971575545351940` |
-| `WHATSAPP_CONFIG_ID` | The Facebook Login for Business configuration of the WhatsApp Embedded Signup variation: what Meta's window shows and grants | settings.ts | Step 3 below (Configurations → its ID) | **missing** |
-| `WHATSAPP_APP_SECRET` | That app's secret: exchanges the sign-up code, signs `appsecret_proof`, and is what Meta signs every webhook with (`X-Hub-Signature-256`) | secret | App settings → Basic → App secret → Show (the owner copies it; never pasted in chat) | **missing** (not needed if WhatsApp moves to the Meta Ads app, whose `META_APP_SECRET` is set) |
-| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | A random string Meta repeats back (`hub.verify_token`) when it checks the webhook address; `GET /api/webhooks/whatsapp` answers the challenge only for it (constant-time compare) | secret | Generated, never chosen: `put-secrets.mjs --env production --generate WHATSAPP_WEBHOOK_VERIFY_TOKEN` | **missing** |
+| `WHATSAPP_APP_ID` | The Meta app every store connects through (empty: `META_APP_ID`) | settings.ts | Meta app dashboard → App settings → Basic → App ID | **empty since 2026-10-25**: WhatsApp runs on the Meta Ads app **"Insights" `971575545351940`** (portfolio Zodiix Pty Ltd). It ran on "pixmagic" `1799660384680551` before; nothing was ever connected through it |
+| `WHATSAPP_CONFIG_ID` | The Insights app's Facebook Login for Business configuration of the Embedded Signup variation: what Meta's window shows and grants | settings.ts | Step 4 below (Configurations → its ID) | **missing**: the only thing left |
+| `WHATSAPP_APP_SECRET` | The app's secret when WhatsApp runs on an app of its own: exchanges the sign-up code, signs `appsecret_proof`, and is what Meta signs every webhook with (`X-Hub-Signature-256`) | secret | — | **not needed**: on the Insights app, `META_APP_SECRET` (set) does all three. Leave it unset: when set it wins over `META_APP_SECRET` |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | A random string Meta repeats back (`hub.verify_token`) when it checks the webhook address; `GET /api/webhooks/whatsapp` answers the challenge only for it (constant-time compare) | secret | Generated, never chosen: `put-secrets.mjs --env production --generate WHATSAPP_WEBHOOK_VERIFY_TOKEN` | set (release 116's config check no longer lists it) |
 | `NANGO_SECRET_KEY` | Nango's key: Nango keeps each store's WhatsApp token | secret | Nango dashboard (prod environment) → Environment settings | set (the ad platforms use it) |
 | `WHATSAPP_API_VERSION` | The Graph API version every call uses | settings.ts | Meta's changelog | `v26.0` |
 
@@ -457,45 +458,64 @@ Secrets Manager reaches the functions on their next start: run **Deploy to AWS**
 workflow, on main) after setting one.
 
 In Meta (developers.facebook.com and business.facebook.com, in a browser; automating these consoles
-has blocked the admin account before, so the owner clicks):
+has blocked the admin account before, so the owner clicks). Checked against Meta's docs on
+2026-10-25 ([Embedded Signup implementation](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation/),
+[Embedded Signup v4](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-4),
+[Facebook Login for Business](https://developers.facebook.com/documentation/facebook-login/facebook-login-for-business),
+[Become a Tech Provider](https://developers.facebook.com/documentation/business-messaging/whatsapp/solution-providers/get-started-for-tech-providers));
+Meta renames buttons now and then, so a label may differ slightly.
 
-1. **Choose the app.** Either keep WhatsApp on "pixmagic" (1799660384680551, portfolio "Testbusiness",
-   not verified) or, recommended, add the WhatsApp product to **"Insights" (971575545351940)**, whose
-   portfolio **Zodiix Pty Ltd** has business verification submitted: then empty `WHATSAPP_APP_ID`
-   (and `WHATSAPP_APP_SECRET`) in settings.ts so it uses that app and `META_APP_SECRET`.
-2. **Business verification** of the portfolio (Security Center), and **Tech Provider** onboarding
-   for the app (WhatsApp → Quickstart). Until then only people with a role on the app can connect.
-3. **Embedded Signup configuration**: Facebook Login for Business → Configurations → Create
-   configuration (not a template; the "60 Expiration Token" template disconnects every store after 60
-   days): login variation **WhatsApp Embedded Signup**, version **v4**, token expiration **Never**,
-   assets **WhatsApp accounts**, permissions `whatsapp_business_management` and
-   `whatsapp_business_messaging`. Its id is `WHATSAPP_CONFIG_ID`.
-4. **App Review**: Advanced Access for `whatsapp_business_management` and
-   `whatsapp_business_messaging` (a screencast of a merchant connecting and sending a template).
-5. **App settings → Basic**: app domain `bizinsights.io`; Facebook Login for Business → Settings:
-   `https://bizinsights.io` in **Allowed domains for the JavaScript SDK** and **Valid OAuth Redirect
-   URIs** (press the page's Save Changes, then reload to check).
-6. **Webhook**: nothing to click. Once the app secret and verify token are set, the sweep points the
-   app's WhatsApp webhook at `https://bizinsights.io/api/webhooks/whatsapp` with every field it reads
-   (`ensureAppWebhook`, within 15 minutes of the deploy, then every 6 hours). Meta verifies the URL
-   by calling it with the verify token before it accepts the subscription, so "set" proves the
-   endpoint is reachable from Meta. The Overview shows people who may connect how Meta last answered
-   (points here / points elsewhere / refused). If the app's webhook already points somewhere else it
-   is left alone and logged: then set it by hand in WhatsApp → Configuration with the verify token.
-7. **AWS** (the owner's terminal, after `aws login --region ap-southeast-2`):
-
-   ```bash
-   node infra/cdk/scripts/put-secrets.mjs --env production --generate WHATSAPP_WEBHOOK_VERIFY_TOKEN
-   ```
-
-   ```bash
-   node infra/cdk/scripts/put-secrets.mjs --env production --set WHATSAPP_APP_SECRET
-   ```
-
-   then put the configuration id in `WHATSAPP_CONFIG_ID` in `apps/aws/src/settings.ts` (a pull
-   request, merged on green), and run Deploy to AWS so the functions read the new secrets.
-8. **Check it**: `/whatsapp` shows the **Connect WhatsApp Business** button; within 15 minutes the
-   Overview says the app's webhook points here; then a first connect, below.
+1. **Open the app.** Sign in to [developers.facebook.com/apps](https://developers.facebook.com/apps/)
+   with the Facebook account that administers **"Insights" (App ID 971575545351940)**
+   (sebanceo@gmail.com) and open it.
+2. **Add WhatsApp to it.** Left menu **Use cases** → **Add use case** (on older dashboards: **Add
+   product** → WhatsApp → **Set up**) → **Connect with customers through WhatsApp** → add it. If Meta
+   asks for a business portfolio, choose **Zodiix Pty Ltd**. Meta may create a test WhatsApp Business
+   account and test number for the portfolio: harmless, and useful for a first test.
+3. **Facebook Login for Business → Settings.** Under **Client OAuth settings** set to **Yes**: Client
+   OAuth login, Web OAuth login, Enforce HTTPS, Embedded Browser OAuth Login, Use Strict Mode for
+   redirect URIs, **Login with the JavaScript SDK**. Add `https://bizinsights.io/` to **Allowed
+   Domains for the JavaScript SDK** and to **Valid OAuth Redirect URIs** (keep every entry already
+   there: Meta Ads' sign-in through Nango uses them). Embedded Signup returns
+   nothing to a page whose domain isn't in both. Press the page's own **Save changes** at the bottom
+   (the toast after typing a URI doesn't save it), then reload to check it stayed.
+4. **Create the configuration** (this is `WHATSAPP_CONFIG_ID`). **Facebook Login for Business →
+   Configurations → + Create configuration** (not **Create from template**: the "WhatsApp Embedded
+   Signup Configuration With 60 Expiration Token" template's token expires after 60 days, which
+   would disconnect every store):
+   - Name: `bizinsights WhatsApp Embedded Signup`.
+   - Login variation: **WhatsApp Embedded Signup** (shown as **Embedded Signup** on newer dashboards).
+   - Products: **Cloud API** only. Selecting products is what makes it a **v4** configuration (v2 and
+     v3 stopped working on 2026-10-15); Meta then picks the permissions Cloud API needs.
+   - Access token, if asked: **System-user access token**, expiration **Never** (system-user tokens
+     never expire unless set to).
+   - Assets: **WhatsApp accounts** only (untick Catalogs, Pages or ad accounts if they are ticked:
+     extra assets make businesses abandon the window).
+   - Permissions: `whatsapp_business_management` and `whatsapp_business_messaging`, nothing else.
+   - **Create**, then copy the **Configuration ID** shown for it in the Configurations list. It is not
+     a secret: send it to Claude (or put it in `WHATSAPP_CONFIG_ID` in `apps/aws/src/settings.ts`
+     yourself, in a pull request merged on green).
+5. **Deploy and check.** Once a release with the configuration id is live, `/whatsapp` shows **Connect
+   WhatsApp Business** instead of "not available yet", and within 15 minutes the sweep points the
+   app's WhatsApp webhook at `https://bizinsights.io/api/webhooks/whatsapp` (`ensureAppWebhook`, then
+   every 6 hours; Meta calls the URL with the verify token before it accepts, so "set" proves Meta
+   can reach it). The Overview shows people who may connect how Meta last answered. If the app's
+   webhook already points somewhere else it is left alone and logged: then set it by hand in
+   **WhatsApp → Configuration** with the verify token. Nothing to do in AWS: `META_APP_SECRET` and
+   `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are already set.
+6. **Connect your own business first.** With Standard Access, people with a role on the app (App roles
+   → Roles: admins, developers, testers) can already go through Embedded Signup with their own
+   business. Do that for PixMagic, add a payment method in WhatsApp Manager, get a template approved
+   and send yourself a test (the merchant guide below).
+7. **Open it to every business (Tech Provider).** Meta's two steps:
+   - **Business verification** of Zodiix Pty Ltd (Business settings → Security Center): submitted
+     2026-10-20, waiting for Meta. App Review can't start before it's approved.
+   - **App Review**: Advanced Access for `whatsapp_business_messaging` and
+     `whatsapp_business_management` (and `public_profile`, which a Facebook Login for Business app
+     needs before it serves other businesses, if it isn't granted yet), with two screencasts: a
+     message sent from bizinsights arriving in WhatsApp, and a message template created in
+     bizinsights. Meta's changelog says Access Verification is no longer required for Tech Providers.
+   Until both are done, Meta's window refuses anyone without a role on the app.
 
 Meta's permissions this needs: `whatsapp_business_management` (read the account, its numbers and
 templates; subscribe to its webhooks; submit templates) and `whatsapp_business_messaging` (send).

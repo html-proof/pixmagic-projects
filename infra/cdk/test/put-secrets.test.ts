@@ -78,7 +78,8 @@ describe("a public setting pasted as a secret", () => {
     expect(secretProblem("SHOPIFY_API_SECRET", APP_SETTINGS.SHOPIFY_API_KEY)).toMatch(/SHOPIFY_API_KEY .* public/);
     const pixmagic = (JSON.parse(APP_SETTINGS.SHOPIFY_EXTRA_APPS) as Array<{ key: string; clientId: string }>).find((a) => a.key === "pixmagic")!;
     expect(secretProblem("SHOPIFY_APP_SECRET_PIXMAGIC", pixmagic.clientId)).toMatch(/SHOPIFY_EXTRA_APPS \(pixmagic\)/);
-    expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", APP_SETTINGS.WHATSAPP_APP_ID)).toMatch(/WHATSAPP_APP_ID/);
+    // WhatsApp runs on the Meta Ads app (WHATSAPP_APP_ID is empty): its app id is META_APP_ID.
+    expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", APP_SETTINGS.META_APP_ID)).toMatch(/META_APP_ID/);
     expect(secretProblem("META_APP_SECRET", APP_SETTINGS.META_APP_ID)).toMatch(/META_APP_ID/);
   });
 
