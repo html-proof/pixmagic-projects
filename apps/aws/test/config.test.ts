@@ -42,8 +42,10 @@ describe("the shipped settings", () => {
   });
 
   it("leave WhatsApp alone until its Embedded Signup configuration is set", () => {
-    // WHATSAPP_APP_ID is shipped, WHATSAPP_CONFIG_ID is empty: Embedded Signup is off on purpose, so
-    // its secret missing is no warning. Once the configuration id is set, it is.
+    // WhatsApp runs on the Meta Ads app (WHATSAPP_APP_ID empty) and WHATSAPP_CONFIG_ID is empty:
+    // Embedded Signup is off on purpose, so its secret missing is no warning. Once the configuration
+    // id is set, it is (until META_APP_SECRET, which then serves WhatsApp too, is there).
+    expect(APP_SETTINGS.WHATSAPP_APP_ID).toBe("");
     expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toBe("");
     const withSignup = { ...APP_SETTINGS, WHATSAPP_CONFIG_ID: "1234567890" };
     expect(halfConfigured(withSignup).map((c) => c.provider)).toContain("WhatsApp (Embedded Signup)");
@@ -60,7 +62,8 @@ describe('the cron action {"action":"config"}', () => {
 
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: false, google: false, adsense: false } });
     expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
-    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhookVerifyToken: false });
+    // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed.
+    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhookVerifyToken: false });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
     // The cold start already said it in the logs, once per provider.

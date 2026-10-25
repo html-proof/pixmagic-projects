@@ -77,13 +77,14 @@ secret among them:
 | --- | --- | --- |
 | `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
-| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (else `META_APP_ID`) | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app); `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `NANGO_SECRET_KEY` too | Connect WhatsApp (Embedded Signup) can't be turned on, and there is no other way to connect (docs/whatsapp.md) |
+| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (empty today, so `META_APP_ID`: WhatsApp runs on the Meta Ads app "Insights") | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app, as now); `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `NANGO_SECRET_KEY` too | Connect WhatsApp (Embedded Signup) can't be turned on, and there is no other way to connect (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
 Embedded Signup is off until `WHATSAPP_CONFIG_ID` is set, so until then nothing warns about
 WhatsApp's secret: the check's line on the Deploy run names what it still needs instead
-("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN)").
+("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID)" since WhatsApp moved to the Meta Ads app
+and the verify token was set, 2026-10-25).
 
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary
@@ -910,8 +911,8 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 - **Provider secrets**: nothing records that META_APP_SECRET (Meta app 971575545351940, App settings →
   Basic) and GOOGLE_ADS_CLIENT_SECRET (Google Cloud client "Insights web") were put in
   `insights/production/app` after the move from Cloudflare (the old Worker's values didn't move by
-  themselves), nor WHATSAPP_APP_SECRET and WHATSAPP_WEBHOOK_VERIFY_TOKEN (needed once Embedded
-  Signup gets its `WHATSAPP_CONFIG_ID`). Check with
+  themselves). WHATSAPP_WEBHOOK_VERIFY_TOKEN is set (2026-10-25); WHATSAPP_APP_SECRET isn't needed
+  while WhatsApp runs on the Meta Ads app (META_APP_SECRET serves). Check with
   `put-secrets.mjs --dry-run` ("Which provider secrets are there" above; the Deploy run's warnings
   say the same), add each missing one with `put-secrets.mjs --set <NAME>`, then run Deploy to AWS.
   Until then Meta Ads, Google Ads and AdSense say "Coming soon" and their connections don't sync.
