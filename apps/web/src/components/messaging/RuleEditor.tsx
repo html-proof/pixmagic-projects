@@ -12,6 +12,7 @@ import {
   templateVariables,
   TRIGGER_INFO,
   type RuleConditionField,
+  type SmsAudience,
   type SmsRuleInput,
   type SmsTrigger,
 } from "@app/shared/sms";
@@ -25,7 +26,9 @@ import type { DryRunResult, RuleDetail, SmsRule, SmsTemplate } from "./types";
 
 // ---------------------------------------------------------------------------
 // The WHEN / IF / WAIT / THEN builder. What a condition may compare is read from the shared schema
-// (ruleConditionSchema); the whole rule is checked with smsRuleSchema before it is sent.
+// (ruleConditionSchema); the whole rule is checked with smsRuleSchema before it is sent. Who the
+// rule texts (its audience: a segment, chosen customers) is set in the automation builder and kept
+// as it is here: this editor shows it and sends it back unchanged.
 // ---------------------------------------------------------------------------
 
 /** Each condition field's comparisons, as the shared schema allows them. */
@@ -71,6 +74,8 @@ interface Draft {
   inactiveDays: string;
   vipMinOrders: string;
   vipMinSpent: string;
+  /** Kept as loaded (the automation builder changes it). */
+  audience: SmsAudience;
 }
 
 /** A new rule: dry run on, one text per customer per 30 days, quiet 9 pm to 9 am. */
@@ -92,6 +97,7 @@ const blank = (): Draft => ({
   inactiveDays: "",
   vipMinOrders: "",
   vipMinSpent: "",
+  audience: { kind: "trigger" },
 });
 
 function delayParts(minutes: number): { delay: string; unit: Unit } {
@@ -118,6 +124,7 @@ function fromConfig(c: SmsRuleInput): Draft {
     inactiveDays: c.inactiveDays ? String(c.inactiveDays) : "",
     vipMinOrders: c.vipMinOrders ? String(c.vipMinOrders) : "",
     vipMinSpent: c.vipMinSpent ? String(c.vipMinSpent) : "",
+    audience: c.audience,
   };
 }
 
@@ -155,6 +162,7 @@ function toInput(d: Draft) {
     inactiveDays: d.trigger === "customer_inactive" ? optional(d.inactiveDays) : null,
     vipMinOrders: d.trigger === "customer_vip" ? optional(d.vipMinOrders) : null,
     vipMinSpent: d.trigger === "customer_vip" ? optional(d.vipMinSpent) : null,
+    audience: d.audience,
   };
 }
 
@@ -334,10 +342,13 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
               onChange={(e) => {
                 const trigger = e.target.value as SmsTrigger;
                 const keep = templates.find((t) => t.id === draft.templateId)?.category === TRIGGER_INFO[trigger].category;
-                set({ trigger, templateId: keep ? draft.templateId : "", ...(rule ? {} : delayParts(TRIGGER_INFO[trigger].defaultDelay)) });
+                // Leaving "joins a segment": its segment was the trigger, not a limit on who gets the new one.
+                const audience = draft.trigger === "customer_segment" ? { audience: { kind: "trigger" } as SmsAudience } : {};
+                set({ trigger, templateId: keep ? draft.templateId : "", ...audience, ...(rule ? {} : delayParts(TRIGGER_INFO[trigger].defaultDelay)) });
               }}
             >
-              {SMS_TRIGGERS.map((t) => (
+              {/* "Customer joins a segment" needs its segment, chosen in the automation builder. */}
+              {SMS_TRIGGERS.filter((t) => t !== "customer_segment" || draft.trigger === t).map((t) => (
                 <option key={t} value={t} disabled={!TRIGGER_INFO[t].available}>
                   {TRIGGER_INFO[t].label}
                   {TRIGGER_INFO[t].category === "marketing" ? " (marketing)" : ""}
@@ -346,6 +357,11 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
               ))}
             </select>
             <p className="mt-1 text-xs text-muted">How bizinsights knows: {info.source}.</p>
+            {draft.audience.kind !== "trigger" && (
+              <p className="mt-1 text-xs text-muted">
+                Who gets it: {draft.audience.kind === "segment" ? "only customers in the automation's segment" : `only the ${draft.audience.contactIds.length} customer(s) it names`}. That is changed in the automation itself (Edit), and kept as it is when you save here.
+              </p>
+            )}
             {SMS_TRIGGERS.some((t) => !TRIGGER_INFO[t].available) && (
               <details className="mt-1 text-xs text-muted">
                 <summary className="cursor-pointer">Why some events aren&apos;t available</summary>

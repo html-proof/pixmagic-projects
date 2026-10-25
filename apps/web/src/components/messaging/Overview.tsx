@@ -1,239 +1,341 @@
 "use client";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { skipLabel } from "@app/shared/sms";
+import { ArrowRight, Check, CircleAlert, Clock, History, Plus, Settings, ShoppingCart, Sparkles, Truck, Workflow, type LucideIcon } from "lucide-react";
 import { Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
-import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { fmtMonth } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
 import { fmtNum, fmtPct, useApi } from "@/lib/api";
-import { CAMPAIGN_STATUS, countryName, fmtUsd, fmtWhen, ModeBanner, plural, StatusPill, useSms } from "./MessagingUi";
-import type { SmsOverview } from "./types";
+import { AUTOMATION_STATUS, TriggerIcon } from "./AutomationUi";
+import { fmtUsd, fmtWhen, plural, useSms } from "./MessagingUi";
+import type { AutomationsResponse, MessagingReadiness, ReadinessItem, SmsOverview } from "./types";
 
-const MODE: Record<SmsOverview["mode"], { tone: Tone; label: string }> = {
-  off: { tone: "neutral", label: "Not switched on" },
-  sandbox: { tone: "warn", label: "Test mode" },
-  live: { tone: "good", label: "Live" },
+// ---------------------------------------------------------------------------
+// Customer Messaging's home: is texting ready (in one word, with only what's missing), the one
+// button that starts an automation, and how this month is going. Every figure and state is the
+// API's (apps/api/src/routes/sms.ts, packages/core/src/sms/readiness.ts); nothing here names the
+// SMS provider, and the one-time setup lives under Settings and the Advanced pages.
+// ---------------------------------------------------------------------------
+
+const STATUS: Record<MessagingReadiness["status"], { tone: Tone; label: string; dot: string }> = {
+  ready: { tone: "good", label: "Ready", dot: "bg-good" },
+  setup_required: { tone: "warn", label: "Setup required", dot: "bg-warn" },
+  action_required: { tone: "warn", label: "Action required", dot: "bg-warn" },
 };
 
-function Step({ done, href, children }: { done: boolean; href: string; children: ReactNode }) {
+/** A first automation in one click: the trigger's ready-made message, opened in the builder. */
+const QUICK_STARTS: Array<{ trigger: string; label: string; help: string; icon: LucideIcon }> = [
+  { trigger: "fulfillment_created", label: "Order shipped", help: "With the tracking link", icon: Truck },
+  { trigger: "order_created", label: "Order confirmation", help: "Thanks for the order", icon: Sparkles },
+  { trigger: "checkout_abandoned", label: "Abandoned checkout", help: "A gentle reminder", icon: ShoppingCart },
+];
+
+function statusLine(r: MessagingReadiness, missing: ReadinessItem[], automations: number): string {
+  if (r.status === "action_required") return r.problems.find((p) => p.kind === "temporary")?.message ?? "Something needs a look before more texts go out.";
+  if (missing.length) return `${plural(missing.length, "thing")} to finish before texts reach customers. Each is done once.`;
+  if (r.testMode) return "Everything on your side is set up. Your SMS account is still being verified: see below.";
+  return automations ? "Your automations text customers as things happen in your store." : "Everything is set up. Create an automation and it starts texting customers.";
+}
+
+/** One line of the setup list: what it is now, and the way to fix it. */
+export function ReadinessRow({ item, manage }: { item: ReadinessItem; manage: boolean }) {
+  const tone = item.ok ? "bg-good/15 text-good" : item.waiting ? "bg-text/[0.06] text-muted" : "bg-warn/15 text-warn";
   return (
-    <li className="flex items-start gap-3 py-2">
-      <span aria-hidden className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${done ? "bg-good text-white" : "border border-border text-muted"}`}>
-        {done ? "✓" : ""}
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+      <span aria-hidden className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${tone}`}>
+        {item.ok ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : item.waiting ? <Clock className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
       </span>
-      <span className={`text-sm ${done ? "text-muted line-through decoration-border" : ""}`}>
-        <span className="sr-only">{done ? "Done: " : "To do: "}</span>
-        {done ? (
-          children
-        ) : (
-          <Link className="text-accent underline-offset-2 hover:underline" href={href}>
-            {children}
-          </Link>
-        )}
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">
+          <span className="sr-only">{item.ok ? "Ready: " : item.waiting ? "In progress: " : "To do: "}</span>
+          {item.label}
+          {item.optional && !item.ok ? <span className="ml-1.5 text-xs font-normal text-muted">(optional)</span> : null}
+        </span>
+        <span className="block text-xs text-muted">{item.detail}</span>
       </span>
+      {item.waiting && !item.ok && <span className="text-xs text-muted">In progress</span>}
+      {!item.ok && item.fix && (manage ? (
+        <Link href={item.fix.href} className="btn-secondary inline-flex h-8 items-center gap-1 px-3 text-xs" aria-label={`${item.fix.label}: ${item.label}`}>
+          Fix this <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+        </Link>
+      ) : (
+        <span className="text-xs text-muted">An owner or admin can fix this</span>
+      ))}
     </li>
   );
 }
 
-/** Customer Messaging at a glance: what is set up, what ran this week, what it cost and what needs a look. */
+/** Customer Messaging at a glance: whether texting is ready, the automations, and this month's texts. */
 export function MessagingOverview() {
-  const { base } = useSms();
+  const { base, manage, store } = useSms();
   const { data, error, reload, loading } = useApi<SmsOverview>(base);
+  const list = useApi<AutomationsResponse>(base ? `${base}/automations` : null);
   if (error) return <LoadError what="Customer Messaging" error={error} onRetry={() => void reload()} busy={loading} />;
   if (!data) return <Skeleton lines={6} />;
-  const { setup, sender, last7Days: w, spend, pendingApprovals: p } = data;
-  const steps: Array<[boolean, string, string]> = [
-    [setup.sender, "/messaging/sender", "Set up the sender: the AWS number or sender ID your texts come from"],
-    [setup.verified, "/messaging/sender", "Check the sender with AWS"],
-    [setup.budget, "/messaging/sender", "Set a monthly SMS budget (nothing is sent with a budget of 0)"],
-    [setup.basis, "/messaging/sender", "Choose how customers agree to order updates by text"],
-    [setup.testNumber, "/messaging/sender", "Add and verify a test number, and send yourself a test"],
-    [setup.approvedTemplate, "/messaging/templates", "Write a message template and get it approved"],
-    [setup.activeRule, "/messaging/automations", "Create an automation and switch it on"],
-    [setup.sending, "/messaging/sender", "Turn sending on"],
-  ];
-  const todo = steps.filter(([done]) => !done).length;
-  const pending = p.templates + p.rules + p.campaigns;
-  const attention = (data.attention.failed ?? 0) + (data.attention.unknown ?? 0) + (data.attention.uncertain ?? 0);
-  const held = sender?.heldUntil && new Date(sender.heldUntil).getTime() > Date.now();
-  const anyTexts = w.requested + w.dryRun > 0;
+
+  const r = data.readiness;
+  const status = STATUS[r.status];
+  const missing = r.items.filter((i) => !i.ok && !i.optional && i.key !== "account");
+  const done = r.items.filter((i) => i.ok);
+  const month = data.thisMonth;
+  const active = data.rules.active ?? 0;
+  const paused = data.rules.paused ?? 0;
+  const drafts = (data.rules.draft ?? 0) + (data.rules.pending_approval ?? 0);
+  const automations = list.data?.automations ?? [];
+  const sendsMarketing = automations.some((a) => a.category === "marketing");
+  const failedWeek = data.attention.failed ?? 0;
+  const unsureWeek = (data.attention.unknown ?? 0) + (data.attention.uncertain ?? 0);
+  const held = data.sender?.heldUntil && new Date(data.sender.heldUntil).getTime() > Date.now();
+  const tz = data.store.timezone;
 
   return (
     <div className="space-y-4">
       <section className="card animate-rise" aria-labelledby="sms-h">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h1 id="sms-h" className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-              Customer Messaging for {data.store.name} <Badge tone={MODE[data.mode].tone}>{MODE[data.mode].label}</Badge>
+          <div className="min-w-0 space-y-2">
+            <h1 id="sms-h" className="text-xl font-semibold">
+              Customer Messaging
             </h1>
-            <p className="mt-1 text-sm text-muted">
-              Order updates and marketing texts sent through AWS, only to customers Shopify says may receive them. Every template, workflow and campaign is approved by an owner or admin before it
-              reaches anyone.
+            <p className="flex flex-wrap items-center gap-2 text-sm" aria-live="polite">
+              <span className="text-muted">Status:</span>
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-sm font-semibold ${r.status === "ready" ? "bg-good/10 text-good" : "bg-warn/10 text-warn"}`} data-testid="messaging-status">
+                <span aria-hidden className={`h-2 w-2 rounded-full ${status.dot}`} />
+                {status.label}
+              </span>
             </p>
-            {sender && (
-              <p className="mt-2 text-sm">
-                {sender.identityLabel ?? "Sender saved"} · {sender.countries.length ? sender.countries.map(countryName).join(", ") : "no countries yet"} ·{" "}
-                <span className={sender.sendingEnabled ? "text-good" : "text-muted"}>{sender.sendingEnabled ? "sending on" : "sending off"}</span> ·{" "}
-                <span className={sender.marketingEnabled ? "text-good" : "text-muted"}>{sender.marketingEnabled ? "marketing on" : "marketing off"}</span>
-              </p>
-            )}
+            <p className="max-w-2xl text-sm text-muted">{statusLine(r, missing, active)}</p>
           </div>
-          <Link href={setup.sending ? "/messaging/settings" : "/messaging/setup"} className={setup.sending ? "btn-secondary" : "btn-primary"}>
-            {setup.sending ? "SMS Settings" : "Set up SMS"}
+          {manage ? (
+            <Link href="/messaging/automations/edit" className="btn-primary inline-flex h-11 items-center gap-2 px-5 text-base">
+              <Plus aria-hidden className="h-5 w-5" /> Create SMS Automation
+            </Link>
+          ) : null}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
+          <Link href="/messaging/automations" className="btn-secondary inline-flex items-center gap-1.5">
+            <Workflow aria-hidden className="h-4 w-4" /> View Automations
+          </Link>
+          <Link href="/messaging/history" className="btn-secondary inline-flex items-center gap-1.5">
+            <History aria-hidden className="h-4 w-4" /> Message History
+          </Link>
+          <Link href="/messaging/settings" className="btn-secondary inline-flex items-center gap-1.5">
+            <Settings aria-hidden className="h-4 w-4" /> Settings
           </Link>
         </div>
       </section>
 
-      <ModeBanner mode={data.mode} showLive />
+      {r.testMode && !missing.length && (
+        <Alert kind="info">
+          <p>
+            <strong>Your SMS account is still being verified.</strong> Test messages can be sent to approved numbers until verification is complete. Until then, automations record what they would
+            send in Message History instead of texting customers.
+          </p>
+          <Link className="mt-1 inline-flex items-center gap-1 font-medium underline" href="/messaging/settings">
+            View setup requirements <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+          </Link>
+        </Alert>
+      )}
       {held && (
         <Alert>
-          Texts are held until {fmtWhen(sender!.heldUntil, data.store.timezone)}
-          {sender!.heldReason ? `: ${skipLabel(sender!.heldReason)}` : ""}. They go out once the hold ends; nothing is lost.
+          Sending is paused until {fmtWhen(data.sender!.heldUntil, tz)} after a problem with your SMS sender. Texts go out once it ends; nothing is lost.
         </Alert>
       )}
 
-      {todo > 0 && (
-        <section className="card animate-rise" aria-labelledby="setup-h">
-          <h2 id="setup-h" className="font-semibold">
-            Finish setting up <span className="text-sm font-normal text-muted">({steps.length - todo} of {steps.length} done)</span>
-          </h2>
-          <p className="text-sm text-muted">
-            No text reaches a customer until each step is done. The quickest way:{" "}
-            <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/setup">
-              Set up SMS
-            </Link>{" "}
-            takes you through it in five short steps.
+      <section aria-label="This month" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="card animate-rise">
+          <p className="text-xs text-muted">SMS Automations</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <span className="rounded-lg bg-good/10 px-2.5 py-1 text-sm font-semibold text-good">Active: {fmtNum(active)}</span>
+            <span className="rounded-lg bg-bg px-2.5 py-1 text-sm font-semibold">Paused: {fmtNum(paused)}</span>
+          </div>
+          <p className="mt-2 text-xs text-muted">{drafts ? `${plural(drafts, "draft")} not switched on yet` : "Switched on ones run by themselves"}</p>
+        </div>
+        <div className="card animate-rise">
+          <p className="text-xs text-muted">Messages sent</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">{fmtNum(month.accepted)}</p>
+          <p className="mt-1 text-xs text-muted">
+            Since {fmtMonth(month.from.slice(0, 7))} 1{month.dryRun ? ` · ${fmtNum(month.dryRun)} recorded in test mode` : ""}
           </p>
-          <ol className="mt-2 divide-y divide-border">
-            {steps.map(([done, href, text]) => (
-              <Step key={text} done={done} href={href}>
-                {text}
-              </Step>
-            ))}
-          </ol>
+        </div>
+        <div className="card animate-rise">
+          <p className="text-xs text-muted">Delivery rate</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">{fmtPct(month.deliveryRate)}</p>
+          <p className="mt-1 text-xs text-muted">{month.delivered + month.carrierAccepted ? `${fmtNum(month.delivered + month.carrierAccepted)} delivered this month` : "Once texts have a final outcome"}</p>
+        </div>
+        <div className="card animate-rise">
+          <p className="text-xs text-muted">{month.quota ? "Messages this month" : "Monthly messaging limit"}</p>
+          {month.quota ? (
+            <p className="mt-1 text-2xl font-semibold tabular-nums">
+              {fmtNum(month.accepted)} <span className="text-base font-normal text-muted">/ {fmtNum(month.quota)}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-2xl font-semibold tabular-nums">
+              {fmtUsd(data.spend.totalUsd)} {data.spend.budgetUsd > 0 && <span className="text-base font-normal text-muted">/ {fmtUsd(data.spend.budgetUsd)}</span>}
+            </p>
+          )}
+          {data.spend.budgetUsd > 0 ? (
+            <div className="mt-2 h-1.5 rounded-full bg-bg" aria-hidden>
+              <div
+                className={`h-1.5 rounded-full ${(data.spend.usedPct ?? 0) >= 100 ? "bg-danger" : (data.spend.usedPct ?? 0) >= 80 ? "bg-warn" : "bg-accent"}`}
+                style={{ width: `${Math.min(100, month.quota ? (month.accepted / month.quota) * 100 : (data.spend.usedPct ?? 0))}%` }}
+              />
+            </div>
+          ) : null}
+          <p className="mt-1 text-xs text-muted">{data.spend.budgetUsd > 0 ? (month.quota ? `Of at most ${fmtNum(month.quota)} texts · limit ${fmtUsd(data.spend.budgetUsd)}` : "Spent this month, of your limit") : "No monthly limit set yet: nothing is sent"}</p>
+        </div>
+      </section>
+
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <section className="card animate-rise" aria-labelledby="auto-h">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="auto-h" className="font-semibold">
+              Your automations
+            </h2>
+            {automations.length > 0 && (
+              <Link className="text-sm text-accent underline-offset-2 hover:underline" href="/messaging/automations">
+                View all
+              </Link>
+            )}
+          </div>
+          {list.error && !list.data ? (
+            <p className="mt-2 text-sm text-muted">Couldn&apos;t load your automations.</p>
+          ) : !list.data ? (
+            <div className="mt-3 space-y-2">
+              <div className="skeleton h-12" />
+              <div className="skeleton h-12" />
+            </div>
+          ) : automations.length === 0 ? (
+            <div className="mt-2 space-y-3">
+              <p className="text-sm text-muted">Pick what happened, choose who gets the text, write it, test it and switch it on. Start from one of these:</p>
+              <ul className="grid gap-2 sm:grid-cols-3">
+                {QUICK_STARTS.map((q) => (
+                  <li key={q.trigger}>
+                    {manage ? (
+                      <Link href={`/messaging/automations/edit?trigger=${q.trigger}`} className="flex h-full items-center gap-3 rounded-xl border border-border p-3 transition hover:border-accent/60 hover:bg-accent/5">
+                        <q.icon aria-hidden className="h-5 w-5 shrink-0 text-accent" />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{q.label}</span>
+                          <span className="block text-xs text-muted">{q.help}</span>
+                        </span>
+                      </Link>
+                    ) : (
+                      <span className="flex h-full items-center gap-3 rounded-xl border border-border p-3 opacity-70">
+                        <q.icon aria-hidden className="h-5 w-5 shrink-0 text-accent" />
+                        <span className="text-sm">{q.label}</span>
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {!manage && <p className="text-xs text-muted">Only owners and admins can create automations.</p>}
+            </div>
+          ) : (
+            <ul className="mt-2 divide-y divide-border">
+              {automations.slice(0, 5).map((a) => {
+                const s = AUTOMATION_STATUS[a.status] ?? AUTOMATION_STATUS.draft;
+                const sent = a.last30Days.accepted;
+                return (
+                  <li key={a.id}>
+                    <Link href={`/messaging/automations/edit?id=${a.id}`} className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2.5 transition hover:bg-bg">
+                      <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                        <TriggerIcon trigger={a.trigger} className="h-[18px] w-[18px]" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{a.name}</span>
+                        <span className="block truncate text-xs text-muted">{a.triggerLabel ? `When: ${a.triggerLabel.toLowerCase()}` : "Its settings need fixing"}</span>
+                      </span>
+                      <span className="hidden text-xs tabular-nums text-muted sm:block">{sent ? `${fmtNum(sent)} sent in 30 days` : ""}</span>
+                      <Badge tone={s.tone}>{s.label}</Badge>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        <section className="card animate-rise" aria-labelledby="ready-h">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="ready-h" className="font-semibold">
+              Messaging setup
+            </h2>
+            {missing.length ? <Badge tone="warn">{plural(missing.length, "step")} to finish</Badge> : <Badge tone="good">All set</Badge>}
+          </div>
+          {missing.length > 0 ? (
+            <>
+              <ul className="mt-1 divide-y divide-border" aria-label="To finish">
+                {missing.map((i) => (
+                  <ReadinessRow key={i.key} item={i} manage={manage} />
+                ))}
+              </ul>
+              {done.length > 0 && (
+                <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted">
+                  {done.map((i) => (
+                    <span key={i.key} className="inline-flex items-center gap-1">
+                      <Check aria-hidden className="h-3 w-3 text-good" strokeWidth={3} />
+                      {i.label}
+                    </span>
+                  ))}
+                </p>
+              )}
+            </>
+          ) : (
+            <ul className="mt-1 divide-y divide-border" aria-label="Setup">
+              {r.items.map((i) => (
+                <ReadinessRow key={i.key} item={i} manage={manage} />
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      {(failedWeek > 0 || unsureWeek > 0 || data.pendingApprovals.campaigns > 0 || r.problems.some((p) => p.kind !== "platform" && (p.stops !== "marketing" || sendsMarketing))) && (
+        <section className="card animate-rise" aria-labelledby="att-h">
+          <h2 id="att-h" className="font-semibold">
+            Worth a look
+          </h2>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {r.problems
+              .filter((p) => p.kind !== "platform" && (p.stops !== "marketing" || sendsMarketing))
+              .map((p) => (
+                <li key={p.code} className="flex flex-wrap items-baseline gap-x-2">
+                  <span>{p.message}</span>
+                  {p.fix && manage && (
+                    <Link className="font-medium text-accent underline-offset-2 hover:underline" href={p.fix.href}>
+                      {p.fix.label}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            {failedWeek > 0 && (
+              <li>
+                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/history?status=failed">
+                  {plural(failedWeek, "text")} couldn&apos;t be delivered this week
+                </Link>
+              </li>
+            )}
+            {unsureWeek > 0 && (
+              <li>
+                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/history?status=unknown,uncertain">
+                  {plural(unsureWeek, "text")} with no final word from the carrier this week
+                </Link>
+              </li>
+            )}
+            {data.pendingApprovals.campaigns > 0 && (
+              <li>
+                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/campaigns">
+                  {plural(data.pendingApprovals.campaigns, "campaign")} waiting for approval
+                </Link>
+              </li>
+            )}
+          </ul>
         </section>
       )}
 
-      <section aria-labelledby="week-h" className="space-y-2">
-        <h2 id="week-h" className="text-sm font-semibold">
-          Last 7 days
-        </h2>
-        {!anyTexts ? (
-          <Empty>No texts in the last 7 days. Test texts aren&apos;t counted here.</Empty>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Stat label="Requested" value={fmtNum(w.requested)} note={w.dryRun ? `${fmtNum(w.dryRun)} more recorded as dry runs` : "Every text something asked for"} />
-            <Stat label="Accepted by AWS" value={fmtNum(w.accepted)} note={w.pending ? `${fmtNum(w.pending)} still with AWS or the carrier` : "—"} />
-            <Stat
-              label="Delivered"
-              value={fmtNum(w.delivered)}
-              note={w.carrierAccepted ? `+ ${fmtNum(w.carrierAccepted)} accepted by the carrier (networks that give no phone receipt)` : "Confirmed by the phone"}
-              tone={w.delivered + w.carrierAccepted ? "good" : undefined}
-            />
-            <Stat label="Failed" value={fmtNum(w.failed)} tone={w.failed ? "danger" : undefined} note={w.notSent || w.optedOut ? `${fmtNum(w.notSent + w.optedOut)} not sent (consent, opt-out, quiet hours…)` : "—"} />
-            <Stat label="Unknown outcome" value={fmtNum(w.unknown)} tone={w.unknown ? "warn" : undefined} note="No final word from the carrier" />
-            <Stat label="Delivery rate" value={fmtPct(w.deliveryRate)} note="Of texts with a final outcome, delivered or accepted by the carrier" />
-          </div>
-        )}
-      </section>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card animate-rise" aria-labelledby="spend-h">
-          <div className="flex items-center justify-between gap-2">
-            <h2 id="spend-h" className="font-semibold">
-              Spend in {fmtMonth(spend.month, { year: true })}
-            </h2>
-            <Link className="text-sm text-accent underline-offset-2 hover:underline" href="/messaging/billing">
-              SMS Billing
-            </Link>
-          </div>
-          {spend.budgetUsd > 0 ? (
-            <>
-              <p className="mt-2 text-2xl font-semibold tabular-nums">{fmtUsd(spend.totalUsd)}</p>
-              <p className="text-sm text-muted">
-                of a {fmtUsd(spend.budgetUsd)} budget{spend.usedPct !== null ? ` · ${fmtPct(spend.usedPct / 100)} used` : ""}
-              </p>
-              <div className="mt-2 h-2 rounded-full bg-bg" aria-hidden>
-                <div className={`h-2 rounded-full ${(spend.usedPct ?? 0) >= 100 ? "bg-danger" : (spend.usedPct ?? 0) >= 80 ? "bg-warn" : "bg-accent"}`} style={{ width: `${Math.min(100, spend.usedPct ?? 0)}%` }} />
-              </div>
-            </>
-          ) : (
-            <p className="mt-2 text-sm text-muted">
-              {spend.totalUsd > 0 ? `${fmtUsd(spend.totalUsd)} so far. ` : ""}No monthly budget is set, so nothing is sent.{" "}
-              <Link className="text-accent underline" href="/messaging/sender">
-                Set one
-              </Link>
-              .
-            </p>
-          )}
-          <p className="mt-2 text-xs text-muted">AWS prices each text in US dollars when it reports the delivery; texts it hasn&apos;t priced yet count at their estimate.</p>
-          <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <dt className="text-xs text-muted">Waiting to send</dt>
-              <dd>{data.scheduled ? fmtNum(data.scheduled) : "None"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">Subscribed to SMS marketing</dt>
-              <dd>{data.contacts ? `${fmtNum(data.subscribed)} of ${plural(data.contacts, "customer")}` : "No customers with a mobile number yet"}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="card animate-rise" aria-labelledby="att-h">
-          <h2 id="att-h" className="font-semibold">
-            Needs attention {pending + attention ? <Badge tone="warn">{pending + attention}</Badge> : null}
-          </h2>
-          {!pending && !attention && !data.campaigns.length ? <p className="mt-2 text-sm text-muted">Nothing right now.</p> : null}
-          <ul className="mt-2 space-y-2 text-sm">
-            {p.templates > 0 && (
-              <li>
-                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/templates">
-                  {plural(p.templates, "template")} waiting for review
-                </Link>
-              </li>
-            )}
-            {p.rules > 0 && (
-              <li>
-                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/automations">
-                  {plural(p.rules, "automation")} waiting for approval
-                </Link>
-              </li>
-            )}
-            {p.campaigns > 0 && (
-              <li>
-                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/campaigns">
-                  {plural(p.campaigns, "campaign")} waiting for approval
-                </Link>
-              </li>
-            )}
-            {(data.attention.failed ?? 0) > 0 && (
-              <li>
-                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/history?status=failed">
-                  {plural(data.attention.failed!, "failed text")} this week
-                </Link>
-              </li>
-            )}
-            {(data.attention.unknown ?? 0) + (data.attention.uncertain ?? 0) > 0 && (
-              <li>
-                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/history?status=unknown,uncertain">
-                  {plural((data.attention.unknown ?? 0) + (data.attention.uncertain ?? 0), "text")} with no final outcome this week
-                </Link>
-              </li>
-            )}
-            {data.campaigns.map((c) => (
-              <li key={c.id} className="flex flex-wrap items-center gap-2">
-                <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/campaigns">
-                  Campaign &ldquo;{c.name}&rdquo;
-                </Link>
-                <StatusPill map={CAMPAIGN_STATUS} status={c.status} />
-                {c.status === "scheduled" && c.scheduledAt ? <span className="text-xs text-muted">starts {fmtWhen(c.scheduledAt, data.store.timezone)}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+      <p className="text-xs text-muted">
+        Every text is checked right before it goes: the customer&apos;s permission, opt-outs, quiet hours and your monthly limit. Times are in {store?.name ?? "your store"}&apos;s time zone ({tz}).
+      </p>
     </div>
   );
 }

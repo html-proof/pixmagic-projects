@@ -48,6 +48,17 @@ import {
   TRIGGER_CONDITION_FIELDS,
   TRIGGER_INFO,
   TRIGGER_SOURCES,
+  audienceWords,
+  describeSegmentRules,
+  segmentConditions,
+  segmentMisfit,
+  skipFix,
+  skipLabel,
+  SKIP_LABEL,
+  smsAudienceSchema,
+  SMS_VARIABLE_GROUP,
+  SMS_VARIABLES,
+  TRIGGER_SUBJECT,
 } from "../src/sms.js";
 
 describe("smsSegments", () => {
@@ -456,5 +467,108 @@ describe("the automation builder", () => {
     expect(order).toMatchObject({ templateId: "tpl1", maxPerCustomer: 10, capDays: 1, dryRun: false, quietStart: 21, quietEnd: 9 });
     const cart = automationRule(smsAutomationSchema.parse({ ...base, trigger: "checkout_abandoned", delayMinutes: 60, maxPerCustomer: 2 }), "tpl2");
     expect(cart).toMatchObject({ maxPerCustomer: 2, capDays: 30, delayMinutes: 60 });
+  });
+});
+
+describe("who an automation texts", () => {
+  const base = { name: "Shipped", trigger: "fulfillment_created", body: "Hi {{customer_name}}, order {{order_number}} shipped." };
+
+  it("is the event's customer unless it says otherwise, and keeps an old rule's meaning", () => {
+    expect(smsAutomationSchema.parse(base).audience).toEqual({ kind: "trigger" });
+    // A rule saved before audiences existed still parses, as "the event's customer".
+    expect(smsRuleSchema.parse({ name: "Old", trigger: "order_created", templateId: "t1" }).audience).toEqual({ kind: "trigger" });
+    expect(automationRule(smsAutomationSchema.parse({ ...base, audience: { kind: "segment", segmentId: "seg1" } }), "t1").audience).toEqual({ kind: "segment", segmentId: "seg1" });
+  });
+
+  it("takes chosen customers once each, at least one and at most 50", () => {
+    expect(smsAudienceSchema.parse({ kind: "customers", contactIds: ["a", "b", "a"] })).toEqual({ kind: "customers", contactIds: ["a", "b"] });
+    expect(smsAudienceSchema.safeParse({ kind: "customers", contactIds: [] }).success).toBe(false);
+    expect(smsAudienceSchema.safeParse({ kind: "customers", contactIds: Array.from({ length: 51 }, (_, i) => `c${i}`) }).success).toBe(false);
+    expect(smsAudienceSchema.safeParse({ kind: "segment", segmentId: "" }).success).toBe(false);
+  });
+
+  it("needs a segment for Customer joins a segment, which is checked daily and is marketing", () => {
+    const join = { name: "Joined", trigger: "customer_segment", body: "Hi {{customer_name}}, thanks! Opt out: {{opt_out_url}}" };
+    expect(smsAutomationSchema.safeParse(join).success).toBe(false);
+    expect(smsAutomationSchema.safeParse({ ...join, audience: { kind: "customers", contactIds: ["c1"] } }).success).toBe(false);
+    expect(smsAutomationSchema.parse({ ...join, audience: { kind: "segment", segmentId: "s1" } }).audience).toEqual({ kind: "segment", segmentId: "s1" });
+    expect(TRIGGER_INFO.customer_segment).toMatchObject({ category: "marketing", available: true });
+    expect(TRIGGER_SOURCES.customer_segment).toMatchObject({ daily: true });
+    expect(AUTOMATION_TRIGGER_CARDS.find((c) => c.key === "scheduled_message")).toMatchObject({ trigger: null, instead: { href: "/messaging/campaigns" } });
+  });
+
+  it("reads a segment's rules as conditions on the event's facts, as campaigns read them", () => {
+    const f = { countries: ["AU"], minOrders: 5, maxOrders: null, minSpent: 100, orderedWithinDays: 30, inactiveForDays: null };
+    const conditions = segmentConditions(f);
+    expect(conditions).toEqual([
+      { field: "country", op: "in", value: ["AU"] },
+      { field: "customer_orders", op: "gte", value: 5 },
+      { field: "customer_spent", op: "gte", value: 100 },
+      { field: "days_since_last_order", op: "lte", value: 30 },
+    ]);
+    expect(evaluateRuleConditions(conditions, { country: "AU", customerOrders: 6, customerSpent: 150, daysSinceLastOrder: 3 }).pass).toBe(true);
+    expect(evaluateRuleConditions(conditions, { country: "AU", customerOrders: 2, customerSpent: 150, daysSinceLastOrder: 3 }).pass).toBe(false);
+    // A fact the event lacks fails the segment, never passes it.
+    expect(evaluateRuleConditions(conditions, { country: "AU" }).pass).toBe(false);
+    expect(segmentConditions({ countries: [] })).toEqual([]);
+    expect(describeSegmentRules(f)).toBe("in AU, 5+ orders, spent 100+, ordered in the last 30 days");
+    expect(describeSegmentRules({ countries: [] })).toBe("Every customer");
+  });
+
+  it("says which segments a trigger's event can't judge", () => {
+    expect(segmentMisfit({ countries: [], minOrders: 5 }, "customer_registered")).toEqual(["customer_orders"]);
+    expect(segmentMisfit({ countries: ["AU"] }, "customer_registered")).toEqual([]);
+    expect(segmentMisfit({ countries: [], minOrders: 5 }, "order_created")).toEqual([]);
+  });
+
+  it("says who gets it in a sentence", () => {
+    for (const t of SMS_TRIGGERS) expect(TRIGGER_SUBJECT[t], t).toBeTruthy();
+    expect(audienceWords("fulfillment_created", { kind: "trigger" })).toBe("The customer whose order shipped");
+    expect(audienceWords("order_created", { kind: "segment", segmentId: "s" }, "VIP Customers")).toBe(`The customer who placed the order, if they're in "VIP Customers"`);
+    expect(audienceWords("order_created", { kind: "customers", contactIds: ["a"] })).toMatch(/if they're the customer you chose$/);
+    expect(audienceWords("order_created", { kind: "customers", contactIds: ["a", "b"] })).toMatch(/one of the 2 customers you chose$/);
+    expect(audienceWords("customer_segment", { kind: "segment", segmentId: "s" }, null)).toBe(`Each customer who joins "a deleted segment"`);
+  });
+});
+
+describe("personalizing and plain words", () => {
+  it("groups every variable for the Personalize list", () => {
+    for (const v of SMS_VARIABLES) expect(SMS_VARIABLE_GROUP[v], v).toBeTruthy();
+  });
+
+  it("turns other tools' dotted variables into ours, and names them in the error until then", () => {
+    expect(fixVariableAliases("Hi {{customer.first_name}}, order #{{order.number}} shipped: {{ order.tracking_url }}")).toBe("Hi {{customer_name}}, order #{{order_number}} shipped: {{tracking_url}}");
+    const issues = checkTemplate({ category: "transactional", body: "Hi {{customer.first_name}}" });
+    expect(issues).toContainEqual(expect.objectContaining({ code: "unknown_variable", message: expect.stringMatching(/\{\{customer\.first_name\}\}.*Did you mean \{\{customer_name\}\}/) }));
+    expect(issues.some((i) => i.code === "malformed")).toBe(false);
+    // An unknown name never renders.
+    expect(renderSms("Hi {{customer.first_name}}", { customer_name: "Sam" }).ok).toBe(false);
+  });
+
+  it("explains every reason the provider gives without its codes, and says where to fix the merchant's own", () => {
+    const codes = [
+      { type: "ThrottlingException" },
+      { type: "ServiceQuotaExceededException", reason: "MONTHLY_SPEND_LIMIT_REACHED_FOR_TEXT" },
+      { type: "ServiceQuotaExceededException", reason: "OTHER" },
+      { type: "ConflictException", reason: "DESTINATION_PHONE_NUMBER_OPTED_OUT" },
+      { type: "ConflictException", reason: "DESTINATION_COUNTRY_BLOCKED" },
+      { type: "ConflictException", reason: "" },
+      { type: "ValidationException", reason: "DESTINATION_PHONE_NUMBER_NOT_VERIFIED" },
+      { type: "ValidationException", reason: "INVALID_PHONE_NUMBER" },
+      { type: "ValidationException", reason: "PRICE_OVER_THRESHOLD" },
+      { type: "ValidationException", reason: "OTHER" },
+      { type: "ResourceNotFoundException" },
+      { type: "AccessDeniedException" },
+      { type: "InternalServerException" },
+      { type: "timeout" },
+      { type: "network", notSent: true },
+    ].map((f) => classifySendError(f).code);
+    for (const code of codes) expect(SKIP_LABEL[code], code).toBeTruthy();
+    // A reason nobody listed reads as a refusal, never as its code.
+    expect(skipLabel("SOME_NEW_PROVIDER_REASON")).toBe("The SMS provider didn't accept this text");
+    expect(skipLabel(null)).toBeNull();
+    expect(Object.values(SKIP_LABEL).join(" ")).not.toMatch(/\bAWS\b/);
+    expect(skipFix("budget_reached")).toMatchObject({ href: expect.stringMatching(/^\/messaging\//) });
+    expect(skipFix("quiet_hours")).toBeNull();
   });
 });

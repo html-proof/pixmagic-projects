@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { systemDb, withTenant, type Prisma } from "@app/db";
-import { contactPhone, liftSuppression, senderOf, smsAnalytics, smsAudit, smsBilling, suppressNumber } from "@app/core/sms";
+import { systemDb, withTenant, type Prisma, type SmsMessageJob } from "@app/db";
+import { contactFirstName, contactPhone, liftSuppression, senderOf, smsAnalytics, smsAudit, smsBilling, suppressNumber } from "@app/core/sms";
 import { allows, can, localDay, normalizePhone } from "@app/shared";
 import { ATTRIBUTION_RULE, billingMonth, CONSENT_LABEL, liftableSuppression, SMS_PERIODS, SMS_STATUSES, smsPeriodRange, SUPPRESSION_LABEL, type SuppressionReason } from "@app/shared/sms";
 import { body, HttpError, requireWorkspace, type Deps } from "../context.js";
@@ -12,6 +12,29 @@ import { base, publicMessage, requireSmsContacts, SMS_MANAGE, SMS_READ, smsStore
 /** Customer Messaging: message history, delivery analytics, billing, consent and the suppression list, the audit trail. */
 
 const day = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * What a history row names: the automation or campaign that sent it (by its name now) and, for
+ * members who may see contact details, the customer's first name.
+ */
+async function messageNames(ws: string, rows: Array<Pick<SmsMessageJob, "ruleId" | "campaignId" | "contactId">>, showContacts: boolean) {
+  const ids = (k: "ruleId" | "campaignId" | "contactId") => [...new Set(rows.map((r) => r[k]).filter((x): x is string => !!x))];
+  const [rules, campaigns, contacts] = await withTenant(ws, (tx) =>
+    Promise.all([
+      ids("ruleId").length ? tx.smsAutomationRule.findMany({ where: { workspaceId: ws, id: { in: ids("ruleId") } }, select: { id: true, name: true } }) : [],
+      ids("campaignId").length ? tx.smsCampaign.findMany({ where: { workspaceId: ws, id: { in: ids("campaignId") } }, select: { id: true, name: true } }) : [],
+      showContacts && ids("contactId").length ? tx.smsContact.findMany({ where: { workspaceId: ws, id: { in: ids("contactId") } }, select: { id: true, storeId: true, firstNameEnc: true } }) : [],
+    ]),
+  );
+  const rule = new Map(rules.map((r) => [r.id, r.name]));
+  const campaign = new Map(campaigns.map((r) => [r.id, r.name]));
+  const contact = new Map(contacts.map((r) => [r.id, contactFirstName(r)]));
+  return (m: Pick<SmsMessageJob, "ruleId" | "campaignId" | "contactId">) => ({
+    automationName: m.ruleId ? (rule.get(m.ruleId) ?? null) : null,
+    campaignName: m.campaignId ? (campaign.get(m.campaignId) ?? null) : null,
+    customerName: showContacts && m.contactId ? (contact.get(m.contactId) ?? null) : null,
+  });
+}
 
 export function smsActivityRoutes(app: App, deps: Deps) {
   // ---------------------------------------------------------------- message history
@@ -40,8 +63,9 @@ export function smsActivityRoutes(app: App, deps: Deps) {
     };
     const rows = await withTenant(ws, (tx) => tx.smsMessageJob.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], ...paging.args }));
     const { items, nextCursor } = paging.split(rows);
-    // Masked numbers and texts only with contact rights; everyone with access sees statuses and costs.
-    return c.json({ messages: items.map((m) => ({ ...publicMessage(m, showText), to: showText ? m.phoneMasked : null })), nextCursor, timezone: store.timezone });
+    const names = await messageNames(ws, items, showText);
+    // Masked numbers, names and texts only with contact rights; everyone with access sees statuses and costs.
+    return c.json({ messages: items.map((m) => ({ ...publicMessage(m, showText), to: showText ? m.phoneMasked : null, ...names(m) })), nextCursor, timezone: store.timezone });
   });
 
   app.get(`${base}/messages/:id`, async (c) => {
@@ -51,8 +75,9 @@ export function smsActivityRoutes(app: App, deps: Deps) {
     const showText = allows(a.access, "customers.contact");
     const m = await withTenant(ws, (tx) => tx.smsMessageJob.findFirst({ where: { id, workspaceId: ws, storeId }, include: { events: { orderBy: { eventAt: "asc" } } } }));
     if (!m) throw new HttpError(404, "Not found", "not_found");
+    const names = await messageNames(ws, [m], showText);
     return c.json({
-      message: { ...publicMessage(m, showText), to: showText ? m.phoneMasked : null },
+      message: { ...publicMessage(m, showText), to: showText ? m.phoneMasked : null, ...names(m) },
       events: m.events.map((e) => ({ type: e.eventType, status: e.messageStatus, final: e.isFinal, at: e.eventAt, country: e.isoCountry, parts: e.parts, priceUsd: e.priceUsd === null ? null : Number(e.priceUsd), carrierFeeUsd: e.carrierFeeUsd === null ? null : Number(e.carrierFeeUsd) })),
     });
   });

@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useState } from "react";
 import { ChevronLeft, Signal, Wifi } from "lucide-react";
 import type { SegmentInfo } from "@app/shared/sms";
 import { Badge } from "@/components/dashboard/Primitives";
@@ -12,7 +13,7 @@ import { countryName, fmtUsd } from "./MessagingUi";
 export interface PreviewSender {
   kind: "name" | "number";
   label: string;
-  /** AWS says it is set up for this store (and registered where that is required). */
+  /** The SMS provider says it is set up for this store (and registered where that is required). */
   approved: boolean;
 }
 
@@ -37,13 +38,16 @@ export function PhonePreview({
 }) {
   const initial = sender.kind === "name" ? (sender.label.trim()[0] ?? "?").toUpperCase() : "#";
   const empty = !text.trim();
+  // The time now, as a phone shows it (after mount: the server's clock isn't the viewer's).
+  const [now, setNow] = useState("9:41");
+  useEffect(() => setNow(new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date())), []);
   return (
     <figure className="space-y-3" aria-label="Preview of the text on a customer's phone">
       <div className="mx-auto w-full max-w-[290px] rounded-[2.6rem] border-[9px] border-neutral-900 bg-neutral-900 shadow-2xl shadow-black/20 dark:border-neutral-700 dark:bg-neutral-700">
         <div className="overflow-hidden rounded-[2rem] bg-surface">
           {/* Status bar with the notch. */}
           <div className="relative flex items-center justify-between px-6 pb-1 pt-2.5 text-[11px] font-semibold" aria-hidden>
-            <span>9:41</span>
+            <span>{now.replace(/\s?[AP]M$/i, "")}</span>
             <span className="absolute left-1/2 top-1.5 h-5 w-20 -translate-x-1/2 rounded-full bg-neutral-900 dark:bg-neutral-700" />
             <span className="flex items-center gap-1">
               <Signal className="h-3 w-3" strokeWidth={2.4} />
@@ -69,9 +73,9 @@ export function PhonePreview({
           {/* The message. */}
           <div className="min-h-[15rem] space-y-2 px-3 py-3">
             <p className="text-center text-[10px] text-muted" aria-hidden>
-              Text Message
+              Messages
               <br />
-              Today 9:41
+              Today {now}
             </p>
             {empty ? (
               <p className="px-2 pt-6 text-center text-xs text-muted">Your message shows here as you write it.</p>
@@ -100,7 +104,7 @@ export function PhonePreview({
         </span>
         {price && price.perPartUsd > 0 ? (
           <span className="block">
-            About {fmtUsd(price.perPartUsd * Math.max(1, segments.segments))} per text to {countryName(price.country)} (AWS&apos;s price, US dollars)
+            About {fmtUsd(price.perPartUsd * Math.max(1, segments.segments))} per text to {countryName(price.country)} (estimated, US dollars)
           </span>
         ) : null}
         <span className="block">Preview only: how the sender shows depends on each customer&apos;s carrier and phone.</span>

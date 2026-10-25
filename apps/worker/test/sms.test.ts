@@ -779,3 +779,76 @@ describe("automations from the builder", () => {
     expect(sms.sent).toHaveLength(0);
   });
 });
+
+describe("who an automation texts", () => {
+  /** An order that brings a customer with a mobile number (the tests then mark them subscribed to SMS marketing). */
+  const marketingOrder = (customerId: number, phone: string, country = "AU") => order({ customer: { id: customerId, first_name: "Ana" }, shipping_address: { first_name: "Ana", country_code: country, phone } });
+
+  it("texts each customer who joins a segment once, checked daily, and new members on a later day", async () => {
+    const store = await setupStore();
+    const segment = await systemDb.smsSegment.create({ data: { workspaceId: store.workspaceId, storeId: store.id, name: "Australia", filter: { countries: ["AU"] } } });
+    await event(store, "orders/create", marketingOrder(5001, "+61412000501"));
+    await event(store, "orders/create", marketingOrder(5002, "+64212000502", "NZ"));
+    const subscribedNow = await systemDb.smsContact.updateMany({ where: { storeId: store.id }, data: { consentState: "subscribed" } });
+    expect(subscribedNow.count).toBe(2);
+    const a = await saveAutomation(store, null, { name: "Joined", trigger: "customer_segment", body: "Hi {{customer_name}}, thanks from {{business_name}}! Opt out: {{opt_out_url}}", audience: { kind: "segment", segmentId: segment.id }, ...ANY_HOUR }, actor);
+    await activateAutomation(store, a.id, { confirm: true }, deps, actor);
+
+    // The daily check runs once a day: each sweep here is another day.
+    const day = (n: number) => new Date(Date.now() + n * 86400_000);
+    await sweepSms(deps, day(0));
+    await drain();
+    await sendDue(store.id);
+    await drain();
+    expect(sms.sent.map((s) => s.destination)).toEqual(["+61412000501"]);
+    // The next day: the same member isn't texted again; a new one is.
+    await event(store, "orders/create", marketingOrder(5003, "+61412000503"));
+    await systemDb.smsContact.updateMany({ where: { storeId: store.id }, data: { consentState: "subscribed" } });
+    await sweepSms(deps, day(1));
+    await drain();
+    await sendDue(store.id);
+    await drain();
+    expect(sms.sent.map((s) => s.destination).sort()).toEqual(["+61412000501", "+61412000503"]);
+    expect((await jobs(store.id)).filter((j) => j.ruleId === a.id)).toHaveLength(2);
+  });
+
+  it("practises in test mode without using up the real text, which then goes once when the platform is live", async () => {
+    const store = await setupStore();
+    const segment = await systemDb.smsSegment.create({ data: { workspaceId: store.workspaceId, storeId: store.id, name: "Big spenders", filter: { countries: [], minSpent: 50 } } });
+    await event(store, "orders/create", marketingOrder(5201, "+61412000701"));
+    await event(store, "orders/create", marketingOrder(5202, "+64212000702", "NZ"));
+    await systemDb.smsContact.updateMany({ where: { storeId: store.id }, data: { consentState: "subscribed" } });
+    // Only Australians, by the automation's own condition (in the query: a member it keeps out never fills the day's 500).
+    const a = await saveAutomation(store, null, { name: "Joined", trigger: "customer_segment", body: "Hi {{customer_name}}! Opt out: {{opt_out_url}}", conditions: [{ field: "country", op: "in", value: ["AU"] }], audience: { kind: "segment", segmentId: segment.id }, ...ANY_HOUR }, actor);
+    await activateAutomation(store, a.id, { confirm: true }, deps, actor);
+    const day = (n: number) => new Date(Date.now() + n * 86400_000);
+
+    setMode({ SMS_MODE: "sandbox" });
+    await sweepSms(deps, day(0));
+    await sweepSms(deps, day(1));
+    expect((await jobs(store.id)).filter((j) => j.ruleId === a.id).map((j) => [j.status, j.dryRun])).toEqual([["dry_run", true]]);
+
+    setMode({ SMS_MODE: "live" });
+    await sweepSms(deps, day(2));
+    await drain();
+    await sendDue(store.id);
+    await drain();
+    await sweepSms(deps, day(3));
+    await drain();
+    expect(sms.sent.map((s) => s.destination)).toEqual(["+61412000701"]);
+  });
+
+  it("keeps each VIP automation to its own threshold when two run", async () => {
+    const store = await setupStore();
+    await event(store, "orders/create", marketingOrder(5101, "+61412000601"));
+    await systemDb.smsContact.updateMany({ where: { storeId: store.id }, data: { consentState: "subscribed", ordersCount: 3 } });
+    const body = "Hi {{customer_name}}, thank you from {{business_name}}! Opt out: {{opt_out_url}}";
+    const three = await saveAutomation(store, null, { name: "3 orders", trigger: "customer_vip", body, vipMinOrders: 3, ...ANY_HOUR }, actor);
+    const ten = await saveAutomation(store, null, { name: "10 orders", trigger: "customer_vip", body: `${body} You're a star.`, vipMinOrders: 10, ...ANY_HOUR }, actor);
+    await activateAutomation(store, three.id, { confirm: true }, deps, actor);
+    await activateAutomation(store, ten.id, { confirm: true }, deps, actor);
+    await sweepSms(deps);
+    const made = (await jobs(store.id)).filter((j) => j.ruleId);
+    expect(made.map((j) => j.ruleId)).toEqual([three.id]);
+  });
+});

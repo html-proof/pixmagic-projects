@@ -4,31 +4,43 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { MessageSquareText } from "lucide-react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
-import { SectionLayout, ToastProvider } from "@/components/AppUi";
+import { SectionLayout, ToastProvider, type SectionItem } from "@/components/AppUi";
 
-const ITEMS = [
+/** What every member uses: see how texting is going, build automations, read the history. */
+const MAIN = [
   ["", "Overview"],
-  ["setup", "Set up SMS"],
-  ["settings", "SMS Settings"],
-  ["send", "Send SMS"],
-  ["templates", "Message Templates"],
   ["automations", "Automations"],
-  ["campaigns", "Campaigns"],
-  ["segments", "Customer Segments"],
   ["history", "Message History"],
-  ["analytics", "Delivery Analytics"],
-  ["billing", "SMS Billing"],
-  ["sender", "Sender Configuration"],
-  ["consent", "Consent & Suppression"],
+  ["settings", "Settings"],
 ] as const;
+
+/**
+ * The one-time configuration and the specialist tools, for owners and admins: set up once, then
+ * never needed to build an automation. Members who can't change anything see only what they may read.
+ */
+const ADVANCED = [
+  ["setup", "Setup guide"],
+  ["sender", "SMS Sender"],
+  ["consent", "Customer permissions"],
+  ["billing", "Messaging costs"],
+  ["templates", "Message templates"],
+  ["campaigns", "Campaigns"],
+  ["segments", "Customer segments"],
+  ["send", "Send one SMS"],
+  ["analytics", "Delivery analytics"],
+] as const;
+const READ_ONLY = new Set<string>(["campaigns", "analytics"]);
 
 export default function MessagingLayout({ children }: { children: ReactNode }) {
   const path = usePathname().replace(/\/$/, "");
   const { storesStatus, store, workspace } = useApp();
-  const items = ITEMS.map(([slug, label]) => {
+  const manage = canManage(workspace.role);
+  const entry = ([slug, label]: readonly [string, string]) => {
     const href = slug ? `/messaging/${slug}` : "/messaging";
     return { href, label, active: path === href || (!!slug && path.startsWith(`${href}/`)) };
-  });
+  };
+  const advanced = ADVANCED.filter(([slug]) => manage || READ_ONLY.has(slug));
+  const items: SectionItem[] = [...MAIN.map(entry), { heading: manage ? "Advanced" : "More" }, ...advanced.map(entry)];
   return (
     <ToastProvider>
       <SectionLayout title="Customer Messaging" icon={<MessageSquareText aria-hidden className="h-[18px] w-[18px] text-accent" strokeWidth={1.8} />} items={items}>

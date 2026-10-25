@@ -1,14 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { fakeSmsProvider, smsOnShopifyEvent, smsWebhookCheckKey, type FakeSmsProvider } from "@app/core/sms";
+import { accountStatusKey, fakeSmsProvider, smsOnShopifyEvent, smsRegion, smsWebhookCheckKey, type FakeSmsProvider } from "@app/core/sms";
 import { LEGACY_GRANTS } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
- * Automations, the four-step builder (apps/api/src/routes/smsAutomations.ts): which triggers
- * Shopify sends for the store, the message checked for its trigger, activation only on the
- * member's confirmation and only for a trigger that arrives, edits that wait until activated,
- * pause, copy, delete, a test text, and the real state and last result. AWS is faked.
+ * Automations, the builder (apps/api/src/routes/smsAutomations.ts): which triggers Shopify sends
+ * for the store, who it texts (a segment, chosen customers), the message checked for its trigger,
+ * activation only on the member's confirmation, only for a trigger that arrives and, on a live
+ * platform, only once the store's setup is done; edits that wait until activated, pause, copy,
+ * delete, a test text, the readiness and checks in plain words, and the real state and last
+ * result. AWS is faked.
  */
 
 let ctx: TestCtx;
@@ -223,7 +225,10 @@ describe("the list", () => {
     await o.call("POST", `/${id}/activate`, { confirm: true });
     const copy = await o.call("POST", `/${id}/duplicate`, {});
     expect(copy.statusCode).toBe(201);
-    expect(copy.json().automation).toMatchObject({ name: "Shipping update (copy)", status: "draft", body: shipped.body });
+    expect(copy.json().automation).toMatchObject({ name: "Shipping update — Copy", status: "draft", body: shipped.body });
+    // Copying again (the original or the copy) takes the next number.
+    expect((await o.call("POST", `/${id}/duplicate`, {})).json().automation.name).toBe("Shipping update — Copy 2");
+    expect((await o.call("POST", `/${copy.json().automation.id}/duplicate`, {})).json().automation.name).toBe("Shipping update — Copy 3");
     const original = (await o.call("GET", `/${id}`)).json().automation;
     expect(copy.json().automation.templateId).not.toBe(original.templateId);
 
@@ -237,5 +242,162 @@ describe("the list", () => {
     // The copy is untouched.
     expect((await o.call("GET", `/${copy.json().automation.id}`)).json().automation.status).toBe("draft");
     expect((await systemDb.smsAuditLog.findFirstOrThrow({ where: { targetId: id, action: "rule_deleted" } })).metadata).toMatchObject({ cancelled: 1 });
+  });
+});
+
+describe("step 2: who gets it", () => {
+  const order = (id: number, phone = "0412 345 678") => ({ id, name: `#${id}`, currency: "AUD", created_at: new Date().toISOString(), total_price: "40.00", customer: { id: 9, first_name: "Sam" }, shipping_address: { country_code: "AU", phone }, line_items: [] });
+
+  it("limits an automation to a segment or to chosen customers, refusing ones that don't fit, and keeps it when another editor saves", async () => {
+    const o = await owner();
+    const seg = await ctx.app.inject({ method: "POST", url: `${o.base}/segments`, headers: o.headers, payload: { name: "VIP Customers", filter: { countries: [], minOrders: 5 } } });
+    expect(seg.statusCode).toBe(201);
+    const segmentId = seg.json().segment.id;
+
+    const vip = await o.call("POST", "", { ...shipped, name: "VIP shipping", audience: { kind: "segment", segmentId } });
+    expect(vip.statusCode).toBe(201);
+    expect(vip.json().automation).toMatchObject({ segmentName: "VIP Customers", audienceLabel: `The customer whose order shipped, if they're in "VIP Customers"`, config: { audience: { kind: "segment", segmentId } } });
+    // A new account has no order count to judge "5+ orders" on.
+    const misfit = await o.call("POST", "", { name: "Welcome VIPs", trigger: "customer_registered", body: "Welcome {{customer_name}}! Opt out: {{opt_out_url}}", audience: { kind: "segment", segmentId } });
+    expect(misfit.statusCode).toBe(400);
+    expect(misfit.json()).toMatchObject({ error: "audience_invalid", message: expect.stringMatching(/customer's orders/) });
+    expect((await o.call("POST", "", { ...shipped, audience: { kind: "segment", segmentId: "cnosuchsegment" } })).json().error).toBe("audience_invalid");
+    expect((await o.call("POST", "", { ...shipped, audience: { kind: "customers", contactIds: ["cnosuchcontact"] } })).json().error).toBe("audience_invalid");
+    // "Customer joins a segment" needs its segment.
+    expect((await o.call("POST", "", { name: "Joined", trigger: "customer_segment", body: "Hi {{customer_name}}! Opt out: {{opt_out_url}}" })).statusCode).toBe(400);
+    expect((await o.call("POST", "", { name: "Joined", trigger: "customer_segment", body: "Hi {{customer_name}}! Opt out: {{opt_out_url}}", audience: { kind: "segment", segmentId } })).statusCode).toBe(201);
+
+    // The segment can't be deleted while automations use it.
+    const del = await ctx.app.inject({ method: "DELETE", url: `${o.base}/segments/${segmentId}`, headers: o.headers });
+    expect(del.statusCode).toBe(409);
+    expect(del.json().message).toMatch(/"VIP shipping"/);
+
+    // Chosen customers: found by first name (masked numbers), named on the automation.
+    await sender(o);
+    await smsOnShopifyEvent(o.store, "orders/create", order(601), ctx.deps);
+    const found = (await o.call("GET", "/audience/customers?q=sa")).json().customers;
+    expect(found).toEqual([expect.objectContaining({ name: "Sam", number: expect.stringMatching(/678$/), orders: 1 })]);
+    expect(JSON.stringify(found)).not.toMatch(/412 ?345|61412/);
+    expect((await o.call("GET", "/audience/customers?q=zed")).json().customers).toEqual([]);
+    const chosen = await o.call("POST", "", { ...shipped, name: "For Sam", audience: { kind: "customers", contactIds: [found[0].id] } });
+    expect(chosen.json().automation.audienceLabel).toMatch(/if they're the customer you chose$/);
+    expect((await o.call("GET", `/audience/customers?ids=${found[0].id}`)).json().customers).toHaveLength(1);
+    // The hub's editor sends no audience: the automation keeps its own.
+    const resaved = await o.call("PUT", `/${chosen.json().automation.id}`, { ...shipped, name: "For Sam" });
+    expect(resaved.json().automation.config.audience).toEqual({ kind: "customers", contactIds: [found[0].id] });
+
+    // How many it could reach now: one customer per event, or those of the choice who may get it.
+    expect((await o.call("POST", "/audience", { trigger: "order_created", audience: { kind: "trigger" } })).json()).toEqual({ customers: null, perEvent: true });
+    expect((await o.call("POST", "/audience", { trigger: "order_created", audience: { kind: "segment", segmentId } })).json()).toEqual({ customers: 0, perEvent: true });
+    expect((await o.call("POST", "/audience", { trigger: "order_created", audience: { kind: "customers", contactIds: [found[0].id] } })).json()).toEqual({ customers: 1, perEvent: true });
+  });
+
+  it("keeps who an automation texts when the advanced rule editor saves it, whatever it sends", async () => {
+    const o = await owner();
+    const segmentId = (await ctx.app.inject({ method: "POST", url: `${o.base}/segments`, headers: o.headers, payload: { name: "VIP Customers", filter: { countries: [], minOrders: 5 } } })).json().segment.id;
+    const a = (await o.call("POST", "", { ...shipped, audience: { kind: "segment", segmentId } })).json().automation;
+    const rule = (await ctx.app.inject({ method: "GET", url: `${o.base}/rules/${a.id}`, headers: o.headers })).json().rule;
+    // The editor sends the whole rule, with the schema's default audience ("everyone") filled in.
+    const put = await ctx.app.inject({ method: "PUT", url: `${o.base}/rules/${a.id}`, headers: o.headers, payload: { ...rule.config, quietStart: 22, audience: { kind: "trigger" } } });
+    expect(put.statusCode).toBe(200);
+    const after = await systemDb.smsAutomationRule.findUniqueOrThrow({ where: { id: a.id } });
+    expect(after.config).toMatchObject({ quietStart: 22, audience: { kind: "segment", segmentId } });
+    // A new rule from that editor texts the event's customer.
+    const created = await ctx.app.inject({ method: "POST", url: `${o.base}/rules`, headers: o.headers, payload: { ...rule.config, name: "Another", audience: { kind: "customers", contactIds: ["cwhoever"] } } });
+    expect(created.statusCode).toBe(201);
+    expect((await systemDb.smsAutomationRule.findUniqueOrThrow({ where: { id: created.json().rule.id } })).config).toMatchObject({ audience: { kind: "trigger" } });
+  });
+
+  it("names customers only to members who may see contact details", async () => {
+    const o = await owner();
+    const v = await signIn(ctx, "v2", "v2@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer, "marketing.campaigns"] } });
+    const res = await ctx.app.inject({ method: "GET", url: `${o.base}/automations/audience/customers?q=`, headers: v.headers });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("texts only the customers its audience names, judged when the event happens", async () => {
+    const o = await owner();
+    await sender(o);
+    const seg = (await ctx.app.inject({ method: "POST", url: `${o.base}/segments`, headers: o.headers, payload: { name: "Repeat", filter: { countries: [], minOrders: 2 } } })).json().segment.id;
+    const id = (await o.call("POST", "", { ...shipped, name: "Repeat thanks", trigger: "order_created", body: "Thanks again {{customer_name}}!", audience: { kind: "segment", segmentId: seg } })).json().automation.id;
+    await o.call("POST", `/${id}/activate`, { confirm: true });
+    await smsOnShopifyEvent(o.store, "orders/create", order(701), ctx.deps);
+    expect(await systemDb.smsMessageJob.count({ where: { ruleId: id } })).toBe(0);
+    await smsOnShopifyEvent(o.store, "orders/create", order(702), ctx.deps);
+    expect(await systemDb.smsMessageJob.findMany({ where: { ruleId: id } })).toEqual([expect.objectContaining({ status: "dry_run" })]);
+    // Another customer, not chosen, gets nothing from an automation for chosen customers.
+    const sam = await systemDb.smsContact.findFirstOrThrow({ where: { storeId: o.store.id } });
+    const forSam = (await o.call("POST", "", { ...shipped, name: "Sam only", trigger: "order_created", body: "Hi {{customer_name}}!", audience: { kind: "customers", contactIds: [sam.id] } })).json().automation.id;
+    await o.call("POST", `/${forSam}/activate`, { confirm: true });
+    await smsOnShopifyEvent(o.store, "orders/create", { ...order(703, "0412 999 888"), customer: { id: 10, first_name: "Kim" } }, ctx.deps);
+    await smsOnShopifyEvent(o.store, "orders/create", order(704), ctx.deps);
+    expect((await systemDb.smsMessageJob.findMany({ where: { ruleId: forSam } })).map((j) => j.contactId)).toEqual([sam.id]);
+  });
+});
+
+describe("readiness and the review's checks", () => {
+  it("says how ready texting is, with only what's missing and where to fix it, in plain words", async () => {
+    const o = await owner();
+    const r = (await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers })).json().readiness;
+    expect(r).toMatchObject({ status: "setup_required", testMode: true, sender: false });
+    expect(r.items.find((i: { key: string }) => i.key === "sender")).toMatchObject({ ok: false, label: "SMS sender", fix: { href: "/messaging/setup?step=sender" } });
+    expect(r.items.find((i: { key: string }) => i.key === "test_recipient")).toMatchObject({ ok: false, optional: true });
+    expect(JSON.stringify(r)).not.toMatch(/\bAWS\b/);
+    const list = (await o.call("GET", "")).json();
+    expect(list.readiness.status).toBe("setup_required");
+    const overview = (await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers })).json();
+    expect(overview.thisMonth).toMatchObject({ accepted: 0, quota: null, from: expect.stringMatching(/^\d{4}-\d{2}-01$/) });
+
+    await sender(o);
+    await ctx.app.inject({ method: "POST", url: `${o.base}/sender/sending`, headers: o.headers, payload: { sending: true } });
+    const ready = (await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers })).json().readiness;
+    // Everything the store does is done; the account is still being verified (test mode).
+    expect(ready.items.filter((i: { ok: boolean; optional: boolean; key: string }) => !i.ok && !i.optional).map((i: { key: string }) => i.key)).toEqual(["account"]);
+    expect(ready.status).toBe("setup_required");
+  });
+
+  it("lets an automation be switched on in test mode, but on a live platform only once the store's setup is done", async () => {
+    const o = await owner();
+    const id = (await o.call("POST", "", shipped)).json().automation.id;
+    const sandbox = (await o.call("GET", `/${id}/checks`)).json();
+    expect(sandbox.canActivate).toBe(true);
+    expect(sandbox.checks.find((c: { key: string }) => c.key === "sender")).toMatchObject({ ok: false, blocking: false, message: "Your store has no SMS sender yet.", fix: { href: "/messaging/setup?step=sender" } });
+    expect(sandbox.checks.find((c: { key: string }) => c.key === "account")).toMatchObject({ ok: false, blocking: false, message: expect.stringMatching(/still being verified/) });
+    expect(sandbox.checks.filter((c: { ok: boolean }) => c.ok).map((c: { key: string }) => c.key)).toEqual(expect.arrayContaining(["trigger", "audience", "message", "variables", "opt_outs", "numbers"]));
+    expect(JSON.stringify(sandbox)).not.toMatch(/\bAWS\b/);
+
+    ctx.setEnv({ SMS_MODE: "live" });
+    sms.accountInfo = { ...sms.accountInfo, sandbox: false, tier: "PRODUCTION" };
+    const live = (await o.call("GET", `/${id}/checks`)).json();
+    expect(live.canActivate).toBe(false);
+    expect(live.checks.filter((c: { blocking: boolean }) => c.blocking).map((c: { key: string }) => c.key)).toEqual(["sender"]);
+    const refused = await o.call("POST", `/${id}/activate`, { confirm: true });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: "setup_incomplete", message: "SMS sending isn't ready yet. Your store has no SMS sender yet." });
+    expect((await systemDb.smsAutomationRule.findUniqueOrThrow({ where: { id } })).status).toBe("draft");
+
+    await sender(o);
+    expect((await o.call("GET", `/${id}/checks`)).json().checks.filter((c: { blocking: boolean }) => c.blocking).map((c: { key: string }) => c.key)).toEqual(["sender_usable"]);
+    await ctx.app.inject({ method: "POST", url: `${o.base}/sender/sending`, headers: o.headers, payload: { sending: true } });
+    // The account's answer from test mode is kept 10 minutes: forget it, as if they had passed.
+    await ctx.deps.coord.take(accountStatusKey(smsRegion(await systemDb.smsSenderConfiguration.findUnique({ where: { storeId: o.store.id } }))));
+    const done = (await o.call("GET", `/${id}/checks`)).json();
+    expect(done).toMatchObject({ canActivate: true });
+    expect(done.checks.find((c: { key: string }) => c.key === "account")).toMatchObject({ ok: true });
+    expect((await o.call("POST", `/${id}/activate`, { confirm: true })).json().automation.status).toBe("active");
+    sms.accountInfo = { ...sms.accountInfo, sandbox: true, tier: "SANDBOX" };
+  });
+
+  it("names the automation and the customer in Message History, for members who may see contact details", async () => {
+    const o = await owner();
+    await sender(o);
+    const id = (await o.call("POST", "", { ...shipped, name: "Confirm", trigger: "order_created", body: "Hi {{customer_name}}, thanks for order {{order_number}}!" })).json().automation.id;
+    await o.call("POST", `/${id}/activate`, { confirm: true });
+    await smsOnShopifyEvent(o.store, "orders/create", { id: 801, name: "#801", currency: "AUD", created_at: new Date().toISOString(), total_price: "40.00", customer: { id: 9, first_name: "Sam" }, shipping_address: { country_code: "AU", phone: "0412 345 678" }, line_items: [] }, ctx.deps);
+    const [m] = (await ctx.app.inject({ method: "GET", url: `${o.base}/messages?ruleId=${id}`, headers: o.headers })).json().messages;
+    expect(m).toMatchObject({ automationName: "Confirm", customerName: "Sam", status: "dry_run", reasonLabel: "Test mode: recorded, not sent to the customer" });
+    const detail = (await ctx.app.inject({ method: "GET", url: `${o.base}/messages/${m.id}`, headers: o.headers })).json().message;
+    expect(detail).toMatchObject({ automationName: "Confirm", customerName: "Sam" });
   });
 });

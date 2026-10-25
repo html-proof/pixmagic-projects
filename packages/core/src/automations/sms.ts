@@ -226,7 +226,8 @@ function hubAutomationOf(a: AutomationView, counts: HubCounts | undefined, store
     lastResult: a.lastResult ? { status: smsHubStatusOf({ status: a.lastResult.status, acceptedAt: null }), reason: a.lastResult.reasonLabel, at: a.lastResult.at } : null,
     last30Days: counts ?? zeroCounts(),
     editable: !!a.config,
-    editHref: a.config ? `/automations/new?channel=sms&id=${encodeURIComponent(a.id)}` : `/messaging/automations/edit?id=${encodeURIComponent(a.id)}`,
+    // The hub's editor knows the event's customer only: a trigger it lacks, or a segment or chosen customers, is edited in Customer Messaging.
+    editHref: a.config && trigger && a.config.audience.kind === "trigger" ? `/automations/new?channel=sms&id=${encodeURIComponent(a.id)}` : `/messaging/automations/edit?id=${encodeURIComponent(a.id)}`,
     config: a.config ? { ...a.config } : null,
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
@@ -314,7 +315,7 @@ function reasonOf(m: SmsMessageJob, status: HubStatus): string | null {
   const report = m.providerStatus ? (DELIVERY_EXPLANATION[m.providerStatus.toUpperCase()] ?? null) : null;
   if (status === "sent" || status === "delivered") return report;
   if (status === "undelivered") return report ?? skipLabel(m.reason) ?? "The carrier reported it undelivered.";
-  return skipLabel(m.reason) ?? (m.errorCode ? m.errorCode.replace(/_/g, " ") : null);
+  return skipLabel(m.reason) ?? skipLabel(m.errorCode);
 }
 
 function smsMessageOf(m: SmsMessageJob, ruleName: string | null, contacts: boolean): HubMessage {

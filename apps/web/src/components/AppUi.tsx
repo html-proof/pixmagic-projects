@@ -14,7 +14,10 @@ import { actionError } from "@/lib/api";
  * A section with a menu of its own (Staff Management, WhatsApp): the menu down the left from tablet
  * width, a row of links that scrolls sideways above the page on phones.
  */
-export function SectionLayout({ title, icon, items, children }: { title: string; icon: ReactNode; items: ReadonlyArray<{ href: string; label: string; active: boolean }>; children: ReactNode }) {
+/** A section's menu entry, or a heading over the entries after it (shown from tablet width up). */
+export type SectionItem = { href: string; label: string; active: boolean } | { heading: string };
+
+export function SectionLayout({ title, icon, items, children }: { title: string; icon: ReactNode; items: ReadonlyArray<SectionItem>; children: ReactNode }) {
   return (
     <div className="grid gap-6 md:grid-cols-[13rem_1fr]">
       <nav aria-label={title} className="flex gap-1 overflow-x-auto pb-1 md:flex-col md:pb-0">
@@ -22,16 +25,22 @@ export function SectionLayout({ title, icon, items, children }: { title: string;
           {icon}
           {title}
         </p>
-        {items.map(({ href, label, active }) => (
-          <Link
-            key={href}
-            href={href}
-            aria-current={active ? "page" : undefined}
-            className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${active ? "bg-surface font-semibold shadow-sm" : "text-muted hover:text-text"}`}
-          >
-            {label}
-          </Link>
-        ))}
+        {items.map((item) =>
+          "heading" in item ? (
+            <p key={`h:${item.heading}`} className="mt-4 hidden px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted md:block">
+              {item.heading}
+            </p>
+          ) : (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={item.active ? "page" : undefined}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${item.active ? "bg-surface font-semibold shadow-sm" : "text-muted hover:text-text"}`}
+            >
+              {item.label}
+            </Link>
+          ),
+        )}
       </nav>
       <div className="min-w-0 space-y-4">{children}</div>
     </div>

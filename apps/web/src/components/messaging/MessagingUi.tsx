@@ -136,7 +136,7 @@ export function actionLabel(action: string): string {
 /** Why a message went out: an automated workflow's event, a campaign, a test, or a text sent from Send SMS. */
 export function purposeLabel(purpose: string, trigger?: string | null): string {
   if (purpose === "automation") return trigger && trigger in TRIGGER_INFO ? TRIGGER_INFO[trigger as SmsTrigger].label : "Automation";
-  return ({ campaign: "Campaign", test: "Test text", manual: "Sent from Send SMS" } as Record<string, string>)[purpose] ?? purpose;
+  return ({ campaign: "Campaign", test: "Test message", manual: "Sent from Send SMS" } as Record<string, string>)[purpose] ?? purpose;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,11 +218,11 @@ export function ModeBanner({ mode, showLive = false }: { mode: SmsMode; showLive
   if (mode === "sandbox") {
     return (
       <Alert kind="info">
-        <strong>Test mode.</strong> AWS only delivers to the verified test numbers in{" "}
-        <Link className="underline" href="/messaging/sender">
-          Sender Configuration
+        <strong>Your SMS account is still being verified.</strong> Test messages can be sent to approved numbers until verification is complete. Automations, campaigns and texts to customers are
+        recorded in Message History instead of being sent.{" "}
+        <Link className="underline" href="/messaging/settings">
+          View setup requirements
         </Link>
-        . Automations, campaigns and texts to customers are recorded as dry runs in Message History instead of being sent.
       </Alert>
     );
   }

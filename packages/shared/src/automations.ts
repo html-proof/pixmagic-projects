@@ -100,6 +100,7 @@ export const HUB_TRIGGERS = [
   "refund_issued",
   "customer_inactive",
   "customer_vip",
+  "customer_segment",
   "scheduled_message",
   "inbound_message",
   "external_event",
@@ -108,7 +109,7 @@ export type HubTrigger = (typeof HUB_TRIGGERS)[number];
 export const isHubTrigger = (t: string): t is HubTrigger => (HUB_TRIGGERS as readonly string[]).includes(t);
 
 /** The icons the trigger cards use (lucide names; the page draws them). */
-export type HubTriggerIcon = "shopping-bag" | "credit-card" | "truck" | "package-check" | "shopping-cart" | "user-plus" | "circle-x" | "undo" | "moon" | "crown" | "calendar-clock" | "message-circle-reply" | "webhook";
+export type HubTriggerIcon = "shopping-bag" | "credit-card" | "truck" | "package-check" | "shopping-cart" | "user-plus" | "circle-x" | "undo" | "moon" | "crown" | "calendar-clock" | "message-circle-reply" | "webhook" | "users";
 
 export interface HubTriggerInfo {
   key: HubTrigger;
@@ -120,6 +121,8 @@ export interface HubTriggerInfo {
   /** The SMS rule's trigger, or null with the reason it isn't offered for SMS. */
   sms: SmsTrigger | null;
   smsUnavailable?: string;
+  /** Set when SMS runs it but only Customer Messaging's builder sets it up (it needs a choice the hub doesn't offer): why. */
+  smsBuilderOnly?: string;
   /** The email rule's event (a Shopify event, or "custom": the business's own event through the event API), or null with the reason. */
   email: ShopifyEventType | "custom" | null;
   emailUnavailable?: string;
@@ -211,6 +214,18 @@ export const HUB_TRIGGER_INFO: Record<HubTrigger, HubTriggerInfo> = {
     email: null,
     emailUnavailable: "Only SMS automations keep the order history this needs.",
   },
+  customer_segment: {
+    key: "customer_segment",
+    label: "Customer joins a segment",
+    description: "Once a customer matches one of your SMS customer segments (checked daily).",
+    icon: "users",
+    main: false,
+    sms: "customer_segment",
+    smsBuilderOnly: "The segment is chosen in Customer Messaging's SMS builder.",
+    email: null,
+    emailUnavailable: "Only SMS automations keep the customer segments this needs.",
+    instead: { label: "Set it up in Customer Messaging", href: "/messaging/automations/edit?trigger=customer_segment" },
+  },
   scheduled_message: {
     key: "scheduled_message",
     label: "Scheduled message",
@@ -263,6 +278,7 @@ export function channelRuns(trigger: HubTrigger, channel: HubChannel): { ok: tru
   if (channel === "whatsapp") return { ok: false, reason: "WhatsApp automations are set up on the WhatsApp page." };
   if (channel === "sms") {
     if (!info.sms) return { ok: false, reason: info.smsUnavailable ?? "Not available for SMS." };
+    if (info.smsBuilderOnly) return { ok: false, reason: info.smsBuilderOnly };
     if (!TRIGGER_INFO[info.sms].available) return { ok: false, reason: TRIGGER_INFO[info.sms].unavailableReason ?? "Not available for SMS." };
     return { ok: true };
   }
@@ -278,7 +294,7 @@ export function triggerCategory(trigger: HubTrigger, channel: HubChannel): Messa
   const info = HUB_TRIGGER_INFO[trigger];
   if (channel === "sms" && info.sms) return TRIGGER_INFO[info.sms].category;
   if (info.email === "custom") return "either";
-  return trigger === "checkout_abandoned" || trigger === "customer_signup" || trigger === "customer_inactive" || trigger === "customer_vip" ? "marketing" : "transactional";
+  return trigger === "checkout_abandoned" || trigger === "customer_signup" || trigger === "customer_inactive" || trigger === "customer_vip" || trigger === "customer_segment" ? "marketing" : "transactional";
 }
 
 // ---------------------------------------------------------------------------

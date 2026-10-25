@@ -132,74 +132,100 @@ test("an owner goes through Set up SMS: connect, sender name, message, a deliver
 
   await page.getByRole("button", { name: "Finish" }).click();
   await expect(page).toHaveURL(/\/messaging\/settings/);
-  await expect(page.getByRole("heading", { name: "SMS Settings" })).toBeVisible();
-  await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  // What's set up, in plain words: the limit and how customers agreed are done.
+  await expect(page.getByRole("heading", { name: "SMS setup" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "SMS setup" }).getByText("Monthly messaging limit", { exact: true })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Enable Automatic SMS" })).toBeChecked();
 });
 
-test("an owner builds an automation in four steps: trigger, message, timing, a delivered test, then on", async ({ page }) => {
+test("an owner creates an SMS automation from one button: when, who, the message, a delivered test, then activates it", async ({ page }) => {
   const { base } = await ownerWithStore(page);
-  // A sender AWS approved (the local stand-in's shared one) and a verified test number.
+  // A sender the provider approved (the local stand-in's shared one), a verified test number, and a segment.
   expect((await call(page, "PUT", `${base}/sender`, { senderType: "sender_id", originationIdentity: "LOCALTEST", countries: ["AU"], monthlyBudgetUsd: 5, hardStop: true, transactionalBasis: "checkout_notice", quietStart: 0, quietEnd: 0, maxPerCustomerDay: 3, maxMarketingPerWeek: 2 })).status).toBe(200);
   expect((await call(page, "POST", `${base}/sender/verify`, {})).status).toBe(200);
   const added = await call(page, "POST", `${base}/test-numbers`, { number: "0412 345 678", country: "AU" });
   expect((await call(page, "POST", `${base}/test-numbers/${(added.json as { testNumber: { id: string } }).testNumber.id}/verify`, { code: "123456" })).status).toBe(200);
+  expect((await call(page, "POST", `${base}/segments`, { name: "Big spenders", filter: { countries: [], minSpent: 50 } })).status).toBe(201);
 
-  await page.goto("/messaging/automations");
-  await expect(page.getByText("No automations yet")).toBeVisible();
-  await page.getByRole("link", { name: "Create automation" }).first().click();
+  // The overview: one status in a word, and the one button.
+  await page.goto("/messaging");
+  await expect(page.getByTestId("messaging-status")).toHaveText(/Setup required|Action required|Ready/, { timeout: 15_000 });
+  await page.getByRole("link", { name: "Create SMS Automation" }).click();
   await expect(page).toHaveURL(/\/messaging\/automations\/edit/);
 
-  // 1. The trigger: only what Shopify sends for the store can be chosen.
+  // 1. When: only what Shopify sends for the store can be chosen; the timing is here too.
   await expect(page.getByRole("radio", { name: /Custom event/ })).toBeDisabled();
   await page.getByRole("radio", { name: /Order shipped or fulfilled/ }).click();
   await expect(page.getByText(/Shopify sends bizinsights this event for your store/)).toBeVisible();
-  await expect(page.getByLabel("Automation name")).toHaveValue("Order shipped or fulfilled text");
+  await expect(page.getByLabel("Automation name")).toHaveValue("Order shipped or fulfilled SMS");
   await page.getByLabel("Automation name").fill("Shipping update");
+  await page.getByText("After a delay", { exact: true }).click();
+  await page.getByLabel("How long to wait").fill("2");
+  await page.getByLabel("Minutes, hours or days").selectOption("hours");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 
-  // 2. The message: the sender, a live preview, and a detail its trigger can't fill refused in words.
-  await expect(page.getByText(/Texts come from/)).toContainText("LOCALTEST");
+  // 2. Who: the event's customer, narrowed to a segment, with the API's count.
+  await expect(page.getByText("Recipients: 1 customer per event")).toBeVisible();
+  await page.getByText("Customer segment", { exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByText(/Recipients: choose a segment/)).toBeVisible();
+  await page.getByLabel("Select customer segment").selectOption({ label: "Big spenders" });
+  await expect(page.getByText(/Recipients: 0 customers/)).toBeVisible();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 3. The message: a live preview, other tools' variables fixed, a detail its trigger can't fill refused in words.
   await expect(page.getByTestId("preview-text")).toHaveText("Good news Sarah! Your Green Leaf order #1042 is on its way. Track it: https://track.example.com/AB123");
   await page.getByLabel("Message", { exact: true }).fill("Hi {{customer_name}}, finish here: {{checkout_url}}");
   await expect(page.getByText(/make this a marketing message/)).toBeVisible();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByText(/Fix the message first/)).toBeVisible();
+  await page.getByLabel("Message", { exact: true }).fill("Hi {{customer.first_name}}, order {{order.number}} is on its way: {{tracking_url}}");
+  await page.getByRole("button", { name: "Fix them" }).click();
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("Hi {{customer_name}}, order {{order_number}} is on its way: {{tracking_url}}");
+  await expect(page.getByTestId("preview-text")).toHaveText("Hi Sarah, order #1042 is on its way: https://track.example.com/AB123");
+  await page.getByRole("button", { name: "Personalize" }).click();
+  await expect(page.getByRole("group", { name: "Insert a detail" }).getByRole("button", { name: /Tracking link/ })).toBeVisible();
   await page.getByRole("button", { name: "Shipped, with tracking" }).click();
-  await expect(page.getByText(/characters · 1 SMS part/).first()).toBeVisible();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-
-  // 3. The timing: after a delay, only for orders of 50 or more.
-  await page.getByText("Send after a delay").click();
-  await page.getByLabel("How long to wait").fill("2");
-  await page.getByLabel("Minutes, hours or days").selectOption("hours");
-  await page.getByText("Only when conditions match").click();
-  await page.getByLabel("Condition 1: value").fill("50");
+  await expect(page.getByText(/Estimated SMS segments: 1/)).toBeVisible();
   await page.getByRole("button", { name: "Save and continue" }).click();
 
-  // 4. The summary, a test text followed to the phone's receipt, then on (asked first).
-  await expect(page.getByText("2 hours after the event, only if order total is at least 50").first()).toBeVisible();
-  await page.getByRole("button", { name: "Send test SMS" }).click();
+  // 4. A test text to the approved number, followed to the phone's receipt.
+  await expect(page.getByText(/still being verified/).first()).toBeVisible();
+  await page.getByRole("button", { name: "Send Test", exact: true }).click();
   await expect(page.getByText("Delivered: the phone confirmed it arrived.")).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("switch", { name: "Automation on" }).click();
-  await expect(page.getByRole("dialog")).toContainText("bizinsights is in test mode");
-  await page.getByRole("dialog").getByRole("button", { name: "Turn on" }).click();
-  await expect(page.getByRole("switch", { name: "Automation on" })).toBeChecked();
-  await page.getByRole("link", { name: "Done" }).click();
+  await expect(page.getByText("✓ Test message sent")).toBeVisible();
+  await page.getByRole("button", { name: "Continue to review" }).click();
 
-  // The list: its real state, search, a copy as a draft, and deleting the copy.
+  // 5. The review: the flow, each part editable, the checks, then activate (asked first).
+  await expect(page.getByRole("button", { name: "Edit who gets it" })).toContainText(`if they're in "Big spenders"`);
+  await expect(page.getByRole("button", { name: "Edit the timing" })).toContainText("2 hours after the event");
+  await expect(page.getByText("Ready to activate")).toBeVisible();
+  await page.getByRole("button", { name: "Activate Automation" }).click();
+  await expect(page.getByRole("dialog")).toContainText("still being verified");
+  await page.getByRole("dialog").getByRole("button", { name: "Activate", exact: true }).click();
+  await expect(page.getByText("✓ Active").first()).toBeVisible();
+
+  // The list: its real state, then a copy opened ready to change, deleted again, and its history.
+  await page.getByRole("link", { name: "All automations" }).click();
   const card = page.getByRole("listitem", { name: "Shipping update", exact: true });
-  await expect(card.getByText("Active", { exact: true })).toBeVisible();
+  await expect(card.getByText("✓ Active", { exact: true })).toBeVisible();
   await expect(card.getByRole("switch")).toBeChecked();
-  await page.getByLabel("Search automations").fill("nothing like it");
-  await expect(page.getByText("No automation matches.")).toBeVisible();
-  await page.getByRole("button", { name: "Clear the filters" }).click();
-  await card.getByRole("button", { name: "Duplicate Shipping update" }).click();
-  const copy = page.getByRole("listitem", { name: "Shipping update (copy)", exact: true });
+  await card.getByRole("button", { name: "More for Shipping update" }).click();
+  await page.getByRole("menuitem", { name: "Duplicate" }).click();
+  await expect(page).toHaveURL(/step=review/);
+  await expect(page.getByRole("heading", { name: /Shipping update — Copy/ })).toBeVisible();
+  await page.getByRole("link", { name: "All automations" }).click();
+  const copy = page.getByRole("listitem", { name: "Shipping update — Copy", exact: true });
   await expect(copy.getByText("Draft", { exact: true })).toBeVisible();
-  await copy.getByRole("button", { name: "Delete Shipping update (copy)" }).click();
+  await copy.getByRole("button", { name: "More for Shipping update — Copy" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect(copy).toHaveCount(0);
-  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "More for Shipping update" }).click();
+  await page.getByRole("menuitem", { name: "View history" }).click();
+  await expect(page).toHaveURL(/\/messaging\/history\?ruleId=/);
+  await expect(page.getByText(/Showing/)).toContainText("Shipping update");
 });
 
 test("the opt-out page says so for a link that names nothing", async ({ page }) => {

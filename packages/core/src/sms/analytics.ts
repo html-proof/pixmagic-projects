@@ -212,7 +212,12 @@ export async function smsOverview(store: Pick<Store, "id" | "timezone" | "curren
     systemDb.smsTemplate.count({ where: { storeId: store.id, approvedVersion: { not: null }, status: { not: "archived" } } }),
     systemDb.smsCampaign.count({ where: { storeId: store.id, status: "pending_approval" } }),
   ]);
-  const pendingRules = await systemDb.smsAutomationRule.count({ where: { storeId: store.id, submittedAt: { not: null } } });
+  const monthStart = `${localDay(new Date(), store.timezone).slice(0, 7)}-01`;
+  const [pendingRules, monthGroups] = await Promise.all([
+    systemDb.smsAutomationRule.count({ where: { storeId: store.id, submittedAt: { not: null } } }),
+    systemDb.smsMessageJob.groupBy({ by: ["status"], where: where(store, { from: monthStart, to: today }), _count: true }),
+  ]);
+  const month = countStatuses(monthGroups);
   const totals = countStatuses(statusGroups);
   const byStatus = (g: Array<{ status: string; _count: number }>) => Object.fromEntries(g.map((x) => [x.status, x._count])) as Record<string, number>;
   const tpl = byStatus(templates);
@@ -246,6 +251,8 @@ export async function smsOverview(store: Pick<Store, "id" | "timezone" | "curren
       sending: !!sender?.sendingEnabled,
     },
     last7Days: { ...totals, deliveryRate: deliveryRate(totals) },
+    /** The store's calendar month so far (its time zone): what was sent and how it ended, and the cap on texts, if any. */
+    thisMonth: { ...month, deliveryRate: deliveryRate(month), from: monthStart, quota: sender?.monthlyMessageQuota ?? null },
     scheduled,
     templates: tpl,
     rules: rl,

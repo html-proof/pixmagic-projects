@@ -84,6 +84,17 @@ function publicCampaign(c: SmsCampaign, segment?: { name: string; filter: unknow
   };
 }
 
+/**
+ * The advanced rule editor's input without an audience: who a rule texts (a segment, chosen
+ * customers) is set in the automation builder only, so an editor that doesn't show it can never
+ * widen it. A new rule texts the event's customer.
+ */
+function withoutAudience(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const { audience: _audience, ...rest } = input as Record<string, unknown>;
+  return rest;
+}
+
 export function smsOpsRoutes(app: App, deps: Deps) {
   // ---------------------------------------------------------------- automation rules
 
@@ -113,7 +124,7 @@ export function smsOpsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, SMS_MANAGE);
     const store = await smsStore(ws, storeId);
-    const r = await createRule(store, await body(c), actorOf(c, a));
+    const r = await createRule(store, withoutAudience(await body(c)), actorOf(c, a));
     return c.json({ rule: publicRule(r) }, 201);
   });
 
@@ -121,7 +132,8 @@ export function smsOpsRoutes(app: App, deps: Deps) {
     const { ws, storeId, id } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, SMS_MANAGE);
     const store = await smsStore(ws, storeId);
-    const r = await updateRule(store, id, await body(c), actorOf(c, a));
+    // The rule keeps its own audience (updateRule): only the automation builder changes who it texts.
+    const r = await updateRule(store, id, withoutAudience(await body(c)), actorOf(c, a));
     return c.json({ rule: publicRule(r) });
   });
 

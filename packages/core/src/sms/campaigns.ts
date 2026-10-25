@@ -9,7 +9,7 @@
  * consent when it goes. Marketing must be switched on for the platform and for the store.
  */
 import { Prisma, systemDb, type SmsCampaign, type Store } from "@app/db";
-import { budgetAllows, estimateCostUsd, segmentFilterSchema, smsCampaignCan, smsCampaignEditable, smsCampaignSchema, type SegmentFilter, type SmsCampaignAction } from "@app/shared/sms";
+import { budgetAllows, estimateCostUsd, segmentFilterSchema, smsCampaignCan, smsCampaignEditable, smsCampaignSchema, type RuleCondition, type SegmentFilter, type SmsCampaignAction } from "@app/shared/sms";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { marketingSwitchedOn, monthSpend, partPrice, senderOf, senderProblem, smsAudit, SmsError, smsMode, type SmsDeps } from "./common.js";
@@ -20,15 +20,36 @@ import { approvedVersionOf, type Actor } from "./templates.js";
 // Segments
 // ---------------------------------------------------------------------------
 
-/** The contacts a filter reaches: subscribed, not suppressed, and matching every part of the filter. */
-export function segmentWhere(storeId: string, f: SegmentFilter, now = new Date()): Prisma.SmsContactWhereInput {
-  const and: Prisma.SmsContactWhereInput[] = [{ storeId, consentState: "subscribed", suppressedAll: false, suppressedMarketing: false }];
+/**
+ * The contacts a filter reaches: subscribed, not suppressed, and matching every part of the filter.
+ * `consent: "any"` drops the marketing consent (order updates limited to a segment): opted-out numbers are still left out.
+ */
+export function segmentWhere(storeId: string, f: SegmentFilter, now = new Date(), consent: "marketing" | "any" = "marketing"): Prisma.SmsContactWhereInput {
+  const and: Prisma.SmsContactWhereInput[] = [consent === "marketing" ? { storeId, consentState: "subscribed", suppressedAll: false, suppressedMarketing: false } : { storeId, suppressedAll: false }];
   if (f.countries.length) and.push({ country: { in: f.countries } });
   if (f.minOrders != null) and.push({ ordersCount: { gte: f.minOrders } });
   if (f.maxOrders != null) and.push({ ordersCount: { lte: f.maxOrders } });
   if (f.minSpent != null) and.push({ totalSpent: { gte: f.minSpent } });
   if (f.orderedWithinDays != null) and.push({ lastOrderAt: { gte: new Date(now.getTime() - f.orderedWithinDays * 86400_000) } });
   if (f.inactiveForDays != null) and.push({ lastOrderAt: { lt: new Date(now.getTime() - f.inactiveForDays * 86400_000) } });
+  return { AND: and };
+}
+
+/**
+ * A rule's conditions on a contact's own facts (country, orders, spend, days since the last order),
+ * as a query: the same reading as evaluateRuleConditions, where a missing fact fails. Order facts
+ * (total, product, tag) aren't a contact's and are left to the rule.
+ */
+export function contactConditionsWhere(conditions: RuleCondition[], now = new Date()): Prisma.SmsContactWhereInput {
+  const day = 86400_000;
+  const and: Prisma.SmsContactWhereInput[] = [];
+  for (const c of conditions) {
+    if (c.field === "country") and.push(c.op === "in" ? { country: { in: c.value } } : { AND: [{ country: { not: null } }, { country: { notIn: c.value } }] });
+    else if (c.field === "customer_orders") and.push({ ordersCount: c.op === "gte" ? { gte: c.value } : { lte: c.value } });
+    else if (c.field === "customer_spent") and.push({ totalSpent: c.op === "gte" ? { gte: c.value } : { lte: c.value } });
+    else if (c.field === "days_since_last_order")
+      and.push({ lastOrderAt: c.op === "gte" ? { lte: new Date(now.getTime() - c.value * day) } : { gt: new Date(now.getTime() - (c.value + 1) * day) } });
+  }
   return { AND: and };
 }
 
@@ -65,6 +86,12 @@ export async function deleteSegment(store: Pick<Store, "id" | "workspaceId">, id
   const seg = await segmentOf(store.id, id);
   const used = await systemDb.smsCampaign.count({ where: { storeId: store.id, segmentId: id, status: { notIn: ["completed", "cancelled"] } } });
   if (used) throw new SmsError("A campaign still uses this segment.", 409, "segment_in_use");
+  const automations = await systemDb.smsAutomationRule.findMany({
+    where: { storeId: store.id, OR: [{ config: { path: ["audience", "segmentId"], equals: id } }, { activeConfig: { path: ["audience", "segmentId"], equals: id } }] },
+    select: { name: true },
+    take: 3,
+  });
+  if (automations.length) throw new SmsError(`An automation still uses this segment (${automations.map((a) => `"${a.name}"`).join(", ")}): change or delete it first.`, 409, "segment_in_use");
   await systemDb.smsSegment.delete({ where: { id: seg.id } });
   await smsAudit({ workspaceId: store.workspaceId, storeId: store.id, actorUserId: actor.userId, action: "segment_deleted", targetType: "sms_segment", targetId: id, ip: actor.ip });
 }
