@@ -60,7 +60,7 @@ describe('the cron action {"action":"config"}', () => {
 
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: false, google: false, adsense: false } });
     expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
-    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false });
+    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhookVerifyToken: false });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
     // The cold start already said it in the logs, once per provider.

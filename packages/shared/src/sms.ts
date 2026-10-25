@@ -10,7 +10,7 @@
  */
 import { z } from "./zod";
 import { addDays, customRangeProblem, isDay } from "./dates";
-import { maskPhone, nextSendTime } from "./whatsapp";
+import { maskPhone, nextSendTime } from "./messaging";
 
 // ---------------------------------------------------------------------------
 // Encoding and message parts

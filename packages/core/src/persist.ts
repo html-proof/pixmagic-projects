@@ -1,9 +1,12 @@
 import { Prisma, systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
+import { logger } from "./logger.js";
 import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
 import { revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
+import { purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
+import { deleteNangoToken } from "./whatsapp/nango.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
 
@@ -914,6 +917,7 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   // Read first: the ad platforms' grants are revoked once the rows are gone (so the store's own
   // connections no longer count as "still using" the grant). Best effort, never blocks the purge.
   const adConnections = await systemDb.adConnection.findMany({ where: { storeId } });
+  const whatsapp = await systemDb.waConnection.findUnique({ where: { storeId }, select: { nangoConnectionId: true } });
   await systemDb.$transaction([
     systemDb.orderLineItem.deleteMany({ where: { storeId } }),
     systemDb.orderSale.deleteMany({ where: { storeId } }),
@@ -947,20 +951,11 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.adCampaignDaily.deleteMany({ where: { storeId } }),
     systemDb.adsenseDaily.deleteMany({ where: { storeId } }),
     systemDb.adConnection.deleteMany({ where: { storeId } }),
-    // WhatsApp: customers' numbers, messages, timelines, reviews, and the store's own credentials.
-    systemDb.whatsappMessageEvent.deleteMany({ where: { storeId } }),
-    systemDb.whatsappMessage.deleteMany({ where: { storeId } }),
-    systemDb.whatsappContact.deleteMany({ where: { storeId } }),
-    systemDb.orderTrackingEvent.deleteMany({ where: { storeId } }),
-    systemDb.orderTracking.deleteMany({ where: { storeId } }),
-    systemDb.abandonedCheckout.deleteMany({ where: { storeId } }),
-    systemDb.customerReview.deleteMany({ where: { storeId } }),
-    systemDb.whatsappCampaign.deleteMany({ where: { storeId } }),
-    systemDb.whatsappAutomationRun.deleteMany({ where: { storeId } }),
-    systemDb.whatsappAutomationRule.deleteMany({ where: { storeId } }),
-    systemDb.whatsappTemplate.deleteMany({ where: { storeId } }),
-    systemDb.whatsappConnection.deleteMany({ where: { storeId } }),
-    systemDb.whatsappSettings.deleteMany({ where: { storeId } }),
+    // WhatsApp Automation: customers' numbers, consent, messages, workflows, campaigns and the
+    // store's connection (its token is at Nango: the erase's caller disconnects first). Then what
+    // the earlier WhatsApp feature still holds until its tables are dropped.
+    ...purgeWhatsappStoreOps(storeId),
+    ...purgeLegacyWhatsappOps(storeId),
     // Customer Messaging (SMS): customers' numbers, consent history, texts, costs, and the store's sender.
     systemDb.smsDeliveryEvent.deleteMany({ where: { storeId } }),
     systemDb.smsCostRecord.deleteMany({ where: { storeId } }),
@@ -986,4 +981,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   ]);
   // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
   for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);
+  // The WhatsApp token is at Nango: it goes too (best effort; Nango never sees it used again).
+  if (whatsapp?.nangoConnectionId) {
+    await deleteNangoToken(whatsapp.nangoConnectionId, fetchImpl ?? fetch).catch((err: unknown) => logger.warn({ err, storeId }, "whatsapp token at Nango not deleted with the store's data"));
+  }
 }

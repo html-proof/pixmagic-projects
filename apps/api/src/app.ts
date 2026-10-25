@@ -25,7 +25,8 @@ import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
 import { adsNangoRoutes } from "./routes/adsNango.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
-import { whatsappPublicRoutes } from "./routes/whatsappPublic.js";
+import { whatsappAutomationRoutes } from "./routes/whatsappAutomation.js";
+import { whatsappWebhookRoutes } from "./routes/whatsappWebhook.js";
 import { staffRoutes } from "./routes/staff.js";
 import { staffAttendanceRoutes } from "./routes/staffAttendance.js";
 import { staffPayrollRoutes } from "./routes/staffPayroll.js";
@@ -226,7 +227,8 @@ export function buildApp(deps: Deps): App {
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.
   metaWebhookRoutes(app, deps);
   whatsappRoutes(app, deps);
-  whatsappPublicRoutes(app, deps);
+  whatsappAutomationRoutes(app, deps);
+  whatsappWebhookRoutes(app, deps);
   staffRoutes(app, deps);
   staffAttendanceRoutes(app, deps);
   staffPayrollRoutes(app, deps);

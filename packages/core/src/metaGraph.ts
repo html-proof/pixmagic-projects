@@ -10,7 +10,7 @@
  *   way as Meta's own errors, so each caller sorts every failure in one place;
  * - with the app's secret (`appSecret`), every call made with a person's token carries
  *   `appsecret_proof`, so a leaked token is useless without the secret. The ads app's secret is
- *   bizinsights' own; a merchant's own WhatsApp app has a secret we don't hold, so WhatsApp sends none.
+ *   bizinsights' own, and so is WhatsApp's (every number is connected through bizinsights' app).
  *
  * How a failure is classified (reconnect, retry, give up) differs between the two callers, so each
  * passes its own `fail` that turns the failure into its error type.

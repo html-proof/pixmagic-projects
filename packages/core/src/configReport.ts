@@ -13,7 +13,7 @@ import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
 import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
-import { waPlatformConfig } from "./whatsapp/graph.js";
+import { waPlatform } from "./whatsapp/common.js";
 
 /** A provider's public id (one of the app's settings) and its secret (Secrets Manager). */
 export interface ProviderCredentials {
@@ -33,8 +33,8 @@ export interface ConfigReport {
   /** `configured`: the platform's own app is set up here; `nango`: it is also connected through Nango (docs/nango.md). */
   ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean>; nango: Record<AdProvider, boolean> };
   /**
-   * "Connect WhatsApp Business" (Embedded Signup; manual connections need none of this), the settings
-   * it still lacks (names, empty once it is on), and the webhook verify token.
+   * "Connect WhatsApp" (Meta's Embedded Signup, the token kept at Nango), the settings it still lacks
+   * (names, empty once it is on), and the webhook verify token.
    */
   whatsapp: { embeddedSignup: boolean; embeddedSignupNeeds: string[]; webhookVerifyToken: boolean };
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
@@ -68,7 +68,7 @@ function extraShopifyApps(raw: string | undefined): Array<{ key: string; clientI
 /**
  * Whether WhatsApp's app secret is there: its own, or the Meta Ads app's when WhatsApp runs on that app (no
  * WHATSAPP_APP_ID, or the same id). On an app of its own, only its own secret signs what it sends.
- * The same rule as whatsapp/graph.ts.
+ * The same rule as whatsapp/common.ts.
  */
 const waSecretSet = (vars: Vars) =>
   !!vars.WHATSAPP_APP_SECRET || ((!vars.WHATSAPP_APP_ID || vars.WHATSAPP_APP_ID === vars.META_APP_ID) && !!vars.META_APP_SECRET);
@@ -87,16 +87,15 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
     secretSet: !!vars[secretSetting],
     effect,
   });
-  // WhatsApp's secret is used only by Embedded Signup ("Connect WhatsApp Business") and the webhooks
-  // of the numbers it connects; manual connections bring their own app's secret. So its id here is
-  // WHATSAPP_CONFIG_ID, the setting that turns Embedded Signup on: an app id picked (WHATSAPP_APP_ID)
-  // before its configuration exists is no reason to warn on every deploy.
+  // WhatsApp's secret is used by Embedded Signup ("Connect WhatsApp") and the webhooks of the numbers
+  // it connects. So its id here is WHATSAPP_CONFIG_ID, the setting that turns Embedded Signup on: an
+  // app id picked (WHATSAPP_APP_ID) before its configuration exists is no reason to warn on every deploy.
   const whatsapp: ProviderCredentials = {
     ...pair(
       "WhatsApp (Embedded Signup)",
       "WHATSAPP_CONFIG_ID",
       "WHATSAPP_APP_SECRET",
-      "Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work",
+      "Connect WhatsApp (Embedded Signup) can't be turned on, and replies and delivery reports from connected numbers can't be checked",
     ),
     secretSet: waSecretSet(vars),
   };
@@ -134,15 +133,18 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
 }
 
 /**
- * What "Connect WhatsApp Business" still lacks, by setting name: Meta's app (its own, or the Meta Ads
- * app's), the Embedded Signup configuration, and that app's secret. Empty when Embedded Signup is on
- * (whatsapp/graph.ts waPlatformConfig asks for the same three).
+ * What "Connect WhatsApp" still lacks, by setting name: Meta's app (its own, or the Meta Ads app's),
+ * the Embedded Signup configuration, that app's secret, the webhook verify token, and Nango's key
+ * (Nango keeps each store's token). Empty when it is on (whatsapp/common.ts waPlatformMissing asks
+ * for the same).
  */
 export function embeddedSignupNeeds(vars: Vars = process.env): string[] {
   return [
     !vars.WHATSAPP_APP_ID && !vars.META_APP_ID ? "WHATSAPP_APP_ID" : null,
     !vars.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
     !waSecretSet(vars) ? "WHATSAPP_APP_SECRET" : null,
+    !vars.WHATSAPP_WEBHOOK_VERIFY_TOKEN ? "WHATSAPP_WEBHOOK_VERIFY_TOKEN" : null,
+    !vars.NANGO_SECRET_KEY ? "NANGO_SECRET_KEY" : null,
   ].filter((n): n is string => n !== null);
 }
 
@@ -158,7 +160,7 @@ export function configReport(): ConfigReport {
   return {
     ads: { configured: adsConfigured(), restricted: adsRestricted(), nango: nangoProviders() },
     whatsapp: {
-      embeddedSignup: waPlatformConfig() !== null,
+      embeddedSignup: waPlatform() !== null,
       embeddedSignupNeeds: embeddedSignupNeeds(),
       webhookVerifyToken: !!e.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     },

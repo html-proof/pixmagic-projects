@@ -142,7 +142,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   await guest.goto("/settings/profile");
   await expect(guest).not.toHaveURL(/\/settings\/profile/);
   // Every owner's and admin's page, and the pages of areas that weren't shared: the page never shows.
-  for (const path of ["/settings/api-keys", "/settings/billing", "/settings/audit", "/settings/workspace", "/settings/integrations", "/whatsapp/connect", "/staff", "/inventory/movements"]) {
+  for (const path of ["/settings/api-keys", "/settings/billing", "/settings/audit", "/settings/workspace", "/settings/integrations", "/staff", "/inventory/movements"]) {
     await guest.goto(path);
     await expect(guest, path).not.toHaveURL(new RegExp(`${path}$`));
     await expect(guest.getByTestId("access-notice"), path).toContainText("You don't have access to that page.");

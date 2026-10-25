@@ -175,16 +175,16 @@ const schema = z.object({
    */
   NANGO_PROVIDERS: z.string().optional().default("meta,google,adsense"),
   /**
-   * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
-   * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the
-   * Facebook Login for Business configuration id of its WhatsApp Embedded Signup variation. The
-   * verify token is what the Meta app's webhook settings were given. Manual connections (the
-   * merchant's own app and system-user token) work without any of these.
+   * WhatsApp Automation (WhatsApp Business Platform, Cloud API; docs/whatsapp.md). "Connect WhatsApp"
+   * (Meta's Embedded Signup) needs the Meta app's id and secret (the ad accounts' Meta app is used
+   * when these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
+   * Signup variation, the webhook verify token, and NANGO_SECRET_KEY (Nango keeps each store's token).
+   * Until every one is set the page says connecting isn't switched on yet.
    */
   WHATSAPP_APP_ID: z.string().optional().default(""),
   WHATSAPP_APP_SECRET: z.string().optional().default(""),
   WHATSAPP_CONFIG_ID: z.string().optional().default(""),
-  WHATSAPP_API_VERSION: z.string().default("v25.0"),
+  WHATSAPP_API_VERSION: z.string().default("v26.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
   /**
    * Customer Messaging: SMS through AWS End User Messaging (docs/sms.md).

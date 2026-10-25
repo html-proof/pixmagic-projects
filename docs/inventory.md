@@ -89,8 +89,9 @@ never claims "live": Shopify gives no freshness guarantee for webhooks.
   gets alerts they never asked for when the module ships. Low = 1..threshold available counting every location; threshold = variant's, else product's, else
   the store's (default 10). Fast movement = at least 5 units today and 3× the 30-day daily rate.
 - **WhatsApp alerts** go through the store's own WhatsApp connection with an approved template of
-  two body variables (store name, the summary): submit the library's `insights_stock_alert`, pick it
-  and the numbers (up to 5, stored encrypted, shown masked) in Stock settings.
+  two body variables (store name, the summary): submit the starter "Stock alert (to your team)" in
+  WhatsApp Automation → Message templates, then pick it and the numbers (up to 5, stored encrypted,
+  shown masked) in Stock settings. At most one message per number and hour (docs/whatsapp.md).
 
 Forecasts (days of stock, run-out date, reorder, fast/slow-moving) need at least 14 days of imported
 orders (`MIN_HISTORY_DAYS`); slow-moving needs 30. Reorder = rate × (lead time + days to cover) −

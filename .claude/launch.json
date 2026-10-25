@@ -30,14 +30,6 @@
       "port": 8789
     },
     {
-      "name": "wa-demo",
-      "runtimeExecutable": "node",
-      "runtimeArgs": [
-        ".claude/wa-demo-server.mjs"
-      ],
-      "port": 8793
-    },
-    {
       "name": "ads-demo",
       "runtimeExecutable": "node",
       "runtimeArgs": [

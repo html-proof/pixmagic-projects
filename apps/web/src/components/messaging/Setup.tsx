@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, CircleAlert, Cloud, Info, Lock, MessageSquareText } from "lucide-react";
-import { callingCode, normalizePhone, PHONE_COUNTRIES } from "@app/shared/whatsapp";
+import { callingCode, normalizePhone, PHONE_COUNTRIES } from "@app/shared/messaging";
 import {
   checkSenderName,
   checkTemplate,

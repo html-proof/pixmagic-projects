@@ -22,10 +22,10 @@ describe("a transaction's statements", () => {
       const page = await withTenant(ws.id, (tx) =>
         Promise.all([
           tx.workspace.findUnique({ where: { id: ws.id } }),
-          tx.whatsappSettings.findUnique({ where: { storeId: "none" } }),
-          tx.whatsappConnection.findUnique({ where: { storeId: "none" } }),
-          tx.whatsappTemplate.findMany({ where: { storeId: "none" } }),
-          tx.whatsappMessage.count({ where: { storeId: "none" } }),
+          tx.waSettings.findUnique({ where: { storeId: "none" } }),
+          tx.waConnection.findUnique({ where: { storeId: "none" } }),
+          tx.waTemplate.findMany({ where: { storeId: "none" } }),
+          tx.waMessage.count({ where: { storeId: "none" } }),
         ]),
       );
       expect(page).toEqual([expect.objectContaining({ id: ws.id }), null, null, [], 0]);

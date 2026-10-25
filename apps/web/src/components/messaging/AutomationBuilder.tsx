@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Check, ChevronDown, CircleAlert, Clock, Info, Lock, MessageSquareText, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
-import { callingCode, normalizePhone, PHONE_COUNTRIES } from "@app/shared/whatsapp";
+import { callingCode, normalizePhone, PHONE_COUNTRIES } from "@app/shared/messaging";
 import {
   AUTOMATION_STARTERS,
   AUTOMATION_STEPS,

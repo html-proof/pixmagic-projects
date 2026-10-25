@@ -116,7 +116,7 @@ export default function StockSettingsPage() {
               </div>
               {alerts.whatsappAlerts && (
                 <>
-                  <Field label="WhatsApp template" htmlFor="wa-template" hint="An approved template with two variables: the store's name, then the alert. Submit the library's “Stock alert (to your team)” from WhatsApp → Message templates.">
+                  <Field label="WhatsApp template" htmlFor="wa-template" hint="An approved template with two variables: the store's name, then the alert. Write it from the starter “Stock alert (to your team)” in WhatsApp Automation → Message templates.">
                     <select id="wa-template" className="input" value={alerts.whatsappTemplate} onChange={(e) => setAlerts({ ...alerts, whatsappTemplate: e.target.value })}>
                       <option value="">Choose a template</option>
                       {templates.data?.templates.map((t) => (

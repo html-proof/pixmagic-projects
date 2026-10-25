@@ -403,10 +403,10 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       default:
-        // checkouts/* and fulfillments/* are only for WhatsApp, customers/* only for SMS consent (below).
+        // checkouts/* and fulfillments/* are only for the automations (below), customers/* for SMS consent and WhatsApp.
         if (!data.topic.startsWith("checkouts/") && !data.topic.startsWith("fulfillment") && !data.topic.startsWith("customers")) logger.info({ topic: data.topic }, "unhandled webhook topic");
     }
-    // WhatsApp order updates, delivery updates and cart reminders (a no-op unless the store turned them on).
+    // WhatsApp Automation's workflows (a no-op for a store without a live WhatsApp connection).
     // After the analytics write, and idempotent, so a retry of this delivery repeats nothing.
     await whatsappOnShopifyEvent(store, data.topic, p, deps);
     // Email automations listening to orders and checkouts (a no-op unless one is enabled). Idempotent too.

@@ -22,10 +22,10 @@ async function seed() {
   await alert({ storeId: store.id, severity: "warning", code: "webhook_failed", message: `Processing orders/create failed: ${LEAK}`, createdAt: ago(60) });
   await alert({ severity: "warning", code: "email_account_reauth:acc1", message: "The email account shop@acme.test must be reconnected before it can send again (Settings → Email → Accounts).", createdAt: ago(30) });
   await alert({ severity: "warning", code: "staff_open_shifts", message: "2 shifts have been open longer than expected.", createdAt: ago(90) });
-  await alert({ storeId: store.id, severity: "info", code: "wa_rule_r1", message: "Big order (order #1001)", createdAt: ago(10) });
+  await alert({ storeId: store.id, severity: "warning", code: "wa_reconnect", message: `WhatsApp needs reconnecting: ${LEAK}`, createdAt: ago(10) });
   await alert({ storeId: store.id, severity: "warning", code: "privacy_request", message: "A customer of acme.myshopify.com asked for their data.", createdAt: ago(120) });
   // Not listed: an old note, a resolved problem, and a problem of a store that has been uninstalled.
-  await alert({ storeId: store.id, severity: "info", code: "wa_rule_r1", message: "Old note", createdAt: ago(8 * 24 * 60) });
+  await alert({ storeId: store.id, severity: "info", code: "inventory_stock", message: "Old note", createdAt: ago(8 * 24 * 60) });
   await alert({ storeId: store.id, severity: "critical", code: "sync_products_failed", message: LEAK, createdAt: ago(2), resolvedAt: ago(1) });
   await alert({ storeId: gone.id, severity: "critical", code: "sync_shop_failed", message: LEAK, createdAt: ago(3) });
   return { owner, ws, store };
@@ -43,7 +43,7 @@ describe("GET /workspaces/:ws/alerts", () => {
     const acme = { id: store.id, name: "Acme Store" };
     expect(alerts).toEqual([
       { id: expect.any(String), severity: "critical", area: "shopify", title: "Couldn't sync your orders", body: expect.stringContaining("Settings → Shopify"), store: acme, createdAt: expect.any(String) },
-      { id: expect.any(String), severity: "info", area: "whatsapp", title: "WhatsApp automation", body: "Big order (order #1001)", store: acme, createdAt: expect.any(String) },
+      { id: expect.any(String), severity: "warning", area: "whatsapp", title: "Reconnect WhatsApp", body: expect.stringContaining("press Reconnect"), store: acme, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "email", title: "An email account needs reconnecting", body: expect.stringContaining("shop@acme.test"), store: null, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "shopify", title: "An update from Shopify couldn't be processed", body: expect.any(String), store: acme, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "staff", title: "Shifts left open", body: "2 shifts have been open longer than expected.", store: null, createdAt: expect.any(String) },

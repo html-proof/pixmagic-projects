@@ -13,6 +13,7 @@ export * from "./ads.js";
 export * from "./adsAnalytics.js";
 export * from "./adsDemo.js";
 export * from "./alerts.js";
+export * from "./messaging.js";
 export * from "./whatsapp.js";
 export * from "./traffic.js";
 export * from "./auth.js";

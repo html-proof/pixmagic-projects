@@ -1,109 +1,133 @@
 /**
- * The WhatsApp Business Platform Cloud API, through Meta's Graph API: Embedded Signup's code
- * exchange, the phone number and account, templates, and sending. Server to server only; tokens
- * never reach a browser. Every call is a plain fetch so tests can stand in for Meta.
+ * The WhatsApp Business Platform (Cloud API) through Meta's Graph API, server to server: Embedded
+ * Signup's code exchange and token check, the business account and its numbers, webhooks,
+ * registration, templates and sending. Every call goes through core/metaGraph.ts (the token in the
+ * Authorization header, paging links only to graph.facebook.com) and is a plain fetch, so tests
+ * stand in for Meta. Tokens never reach a browser or a log.
  */
-import { classifyGraphError, type ErrorAction, type TemplateComponent } from "@app/shared";
-import { env } from "../env.js";
+import { classifyMetaError, type ErrorAction, type TemplateComponent } from "@app/shared";
 import { graphCall, type GraphFailure } from "../metaGraph.js";
 import type { FetchLike } from "../shopify.js";
-
-/** bizinsights' own Meta app, for Embedded Signup. Null until it is configured (the button then says so). */
-export interface WaPlatformConfig {
-  appId: string;
-  appSecret: string;
-  configId: string;
-  version: string;
-  verifyToken: string;
-}
-
-/**
- * WhatsApp's app secret: its own, or the ad accounts' Meta app secret only when WhatsApp runs on that
- * same app. With WhatsApp on its own app (WHATSAPP_APP_ID set to another id), the Meta Ads app's
- * secret would sign nothing WhatsApp sends, so it's never borrowed.
- */
-function waSecret(e: ReturnType<typeof env>): string {
-  if (e.WHATSAPP_APP_SECRET) return e.WHATSAPP_APP_SECRET;
-  return !e.WHATSAPP_APP_ID || e.WHATSAPP_APP_ID === e.META_APP_ID ? e.META_APP_SECRET : "";
-}
-
-export function waPlatformConfig(): WaPlatformConfig | null {
-  const e = env();
-  const appId = e.WHATSAPP_APP_ID || e.META_APP_ID;
-  const appSecret = waSecret(e);
-  if (!appId || !appSecret || !e.WHATSAPP_CONFIG_ID) return null;
-  return { appId, appSecret, configId: e.WHATSAPP_CONFIG_ID, version: e.WHATSAPP_API_VERSION, verifyToken: e.WHATSAPP_WEBHOOK_VERIFY_TOKEN };
-}
-
-/** The app secret that signs webhooks for numbers connected through Embedded Signup. */
-export function waPlatformSecret(): string {
-  return waSecret(env());
-}
-
-export const waVersion = () => env().WHATSAPP_API_VERSION;
+import { waAppSecret, waVersion, type WaPlatform } from "./common.js";
 
 export class WhatsappApiError extends Error {
   override name = "WhatsappApiError";
-  readonly action: ErrorAction;
+  readonly action: ErrorAction | "network";
   constructor(
+    /** 0 when nothing answered. */
     readonly httpStatus: number,
     readonly code: number | null,
+    readonly subcode: number | null,
+    /** Meta's title or error type: for logs and the message's error title. */
     readonly title: string,
+    /** Meta's own words, for the logs (shown to a merchant only through providerDetail). */
     readonly details: string | null,
   ) {
     super(`WhatsApp API ${httpStatus}${code !== null ? ` (#${code})` : ""}: ${details || title}`);
-    this.action = classifyGraphError(code, httpStatus);
+    // No answer at all: Meta may or may not have the request (a send is then "uncertain").
+    this.action = httpStatus === 0 ? "network" : classifyMetaError(code, httpStatus);
   }
 }
 
-/** A Graph API failure as WhatsApp sorts it (`classifyGraphError`: reconnect, retry or fail). */
 function waError(f: GraphFailure): WhatsappApiError {
-  // No answer at all: Meta or the network is down. Retryable (no code, 5xx-like).
-  if (f.reason === "network") return new WhatsappApiError(503, null, "network", f.message);
-  return new WhatsappApiError(f.status, f.code, f.userTitle || f.type || "error", f.details || f.userMessage || f.message || f.text || null);
+  if (f.reason === "network") return new WhatsappApiError(0, null, null, "network", f.message);
+  return new WhatsappApiError(f.status, f.code, f.subcode, f.userTitle || f.type || "error", f.details || f.userMessage || f.message || f.text || null);
 }
 
-/** One Graph API call with the business's (or bizinsights' app) token. */
-export function graph<T>(
-  fetchImpl: FetchLike,
-  token: string,
-  method: "GET" | "POST" | "DELETE",
-  path: string,
-  opts: { query?: Record<string, string>; body?: unknown; version?: string } = {},
-): Promise<T> {
-  return graphCall<T>(fetchImpl, { version: opts.version ?? waVersion(), method, path, token, query: opts.query, json: opts.body }, waError);
+interface CallOpts {
+  query?: Record<string, string>;
+  body?: unknown;
+  version?: string;
+  /** An app token (`<id>|<secret>`) carries its secret and takes no proof. */
+  appToken?: boolean;
 }
 
-/** Embedded Signup returns a code that lives 30 seconds: exchange it for the business's token at once. */
-export async function waExchangeCode(cfg: WaPlatformConfig, code: string, fetchImpl: FetchLike): Promise<string> {
-  // The code exchange is the one call without a token: the app proves itself with its id and secret.
-  const body = await graphCall<{ access_token?: string }>(
-    fetchImpl,
-    { version: cfg.version, method: "GET", path: "oauth/access_token", query: { client_id: cfg.appId, client_secret: cfg.appSecret, code } },
-    (f) => (f.reason === "network" ? waError(f) : new WhatsappApiError(f.status || 400, f.code, f.type ?? "oauth", f.message ?? "The sign-in code was not accepted")),
-  );
-  if (!body.access_token) throw new WhatsappApiError(400, null, "oauth", "The sign-in code was not accepted");
-  return body.access_token;
+/**
+ * One Graph API call with the business's token (or bizinsights' app token). Calls with a business
+ * token carry `appsecret_proof` when bizinsights' app secret is known: the token was issued to it.
+ */
+export function graph<T>(fetchImpl: FetchLike, token: string, method: "GET" | "POST" | "DELETE", path: string, opts: CallOpts = {}): Promise<T> {
+  const secret = opts.appToken ? "" : waAppSecret();
+  return graphCall<T>(fetchImpl, { version: opts.version ?? waVersion(), method, path, token, ...(secret ? { appSecret: secret } : {}), query: opts.query, json: opts.body }, waError);
 }
 
-export interface WaPhoneInfo {
+const appToken = (p: WaPlatform) => `${p.appId}|${p.appSecret}`;
+
+/** Embedded Signup's code lives 30 seconds: exchange it for the business's token at once. */
+export async function exchangeSignupCode(p: WaPlatform, code: string, fetchImpl: FetchLike): Promise<string> {
+  // The one call without a token: the app proves itself with its id and secret.
+  const r = await graphCall<{ access_token?: string }>(fetchImpl, { version: p.version, method: "GET", path: "oauth/access_token", query: { client_id: p.appId, client_secret: p.appSecret, code } }, waError);
+  if (!r.access_token) throw new WhatsappApiError(400, null, null, "oauth", "Meta returned no token for the sign-in code");
+  return r.access_token;
+}
+
+export interface TokenInfo {
+  appId: string | null;
+  valid: boolean;
+  scopes: string[];
+  /** The WhatsApp Business Accounts the token was given (Meta's granular scopes); empty when Meta doesn't list them. */
+  wabaIds: string[];
+  /** When it expires; null for a token that doesn't (a business integration system user token). */
+  expiresAt: Date | null;
+}
+
+/** What Meta says of a token, asked with bizinsights' app token (Meta's token inspector). */
+export async function inspectToken(p: WaPlatform, token: string, fetchImpl: FetchLike): Promise<TokenInfo> {
+  const r = await graph<{ data?: { app_id?: string; is_valid?: boolean; scopes?: string[]; expires_at?: number; granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(fetchImpl, appToken(p), "GET", "debug_token", {
+    query: { input_token: token },
+    appToken: true,
+    version: p.version,
+  });
+  const d = r.data ?? {};
+  const targets = (d.granular_scopes ?? []).filter((g) => g.scope === "whatsapp_business_management" || g.scope === "whatsapp_business_messaging").flatMap((g) => g.target_ids ?? []);
+  return {
+    appId: d.app_id ? String(d.app_id) : null,
+    valid: d.is_valid !== false,
+    scopes: d.scopes ?? [],
+    wabaIds: [...new Set(targets.map(String))],
+    expiresAt: d.expires_at ? new Date(d.expires_at * 1000) : null,
+  };
+}
+
+export const REQUIRED_SCOPES = ["whatsapp_business_management", "whatsapp_business_messaging"];
+
+export interface WabaInfo {
+  id: string;
+  name?: string;
+  currency?: string;
+  timezone_id?: string;
+}
+
+export async function getWaba(wabaId: string, token: string, fetchImpl: FetchLike): Promise<WabaInfo> {
+  return graph<WabaInfo>(fetchImpl, token, "GET", wabaId, { query: { fields: "id,name,currency,timezone_id" } });
+}
+
+export interface PhoneInfo {
   id: string;
   display_phone_number?: string;
   verified_name?: string;
   quality_rating?: string;
   code_verification_status?: string;
   name_status?: string;
+  /** CLOUD_API once the number is registered for sending; NOT_APPLICABLE before. */
   platform_type?: string;
+  /** CONNECTED, PENDING, DISCONNECTED, FLAGGED, RESTRICTED... */
+  status?: string;
   messaging_limit_tier?: string;
 }
 
-/** The number's name, quality and whether it is on the Cloud API. */
-export async function waPhoneInfo(phoneNumberId: string, token: string, fetchImpl: FetchLike): Promise<WaPhoneInfo> {
-  const info = await graph<WaPhoneInfo>(fetchImpl, token, "GET", phoneNumberId, {
-    query: { fields: "display_phone_number,verified_name,quality_rating,code_verification_status,name_status,platform_type" },
-  });
-  // Meta has been moving messaging limits from the number to the business portfolio: ask for the
-  // tier on its own, so a field it no longer has can't fail the whole lookup.
+const PHONE_FIELDS = "id,display_phone_number,verified_name,quality_rating,code_verification_status,name_status,platform_type,status";
+
+export async function listPhones(wabaId: string, token: string, fetchImpl: FetchLike): Promise<PhoneInfo[]> {
+  const r = await graph<{ data?: PhoneInfo[] }>(fetchImpl, token, "GET", `${wabaId}/phone_numbers`, { query: { fields: PHONE_FIELDS, limit: "100" } });
+  return r.data ?? [];
+}
+
+/** The number's name, quality and whether it is on the Cloud API, and its messaging limit where Meta still reports it there. */
+export async function getPhone(phoneNumberId: string, token: string, fetchImpl: FetchLike): Promise<PhoneInfo> {
+  const info = await graph<PhoneInfo>(fetchImpl, token, "GET", phoneNumberId, { query: { fields: PHONE_FIELDS } });
+  // Meta has been moving the limit from the number to the business: asked on its own, so a field it
+  // no longer has can't fail the whole read.
   try {
     const tier = await graph<{ messaging_limit_tier?: string }>(fetchImpl, token, "GET", phoneNumberId, { query: { fields: "messaging_limit_tier" } });
     if (tier.messaging_limit_tier) info.messaging_limit_tier = tier.messaging_limit_tier;
@@ -113,114 +137,30 @@ export async function waPhoneInfo(phoneNumberId: string, token: string, fetchImp
   return info;
 }
 
-export interface WaAccountInfo {
-  id: string;
-  name?: string;
-  owner_business_info?: { id?: string; name?: string };
-}
-
-export async function waAccountInfo(wabaId: string, token: string, fetchImpl: FetchLike): Promise<WaAccountInfo> {
-  return graph<WaAccountInfo>(fetchImpl, token, "GET", wabaId, { query: { fields: "id,name" } });
-}
-
-/** The phone numbers in an account (to check that a manually entered phone number id belongs to it). */
-export async function waAccountPhoneIds(wabaId: string, token: string, fetchImpl: FetchLike): Promise<string[]> {
-  const r = await graph<{ data?: Array<{ id: string }> }>(fetchImpl, token, "GET", `${wabaId}/phone_numbers`, { query: { fields: "id", limit: "100" } });
-  return (r.data ?? []).map((p) => p.id);
-}
-
-export interface WaTokenInfo {
-  /** The Meta app the token was made for. */
-  appId: string | null;
-  scopes: string[];
-  /** The WhatsApp Business Accounts the token was given; null when Meta doesn't list them. */
-  wabaIds: string[] | null;
-}
-
-/** What a token can reach: its app, its permissions and the WhatsApp accounts it was given. */
-/**
- * What Meta says about a token: its app, permissions and the WhatsApp accounts it was given.
- * `inspector` is the token that asks (bizinsights' app token `<id>|<secret>` for Embedded Signup
- * tokens); by default the token inspects itself.
- */
-export async function waTokenInfo(token: string, fetchImpl: FetchLike, inspector = token): Promise<WaTokenInfo> {
-  const r = await graph<{ data?: { app_id?: string; is_valid?: boolean; scopes?: string[]; granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(fetchImpl, inspector, "GET", "debug_token", {
-    query: { input_token: token },
-  });
-  const d = r.data ?? {};
-  if (d.is_valid === false) throw new WhatsappApiError(401, 190, "OAuthException", "The access token isn't valid");
-  const targets = (d.granular_scopes ?? []).filter((g) => g.scope === "whatsapp_business_management" || g.scope === "whatsapp_business_messaging").flatMap((g) => g.target_ids ?? []);
-  return { appId: d.app_id ?? null, scopes: d.scopes ?? [], wabaIds: targets.length ? [...new Set(targets)] : null };
-}
-
-export interface WaNumber {
-  id: string;
-  display_phone_number?: string;
-  verified_name?: string;
-  platform_type?: string;
-  quality_rating?: string;
-}
-
-/** The phone numbers in an account, with what a person needs to recognise them. */
-export async function waAccountNumbers(wabaId: string, token: string, fetchImpl: FetchLike): Promise<WaNumber[]> {
-  const r = await graph<{ data?: WaNumber[] }>(fetchImpl, token, "GET", `${wabaId}/phone_numbers`, {
-    query: { fields: "id,display_phone_number,verified_name,platform_type,quality_rating", limit: "100" },
-  });
-  return r.data ?? [];
-}
-
-/** The webhook fields bizinsights reads (webhook.ts). */
-export const WA_WEBHOOK_FIELDS = [
-  "messages",
-  "user_preferences",
-  "message_template_status_update",
-  "message_template_quality_update",
-  "template_category_update",
-  "phone_number_quality_update",
-  "account_update",
-];
-
-/**
- * Point a merchant's own Meta app's WhatsApp webhook at bizinsights, so they don't have to paste a
- * callback URL and verify token into Meta's dashboard. Meta checks the URL straight away (the
- * verify-token handshake), so the connection has to be saved first. An app whose WhatsApp webhook
- * already goes somewhere else is left alone ("in_use"): it may be feeding another tool.
- * "already": it points here with every field, so Meta isn't asked again.
- * Throws when Meta refuses the app id and secret (a secret from a different app, say).
- */
-export async function waSetAppWebhook(
-  app: { appId: string; appSecret: string },
-  callbackUrl: string,
-  verifyToken: string,
-  fetchImpl: FetchLike,
-): Promise<"set" | "already" | "in_use"> {
-  const appToken = `${app.appId}|${app.appSecret}`;
-  const current = await graph<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean; fields?: Array<{ name?: string }> }> }>(
-    fetchImpl,
-    appToken,
-    "GET",
-    `${app.appId}/subscriptions`,
-  );
-  const wa = (current.data ?? []).find((s) => s.object === "whatsapp_business_account");
-  if (wa?.active && wa.callback_url && wa.callback_url !== callbackUrl) return "in_use";
-  if (wa?.active && WA_WEBHOOK_FIELDS.every((f) => wa.fields?.some((x) => x.name === f))) return "already";
-  await graph(fetchImpl, appToken, "POST", `${app.appId}/subscriptions`, {
-    query: { object: "whatsapp_business_account", callback_url: callbackUrl, verify_token: verifyToken, fields: WA_WEBHOOK_FIELDS.join(",") },
-  });
-  return "set";
-}
-
-/** Have the account's webhooks (messages, statuses, template reviews) sent to the token's app. */
-export async function waSubscribeApp(wabaId: string, token: string, fetchImpl: FetchLike): Promise<void> {
+/** Have the account's webhooks (statuses, replies, template reviews) sent to the token's app: bizinsights'. */
+export async function subscribeApp(wabaId: string, token: string, fetchImpl: FetchLike): Promise<void> {
   await graph(fetchImpl, token, "POST", `${wabaId}/subscribed_apps`);
 }
 
+/** Whether bizinsights' app is still subscribed to the account (a business can remove it). */
+export async function appSubscribed(p: Pick<WaPlatform, "appId">, wabaId: string, token: string, fetchImpl: FetchLike): Promise<boolean> {
+  const r = await graph<{ data?: Array<{ whatsapp_business_api_data?: { id?: string }; id?: string }> }>(fetchImpl, token, "GET", `${wabaId}/subscribed_apps`);
+  return (r.data ?? []).some((a) => String(a.whatsapp_business_api_data?.id ?? a.id ?? "") === p.appId);
+}
+
+export async function unsubscribeApp(wabaId: string, token: string, fetchImpl: FetchLike): Promise<void> {
+  await graph(fetchImpl, token, "DELETE", `${wabaId}/subscribed_apps`);
+}
+
 /** Register the number with the Cloud API. `pin` becomes (or must match) its two-step verification PIN. */
-export async function waRegisterPhone(phoneNumberId: string, pin: string, token: string, fetchImpl: FetchLike): Promise<void> {
+export async function registerPhone(phoneNumberId: string, pin: string, token: string, fetchImpl: FetchLike): Promise<void> {
   await graph(fetchImpl, token, "POST", `${phoneNumberId}/register`, { body: { messaging_product: "whatsapp", pin } });
 }
 
-export interface WaTemplate {
+/** Meta's answer when the number already has a two-step verification PIN other than the one sent. */
+export const PIN_MISMATCH_CODES = [133005, 133006];
+
+export interface MetaTemplate {
   id: string;
   name: string;
   language: string;
@@ -231,12 +171,12 @@ export interface WaTemplate {
   quality_score?: { score?: string };
 }
 
-/** Every template in the account (paged). */
-export async function waListTemplates(wabaId: string, token: string, fetchImpl: FetchLike): Promise<WaTemplate[]> {
-  const out: WaTemplate[] = [];
+/** Every template in the account. */
+export async function metaListTemplates(wabaId: string, token: string, fetchImpl: FetchLike): Promise<MetaTemplate[]> {
+  const out: MetaTemplate[] = [];
   let after: string | undefined;
   for (let page = 0; page < 20; page++) {
-    const r = await graph<{ data?: WaTemplate[]; paging?: { cursors?: { after?: string }; next?: string } }>(fetchImpl, token, "GET", `${wabaId}/message_templates`, {
+    const r = await graph<{ data?: MetaTemplate[]; paging?: { cursors?: { after?: string }; next?: string } }>(fetchImpl, token, "GET", `${wabaId}/message_templates`, {
       query: { fields: "id,name,language,category,status,components,rejected_reason,quality_score", limit: "100", ...(after ? { after } : {}) },
     });
     out.push(...(r.data ?? []));
@@ -247,33 +187,66 @@ export async function waListTemplates(wabaId: string, token: string, fetchImpl: 
 }
 
 /** Submit a template for Meta's review. */
-export async function waCreateTemplate(
+export async function metaCreateTemplate(
   wabaId: string,
   token: string,
-  template: { name: string; language: string; category: string; components: Array<Record<string, unknown>> },
+  t: { name: string; language: string; category: string; components: Array<Record<string, unknown>> },
   fetchImpl: FetchLike,
 ): Promise<{ id: string; status: string; category: string }> {
-  return graph(fetchImpl, token, "POST", `${wabaId}/message_templates`, { body: template });
+  const r = await graph<{ id?: string; status?: string; category?: string }>(fetchImpl, token, "POST", `${wabaId}/message_templates`, { body: t });
+  if (!r.id) throw new WhatsappApiError(502, null, null, "no_template_id", "Meta accepted the template but returned no id");
+  return { id: String(r.id), status: r.status ?? "PENDING", category: r.category ?? t.category };
 }
 
-/** Send a template message. Returns Meta's message id (wamid). */
-export async function waSendTemplate(
-  phoneNumberId: string,
-  token: string,
-  to: string,
-  template: { name: string; language: string; components: Array<Record<string, unknown>> },
-  fetchImpl: FetchLike,
-): Promise<string> {
-  const r = await graph<{ messages?: Array<{ id: string }> }>(fetchImpl, token, "POST", `${phoneNumberId}/messages`, {
-    body: {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "template",
-      template: { name: template.name, language: { code: template.language }, ...(template.components.length ? { components: template.components } : {}) },
-    },
+export async function metaDeleteTemplate(wabaId: string, token: string, name: string, metaId: string, fetchImpl: FetchLike): Promise<void> {
+  await graph(fetchImpl, token, "DELETE", `${wabaId}/message_templates`, { query: { name, hsm_id: metaId } });
+}
+
+/**
+ * Send a message. `body` is everything but the envelope (type and its object). Returns Meta's
+ * message id. `ref` comes back on every status webhook (`biz_opaque_callback_data`), so a status is
+ * matched to its message even before the id has been recorded.
+ */
+export async function sendMessage(phoneNumberId: string, token: string, to: string, body: Record<string, unknown>, ref: string, fetchImpl: FetchLike): Promise<string> {
+  const r = await graph<{ messages?: Array<{ id?: string }> }>(fetchImpl, token, "POST", `${phoneNumberId}/messages`, {
+    body: { messaging_product: "whatsapp", recipient_type: "individual", to, biz_opaque_callback_data: ref, ...body },
   });
   const id = r.messages?.[0]?.id;
-  if (!id) throw new WhatsappApiError(502, null, "no_message_id", "Meta accepted the send but returned no message id");
+  if (!id) throw new WhatsappApiError(502, null, null, "no_message_id", "Meta accepted the send but returned no message id");
   return id;
+}
+
+/** The webhook fields bizinsights reads (webhook.ts). */
+export const WA_WEBHOOK_FIELDS = [
+  "messages",
+  "user_preferences",
+  "message_template_status_update",
+  "message_template_quality_update",
+  "template_category_update",
+  "phone_number_quality_update",
+  "phone_number_name_update",
+  "account_update",
+];
+
+/**
+ * Point bizinsights' own app's WhatsApp webhook at bizinsights, so nobody has to paste a callback
+ * URL and verify token into Meta's dashboard (Meta checks the URL there and then, with the verify
+ * token). A webhook already pointing elsewhere is left alone ("in_use"). "already": it points here
+ * with every field.
+ */
+export async function ensureAppWebhook(p: WaPlatform, callbackUrl: string, fetchImpl: FetchLike): Promise<"set" | "already" | "in_use"> {
+  const current = await graph<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean; fields?: Array<{ name?: string } | string> }> }>(fetchImpl, appToken(p), "GET", `${p.appId}/subscriptions`, {
+    appToken: true,
+    version: p.version,
+  });
+  const wa = (current.data ?? []).find((s) => s.object === "whatsapp_business_account");
+  const names = (wa?.fields ?? []).map((f) => (typeof f === "string" ? f : (f.name ?? "")));
+  if (wa?.active && wa.callback_url && wa.callback_url !== callbackUrl) return "in_use";
+  if (wa?.active && WA_WEBHOOK_FIELDS.every((f) => names.includes(f))) return "already";
+  await graph(fetchImpl, appToken(p), "POST", `${p.appId}/subscriptions`, {
+    appToken: true,
+    version: p.version,
+    query: { object: "whatsapp_business_account", callback_url: callbackUrl, verify_token: p.verifyToken, fields: WA_WEBHOOK_FIELDS.join(",") },
+  });
+  return "set";
 }

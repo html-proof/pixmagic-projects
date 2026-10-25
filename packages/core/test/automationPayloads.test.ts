@@ -9,7 +9,6 @@ import {
   fulfillmentEventSchema,
   fulfillmentSchema,
   fulfillmentWebhookSchema,
-  graphqlShipmentSchema,
   parseShopify,
   scopesUpdateSchema,
   subscriptionUpdateSchema,
@@ -144,7 +143,6 @@ describe("Shopify payloads the automations read", () => {
     ["refund that doesn't name its order", automationRefundSchema, { id: 5, created_at: "2026-03-05T12:00:00Z" }, "order_id"],
     ["parcel without its id", fulfillmentSchema, { status: "success" }, "id"],
     ["courier report without its parcel", fulfillmentEventSchema, { order_id: 1, status: "delivered" }, "fulfillment_id"],
-    ["shipment with a tracking list that isn't one", graphqlShipmentSchema, { id: "gid://shopify/Fulfillment/1", trackingInfo: { number: "X" } }, "trackingInfo"],
   ];
 
   it.each(cases)("%s: skipped, with a warning naming the field", (_name, schema, raw, path) => {

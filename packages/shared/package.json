@@ -24,6 +24,7 @@
     "./sales": "./src/sales.ts",
     "./salesCalculation": "./src/salesCalculation.ts",
     "./sms": "./src/sms.ts",
+    "./messaging": "./src/messaging.ts",
     "./whatsapp": "./src/whatsapp.ts",
     "./traffic": "./src/traffic.ts",
     "./staff": "./src/staff/index.ts",

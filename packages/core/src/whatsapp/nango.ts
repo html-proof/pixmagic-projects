@@ -1,152 +1,174 @@
 /**
- * Adding the access token through Nango (docs/whatsapp.md "Through Nango"): bizinsights' Nango
- * environment holds an API-key integration, `whatsapp-business`, so Nango's Connect UI is where the
- * merchant pastes their system-user token, in Nango's window instead of bizinsights' own box. The rest
- * is the manual connect (connect.ts): the numbers the token reaches, then the app secret.
+ * Nango (docs/nango.md) holds each store's WhatsApp access token. Nango's own WhatsApp Business
+ * integration (provider `whatsapp-business`) is API-key only: its Connect UI would ask the merchant to
+ * paste a token, and it has no Embedded Signup. So the merchant signs in through Meta's Embedded
+ * Signup on bizinsights' page (connect.ts), bizinsights exchanges the code for the business token,
+ * and hands that token to Nango (Nango's connection import, `credentials.type: API_KEY`). From then
+ * on bizinsights asks Nango for it right before each call and keeps it in memory for a few minutes.
  *
- * Nango keeps no copy. bizinsights reads the token once, right after the Connect UI says it was saved,
- * and deletes the connection there whatever happens next (so none counts toward Nango's plan either).
- * Until the merchant finishes, the token waits here sealed for its store, under a handle only the person
- * who added it can use; the browser never sees it. A connection nobody finished (the page closed first)
- * is deleted by the cron's sweep.
+ * One Nango connection per store: its id is `wa-<storeId>`, so a reconnect replaces the token in place
+ * and a retry never makes a second connection. Tags carry ids only (no personal data). Only Nango's
+ * REST API is used, server side, with the environment's secret key.
  */
-import { randomToken } from "@app/shared";
-import { nangoApiKey, nangoConnections, nangoCreateConnectSession, nangoDeleteConnection, nangoIntegrations, type NangoConfig } from "../ads.js";
-import { nangoConfig } from "../adConnections/config.js";
 import type { Coord } from "../coord.js";
+import { env } from "../env.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
-import { WhatsappConnectError } from "./connect.js";
-import { waDecrypt, waEncrypt } from "./store.js";
-
-/** The integration's unique key in bizinsights' Nango environment, made in Nango's dashboard. */
-export const WHATSAPP_NANGO_INTEGRATION = "whatsapp-business";
-/** The Nango provider it must be made from: an API-key one, whose key is the WhatsApp access token. */
-const WHATSAPP_NANGO_PROVIDER = "whatsapp-business";
-
-/** A Connect UI session's lifetime at Nango, so its state here; a token waits as long for the merchant. */
-export const WA_NANGO_TTL_S = 30 * 60;
-const READY_TTL_S = 5 * 60;
-
-const READY_KEY = "nango-whatsapp-ready";
-const sessionKey = (nonce: string) => `oauth:wa-nango:${nonce}`;
-const heldKey = (handle: string) => `wa-nango-token:${handle}`;
-
-/** Who added a token: the person, and the workspace and store it is for. */
-export interface WaNangoWho {
-  userId: string;
-  workspaceId: string;
-  storeId: string;
-}
+import { WhatsappError } from "./common.js";
 
 /**
- * Whether the token can be added through Nango now: this server has Nango's key and Nango holds the
- * integration, made from the right provider (asked of Nango, kept 5 minutes). Not offered while Nango
- * can't say: the token box works without it.
+ * bizinsights' WhatsApp integration in its Nango environment: `whatsapp-business`, the one the owner made
+ * in Nango's dashboard on 2026-10-24 (made here on first use if it is ever missing).
  */
-export async function whatsappNangoReady(coord: Coord, fetchImpl?: FetchLike): Promise<boolean> {
-  const cfg = nangoConfig(fetchImpl);
-  if (!cfg) return false;
-  const cached = await coord.peek(READY_KEY).catch(() => null);
-  if (cached) return cached === "1";
-  let ready: boolean;
+export const WA_NANGO_INTEGRATION = "whatsapp-business";
+/** Nango's provider for it: the WhatsApp Business API-key integration. */
+export const WA_NANGO_PROVIDER = "whatsapp-business";
+
+export const waNangoConnectionId = (storeId: string) => `wa-${storeId}`;
+
+/** Nango can't be reached or is busy: try again later. */
+export class NangoUnavailableError extends Error {
+  override name = "NangoUnavailableError";
+}
+/** Nango has no token for the connection any more (deleted, or never made): reconnect. */
+export class NangoTokenGoneError extends Error {
+  override name = "NangoTokenGoneError";
+}
+
+interface NangoCfg {
+  secretKey: string;
+  apiUrl: string;
+  fetchImpl: FetchLike;
+}
+
+function cfg(fetchImpl: FetchLike): NangoCfg {
+  const e = env();
+  if (!e.NANGO_SECRET_KEY) throw new WhatsappError("WhatsApp connections aren't set up on bizinsights yet. Please contact support.", 503, "not_configured");
+  return { secretKey: e.NANGO_SECRET_KEY, apiUrl: e.NANGO_API_URL.replace(/\/+$/, ""), fetchImpl };
+}
+
+async function nango<T>(c: NangoCfg, method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<{ status: number; json: T }> {
+  let res: Response;
   try {
-    ready = (await nangoIntegrations(cfg)).some((i) => i.integrationKey === WHATSAPP_NANGO_INTEGRATION && i.provider === WHATSAPP_NANGO_PROVIDER);
+    res = await c.fetchImpl(`${c.apiUrl}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${c.secretKey}`, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
   } catch (err) {
-    logger.warn({ err }, "nango's integrations couldn't be listed; WhatsApp offers only its own token box for now");
-    await coord.put(READY_KEY, "0", 60).catch(() => undefined);
-    return false;
+    throw new NangoUnavailableError(`Nango didn't answer: ${(err as Error)?.name ?? "network error"}`);
   }
-  await coord.put(READY_KEY, ready ? "1" : "0", READY_TTL_S).catch(() => undefined);
-  return ready;
+  const json = (await res.json().catch(() => ({}))) as T;
+  if (res.status === 429 || res.status >= 500) throw new NangoUnavailableError(`Nango answered ${res.status}`);
+  if (res.status === 401 || res.status === 403) {
+    logger.error({ status: res.status }, "nango refused bizinsights' secret key");
+    throw new WhatsappError("WhatsApp connections aren't set up correctly on bizinsights. Please contact support.", 503, "not_configured");
+  }
+  return { status: res.status, json };
 }
 
-/**
- * A Connect UI session limited to the WhatsApp integration, tagged with ids only, among them `nonce`, by
- * which takeWhatsappNangoToken later knows the connection came from this session.
- */
-export async function startWhatsappNangoSession(coord: Coord, cfg: NangoConfig, nonce: string, who: WaNangoWho): Promise<{ token: string; expiresAt: string | null }> {
-  const session = await nangoCreateConnectSession(cfg, {
-    integrationKey: WHATSAPP_NANGO_INTEGRATION,
-    tags: { end_user_id: who.userId, organization_id: who.workspaceId, bi_store: who.storeId, bi_provider: "whatsapp", bi_session: nonce },
-  });
-  await coord.put(sessionKey(nonce), JSON.stringify(who), WA_NANGO_TTL_S);
-  return session;
-}
+const READY_KEY = "wa:nango:integration";
 
 /**
- * The token pasted in Nango's window for session `nonce`, read once: the session must be this person's,
- * for this store, and the connection must carry its tags as Nango holds them (nothing the browser says
- * is trusted past the connection's id). The connection is deleted at Nango whatever the outcome.
+ * Make sure bizinsights' Nango environment has the WhatsApp integration (an API-key integration needs
+ * no credentials of its own, so bizinsights makes it itself). Checked at most every 5 minutes.
  */
-export async function takeWhatsappNangoToken(coord: Coord, cfg: NangoConfig, nonce: string, connectionId: string, who: WaNangoWho): Promise<string> {
-  try {
-    const raw = await coord.take(sessionKey(nonce));
-    const state = raw ? (JSON.parse(raw) as WaNangoWho) : null;
-    if (!state) throw new WhatsappConnectError("That took too long. Press Add your token and paste it again.", "state_expired");
-    if (state.userId !== who.userId || state.workspaceId !== who.workspaceId || state.storeId !== who.storeId) {
-      throw new WhatsappConnectError("That window was opened by someone else. Press Add your token and paste it again.", "session_mismatch");
+export async function ensureNangoIntegration(coord: Coord, fetchImpl: FetchLike): Promise<void> {
+  if (await coord.peek(READY_KEY).catch(() => null)) return;
+  const c = cfg(fetchImpl);
+  const got = await nango<{ data?: { provider?: string } }>(c, "GET", `/integrations/${WA_NANGO_INTEGRATION}`);
+  if (got.status === 404) {
+    const made = await nango<{ error?: { code?: string } }>(c, "POST", "/integrations", { unique_key: WA_NANGO_INTEGRATION, provider: WA_NANGO_PROVIDER, display_name: "bizinsights · WhatsApp" });
+    if (made.status >= 300) {
+      logger.error({ status: made.status, code: made.json.error?.code }, "nango: couldn't create the WhatsApp integration");
+      throw new WhatsappError("WhatsApp connections aren't set up correctly on bizinsights. Please contact support.", 503, "not_configured");
     }
-    const ours = (await nangoConnections(cfg, connectionId)).some(
-      (x) =>
-        x.connectionId === connectionId &&
-        x.integrationKey === WHATSAPP_NANGO_INTEGRATION &&
-        x.tags.bi_session === nonce &&
-        x.tags.end_user_id === who.userId &&
-        x.tags.organization_id === who.workspaceId &&
-        x.tags.bi_store === who.storeId,
-    );
-    if (!ours) throw new WhatsappConnectError("That token couldn't be matched to this page. Press Add your token and paste it again.", "state_mismatch");
-    return await nangoApiKey(cfg, WHATSAPP_NANGO_INTEGRATION, connectionId);
-  } finally {
-    await nangoDeleteConnection(cfg, WHATSAPP_NANGO_INTEGRATION, connectionId).catch((err: unknown) => {
-      logger.warn({ err }, "whatsapp: the nango connection wasn't deleted; the sweep deletes it later");
-    });
+    logger.info({ integration: WA_NANGO_INTEGRATION }, "nango: WhatsApp integration created");
+  } else if (got.status >= 300) {
+    throw new NangoUnavailableError(`Nango answered ${got.status} for the WhatsApp integration`);
+  } else if (got.json.data?.provider && got.json.data.provider !== WA_NANGO_PROVIDER) {
+    logger.error({ provider: got.json.data.provider }, "nango: the WhatsApp integration is made from another provider; delete it in Nango's dashboard");
+    throw new WhatsappError("WhatsApp connections aren't set up correctly on bizinsights. Please contact support.", 503, "not_configured");
   }
+  await coord.put(READY_KEY, "1", 300).catch(() => undefined);
 }
 
-/** Keep a token from Nango's window for the rest of the connect: sealed for its store, under a new handle. */
-export async function holdWhatsappToken(coord: Coord, who: WaNangoWho, token: string): Promise<string> {
-  const handle = randomToken(24);
-  await coord.put(heldKey(handle), JSON.stringify({ userId: who.userId, storeId: who.storeId, enc: waEncrypt(who.storeId, "access", token) }), WA_NANGO_TTL_S);
-  return handle;
+/** Ids only: who connected, the workspace, the store, the account. */
+export interface WaNangoTags {
+  end_user_id: string;
+  organization_id: string;
+  bi_store: string;
+  bi_provider: "whatsapp";
+  bi_waba: string;
 }
 
-/** The token held under `handle`, for the person and store it was added for only. */
-export async function heldWhatsappToken(coord: Coord, handle: string, who: Pick<WaNangoWho, "userId" | "storeId">): Promise<string> {
-  const raw = await coord.peek(heldKey(handle)).catch(() => null);
-  const held = raw ? (JSON.parse(raw) as { userId: string; storeId: string; enc: string }) : null;
-  if (!held || held.userId !== who.userId || held.storeId !== who.storeId) {
-    throw new WhatsappConnectError("The token from Nango's window has expired. Press Add your token and paste it again.", "token_expired");
+/** Hand Nango the business token (it replaces the one an earlier connect left under the same id). */
+export async function storeTokenInNango(input: { storeId: string; token: string; tags: WaNangoTags }, deps: { coord: Coord; fetchImpl: FetchLike }): Promise<string> {
+  await ensureNangoIntegration(deps.coord, deps.fetchImpl);
+  const connectionId = waNangoConnectionId(input.storeId);
+  const r = await nango<{ error?: { code?: string } }>(cfg(deps.fetchImpl), "POST", "/connections", {
+    provider_config_key: WA_NANGO_INTEGRATION,
+    connection_id: connectionId,
+    credentials: { type: "API_KEY", apiKey: input.token },
+    tags: input.tags,
+  });
+  if (r.status >= 300) {
+    logger.error({ status: r.status, code: r.json.error?.code }, "nango refused the WhatsApp token import");
+    throw new WhatsappError("bizinsights couldn't save your WhatsApp connection just now. Press Connect WhatsApp again in a minute.", 502, "save_failed");
   }
-  return waDecrypt(who.storeId, "access", held.enc);
+  forgetWaToken(connectionId);
+  return connectionId;
 }
 
-/** Forget a held token (the connection saved its own copy). */
-export async function dropHeldWhatsappToken(coord: Coord, handle: string): Promise<void> {
-  await coord.take(heldKey(handle)).catch(() => null);
+const TOKEN_TTL_MS = 4 * 60_000;
+const cache = new Map<string, { token: string; at: number }>();
+
+/** Forget a cached token (after a reconnect, a disconnect, or Meta refusing it). */
+export function forgetWaToken(connectionId: string) {
+  cache.delete(connectionId);
+}
+
+/** The business token for a connection, from Nango (cached a few minutes in this process). */
+export async function waTokenFor(connectionId: string, fetchImpl: FetchLike): Promise<string> {
+  const hit = cache.get(connectionId);
+  if (hit && Date.now() - hit.at < TOKEN_TTL_MS) return hit.token;
+  const r = await nango<{ credentials?: { type?: string; apiKey?: string; api_key?: string } }>(cfg(fetchImpl), "GET", `/connections/${encodeURIComponent(connectionId)}?provider_config_key=${WA_NANGO_INTEGRATION}`);
+  if (r.status === 404) throw new NangoTokenGoneError("Nango has no WhatsApp connection with that id");
+  if (r.status >= 300) throw new NangoUnavailableError(`Nango answered ${r.status}`);
+  const token = r.json.credentials?.apiKey ?? r.json.credentials?.api_key;
+  if (!token) throw new NangoTokenGoneError("The Nango connection holds no WhatsApp token");
+  if (cache.size > 5000) cache.clear();
+  cache.set(connectionId, { token, at: Date.now() });
+  return token;
+}
+
+/** Delete the store's connection at Nango, with its token. "gone": it wasn't there. */
+export async function deleteNangoToken(connectionId: string, fetchImpl: FetchLike): Promise<"deleted" | "gone"> {
+  forgetWaToken(connectionId);
+  const r = await nango(cfg(fetchImpl), "DELETE", `/connections/${encodeURIComponent(connectionId)}?provider_config_key=${WA_NANGO_INTEGRATION}`);
+  if (r.status === 404) return "gone";
+  if (r.status >= 300) throw new NangoUnavailableError(`Nango answered ${r.status}`);
+  return "deleted";
 }
 
 /**
- * Connections in the WhatsApp integration older than a Connect UI session: tokens added in a window
- * whose page never finished. bizinsights keeps none there, so each is deleted. Returns how many.
+ * Connections in the WhatsApp integration that aren't a store's (`wa-<storeId>`): tokens the earlier
+ * "add your token in Nango's window" flow (2026-10-24) left behind when its page closed before it
+ * finished. Deleted once they are 30 minutes old, so Nango keeps no token bizinsights doesn't use.
  */
-export async function sweepWhatsappNangoLeftovers(fetchImpl?: FetchLike, now = Date.now()): Promise<number> {
-  const cfg = nangoConfig(fetchImpl);
-  if (!cfg) return 0;
-  const left = (await nangoConnections(cfg)).filter((x) => {
-    if (x.integrationKey !== WHATSAPP_NANGO_INTEGRATION) return false;
-    const at = x.createdAt ? Date.parse(x.createdAt) : Number.NaN;
-    return !Number.isFinite(at) || now - at > WA_NANGO_TTL_S * 1000;
-  });
+export async function sweepStrayNangoTokens(fetchImpl: FetchLike): Promise<number> {
+  if (!env().NANGO_SECRET_KEY) return 0;
+  const c = cfg(fetchImpl);
+  const r = await nango<{ connections?: Array<{ connection_id?: string; provider_config_key?: string; created?: string }> }>(c, "GET", "/connections");
+  if (r.status >= 300) throw new NangoUnavailableError(`Nango answered ${r.status}`);
+  const cutoff = Date.now() - 30 * 60_000;
   let deleted = 0;
-  for (const x of left) {
-    const outcome = await nangoDeleteConnection(cfg, WHATSAPP_NANGO_INTEGRATION, x.connectionId).catch((err: unknown) => {
-      logger.warn({ err }, "whatsapp: a leftover nango connection wasn't deleted; the next tick tries again");
-      return null;
-    });
-    if (outcome) deleted++;
+  for (const x of r.json.connections ?? []) {
+    if (x.provider_config_key !== WA_NANGO_INTEGRATION || !x.connection_id || x.connection_id.startsWith("wa-")) continue;
+    const created = x.created ? Date.parse(x.created) : 0;
+    if (Number.isFinite(created) && created > cutoff) continue;
+    if ((await deleteNangoToken(x.connection_id, fetchImpl).catch(() => "gone")) === "deleted") deleted++;
   }
-  if (deleted) logger.info({ deleted }, "whatsapp: nango connections nobody finished were deleted");
+  if (deleted) logger.info({ deleted }, "nango: stray WhatsApp tokens deleted");
   return deleted;
 }

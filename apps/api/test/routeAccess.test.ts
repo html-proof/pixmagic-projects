@@ -69,6 +69,8 @@ const PUBLIC = new Set([
   "POST /webhooks/meta/data-deletion",
   "GET /webhooks/whatsapp",
   "POST /webhooks/whatsapp",
+  // A store's own tools send WhatsApp custom events with the store's event key (whev_...).
+  "POST /whatsapp/events",
   "POST /pixel/:key",
   "OPTIONS /pixel/:key",
   "POST /v1/events",
@@ -79,17 +81,10 @@ const PUBLIC = new Set([
   "POST /email/unsubscribe/:token",
   "GET /sms/u/:code",
   "POST /sms/u/:code",
-  "GET /public/track/:token",
-  "GET /public/review/:token",
-  "POST /public/review/:token",
-  "GET /r/:code",
   "GET /staff/invitations/lookup",
   "POST /staff/invitations/accept",
   "POST /invitations/preview",
   "POST /invitations/open",
-  // What a storefront shows anyway: a store's published reviews, and the platform's WhatsApp sign-up settings.
-  "GET /public/stores/:storeId/reviews",
-  "GET /whatsapp/platform",
 ]);
 
 /** A shared link may still use this account route: who am I (that workspace only, read-only). */
@@ -135,6 +130,7 @@ const READ_ONLY_POSTS = new Set([
   "POST /workspaces/:ws/stores/:storeId/sms/segments/estimate",
   "POST /workspaces/:ws/stores/:storeId/sms/campaigns/estimate",
   "POST /workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate",
+  "POST /workspaces/:ws/stores/:storeId/whatsapp/workflows/check",
   "POST /workspaces/:ws/email/templates/:id/preview",
   // Asks for a one-time download link (a download, as GET /export is; a shared link keeps its export permissions).
   "POST /workspaces/:ws/staff/exports",

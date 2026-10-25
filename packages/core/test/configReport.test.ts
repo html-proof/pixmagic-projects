@@ -163,7 +163,7 @@ describe("which provider has its public id but not its secret", () => {
     expect(half({ WHATSAPP_APP_ID: "1799660384680551" })).toEqual([]);
     expect(half({ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "public-wa-config-9999" })).toEqual(["WhatsApp (Embedded Signup)"]);
     const wa = providerCredentials({ WHATSAPP_CONFIG_ID: "c" }).find((c) => c.secretSetting === "WHATSAPP_APP_SECRET")!;
-    expect(wa.effect).toBe("Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work");
+    expect(wa.effect).toBe("Connect WhatsApp (Embedded Signup) can't be turned on, and replies and delivery reports from connected numbers can't be checked");
   });
 
   it('says what each missing secret stops, in words that follow "so"', () => {
@@ -207,14 +207,16 @@ describe("the configuration report", () => {
   });
 
   it("names what Embedded Signup still lacks, exactly when it is off", () => {
+    const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", NANGO_SECRET_KEY: "n" };
     const cases: Array<[Record<string, string>, string[]]> = [
-      [{}, ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
+      [{}, ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"]],
       // Production today: the app is picked, its configuration and secret aren't there.
-      [{ WHATSAPP_APP_ID: "1799660384680551" }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w" }, ["WHATSAPP_CONFIG_ID"]],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m" }, ["WHATSAPP_APP_SECRET"]],
-      [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c" }, []],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c" }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", ...ready }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", ...ready }, ["WHATSAPP_CONFIG_ID"]],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m", ...ready }, ["WHATSAPP_APP_SECRET"]],
+      [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" }, ["NANGO_SECRET_KEY"]],
     ];
     for (const [vars, needs] of cases) {
       setEnv(vars);
