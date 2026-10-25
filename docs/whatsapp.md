@@ -11,8 +11,9 @@ webhook URL.
 **Today (2026-10-25) every setting is in place**: WhatsApp runs on the Meta app "Insights"
 (971575545351940, business portfolio "bizinsights.io"), whose secret and the webhook verify token
 are set, and `WHATSAPP_CONFIG_ID` is its Embedded Signup configuration "bizinsights WhatsApp Signup"
-(`2228218088074576`). Until Meta approves business verification and App Review, only people with a
-role on the app can get through Meta's window ([Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 7).
+(`2228218088074576`). Until the app is a Tech Provider (its terms accepted, business verification,
+App Review), Meta's window stops at "bizinsights.io can't onboard customers right now" for everyone,
+the app's admin included ([Setting it up](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 7).
 
 This page replaced the earlier WhatsApp feature (2026-10-10 to 2026-10-24) on 2026-10-25: see
 [The old WhatsApp tables](#the-old-whatsapp-tables) for what happened to it.
@@ -142,6 +143,14 @@ Browser                                  bizinsights API                        
                                          templates                                  ──► GET /{waba}/message_templates
                                   ◄──    the connection (never the token)
 ```
+
+While Meta's window is open the button reads "Waiting for Meta…", with **Stop waiting** under it
+(bizinsights can't close Meta's window, but nothing stays stuck on this page; a code that still
+arrives because the person finished in Meta's window after all is sent on as usual). After 15
+seconds the page also says what can hold it up: Meta's window behind this one, or Meta's own page
+"… can't onboard customers right now" ([why Meta shows it](#setting-it-up-the-owner-none-of-this-can-be-done-from-code), step 7). That is a hint, never a time
+limit: a real signup (a new business, a phone code) takes minutes. An error Meta posts to the page
+is shown at once instead of when its window is closed.
 
 A window that closes is never a connection: only the server's answer is. Every refusal says what to
 do in plain words: the sign-in wasn't started here or took too long; the code expired; the token
@@ -521,11 +530,23 @@ Meta renames buttons now and then, so a label may differ slightly.
    webhook already points somewhere else it is left alone and logged: then set it by hand in
    **WhatsApp → Configuration** with the verify token. Nothing to do in AWS: `META_APP_SECRET` and
    `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are already set.
-6. **Connect your own business first.** With Standard Access, people with a role on the app (App roles
-   → Roles: admins, developers, testers) can already go through Embedded Signup with their own
-   business. Do that for PixMagic, add a payment method in WhatsApp Manager, get a template approved
-   and send yourself a test (the merchant guide below).
-7. **Open it to every business (Tech Provider).** Meta's two steps:
+6. **Connect your own business first**, once Meta lets the app onboard anyone (step 7): add a
+   payment method in WhatsApp Manager, get a template approved and send yourself a test (the
+   merchant guide below). Choose a business portfolio other than **bizinsights.io**: Meta doesn't
+   onboard a WhatsApp Business account through Embedded Signup into the portfolio that owns the app.
+   On 2026-10-25 the app's admin, signed in, got no further than Meta's page "bizinsights.io can't
+   onboard customers right now … would you like to share your contact information" (its button kept
+   spinning), straight after signing in: so a role on the app is not enough while step 7 is open.
+7. **Open it to every business (Tech Provider).** Meta's "can't onboard customers right now" page
+   is what everyone gets until this is done. Meta's docs say no business can be onboarded before App
+   Review grants Advanced Access to the permissions, and developers who hit the same page report
+   needing all three of: business verification, App Review, and accepting the Tech Provider terms in
+   the dashboard (**Use cases** → **Connect with customers through WhatsApp** → **Customize** →
+   **Tech Provider onboarding** / **Become a Tech Provider**; being verified is not the same as
+   being registered). Then Meta allows 10 new businesses per rolling 7 days, 200 after Access
+   Verification. The steps:
+   - **Tech Provider terms**: open the wizard above and accept what it asks (the owner: it's an
+     agreement with Meta). Not done as of 2026-10-25.
    - **Business verification** of Zodiix Pty Ltd (Business settings → Security Center): submitted
      2026-10-20, waiting for Meta. App Review can't start before it's approved. The app's portfolio
      must be the verified one: on 2026-10-25 the only portfolio the app's admin could pick was
@@ -537,7 +558,8 @@ Meta renames buttons now and then, so a label may differ slightly.
      needs before it serves other businesses, if it isn't granted yet), with two screencasts: a
      message sent from bizinsights arriving in WhatsApp, and a message template created in
      bizinsights. Meta's changelog says Access Verification is no longer required for Tech Providers.
-   Until both are done, Meta's window refuses anyone without a role on the app.
+   Until all of it is done, Meta's window stops at "can't onboard customers right now" for
+   everyone, the app's own admin included (seen 2026-10-25).
 
 Meta's permissions this needs: `whatsapp_business_management` (read the account, its numbers and
 templates; subscribe to its webhooks; submit templates) and `whatsapp_business_messaging` (send).

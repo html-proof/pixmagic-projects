@@ -67,6 +67,11 @@ type Phase = { kind: "idle" } | { kind: "opening" } | { kind: "authorizing" } | 
 const BLOCKED_MS = 1500;
 /** How long to wait for Meta's message after the code arrives (the code itself lives 30 seconds). */
 const WAIT_FOR_IDS_MS = 3000;
+/**
+ * After this long in Meta's window, say what can hold it up (a window behind this one, Meta's "can't
+ * onboard customers right now" page). Never a time limit: a real signup can take minutes.
+ */
+const SLOW_MS = 15_000;
 
 export function ConnectWhatsApp({
   base,
@@ -92,12 +97,20 @@ export function ConnectWhatsApp({
   const cancelled = useRef<{ step: string | null } | null>(null);
   const failed = useRef<string | null>(null);
   const done = useRef(false);
+  /** The person stopped waiting while Meta's window may still be open: a code from it still finishes. */
+  const gaveUp = useRef(false);
+  /** Which press of the button Meta's answer belongs to. */
+  const attempt = useRef(0);
   const openedAt = useRef(0);
   const waitTimer = useRef<number | undefined>(undefined);
+  const slowTimer = useRef<number | undefined>(undefined);
+  const [slow, setSlow] = useState(false);
 
   const stop = useCallback((text: string, tone: "info" | "error" = "error") => {
     done.current = true;
     window.clearTimeout(waitTimer.current);
+    window.clearTimeout(slowTimer.current);
+    setSlow(false);
     setPhase({ kind: "stopped", text, tone });
   }, []);
 
@@ -106,6 +119,8 @@ export function ConnectWhatsApp({
     if (done.current || !code.current || !nonce.current) return;
     done.current = true;
     window.clearTimeout(waitTimer.current);
+    window.clearTimeout(slowTimer.current);
+    setSlow(false);
     setPhase({ kind: "configuring" });
     const f = finished.current;
     try {
@@ -148,13 +163,21 @@ export function ConnectWhatsApp({
         cancelled.current = { step: m.step };
       } else {
         failed.current = m.message ?? "unknown error";
+        // Meta's flow ends with its error: say so now rather than when its window is closed.
+        if (!done.current && !code.current) stop(`Meta reported a problem: ${failed.current}. Nothing was connected; close Meta's window if it's still open, then try again.`);
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [finish]);
+  }, [finish, stop]);
 
-  useEffect(() => () => window.clearTimeout(waitTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(waitTimer.current);
+      window.clearTimeout(slowTimer.current);
+    },
+    [],
+  );
 
   // Meta's SDK is loaded as soon as the button shows, so the click can open Meta's window at once:
   // browsers block a pop-up opened after awaiting a request.
@@ -166,7 +189,10 @@ export function ConnectWhatsApp({
   const start = async () => {
     if (!appId || !configId || !version) return;
     setPhase({ kind: "opening" });
+    setSlow(false);
+    window.clearTimeout(slowTimer.current);
     done.current = false;
+    gaveUp.current = false;
     code.current = null;
     finished.current = null;
     cancelled.current = null;
@@ -182,8 +208,15 @@ export function ConnectWhatsApp({
       const FB = loaded ?? (await loadFacebookSdk(appId, version));
       openedAt.current = Date.now();
       setPhase({ kind: "authorizing" });
+      slowTimer.current = window.setTimeout(() => setSlow(true), SLOW_MS);
+      const mine = ++attempt.current;
       FB.login(
         (r) => {
+          const current = mine === attempt.current;
+          if (current) {
+            window.clearTimeout(slowTimer.current);
+            setSlow(false);
+          }
           if (r.authResponse?.code) {
             code.current = r.authResponse.code;
             // Meta's message with the chosen account and number usually comes first; wait a moment if not.
@@ -191,7 +224,8 @@ export function ConnectWhatsApp({
             else waitTimer.current = window.setTimeout(() => void finish(), WAIT_FOR_IDS_MS);
             return;
           }
-          if (done.current) return;
+          // A window given up on and then closed (maybe after Try again opened another) changes nothing.
+          if (!current || done.current || gaveUp.current) return;
           // The window closed without a code: nothing is connected.
           const c = cancelled.current;
           if (failed.current) stop(`Meta reported a problem: ${failed.current}. Nothing was connected; please try again.`);
@@ -206,6 +240,17 @@ export function ConnectWhatsApp({
     } catch (e) {
       stop(e instanceof Error && !("status" in e) ? e.message : waError(e, "start connecting WhatsApp"));
     }
+  };
+
+  /**
+   * Stop waiting for Meta's window (its page can't be closed from here). Nothing is connected; a
+   * code that still comes from that window, because the person finished there after all, is sent on.
+   */
+  const stopWaiting = () => {
+    gaveUp.current = true;
+    window.clearTimeout(slowTimer.current);
+    setSlow(false);
+    setPhase({ kind: "stopped", text: "Stopped waiting for Meta. Nothing was connected; close Meta's window if it's still open.", tone: "info" });
   };
 
   const busy = phase.kind === "opening" || phase.kind === "authorizing" || phase.kind === "configuring";
@@ -247,6 +292,19 @@ export function ConnectWhatsApp({
           {busy && <span aria-hidden className="mt-1 inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />}
           <span>{status}</span>
         </p>
+      )}
+      {phase.kind === "authorizing" && (
+        <div className={`space-y-1.5 text-sm text-muted ${look === "row" ? "max-w-xs" : "max-w-md"}`}>
+          {slow && (
+            <p data-testid="wa-connect-slow">
+              Can&apos;t see Meta&apos;s window? It may be behind this one. If it says bizinsights &ldquo;can&apos;t onboard customers right now&rdquo;, Meta isn&apos;t letting businesses connect
+              through bizinsights at the moment: close that window. Nothing was connected, and you can try again later.
+            </p>
+          )}
+          <button type="button" className="font-medium text-accent underline-offset-2 hover:underline" onClick={stopWaiting} data-testid="wa-connect-stop">
+            Stop waiting
+          </button>
+        </div>
       )}
     </div>
   );

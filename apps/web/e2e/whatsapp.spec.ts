@@ -112,6 +112,34 @@ test("not connected: the real state, the button and what Meta asks; a blocked or
   await expect(button).toBeEnabled();
 });
 
+test("a Meta window that sits there (its \"can't onboard customers\" page): what to do after a while, Stop waiting, and Meta's error at once", async ({ page }) => {
+  await ownerWithStore(page, "wa-stuck");
+  await stubMeta(page);
+  await page.clock.install();
+  await page.goto("/whatsapp");
+  const button = page.getByTestId("wa-connect");
+  const status = page.getByTestId("wa-connect-status");
+
+  // Meta's window stays open and never answers.
+  await scenario(page, { kind: "window", delay: 3_600_000 });
+  await button.click();
+  await expect(status).toContainText("Finish the steps in Meta's window.");
+  await expect(page.getByTestId("wa-connect-slow")).toHaveCount(0);
+  await page.clock.fastForward(16_000);
+  await expect(page.getByTestId("wa-connect-slow")).toContainText("can't onboard customers right now");
+  await page.getByTestId("wa-connect-stop").click();
+  await expect(status).toContainText("Stopped waiting for Meta. Nothing was connected");
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveText(/Try again/);
+  await expect(page.getByTestId("wa-connect-slow")).toHaveCount(0);
+
+  // Meta posts an error and its window stays open: shown now, not when the window is closed.
+  await scenario(page, { kind: "window", delay: 3_600_000, message: { type: "WA_EMBEDDED_SIGNUP", event: "CANCEL", data: { error_message: "Onboarding unavailable", error_code: "1", session_id: "s1" } } });
+  await button.click();
+  await expect(page.getByRole("alert").filter({ hasText: "Meta reported a problem: Onboarding unavailable." })).toBeVisible();
+  await expect(button).toBeEnabled();
+});
+
 test("Meta's finish (only from facebook.com) is sent to the server with the nonce; its refusal is shown and nothing is claimed", async ({ page }) => {
   await ownerWithStore(page, "wa-finish");
   await stubMeta(page);
