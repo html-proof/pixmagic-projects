@@ -77,14 +77,13 @@ secret among them:
 | --- | --- | --- |
 | `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
-| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (empty today, so `META_APP_ID`: WhatsApp runs on the Meta Ads app "Insights") | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app, as now); `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `NANGO_SECRET_KEY` too | Connect WhatsApp (Embedded Signup) can't be turned on, and there is no other way to connect (docs/whatsapp.md) |
+| `WHATSAPP_CONFIG_ID` (set 2026-10-25), on the app `WHATSAPP_APP_ID` (empty, so `META_APP_ID`: WhatsApp runs on the Meta Ads app "Insights") | `META_APP_SECRET` while WhatsApp is on the Meta Ads app, as now (the check names it so); `WHATSAPP_APP_SECRET` only on an app of its own; `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `NANGO_SECRET_KEY` too | Connect WhatsApp (Embedded Signup) can't be turned on, and there is no other way to connect (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
-Embedded Signup is off until `WHATSAPP_CONFIG_ID` is set, so until then nothing warns about
-WhatsApp's secret: the check's line on the Deploy run names what it still needs instead
-("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID)" since WhatsApp moved to the Meta Ads app
-and the verify token was set, 2026-10-25).
+Embedded Signup is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns about
+WhatsApp's secret: the check's line on the Deploy run names what it still needs instead. Since the
+configuration id was set (2026-10-25) the line should read "WhatsApp Embedded Signup on".
 
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary

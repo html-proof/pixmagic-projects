@@ -95,7 +95,8 @@ export async function ensureNangoIntegration(coord: Coord, fetchImpl: FetchLike)
 
 /** Ids only: who connected, the workspace, the store, the account. */
 export interface WaNangoTags {
-  end_user_id: string;
+  /** Left out when the person who connected has since been deleted. */
+  end_user_id?: string;
   organization_id: string;
   bi_store: string;
   bi_provider: "whatsapp";
