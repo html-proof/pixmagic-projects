@@ -1,6 +1,5 @@
 "use client";
-import { useCallback, useId, useState, type ReactNode } from "react";
-import { renderTemplate, skipLabel, type SendValues, type TemplateComponent, type TemplateMapping } from "@app/shared/whatsapp";
+import { useCallback, useState, type ReactNode } from "react";
 import { useApp } from "@/components/AppContext";
 import { useToast } from "@/components/AppUi";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
@@ -8,30 +7,28 @@ import { actionError, ApiError, isTransient } from "@/lib/api";
 import type { WaMessage } from "./types";
 
 // ---------------------------------------------------------------------------
-// Shared pieces of WhatsApp Automation: where we are, the API's own words when it refuses,
-// status pills, the WhatsApp mark and a phone-style message preview. The rules themselves are in
-// @app/shared/whatsapp; paged lists, the drawer and country pickers come from the SMS area's
+// Shared pieces of WhatsApp Automation (/dashboard/whatsapp-automation): where we are, the API's own
+// words when it refuses, status pills, the WhatsApp mark and a phone-style bubble. The rules are in
+// @app/shared/whatsapp; paged lists, the drawer and the country picker come from the SMS area's
 // MessagingUi, which does the same jobs.
 // ---------------------------------------------------------------------------
 
-/** The current store's WhatsApp API base and its tab links. */
+export const WA_PAGE = "/dashboard/whatsapp-automation";
+
+/** The current store's WhatsApp API base. */
 export function useWa() {
   const { workspace, store } = useApp();
-  return {
-    ws: workspace.id,
-    store,
-    base: store ? `/workspaces/${workspace.id}/stores/${store.id}/whatsapp` : null,
-  };
+  return { ws: workspace.id, store, base: store ? `/workspaces/${workspace.id}/stores/${store.id}/whatsapp` : null };
 }
 
 /** A link to one of the page's tabs (with extra query values). */
 export const waHref = (tab: string, extra: Record<string, string> = {}) => {
   const q = new URLSearchParams({ ...(tab === "overview" ? {} : { tab }), ...extra }).toString();
-  return `/whatsapp${q ? `?${q}` : ""}`;
+  return `${WA_PAGE}${q ? `?${q}` : ""}`;
 };
 
 /** Refusals whose message the API wrote for the merchant (WhatsappError: a rule broken, a step to take first). */
-const SAID_BY_API = new Set([400, 403, 404, 409, 502, 503]);
+const SAID_BY_API = new Set([400, 403, 404, 409, 422, 429, 502, 503]);
 
 /** A failed WhatsApp action in words: the API's own sentence when it wrote one, else the app's usual wording. */
 export function waError(e: unknown, what: string): string {
@@ -57,7 +54,8 @@ export function useWaAction() {
         if (msg) toast("success", msg);
         return true;
       } catch (e) {
-        toast("error", waError(e, what));
+        const problems = problemsOf(e);
+        toast("error", problems.length ? `${waError(e, what)} ${problems.join(" ")}` : waError(e, what));
         return false;
       } finally {
         setBusy(null);
@@ -67,6 +65,9 @@ export function useWaAction() {
   );
   return { busy, run };
 }
+
+/** A fresh key for one press of a Send button: a retried request with the same key sends once. */
+export const newIdempotencyKey = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 /** WhatsApp's mark (brand colours, as Meta asks it to be shown). */
 export function WhatsappIcon({ size = 20, className }: { size?: number; className?: string }) {
@@ -95,24 +96,22 @@ const MESSAGE_TONE: Record<string, Tone> = {
   failed: "danger",
   cancelled: "neutral",
   skipped: "warn",
+  received: "neutral",
 };
 
-/** A message's status in words, with the reason as a tooltip. */
-export function MessageStatus({ m }: { m: Pick<WaMessage, "status" | "statusLabel" | "reasonLabel" | "errorTitle" | "direction"> }) {
+/** A message's status in words, with its reason as a tooltip. */
+export function MessageStatus({ m }: { m: Pick<WaMessage, "status" | "statusLabel" | "reasonLabel" | "errorDetail" | "direction"> }) {
   if (m.direction === "in") return <Badge tone="neutral">Received</Badge>;
   return (
-    <span title={m.errorTitle ?? m.reasonLabel ?? undefined}>
-      <Badge tone={MESSAGE_TONE[m.status] ?? "neutral"}>{m.statusLabel}</Badge>
+    <span title={m.errorDetail ?? m.reasonLabel ?? undefined}>
+      <Badge tone={MESSAGE_TONE[m.status] ?? "neutral"}>{m.status === "accepted" ? "Accepted" : m.statusLabel}</Badge>
     </span>
   );
 }
 
-const TEMPLATE_TONE: Record<string, Tone> = { APPROVED: "good", PENDING: "warn", IN_APPEAL: "warn", REJECTED: "danger", PAUSED: "danger", DISABLED: "danger" };
-export const templateTone = (status: string): Tone => TEMPLATE_TONE[status] ?? "neutral";
+export const CONNECTION_TONE: Record<string, Tone> = { pairing: "warn", connected: "good", reconnecting: "warn", logged_out: "danger", failed: "danger", disconnected: "neutral" };
 
-export const CONNECTION_TONE: Record<string, Tone> = { active: "good", action_required: "warn", reconnect: "danger", error: "danger", disconnected: "neutral" };
-
-export const WORKFLOW_STATUS: Record<string, { tone: Tone; label: string }> = {
+export const AUTOMATION_STATUS: Record<string, { tone: Tone; label: string }> = {
   draft: { tone: "neutral", label: "Draft" },
   active: { tone: "good", label: "On" },
   paused: { tone: "warn", label: "Paused" },
@@ -120,121 +119,42 @@ export const WORKFLOW_STATUS: Record<string, { tone: Tone; label: string }> = {
 
 export const CAMPAIGN_STATUS: Record<string, { tone: Tone; label: string }> = {
   draft: { tone: "neutral", label: "Draft" },
-  scheduled: { tone: "neutral", label: "Scheduled" },
+  scheduled: { tone: "warn", label: "Scheduled" },
   sending: { tone: "good", label: "Sending" },
-  completed: { tone: "good", label: "Finished" },
+  completed: { tone: "good", label: "Completed" },
   cancelled: { tone: "neutral", label: "Cancelled" },
 };
 
-export function Pill({ map, status }: { map: Record<string, { tone: Tone; label: string }>; status: string }) {
-  const s = map[status] ?? { tone: "neutral" as Tone, label: status.replace(/_/g, " ") };
-  return <Badge tone={s.tone}>{s.label}</Badge>;
-}
-
-/** Where a message came from, in words. */
-export function sourceLabel(source: string): string {
-  return ({ workflow: "Workflow", campaign: "Campaign", manual: "Sent by your team", test: "Test", team_alert: "Team alert", inbound: "From the customer" } as Record<string, string>)[source] ?? source;
-}
-
-/** Why a message wasn't sent or is waiting, in words. */
-export const reasonText = (reason: string | null | undefined): string | null => {
-  if (!reason) return null;
-  const known: Record<string, string> = {
-    waiting_for_connection: "Waiting for WhatsApp to be reconnected or finished setting up",
-    sending_hours: "Waiting for sending hours",
-    daily_limit: "Waiting: the daily limit was reached",
-    meta_throttled: "Waiting: WhatsApp asked to slow down for a moment",
-    automation_paused: "Held: automation is paused",
-    uncertain: "WhatsApp didn't answer: it may or may not have been sent",
-    refused: "WhatsApp refused it",
-    undeliverable: "WhatsApp couldn't deliver it",
-    account: "A problem with the WhatsApp account",
-    nothing_to_send: "Nothing left to send",
-    unreadable: "Its details couldn't be read",
-  };
-  return known[reason] ?? skipLabel(reason);
+export const SOURCE_LABEL: Record<string, string> = {
+  automation: "Automation",
+  campaign: "Campaign",
+  manual: "Sent from the dashboard",
+  test: "Test",
+  verification: "Verification code",
+  team_alert: "Team alert",
+  reply: "Reply",
+  inbound: "From the customer",
 };
 
-// ---------------------------------------------------------------------------
-// A message as the customer sees it
-// ---------------------------------------------------------------------------
-
-/** A template filled with values (samples when `values` is null), as a WhatsApp chat bubble. */
-export function TemplatePreview({ components, mapping, values, headerMedia }: { components: TemplateComponent[]; mapping: TemplateMapping | null; values?: SendValues | null; headerMedia?: string | null }) {
-  const r = renderTemplate(components, mapping, values ?? null);
-  const format = components.find((c) => c.type.toUpperCase() === "HEADER")?.format?.toUpperCase();
+/** A WhatsApp message as it looks on a phone (the store's side). */
+export function WaBubble({ children, mine = true }: { children: ReactNode; mine?: boolean }) {
   return (
-    <ChatBubble
-      header={
-        format && format !== "TEXT" ? (
-          <div className="mb-2 flex h-20 items-center justify-center rounded-lg bg-black/5 text-xs text-muted">{headerMedia ? `${format.toLowerCase()}: ${headerMedia}` : `[${format.toLowerCase()}]`}</div>
-        ) : r.header ? (
-          <p className="mb-1 font-semibold">{r.header}</p>
-        ) : null
-      }
-      body={r.body}
-      footer={r.footer}
-      buttons={r.buttons}
-    />
-  );
-}
-
-/** One WhatsApp bubble: a header, the text, the footer and the buttons under it. */
-export function ChatBubble({ header, body, footer, buttons = [] }: { header?: ReactNode; body: string; footer?: string | null; buttons?: string[] }) {
-  return (
-    <div className="max-w-sm rounded-2xl bg-[#e7f6e9] p-3 text-sm text-[#111b21] shadow-sm dark:bg-[#1f3b2c] dark:text-[#e9edef]" data-testid="wa-preview">
-      <div className="rounded-xl bg-white px-3 py-2 dark:bg-[#202c33]">
-        {header}
-        <p className="whitespace-pre-wrap break-words">{body || <span className="text-muted">Your message appears here.</span>}</p>
-        {footer && <p className="mt-1 text-xs text-[#667781] dark:text-[#8696a0]">{footer}</p>}
-      </div>
-      {buttons.length > 0 && (
-        <div className="mt-1 grid gap-1">
-          {buttons.map((b, i) => (
-            <span key={`${b}-${i}`} className="rounded-xl bg-white px-3 py-1.5 text-center text-sm font-medium text-[#027eb5] dark:bg-[#202c33] dark:text-[#53bdeb]">
-              {b}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** A small "?" that explains a field, readable by keyboard and screen reader. */
-export function Hint({ children }: { children: ReactNode }) {
-  const id = useId();
-  const [open, setOpen] = useState(false);
-  return (
-    <span className="relative inline-block align-middle">
-      <button
-        type="button"
-        className="ml-1 grid size-5 place-items-center rounded-full border border-border text-[11px] text-muted hover:text-text"
-        aria-describedby={open ? id : undefined}
-        aria-label="More about this"
-        onClick={() => setOpen((o) => !o)}
-        onBlur={() => setOpen(false)}
-      >
-        ?
-      </button>
-      {open && (
-        <span id={id} role="tooltip" className="absolute left-0 top-6 z-30 w-64 rounded-lg border border-border bg-surface p-2 text-xs font-normal text-text shadow-lg">
-          {children}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/** A labelled field with an optional help line. */
-export function Field({ label, htmlFor, help, children }: { label: ReactNode; htmlFor?: string; help?: ReactNode; children: ReactNode }) {
-  return (
-    <div>
-      <label className="label" htmlFor={htmlFor}>
-        {label}
-      </label>
+    <div className={`max-w-md whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm shadow-sm ${mine ? "rounded-br-sm bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef]" : "rounded-bl-sm border border-border bg-surface"}`}>
       {children}
-      {help && <p className="mt-1 text-xs text-muted">{help}</p>}
     </div>
   );
 }
+
+/** "3 minutes ago" style when recent, else a short date and time in the browser's zone. */
+export function fmtAgo(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const t = new Date(iso).getTime();
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 45) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86_400) return `${Math.round(s / 3600)} h ago`;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+}
+
+/** A share as a percentage, or "–" with nothing to divide. */
+export const fmtShare = (n: number | null | undefined) => (n == null ? "–" : `${Math.round(n * 100)}%`);

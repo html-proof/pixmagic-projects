@@ -1,123 +1,160 @@
 /**
- * Message templates: what Meta holds in the store's WhatsApp Business Account (synced on connect,
- * on Refresh, by the health check, and kept current by Meta's template webhooks), templates the
- * merchant writes here and submits for Meta's review, and deleting them. Only a template Meta
- * approved is ever sent, and the category Meta gave it decides who may receive it.
+ * Message templates written in bizinsights (docs/whatsapp.md, "Templates"): a name, a category, a
+ * text with {{variables}} and an on/off switch. On a linked phone a template is the store's own
+ * wording: nobody reviews it. On the Cloud API, a business-started message must use a template
+ * Meta approved, so each one is also submitted to Meta (through Evolution API) and can be used
+ * there only once Meta's status is APPROVED.
  */
-import { Prisma, systemDb, type Store, type WaConnection, type WaTemplate } from "@app/db";
-import { checkTemplateDraft, hasErrors, toMetaComponents, type TemplateDraft } from "@app/shared";
+import { systemDb, type Store, type WappConnection, type WappTemplate } from "@app/db";
+import { variablesIn, waHasErrors, waTemplateIssues, waTemplateSchema, type WaTemplateCategory, type WaTemplateInput } from "@app/shared";
+import { logger } from "../logger.js";
 import { audit } from "../notify.js";
-import { providerDetail } from "../errors.js";
-import type { FetchLike } from "../shopify.js";
 import { WhatsappError, type WaDeps } from "./common.js";
-import { metaCreateTemplate, metaDeleteTemplate, metaListTemplates, WhatsappApiError } from "./graph.js";
-import { connectionToken } from "./tokens.js";
+import { clientFor, instanceToken, providerProblem } from "./connection.js";
 
-/** Replace the store's templates with what the account holds now. Returns how many there are. */
-export async function syncTemplates(conn: Pick<WaConnection, "storeId" | "workspaceId" | "wabaId">, token: string, fetchImpl: FetchLike): Promise<number> {
-  const list = await metaListTemplates(conn.wabaId, token, fetchImpl);
-  const seen: Array<{ name: string; language: string }> = [];
-  for (const t of list) {
-    if (!t.name || !t.language) continue;
-    seen.push({ name: t.name, language: t.language });
-    const data = {
-      wabaId: conn.wabaId,
-      metaId: String(t.id),
-      category: String(t.category ?? "").toUpperCase(),
-      status: String(t.status ?? "").toUpperCase(),
-      components: (t.components ?? []) as unknown as Prisma.InputJsonValue,
-      rejectedReason: t.rejected_reason && t.rejected_reason !== "NONE" ? t.rejected_reason.slice(0, 300) : null,
-      qualityScore: t.quality_score?.score ?? null,
-    };
-    await systemDb.waTemplate.upsert({
-      where: { storeId_name_language: { storeId: conn.storeId, name: t.name, language: t.language } },
-      create: { workspaceId: conn.workspaceId, storeId: conn.storeId, name: t.name, language: t.language, ...data },
-      update: data,
-    });
+/** Whether a template can be sent through this connection now, and why not. */
+export function templateUsable(t: Pick<WappTemplate, "active" | "metaStatus">, conn: Pick<WappConnection, "provider"> | null): { ok: boolean; reason: string | null } {
+  if (!t.active) return { ok: false, reason: "The template is switched off." };
+  if (conn?.provider === "cloud_api" && t.metaStatus !== "APPROVED") {
+    return { ok: false, reason: t.metaStatus ? `Meta hasn't approved it (${t.metaStatus.toLowerCase()}).` : "It hasn't been submitted to Meta yet." };
   }
-  // Templates deleted in WhatsApp Manager, or of another account the store was connected to before.
-  await systemDb.waTemplate.deleteMany({
-    where: { storeId: conn.storeId, NOT: seen.length ? { OR: seen.map((s) => ({ name: s.name, language: s.language })) } : undefined },
-  });
-  return seen.length;
+  return { ok: true, reason: null };
 }
 
-/** The store's template by name and language when Meta approved it, else null. */
-export async function approvedTemplate(storeId: string, name: string, language: string): Promise<WaTemplate | null> {
-  const t = await systemDb.waTemplate.findUnique({ where: { storeId_name_language: { storeId, name, language } } });
-  return t && t.status === "APPROVED" ? t : null;
+export async function templateOf(storeId: string, id: string): Promise<WappTemplate | null> {
+  return systemDb.wappTemplate.findFirst({ where: { id, storeId } });
 }
 
-/** Meta's refusal of a template, in the merchant's words. */
-function templateRefusal(err: WhatsappApiError): WhatsappError {
-  if (err.code === 100 && /already exists|name.*(taken|exists)/i.test(err.details ?? "")) {
-    return new WhatsappError("A template with this name and language already exists. Choose another name.", 409, "template_exists");
-  }
-  if (err.action === "reconnect") return new WhatsappError("Meta no longer accepts bizinsights' access to your WhatsApp. Reconnect WhatsApp, then try again.", 409, "reconnect_needed");
-  if (err.action === "retry" || err.action === "network") return new WhatsappError("WhatsApp didn't answer just now. Try again in a minute.", 503, "meta_unavailable");
-  return new WhatsappError(`Meta didn't accept the template: ${providerDetail(err.details ?? err.title) || "no reason given"}`, 400, "template_refused");
+/** What uses a template (an automation or a campaign that hasn't finished stops it being deleted). */
+export async function templateUsage(storeId: string, ids: string[]) {
+  const [autos, campaigns] = await Promise.all([
+    systemDb.wappAutomation.groupBy({ by: ["templateId"], where: { storeId, templateId: { in: ids } }, _count: { _all: true } }),
+    systemDb.wappCampaign.groupBy({ by: ["templateId"], where: { storeId, templateId: { in: ids }, status: { in: ["draft", "scheduled", "sending"] } }, _count: { _all: true } }),
+  ]);
+  const out = new Map<string, { automations: number; campaigns: number }>();
+  for (const id of ids) out.set(id, { automations: 0, campaigns: 0 });
+  for (const a of autos) out.get(a.templateId)!.automations = a._count._all;
+  for (const c of campaigns) out.get(c.templateId)!.campaigns = c._count._all;
+  return out;
 }
 
-/** Write a template and submit it for Meta's review (usually minutes, sometimes up to a day). */
-export async function submitTemplate(deps: WaDeps, input: { store: Store; draft: TemplateDraft; userId: string | null; ip?: string }): Promise<WaTemplate> {
-  const issues = checkTemplateDraft(input.draft);
-  if (hasErrors(issues)) throw new WhatsappError(issues.find((i) => i.level === "error")!.message, 400, "invalid_template", { issues });
-  const conn = await systemDb.waConnection.findUnique({ where: { storeId: input.store.id } });
-  if (!conn || conn.status === "disconnected" || !conn.nangoConnectionId) throw new WhatsappError("Connect WhatsApp before writing templates.", 409, "not_connected");
-  const existing = await systemDb.waTemplate.findUnique({ where: { storeId_name_language: { storeId: input.store.id, name: input.draft.name, language: input.draft.language } } });
-  if (existing) throw new WhatsappError("A template with this name and language already exists. Choose another name.", 409, "template_exists");
-  const token = await connectionToken(conn, deps);
-  const components = toMetaComponents(input.draft);
-  let made: { id: string; status: string; category: string };
-  try {
-    made = await metaCreateTemplate(conn.wabaId, token, { name: input.draft.name, language: input.draft.language, category: input.draft.category, components }, deps.fetchImpl);
-  } catch (err) {
-    if (err instanceof WhatsappApiError) throw templateRefusal(err);
-    throw err;
+function checked(data: unknown): WaTemplateInput {
+  const t = waTemplateSchema.parse(data);
+  const issues = waTemplateIssues(t);
+  if (waHasErrors(issues)) throw new WhatsappError(issues.filter((i) => i.level === "error").map((i) => i.message).join(" "), 400, "template_invalid", { issues });
+  return t;
+}
+
+export async function createWaTemplate(store: Pick<Store, "id" | "workspaceId">, input: { data: unknown; userId: string; ip?: string }): Promise<WappTemplate> {
+  const t = checked(input.data);
+  if (await systemDb.wappTemplate.findUnique({ where: { storeId_name: { storeId: store.id, name: t.name } } })) {
+    throw new WhatsappError(`There's already a template called "${t.name}". Pick another name.`, 409, "template_exists");
   }
-  const row = await systemDb.waTemplate.upsert({
-    where: { storeId_name_language: { storeId: input.store.id, name: input.draft.name, language: input.draft.language } },
-    create: {
-      workspaceId: input.store.workspaceId,
-      storeId: input.store.id,
-      wabaId: conn.wabaId,
-      metaId: made.id,
-      name: input.draft.name,
-      language: input.draft.language,
-      category: made.category.toUpperCase(),
-      status: made.status.toUpperCase(),
-      components: components as unknown as Prisma.InputJsonValue,
-      createdByUserId: input.userId,
-    },
-    update: { metaId: made.id, status: made.status.toUpperCase(), category: made.category.toUpperCase(), components: components as unknown as Prisma.InputJsonValue },
-  });
-  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.template_submitted", targetType: "store", targetId: input.store.id, metadata: { name: row.name, language: row.language, category: input.draft.category }, ip: input.ip });
+  const row = await systemDb.wappTemplate.create({ data: { workspaceId: store.workspaceId, storeId: store.id, name: t.name, category: t.category, body: t.body, active: t.active, createdByUserId: input.userId, updatedByUserId: input.userId } });
+  await audit({ workspaceId: store.workspaceId, actorUserId: input.userId, action: "whatsapp.template_created", targetType: "whatsapp_template", targetId: row.id, metadata: { name: t.name, category: t.category }, ip: input.ip });
   return row;
 }
 
-/** Delete a template at Meta and here. Refused while an active workflow or a running campaign uses it. */
-export async function removeTemplate(deps: WaDeps, input: { store: Store; templateId: string; userId: string | null; ip?: string }): Promise<void> {
-  const t = await systemDb.waTemplate.findFirst({ where: { id: input.templateId, storeId: input.store.id } });
-  if (!t) throw new WhatsappError("That template wasn't found.", 404, "not_found");
-  const [workflows, campaigns] = await Promise.all([
-    systemDb.waWorkflow.count({ where: { storeId: t.storeId, templateName: t.name, templateLanguage: t.language, status: "active" } }),
-    systemDb.waCampaign.count({ where: { storeId: t.storeId, templateName: t.name, templateLanguage: t.language, status: { in: ["scheduled", "sending"] } } }),
-  ]);
-  if (workflows || campaigns) throw new WhatsappError("This template is in use by an active workflow or a running campaign. Pause or cancel those first.", 409, "template_in_use");
-  const conn = await systemDb.waConnection.findUnique({ where: { storeId: t.storeId } });
-  // Disconnected: bizinsights has no access to delete it at Meta, only its own copy goes.
-  if (conn?.nangoConnectionId && conn.status !== "disconnected" && conn.wabaId === t.wabaId) {
-    const token = await connectionToken(conn, deps);
-    try {
-      await metaDeleteTemplate(conn.wabaId, token, t.name, t.metaId, deps.fetchImpl);
-    } catch (err) {
-      // Already gone at Meta: delete it here too.
-      if (!(err instanceof WhatsappApiError && (err.code === 100 || err.httpStatus === 404))) {
-        if (err instanceof WhatsappApiError) throw templateRefusal(err);
-        throw err;
-      }
+/**
+ * Edits a template. Messages already waiting keep the text they were rendered with; automations and
+ * campaigns use the new one from now on. On the Cloud API an edit needs Meta's review again.
+ */
+export async function updateWaTemplate(store: Pick<Store, "id" | "workspaceId">, id: string, input: { data: unknown; userId: string; ip?: string }): Promise<WappTemplate> {
+  const existing = await templateOf(store.id, id);
+  if (!existing) throw new WhatsappError("Not found", 404, "not_found");
+  const t = checked(input.data);
+  if (t.name !== existing.name && (await systemDb.wappTemplate.findUnique({ where: { storeId_name: { storeId: store.id, name: t.name } } }))) {
+    throw new WhatsappError(`There's already a template called "${t.name}". Pick another name.`, 409, "template_exists");
+  }
+  if (t.category !== existing.category) {
+    const usage = (await templateUsage(store.id, [id])).get(id)!;
+    if (usage.automations || usage.campaigns) throw new WhatsappError("Automations or campaigns use this template, so its category can't change. Make a new template instead.", 409, "template_in_use");
+  }
+  const changedText = t.body !== existing.body || t.category !== existing.category;
+  const row = await systemDb.wappTemplate.update({
+    where: { id },
+    data: {
+      name: t.name,
+      category: t.category,
+      body: t.body,
+      active: t.active,
+      updatedByUserId: input.userId,
+      // Meta reviewed the old text, not this one.
+      ...(changedText && existing.metaStatus ? { metaStatus: null, metaId: null, metaName: null, metaReason: null } : {}),
+    },
+  });
+  await audit({ workspaceId: store.workspaceId, actorUserId: input.userId, action: "whatsapp.template_updated", targetType: "whatsapp_template", targetId: id, metadata: { name: t.name, active: t.active }, ip: input.ip });
+  return row;
+}
+
+export async function deleteWaTemplate(store: Pick<Store, "id" | "workspaceId">, id: string, actor: { userId: string; ip?: string }) {
+  const existing = await templateOf(store.id, id);
+  if (!existing) throw new WhatsappError("Not found", 404, "not_found");
+  const usage = (await templateUsage(store.id, [id])).get(id)!;
+  if (usage.automations || usage.campaigns) {
+    throw new WhatsappError(`This template is used by ${usage.automations} automation(s) and ${usage.campaigns} campaign(s). Change or delete those first.`, 409, "template_in_use");
+  }
+  await systemDb.wappTemplate.delete({ where: { id } });
+  await audit({ workspaceId: store.workspaceId, actorUserId: actor.userId, action: "whatsapp.template_deleted", targetType: "whatsapp_template", targetId: id, metadata: { name: existing.name }, ip: actor.ip });
+}
+
+// ---------------------------------------------------------------------------
+// Meta's review (Cloud API connections only)
+// ---------------------------------------------------------------------------
+
+/** Meta's template name: lower case, digits and underscores, made unique per bizinsights template. */
+export const metaTemplateName = (t: Pick<WappTemplate, "id" | "name">) =>
+  `${t.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40) || "template"}_${t.id.slice(-6).toLowerCase()}`;
+
+/** A bizinsights text in Meta's form: {{customer_first_name}} becomes {{1}}, in order, with Meta's sample values. */
+export function toMetaBody(body: string, samples: Record<string, string>): { text: string; order: string[]; examples: string[] } {
+  const order = variablesIn(body);
+  let text = body;
+  order.forEach((v, i) => {
+    text = text.replace(new RegExp(`\\{\\{\\s*${v}\\s*\\}\\}`, "g"), `{{${i + 1}}}`);
+  });
+  return { text, order, examples: order.map((v) => samples[v] ?? v) };
+}
+
+const META_CATEGORY: Record<WaTemplateCategory, "UTILITY" | "MARKETING"> = { transactional: "UTILITY", marketing: "MARKETING" };
+
+/** Submits a template to Meta for review (Cloud API). Meta's answer is recorded as it comes. */
+export async function submitTemplateToMeta(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnection, t: WappTemplate, samples: Record<string, string>, language = "en"): Promise<WappTemplate> {
+  if (conn.provider !== "cloud_api" || !conn.instanceName) throw new WhatsappError("Only a Cloud API connection submits templates to Meta.", 409, "not_cloud_api");
+  const name = metaTemplateName(t);
+  const body = toMetaBody(t.body, samples);
+  try {
+    const r = await clientFor(conn, deps).createWaTemplate(conn.instanceName, instanceToken(conn), {
+      name,
+      category: META_CATEGORY[t.category as WaTemplateCategory],
+      language,
+      components: [{ type: "BODY", text: body.text, ...(body.examples.length ? { example: { body_text: [body.examples] } } : {}) }],
+    });
+    return systemDb.wappTemplate.update({ where: { id: t.id }, data: { metaName: name, metaLanguage: language, metaId: r.id ?? null, metaStatus: (r.status ?? "PENDING").toUpperCase(), metaReason: null, metaCheckedAt: new Date() } });
+  } catch (e) {
+    throw providerProblem(e);
+  }
+}
+
+/** Meta's current review of every submitted template (Cloud API). */
+export async function refreshMetaTemplates(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnection): Promise<number> {
+  if (conn.provider !== "cloud_api" || !conn.instanceName) return 0;
+  const list = await clientFor(conn, deps).findTemplates(conn.instanceName, instanceToken(conn));
+  const byName = new Map(list.map((t) => [`${t.name}:${t.language}`, t]));
+  const mine = await systemDb.wappTemplate.findMany({ where: { storeId: conn.storeId, metaName: { not: null } } });
+  let changed = 0;
+  for (const t of mine) {
+    const m = byName.get(`${t.metaName}:${t.metaLanguage ?? "en"}`);
+    const status = m?.status?.toUpperCase() ?? "DELETED";
+    if (status !== t.metaStatus) {
+      await systemDb.wappTemplate.update({ where: { id: t.id }, data: { metaStatus: status, metaReason: m?.rejected_reason ?? null, metaCheckedAt: new Date() } });
+      changed++;
     }
   }
-  await systemDb.waTemplate.delete({ where: { id: t.id } });
-  await audit({ workspaceId: t.workspaceId, actorUserId: input.userId, action: "whatsapp.template_deleted", targetType: "store", targetId: t.storeId, metadata: { name: t.name, language: t.language }, ip: input.ip });
+  if (changed) logger.info({ storeId: conn.storeId, changed }, "whatsapp templates: Meta's review changed");
+  return changed;
 }

@@ -15,7 +15,7 @@ import {
   type AggregateJobData,
   type Producer,
   type QueueName,
-  setWebhookAside,
+  setWebhookEventAside,
   sweepWhatsapp,
   sweepEmail,
   type EmailJob,
@@ -129,8 +129,6 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     // Ad account syncs ride the sync queue too (see adsQueue), told apart by their kind.
     const kind = (job as { kind?: string }).kind;
     if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
-    // WhatsApp messages ride the sync queue too; the message rows carry their own state.
-    else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch" || kind === "whatsapp_webhook")) await runWhatsappJob(job as WhatsappJob, deps);
     // Texts (Customer Messaging) ride the sync queue too; the job rows carry their own state.
     else if (queue === "sync" && kind === "sms") await runSmsJob(job as SmsJob, deps);
     // The check against Shopify rides the sync queue too; its run's row is its record.
@@ -141,6 +139,8 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else if (queue === "email") await runEmailJob(job as EmailJob, deps);
     else if (queue === "smsEvents") await runSmsEvent(job, deps);
+    // WhatsApp Automation: sends, Evolution API's events, campaign batches; the rows carry their own state.
+    else if (queue === "whatsapp") await runWhatsappJob(job as WhatsappJob, deps);
     else await runAggregate(job as AggregateJobData);
     msg.ack();
   } catch (e) {
@@ -236,11 +236,10 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // that keeps failing is left to the queue's dead-letter queue, with its alarm.
     return;
   }
-  if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch" || kind === "whatsapp_webhook")) {
+  if (queue === "whatsapp") {
     // The rows are the record: a message stays queued or failed with its reason, a campaign's batch
-    // chain is picked up again by the sweep, and a webhook delivery that kept failing is set aside
-    // (its stores alerted) here or by the sweep.
-    if (final && kind === "whatsapp_webhook") await setWebhookAside((body as { eventId: string }).eventId, deps);
+    // chain is picked up again by the sweep, and an event that kept failing is set aside here or by the sweep.
+    if (final && kind === "wapp_event") await setWebhookEventAside((body as { eventId: string }).eventId, error);
     return;
   }
   if (queue === "sync" && kind === "verify") {

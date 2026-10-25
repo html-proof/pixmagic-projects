@@ -183,7 +183,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
     ...(automationsHub ? [area("/automations", "Automations", Workflow)] : []),
     ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
-    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
+    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/dashboard/whatsapp-automation", "WhatsApp", MessageCircle)] : []),
   ];
   const settings: NavItem[] = [
     ...(allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
@@ -739,7 +739,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       ...(offers("sms") && allowed("marketing.campaigns")
         ? [{ id: "messaging", label: "Customer Messaging", group: "Marketing", icon: MessageSquareText, keywords: "sms text messages campaigns automations templates opt-out", go: go("/messaging") }]
         : []),
-      ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
+      ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/dashboard/whatsapp-automation") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
       ...(allowed("members:manage") ? [{ id: "team", label: "Team & Access", group: "Settings", icon: ShieldCheck, keywords: "members invite users roles permissions share", go: go("/team") }] : []),

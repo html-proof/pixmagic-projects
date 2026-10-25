@@ -35,9 +35,10 @@ const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
 };
 import type { DataStack } from "./data-stack.js";
 import { loggedBucket } from "./s3-access-logs.js";
+import { evolutionUrl } from "./whatsapp-stack.js";
 import { viewerRequestCode } from "./viewer-request.js";
 
-type QueueName = "sync" | "webhooks" | "aggregate" | "email" | "smsEvents";
+type QueueName = "sync" | "webhooks" | "aggregate" | "email" | "smsEvents" | "whatsapp";
 
 /**
  * The application: queues, the three functions (one package), CloudFront, schedules, alarms,
@@ -86,7 +87,7 @@ export class AppStack extends Stack {
       })();
     const shortCommit = commit.replace(/^([0-9a-f]{7})[0-9a-f]+/, "$1");
 
-    // --- Queues (sync, webhooks, aggregate, email, smsEvents + a dead-letter queue).
+    // --- Queues (sync, webhooks, aggregate, email, smsEvents, whatsapp + a dead-letter queue).
     // Visibility timeout covers the jobs function's 15 minutes. consume() settles every message
     // within MAX_ATTEMPTS (6); maxReceiveCount 10 only catches what it never settles (crashes).
     const dlq = new sqs.Queue(this, "Dlq", { queueName: `${prefix}-dlq`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
@@ -99,7 +100,7 @@ export class AppStack extends Stack {
         enforceSSL: true,
         deadLetterQueue: { queue: dlq, maxReceiveCount: 10 },
       });
-    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email"), smsEvents: queue("smsEvents") };
+    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email"), smsEvents: queue("smsEvents"), whatsapp: queue("whatsapp") };
 
     // --- Customer Messaging: AWS End User Messaging SMS (docs/sms.md). The configuration set sends
     // every SMS event (accepted, delivered, failed, opted out...) to a topic only this account's SMS
@@ -147,6 +148,10 @@ export class AppStack extends Stack {
       QUEUE_URLS: Stack.of(this).toJsonString(Object.fromEntries(Object.entries(queues).map(([k, q]) => [k, q.queueUrl]))),
       SES_REGION: cfg.region,
       SMS_CONFIGURATION_SET: smsConfigurationSet,
+      // WhatsApp Automation's Evolution API service (whatsapp-stack.ts): its private address, and its
+      // global key's secret (read at cold start like the others).
+      EVOLUTION_API_URL: evolutionUrl(cfg),
+      EVOLUTION_SECRET_ARN: data.evolutionSecret.secretArn,
       // A domain is known before the deploy, so the functions get it with the release (no window in
       // which a fresh instance reads the previous address from the runtime parameter). Without one,
       // the address is CloudFront's, which the runtime parameter carries.
@@ -174,6 +179,8 @@ export class AppStack extends Stack {
           ...environment,
           ...(name === "api" ? { COGNITO_WORKER_SECRET_ARN: cognitoSecret } : {}),
           ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
+          // Only the cron makes the WhatsApp service's database role (its "evolution-db" action) and prunes its data.
+          ...(name === "cron" ? { EVOLUTION_DB_SECRET_ARN: data.evolutionDbSecret.secretArn } : {}),
         },
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
@@ -186,6 +193,8 @@ export class AppStack extends Stack {
       });
       data.appSecret.grantRead(f);
       data.dbSecret.grantRead(f);
+      data.evolutionSecret.grantRead(f);
+      if (name === "cron") data.evolutionDbSecret.grantRead(f);
       data.coordTable.grantReadWriteData(f);
       data.payloads.grantReadWrite(f);
       for (const q of Object.values(queues)) q.grantSendMessages(f);
@@ -237,6 +246,8 @@ export class AppStack extends Stack {
       ["aggregate", 5, 1, 2],
       ["email", 10, 2, 2],
       ["smsEvents", 10, 2, 2],
+      // WhatsApp sends, Evolution API's events and campaign batches: quick jobs, each store paced by its own lock.
+      ["whatsapp", 10, 1, 3],
     ];
     for (const [name, batchSize, windowS, maxConcurrency] of sources) {
       jobs.alias.addEventSource(
@@ -529,13 +540,24 @@ export class AppStack extends Stack {
     // hub's history shows message by message (docs/automations.md, "Alarms").
     const sendFailures = new logs.MetricFilter(this, "MessagingSendFailures", {
       logGroup: jobs.fn.logGroup,
-      filterPattern: logs.FilterPattern.anyTerm("sms send refused", "email send failed"),
+      filterPattern: logs.FilterPattern.anyTerm("sms send refused", "email send failed", "whatsapp send refused by the provider"),
       metricNamespace: "Insights",
       metricName: `${cfg.name}-messaging-send-failures`,
       metricValue: "1",
       defaultValue: 0,
     });
-    alarm("messaging-send-failures", sendFailures.metric({ period: five, statistic: "Sum" }), 25, "Many automated SMS or emails refused by their providers: see Automations → Message history and docs/automations.md", 2);
+    alarm("messaging-send-failures", sendFailures.metric({ period: five, statistic: "Sum" }), 25, "Many automated SMS, emails or WhatsApp messages refused by their providers: see the message histories, docs/automations.md and docs/whatsapp.md", 2);
+    // WhatsApp's Evolution API service not answering the cron's check (every 15 minutes): no store can
+    // connect or send until it is back (whatsapp-stack.ts has the service's own alarms).
+    const evolutionDown = new logs.MetricFilter(this, "EvolutionUnreachable", {
+      logGroup: cron.fn.logGroup,
+      filterPattern: logs.FilterPattern.anyTerm("evolution unreachable"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-evolution-unreachable`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("whatsapp-service-unreachable", evolutionDown.metric({ period: Duration.minutes(15), statistic: "Sum" }), 1, "WhatsApp's Evolution API service didn't answer the sweep: no store can connect or send (docs/whatsapp.md, Runbook)", 2);
 
     new cloudwatch.Dashboard(this, "Dashboard", {
       dashboardName: prefix,

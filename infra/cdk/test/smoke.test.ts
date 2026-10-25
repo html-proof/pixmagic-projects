@@ -26,13 +26,13 @@ const credential = (provider: string, idSetting: string, secretSetting: string, 
 /** What the shipped settings answer today, without META_APP_SECRET (core configReport.ts's shape). */
 const REPORT = {
   ads: { configured: { meta: false, google: false, adsense: false }, restricted: { meta: false, google: false, adsense: false } },
-  whatsapp: { embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false },
+  whatsapp: { evolution: true, evolutionNeeds: [], embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false },
   email: { google: false, microsoft: false, resend: true },
   auth: { cognito: true, google: false, emailOtp: false, loginCode: true },
   credentials: [
     credential("Shopify", "SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", true, true, "stores can't install the Shopify app or refresh their access"),
     credential("Meta Ads", "META_APP_ID", "META_APP_SECRET", true, false, 'Meta Ads says "Coming soon" and its connections stop syncing'),
-    credential("WhatsApp (Embedded Signup)", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", false, false, "Connect WhatsApp Business (Embedded Signup) can't be turned on"),
+    credential("WhatsApp (Embedded Signup)", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", false, false, "connecting WhatsApp through Meta's Cloud API (Embedded Signup) can't be offered"),
     credential("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", false, true, "Connect Outlook says it isn't set up"),
   ],
   halfConfigured: ["Meta Ads"],
@@ -63,7 +63,7 @@ describe("the configuration check", () => {
         "Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --env production --set META_APP_SECRET, then run Deploy to AWS (Actions, Run workflow, on main) so the functions read it (docs/aws-deployment.md).",
     ]);
     expect(detail).toBe(
-      "ads none (restricted none); WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET); email resend; Google sign-in off; emailed sign-in code on; missing a secret: Meta Ads",
+      "ads none (restricted none); WhatsApp service on, Cloud API off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET); email resend; Google sign-in off; emailed sign-in code on; missing a secret: Meta Ads",
     );
   });
 

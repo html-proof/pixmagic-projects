@@ -22,8 +22,8 @@ export interface LocalQueues extends Queues {
 
 export function localQueues(run: (queue: QueueName, msg: QueueMessage) => Promise<void>, opts: { concurrency?: number } = {}): LocalQueues {
   const concurrency = opts.concurrency ?? 4;
-  const running: Record<QueueName, number> = { sync: 0, webhooks: 0, aggregate: 0, email: 0, smsEvents: 0 };
-  const ready: Record<QueueName, Array<() => Promise<void>>> = { sync: [], webhooks: [], aggregate: [], email: [], smsEvents: [] };
+  const running: Record<QueueName, number> = { sync: 0, webhooks: 0, aggregate: 0, email: 0, smsEvents: 0, whatsapp: 0 };
+  const ready: Record<QueueName, Array<() => Promise<void>>> = { sync: [], webhooks: [], aggregate: [], email: [], smsEvents: [], whatsapp: [] };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let busy = 0;
   const settled: Array<() => void> = [];
@@ -93,6 +93,7 @@ export function localQueues(run: (queue: QueueName, msg: QueueMessage) => Promis
     aggregate: producer("aggregate"),
     email: producer("email"),
     smsEvents: producer("smsEvents"),
+    whatsapp: producer("whatsapp"),
     close() {
       for (const t of timers) clearTimeout(t);
       timers.clear();

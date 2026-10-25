@@ -17,7 +17,7 @@ import {
   type AdsSyncData,
   dispatchCampaign,
   processWebhookEvent,
-  sendWaMessage,
+  sendQueuedMessage,
   type WhatsappJob,
   processBusinessEvent,
   retryInvitationEmail,
@@ -36,14 +36,15 @@ export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
 }
 
 /**
- * WhatsApp Automation: send one message, make a campaign's next batch, or apply one of Meta's webhook
- * deliveries. The rows carry the state: a send never throws for Meta's answer; a webhook delivery
- * that fails throws, so the queue brings it back (and the sweep sets it aside after enough tries).
+ * WhatsApp Automation (the whatsapp queue): send one message, make a campaign's next batch, or apply
+ * one of Evolution API's stored webhook events. The rows carry the state: a send never throws for the
+ * provider's answer; an event that fails throws, so the queue brings it back (and it is set aside
+ * after enough tries, here or by the sweep).
  */
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
-  if (job.kind === "whatsapp") return { outcome: await sendWaMessage(job.messageId, deps) };
-  if (job.kind === "whatsapp_dispatch") return dispatchCampaign(job, deps);
-  return processWebhookEvent(job.eventId, deps);
+  if (job.kind === "wapp_send") return { outcome: await sendQueuedMessage(deps, job.messageId) };
+  if (job.kind === "wapp_campaign") return { outcome: await dispatchCampaign(deps, job.campaignId) };
+  return { outcome: await processWebhookEvent(deps, job.eventId) };
 }
 
 /** One text (Customer Messaging). The row carries its state; the send path never throws for an SMS failure. */
@@ -192,7 +193,7 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
 
 /**
  * Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a
- * grace period. (WhatsApp's stray tokens at Nango are the WhatsApp sweep's: whatsapp/nango.ts.)
+ * grace period.
  */
 export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
   return sweepNangoOrphans(deps.coord, deps.fetchImpl);

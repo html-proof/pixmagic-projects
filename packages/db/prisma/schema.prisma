@@ -1827,12 +1827,11 @@ model WhatsappAutomationRun {
 }
 
 // ---------------------------------------------------------------------------------------------
-// WhatsApp Automation (docs/whatsapp.md). The store's own WhatsApp Business number, connected with
-// Meta's Embedded Signup; the business's access token is held by Nango (integration
-// `whatsapp-business`), never in these tables. Customers' numbers, names and message contents are
-// ENCRYPTED (AES-256-GCM, AAD bound to the store and purpose), with a keyed hash to find a number and
-// a masked form for the dashboard. Retention: packages/core/src/whatsapp/sweep.ts. customers/redact
-// and shop/redact delete them (whatsapp/privacy.ts).
+// RETIRED 2026-10-26: the Meta Cloud API + Nango WhatsApp module (2026-10-25), replaced by the
+// wapp_* tables below. Nothing reads or writes these any more except the privacy paths
+// (packages/core/src/whatsapp/legacy.ts: customers/redact, shop/redact, data request counts), so a
+// rollback to the release before the rebuild still finds them. A later migration drops them
+// (docs/whatsapp.md, "The old WhatsApp tables").
 // ---------------------------------------------------------------------------------------------
 
 // The store's WhatsApp Business number. One row per store, kept after a disconnect (for the history).
@@ -2210,6 +2209,430 @@ model WaCampaign {
   @@index([status, scheduledAt])
   @@index([workspaceId])
   @@map("wa_campaigns")
+}
+
+// ---------------------------------------------------------------------------------------------
+// WhatsApp Automation on Evolution API (docs/whatsapp.md, 2026-10-26). Each store's connection is
+// one instance on bizinsights' own Evolution API service (a phone linked by QR code, or Meta's
+// Cloud API). Every table carries workspace_id under the tenant row-level-security policy.
+// Customers' numbers, names and message texts are ENCRYPTED (AES-256-GCM, AAD "wapp:<storeId>:<kind>"),
+// found by a keyed hash and shown masked; message texts are cleared after the store's retention.
+// Instance keys and webhook keys are encrypted too and never leave the server.
+// ---------------------------------------------------------------------------------------------
+
+/// A store's WhatsApp connection (one Evolution API instance). One row per store, kept after a disconnect for the history.
+model WappConnection {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @unique @map("store_id")
+  /// qr | cloud_api (WA_PROVIDERS)
+  provider         String
+  /// WA_CONNECTION_STATUSES: what the provider last reported, never assumed.
+  status           String    @default("pairing")
+  /// Why it is in that state: Baileys' close code ("close_401"), "qr_limit", "create_failed"... Never a provider's raw answer.
+  statusReason     String?   @map("status_reason")
+  /// The Evolution API server (shard) that holds the instance.
+  shard            String
+  /// Evolution's instance name: random, never derived from the tenant; null once the instance is deleted.
+  instanceName     String?   @unique @map("instance_name")
+  instanceId       String?   @map("instance_id")
+  /// The instance's own API key (Evolution's per-instance token; Meta's access token for cloud_api), encrypted.
+  instanceTokenEnc String?   @map("instance_token_enc")
+  /// The key Evolution signs this instance's webhook JWTs with (HS256), encrypted.
+  webhookKeyEnc    String?   @map("webhook_key_enc")
+  /// qr | code: how the phone is being paired.
+  pairingMethod    String?   @map("pairing_method")
+  /// The linked number (the business's own): E.164 encrypted, and masked for the page.
+  phoneEnc         String?   @map("phone_enc")
+  phoneMasked      String?   @map("phone_masked")
+  /// The WhatsApp profile name the provider reports.
+  profileName      String?   @map("profile_name")
+  /// cloud_api: Meta's WhatsApp Business account, phone number and business portfolio ids.
+  wabaId           String?   @map("waba_id")
+  phoneNumberId    String?   @unique @map("phone_number_id")
+  businessId       String?   @map("business_id")
+  /// cloud_api: when Meta's access token expires (Embedded Signup issues 60-day tokens; the sweep renews them).
+  tokenExpiresAt   DateTime? @map("token_expires_at")
+  /// QR codes the provider has issued in this pairing attempt (it gives up after its limit).
+  qrCount          Int       @default(0) @map("qr_count")
+  pairingStartedAt DateTime? @map("pairing_started_at")
+  connectedAt      DateTime? @map("connected_at")
+  disconnectedAt   DateTime? @map("disconnected_at")
+  /// The time on the provider's last event about the connection: an older event changes nothing.
+  lastEventAt      DateTime? @map("last_event_at")
+  /// When bizinsights last asked the provider for the connection's state.
+  lastCheckedAt    DateTime? @map("last_checked_at")
+  /// Since when it can't send (logged out, reconnecting, failed): waiting messages are cancelled 48 hours after.
+  downSince        DateTime? @map("down_since")
+  createdByUserId  String?   @map("created_by_user_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@index([status])
+  @@map("wapp_connections")
+}
+
+/// The store's WhatsApp choices (Step 3, Configure) and its verified test number (Step 4).
+model WappSettings {
+  storeId               String    @id @map("store_id")
+  workspaceId           String    @map("workspace_id")
+  /// What {{store_name}} says (the store's name until it is set).
+  businessName          String?   @map("business_name")
+  /// unset | opt_in_only | checkout_notice (WA_ORDER_UPDATE_BASES); who chose it and when (also audited).
+  orderUpdates          String    @default("unset") @map("order_updates")
+  orderUpdatesSetBy     String?   @map("order_updates_set_by")
+  orderUpdatesSetAt     DateTime? @map("order_updates_set_at")
+  marketingEnabled      Boolean   @default(false) @map("marketing_enabled")
+  /// The store says its Shopify text-message marketing consent wording covers WhatsApp too.
+  shopifySmsConsent     Boolean   @default(false) @map("shopify_sms_consent")
+  /// Store-time hours business-started messages may go out in.
+  sendWindowStart       Int       @default(9) @map("send_window_start")
+  sendWindowEnd         Int       @default(20) @map("send_window_end")
+  /// IANA time zone for the sending hours (null: the store's).
+  timeZone              String?   @map("time_zone")
+  /// Business-started messages a day (null: the provider's default, WA_DAILY_LIMIT).
+  dailyLimit            Int?      @map("daily_limit")
+  perCustomerDailyLimit Int       @default(3) @map("per_customer_daily_limit")
+  /// Days message texts are kept (then only the record stays).
+  retentionDays         Int       @default(90) @map("retention_days")
+  /// When the settings were first saved (Step 3 done).
+  configuredAt          DateTime? @map("configured_at")
+  /// The merchant's own number for tests: keyed hash, encrypted, masked.
+  testPhoneHash         String?   @map("test_phone_hash")
+  testPhoneEnc          String?   @map("test_phone_enc")
+  testPhoneMasked       String?   @map("test_phone_masked")
+  /// SHA-256 of the verification code sent to it over WhatsApp, until it is entered or expires.
+  testCodeHash          String?   @map("test_code_hash")
+  testCodeExpiresAt     DateTime? @map("test_code_expires_at")
+  testCodeAttempts      Int       @default(0) @map("test_code_attempts")
+  testVerifiedAt        DateTime? @map("test_verified_at")
+  /// When a test message to it was reported sent (or further) by the provider (Step 4 done).
+  testPassedAt          DateTime? @map("test_passed_at")
+  /// "Pause all automation": since when (null: it runs), and who paused it.
+  automationPausedAt    DateTime? @map("automation_paused_at")
+  automationPausedBy    String?   @map("automation_paused_by")
+  updatedByUserId       String?   @map("updated_by_user_id")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@map("wapp_settings")
+}
+
+/// A message template written in bizinsights. On cloud_api, Meta's review of it as well.
+model WappTemplate {
+  id                 String    @id @default(cuid())
+  workspaceId        String    @map("workspace_id")
+  storeId            String    @map("store_id")
+  name               String
+  /// transactional | marketing
+  category           String
+  /// The text with {{variables}} (WA_VARIABLES).
+  body               String
+  active             Boolean   @default(true)
+  /// cloud_api: the name and language it was submitted to Meta under, Meta's id, status and reason.
+  metaName           String?   @map("meta_name")
+  metaLanguage       String?   @map("meta_language")
+  metaId             String?   @map("meta_id")
+  metaStatus         String?   @map("meta_status")
+  metaReason         String?   @map("meta_reason")
+  metaCheckedAt      DateTime? @map("meta_checked_at")
+  createdByUserId    String?   @map("created_by_user_id")
+  updatedByUserId    String?   @map("updated_by_user_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, name])
+  @@index([workspaceId])
+  @@map("wapp_templates")
+}
+
+/// A customer's WhatsApp number at a store and what they agreed to. Opt-outs stay while the store uses WhatsApp.
+model WappContact {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  /// HMAC(CUSTOMER_HASH_KEY, "wa:<storeId>:<E.164 digits>"): the same hash data requests are recorded with.
+  phoneHash         String    @map("phone_hash")
+  phoneEnc          String    @map("phone_enc")
+  phoneMasked       String    @map("phone_masked")
+  country           String?
+  firstNameEnc      String?   @map("first_name_enc")
+  shopifyCustomerId String?   @map("shopify_customer_id")
+  /// Replied STOP (or was opted out): nothing at all is sent.
+  optedOut          Boolean   @default(false) @map("opted_out")
+  /// Agreed to order updates themselves (START, recorded by the store).
+  optedIn           Boolean   @default(false) @map("opted_in")
+  /// opted_in | opted_out | unknown
+  marketing         String    @default("unknown")
+  consentUpdatedAt  DateTime? @map("consent_updated_at")
+  lastInboundAt     DateTime? @map("last_inbound_at")
+  lastOutboundAt    DateTime? @map("last_outbound_at")
+  /// The provider said the number isn't on WhatsApp (and when): not tried again for 30 days.
+  notOnWhatsappAt   DateTime? @map("not_on_whatsapp_at")
+  /// From Shopify's events (campaign audiences).
+  ordersCount       Int       @default(0) @map("orders_count")
+  totalSpent        Decimal   @default(0) @map("total_spent") @db.Decimal(18, 2)
+  lastOrderAt       DateTime? @map("last_order_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, phoneHash])
+  @@index([storeId, marketing, optedOut])
+  @@index([storeId, shopifyCustomerId])
+  @@index([workspaceId])
+  @@map("wapp_contacts")
+}
+
+/// Every change to a customer's consent and where it came from. Append-only.
+model WappConsentEvent {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  contactId   String   @map("contact_id")
+  /// all | order_updates | marketing
+  scope       String
+  /// opted_in | opted_out
+  status      String
+  /// WA_CONSENT_SOURCES
+  source      String
+  actorUserId String?  @map("actor_user_id")
+  note        String?
+  occurredAt  DateTime @map("occurred_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([contactId, occurredAt])
+  @@index([storeId, createdAt])
+  @@index([workspaceId])
+  @@map("wapp_consent_events")
+}
+
+/// Numbers the store must not message: everything (all) or marketing only.
+model WappSuppression {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  phoneHash   String   @map("phone_hash")
+  phoneMasked String   @map("phone_masked")
+  /// all | marketing
+  scope       String
+  /// stop_reply | merchant | invalid_number | redact
+  reason      String
+  note        String?
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([storeId, phoneHash, scope])
+  @@index([workspaceId])
+  @@map("wapp_suppressions")
+}
+
+/// Every WhatsApp message, sent and received: the queue and the history. A campaign's recipients are its messages.
+model WappMessage {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  connectionId      String?   @map("connection_id")
+  provider          String?
+  /// out | in
+  direction         String    @default("out")
+  contactId         String?   @map("contact_id")
+  phoneHash         String?   @map("phone_hash")
+  phoneEnc          String?   @map("phone_enc")
+  phoneMasked       String?   @map("phone_masked")
+  /// automation | campaign | manual | test | verification | team_alert | inbound
+  source            String
+  automationId      String?   @map("automation_id")
+  runId             String?   @map("run_id")
+  campaignId        String?   @map("campaign_id")
+  /// One message per purpose and store: "auto:<automation>:<subject>", "campaign:<id>:<contact>", "manual:<key>"...
+  idempotencyKey    String?   @map("idempotency_key")
+  /// transactional | marketing
+  category          String?
+  /// text | image | document (out); the provider's type (in)
+  type              String
+  templateId        String?   @map("template_id")
+  /// What the send needs (text, an attachment's blob key), encrypted; cleared once the message is final.
+  payloadEnc        String?   @map("payload_enc")
+  /// What the customer reads (or wrote), encrypted, for the history; cleared after the store's retention.
+  previewEnc        String?   @map("preview_enc")
+  /// WA_MESSAGE_STATUSES
+  status            String    @default("queued")
+  /// WA_SKIP_REASONS (why skipped, cancelled, held or failed).
+  reason            String?
+  sendAfter         DateTime  @default(now()) @map("send_after")
+  enqueuedAt        DateTime? @map("enqueued_at")
+  attempts          Int       @default(0)
+  /// The provider's id for it (WhatsApp's message key id; Meta's wamid on cloud_api).
+  providerMessageId String?   @map("provider_message_id")
+  errorCode         String?   @map("error_code")
+  /// The provider's reason, cleaned for the merchant (providerDetail).
+  errorDetail       String?   @map("error_detail")
+  acceptedAt        DateTime? @map("accepted_at")
+  sentAt            DateTime? @map("sent_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  readAt            DateTime? @map("read_at")
+  failedAt          DateTime? @map("failed_at")
+  finalAt           DateTime? @map("final_at")
+  createdByUserId   String?   @map("created_by_user_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, idempotencyKey])
+  @@unique([connectionId, providerMessageId])
+  @@index([status, sendAfter])
+  @@index([storeId, createdAt])
+  @@index([storeId, direction, acceptedAt])
+  @@index([campaignId, status])
+  @@index([automationId, createdAt])
+  @@index([contactId, createdAt])
+  @@index([workspaceId])
+  @@map("wapp_messages")
+}
+
+/// The provider's reports about a message, once per message and status.
+model WappMessageEvent {
+  id             String   @id @default(cuid())
+  workspaceId    String   @map("workspace_id")
+  storeId        String   @map("store_id")
+  messageId      String   @map("message_id")
+  status         String
+  /// The provider's own word (SERVER_ACK, DELIVERY_ACK, READ...).
+  providerStatus String?  @map("provider_status")
+  occurredAt     DateTime @map("occurred_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([messageId, status])
+  @@index([storeId])
+  @@index([workspaceId])
+  @@map("wapp_message_events")
+}
+
+/// Evolution API's webhook deliveries, as received (JWT checked), until applied. Its retries are stored once.
+model WappWebhookEvent {
+  id           String    @id @default(cuid())
+  workspaceId  String    @map("workspace_id")
+  storeId      String    @map("store_id")
+  connectionId String    @map("connection_id")
+  /// CONNECTION_UPDATE, MESSAGES_UPSERT, MESSAGES_UPDATE... (Evolution's event name, upper-cased)
+  event        String
+  /// SHA-256 of the raw body.
+  bodyHash     String    @unique @map("body_hash")
+  /// The body, encrypted (it carries customers' numbers and messages); cleared once applied.
+  bodyEnc      String?   @map("body_enc")
+  /// pending | processed | ignored | dead
+  status       String    @default("pending")
+  attempts     Int       @default(0)
+  lastError    String?   @map("last_error")
+  /// The provider's own time on the event.
+  providerAt   DateTime? @map("provider_at")
+  receivedAt   DateTime  @default(now()) @map("received_at")
+  enqueuedAt   DateTime? @map("enqueued_at")
+  processedAt  DateTime? @map("processed_at")
+
+  @@index([status, receivedAt])
+  @@index([connectionId, receivedAt])
+  @@index([workspaceId])
+  @@map("wapp_webhook_events")
+}
+
+/// An automation: trigger -> conditions -> template -> recipient and timing.
+model WappAutomation {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  storeId         String    @map("store_id")
+  name            String
+  description     String?
+  /// WA_TRIGGERS
+  trigger         String
+  conditions      Json      @default("[]")
+  templateId      String    @map("template_id")
+  /// customer | shipping_address | billing_address
+  recipient       String    @default("customer")
+  delayMinutes    Int       @default(0) @map("delay_minutes")
+  /// Its own sending hours (null: the store's).
+  sendWindowStart Int?      @map("send_window_start")
+  sendWindowEnd   Int?      @map("send_window_end")
+  /// Every message goes to the store's verified test number instead of the customer.
+  testMode        Boolean   @default(true) @map("test_mode")
+  /// message_received: the same customer gets the reply at most once in this many minutes.
+  cooldownMinutes Int?      @map("cooldown_minutes")
+  /// draft | active | paused
+  status          String    @default("draft")
+  /// Goes up with every save: a message waiting from an older version checks the automation again.
+  version         Int       @default(1)
+  createdByUserId String?   @map("created_by_user_id")
+  updatedByUserId String?   @map("updated_by_user_id")
+  activatedAt     DateTime? @map("activated_at")
+  lastRunAt       DateTime? @map("last_run_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([storeId, trigger, status])
+  @@index([workspaceId])
+  @@map("wapp_automations")
+}
+
+/// Each time an automation's trigger fired: at most once per automation and order, checkout, customer or message.
+model WappAutomationRun {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  automationId      String   @map("automation_id")
+  automationVersion Int      @map("automation_version")
+  trigger           String
+  /// "order:<id>", "checkout:<token>", "customer:<id>", "inbound:<contact>:<window>", "test:<id>"
+  subjectKey        String   @map("subject_key")
+  /// What the merchant recognises: "Order #1042", "Checkout", "Message from +61 •••• 678".
+  subjectLabel      String?  @map("subject_label")
+  /// queued | skipped
+  outcome           String
+  reason            String?
+  /// The failed conditions or missing values, for the history.
+  detail            String?
+  messageId         String?  @map("message_id")
+  contactId         String?  @map("contact_id")
+  testMode          Boolean  @default(false) @map("test_mode")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@unique([automationId, subjectKey])
+  @@index([storeId, createdAt])
+  @@index([automationId, createdAt])
+  @@index([workspaceId])
+  @@map("wapp_automation_runs")
+}
+
+/// A campaign: a marketing template to an audience of opted-in customers, now or later, after the merchant confirms the count.
+model WappCampaign {
+  id                  String    @id @default(cuid())
+  workspaceId         String    @map("workspace_id")
+  storeId             String    @map("store_id")
+  name                String
+  templateId          String    @map("template_id")
+  audience            Json
+  /// draft | scheduled | sending | completed | cancelled
+  status              String    @default("draft")
+  scheduledAt         DateTime? @map("scheduled_at")
+  /// The count the merchant confirmed when launching, and how many messages were made.
+  confirmedRecipients Int?      @map("confirmed_recipients")
+  recipients          Int       @default(0)
+  /// The last contact id given a message (recipients are made in batches).
+  cursor              String?
+  materializedAt      DateTime? @map("materialized_at")
+  startedAt           DateTime? @map("started_at")
+  completedAt         DateTime? @map("completed_at")
+  cancelledAt         DateTime? @map("cancelled_at")
+  cancelReason        String?   @map("cancel_reason")
+  createdByUserId     String?   @map("created_by_user_id")
+  launchedByUserId    String?   @map("launched_by_user_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([storeId, status])
+  @@index([status, scheduledAt])
+  @@index([workspaceId])
+  @@map("wapp_campaigns")
 }
 
 // ---------------------------------------------------------------------------------------------

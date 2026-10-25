@@ -1,459 +1,343 @@
 /**
- * The message queue and the sender.
+ * The message queue and the sender (docs/whatsapp.md, "Sending").
  *
- *  1. Something queues a message (a workflow, a campaign, a person, a test): a row with an
- *     idempotency key, so a Shopify retry, a duplicate queue delivery or a double click still make
- *     one row.
- *  2. A message due within 12 hours goes on the sync queue (`kind: "whatsapp"`); the 15-minute sweep
- *     catches the rest, and anything a lost queue message left behind.
- *  3. Right before sending, everything is checked again: the connection, the customer's consent
- *     (by the category Meta gave the template), the 24-hour window for free-form replies, the
- *     template still approved, the workflow still on, the campaign not cancelled, sending hours, the
- *     store's daily limit and the number's pace.
- *  4. The row is claimed (queued → sending) before Meta is called, so two workers can't both send
- *     it. Meta's answer decides what happens next: accepted (its message id stored), retried later
- *     (rate limits, Meta busy), held (access ended: reconnect), or failed with its reason. A send
- *     with no answer at all may have reached Meta, so it is never repeated on its own: it is marked
- *     failed as "uncertain" and the merchant may retry it.
- *  5. "Accepted" is not "delivered": Meta's status webhooks (webhook.ts) move it on.
+ * queueMessage makes one row per purpose (`idempotencyKey`, unique per store), so a Shopify retry,
+ * a duplicate queue delivery, two automations firing together or a double press send once. The
+ * row carries what the send needs (encrypted) and what the history shows (encrypted, cleared after
+ * the store's retention).
  *
- * Two brakes on top: a store that paused all automation holds its workflows' and campaigns'
- * messages (released on resume, cancelled after 48 hours), and a number Meta throttles or can't
- * serve trips a circuit breaker, so its other waiting messages wait it out instead of each being
- * refused in turn (30 s, doubling to 10 minutes while Meta keeps refusing; no attempt is spent).
+ * sendQueuedMessage (the whatsapp queue's wapp_send job) claims the row, then checks, in order:
+ * the connection is up, automation isn't paused, the automation or campaign still runs, consent
+ * (again: a customer may have replied STOP since), the sending hours, the store's daily limit, the
+ * customer's daily limit, the pace of the linked phone. Then one call to Evolution API. Its answer
+ * is recorded as "accepted": sent, delivered and read come only from WhatsApp's reports
+ * (applyMessageStatus), never from the HTTP answer.
  */
-import { Prisma, systemDb, type Store, type WaConnection, type WaContact, type WaMessage } from "@app/db";
+import { systemDb, type Store, type WappConnection, type WappContact, type WappMessage } from "@app/db";
 import {
-  buildSendComponents,
-  consentProblem,
   inSendWindow,
+  isFinalStatus,
+  localDay,
   maskPhone,
-  metaErrorExplanation,
-  MissingValueError,
+  messageStatusFromProvider,
   nextSendTime,
-  templateShape,
-  tierLimit,
-  WA_MAX_ATTEMPTS,
+  QR_GAP_JITTER_MS,
+  QR_MIN_GAP_MS,
+  CLOUD_SENDS_PER_SECOND,
+  startOfLocalDay,
+  statusAfterReport,
+  waConsentProblem,
+  WA_MAX_SEND_ATTEMPTS,
   WA_RETRY_DELAYS_S,
-  type SendValues,
-  type SkipReason,
-  type TemplateComponent,
-  type TemplateMapping,
+  type NormalizedPhone,
+  type WaMessageStatus,
+  type WaSkipReason,
+  type WaTemplateCategory,
 } from "@app/shared";
+import { providerDetail } from "../errors.js";
 import { logger } from "../logger.js";
-import { WA_MAX_QUEUE_DELAY_S, settingsOf, waDecrypt, waEncrypt, waPhoneHash, waQueue, WhatsappError, type WaDeps } from "./common.js";
-import { consentFacts, setConsent } from "./contacts.js";
-import { sendMessage, WhatsappApiError } from "./graph.js";
-import { NangoTokenGoneError, NangoUnavailableError, waTokenFor } from "./nango.js";
-import { markAccountProblem, markReconnect, markWorking } from "./tokens.js";
+import { consentFacts } from "./contacts.js";
+import { dailyLimitOf, DOWN_GRACE_MS, settingsOf, storeById, WA_MAX_QUEUE_DELAY_S, waDecrypt, waEncrypt, waPhoneHash, waQueue, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
+import { checkConnection, clientFor, instanceToken } from "./connection.js";
+import { EvolutionError, isNotConnected } from "./evolution.js";
 
-export type MessageSource = "workflow" | "campaign" | "manual" | "test" | "team_alert";
+export type MessageSource = "automation" | "campaign" | "manual" | "test" | "verification" | "team_alert" | "reply";
 
-/** What a send needs besides the recipient and the template's name: kept encrypted until it is final. */
-export type SendPayload =
-  | { kind: "template"; mapping: TemplateMapping; values: SendValues; headerMediaUrl?: string | null }
-  | { kind: "text"; body: string; previewUrl?: boolean }
-  | { kind: "media"; mediaType: "image" | "document" | "video"; link: string; caption?: string | null; filename?: string | null };
+/** What a send needs, encrypted on the row until the message is final. */
+export interface MessagePayload {
+  text: string;
+  attachment?: { key: string; mime: string; name: string; kind: "image" | "document" } | null;
+  /** Cloud API: the Meta template and its body's values, in order. */
+  meta?: { name: string; language: string; params: string[] } | null;
+}
 
 export interface QueueInput {
   store: Pick<Store, "id" | "workspaceId">;
-  connectionId: string | null;
-  contact?: WaContact | null;
-  /** A number without a contact (E.164): the store's own test phone or its team. No consent record applies. */
-  to?: string | null;
+  conn: Pick<WappConnection, "id" | "provider"> | null;
   source: MessageSource;
+  category: WaTemplateCategory;
+  phone: NormalizedPhone;
+  contactId?: string | null;
+  payload: MessagePayload;
+  templateId?: string | null;
   idempotencyKey: string;
-  workflowId?: string | null;
-  workflowRunId?: string | null;
+  automationId?: string | null;
+  runId?: string | null;
   campaignId?: string | null;
-  template?: { name: string; language: string; category: string } | null;
-  payload: SendPayload;
-  /** What the customer will read, for the history (encrypted). */
-  preview: string;
-  sendAfter?: Date;
   createdByUserId?: string | null;
-  /** Record it as not sent, with this reason, so the merchant sees why. */
-  skip?: SkipReason | null;
+  sendAfter?: Date;
+  /** Queued later by the caller (a campaign batch): not enqueued here. */
+  noEnqueue?: boolean;
 }
 
-const digits = (e164: string) => e164.replace(/\D/g, "");
+/** The longest text the history keeps of a message. */
+const PREVIEW_MAX = 1000;
 
-/** Queue a message. Idempotent on (store, key): a repeat returns the row already there. */
-export async function queueMessage(input: QueueInput, deps: Pick<WaDeps, "queues">, opts: { enqueue?: boolean } = {}): Promise<{ message: WaMessage; created: boolean }> {
-  const { store } = input;
-  const to = input.contact ? null : input.to;
-  const now = new Date();
-  const type = input.payload.kind === "template" ? "template" : input.payload.kind === "text" ? "text" : input.payload.mediaType;
+const previewOf = (p: MessagePayload) => [p.text, p.attachment ? `[${p.attachment.kind === "image" ? "Image" : "Document"}: ${p.attachment.name}]` : ""].filter(Boolean).join("\n").slice(0, PREVIEW_MAX);
+
+/** Puts a message on the queue (or returns the one already made for the same purpose). */
+export async function queueMessage(deps: Pick<WaDeps, "queues">, input: QueueInput): Promise<{ message: WappMessage; created: boolean }> {
+  const existing = await systemDb.wappMessage.findUnique({ where: { storeId_idempotencyKey: { storeId: input.store.id, idempotencyKey: input.idempotencyKey } } });
+  if (existing) return { message: existing, created: false };
+  const sendAfter = input.sendAfter ?? new Date();
+  let message: WappMessage;
   try {
-    const message = await systemDb.waMessage.create({
+    message = await systemDb.wappMessage.create({
       data: {
-        workspaceId: store.workspaceId,
-        storeId: store.id,
-        connectionId: input.connectionId,
+        workspaceId: input.store.workspaceId,
+        storeId: input.store.id,
+        connectionId: input.conn?.id ?? null,
+        provider: input.conn?.provider ?? null,
         direction: "out",
-        contactId: input.contact?.id ?? null,
-        phoneHash: input.contact?.phoneHash ?? (to ? waPhoneHash(store.id, digits(to)) : null),
-        phoneEnc: to ? waEncrypt(store.id, "phone", to) : null,
-        phoneMasked: input.contact?.phoneMasked ?? (to ? maskPhone(to) : null),
+        contactId: input.contactId ?? null,
+        phoneHash: waPhoneHash(input.store.id, input.phone.waId),
+        phoneEnc: waEncrypt(input.store.id, "phone", input.phone.e164),
+        phoneMasked: maskPhone(input.phone.e164),
         source: input.source,
-        workflowId: input.workflowId ?? null,
-        workflowRunId: input.workflowRunId ?? null,
+        automationId: input.automationId ?? null,
+        runId: input.runId ?? null,
         campaignId: input.campaignId ?? null,
         idempotencyKey: input.idempotencyKey,
-        type,
-        templateName: input.template?.name ?? null,
-        templateLanguage: input.template?.language ?? null,
-        category: input.template?.category ?? "SERVICE",
-        payloadEnc: input.skip ? null : waEncrypt(store.id, "payload", JSON.stringify(input.payload)),
-        previewEnc: input.preview ? waEncrypt(store.id, "preview", input.preview.slice(0, 2000)) : null,
-        status: input.skip ? "skipped" : "queued",
-        reason: input.skip ?? null,
-        sendAfter: input.sendAfter ?? now,
-        finalAt: input.skip ? now : null,
+        category: input.category,
+        type: input.payload.attachment ? input.payload.attachment.kind : "text",
+        templateId: input.templateId ?? null,
+        payloadEnc: waEncrypt(input.store.id, "payload", JSON.stringify(input.payload)),
+        previewEnc: waEncrypt(input.store.id, "preview", previewOf(input.payload)),
+        status: "queued",
+        sendAfter,
         createdByUserId: input.createdByUserId ?? null,
       },
     });
-    if (message.status === "queued" && opts.enqueue !== false) await enqueueSend(message, deps);
-    return { message, created: true };
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      const message = await systemDb.waMessage.findUnique({ where: { storeId_idempotencyKey: { storeId: store.id, idempotencyKey: input.idempotencyKey } } });
-      if (message) return { message, created: false };
+    if ((e as { code?: string }).code === "P2002") {
+      return { message: await systemDb.wappMessage.findUniqueOrThrow({ where: { storeId_idempotencyKey: { storeId: input.store.id, idempotencyKey: input.idempotencyKey } } }), created: false };
     }
     throw e;
   }
+  if (!input.noEnqueue) await enqueueIfDue(deps, message);
+  return { message, created: true };
 }
 
-/** Put a queued message on the queue when it is due within the queue's longest delay (the sweep takes the rest). */
-export async function enqueueSend(m: Pick<WaMessage, "id" | "sendAfter" | "status">, deps: Pick<WaDeps, "queues">): Promise<boolean> {
+/** Hands a waiting message to the queue when it is due within SQS's delay; later ones are the sweep's. */
+export async function enqueueIfDue(deps: Pick<WaDeps, "queues">, m: Pick<WappMessage, "id" | "sendAfter" | "status">): Promise<boolean> {
   if (m.status !== "queued") return false;
   const delay = Math.max(0, Math.ceil((m.sendAfter.getTime() - Date.now()) / 1000));
   if (delay > WA_MAX_QUEUE_DELAY_S) return false;
-  await waQueue(deps.queues).send({ kind: "whatsapp", messageId: m.id }, { delaySeconds: delay });
-  await systemDb.waMessage.updateMany({ where: { id: m.id, status: "queued" }, data: { enqueuedAt: new Date() } });
+  await waQueue(deps.queues).send({ kind: "wapp_send", messageId: m.id }, { delaySeconds: delay });
+  await systemDb.wappMessage.update({ where: { id: m.id }, data: { enqueuedAt: new Date() } });
   return true;
 }
 
-export type SendOutcome = "gone" | "later" | "accepted" | "skipped" | "cancelled" | "failed" | "held" | "retry";
-
-/** End a message without sending it (only one still being worked on changes). */
-async function finish(m: WaMessage, status: "skipped" | "cancelled" | "failed", reason: string, extra: Prisma.WaMessageUpdateManyMutationInput = {}): Promise<SendOutcome> {
-  const keep = status === "failed" && reason !== "template_not_approved";
-  await systemDb.waMessage.updateMany({
-    where: { id: m.id, status: { in: ["queued", "sending"] } },
-    // A failed message keeps what it needs for a retry (cleared by the retention sweep after 7 days).
-    data: { status, reason, finalAt: new Date(), ...(keep ? {} : { payloadEnc: null }), ...(status === "failed" ? { failedAt: new Date() } : {}), ...extra },
+/** Ends a message without sending it (its attachment, if any, goes). */
+async function finish(id: string, status: "skipped" | "cancelled" | "failed", reason: WaSkipReason, extra: { errorCode?: string | null; errorDetail?: string | null } = {}, deps?: Pick<WaDeps, "payloads">) {
+  const m = await systemDb.wappMessage.update({
+    where: { id },
+    data: { status, reason, finalAt: new Date(), ...(status === "failed" ? { failedAt: new Date() } : {}), payloadEnc: null, errorCode: extra.errorCode ?? null, errorDetail: extra.errorDetail ?? null },
   });
+  if (m.type !== "text") await dropAttachment(m, deps);
   return status;
 }
 
-/** Back to queued for later; `spend` is false for a wait that isn't the message's fault (no attempt counted). */
-async function later(m: WaMessage, at: Date, deps: Pick<WaDeps, "queues">, reason: string | null, spend = false): Promise<SendOutcome> {
-  await systemDb.waMessage.updateMany({
-    where: { id: m.id, status: "sending" },
-    data: { status: "queued", sendAfter: at, enqueuedAt: null, reason, ...(spend ? {} : { attempts: { decrement: 1 } }) },
-  });
-  await enqueueSend({ id: m.id, sendAfter: at, status: "queued" }, deps);
-  return "later";
+/** Puts a message back to wait (a hold doesn't spend one of its tries). */
+async function hold(deps: Pick<WaDeps, "queues">, id: string, until: Date, reason: WaSkipReason | null) {
+  const m = await systemDb.wappMessage.update({ where: { id }, data: { status: "queued", sendAfter: until, reason, attempts: { decrement: 1 }, enqueuedAt: null } });
+  await enqueueIfDue(deps, m);
+  return "held" as const;
 }
 
-/** Messages a store's number hands to Meta per second at most (Meta allows 80 by default). */
-const SENDS_PER_SECOND = 20;
-/** Waiting messages are held this long while the connection needs the merchant, then cancelled by the sweep. */
-export const HOLD_LIMIT_MS = 48 * 3600_000;
-
-// ---------------------------------------------------------------------------
-// The circuit breaker: one per sending number
-// ---------------------------------------------------------------------------
-
-/** How long a number waits after Meta throttles it or can't serve it: 30 s, doubling while it keeps happening, at most 10 minutes. */
-export const BREAKER_BASE_S = 30;
-export const BREAKER_MAX_S = 600;
-const breakerKey = (phoneNumberId: string) => `wa:breaker:${phoneNumberId}`;
-
-/** Meta codes that say the number (not one message) is throttled, or Meta itself is busy. */
-const NUMBER_WIDE = new Set([4, 80007, 130429, 131048, 131000, 1, 2, 133004]);
-
-/**
- * The number's breaker as stored: "<open until, ms>:<trips in a row>". The record outlives the wait
- * by BREAKER_MAX_S, so a refusal soon after it closed waits twice as long; a send Meta takes clears it.
- */
-async function readBreaker(coord: WaDeps["coord"], phoneNumberId: string): Promise<{ until: number; trips: number } | null> {
-  const raw = await coord.peek(breakerKey(phoneNumberId)).catch(() => null);
-  if (!raw) return null;
-  const [until, trips] = raw.split(":").map(Number);
-  return Number.isFinite(until) && Number.isFinite(trips) && trips! > 0 ? { until: until!, trips: trips! } : null;
+async function dropAttachment(m: Pick<WappMessage, "id">, deps?: Pick<WaDeps, "payloads">) {
+  if (!deps) return;
+  await deps.payloads.delete(`wapp-media/${m.id}`).catch(() => {});
 }
 
-/** Until when the number's breaker is open (null: closed). */
-export async function breakerOpenUntil(coord: WaDeps["coord"], phoneNumberId: string): Promise<number | null> {
-  const b = await readBreaker(coord, phoneNumberId);
-  return b && b.until > Date.now() ? b.until : null;
+/** Business-started messages (counted against the daily limits); a test, a verification code or a reply to a customer's message aren't. */
+const counted = (source: string) => source === "automation" || source === "campaign" || source === "manual" || source === "team_alert";
+/** Messages that keep to the sending hours: the ones nobody is waiting for at that moment. */
+const timed = (source: string) => source === "automation" || source === "campaign" || source === "team_alert";
+/** Messages to a customer, whose consent is checked again at the moment of sending. */
+const toCustomer = (source: string) => source === "automation" || source === "campaign" || source === "manual" || source === "reply";
+
+/** How many business-started messages the store sent today (its own day). */
+export async function sentToday(storeId: string, timeZone: string, now = new Date()): Promise<number> {
+  const since = startOfLocalDay(localDay(now, timeZone), timeZone);
+  return systemDb.wappMessage.count({ where: { storeId, direction: "out", source: { in: ["automation", "campaign", "manual", "team_alert"] }, acceptedAt: { gte: since } } });
 }
 
-/** Open the number's breaker after a refusal that holds for every message it sends. Returns until when. */
-export async function tripBreaker(coord: WaDeps["coord"], phoneNumberId: string): Promise<number> {
-  const prev = await readBreaker(coord, phoneNumberId);
-  // Several sends refused in the same moment trip it once.
-  if (prev && prev.until > Date.now()) return prev.until;
-  const trips = (prev?.trips ?? 0) + 1;
-  const wait = Math.min(BREAKER_MAX_S, BREAKER_BASE_S * 2 ** (trips - 1));
-  const until = Date.now() + wait * 1000;
-  await coord.put(breakerKey(phoneNumberId), `${until}:${trips}`, wait + BREAKER_MAX_S).catch(() => undefined);
-  logger.warn({ phoneNumberId, wait, trips }, "whatsapp: Meta throttled the number; its sends wait");
-  return until;
+/** The reason consent stops this message now, if any. A customer who wrote in the last 24 hours may be answered. */
+export async function consentBlock(contact: WappContact | null, category: WaTemplateCategory, settings: WaSettingsView, opts: { reply?: boolean } = {}): Promise<WaSkipReason | null> {
+  if (!contact) return "unknown_contact";
+  const facts = await consentFacts(contact, category);
+  if (facts.optedOut) return "opted_out";
+  if (facts.suppressed) return "suppressed";
+  if (category === "transactional" && (opts.reply || (contact.lastInboundAt && Date.now() - contact.lastInboundAt.getTime() < 24 * 3600_000))) return null;
+  return waConsentProblem(category, facts, settings);
 }
 
-/** Meta took a message from the number again: the breaker closes. */
-async function closeBreaker(coord: WaDeps["coord"], phoneNumberId: string): Promise<void> {
-  await coord.put(breakerKey(phoneNumberId), "0:0", 1).catch(() => undefined);
-}
-
-/** A refusal that holds for every message the number sends (a throttle, Meta busy), not just this one. */
-const numberWide = (err: WhatsappApiError) => (err.code !== null && NUMBER_WIDE.has(err.code)) || (err.code === null && (err.httpStatus >= 500 || err.httpStatus === 429));
-
-/** Messages held while their store paused automation are released at once on resume (the sweep takes the rest). */
-export async function releasePausedMessages(storeId: string, deps: Pick<WaDeps, "queues">): Promise<number> {
+/** One message to WhatsApp, after every check. Returns what happened (for the job's log). */
+export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl" | "coord" | "payloads" | "mailer">, messageId: string): Promise<string> {
   const now = new Date();
-  await systemDb.waMessage.updateMany({ where: { storeId, status: "queued", reason: "automation_paused" }, data: { reason: null, sendAfter: now, enqueuedAt: null } });
-  const rows = await systemDb.waMessage.findMany({ where: { storeId, status: "queued", enqueuedAt: null, sendAfter: { lte: now } }, select: { id: true, sendAfter: true, status: true }, take: 1000 });
-  for (const m of rows) await enqueueSend(m, deps);
-  return rows.length;
-}
-
-/** How many customers the store started conversations with in the last 24 hours (template sends). */
-async function recipientsToday(storeId: string, coord: WaDeps["coord"]): Promise<number> {
-  const key = `wa:daily:${storeId}`;
-  const cached = await coord.peek(key).catch(() => null);
-  if (cached !== null) return Number(cached);
-  const since = new Date(Date.now() - 24 * 3600_000);
-  const rows = await systemDb.$queryRaw<Array<{ n: bigint }>>`
-    SELECT count(DISTINCT phone_hash) AS n FROM wa_messages
-    WHERE store_id = ${storeId} AND direction = 'out' AND type = 'template' AND source <> 'test'
-      AND accepted_at >= ${since} AND created_at >= ${new Date(since.getTime() - 24 * 3600_000)}`;
-  const n = Number(rows[0]?.n ?? 0);
-  await coord.put(key, String(n), 60).catch(() => undefined);
-  return n;
-}
-
-/** The send's message object for Meta (everything but the envelope). */
-function messageBody(m: WaMessage, payload: SendPayload, components: TemplateComponent[] | null): Record<string, unknown> {
-  if (payload.kind === "template") {
-    const shape = templateShape(components ?? []);
-    const parts = buildSendComponents(shape, payload.mapping, payload.values, payload.headerMediaUrl);
-    return { type: "template", template: { name: m.templateName, language: { code: m.templateLanguage }, ...(parts.length ? { components: parts } : {}) } };
+  // Claim it: one delivery of the job sends it, a duplicate delivery or a sweep finds it taken.
+  const claimed = await systemDb.wappMessage.updateMany({ where: { id: messageId, status: "queued", sendAfter: { lte: new Date(now.getTime() + 60_000) } }, data: { status: "sending", attempts: { increment: 1 } } });
+  if (!claimed.count) return "not_due";
+  const m = await systemDb.wappMessage.findUniqueOrThrow({ where: { id: messageId } });
+  const end = (status: "skipped" | "cancelled" | "failed", reason: WaSkipReason, extra: { errorCode?: string | null; errorDetail?: string | null } = {}) => finish(m.id, status, reason, extra, deps);
+  const store = await storeById(m.storeId);
+  const conn = await systemDb.wappConnection.findUnique({ where: { storeId: m.storeId } });
+  if (!store || store.status === "uninstalled" || !conn || conn.status === "disconnected" || !conn.instanceName) return end("cancelled", "not_connected");
+  if (m.connectionId && m.connectionId !== conn.id) return end("cancelled", "connection_changed");
+  if (conn.status !== "connected") {
+    if (conn.downSince && now.getTime() - conn.downSince.getTime() > DOWN_GRACE_MS) return end("cancelled", "not_connected");
+    return hold(deps, m.id, new Date(now.getTime() + 10 * 60_000), "not_connected");
   }
-  if (payload.kind === "text") return { type: "text", text: { body: payload.body, preview_url: !!payload.previewUrl } };
-  const media: Record<string, unknown> = { link: payload.link };
-  if (payload.caption && payload.mediaType !== "document") media.caption = payload.caption;
-  if (payload.mediaType === "document") {
-    if (payload.caption) media.caption = payload.caption;
-    if (payload.filename) media.filename = payload.filename;
-  }
-  return { type: payload.mediaType, [payload.mediaType]: media };
-}
+  const settings = await settingsOf(store);
 
-/** Send one queued message. Never throws for Meta's or Nango's answers: the row records them. */
-export async function sendWaMessage(messageId: string, deps: WaDeps): Promise<SendOutcome> {
-  const m0 = await systemDb.waMessage.findUnique({ where: { id: messageId } });
-  if (!m0 || m0.status !== "queued") return "gone";
-  if (m0.sendAfter.getTime() > Date.now() + 5000) {
-    await enqueueSend(m0, deps);
-    return "later";
+  if (m.source === "automation" && m.automationId) {
+    const a = await systemDb.wappAutomation.findUnique({ where: { id: m.automationId }, select: { status: true } });
+    if (!a || a.status !== "active") return end("cancelled", "automation_off");
   }
-  // Claimed before anything else: a second delivery of the same job finds it taken.
-  const claimed = await systemDb.waMessage.updateMany({ where: { id: m0.id, status: "queued" }, data: { status: "sending", attempts: { increment: 1 }, enqueuedAt: null } });
-  if (!claimed.count) return "gone";
-  const m = { ...m0, status: "sending", attempts: m0.attempts + 1 };
-
-  const [conn, store] = await Promise.all([systemDb.waConnection.findUnique({ where: { storeId: m.storeId } }), systemDb.store.findUnique({ where: { id: m.storeId }, select: { status: true, timezone: true } })]);
-  if (!conn || conn.status === "disconnected") return finish(m, "cancelled", conn ? "disconnected" : "not_connected");
-  // The store left bizinsights (the Shopify app uninstalled): nothing more is sent about it.
-  if (!store || store.status === "uninstalled") return finish(m, "cancelled", "not_connected");
-  if (conn.status !== "active" || !conn.registered || !conn.phoneNumberId || !conn.nangoConnectionId) {
-    // Waiting for the merchant (reconnect, an account problem, a step): held; the sweep cancels after 48 hours.
-    if (conn.reconnectSince && Date.now() - conn.reconnectSince.getTime() > HOLD_LIMIT_MS) return finish(m, "cancelled", "reconnect_timeout");
-    return later(m, new Date(Date.now() + 30 * 60_000), deps, "waiting_for_connection");
+  if (m.source === "campaign" && m.campaignId) {
+    const c = await systemDb.wappCampaign.findUnique({ where: { id: m.campaignId }, select: { status: true } });
+    if (!c || c.status !== "sending") return end("cancelled", "campaign_cancelled");
+  }
+  if ((m.source === "automation" || m.source === "campaign" || m.source === "team_alert") && settings.automationPausedAt) {
+    if (now.getTime() - settings.automationPausedAt.getTime() > DOWN_GRACE_MS) return end("cancelled", "automation_paused");
+    return hold(deps, m.id, new Date(now.getTime() + 3600_000), "automation_paused");
   }
 
-  let payload: SendPayload;
+  const contact = m.contactId ? await systemDb.wappContact.findUnique({ where: { id: m.contactId } }) : null;
+  // An automation in test mode sends to the store's own verified number (no contact): no customer consent applies.
+  if (toCustomer(m.source) && !(m.source === "automation" && !m.contactId)) {
+    const block = await consentBlock(contact, (m.category ?? "transactional") as WaTemplateCategory, settings, { reply: m.source === "reply" });
+    if (block) return end("skipped", block);
+    if (contact?.notOnWhatsappAt && now.getTime() - contact.notOnWhatsappAt.getTime() < 30 * 86_400_000) return end("skipped", "not_on_whatsapp");
+  }
+  if (timed(m.source) && !inSendWindow(now, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end)) {
+    return hold(deps, m.id, nextSendTime(now, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end), null);
+  }
+  if (counted(m.source) && (await sentToday(m.storeId, settings.timeZone, now)) >= dailyLimitOf(settings, conn.provider as "qr" | "cloud_api")) {
+    const tomorrow = startOfLocalDay(localDay(new Date(now.getTime() + 86_400_000), settings.timeZone), settings.timeZone);
+    if (m.source === "campaign" || m.source === "automation") return hold(deps, m.id, timed(m.source) ? nextSendTime(tomorrow, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end) : tomorrow, "daily_limit");
+    return end("skipped", "daily_limit");
+  }
+  if ((m.source === "automation" || m.source === "campaign") && m.phoneHash) {
+    const lastDay = await systemDb.wappMessage.count({ where: { storeId: m.storeId, phoneHash: m.phoneHash, direction: "out", source: { in: ["automation", "campaign"] }, acceptedAt: { gte: new Date(now.getTime() - 86_400_000) } } });
+    if (lastDay >= settings.perCustomerDailyLimit) return end("skipped", "customer_limit");
+  }
+  // The pace: one message at a time per linked phone, with a pause between; the Cloud API per second.
+  const gap = conn.provider === "qr" ? QR_MIN_GAP_MS + Math.floor(Math.random() * QR_GAP_JITTER_MS) : Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
+  if (!(await deps.coord.acquire(`wapp:pace:${conn.id}`, gap))) {
+    return hold(deps, m.id, new Date(now.getTime() + gap + Math.floor(Math.random() * 2000)), null);
+  }
+
+  if (!m.payloadEnc || !m.phoneEnc) return end("failed", "gave_up", { errorCode: "no_payload" });
+  const payload = JSON.parse(waDecrypt(m.storeId, "payload", m.payloadEnc)) as MessagePayload;
+  const number = waDecrypt(m.storeId, "phone", m.phoneEnc).replace(/^\+/, "");
+  const client = clientFor(conn, deps);
+  const token = instanceToken(conn);
   try {
-    if (!m.payloadEnc) return finish(m, "failed", "nothing_to_send");
-    payload = JSON.parse(waDecrypt(m.storeId, "payload", m.payloadEnc)) as SendPayload;
-  } catch (err) {
-    logger.error({ err, messageId: m.id }, "whatsapp message payload unreadable");
-    return finish(m, "failed", "unreadable");
-  }
-
-  // The recipient, and whether they may receive it.
-  let to: string | null = null;
-  let contact: WaContact | null = null;
-  if (m.contactId) {
-    contact = await systemDb.waContact.findUnique({ where: { id: m.contactId } });
-    if (!contact) return finish(m, "cancelled", "erased");
-    to = waDecrypt(contact.storeId, "phone", contact.phoneEnc);
-  } else if (m.phoneEnc) {
-    to = waDecrypt(m.storeId, "phone", m.phoneEnc);
-  }
-  if (!to) return finish(m, "skipped", "no_phone");
-
-  let components: TemplateComponent[] | null = null;
-  let category = m.category ?? "SERVICE";
-  if (m.type === "template") {
-    const t = await systemDb.waTemplate.findUnique({ where: { storeId_name_language: { storeId: m.storeId, name: m.templateName ?? "", language: m.templateLanguage ?? "" } } });
-    if (!t || t.status !== "APPROVED") return finish(m, "failed", "template_not_approved", { errorTitle: "The template isn't approved by Meta (any more)." });
-    components = t.components as unknown as TemplateComponent[];
-    // Meta's category now decides who may receive it (Meta can move a template to Marketing).
-    category = t.category;
-  }
-  const settings = await settingsOf(m.storeId);
-  // "Pause all automation": workflows' and campaigns' messages wait (released on resume), for 48 hours at most.
-  if ((m.source === "workflow" || m.source === "campaign") && settings.automationPausedAt) {
-    const pausedAt = settings.automationPausedAt.getTime();
-    if (Date.now() - pausedAt > HOLD_LIMIT_MS) return finish(m, "cancelled", "automation_paused");
-    return later(m, new Date(pausedAt + HOLD_LIMIT_MS + 60_000), deps, "automation_paused");
-  }
-  if (contact) {
-    if (m.type === "template") {
-      const problem = consentProblem(category, consentFacts(contact), { orderUpdates: settings.orderUpdates });
-      if (problem) return finish(m, "skipped", problem);
+    let sent;
+    if (payload.attachment) {
+      const media = await deps.payloads.get(`wapp-media/${m.id}`);
+      if (!media) return end("failed", "gave_up", { errorCode: "attachment_missing", errorDetail: "The attachment was no longer there to send." });
+      sent = await client.sendMedia(conn.instanceName, token, { number, mediatype: payload.attachment.kind, mimetype: payload.attachment.mime, media, fileName: payload.attachment.name, caption: payload.text || undefined });
+    } else if (conn.provider === "cloud_api" && payload.meta) {
+      sent = await client.sendTemplate(conn.instanceName, token, { number, name: payload.meta.name, language: payload.meta.language, bodyParams: payload.meta.params });
     } else {
-      if (contact.optedOut) return finish(m, "skipped", "opted_out");
-      // Free-form messages only within 24 hours of the customer's last message (Meta's rule).
-      if (!contact.lastInboundAt || Date.now() - contact.lastInboundAt.getTime() > 24 * 3600_000) return finish(m, "skipped", "outside_window");
+      sent = await client.sendText(conn.instanceName, token, { number, text: payload.text });
     }
-  }
-
-  // Still wanted?
-  if (m.workflowId) {
-    const wf = await systemDb.waWorkflow.findUnique({ where: { id: m.workflowId }, select: { status: true, sendWindowStart: true, sendWindowEnd: true } });
-    if (!wf || wf.status !== "active") return finish(m, "cancelled", "workflow_paused");
-    if (wf.sendWindowStart !== null && wf.sendWindowEnd !== null) {
-      const tz = store.timezone || "UTC";
-      if (!inSendWindow(new Date(), tz, wf.sendWindowStart, wf.sendWindowEnd)) return later(m, nextSendTime(new Date(), tz, wf.sendWindowStart, wf.sendWindowEnd), deps, "sending_hours");
-    }
-  }
-  if (m.campaignId) {
-    const c = await systemDb.waCampaign.findUnique({ where: { id: m.campaignId }, select: { status: true } });
-    if (!c || c.status !== "sending") return finish(m, "cancelled", "campaign_cancelled");
-  }
-
-  // The store's daily limit (its own, else Meta's tier) and the number's pace.
-  if (m.type === "template" && m.source !== "test" && m.source !== "team_alert") {
-    const tier = tierLimit(conn.messagingLimitTier);
-    const cap = [tier, settings.dailyLimit].filter((x): x is number => x !== null).reduce((a, b) => Math.min(a, b), Number.POSITIVE_INFINITY);
-    if (Number.isFinite(cap) && (await recipientsToday(m.storeId, deps.coord)) >= cap) return later(m, new Date(Date.now() + 3600_000), deps, "daily_limit");
-  }
-  // Meta throttled this number a moment ago: wait it out (no attempt spent) instead of being refused again.
-  const breaker = await readBreaker(deps.coord, conn.phoneNumberId);
-  if (breaker && breaker.until > Date.now()) return later(m, new Date(breaker.until + Math.floor(Math.random() * 5000)), deps, "meta_throttled");
-  const second = Math.floor(Date.now() / 1000);
-  if ((await deps.coord.hit(`wa:pace:${conn.phoneNumberId}:${second}`, 2).catch(() => 0)) > SENDS_PER_SECOND) {
-    return later(m, new Date(Date.now() + 1000 + Math.floor(Math.random() * 2000)), deps, null);
-  }
-
-  let body: Record<string, unknown>;
-  try {
-    body = messageBody(m, payload, components);
-  } catch (err) {
-    if (err instanceof MissingValueError) return finish(m, "skipped", "missing_values", { errorTitle: `No value for: ${err.missing.join(", ")}`.slice(0, 300) });
-    throw err;
-  }
-
-  let token: string;
-  try {
-    token = await waTokenFor(conn.nangoConnectionId, deps.fetchImpl);
-  } catch (err) {
-    if (err instanceof NangoTokenGoneError) {
-      await markReconnect(conn, "bizinsights' access to your WhatsApp was removed", deps);
-      return later(m, new Date(Date.now() + 30 * 60_000), deps, "waiting_for_connection");
-    }
-    if (err instanceof NangoUnavailableError || err instanceof WhatsappError) return retryLater(m, deps, "nango_unavailable");
-    throw err;
-  }
-
-  try {
-    const wamid = await sendMessage(conn.phoneNumberId, token, digits(to), body, m.id, deps.fetchImpl);
-    const now = new Date();
-    await systemDb.waMessage.updateMany({
-      where: { id: m.id, status: "sending" },
-      data: { status: "accepted", wamid, acceptedAt: now, reason: null, errorCode: null, errorTitle: null, payloadEnc: null },
+    const status: WaMessageStatus = messageStatusFromProvider(sent.status) === "sent" ? "sent" : "accepted";
+    const at = new Date();
+    await systemDb.wappMessage.update({
+      where: { id: m.id },
+      data: { status, reason: null, providerMessageId: sent.id, acceptedAt: at, ...(status === "sent" ? { sentAt: at } : {}), payloadEnc: null, errorCode: null, errorDetail: null },
     });
-    if (conn.status !== "active") await markWorking(conn);
-    if (breaker) await closeBreaker(deps.coord, conn.phoneNumberId);
-    return "accepted";
-  } catch (err) {
-    if (!(err instanceof WhatsappApiError)) throw err;
-    return onMetaError(m, conn, contact, err, deps);
-  }
-}
-
-async function retryLater(m: WaMessage, deps: Pick<WaDeps, "queues">, reason: string): Promise<SendOutcome> {
-  if (m.attempts >= WA_MAX_ATTEMPTS) return finish(m, "failed", reason, { errorTitle: "WhatsApp kept refusing for now; it was tried several times." });
-  const wait = WA_RETRY_DELAYS_S[Math.min(m.attempts - 1, WA_RETRY_DELAYS_S.length - 1)]! * 1000;
-  // A little jitter, so a burst that was throttled together doesn't come back together.
-  await later(m, new Date(Date.now() + wait + Math.floor(Math.random() * wait * 0.2)), deps, reason, true);
-  return "retry";
-}
-
-async function onMetaError(m: WaMessage, conn: WaConnection, contact: WaContact | null, err: WhatsappApiError, deps: WaDeps): Promise<SendOutcome> {
-  const code = err.code !== null ? String(err.code) : null;
-  const explained = metaErrorExplanation(err.code, null).slice(0, 300);
-  logger.warn({ messageId: m.id, storeId: m.storeId, httpStatus: err.httpStatus, code: err.code, action: err.action }, "whatsapp send refused");
-  switch (err.action) {
-    case "network":
-      // Meta may have it: never sent again on its own.
-      return finish(m, "failed", "uncertain", { errorTitle: "WhatsApp didn't answer, so it may or may not have been sent. Check with the customer before sending it again." });
-    case "retry":
-      if (conn.phoneNumberId && numberWide(err)) await tripBreaker(deps.coord, conn.phoneNumberId);
-      return retryLater(m, deps, `meta_${code ?? err.httpStatus}`);
-    case "reconnect":
-      await markReconnect(conn, "Meta no longer accepts bizinsights' access", deps);
-      return later(m, new Date(Date.now() + 30 * 60_000), deps, "waiting_for_connection");
-    case "account":
-      await markAccountProblem(conn, explained, deps, { holdSending: err.code === 133010 || err.code === 131031 || err.code === 368 });
-      return finish(m, "failed", "account", { errorCode: code, errorTitle: explained });
-    case "marketing_opt_out":
-      if (contact) await setConsent(contact, { scope: "marketing", status: "opted_out", source: "meta_error", at: new Date() }).catch(() => undefined);
-      return finish(m, "failed", "no_marketing_consent", { errorCode: code, errorTitle: explained });
-    default:
-      return finish(m, "failed", "refused", { errorCode: code, errorTitle: metaErrorExplanation(err.code, err.title).slice(0, 300) });
+    await systemDb.wappMessageEvent.createMany({ data: [{ workspaceId: m.workspaceId, storeId: m.storeId, messageId: m.id, status: "accepted", providerStatus: sent.status, occurredAt: at }], skipDuplicates: true });
+    if (contact) await systemDb.wappContact.update({ where: { id: contact.id }, data: { lastOutboundAt: at } });
+    if (payload.attachment) await dropAttachment(m, deps);
+    return status;
+  } catch (e) {
+    if (!(e instanceof EvolutionError)) throw e;
+    const detail = providerDetail(e.detail);
+    if (e.notOnWhatsapp) {
+      if (contact) await systemDb.wappContact.update({ where: { id: contact.id }, data: { notOnWhatsappAt: new Date() } });
+      return end("skipped", "not_on_whatsapp", { errorCode: "not_on_whatsapp" });
+    }
+    if (e.uncertain) {
+      logger.warn({ messageId: m.id, storeId: m.storeId }, "whatsapp send timed out: it may have been sent, not retried");
+      return end("failed", "gave_up", { errorCode: "uncertain", errorDetail: "WhatsApp's service didn't answer in time. The message may have reached the customer: check the chat on your phone before sending it again." });
+    }
+    if (isNotConnected(e)) {
+      // The provider lost the phone: hold, and ask it for the state so the page shows it.
+      await checkConnection(deps, conn).catch(() => {});
+      return hold(deps, m.id, new Date(Date.now() + 5 * 60_000), "not_connected");
+    }
+    if (e.kind === "unreachable" || e.kind === "server" || e.kind === "timeout") {
+      if (m.attempts >= WA_MAX_SEND_ATTEMPTS) return end("failed", "gave_up", { errorCode: e.kind, errorDetail: "bizinsights' WhatsApp service couldn't be reached after several tries." });
+      const delay = WA_RETRY_DELAYS_S[Math.min(m.attempts - 1, WA_RETRY_DELAYS_S.length - 1)]!;
+      const r = await systemDb.wappMessage.update({ where: { id: m.id }, data: { status: "queued", sendAfter: new Date(Date.now() + delay * 1000), errorCode: e.kind, enqueuedAt: null } });
+      await enqueueIfDue(deps, r);
+      logger.warn({ messageId: m.id, attempts: m.attempts, kind: e.kind }, "whatsapp send will be retried");
+      return "retry";
+    }
+    if (e.kind === "unauthorized" || e.kind === "not_found") await checkConnection(deps, conn).catch(() => {});
+    logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status }, "whatsapp send refused by the provider");
+    return end("failed", "provider_rejected", { errorCode: `${e.kind}_${e.status}`, errorDetail: detail || null });
   }
 }
 
 /**
- * "Retry" on a failed message: queued again as it was. Not for one Meta delivered (or reported as
- * delivered later), nor one whose details are gone (older than 7 days).
+ * A status report from WhatsApp (Evolution's MESSAGES_UPDATE). A message only moves forward;
+ * every report is recorded once. A test message reaching WhatsApp completes Step 4.
  */
-export async function retryMessage(deps: Pick<WaDeps, "queues">, input: { storeId: string; messageId: string }): Promise<WaMessage> {
-  const m = await systemDb.waMessage.findFirst({ where: { id: input.messageId, storeId: input.storeId, direction: "out" } });
-  if (!m) throw new WhatsappError("That message wasn't found.", 404, "not_found");
-  if (m.status !== "failed") throw new WhatsappError("Only a failed message can be sent again.", 409, "not_failed");
-  if (!m.payloadEnc) throw new WhatsappError("This message is too old to send again. Send a new one instead.", 409, "too_old");
-  const now = new Date();
-  const r = await systemDb.waMessage.updateMany({
-    where: { id: m.id, status: "failed" },
-    data: { status: "queued", reason: null, attempts: 0, sendAfter: now, finalAt: null, failedAt: null, errorCode: null, errorTitle: null, enqueuedAt: null },
-  });
-  if (!r.count) throw new WhatsappError("Only a failed message can be sent again.", 409, "not_failed");
-  const updated = { ...m, status: "queued", sendAfter: now };
-  await enqueueSend(updated, deps);
-  return updated;
-}
-
-/** Cancel what is still waiting (a workflow paused, a campaign cancelled, an order cancelled). Returns how many. */
-export async function cancelQueued(where: Prisma.WaMessageWhereInput, reason: SkipReason): Promise<number> {
-  const r = await systemDb.waMessage.updateMany({ where: { ...where, status: "queued" }, data: { status: "cancelled", reason, finalAt: new Date(), payloadEnc: null } });
-  return r.count;
-}
-
-/** A message's preview text, or null (an unreadable one is shown as unknown). */
-export function messagePreview(m: Pick<WaMessage, "storeId" | "previewEnc" | "id">): string | null {
-  if (!m.previewEnc) return null;
-  try {
-    return waDecrypt(m.storeId, "preview", m.previewEnc);
-  } catch (err) {
-    logger.warn({ err, messageId: m.id }, "whatsapp message preview unreadable");
-    return null;
+export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "storeId" | "workspaceId">, report: { providerMessageId: string; status: string; at: Date }): Promise<"unknown" | "unchanged" | WaMessageStatus> {
+  const m = await systemDb.wappMessage.findUnique({ where: { connectionId_providerMessageId: { connectionId: conn.id, providerMessageId: report.providerMessageId } } });
+  if (!m || m.storeId !== conn.storeId) return "unknown";
+  const status = messageStatusFromProvider(report.status);
+  if (!status) return "unchanged";
+  await systemDb.wappMessageEvent.createMany({ data: [{ workspaceId: m.workspaceId, storeId: m.storeId, messageId: m.id, status, providerStatus: report.status.slice(0, 40), occurredAt: report.at }], skipDuplicates: true });
+  const next = statusAfterReport(m.status, status);
+  if (!next) return "unchanged";
+  const stamp: Record<string, Date> = {};
+  if (next === "sent") stamp.sentAt = report.at;
+  if (next === "delivered") {
+    stamp.deliveredAt = report.at;
+    if (!m.sentAt) stamp.sentAt = report.at;
   }
+  if (next === "read") {
+    stamp.readAt = report.at;
+    if (!m.deliveredAt) stamp.deliveredAt = report.at;
+    if (!m.sentAt) stamp.sentAt = report.at;
+  }
+  if (next === "failed") stamp.failedAt = report.at;
+  await systemDb.wappMessage.update({
+    where: { id: m.id },
+    data: { status: next, ...stamp, ...(isFinalStatus(next) ? { finalAt: report.at, payloadEnc: null } : {}), ...(next === "failed" ? { reason: "provider_rejected", errorCode: "whatsapp_error" } : {}) },
+  });
+  if (m.source === "test" && (next === "sent" || next === "delivered" || next === "read")) {
+    await systemDb.wappSettings.updateMany({ where: { storeId: m.storeId, testPassedAt: null, testVerifiedAt: { not: null } }, data: { testPassedAt: report.at } });
+  }
+  return next;
+}
+
+/** Sends a failed message again (the merchant's "Retry"), when nothing about it has changed. */
+export async function retryMessage(deps: Pick<WaDeps, "queues">, store: Pick<Store, "id">, id: string, actor: { userId: string }): Promise<WappMessage> {
+  const m = await systemDb.wappMessage.findFirst({ where: { id, storeId: store.id } });
+  if (!m || m.direction !== "out") throw new WhatsappError("Not found", 404, "not_found");
+  if (m.status !== "failed" || !m.phoneEnc) throw new WhatsappError("Only a failed message can be sent again.", 409, "not_failed");
+  if (!m.payloadEnc && m.type === "text") {
+    // The text was cleared when it failed: rebuild the payload from the preview.
+    if (!m.previewEnc) throw new WhatsappError("This message's text is no longer kept, so it can't be sent again.", 409, "text_gone");
+  }
+  const payload: MessagePayload | null = m.payloadEnc
+    ? (JSON.parse(waDecrypt(m.storeId, "payload", m.payloadEnc)) as MessagePayload)
+    : m.type === "text" && m.previewEnc
+      ? { text: waDecrypt(m.storeId, "preview", m.previewEnc) }
+      : null;
+  if (!payload) throw new WhatsappError("This message's attachment is no longer kept, so it can't be sent again.", 409, "attachment_gone");
+  const updated = await systemDb.wappMessage.update({
+    where: { id: m.id },
+    data: { status: "queued", reason: null, errorCode: null, errorDetail: null, failedAt: null, finalAt: null, attempts: 0, sendAfter: new Date(), payloadEnc: waEncrypt(m.storeId, "payload", JSON.stringify(payload)), createdByUserId: actor.userId },
+  });
+  await enqueueIfDue(deps, updated);
+  return updated;
 }

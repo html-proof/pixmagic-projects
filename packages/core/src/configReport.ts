@@ -13,7 +13,6 @@ import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
 import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
-import { waPlatform } from "./whatsapp/common.js";
 
 /** A provider's public id (one of the app's settings) and its secret (Secrets Manager). */
 export interface ProviderCredentials {
@@ -33,10 +32,11 @@ export interface ConfigReport {
   /** `configured`: the platform's own app is set up here; `nango`: it is also connected through Nango (docs/nango.md). */
   ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean>; nango: Record<AdProvider, boolean> };
   /**
-   * "Connect WhatsApp" (Meta's Embedded Signup, the token kept at Nango), the settings it still lacks
-   * (names, empty once it is on), and the webhook verify token.
+   * WhatsApp Automation: linking a phone through bizinsights' Evolution API service (on once its
+   * URL and key are set), connecting through Meta's Cloud API (Embedded Signup; the settings it still
+   * lacks, empty once it can be offered), and the verify token of Meta's webhook.
    */
-  whatsapp: { embeddedSignup: boolean; embeddedSignupNeeds: string[]; webhookVerifyToken: boolean };
+  whatsapp: { evolution: boolean; evolutionNeeds: string[]; embeddedSignup: boolean; embeddedSignupNeeds: string[]; webhookVerifyToken: boolean };
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
@@ -87,9 +87,9 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
     secretSet: !!vars[secretSetting],
     effect,
   });
-  // WhatsApp's secret is used by Embedded Signup ("Connect WhatsApp") and the webhooks of the numbers
-  // it connects. So its id here is WHATSAPP_CONFIG_ID, the setting that turns Embedded Signup on: an
-  // app id picked (WHATSAPP_APP_ID) before its configuration exists is no reason to warn on every deploy.
+  // WhatsApp's Meta secret is used by the Cloud API way to connect (Embedded Signup) and the webhooks of
+  // the numbers it connects. So its id here is WHATSAPP_CONFIG_ID, the setting that turns it on: an app
+  // id picked (WHATSAPP_APP_ID) before its configuration exists is no reason to warn on every deploy.
   // On the Meta Ads app the secret to set is META_APP_SECRET (WHATSAPP_APP_SECRET would win over it).
   const onMetaApp = !vars.WHATSAPP_APP_ID || vars.WHATSAPP_APP_ID === vars.META_APP_ID;
   const whatsapp: ProviderCredentials = {
@@ -97,7 +97,7 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
       "WhatsApp (Embedded Signup)",
       "WHATSAPP_CONFIG_ID",
       onMetaApp ? "META_APP_SECRET" : "WHATSAPP_APP_SECRET",
-      "Connect WhatsApp (Embedded Signup) can't be turned on, and replies and delivery reports from connected numbers can't be checked",
+      "connecting WhatsApp through Meta's Cloud API (Embedded Signup) can't be offered, and Meta's webhooks for Cloud API numbers can't be checked",
     ),
     secretSet: waSecretSet(vars),
   };
@@ -134,19 +134,24 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
   ];
 }
 
+/** What bizinsights' Evolution API service still lacks here (empty: phones can be linked). */
+export function evolutionNeeds(vars: Vars = process.env): string[] {
+  return [!vars.EVOLUTION_API_URL ? "EVOLUTION_API_URL" : null, !vars.EVOLUTION_API_KEY ? "EVOLUTION_API_KEY" : null].filter((n): n is string => n !== null);
+}
+
 /**
- * What "Connect WhatsApp" still lacks, by setting name: Meta's app (its own, or the Meta Ads app's),
- * the Embedded Signup configuration, that app's secret, the webhook verify token, and Nango's key
- * (Nango keeps each store's token). Empty when it is on (whatsapp/common.ts waPlatformMissing asks
- * for the same).
+ * What connecting through Meta's Cloud API still lacks, by setting name: the Evolution API service it
+ * sends through, Meta's app (its own, or the Meta Ads app's), the Embedded Signup configuration,
+ * that app's secret and the webhook verify token. Empty when it can be offered (whatsapp/overview.ts
+ * cloudApiMissing asks for the same).
  */
 export function embeddedSignupNeeds(vars: Vars = process.env): string[] {
   return [
+    ...evolutionNeeds(vars).slice(0, 1),
     !vars.WHATSAPP_APP_ID && !vars.META_APP_ID ? "WHATSAPP_APP_ID" : null,
     !vars.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
     !waSecretSet(vars) ? "WHATSAPP_APP_SECRET" : null,
     !vars.WHATSAPP_WEBHOOK_VERIFY_TOKEN ? "WHATSAPP_WEBHOOK_VERIFY_TOKEN" : null,
-    !vars.NANGO_SECRET_KEY ? "NANGO_SECRET_KEY" : null,
   ].filter((n): n is string => n !== null);
 }
 
@@ -162,7 +167,9 @@ export function configReport(): ConfigReport {
   return {
     ads: { configured: adsConfigured(), restricted: adsRestricted(), nango: nangoProviders() },
     whatsapp: {
-      embeddedSignup: waPlatform() !== null,
+      evolution: evolutionNeeds().length === 0,
+      evolutionNeeds: evolutionNeeds(),
+      embeddedSignup: embeddedSignupNeeds().length === 0,
       embeddedSignupNeeds: embeddedSignupNeeds(),
       webhookVerifyToken: !!e.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     },

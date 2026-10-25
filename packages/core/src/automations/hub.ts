@@ -78,7 +78,7 @@ export function hubPermissions(access: MemberAccess): HubPermissions {
 }
 
 const buildable = (channel: HubChannel) => {
-  if (!HUB_BUILDABLE.includes(channel)) throw new HubError("WhatsApp automations are set up on the WhatsApp page.", 409, "channel_elsewhere");
+  if (!HUB_BUILDABLE.includes(channel)) throw new HubError("WhatsApp automations are set up on the WhatsApp Automation page.", 409, "channel_elsewhere");
 };
 
 // ---------------------------------------------------------------------------

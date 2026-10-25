@@ -1,810 +1,893 @@
 /**
- * WhatsApp Automation (WhatsApp Business Platform, Cloud API): the pure parts, shared by the API,
- * the worker and the dashboard (`@app/shared/whatsapp`). Message templates and their variables,
- * who may receive what (consent), workflow triggers and conditions, campaign audiences, message
- * statuses, and what to do about each error Meta returns. Everything that touches the network or
- * the database is in packages/core/src/whatsapp; docs/whatsapp.md describes the whole feature.
+ * WhatsApp Automation's rules (docs/whatsapp.md), shared by the API, the worker and the dashboard
+ * (`@app/shared/whatsapp`): how a store connects (a WhatsApp phone linked by QR code or pairing
+ * code, through bizinsights' Evolution API service; or Meta's official Cloud API), the states a
+ * connection and a message go through, message templates and their variables, who may receive
+ * what (consent), automation triggers and conditions, campaigns, and the four-step setup.
  *
- * Phone numbers and sending hours are shared with Customer Messaging (SMS): `./messaging.ts`.
+ * Pure: no I/O, no node: imports, safe in the browser. Phone numbers and sending hours, shared
+ * with SMS, are in ./messaging.
  */
 import { z } from "./zod";
 
 // ---------------------------------------------------------------------------
-// Message templates
+// How a store connects
 // ---------------------------------------------------------------------------
 
-/** A template's component as Meta stores and returns it (GET /{waba}/message_templates). */
-export interface TemplateComponent {
-  type: string;
-  format?: string;
-  text?: string;
-  buttons?: Array<{ type: string; text?: string; url?: string; phone_number?: string }>;
+/**
+ * `qr`: a WhatsApp or WhatsApp Business app on the merchant's phone, linked as a device (WhatsApp
+ * Web's protocol, through Evolution API's Baileys integration). `cloud_api`: Meta's WhatsApp
+ * Business Platform, connected with Meta's Embedded Signup (Evolution API's WHATSAPP-BUSINESS
+ * integration sends through it).
+ */
+export const WA_PROVIDERS = ["qr", "cloud_api"] as const;
+export type WaProvider = (typeof WA_PROVIDERS)[number];
+
+export interface ProviderInfo {
+  label: string;
+  /** One line for a picker. */
+  short: string;
+  /** Meta's official business messaging (true), or WhatsApp Web's linked-device protocol (false). */
+  official: boolean;
+  /** What the merchant gets, in plain words. */
+  good: string[];
+  /** What the merchant must know before choosing it. Shown in full before anything is created. */
+  limits: string[];
 }
 
-/** The categories bizinsights creates. Authentication templates (one-time codes) aren't for this feature. */
-export const TEMPLATE_CATEGORIES = ["UTILITY", "MARKETING"] as const;
-export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
-
-export const TEMPLATE_CATEGORY_INFO: Record<TemplateCategory, { label: string; help: string }> = {
-  UTILITY: {
-    label: "Order and service updates",
-    help: "Updates a customer expects about something they did: an order confirmation, shipping, an appointment. No offers or promotions in these.",
+export const PROVIDER_INFO: Record<WaProvider, ProviderInfo> = {
+  cloud_api: {
+    label: "Official WhatsApp Business Platform (Cloud API)",
+    short: "Meta's official API for business messaging: approved templates, a verified business, higher volumes.",
+    official: true,
+    good: [
+      "Meta's official way for businesses to message customers, with message templates Meta reviews",
+      "Built for higher volumes, with delivery reports from Meta",
+      "Your number stays on Meta's servers: no phone needs to stay online",
+    ],
+    limits: [
+      "You sign in with Meta and pick or create a WhatsApp Business account; Meta may ask to verify your business",
+      "Messages that start a conversation must use a template Meta approved; Meta charges per conversation",
+      "A number used here can't also be used in the WhatsApp app on a phone",
+    ],
   },
-  MARKETING: {
-    label: "Marketing",
-    help: "Offers, reminders about a cart, welcome messages, news. Only customers who agreed to marketing on WhatsApp receive these.",
+  qr: {
+    label: "Link a WhatsApp phone with a QR code",
+    short: "Link the WhatsApp or WhatsApp Business app on your phone, like WhatsApp Web. Quick to set up.",
+    official: false,
+    good: [
+      "Ready in a minute: scan a code with the phone that has your business's WhatsApp",
+      "Messages come from your existing number and appear in the app on your phone",
+      "No Meta business verification or template review",
+    ],
+    limits: [
+      "This uses WhatsApp Web's linked-device connection, not Meta's official business API. WhatsApp's terms limit automated and bulk messages from the app, and WhatsApp may restrict or ban a number it sees sending unwanted messages",
+      "Keep the phone connected to the internet at least every 14 days, or WhatsApp logs the link out",
+      "bizinsights paces messages and caps how many go out a day to protect your number; it is not built for large broadcasts",
+      "Delivery and read reports depend on WhatsApp sending them: some messages may only ever show as sent",
+    ],
   },
 };
 
-/** Languages offered when writing a template (Meta's codes). Any code Meta accepts can still be synced from WhatsApp Manager. */
-export const TEMPLATE_LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
-  { code: "en", label: "English" },
-  { code: "en_US", label: "English (US)" },
-  { code: "en_GB", label: "English (UK)" },
-  { code: "es", label: "Spanish" },
-  { code: "es_MX", label: "Spanish (Mexico)" },
-  { code: "pt_BR", label: "Portuguese (Brazil)" },
-  { code: "fr", label: "French" },
-  { code: "de", label: "German" },
-  { code: "it", label: "Italian" },
-  { code: "nl", label: "Dutch" },
-  { code: "hi", label: "Hindi" },
-  { code: "ml", label: "Malayalam" },
-  { code: "ta", label: "Tamil" },
-  { code: "ar", label: "Arabic" },
-  { code: "id", label: "Indonesian" },
-  { code: "ms", label: "Malay" },
-  { code: "zh_CN", label: "Chinese (simplified)" },
-];
-
-/** Template statuses Meta reports, in words. */
-export const TEMPLATE_STATUS_LABEL: Record<string, string> = {
-  APPROVED: "Approved",
-  PENDING: "Waiting for Meta's review",
-  IN_APPEAL: "Appealed",
-  REJECTED: "Rejected by Meta",
-  PAUSED: "Paused by Meta (low quality)",
-  DISABLED: "Disabled by Meta",
-  PENDING_DELETION: "Being deleted",
-  DELETED: "Deleted",
-  LIMIT_EXCEEDED: "Template limit reached",
-};
-
-/** The highest {{n}} in a text (Meta numbers variables 1, 2, 3...). */
-export function countVariables(text: string | undefined | null): number {
-  if (!text) return 0;
-  const nums = [...text.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((x) => Number(x[1]));
-  return nums.length ? Math.max(...nums) : 0;
-}
-
-export interface TemplateShape {
-  bodyVars: number;
-  headerFormat: "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION";
-  headerVars: number;
-  /** Indexes (in the template's button list) of URL buttons whose link ends in a variable. */
-  dynamicUrlButtons: number[];
-}
-
-/** What a stored template needs filled in when it is sent. */
-export function templateShape(components: TemplateComponent[]): TemplateShape {
-  const body = components.find((c) => c.type.toUpperCase() === "BODY");
-  const header = components.find((c) => c.type.toUpperCase() === "HEADER");
-  const buttons = components.find((c) => c.type.toUpperCase() === "BUTTONS")?.buttons ?? [];
-  const format = (header?.format?.toUpperCase() ?? "NONE") as TemplateShape["headerFormat"];
-  return {
-    bodyVars: countVariables(body?.text),
-    headerFormat: header ? format : "NONE",
-    headerVars: format === "TEXT" ? countVariables(header?.text) : 0,
-    dynamicUrlButtons: buttons.flatMap((b, i) => (b.type.toUpperCase() === "URL" && countVariables(b.url) > 0 ? [i] : [])),
-  };
-}
-
-/** A template's texts, for previews: header, body, footer and the buttons' labels. */
-export function templateTexts(components: TemplateComponent[]): { header: string | null; headerFormat: TemplateShape["headerFormat"]; body: string; footer: string | null; buttons: string[] } {
-  const find = (t: string) => components.find((c) => c.type.toUpperCase() === t);
-  const header = find("HEADER");
-  return {
-    header: header?.format?.toUpperCase() === "TEXT" ? (header.text ?? null) : null,
-    headerFormat: templateShape(components).headerFormat,
-    body: find("BODY")?.text ?? "",
-    footer: find("FOOTER")?.text ?? null,
-    buttons: (find("BUTTONS")?.buttons ?? []).map((b) => b.text ?? "").filter(Boolean),
-  };
-}
-
-const TEMPLATE_NAME = /^[a-z0-9_]{1,512}$/;
-const varsOf = (text: string) => [...text.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1]));
-
-/** A template the merchant writes in the dashboard, before it goes to Meta for review. */
-export const templateDraftSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1, "Give the template a name")
-    .max(512)
-    .transform((s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""))
-    .refine((s) => TEMPLATE_NAME.test(s), "Use letters, numbers and underscores"),
-  language: z.string().trim().regex(/^[a-z]{2,3}(_[A-Z]{2})?$/, "Pick a language"),
-  category: z.enum(TEMPLATE_CATEGORIES),
-  header: z.discriminatedUnion("type", [z.object({ type: z.literal("none") }), z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(60), example: z.string().trim().max(60).optional() })]),
-  body: z.string().trim().min(1, "Write the message").max(1024, "WhatsApp allows 1,024 characters"),
-  /** One example value per {{n}} in the body, in order: Meta's reviewers read the template with them. */
-  bodyExamples: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
-  footer: z.string().trim().max(60).optional().nullable(),
-  buttons: z
-    .array(
-      z.discriminatedUnion("type", [
-        z.object({ type: z.literal("quick_reply"), text: z.string().trim().min(1).max(25) }),
-        z.object({
-          type: z.literal("url"),
-          text: z.string().trim().min(1).max(25),
-          url: z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "Links must start with https://"),
-          example: z.string().trim().max(2000).optional(),
-        }),
-      ]),
-    )
-    .max(3)
-    .default([]),
-});
-export type TemplateDraft = z.output<typeof templateDraftSchema>;
-
-export interface TemplateIssue {
-  level: "error" | "warning";
-  code: string;
-  message: string;
-}
-
-/** What Meta would refuse in a draft (errors), and what is likely to get it rejected or paused (warnings). */
-export function checkTemplateDraft(d: TemplateDraft): TemplateIssue[] {
-  const out: TemplateIssue[] = [];
-  const vars = varsOf(d.body);
-  const n = vars.length ? Math.max(...vars) : 0;
-  for (let i = 1; i <= n; i++) if (!vars.includes(i)) out.push({ level: "error", code: "variables_gap", message: `Variables must be numbered in order: {{${i}}} is missing.` });
-  if (n && d.bodyExamples.length < n) out.push({ level: "error", code: "examples_missing", message: `Give an example for each variable (${n} needed): Meta's reviewers read the message with them.` });
-  const trimmed = d.body.trim();
-  if (/^\{\{\s*\d+\s*\}\}/.test(trimmed) || /\{\{\s*\d+\s*\}\}[.!?]?$/.test(trimmed)) out.push({ level: "error", code: "variable_at_edge", message: "The message can't start or end with a variable. Add a few words before or after it." });
-  if (/\{\{\s*\d+\s*\}\}\s*\{\{\s*\d+\s*\}\}/.test(d.body)) out.push({ level: "error", code: "adjacent_variables", message: "Two variables can't sit side by side: put words between them." });
-  const words = trimmed.replace(/\{\{\s*\d+\s*\}\}/g, " ").split(/\s+/).filter(Boolean).length;
-  if (n && words < n * 3) out.push({ level: "error", code: "too_many_variables", message: "Meta rejects templates that are mostly variables. Add more fixed words." });
-  if (d.header.type === "text" && countVariables(d.header.text) > 1) out.push({ level: "error", code: "header_variables", message: "A header can have at most one variable." });
-  if (d.header.type === "text" && countVariables(d.header.text) === 1 && !d.header.example) out.push({ level: "error", code: "header_example", message: "Give an example for the header's variable." });
-  if (d.footer && countVariables(d.footer)) out.push({ level: "error", code: "footer_variables", message: "The footer can't have variables." });
-  for (const b of d.buttons) {
-    if (b.type !== "url") continue;
-    const v = countVariables(b.url);
-    if (v > 1 || (v === 1 && !/\{\{\s*1\s*\}\}$/.test(b.url))) out.push({ level: "error", code: "button_url_variable", message: `"${b.text}": a link can have one variable, at its very end ({{1}}).` });
-    if (v === 1 && !b.example) out.push({ level: "error", code: "button_url_example", message: `"${b.text}": give an example of the full link.` });
-  }
-  if (d.buttons.filter((b) => b.type === "url").length > 2) out.push({ level: "error", code: "too_many_links", message: "A template can have at most two link buttons." });
-  if (d.category === "MARKETING" && !d.buttons.some((b) => b.type === "quick_reply" && /stop|unsubscribe/i.test(b.text)) && !/stop/i.test(`${d.body} ${d.footer ?? ""}`)) {
-    out.push({ level: "warning", code: "no_opt_out", message: 'Marketing messages should tell people how to stop them: add a "Stop promotions" quick reply, or "Reply STOP to unsubscribe" in the footer.' });
-  }
-  if (d.category === "UTILITY" && /\b(\d{1,2}% ?off|discount|sale|offer|coupon|promo)\b/i.test(d.body)) {
-    out.push({ level: "warning", code: "marketing_words", message: "This reads like an offer. Meta moves utility templates with offers to Marketing, which only opted-in customers receive." });
-  }
-  return out;
-}
-
-export const hasErrors = (issues: TemplateIssue[]) => issues.some((i) => i.level === "error");
-
-/** A draft as the components of Meta's "create template" call (POST /{waba}/message_templates). */
-export function toMetaComponents(d: TemplateDraft): Array<Record<string, unknown>> {
-  const out: Array<Record<string, unknown>> = [];
-  if (d.header.type === "text") {
-    out.push({ type: "HEADER", format: "TEXT", text: d.header.text, ...(countVariables(d.header.text) && d.header.example ? { example: { header_text: [d.header.example] } } : {}) });
-  }
-  const n = countVariables(d.body);
-  out.push({ type: "BODY", text: d.body, ...(n ? { example: { body_text: [d.bodyExamples.slice(0, n)] } } : {}) });
-  if (d.footer) out.push({ type: "FOOTER", text: d.footer });
-  if (d.buttons.length) {
-    out.push({
-      type: "BUTTONS",
-      buttons: d.buttons.map((b) =>
-        b.type === "quick_reply" ? { type: "QUICK_REPLY", text: b.text } : { type: "URL", text: b.text, url: b.url, ...(countVariables(b.url) && b.example ? { example: [b.example] } : {}) },
-      ),
-    });
-  }
-  return out;
-}
-
-/** A draft as the components Meta would store, for previews before it is submitted. */
-export function draftComponents(d: TemplateDraft): TemplateComponent[] {
-  return toMetaComponents(d) as unknown as TemplateComponent[];
-}
-
 // ---------------------------------------------------------------------------
-// Variables: where each {{n}} takes its value from when a message is sent
+// Connection states (what the provider last said, never assumed)
 // ---------------------------------------------------------------------------
 
-export const VARIABLE_SOURCES = [
-  "customer_first_name",
-  "store_name",
-  "order_number",
-  "order_total",
-  "order_status_url",
-  "product_names",
-  "tracking_number",
-  "tracking_url",
-  "carrier",
-  "checkout_url",
-  "event_date",
-  "event_time",
-  "event_value",
-  "custom_text",
-] as const;
-export type VariableSource = (typeof VARIABLE_SOURCES)[number];
+/**
+ * pairing: created, waiting for the phone to scan the code (or type the pairing code)
+ * connected: the provider reports the connection open
+ * reconnecting: the provider lost the connection and is reconnecting by itself
+ * logged_out: the phone (or WhatsApp) ended the link; it must be paired again
+ * failed: pairing gave up (the codes ran out) or the provider refused the connection
+ * disconnected: the merchant disconnected it (the provider's instance is deleted); history is kept
+ */
+export const WA_CONNECTION_STATUSES = ["pairing", "connected", "reconnecting", "logged_out", "failed", "disconnected"] as const;
+export type WaConnectionStatus = (typeof WA_CONNECTION_STATUSES)[number];
 
-export const VARIABLE_INFO: Record<VariableSource, { label: string; sample: string; help?: string }> = {
-  customer_first_name: { label: "Customer's first name", sample: "Priya", help: "\"there\" when the order has no name." },
-  store_name: { label: "Your store's name", sample: "Kerala Spices" },
-  order_number: { label: "Order number", sample: "#1042" },
-  order_total: { label: "Order total", sample: "$58.00" },
-  order_status_url: { label: "Order status page (Shopify)", sample: "https://shop.example.com/orders/abc" },
-  product_names: { label: "Products ordered", sample: "Cardamom 200g, Black pepper 100g" },
-  tracking_number: { label: "Tracking number", sample: "LX123456789AU" },
-  tracking_url: { label: "Tracking link", sample: "https://auspost.com.au/track/LX123456789AU" },
-  carrier: { label: "Courier", sample: "Australia Post" },
-  checkout_url: { label: "Link back to the checkout", sample: "https://shop.example.com/checkouts/recover" },
-  event_date: { label: "Event date (custom events)", sample: "Monday 3 November" },
-  event_time: { label: "Event time (custom events)", sample: "10:30 am" },
-  event_value: { label: "A value sent with the event", sample: "Haircut with Sam", help: "The key you name, from the event's values." },
-  custom_text: { label: "Fixed text", sample: "", help: "The same words for everyone." },
+export const WA_CONNECTION_LABEL: Record<WaConnectionStatus, string> = {
+  pairing: "Waiting for your phone",
+  connected: "Connected",
+  reconnecting: "Reconnecting",
+  logged_out: "Logged out",
+  failed: "Not connected",
+  disconnected: "Disconnected",
 };
 
-/** One {{n}}: where its value comes from. `text` is the fixed text (custom_text) or the event value's key (event_value). */
-export const variableRefSchema = z.object({ source: z.enum(VARIABLE_SOURCES), text: z.string().trim().max(300).optional() });
-export type VariableRef = z.output<typeof variableRefSchema>;
+/** Whether a connection in this state can send now. */
+export const waCanSend = (status: string | null | undefined) => status === "connected";
 
-export const mappingSchema = z.object({
-  header: variableRefSchema.nullable().optional(),
-  body: z.array(variableRefSchema).max(20).default([]),
-  /** One per URL button whose link ends in a variable, in the template's button order. */
-  buttons: z.array(variableRefSchema).max(2).default([]),
-});
-export type TemplateMapping = z.output<typeof mappingSchema>;
-
-/** What one event knows: the values the variables take. Missing ones are absent. */
-export type SendValues = Partial<Record<Exclude<VariableSource, "custom_text" | "event_value">, string>> & { event?: Record<string, string> };
-
-/** Meta refuses parameters with newlines, tabs or more than four spaces in a row, and empty ones. */
-export function cleanParam(value: string | null | undefined, max = 600): string {
-  return (value ?? "").replace(/[\r\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim().slice(0, max);
-}
-
-/** The value a variable takes from `values`; null when the event doesn't know it. */
-export function resolveVariable(ref: VariableRef | null | undefined, values: SendValues): string | null {
-  if (!ref) return null;
-  if (ref.source === "custom_text") return ref.text?.trim() || null;
-  if (ref.source === "event_value") return (ref.text && values.event?.[ref.text]?.trim()) || null;
-  if (ref.source === "customer_first_name") return values.customer_first_name?.trim() || "there";
-  return values[ref.source]?.trim() || null;
-}
-
-/** Variable sources a template uses that `values` doesn't hold (they'd send an empty value, which Meta refuses). */
-export function missingValues(shape: TemplateShape, mapping: TemplateMapping, values: SendValues): string[] {
-  const refs = [...(shape.headerVars ? [mapping.header ?? null] : []), ...mapping.body.slice(0, shape.bodyVars), ...mapping.buttons.slice(0, shape.dynamicUrlButtons.length)];
-  const missing = refs.flatMap((r, i) => (resolveVariable(r, values) ? [] : [r ? VARIABLE_INFO[r.source].label : `variable ${i + 1}`]));
-  if (mapping.body.length < shape.bodyVars) missing.push(`${shape.bodyVars - mapping.body.length} body variable(s) not chosen`);
-  return [...new Set(missing)];
-}
-
-export class MissingValueError extends Error {
-  override name = "MissingValueError";
-  constructor(readonly missing: string[]) {
-    super(`Missing: ${missing.join(", ")}`);
+/**
+ * Evolution API's connection state (`open`, `connecting`, `close`, and `refused` once its QR codes
+ * run out) as a connection status. `connecting` on a connection that was connected before is the
+ * provider reconnecting; before that, it is waiting for the phone.
+ */
+export function connectionStatusFromProvider(state: string | null | undefined, previous: WaConnectionStatus | null): WaConnectionStatus | null {
+  switch (state) {
+    case "open":
+      return "connected";
+    case "connecting":
+      return previous === "connected" || previous === "reconnecting" ? "reconnecting" : "pairing";
+    case "refused":
+      return "failed";
+    case "close":
+      return previous === "connected" || previous === "reconnecting" ? "reconnecting" : previous === "pairing" ? "failed" : previous;
+    default:
+      return null;
   }
 }
 
 /**
- * The `template.components` of a Cloud API send. Throws MissingValueError when a variable has no
- * value (Meta would refuse the whole message), and when a media header has no link.
+ * WhatsApp's (Baileys') reasons a connection closed, as Evolution API reports them in
+ * `statusReason`. 401 (logged out) and 403 (forbidden) end the link: it must be paired again.
  */
-export function buildSendComponents(shape: TemplateShape, mapping: TemplateMapping, values: SendValues, headerMediaUrl?: string | null): Array<Record<string, unknown>> {
-  const missing = missingValues(shape, mapping, values);
-  if (["IMAGE", "VIDEO", "DOCUMENT"].includes(shape.headerFormat) && !headerMediaUrl) missing.push(`a ${shape.headerFormat.toLowerCase()} for the header`);
-  if (missing.length) throw new MissingValueError(missing);
-  const out: Array<Record<string, unknown>> = [];
-  if (shape.headerFormat === "TEXT" && shape.headerVars) {
-    out.push({ type: "header", parameters: [{ type: "text", text: cleanParam(resolveVariable(mapping.header, values), 60) }] });
-  } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(shape.headerFormat)) {
-    const kind = shape.headerFormat.toLowerCase();
-    out.push({ type: "header", parameters: [{ type: kind, [kind]: { link: headerMediaUrl } }] });
+export function closeReasonLabel(code: number | null | undefined): string | null {
+  switch (code) {
+    case 401:
+      return "The phone logged this link out (or removed it under Linked devices).";
+    case 403:
+      return "WhatsApp refused this number's connection. Open WhatsApp on the phone for details.";
+    case 408:
+      return "The connection timed out.";
+    case 411:
+      return "WhatsApp asked for the link to be set up again.";
+    case 428:
+      return "WhatsApp closed the connection.";
+    case 440:
+      return "This link was replaced by another session of the same account.";
+    case 500:
+      return "The session's keys stopped working; pair the phone again.";
+    case 503:
+      return "WhatsApp was unavailable.";
+    case 515:
+      return "WhatsApp asked for a restart.";
+    default:
+      return null;
   }
-  if (shape.bodyVars) {
-    out.push({ type: "body", parameters: mapping.body.slice(0, shape.bodyVars).map((r) => ({ type: "text", text: cleanParam(resolveVariable(r, values)) })) });
-  }
-  shape.dynamicUrlButtons.forEach((index, n) => {
-    out.push({ type: "button", sub_type: "url", index: String(index), parameters: [{ type: "text", text: cleanParam(resolveVariable(mapping.buttons[n], values), 2000) }] });
-  });
-  return out;
 }
 
-/** Fill {{n}} with values (1-based), leaving unknown ones as they are. */
-export function fillText(text: string, values: Array<string | null | undefined>): string {
-  return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (all, n: string) => values[Number(n) - 1] || all);
-}
-
-/** A template as the customer would read it with `values` (samples when null), for previews and the message history. */
-export function renderTemplate(components: TemplateComponent[], mapping: TemplateMapping | null, values: SendValues | null): { header: string | null; body: string; footer: string | null; buttons: string[] } {
-  const t = templateTexts(components);
-  const pick = (r: VariableRef | null | undefined) => {
-    if (!r) return null;
-    if (values) return resolveVariable(r, values);
-    return r.source === "custom_text" ? r.text || null : r.source === "event_value" ? `[${r.text || "value"}]` : VARIABLE_INFO[r.source].sample;
-  };
-  return {
-    header: t.header ? fillText(t.header, [pick(mapping?.header)]) : null,
-    body: fillText(t.body, (mapping?.body ?? []).map(pick)),
-    footer: t.footer,
-    buttons: t.buttons,
-  };
-}
+/** Close reasons after which reconnecting by itself can't work. */
+export const isTerminalCloseReason = (code: number | null | undefined) => code === 401 || code === 403 || code === 500;
 
 // ---------------------------------------------------------------------------
-// Starter templates: written for the common jobs, reviewed by the merchant before Meta sees them
-// ---------------------------------------------------------------------------
-
-export interface StarterTemplate {
-  key: string;
-  title: string;
-  description: string;
-  draft: TemplateDraft;
-  /** How each body variable is filled when the template is used in a workflow. */
-  mapping: TemplateMapping;
-}
-
-const ref = (source: VariableSource, text?: string): VariableRef => (text ? { source, text } : { source });
-
-export const STARTER_TEMPLATES: StarterTemplate[] = [
-  {
-    key: "order_confirmation",
-    title: "Order confirmation",
-    description: "Thanks the customer and confirms their order.",
-    draft: {
-      name: "order_confirmation",
-      language: "en",
-      category: "UTILITY",
-      header: { type: "none" },
-      body: "Hi {{1}}, thank you for your order {{2}} from {{3}}. We're getting it ready and will message you when it ships.",
-      bodyExamples: ["Priya", "#1042", "Kerala Spices"],
-      footer: "Reply STOP to stop these updates",
-      buttons: [],
-    },
-    mapping: { body: [ref("customer_first_name"), ref("order_number"), ref("store_name")], buttons: [] },
-  },
-  {
-    key: "shipping_update",
-    title: "Shipping update",
-    description: "Tells the customer their order is on its way, with tracking.",
-    draft: {
-      name: "shipping_update",
-      language: "en",
-      category: "UTILITY",
-      header: { type: "none" },
-      body: "Good news {{1}}! Your order {{2}} is on its way with {{3}}, tracking number {{4}}. We will let you know if anything changes.",
-      bodyExamples: ["Priya", "#1042", "Australia Post", "LX123456789AU"],
-      footer: "Reply STOP to stop these updates",
-      buttons: [],
-    },
-    mapping: { body: [ref("customer_first_name"), ref("order_number"), ref("carrier"), ref("tracking_number")], buttons: [] },
-  },
-  {
-    key: "abandoned_checkout",
-    title: "Abandoned checkout reminder",
-    description: "Reminds an opted-in customer about the items they left in checkout.",
-    draft: {
-      name: "checkout_reminder",
-      language: "en",
-      category: "MARKETING",
-      header: { type: "none" },
-      body: "Hi {{1}}, you left {{2}} in your cart at {{3}}. Your items are still waiting for you whenever you're ready.",
-      bodyExamples: ["Priya", "Cardamom 200g", "Kerala Spices"],
-      footer: null,
-      buttons: [{ type: "quick_reply", text: "Stop promotions" }],
-    },
-    mapping: { body: [ref("customer_first_name"), ref("product_names"), ref("store_name")], buttons: [] },
-  },
-  {
-    key: "follow_up",
-    title: "Follow-up after an order",
-    description: "Checks in a few days after the order shipped.",
-    draft: {
-      name: "order_follow_up",
-      language: "en",
-      category: "MARKETING",
-      header: { type: "none" },
-      body: "Hi {{1}}, we hope you're enjoying your order {{2}} from {{3}}. If anything isn't right, just reply to this message.",
-      bodyExamples: ["Priya", "#1042", "Kerala Spices"],
-      footer: null,
-      buttons: [{ type: "quick_reply", text: "Stop promotions" }],
-    },
-    mapping: { body: [ref("customer_first_name"), ref("order_number"), ref("store_name")], buttons: [] },
-  },
-  {
-    key: "welcome",
-    title: "Welcome a new customer",
-    description: "Greets a customer who just created an account and agreed to marketing.",
-    draft: {
-      name: "welcome_customer",
-      language: "en",
-      category: "MARKETING",
-      header: { type: "none" },
-      body: "Welcome to {{1}}, {{2}}! We'll send you our news and offers here now and then.",
-      bodyExamples: ["Kerala Spices", "Priya"],
-      footer: null,
-      buttons: [{ type: "quick_reply", text: "Stop promotions" }],
-    },
-    mapping: { body: [ref("store_name"), ref("customer_first_name")], buttons: [] },
-  },
-  {
-    key: "appointment_reminder",
-    title: "Appointment reminder",
-    description: "Reminds a customer of a booking (sent from a custom event).",
-    draft: {
-      name: "appointment_reminder",
-      language: "en",
-      category: "UTILITY",
-      header: { type: "none" },
-      body: "Hi {{1}}, this is a reminder of your appointment with {{2}} on {{3}} at {{4}}. Reply if you need to change it.",
-      bodyExamples: ["Priya", "Kerala Spices", "Monday 3 November", "10:30 am"],
-      footer: "Reply STOP to stop these reminders",
-      buttons: [],
-    },
-    mapping: { body: [ref("customer_first_name"), ref("store_name"), ref("event_date"), ref("event_time")], buttons: [] },
-  },
-  {
-    key: "promotion",
-    title: "Promotion",
-    description: "A campaign message for customers who opted in to offers.",
-    draft: {
-      name: "store_promotion",
-      language: "en",
-      category: "MARKETING",
-      header: { type: "none" },
-      body: "Hi {{1}}, something new at {{2}}: {{3}}. Reply to this message if you have any questions.",
-      bodyExamples: ["Priya", "Kerala Spices", "our festive spice boxes are here"],
-      footer: null,
-      buttons: [{ type: "quick_reply", text: "Stop promotions" }],
-    },
-    mapping: { body: [ref("customer_first_name"), ref("store_name"), ref("custom_text", "our new arrivals are here")], buttons: [] },
-  },
-  {
-    key: "stock_alert",
-    title: "Stock alert (to your team)",
-    description: "Inventory's low and sold-out stock alerts, sent to your own team's numbers.",
-    draft: {
-      name: "team_stock_alert",
-      language: "en",
-      category: "UTILITY",
-      header: { type: "none" },
-      body: "Stock alert from {{1}}: {{2}}. Open bizinsights to see which products.",
-      bodyExamples: ["Kerala Spices", "2 products sold out, 5 running low"],
-      footer: null,
-      buttons: [],
-    },
-    mapping: { body: [ref("store_name"), ref("custom_text", "stock summary")], buttons: [] },
-  },
-];
-
-export const starterTemplate = (key: string) => STARTER_TEMPLATES.find((t) => t.key === key) ?? null;
-
-// ---------------------------------------------------------------------------
-// Opt-out and opt-in keywords (an inbound message whose whole text is one of these)
-// ---------------------------------------------------------------------------
-
-// Not "cancel": in a conversation about an order it usually means the order, not the messages.
-const STOP_WORDS = new Set(["stop", "stopall", "unsubscribe", "end", "quit", "optout", "opt out", "no more", "remove me"]);
-const START_WORDS = new Set(["start", "subscribe", "optin", "opt in", "unstop"]);
-const keyword = (text: string) => text.trim().toLowerCase().replace(/[.!?]+$/, "").replace(/\s+/g, " ");
-
-/** "STOP": the customer wants no more messages from this business at all. */
-export const isStopKeyword = (text: string | null | undefined) => !!text && STOP_WORDS.has(keyword(text));
-/** "START": the customer asks for messages again, offers included. */
-export const isStartKeyword = (text: string | null | undefined) => !!text && START_WORDS.has(keyword(text));
-/** The "Stop promotions" quick reply: marketing stops, order updates continue. */
-export const isStopPromotionsReply = (text: string | null | undefined) => !!text && /^stop promotions?$/.test(keyword(text));
-
-// ---------------------------------------------------------------------------
-// Consent: who may receive what
+// Messages and their states
 // ---------------------------------------------------------------------------
 
 /**
- * How customers agree to order and service updates on WhatsApp (the store's choice, audited):
- *  - opt_in_only: only customers who opted in themselves (START, a "yes" recorded by the store, or
- *    Shopify's text-message consent when the store says its wording covers WhatsApp);
- *  - checkout_notice: the store's checkout or terms tell customers they'll get order updates on
- *    WhatsApp, and how to stop them. Everyone who ordered gets updates until they reply STOP.
- * Until the store chooses, no order update is sent.
+ * queued (waiting its time or its turn) → sending (handed to the worker) → accepted (the provider
+ * took it; nothing from WhatsApp yet) → sent (WhatsApp's server has it) → delivered (on the
+ * customer's phone) → read. failed / cancelled / skipped end it with a reason. received: a
+ * customer's message to the store.
  */
-export const ORDER_UPDATE_BASES = ["unset", "opt_in_only", "checkout_notice"] as const;
-export type OrderUpdateBasis = (typeof ORDER_UPDATE_BASES)[number];
-
-export const ORDER_UPDATE_BASIS_INFO: Record<OrderUpdateBasis, { label: string; help: string }> = {
-  unset: { label: "Not chosen yet", help: "No order or service update is sent until you choose." },
-  opt_in_only: { label: "Only customers who opted in", help: "Customers who replied START, who you recorded as agreeing, or who accepted text-message marketing at checkout (when you say that covers WhatsApp)." },
-  checkout_notice: {
-    label: "My checkout tells customers",
-    help: "Your checkout or terms say customers get order updates on WhatsApp and can reply STOP. Every customer with a phone number gets updates until they reply STOP.",
-  },
-};
-
-export type MarketingStatus = "opted_in" | "opted_out" | "unknown";
-
-export interface ConsentFacts {
-  /** Replied STOP (or was recorded as opted out): nothing at all is sent. */
-  optedOut: boolean;
-  /** Agreed to messages from the store themselves (START, recorded by the store, Shopify's consent); "Stop promotions" doesn't undo it. */
-  optedIn: boolean;
-  marketing: MarketingStatus;
-}
-
-export interface ConsentSettings {
-  orderUpdates: OrderUpdateBasis;
-}
-
-/** Why a message may not go to this customer, or null when it may. Meta's category of the template decides which rule applies. */
-export function consentProblem(category: string, contact: ConsentFacts, settings: ConsentSettings): SkipReason | null {
-  if (contact.optedOut) return "opted_out";
-  const c = category.toUpperCase();
-  if (c === "MARKETING") return contact.marketing === "opted_in" ? null : "no_marketing_consent";
-  if (c === "UTILITY") return contact.optedIn || settings.orderUpdates === "checkout_notice" ? null : "no_order_update_consent";
-  // Authentication (one-time codes) and anything Meta may add: not sent by this feature.
-  return "template_not_allowed";
-}
-
-export const CONSENT_SOURCES = ["whatsapp_start", "whatsapp_stop", "stop_promotions", "meta_preferences", "meta_error", "shopify_sms", "merchant"] as const;
-export type ConsentSource = (typeof CONSENT_SOURCES)[number];
-
-export const CONSENT_SOURCE_LABEL: Record<ConsentSource, string> = {
-  whatsapp_start: "Replied START on WhatsApp",
-  whatsapp_stop: "Replied STOP on WhatsApp",
-  stop_promotions: 'Pressed "Stop promotions"',
-  meta_preferences: "Changed their marketing setting in WhatsApp",
-  meta_error: "WhatsApp said they stopped marketing messages",
-  shopify_sms: "Text-message marketing consent in Shopify",
-  merchant: "Recorded by your team",
-};
-
-// ---------------------------------------------------------------------------
-// Message statuses
-// ---------------------------------------------------------------------------
-
-/**
- *  - queued: waiting for its time (a delay, a workflow's timing, a campaign's turn);
- *  - sending: being handed to Meta right now;
- *  - accepted: Meta's API accepted it and gave its id (the first proof it exists);
- *  - sent / delivered / read: Meta's webhooks (read only when the customer has read receipts on);
- *  - failed: Meta refused it, or reported it undeliverable;
- *  - cancelled: no longer wanted (the order was cancelled, the workflow paused, the campaign cancelled);
- *  - skipped: never sent, with the reason (no consent, no number, outside the 24-hour window...).
- */
-export const WA_MESSAGE_STATUSES = ["queued", "sending", "accepted", "sent", "delivered", "read", "failed", "cancelled", "skipped"] as const;
+export const WA_MESSAGE_STATUSES = ["queued", "sending", "accepted", "sent", "delivered", "read", "failed", "cancelled", "skipped", "received"] as const;
 export type WaMessageStatus = (typeof WA_MESSAGE_STATUSES)[number];
 
-export const WA_STATUS_LABEL: Record<WaMessageStatus, string> = {
+export const WA_MESSAGE_LABEL: Record<WaMessageStatus, string> = {
   queued: "Waiting to send",
   sending: "Sending",
-  accepted: "Accepted by WhatsApp",
+  accepted: "Accepted (no report from WhatsApp yet)",
   sent: "Sent",
   delivered: "Delivered",
   read: "Read",
   failed: "Failed",
   cancelled: "Cancelled",
   skipped: "Not sent",
+  received: "Received",
 };
 
-/** How far along a message is. Statuses only move forward; failed is final unless it was already delivered. */
-export const STATUS_RANK: Record<string, number> = { queued: 0, sending: 1, accepted: 2, sent: 3, delivered: 4, read: 5 };
+/** How far along a message is: a status report never moves it back. */
+const STATUS_RANK: Partial<Record<WaMessageStatus, number>> = { queued: 0, sending: 1, accepted: 2, sent: 3, delivered: 4, read: 5 };
 
-/** The status after Meta reports `event` (sent | delivered | read | failed) for a message now at `current`; null: no change. */
-export function statusAfterEvent(current: string, event: string): WaMessageStatus | null {
-  const now = STATUS_RANK[current];
-  if (event === "failed") return now !== undefined && now < STATUS_RANK.delivered! ? "failed" : null;
-  const next = STATUS_RANK[event];
-  if (next === undefined) return null;
-  // A late "sent" after "failed" doesn't revive it; a "delivered" after "failed" does (it's a fact).
-  if (current === "failed") return next >= STATUS_RANK.delivered! ? (event as WaMessageStatus) : null;
-  if (now === undefined) return null;
-  return next > now ? (event as WaMessageStatus) : null;
-}
-
-/** The overview's buckets: waiting, sent (Meta has it), delivered (delivered or read), failed. */
-export function statusBucket(status: string): "pending" | "sent" | "delivered" | "failed" | "other" {
-  if (status === "queued" || status === "sending") return "pending";
-  if (status === "accepted" || status === "sent") return "sent";
-  if (status === "delivered" || status === "read") return "delivered";
-  if (status === "failed") return "failed";
-  return "other";
-}
-
-/** Why a message wasn't sent, or was cancelled. */
-export const SKIP_REASONS = [
-  "opted_out",
-  "no_marketing_consent",
-  "no_order_update_consent",
-  "template_not_allowed",
-  "template_not_approved",
-  "missing_values",
-  "no_phone",
-  "outside_window",
-  "not_connected",
-  "disconnected",
-  "reconnect_timeout",
-  "workflow_paused",
-  "campaign_cancelled",
-  "order_cancelled",
-  "checkout_completed",
-  "conditions_not_met",
-  "stale",
-  "erased",
-  "automation_paused",
-  "recently_replied",
-] as const;
-export type SkipReason = (typeof SKIP_REASONS)[number];
-
-export const SKIP_LABEL: Record<SkipReason, string> = {
-  opted_out: "The customer replied STOP",
-  no_marketing_consent: "The customer hasn't agreed to marketing on WhatsApp",
-  no_order_update_consent: "The customer hasn't agreed to order updates on WhatsApp",
-  template_not_allowed: "This kind of template isn't sent from here",
-  template_not_approved: "The template isn't approved by Meta",
-  missing_values: "A variable had no value for this customer",
-  no_phone: "No phone number on the order",
-  outside_window: "More than 24 hours since the customer last wrote",
-  not_connected: "WhatsApp isn't connected",
-  disconnected: "WhatsApp was disconnected",
-  reconnect_timeout: "WhatsApp needed reconnecting for too long",
-  workflow_paused: "The workflow was paused or changed",
-  campaign_cancelled: "The campaign was cancelled",
-  order_cancelled: "The order was cancelled",
-  checkout_completed: "The customer finished the checkout",
-  conditions_not_met: "The workflow's conditions didn't match",
-  stale: "The event was too old to message about",
-  erased: "The customer's data was erased",
-  automation_paused: "Automation was paused for the store",
-  recently_replied: "This customer already got this reply recently",
-};
-
-export const skipLabel = (reason: string | null | undefined): string | null => (reason ? (SKIP_LABEL[reason as SkipReason] ?? reason.replace(/_/g, " ")) : null);
-
-// ---------------------------------------------------------------------------
-// Meta's errors: what to do about each
-// ---------------------------------------------------------------------------
-
-export type ErrorAction =
-  /** Try again later (rate limits, Meta busy). */
-  | "retry"
-  /** bizinsights' access ended: the connection needs reconnecting; nothing sends until then. */
-  | "reconnect"
-  /** The number needs a step in WhatsApp (registration, payment method, display name). */
-  | "account"
-  /** The customer stopped marketing messages from this business. */
-  | "marketing_opt_out"
-  /** This message can't be sent as it is (bad template values, number not on WhatsApp, outside the window). */
-  | "fail";
+/** Finished: nothing more will happen to it (read can still follow delivered; it is not final). */
+export const isFinalStatus = (s: string) => s === "read" || s === "failed" || s === "cancelled" || s === "skipped" || s === "received";
 
 /**
- * Codes from Meta's Cloud API error reference. Unknown codes fail the message rather than retry it
- * forever; a 5xx or 429 without a code retries.
+ * The provider's word for a message's state (Evolution API: Baileys' ERROR, PENDING, SERVER_ACK,
+ * DELIVERY_ACK, READ, PLAYED; Meta's sent, delivered, read, failed upper-cased) as a status, or
+ * null when it isn't one bizinsights knows (it is then recorded but changes nothing).
  */
-export function classifyMetaError(code: number | null | undefined, httpStatus: number): ErrorAction {
-  if (code === 190 || code === 102 || code === 10 || code === 200 || code === 3 || code === 33 || (code === 100 && httpStatus === 401)) return "reconnect";
-  if (code === 131050 || code === 498) return "marketing_opt_out";
-  if ([4, 80007, 130429, 131016, 131048, 131056, 131000, 133004, 2, 1, 131049].includes(code ?? -1)) return "retry";
-  if ([133010, 131042, 131031, 133000, 368].includes(code ?? -1)) return "account";
-  if (code === null || code === undefined) return httpStatus >= 500 || httpStatus === 429 ? "retry" : "fail";
-  return "fail";
-}
-
-/** Plain words for the failures a merchant is most likely to see, with what to do. */
-export function metaErrorExplanation(code: string | number | null | undefined, fallback?: string | null): string {
-  switch (Number(code)) {
-    case 131026:
-      return "This number isn't on WhatsApp, or couldn't receive the message.";
-    case 131047:
-      return "More than 24 hours since the customer last wrote, so only an approved template can be sent.";
-    case 131049:
-      return "Meta held back this marketing message because the customer received many recently.";
-    case 131050:
-    case 498:
-      return "The customer has stopped marketing messages from your business.";
-    case 131051:
-      return "WhatsApp doesn't support this kind of message.";
-    case 131052:
-    case 131053:
-      return "WhatsApp couldn't download the media. Check the link opens without signing in.";
-    case 131056:
-      return "Too many messages to this customer in a short time.";
-    case 131008:
-    case 131009:
-    case 132000:
-      return "The values sent don't match the template's variables.";
-    case 132001:
-      return "The template doesn't exist in this language, or isn't approved.";
-    case 132005:
-      return "A variable's value is too long.";
-    case 132007:
-      return "The template's content breaks WhatsApp's policy.";
-    case 132012:
-      return "A variable's value has a format WhatsApp refuses.";
-    case 132015:
-    case 132016:
-      return "The template is paused or disabled because of its quality.";
-    case 131042:
-      return "WhatsApp needs a payment method on your WhatsApp Business account. Add one in WhatsApp Manager.";
-    case 131031:
-      return "Your WhatsApp Business account is locked or restricted. Check WhatsApp Manager.";
-    case 133010:
-      return "Your phone number isn't registered with the Cloud API yet.";
-    case 130429:
-    case 80007:
-    case 4:
-      return "WhatsApp's rate limit was reached.";
-    case 190:
-    case 102:
-      return "Meta no longer accepts bizinsights' access to your WhatsApp. Reconnect WhatsApp.";
-    case 10:
-    case 200:
-      return "bizinsights doesn't have permission to send from this WhatsApp account. Reconnect and leave both WhatsApp permissions ticked.";
-    case 368:
-      return "Your WhatsApp account is temporarily blocked for policy violations.";
-    case 131021:
-      return "A message can't be sent to the business's own number.";
+export function messageStatusFromProvider(status: string | null | undefined): WaMessageStatus | null {
+  switch ((status ?? "").toUpperCase()) {
+    case "PENDING":
+      return "accepted";
+    case "SERVER_ACK":
+    case "SENT":
+      return "sent";
+    case "DELIVERY_ACK":
+    case "DELIVERED":
+      return "delivered";
+    case "READ":
+    case "PLAYED":
+      return "read";
+    case "ERROR":
+    case "FAILED":
+      return "failed";
     default:
-      return fallback?.trim() || "WhatsApp couldn't send this message.";
+      return null;
   }
 }
 
-/** Waits before the next try of a message that failed with "retry": 30 s, 2 min, 10 min, 30 min, 2 h. */
-export const WA_RETRY_DELAYS_S = [30, 120, 600, 1800, 7200];
-export const WA_MAX_ATTEMPTS = WA_RETRY_DELAYS_S.length + 1;
+/**
+ * The status a message moves to when a report arrives, or null when the report changes nothing:
+ * reports arrive out of order and more than once, so a message only moves forward, and "failed"
+ * can't follow a delivery.
+ */
+export function statusAfterReport(current: string, reported: WaMessageStatus): WaMessageStatus | null {
+  if (current === reported) return null;
+  if (current === "cancelled" || current === "skipped" || current === "received") return null;
+  if (reported === "failed") return (STATUS_RANK[current as WaMessageStatus] ?? 99) < (STATUS_RANK.delivered ?? 4) ? "failed" : null;
+  const to = STATUS_RANK[reported];
+  if (to === undefined) return null;
+  if (current === "failed") return to >= (STATUS_RANK.delivered ?? 4) ? reported : null;
+  const from = STATUS_RANK[current as WaMessageStatus];
+  return from === undefined || to > from ? reported : null;
+}
+
+/** Grouping for the statistics: what reached WhatsApp, what reached the customer, what didn't. */
+export function statusBucket(status: string): "waiting" | "sent" | "delivered" | "read" | "failed" | "not_sent" | "received" {
+  if (status === "queued" || status === "sending") return "waiting";
+  if (status === "accepted" || status === "sent") return "sent";
+  if (status === "delivered") return "delivered";
+  if (status === "read") return "read";
+  if (status === "failed") return "failed";
+  if (status === "received") return "received";
+  return "not_sent";
+}
+
+/** Why a message wasn't sent, is held, or was cancelled. */
+export const WA_SKIP_REASONS = [
+  "opted_out",
+  "suppressed",
+  "no_consent",
+  "no_marketing_consent",
+  "consent_basis_unset",
+  "marketing_off",
+  "no_phone",
+  "invalid_phone",
+  "not_on_whatsapp",
+  "not_connected",
+  "connection_changed",
+  "automation_paused",
+  "automation_off",
+  "daily_limit",
+  "customer_limit",
+  "duplicate",
+  "conditions",
+  "stale_event",
+  "order_cancelled",
+  "checkout_completed",
+  "template_unavailable",
+  "missing_values",
+  "test_mode",
+  "campaign_cancelled",
+  "provider_rejected",
+  "gave_up",
+  "unknown_contact",
+  "manual_cancel",
+] as const;
+export type WaSkipReason = (typeof WA_SKIP_REASONS)[number];
+
+export const WA_SKIP_LABEL: Record<WaSkipReason, string> = {
+  opted_out: "The customer opted out of WhatsApp messages",
+  suppressed: "The number is on the store's do-not-message list",
+  no_consent: "The customer hasn't agreed to WhatsApp updates",
+  no_marketing_consent: "The customer hasn't agreed to marketing messages",
+  consent_basis_unset: "The store hasn't chosen how customers agree to order updates (Settings)",
+  marketing_off: "Marketing messages are switched off in Settings",
+  no_phone: "No phone number on the order or customer",
+  invalid_phone: "The phone number isn't a valid international number",
+  not_on_whatsapp: "The number isn't on WhatsApp",
+  not_connected: "WhatsApp wasn't connected",
+  connection_changed: "The WhatsApp connection changed before it was sent",
+  automation_paused: "All automation was paused",
+  automation_off: "The automation was switched off",
+  daily_limit: "The store's daily message limit was reached",
+  customer_limit: "The customer already got the most messages allowed today",
+  duplicate: "Already sent for this event",
+  conditions: "The automation's conditions didn't match",
+  stale_event: "The event was too old to message about",
+  order_cancelled: "The order was cancelled",
+  checkout_completed: "The customer finished their checkout",
+  template_unavailable: "The template was switched off, deleted or isn't approved",
+  missing_values: "A value the template needs wasn't in the event",
+  test_mode: "Test mode: sent to the store's test number instead",
+  campaign_cancelled: "The campaign was cancelled",
+  provider_rejected: "WhatsApp refused it",
+  gave_up: "Couldn't be sent after several tries",
+  unknown_contact: "The number isn't one of the store's customers",
+  manual_cancel: "Cancelled by the store",
+};
+
+export const waSkipLabel = (reason: string | null | undefined): string | null =>
+  reason ? (WA_SKIP_LABEL[reason as WaSkipReason] ?? reason.replace(/_/g, " ")) : null;
+
+/** Delays before each retry of a send that failed for a reason that can pass (the provider down, a timeout). */
+export const WA_RETRY_DELAYS_S = [30, 120, 600, 1800];
+export const WA_MAX_SEND_ATTEMPTS = WA_RETRY_DELAYS_S.length + 1;
 
 // ---------------------------------------------------------------------------
-// The connection
+// Sending limits (per connection; protect the merchant's number and the platform)
 // ---------------------------------------------------------------------------
 
 /**
- *  - active: connected and able to send;
- *  - action_required: connected, but the merchant must do one thing first (register the number with
- *    their PIN, pick a number, add a number in WhatsApp Manager);
- *  - reconnect: Meta no longer accepts bizinsights' access (revoked, removed, expired);
- *  - error: Meta restricted or disabled the account;
- *  - disconnected: the merchant disconnected it (the row stays, for the message history).
+ * A linked phone (QR) gets at most one message every QR_MIN_GAP_MS, plus a random extra pause, so
+ * a burst looks like a person typing rather than a broadcast. The Cloud API is paced per second.
  */
-export const WA_CONNECTION_STATUSES = ["active", "action_required", "reconnect", "error", "disconnected"] as const;
-export type WaConnectionStatus = (typeof WA_CONNECTION_STATUSES)[number];
-
-export const CONNECTION_STATUS_LABEL: Record<WaConnectionStatus, string> = {
-  active: "Connected",
-  action_required: "Action needed",
-  reconnect: "Reconnect needed",
-  error: "Problem with the account",
-  disconnected: "Disconnected",
-};
-
-/** The steps a connection can wait for, and what the merchant does about each. */
-export const CONNECTION_STEPS = {
-  pin_required: "Your number already has a two-step verification PIN. Enter that 6-digit PIN to finish registering it.",
-  choose_number: "Choose which of your WhatsApp numbers bizinsights sends from.",
-  no_number: "Your WhatsApp Business account has no phone number yet. Add one in WhatsApp Manager, then press Check again.",
-  business_app_number: "This number is used in the WhatsApp Business app. bizinsights will send from it once Meta finishes moving its messages; press Check again in a few minutes.",
-  register_failed: "Meta couldn't register your number for sending. Press Check again; if it keeps failing, check the number in WhatsApp Manager.",
-} as const;
-export type ConnectionStep = keyof typeof CONNECTION_STEPS;
-
-/** Meta's messaging limit tier: how many customers a day the business may start conversations with (null: no limit). */
-export function tierLimit(tier: string | null | undefined): number | null {
-  const m = /^TIER_(\d+)(K)?$/i.exec(tier ?? "");
-  if (m) return Number(m[1]) * (m[2] ? 1000 : 1);
-  if (/UNLIMITED/i.test(tier ?? "")) return null;
-  // Unknown: Meta starts new numbers at 250.
-  return 250;
-}
-
-export const QUALITY_LABEL: Record<string, string> = { GREEN: "High", YELLOW: "Medium", RED: "Low", UNKNOWN: "Not rated yet" };
+export const QR_MIN_GAP_MS = 4_000;
+export const QR_GAP_JITTER_MS = 4_000;
+export const CLOUD_SENDS_PER_SECOND = 20;
+/** Messages a store may start in a day by default, and the most it may choose, per provider. */
+export const WA_DAILY_LIMIT: Record<WaProvider, { default: number; max: number }> = { qr: { default: 200, max: 1000 }, cloud_api: { default: 1000, max: 100_000 } };
+/** Business-started messages one customer may get in a day by default (a reply to their message doesn't count). */
+export const WA_PER_CUSTOMER_DAILY = { default: 3, max: 10 };
 
 // ---------------------------------------------------------------------------
-// Embedded Signup (Meta's "Continue with WhatsApp" window), as the browser hears it
+// Variables, templates and rendering
+// ---------------------------------------------------------------------------
+
+/** Values a template can use. Each comes from Shopify's verified events or the store's settings, never from a customer's message. */
+export const WA_VARIABLES = [
+  "customer_first_name",
+  "store_name",
+  "order_number",
+  "order_total",
+  "product_names",
+  "order_status_url",
+  "tracking_number",
+  "tracking_url",
+  "carrier",
+  "checkout_url",
+] as const;
+export type WaVariable = (typeof WA_VARIABLES)[number];
+
+export const WA_VARIABLE_INFO: Record<WaVariable, { label: string; sample: string }> = {
+  customer_first_name: { label: "Customer's first name", sample: "Sam" },
+  store_name: { label: "Your business name", sample: "Example Store" },
+  order_number: { label: "Order number", sample: "#1042" },
+  order_total: { label: "Order total", sample: "$58.00" },
+  product_names: { label: "Products", sample: "Linen shirt ×2, Canvas tote" },
+  order_status_url: { label: "Order status page link", sample: "https://example.com/orders/1042" },
+  tracking_number: { label: "Tracking number", sample: "LX123456789AU" },
+  tracking_url: { label: "Tracking link", sample: "https://track.example.com/LX123456789AU" },
+  carrier: { label: "Carrier", sample: "Australia Post" },
+  checkout_url: { label: "Checkout link", sample: "https://example.com/checkouts/abc" },
+};
+
+export type WaValues = Partial<Record<WaVariable, string>>;
+
+/** The sample values the previews and test messages use. */
+export const waSampleValues = (storeName?: string | null): WaValues => {
+  const out: WaValues = {};
+  for (const v of WA_VARIABLES) out[v] = WA_VARIABLE_INFO[v].sample;
+  if (storeName) out.store_name = storeName;
+  return out;
+};
+
+const VARIABLE_RE = /\{\{\s*([a-z_]+)\s*\}\}/g;
+
+/** The variables a text uses, each once, in the order they first appear (unknown names included). */
+export function variablesIn(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(VARIABLE_RE)) if (!out.includes(m[1]!)) out.push(m[1]!);
+  return out;
+}
+
+/**
+ * A value as it may go into a message: one line, no control characters, at most `max` characters.
+ * Values are put in after the template is read, so a value that looks like {{a_variable}} stays text.
+ */
+export function cleanValue(value: string | null | undefined, max = 200): string {
+  const v = (value ?? "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return v.length > max ? `${v.slice(0, max - 1)}…` : v;
+}
+
+export class WaMissingValueError extends Error {
+  constructor(public readonly missing: string[]) {
+    super(`Missing values: ${missing.join(", ")}`);
+    this.name = "WaMissingValueError";
+  }
+}
+
+/**
+ * The text a customer receives. Every variable must have a value (an empty one too would read
+ * "Hi , your order…"), else WaMissingValueError lists them; `lenient` fills missing ones with ""
+ * for previews instead.
+ */
+export function renderWaText(body: string, values: WaValues, opts: { lenient?: boolean } = {}): string {
+  const missing: string[] = [];
+  const out = body.replace(VARIABLE_RE, (_all, name: string) => {
+    const v = (values as Record<string, string | undefined>)[name];
+    const clean = cleanValue(v, name.endsWith("_url") ? 500 : 200);
+    if (!clean) missing.push(name);
+    return clean;
+  });
+  if (missing.length && !opts.lenient) throw new WaMissingValueError([...new Set(missing)]);
+  return out.replace(/[ \t]+\n/g, "\n").trim();
+}
+
+/** transactional: about something the customer did (an order, a checkout they asked about); marketing: promotions, reminders, news. */
+export const WA_TEMPLATE_CATEGORIES = ["transactional", "marketing"] as const;
+export type WaTemplateCategory = (typeof WA_TEMPLATE_CATEGORIES)[number];
+
+export const WA_CATEGORY_INFO: Record<WaTemplateCategory, { label: string; help: string }> = {
+  transactional: {
+    label: "Order and service update",
+    help: "About something the customer did: their order, payment, shipping or a question they asked. Goes to customers under the consent choice in Settings.",
+  },
+  marketing: {
+    label: "Marketing",
+    help: "Promotions, cart reminders, news. Only goes to customers who agreed to marketing messages, and must tell them how to stop (Reply STOP).",
+  },
+};
+
+/** WhatsApp's own limit is 4,096 characters; a template of Meta's allows 1,024 in its body. */
+export const WA_TEXT_MAX = 1024;
+
+export const waTemplateSchema = z.object({
+  name: z.string().trim().min(1, "Give the template a name").max(80),
+  category: z.enum(WA_TEMPLATE_CATEGORIES),
+  body: z.string().trim().min(1, "Write the message").max(WA_TEXT_MAX, `At most ${WA_TEXT_MAX} characters`),
+  active: z.boolean().default(true),
+});
+export type WaTemplateInput = z.output<typeof waTemplateSchema>;
+
+export interface WaTemplateIssue {
+  level: "error" | "warning";
+  message: string;
+}
+
+const SHORTENERS = /\b(bit\.ly|tinyurl\.com|goo\.gl|t\.co|ow\.ly|is\.gd|buff\.ly|cutt\.ly|rb\.gy)\//i;
+
+/** What's wrong with a template before it can be saved (errors) or what may hurt it (warnings). */
+export function waTemplateIssues(t: Pick<WaTemplateInput, "body" | "category">): WaTemplateIssue[] {
+  const out: WaTemplateIssue[] = [];
+  const body = t.body.trim();
+  if (!body) out.push({ level: "error", message: "Write the message." });
+  if (body.length > WA_TEXT_MAX) out.push({ level: "error", message: `The message is ${body.length} characters; WhatsApp templates allow ${WA_TEXT_MAX}.` });
+  const unknown = variablesIn(body).filter((v) => !(WA_VARIABLES as readonly string[]).includes(v));
+  if (unknown.length) out.push({ level: "error", message: `Unknown variable${unknown.length > 1 ? "s" : ""}: ${unknown.map((v) => `{{${v}}}`).join(", ")}. Use the variables listed beside the editor.` });
+  if (/\{\{|\}\}/.test(body.replace(VARIABLE_RE, ""))) out.push({ level: "error", message: "A variable is missing a brace: write it as {{customer_first_name}}." });
+  if (t.category === "marketing" && !/\bstop\b/i.test(body)) out.push({ level: "error", message: 'Marketing messages must say how to stop them, for example "Reply STOP to unsubscribe."' });
+  if (SHORTENERS.test(body)) out.push({ level: "warning", message: "Link shorteners make messages look like spam to customers and WhatsApp. Use your store's own links." });
+  if (/^[^a-z]*$/.test(body) && /[A-Z]{12,}/.test(body)) out.push({ level: "warning", message: "A message in capitals reads as shouting." });
+  return out;
+}
+
+export const waHasErrors = (issues: WaTemplateIssue[]) => issues.some((i) => i.level === "error");
+
+/** Ready-made templates the editor starts from. */
+export const WA_STARTER_TEMPLATES: Array<{ key: string; name: string; category: WaTemplateCategory; body: string }> = [
+  { key: "order_confirmation", name: "Order confirmation", category: "transactional", body: "Hi {{customer_first_name}}, thanks for your order {{order_number}} from {{store_name}}! Total: {{order_total}}. We'll message you when it ships." },
+  { key: "payment_received", name: "Payment received", category: "transactional", body: "Hi {{customer_first_name}}, we've received your payment for order {{order_number}}. Thank you for shopping with {{store_name}}." },
+  {
+    key: "shipping_update",
+    name: "Shipping update",
+    category: "transactional",
+    body: "Good news {{customer_first_name}}: your order {{order_number}} is on its way with {{carrier}}. Track it here: {{tracking_url}}",
+  },
+  { key: "order_cancelled", name: "Order cancelled", category: "transactional", body: "Hi {{customer_first_name}}, your order {{order_number}} from {{store_name}} has been cancelled. Reply here if you have any questions." },
+  {
+    key: "abandoned_checkout",
+    name: "Cart reminder",
+    category: "marketing",
+    body: "Hi {{customer_first_name}}, you left {{product_names}} in your cart at {{store_name}}. Finish your order here: {{checkout_url}}\n\nReply STOP to unsubscribe.",
+  },
+  { key: "welcome", name: "Welcome", category: "marketing", body: "Welcome to {{store_name}}, {{customer_first_name}}! We'll share news and offers here now and then.\n\nReply STOP to unsubscribe." },
+  { key: "auto_reply", name: "Auto-reply", category: "transactional", body: "Thanks for your message! The {{store_name}} team will get back to you as soon as we can." },
+];
+
+// ---------------------------------------------------------------------------
+// Consent
+// ---------------------------------------------------------------------------
+
+/**
+ * How customers agree to order updates on WhatsApp (the store chooses, in Settings):
+ * opt_in_only: only customers who agreed (marketing consent, START, or recorded by the store);
+ * checkout_notice: the store tells customers at checkout that order updates come by WhatsApp,
+ * and every customer with a number gets them unless they opted out.
+ */
+export const WA_ORDER_UPDATE_BASES = ["unset", "opt_in_only", "checkout_notice"] as const;
+export type WaOrderUpdateBasis = (typeof WA_ORDER_UPDATE_BASES)[number];
+
+export const WA_ORDER_UPDATE_INFO: Record<WaOrderUpdateBasis, { label: string; help: string }> = {
+  unset: { label: "Not chosen yet", help: "Order updates can't be sent until you choose." },
+  opt_in_only: { label: "Only customers who agreed", help: "Customers who agreed to WhatsApp or text messages, replied START, or whose consent you recorded." },
+  checkout_notice: {
+    label: "Customers told at checkout",
+    help: "Your checkout or privacy policy tells customers order updates come by WhatsApp. Everyone with a number gets them unless they reply STOP.",
+  },
+};
+
+export type WaMarketingState = "opted_in" | "opted_out" | "unknown";
+
+export interface WaConsentFacts {
+  /** Replied STOP or was opted out: nothing at all is sent. */
+  optedOut: boolean;
+  /** Agreed to order updates themselves (START, recorded by the store). */
+  optedIn: boolean;
+  marketing: WaMarketingState;
+  /** On the store's do-not-message list for this purpose. */
+  suppressed: boolean;
+}
+
+/** Why a message of this category may not go to this customer (null: it may). */
+export function waConsentProblem(category: WaTemplateCategory, c: WaConsentFacts, s: { orderUpdates: WaOrderUpdateBasis; marketingEnabled: boolean }): WaSkipReason | null {
+  if (c.optedOut) return "opted_out";
+  if (c.suppressed) return "suppressed";
+  if (category === "marketing") {
+    if (!s.marketingEnabled) return "marketing_off";
+    return c.marketing === "opted_in" ? null : "no_marketing_consent";
+  }
+  if (s.orderUpdates === "unset") return "consent_basis_unset";
+  if (s.orderUpdates === "opt_in_only" && !c.optedIn && c.marketing !== "opted_in") return "no_consent";
+  return null;
+}
+
+const keyword = (text: string) =>
+  text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!¡¿?"'*_]/g, "")
+    .replace(/\s+/g, " ");
+const STOP_WORDS = new Set(["stop", "unsubscribe", "stop all", "opt out", "optout", "cancel messages", "parar", "sair", "arrêt", "arret", "stopp", "basta"]);
+const START_WORDS = new Set(["start", "subscribe", "unstop", "opt in", "optin", "yes start"]);
+
+/** A customer's reply that opts them out of everything (STOP), or back in (START). */
+export const waIsStop = (text: string | null | undefined) => !!text && STOP_WORDS.has(keyword(text));
+export const waIsStart = (text: string | null | undefined) => !!text && START_WORDS.has(keyword(text));
+
+/** Where a consent change came from. */
+export const WA_CONSENT_SOURCES = ["whatsapp_stop", "whatsapp_start", "shopify_sms", "merchant", "customer_redact"] as const;
+export type WaConsentSource = (typeof WA_CONSENT_SOURCES)[number];
+
+export const WA_CONSENT_SOURCE_LABEL: Record<WaConsentSource, string> = {
+  whatsapp_stop: "Replied STOP on WhatsApp",
+  whatsapp_start: "Replied START on WhatsApp",
+  shopify_sms: "Shopify's text-message consent (the store says it covers WhatsApp)",
+  merchant: "Recorded by the store",
+  customer_redact: "Erased at the customer's request",
+};
+
+/** The store's do-not-message list: everything, or marketing only. */
+export const WA_SUPPRESSION_SCOPES = ["all", "marketing"] as const;
+export type WaSuppressionScope = (typeof WA_SUPPRESSION_SCOPES)[number];
+
+// ---------------------------------------------------------------------------
+// Automation triggers and conditions
+// ---------------------------------------------------------------------------
+
+export const WA_TRIGGERS = ["order_created", "order_paid", "order_fulfilled", "order_cancelled", "checkout_abandoned", "customer_created", "message_received"] as const;
+export type WaTrigger = (typeof WA_TRIGGERS)[number];
+
+export interface WaTriggerInfo {
+  label: string;
+  description: string;
+  /** Shopify's webhook topics that start it (empty: not a Shopify event). */
+  topics: string[];
+  /** The kind of template it sends: a cart reminder or a welcome is marketing. */
+  category: WaTemplateCategory;
+  variables: WaVariable[];
+  /** A sensible wait before sending (minutes). */
+  defaultDelayMinutes: number;
+}
+
+const ORDER_VARS: WaVariable[] = ["customer_first_name", "store_name", "order_number", "order_total", "product_names", "order_status_url"];
+
+export const WA_TRIGGER_INFO: Record<WaTrigger, WaTriggerInfo> = {
+  order_created: { label: "An order is placed", description: "Shopify tells bizinsights about a new order.", topics: ["orders/create"], category: "transactional", variables: ORDER_VARS, defaultDelayMinutes: 0 },
+  order_paid: { label: "An order is paid", description: "Shopify marks an order paid.", topics: ["orders/paid"], category: "transactional", variables: ORDER_VARS, defaultDelayMinutes: 0 },
+  order_fulfilled: {
+    label: "An order ships",
+    description: "The first parcel of an order is fulfilled (with its tracking when there is one).",
+    topics: ["orders/fulfilled", "orders/partially_fulfilled"],
+    category: "transactional",
+    variables: [...ORDER_VARS, "tracking_number", "tracking_url", "carrier"],
+    defaultDelayMinutes: 0,
+  },
+  order_cancelled: { label: "An order is cancelled", description: "Shopify cancels an order.", topics: ["orders/cancelled"], category: "transactional", variables: ORDER_VARS, defaultDelayMinutes: 0 },
+  checkout_abandoned: {
+    label: "A checkout is left unfinished",
+    description: "A customer entered their number at checkout and didn't finish. Timed from their last change; finishing the order cancels it.",
+    topics: ["checkouts/create", "checkouts/update"],
+    category: "marketing",
+    variables: ["customer_first_name", "store_name", "order_total", "product_names", "checkout_url"],
+    defaultDelayMinutes: 60,
+  },
+  customer_created: {
+    label: "A customer signs up",
+    description: "A new customer account is created in Shopify (needs access to your customers).",
+    topics: ["customers/create"],
+    category: "marketing",
+    variables: ["customer_first_name", "store_name"],
+    defaultDelayMinutes: 0,
+  },
+  message_received: {
+    label: "A customer sends a message",
+    description: "A customer writes to your WhatsApp number. Replies at most once per customer in the cool-down you set.",
+    topics: [],
+    category: "transactional",
+    variables: ["customer_first_name", "store_name"],
+    defaultDelayMinutes: 0,
+  },
+};
+
+export const WA_CONDITION_FIELDS = ["order_total", "country", "product", "customer_type", "order_tag", "message_text"] as const;
+export type WaConditionField = (typeof WA_CONDITION_FIELDS)[number];
+
+export const waConditionSchema = z.discriminatedUnion("field", [
+  z.object({ field: z.literal("order_total"), op: z.enum(["gte", "lte"]), value: z.number().min(0).max(1_000_000_000) }),
+  z.object({ field: z.literal("country"), op: z.enum(["in", "not_in"]), value: z.array(z.string().trim().length(2).toUpperCase()).min(1).max(50) }),
+  z.object({ field: z.literal("product"), op: z.literal("contains"), value: z.string().trim().min(1).max(100) }),
+  z.object({ field: z.literal("customer_type"), op: z.literal("is"), value: z.enum(["new", "returning"]) }),
+  z.object({ field: z.literal("order_tag"), op: z.literal("has"), value: z.string().trim().min(1).max(60) }),
+  z.object({ field: z.literal("message_text"), op: z.enum(["contains", "equals"]), value: z.string().trim().min(1).max(100) }),
+]);
+export type WaCondition = z.output<typeof waConditionSchema>;
+
+/** The conditions a trigger's events can answer. */
+export function waConditionFields(trigger: WaTrigger): WaConditionField[] {
+  if (trigger === "message_received") return ["message_text"];
+  if (trigger === "customer_created") return ["country"];
+  if (trigger === "checkout_abandoned") return ["order_total", "country", "product", "customer_type"];
+  return ["order_total", "country", "product", "customer_type", "order_tag"];
+}
+
+/** What an event says, for the conditions. Null: the event didn't carry it (a condition on it then doesn't match). */
+export interface WaFacts {
+  orderTotal: number | null;
+  country: string | null;
+  productTitles: string[];
+  customerType: "new" | "returning" | null;
+  tags: string[];
+  messageText: string | null;
+}
+
+export const WA_CONDITION_LABEL: Record<WaConditionField, string> = {
+  order_total: "Order total",
+  country: "Country",
+  product: "Product",
+  customer_type: "Customer",
+  order_tag: "Order tag",
+  message_text: "Message",
+};
+
+export function describeWaCondition(c: WaCondition): string {
+  switch (c.field) {
+    case "order_total":
+      return `Order total ${c.op === "gte" ? "at least" : "at most"} ${c.value}`;
+    case "country":
+      return `Country ${c.op === "in" ? "is" : "is not"} ${c.value.join(", ")}`;
+    case "product":
+      return `A product's name contains "${c.value}"`;
+    case "customer_type":
+      return c.value === "new" ? "First order" : "Returning customer";
+    case "order_tag":
+      return `Order tagged "${c.value}"`;
+    case "message_text":
+      return `Message ${c.op === "equals" ? "is" : "contains"} "${c.value}"`;
+  }
+}
+
+/** Whether an event passes every condition, and which didn't. */
+export function evaluateWaConditions(conditions: WaCondition[], f: WaFacts): { pass: boolean; failed: string[] } {
+  const failed: string[] = [];
+  const low = (s: string) => s.toLowerCase();
+  for (const c of conditions) {
+    let ok: boolean;
+    switch (c.field) {
+      case "order_total":
+        ok = f.orderTotal !== null && (c.op === "gte" ? f.orderTotal >= c.value : f.orderTotal <= c.value);
+        break;
+      case "country":
+        ok = f.country !== null && (c.op === "in") === c.value.includes(f.country.toUpperCase());
+        break;
+      case "product":
+        ok = f.productTitles.some((t) => low(t).includes(low(c.value)));
+        break;
+      case "customer_type":
+        ok = f.customerType === c.value;
+        break;
+      case "order_tag":
+        ok = f.tags.some((t) => low(t) === low(c.value));
+        break;
+      case "message_text": {
+        const text = low((f.messageText ?? "").trim());
+        ok = !!text && (c.op === "equals" ? text === low(c.value) : text.includes(low(c.value)));
+        break;
+      }
+    }
+    if (!ok) failed.push(describeWaCondition(c));
+  }
+  return { pass: failed.length === 0, failed };
+}
+
+// ---------------------------------------------------------------------------
+// Automations
+// ---------------------------------------------------------------------------
+
+/** Who the message goes to: the customer's own number, or the number on the shipping or billing address. */
+export const WA_RECIPIENTS = ["customer", "shipping_address", "billing_address"] as const;
+export type WaRecipient = (typeof WA_RECIPIENTS)[number];
+
+export const WA_RECIPIENT_LABEL: Record<WaRecipient, string> = {
+  customer: "The customer's phone (from the order or account, then the addresses)",
+  shipping_address: "The phone on the shipping address",
+  billing_address: "The phone on the billing address",
+};
+
+export const waSendWindowSchema = z
+  .object({ start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(24) })
+  .refine((w) => w.start !== w.end, "The start and end can't be the same hour");
+export type WaSendWindow = z.output<typeof waSendWindowSchema>;
+export const WA_DEFAULT_SEND_WINDOW: WaSendWindow = { start: 9, end: 20 };
+
+/** The longest an automation may wait before sending (minutes): 30 days. */
+export const WA_MAX_DELAY_MINUTES = 30 * 24 * 60;
+
+export const waAutomationSchema = z
+  .object({
+    name: z.string().trim().min(1, "Name the automation").max(80),
+    description: z.string().trim().max(300).optional().nullable(),
+    trigger: z.enum(WA_TRIGGERS),
+    conditions: z.array(waConditionSchema).max(10).default([]),
+    templateId: z.string().trim().min(1, "Pick a message template").max(40),
+    recipient: z.enum(WA_RECIPIENTS).default("customer"),
+    delayMinutes: z.number().int().min(0).max(WA_MAX_DELAY_MINUTES).default(0),
+    /** Store-time hours it may send in; null: the store's sending hours. */
+    sendWindow: waSendWindowSchema.nullable().default(null),
+    /** Test mode: every message goes to the store's verified test number instead of the customer. */
+    testMode: z.boolean().default(true),
+    /** message_received only: the same customer gets this reply at most once in this many minutes. */
+    cooldownMinutes: z.number().int().min(5).max(7 * 24 * 60).nullable().default(null),
+  })
+  .superRefine((a, ctx) => {
+    const allowed = waConditionFields(a.trigger);
+    a.conditions.forEach((c, i) => {
+      if (!allowed.includes(c.field)) ctx.addIssue({ code: "custom", path: ["conditions", i], message: `"${WA_CONDITION_LABEL[c.field]}" can't be checked for "${WA_TRIGGER_INFO[a.trigger].label}"` });
+    });
+    if (a.trigger !== "message_received" && a.cooldownMinutes != null) ctx.addIssue({ code: "custom", path: ["cooldownMinutes"], message: "Only a reply to a customer's message has a cool-down" });
+  });
+export type WaAutomationInput = z.output<typeof waAutomationSchema>;
+
+export const WA_AUTOMATION_STATUSES = ["draft", "active", "paused"] as const;
+export type WaAutomationStatus = (typeof WA_AUTOMATION_STATUSES)[number];
+
+/** The cool-down a reply automation gets when none is set: a day. */
+export const WA_DEFAULT_REPLY_COOLDOWN = 24 * 60;
+
+/** Ready-made automations (with the starter template each uses). */
+export const WA_AUTOMATION_PRESETS: Array<{ key: string; name: string; trigger: WaTrigger; template: string; delayMinutes: number; description: string }> = [
+  { key: "order_confirmation", name: "Order confirmation", trigger: "order_created", template: "order_confirmation", delayMinutes: 0, description: "Thank customers and confirm their order as soon as it's placed." },
+  { key: "shipping_update", name: "Shipping update", trigger: "order_fulfilled", template: "shipping_update", delayMinutes: 0, description: "Send the tracking link when an order ships." },
+  { key: "cart_reminder", name: "Cart reminder", trigger: "checkout_abandoned", template: "abandoned_checkout", delayMinutes: 60, description: "Remind customers who agreed to marketing about the checkout they left, an hour later." },
+  { key: "auto_reply", name: "Auto-reply", trigger: "message_received", template: "auto_reply", delayMinutes: 0, description: "Let customers who write in know you'll get back to them (once a day each)." },
+];
+
+// ---------------------------------------------------------------------------
+// Campaigns
+// ---------------------------------------------------------------------------
+
+export const waAudienceSchema = z.object({
+  countries: z.array(z.string().trim().length(2).toUpperCase()).max(50).default([]),
+  customerType: z.enum(["any", "new", "returning"]).default("any"),
+  orderedWithinDays: z.number().int().min(1).max(3650).nullable().default(null),
+  notOrderedForDays: z.number().int().min(1).max(3650).nullable().default(null),
+  minOrders: z.number().int().min(1).max(100_000).nullable().default(null),
+  minSpent: z.number().min(0).max(1_000_000_000).nullable().default(null),
+});
+export type WaAudience = z.output<typeof waAudienceSchema>;
+
+export function describeWaAudience(a: WaAudience): string {
+  const parts = ["Customers who agreed to marketing messages"];
+  if (a.countries.length) parts.push(`in ${a.countries.join(", ")}`);
+  if (a.customerType === "new") parts.push("with one order");
+  if (a.customerType === "returning") parts.push("with more than one order");
+  if (a.orderedWithinDays) parts.push(`who ordered in the last ${a.orderedWithinDays} days`);
+  if (a.notOrderedForDays) parts.push(`who haven't ordered for ${a.notOrderedForDays} days`);
+  if (a.minOrders) parts.push(`with at least ${a.minOrders} orders`);
+  if (a.minSpent != null) parts.push(`who spent at least ${a.minSpent}`);
+  return parts.join(", ");
+}
+
+export const waCampaignSchema = z.object({
+  name: z.string().trim().min(1, "Name the campaign").max(80),
+  templateId: z.string().trim().min(1, "Pick a marketing template").max(40),
+  audience: waAudienceSchema,
+});
+export type WaCampaignInput = z.output<typeof waCampaignSchema>;
+
+export const WA_CAMPAIGN_STATUSES = ["draft", "scheduled", "sending", "completed", "cancelled"] as const;
+export type WaCampaignStatus = (typeof WA_CAMPAIGN_STATUSES)[number];
+
+/** The most recipients one campaign may have, per provider: a linked phone isn't for broadcasts. */
+export const WA_CAMPAIGN_MAX: Record<WaProvider, number> = { qr: 250, cloud_api: 100_000 };
+
+export const waLaunchSchema = z.object({
+  /** The recipient count the merchant saw and confirmed: launching refuses if the audience changed since. */
+  confirmRecipients: z.number().int().min(1),
+  /** Null: now. */
+  scheduledAt: z.coerce.date().nullable().default(null),
+});
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+export const waSettingsSchema = z.object({
+  businessName: z.string().trim().max(60).nullable(),
+  orderUpdates: z.enum(WA_ORDER_UPDATE_BASES),
+  marketingEnabled: z.boolean(),
+  /** The store says its Shopify text-message consent wording covers WhatsApp too. */
+  shopifySmsConsent: z.boolean(),
+  sendWindow: waSendWindowSchema,
+  timeZone: z.string().trim().min(1).max(64).nullable(),
+  dailyLimit: z.number().int().min(1).max(100_000),
+  perCustomerDailyLimit: z.number().int().min(1).max(WA_PER_CUSTOMER_DAILY.max),
+  /** Days message texts are kept for the history (then only the record stays). */
+  retentionDays: z.number().int().min(7).max(365),
+});
+export type WaSettingsInput = z.output<typeof waSettingsSchema>;
+
+export const WA_DEFAULT_RETENTION_DAYS = 90;
+
+/** Whether an IANA time zone name works (the browser and Node both accept it). */
+export function isTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Messages from the dashboard
+// ---------------------------------------------------------------------------
+
+/** Why the store may message this number: the merchant says so, and it is recorded with their name. */
+export const WA_SEND_REASONS = ["order_update", "reply", "marketing"] as const;
+export type WaSendReason = (typeof WA_SEND_REASONS)[number];
+
+export const WA_SEND_REASON_INFO: Record<WaSendReason, { label: string; category: WaTemplateCategory }> = {
+  order_update: { label: "About the customer's order", category: "transactional" },
+  reply: { label: "Answering the customer's question", category: "transactional" },
+  marketing: { label: "Marketing (the customer agreed to it)", category: "marketing" },
+};
+
+/** Attachments the composer accepts, and how big. */
+export const WA_ATTACHMENT_TYPES: Record<string, "image" | "document"> = { "image/jpeg": "image", "image/png": "image", "image/webp": "image", "application/pdf": "document" };
+export const WA_ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024;
+
+export const waSendSchema = z
+  .object({
+    phone: z.string().trim().min(6).max(32),
+    /** The country to read a number typed without "+" in. */
+    country: z.string().trim().length(2).toUpperCase().nullable().default(null),
+    reason: z.enum(WA_SEND_REASONS),
+    text: z.string().trim().max(WA_TEXT_MAX).default(""),
+    templateId: z.string().trim().max(40).nullable().default(null),
+    attachment: z
+      .object({
+        name: z.string().trim().min(1).max(120),
+        mime: z.string().refine((m) => m in WA_ATTACHMENT_TYPES, "Attach a JPEG, PNG or WebP image, or a PDF"),
+        /** The file, base64-encoded. */
+        data: z.string().min(1).max(Math.ceil((WA_ATTACHMENT_MAX_BYTES * 4) / 3) + 8, "Attachments can be at most 3 MB"),
+      })
+      .nullable()
+      .default(null),
+    /** "The customer asked to be messaged on WhatsApp": recorded as consent from the store, with who said it. */
+    customerAsked: z.boolean().default(false),
+    /** Prevents a double press (or a retried request) sending twice: the same key sends once. */
+    idempotencyKey: z.string().trim().min(8).max(80),
+  })
+  .refine((m) => m.text || m.templateId || m.attachment, { message: "Write a message, pick a template or attach a file", path: ["text"] });
+export type WaSendInput = z.output<typeof waSendSchema>;
+
+// ---------------------------------------------------------------------------
+// Meta's Embedded Signup window (the Cloud API way to connect), as the browser hears it
 // ---------------------------------------------------------------------------
 
 export type EmbeddedSignupEvent =
@@ -855,416 +938,64 @@ export function signupStepLabel(step: string | null | undefined): string | null 
 }
 
 // ---------------------------------------------------------------------------
-// Workflows: trigger → conditions → message → timing
+// The four-step setup
 // ---------------------------------------------------------------------------
 
-export const WORKFLOW_TRIGGERS = ["order_created", "order_paid", "order_fulfilled", "order_cancelled", "checkout_abandoned", "customer_created", "custom_event", "message_received"] as const;
-export type WorkflowTrigger = (typeof WORKFLOW_TRIGGERS)[number];
+export const WA_SETUP_STEPS = ["connect", "authorize", "configure", "test"] as const;
+export type WaSetupStep = (typeof WA_SETUP_STEPS)[number];
 
-export interface TriggerInfo {
-  label: string;
-  /** What starts it, in a sentence a store owner understands. */
-  when: string;
-  /** Shopify's webhook topics that start it (none for custom events and customers' messages). */
-  topics: string[];
-  /** The values its messages can use. */
-  variables: VariableSource[];
-  /** The kind of template it usually sends (marketing ones only reach opted-in customers). */
-  category: TemplateCategory;
-  /**
-   * What it sends: an approved template, or (a customer's message) a reply the merchant writes,
-   * which WhatsApp allows without a template because the customer has just written.
-   */
-  sends: "template" | "reply";
-}
-
-const ORDER_VARS: VariableSource[] = ["customer_first_name", "store_name", "order_number", "order_total", "order_status_url", "product_names", "custom_text"];
-
-export const TRIGGER_INFO: Record<WorkflowTrigger, TriggerInfo> = {
-  order_created: { label: "New order", when: "A customer places an order in your Shopify store.", topics: ["orders/create"], variables: ORDER_VARS, category: "UTILITY", sends: "template" },
-  order_paid: { label: "Order paid", when: "An order is paid, including cash on delivery or bank transfer orders paid later.", topics: ["orders/paid"], variables: ORDER_VARS, category: "UTILITY", sends: "template" },
-  order_fulfilled: {
-    label: "Order shipped",
-    when: "You fulfill an order in Shopify (all of it, or the first parcel).",
-    topics: ["orders/fulfilled", "orders/partially_fulfilled"],
-    variables: [...ORDER_VARS, "tracking_number", "tracking_url", "carrier"],
-    category: "UTILITY",
-    sends: "template",
-  },
-  order_cancelled: { label: "Order cancelled", when: "An order is cancelled in Shopify.", topics: ["orders/cancelled"], variables: ORDER_VARS, category: "UTILITY", sends: "template" },
-  checkout_abandoned: {
-    label: "Checkout abandoned",
-    when: "A customer gives a phone number in checkout and doesn't finish within the wait you choose.",
-    topics: ["checkouts/create", "checkouts/update"],
-    variables: ["customer_first_name", "store_name", "product_names", "order_total", "checkout_url", "custom_text"],
-    category: "MARKETING",
-    sends: "template",
-  },
-  customer_created: {
-    label: "New customer",
-    when: "A customer creates an account or is added in Shopify.",
-    topics: ["customers/create"],
-    variables: ["customer_first_name", "store_name", "custom_text"],
-    category: "MARKETING",
-    sends: "template",
-  },
-  custom_event: {
-    label: "Custom event",
-    when: "Your booking tool, form or another app sends bizinsights an event (an appointment, a service visit, a sign-up).",
-    topics: [],
-    variables: ["customer_first_name", "store_name", "event_date", "event_time", "event_value", "custom_text"],
-    category: "UTILITY",
-    sends: "template",
-  },
-  message_received: {
-    label: "Customer sends a message",
-    when: "A customer writes to your WhatsApp number. STOP, START and \"stop promotions\" are handled by bizinsights and never start a workflow.",
-    topics: [],
-    variables: [],
-    category: "UTILITY",
-    sends: "reply",
-  },
+export const WA_SETUP_STEP_INFO: Record<WaSetupStep, { label: string; help: string }> = {
+  connect: { label: "Connect", help: "Choose how bizinsights connects to your WhatsApp." },
+  authorize: { label: "Authorize", help: "Scan the code with your phone, or sign in with Meta." },
+  configure: { label: "Configure", help: "Your business name, how customers agree to messages, sending hours." },
+  test: { label: "Test and activate", help: "Send a test to your own verified number, then switch automations on." },
 };
 
-export const CONDITION_FIELDS = ["order_total", "country", "product", "customer_type", "order_tag", "payment_method", "message_text", "received_at"] as const;
-export type ConditionField = (typeof CONDITION_FIELDS)[number];
-
-const hourSchema = z.number().int().min(0).max(23);
-
-export const workflowConditionSchema = z.discriminatedUnion("field", [
-  z.object({ field: z.literal("order_total"), op: z.enum(["gte", "lte"]), value: z.number().min(0).max(1e9) }),
-  z.object({ field: z.literal("country"), op: z.enum(["in", "not_in"]), value: z.array(z.string().regex(/^[A-Z]{2}$/)).min(1).max(50) }),
-  z.object({ field: z.literal("product"), op: z.literal("contains"), value: z.string().trim().min(1).max(100) }),
-  z.object({ field: z.literal("customer_type"), op: z.literal("is"), value: z.enum(["new", "returning"]) }),
-  z.object({ field: z.literal("order_tag"), op: z.enum(["has", "lacks"]), value: z.string().trim().min(1).max(60) }),
-  z.object({ field: z.literal("payment_method"), op: z.literal("contains"), value: z.string().trim().min(1).max(60) }),
-  /** The customer's message contains one of these words or phrases (any case). */
-  z.object({ field: z.literal("message_text"), op: z.literal("contains_any"), value: z.array(z.string().trim().min(1).max(60)).min(1).max(20) }),
-  /** The customer wrote outside (or within) these store-time hours: an "away" message, or business hours only. */
-  z.object({ field: z.literal("received_at"), op: z.enum(["outside_hours", "within_hours"]), value: z.object({ start: hourSchema, end: hourSchema }).refine((w) => w.start !== w.end, "The start and end can't be the same hour") }),
-]);
-export type WorkflowCondition = z.output<typeof workflowConditionSchema>;
-
-const ORDER_CONDITIONS: ConditionField[] = ["order_total", "country", "product", "customer_type", "order_tag", "payment_method"];
-
-/** Which conditions make sense for which trigger. */
-export function conditionFieldsFor(trigger: WorkflowTrigger): ConditionField[] {
-  if (trigger === "custom_event") return [];
-  if (trigger === "message_received") return ["message_text", "received_at"];
-  if (trigger === "customer_created") return ["country"];
-  if (trigger === "checkout_abandoned") return ["order_total", "country", "product", "customer_type"];
-  return [...ORDER_CONDITIONS];
+export interface WaSetupFacts {
+  provider: WaProvider | null;
+  status: WaConnectionStatus | null;
+  configuredAt: Date | string | null;
+  orderUpdates: WaOrderUpdateBasis;
+  testVerifiedAt: Date | string | null;
+  /** A test message the provider reported as sent (or further) since the connection was made. */
+  testPassedAt: Date | string | null;
 }
 
-/** What an event says about the order, checkout, customer or message it is about. Unknown facts are null. */
-export interface WorkflowFacts {
-  orderTotal: number | null;
-  country: string | null;
-  productTitles: string[];
-  /** "new": their first order; "returning": they ordered before; null when Shopify didn't say. */
-  customerType: "new" | "returning" | null;
-  tags: string[];
-  paymentMethods: string[];
-  /** A customer's message: what it says (null for media without a caption). */
-  messageText?: string | null;
-  /** A customer's message: the hour (0-23, store time) it was written. */
-  localHour?: number | null;
+/** Each step done or not, and the first one that isn't (null: set up). */
+export function waSetupProgress(f: WaSetupFacts): { done: Record<WaSetupStep, boolean>; current: WaSetupStep | null } {
+  const done: Record<WaSetupStep, boolean> = {
+    connect: !!f.provider && f.status !== "disconnected",
+    authorize: f.status === "connected" || f.status === "reconnecting",
+    configure: !!f.configuredAt && f.orderUpdates !== "unset",
+    test: !!f.testVerifiedAt && !!f.testPassedAt,
+  };
+  const current = WA_SETUP_STEPS.find((s) => !done[s]) ?? null;
+  return { done, current };
 }
 
-export const CONDITION_LABEL: Record<ConditionField, string> = {
-  order_total: "Order total",
-  country: "Customer's country",
-  product: "Products ordered",
-  customer_type: "Customer",
-  order_tag: "Order tags",
-  payment_method: "Payment method",
-  message_text: "Words in the message",
-  received_at: "Time it arrives",
-};
+/** What a page shows about automation as a whole. */
+export type WaAutomationState = "not_connected" | "paused" | "setup" | "needs_attention" | "idle" | "active";
 
-const hour12 = (h: number) => `${h % 12 || 12}${h < 12 ? "am" : "pm"}`;
-/** Whether a store-time hour is inside start..end (end not included; a window may run past midnight). */
-const hourIn = (hour: number, start: number, end: number) => (start < end ? hour >= start && hour < end : hour >= start || hour < end);
-
-/** A condition in words: "Order total is at least 50". */
-export function describeCondition(c: WorkflowCondition): string {
-  switch (c.field) {
-    case "order_total":
-      return `Order total is ${c.op === "gte" ? "at least" : "at most"} ${c.value}`;
-    case "country":
-      return `Customer's country is ${c.op === "in" ? "" : "not "}${c.value.join(", ")}`;
-    case "product":
-      return `A product's name contains "${c.value}"`;
-    case "customer_type":
-      return c.value === "new" ? "It's the customer's first order" : "The customer has ordered before";
-    case "order_tag":
-      return `The order ${c.op === "has" ? "has" : "doesn't have"} the tag "${c.value}"`;
-    case "payment_method":
-      return `The payment method contains "${c.value}"`;
-    case "message_text":
-      return `The message contains ${c.value.map((w) => `"${w}"`).join(" or ")}`;
-    case "received_at":
-      return `It arrives ${c.op === "outside_hours" ? "outside" : "between"} ${hour12(c.value.start)} ${c.op === "outside_hours" ? "to" : "and"} ${hour12(c.value.end)} (store time)`;
-  }
-}
-
-/** Whether every condition holds (an unknown fact fails a condition that needs it). */
-export function evaluateWorkflowConditions(conditions: WorkflowCondition[], f: WorkflowFacts): { pass: boolean; failed: string[] } {
-  const failed: string[] = [];
-  for (const c of conditions) {
-    let ok: boolean;
-    switch (c.field) {
-      case "order_total":
-        ok = f.orderTotal !== null && (c.op === "gte" ? f.orderTotal >= c.value : f.orderTotal <= c.value);
-        break;
-      case "country":
-        ok = f.country !== null && (c.op === "in") === c.value.includes(f.country.toUpperCase());
-        break;
-      case "product":
-        ok = f.productTitles.some((t) => t.toLowerCase().includes(c.value.toLowerCase()));
-        break;
-      case "customer_type":
-        ok = f.customerType === c.value;
-        break;
-      case "order_tag": {
-        const has = f.tags.some((t) => t.toLowerCase() === c.value.toLowerCase());
-        ok = c.op === "has" ? has : !has;
-        break;
-      }
-      case "payment_method":
-        ok = f.paymentMethods.some((p) => p.toLowerCase().includes(c.value.toLowerCase()));
-        break;
-      case "message_text": {
-        const text = (f.messageText ?? "").toLowerCase();
-        ok = !!text && c.value.some((w) => text.includes(w.toLowerCase()));
-        break;
-      }
-      case "received_at": {
-        const h = f.localHour;
-        ok = h !== null && h !== undefined && (c.op === "within_hours") === hourIn(h, c.value.start, c.value.end);
-        break;
-      }
-    }
-    if (!ok) failed.push(describeCondition(c));
-  }
-  return { pass: failed.length === 0, failed };
-}
-
-/**
- * When the message goes: `after_trigger` (minutes after the event; 0 = at once) or, for custom events
- * with a time (appointments), `before_event` (minutes before it).
- */
-export const timingSchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("after_trigger"), minutes: z.number().int().min(0).max(30 * 24 * 60) }),
-  z.object({ mode: z.literal("before_event"), minutes: z.number().int().min(0).max(30 * 24 * 60) }),
-]);
-export type WorkflowTiming = z.output<typeof timingSchema>;
-
-/** Hours (store time) marketing messages may go out; a message due outside them waits for the next start. */
-export const sendWindowSchema = z.object({ start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }).refine((w) => w.start !== w.end, "The start and end can't be the same hour");
-export const DEFAULT_SEND_WINDOW = { start: 9, end: 20 };
-
-export const templateRefSchema = z.object({ name: z.string().trim().min(1).max(512), language: z.string().trim().min(2).max(10) });
-
-/** The longest automatic reply to a customer's message (Meta allows 4,096 characters; replies should be short). */
-export const REPLY_MAX_LENGTH = 1000;
-/** A reply waits at most this long: WhatsApp's 24-hour window must still be open when it goes. */
-export const REPLY_MAX_DELAY_MINUTES = 12 * 60;
-/** By default the same customer gets a workflow's reply at most once a day, so a conversation isn't answered over and over. */
-export const DEFAULT_REPLY_COOLDOWN_MINUTES = 24 * 60;
-
-export const workflowSchema = z
-  .object({
-    name: z.string().trim().min(1, "Name the workflow").max(80),
-    trigger: z.enum(WORKFLOW_TRIGGERS),
-    /** Custom events only: which event name starts it ("appointment_booked"). */
-    eventName: z.string().trim().regex(/^[a-z0-9_.-]{1,60}$/i, "Use letters, numbers, dots, dashes and underscores").nullable().optional(),
-    conditions: z.array(workflowConditionSchema).max(10).default([]),
-    /** The approved template it sends; none for a "Customer sends a message" workflow, which replies with `replyText`. */
-    template: templateRefSchema.nullable().optional(),
-    mapping: mappingSchema,
-    headerMediaUrl: z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "Links must start with https://").nullable().optional(),
-    /** "Customer sends a message" only: the reply, as written (no variables). */
-    replyText: z.string().trim().max(REPLY_MAX_LENGTH, `Keep the reply under ${REPLY_MAX_LENGTH} characters`).nullable().optional(),
-    /** "Customer sends a message" only: the same customer gets the reply at most once in this many minutes (0: every message). */
-    replyCooldownMinutes: z.number().int().min(0).max(30 * 24 * 60).nullable().optional(),
-    timing: timingSchema.default({ mode: "after_trigger", minutes: 0 }),
-    /** Null: any hour. Marketing workflows default to DEFAULT_SEND_WINDOW. */
-    sendWindow: sendWindowSchema.nullable().optional(),
-  })
-  .superRefine((w, ctx) => {
-    if (w.trigger === "custom_event" && !w.eventName) ctx.addIssue({ code: "custom", path: ["eventName"], message: "Name the event that starts this workflow" });
-    if (TRIGGER_INFO[w.trigger].sends === "reply") {
-      if (!w.replyText) ctx.addIssue({ code: "custom", path: ["replyText"], message: "Write the reply customers receive" });
-      if (w.template) ctx.addIssue({ code: "custom", path: ["template"], message: "A reply to a customer's message is your own text, not a template" });
-      if (w.timing.minutes > REPLY_MAX_DELAY_MINUTES) ctx.addIssue({ code: "custom", path: ["timing"], message: "Reply within 12 hours: WhatsApp only allows replies without a template for 24 hours after the customer writes" });
-    } else {
-      if (!w.template) ctx.addIssue({ code: "custom", path: ["template"], message: "Choose the approved template to send" });
-      if (w.replyText) ctx.addIssue({ code: "custom", path: ["replyText"], message: "Only a workflow answering a customer's message sends a reply of its own" });
-    }
-    if (w.timing.mode === "before_event" && w.trigger !== "custom_event") ctx.addIssue({ code: "custom", path: ["timing"], message: '"Before the event" only works with custom events that send a time' });
-    if (w.trigger === "checkout_abandoned" && w.timing.minutes < 30) ctx.addIssue({ code: "custom", path: ["timing"], message: "Wait at least 30 minutes before reminding about a checkout" });
-    const allowed = new Set(conditionFieldsFor(w.trigger));
-    w.conditions.forEach((c, i) => {
-      if (!allowed.has(c.field)) ctx.addIssue({ code: "custom", path: ["conditions", i], message: `${CONDITION_LABEL[c.field]} can't be checked for ${TRIGGER_INFO[w.trigger].label.toLowerCase()}` });
-    });
-    const vars = new Set(TRIGGER_INFO[w.trigger].variables);
-    for (const r of [...w.mapping.body, ...w.mapping.buttons, ...(w.mapping.header ? [w.mapping.header] : [])]) {
-      if (!vars.has(r.source)) ctx.addIssue({ code: "custom", path: ["mapping"], message: `${VARIABLE_INFO[r.source].label} isn't known for ${TRIGGER_INFO[w.trigger].label.toLowerCase()}` });
-      if (r.source === "custom_text" && !r.text) ctx.addIssue({ code: "custom", path: ["mapping"], message: "Write the fixed text" });
-      if (r.source === "event_value" && !r.text) ctx.addIssue({ code: "custom", path: ["mapping"], message: "Name the event value to use" });
-    }
-  });
-export type WorkflowInput = z.output<typeof workflowSchema>;
-
-export const WORKFLOW_STATUSES = ["draft", "active", "paused"] as const;
-export type WorkflowStatus = (typeof WORKFLOW_STATUSES)[number];
-
-/**
- * Where a store's automation stands, in one word the dashboard shows: what the merchant can rely on.
- *  - disconnected: no WhatsApp number connected;
- *  - paused: the merchant paused all automation;
- *  - needs_attention: connected, but something stops messages (reconnect, a step, no webhooks, a
- *    switched-on workflow that can't send);
- *  - idle: working, but no workflow is switched on;
- *  - active: working, and at least one workflow is on with nothing stopping it.
- */
-export type AutomationState = "disconnected" | "paused" | "needs_attention" | "idle" | "active";
-
-export const AUTOMATION_STATE_LABEL: Record<AutomationState, string> = {
-  disconnected: "Disconnected",
+export const WA_AUTOMATION_STATE_LABEL: Record<WaAutomationState, string> = {
+  not_connected: "Not connected",
   paused: "Paused",
+  setup: "Finish setting up",
   needs_attention: "Needs attention",
-  idle: "No workflow on",
-  active: "Active",
+  idle: "No automation on",
+  active: "Running",
 };
 
-export function automationState(f: {
-  connection: { status: string; registered: boolean; subscribed: boolean } | null;
-  paused: boolean;
-  activeWorkflows: number;
-  /** Switched-on workflows that something stops from sending. */
-  blockedWorkflows: number;
-}): AutomationState {
-  const c = f.connection;
-  if (!c || c.status === "disconnected") return "disconnected";
+export function waAutomationState(f: { connected: boolean; paused: boolean; setupDone: boolean; active: number; blocked: number }): WaAutomationState {
+  if (!f.connected) return "not_connected";
   if (f.paused) return "paused";
-  if (c.status !== "active" || !c.registered || !c.subscribed || f.blockedWorkflows > 0) return "needs_attention";
-  return f.activeWorkflows > 0 ? "active" : "idle";
+  if (!f.setupDone) return "setup";
+  if (f.blocked) return "needs_attention";
+  return f.active ? "active" : "idle";
 }
 
-/** Ready-made workflows the builder starts from (a starter template it is written for, or a reply of its own). */
-export const WORKFLOW_PRESETS: Array<{
-  key: string;
-  title: string;
-  description: string;
-  trigger: WorkflowTrigger;
-  starter?: string;
-  timing: WorkflowTiming;
-  eventName?: string;
-  replyText?: string;
-  replyCooldownMinutes?: number;
-  conditions?: WorkflowCondition[];
-}> = [
-  { key: "order_confirmation", title: "Order confirmation", description: "Thank customers and confirm every new order.", trigger: "order_created", starter: "order_confirmation", timing: { mode: "after_trigger", minutes: 0 } },
-  { key: "shipping_update", title: "Shipping update", description: "Tell customers their order is on its way, with tracking.", trigger: "order_fulfilled", starter: "shipping_update", timing: { mode: "after_trigger", minutes: 0 } },
-  { key: "abandoned_checkout", title: "Abandoned checkout reminder", description: "Remind opted-in customers about an unfinished checkout after an hour.", trigger: "checkout_abandoned", starter: "abandoned_checkout", timing: { mode: "after_trigger", minutes: 60 } },
-  { key: "follow_up", title: "Customer follow-up", description: "Check in with customers a week after their order ships.", trigger: "order_fulfilled", starter: "follow_up", timing: { mode: "after_trigger", minutes: 7 * 24 * 60 } },
-  { key: "welcome", title: "Welcome new customers", description: "Greet new customers who agreed to marketing.", trigger: "customer_created", starter: "welcome", timing: { mode: "after_trigger", minutes: 10 } },
-  { key: "appointment_reminder", title: "Appointment reminder", description: "Remind customers a day before a booking your booking tool sends.", trigger: "custom_event", starter: "appointment_reminder", timing: { mode: "before_event", minutes: 24 * 60 }, eventName: "appointment_booked" },
-  {
-    key: "support_reply",
-    title: "Support auto-reply",
-    description: "Tell customers who write to you that their message arrived and when you'll answer.",
-    trigger: "message_received",
-    timing: { mode: "after_trigger", minutes: 0 },
-    replyText: "Thanks for your message! We've received it and will reply as soon as we can, usually within a few hours.",
-    replyCooldownMinutes: DEFAULT_REPLY_COOLDOWN_MINUTES,
-  },
-  {
-    key: "away_message",
-    title: "Away message",
-    description: "Answer customers who write outside your opening hours.",
-    trigger: "message_received",
-    timing: { mode: "after_trigger", minutes: 0 },
-    replyText: "Thanks for getting in touch! We're closed right now and will reply when we open.",
-    replyCooldownMinutes: 12 * 60,
-    conditions: [{ field: "received_at", op: "outside_hours", value: { start: 9, end: 17 } }],
-  },
-];
-
-/** A custom event another tool (or the dashboard's test) sends: who it is for, when, and its values. */
-export const customEventSchema = z.object({
-  event: z.string().trim().regex(/^[a-z0-9_.-]{1,60}$/i),
-  /** Unique per event in your tool, so a repeat doesn't message twice. */
-  eventId: z.string().trim().min(1).max(120),
-  phone: z.string().trim().min(6).max(40),
-  /** ISO country of the number, when it is written without +. */
-  country: z.string().regex(/^[A-Z]{2}$/).optional(),
-  firstName: z.string().trim().max(60).optional(),
-  /** When the appointment or event happens (needed for "before the event" timing). */
-  at: z.string().datetime({ offset: true }).optional(),
-  values: z.record(z.string().regex(/^[a-z0-9_]{1,40}$/i), z.string().max(300)).refine((v) => Object.keys(v).length <= 20, "At most 20 values").optional(),
-  /** The customer agreed to marketing on WhatsApp in your tool (recorded as consent from "your team"). */
-  marketingConsent: z.boolean().optional(),
-});
-export type CustomEventInput = z.output<typeof customEventSchema>;
-
-// ---------------------------------------------------------------------------
-// Campaigns
-// ---------------------------------------------------------------------------
-
-export const audienceSchema = z.object({
-  countries: z.array(z.string().regex(/^[A-Z]{2}$/)).max(50).default([]),
-  customerType: z.enum(["any", "new", "returning"]).default("any"),
-  /** Ordered within the last N days. */
-  orderedWithinDays: z.number().int().min(1).max(3650).nullable().optional(),
-  /** Haven't ordered for N days (win-back). */
-  notOrderedForDays: z.number().int().min(1).max(3650).nullable().optional(),
-  minOrders: z.number().int().min(1).max(10000).nullable().optional(),
-  minSpent: z.number().min(0).max(1e9).nullable().optional(),
-});
-export type CampaignAudience = z.output<typeof audienceSchema>;
-
-/** An audience in words. Everyone in it agreed to marketing and didn't reply STOP; that is always true. */
-export function describeAudience(a: CampaignAudience): string {
-  const parts: string[] = [];
-  if (a.customerType === "new") parts.push("with one order");
-  if (a.customerType === "returning") parts.push("who ordered more than once");
-  if (a.minOrders) parts.push(`with at least ${a.minOrders} orders`);
-  if (a.minSpent) parts.push(`who spent at least ${a.minSpent}`);
-  if (a.orderedWithinDays) parts.push(`who ordered in the last ${a.orderedWithinDays} days`);
-  if (a.notOrderedForDays) parts.push(`who haven't ordered for ${a.notOrderedForDays} days`);
-  if (a.countries.length) parts.push(`in ${a.countries.join(", ")}`);
-  return `Customers who agreed to WhatsApp marketing${parts.length ? ` ${parts.join(", ")}` : ""}`;
-}
-
-export const campaignSchema = z.object({
-  name: z.string().trim().min(1, "Name the campaign").max(80),
-  template: templateRefSchema,
-  mapping: mappingSchema,
-  headerMediaUrl: z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "Links must start with https://").nullable().optional(),
-  audience: audienceSchema,
-});
-export type CampaignInput = z.output<typeof campaignSchema>;
-
-/** Variables a campaign can fill: it has no order, only the customer and the store. */
-export const CAMPAIGN_VARIABLES: VariableSource[] = ["customer_first_name", "store_name", "custom_text"];
-
-export const CAMPAIGN_STATUSES = ["draft", "scheduled", "sending", "completed", "cancelled"] as const;
-export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
-export type CampaignAction = "edit" | "schedule" | "cancel" | "delete" | "test";
-
-const CAMPAIGN_ACTIONS: Record<CampaignAction, CampaignStatus[]> = {
-  edit: ["draft"],
-  test: ["draft", "scheduled"],
-  schedule: ["draft"],
-  cancel: ["scheduled", "sending"],
-  delete: ["draft", "cancelled"],
-};
-export const campaignCan = (status: string, action: CampaignAction) => (CAMPAIGN_ACTIONS[action] as string[]).includes(status);
-
-/** Messages a campaign hands to Meta per second, per store (well under Meta's 80 per second per number). */
-export const CAMPAIGN_SENDS_PER_SECOND = 10;
-/** The most recipients one campaign may have. */
-export const CAMPAIGN_MAX_RECIPIENTS = 100_000;
+/**
+ * The notice Evolution API's licence asks for (its LICENSE, "Usage Notification Requirement"):
+ * shown on the WhatsApp settings and in the docs.
+ */
+export const EVOLUTION_NOTICE =
+  "WhatsApp connections run on Evolution API (https://github.com/evolution-foundation/evolution-api), open-source software by Evolution Foundation, licensed under the Apache License 2.0 with additional conditions.";

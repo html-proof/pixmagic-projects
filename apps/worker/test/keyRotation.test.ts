@@ -37,21 +37,33 @@ describe("rotating the token encryption key", () => {
       data: { workspaceId: ws.id, storeId: store.id, provider: "meta", accountId: "act_1", currency: "USD", timezone: "UTC", ...encryptAdTokens(store.id, "meta", { accessToken: "EAA_ad", refreshToken: null, expiresAt: null }) },
     });
     const sid = store.id;
-    // WhatsApp Automation: the number's PIN, the test number, a contact, a message and a webhook body.
-    const conn = await systemDb.waConnection.create({ data: { workspaceId: ws.id, storeId: sid, wabaId: "1", phoneNumberId: "2", pinEnc: waEncrypt(sid, "pin", "123456") } });
-    await systemDb.waSettings.create({ data: { workspaceId: ws.id, storeId: sid, testPhoneEnc: waEncrypt(sid, "test_phone", "+61400000001") } });
-    const contact = await systemDb.waContact.create({
+    // WhatsApp Automation: the instance's keys and linked number, the test number, a contact, a message and a webhook body.
+    const conn = await systemDb.wappConnection.create({
+      data: {
+        workspaceId: ws.id,
+        storeId: sid,
+        provider: "qr",
+        status: "connected",
+        shard: "a",
+        instanceName: "bi_000000000000000000000001",
+        instanceTokenEnc: waEncrypt(sid, "instance_token", "tok"),
+        webhookKeyEnc: waEncrypt(sid, "webhook_key", "key"),
+        phoneEnc: waEncrypt(sid, "linked_phone", "+61400000009"),
+      },
+    });
+    await systemDb.wappSettings.create({ data: { workspaceId: ws.id, storeId: sid, testPhoneEnc: waEncrypt(sid, "test_phone", "+61400000001") } });
+    const contact = await systemDb.wappContact.create({
       data: { workspaceId: ws.id, storeId: sid, phoneHash: "h", phoneEnc: waEncrypt(sid, "phone", "+919000000001"), phoneMasked: "001", firstNameEnc: waEncrypt(sid, "name", "Asha") },
     });
-    const message = await systemDb.waMessage.create({
-      data: { workspaceId: ws.id, storeId: sid, source: "manual", type: "text", idempotencyKey: "k", payloadEnc: waEncrypt(sid, "payload", '{"kind":"text","body":"hi"}'), previewEnc: waEncrypt(sid, "preview", "hi") },
+    const message = await systemDb.wappMessage.create({
+      data: { workspaceId: ws.id, storeId: sid, source: "manual", type: "text", idempotencyKey: "k", payloadEnc: waEncrypt(sid, "payload", '{"text":"hi"}'), previewEnc: waEncrypt(sid, "preview", "hi") },
     });
-    const hook = await systemDb.waWebhookEvent.create({ data: { id: "wh_1", bodyHash: "b", bodyEnc: waEncrypt("wh_1", "webhook", '{"object":"whatsapp_business_account"}') } });
+    const hook = await systemDb.wappWebhookEvent.create({ data: { workspaceId: ws.id, storeId: sid, connectionId: conn.id, event: "MESSAGES_UPSERT", bodyHash: "b", bodyEnc: waEncrypt(sid, "webhook", '{"event":"messages.upsert"}') } });
 
     // The sweep measures a send cut off mid-call from updatedAt: re-encrypting must not make an old
     // row look recently touched.
     const longAgo = new Date("2026-01-01T00:00:00Z");
-    await systemDb.waMessage.updateMany({ where: { id: message.id }, data: { updatedAt: longAgo } });
+    await systemDb.wappMessage.updateMany({ where: { id: message.id }, data: { updatedAt: longAgo } });
 
     useKeys(`${NEW},${OLD}`);
     // 1 store + 1 ad connection + 5 WhatsApp rows.
@@ -61,17 +73,17 @@ describe("rotating the token encryption key", () => {
     useKeys(NEW);
     expect(await getAccessToken(store, memoryCoord())).toBe("shpat_k");
     expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: ad.id } }))).toBe("EAA_ad");
-    const c = await systemDb.waConnection.findUniqueOrThrow({ where: { id: conn.id } });
-    expect(waDecrypt(sid, "pin", c.pinEnc!)).toBe("123456");
-    const settings = await systemDb.waSettings.findUniqueOrThrow({ where: { storeId: sid } });
+    const c = await systemDb.wappConnection.findUniqueOrThrow({ where: { id: conn.id } });
+    expect([waDecrypt(sid, "instance_token", c.instanceTokenEnc!), waDecrypt(sid, "webhook_key", c.webhookKeyEnc!), waDecrypt(sid, "linked_phone", c.phoneEnc!)]).toEqual(["tok", "key", "+61400000009"]);
+    const settings = await systemDb.wappSettings.findUniqueOrThrow({ where: { storeId: sid } });
     expect(waDecrypt(sid, "test_phone", settings.testPhoneEnc!)).toBe("+61400000001");
-    const k = await systemDb.waContact.findUniqueOrThrow({ where: { id: contact.id } });
+    const k = await systemDb.wappContact.findUniqueOrThrow({ where: { id: contact.id } });
     expect([waDecrypt(sid, "phone", k.phoneEnc), waDecrypt(sid, "name", k.firstNameEnc!)]).toEqual(["+919000000001", "Asha"]);
-    const m = await systemDb.waMessage.findUniqueOrThrow({ where: { id: message.id } });
-    expect([waDecrypt(sid, "payload", m.payloadEnc!), waDecrypt(sid, "preview", m.previewEnc!)]).toEqual(['{"kind":"text","body":"hi"}', "hi"]);
+    const m = await systemDb.wappMessage.findUniqueOrThrow({ where: { id: message.id } });
+    expect([waDecrypt(sid, "payload", m.payloadEnc!), waDecrypt(sid, "preview", m.previewEnc!)]).toEqual(['{"text":"hi"}', "hi"]);
     expect(m.updatedAt).toEqual(longAgo);
-    const w = await systemDb.waWebhookEvent.findUniqueOrThrow({ where: { id: hook.id } });
-    expect(waDecrypt("wh_1", "webhook", w.bodyEnc!)).toBe('{"object":"whatsapp_business_account"}');
+    const w = await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: hook.id } });
+    expect(waDecrypt(sid, "webhook", w.bodyEnc!)).toBe('{"event":"messages.upsert"}');
   });
 
   it("a Google token refreshed between adding the key and re-encrypting is sealed whole with the new key, so removing the old one strands nothing", async () => {

@@ -13,6 +13,7 @@ import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { costReportDeps, sendCostReport } from "./costReport.js";
 import { dynamoCoord } from "./dynamoCoord.js";
+import { ensureEvolutionDb, evolutionDbUrl, pruneEvolutionData } from "./evolutionDb.js";
 import { migrate, tableCounts } from "./migrate.js";
 import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { apiPath } from "./paths.js";
@@ -28,7 +29,7 @@ import { staticSite } from "./staticSite.js";
  * memory, timeout and trigger, so the UI, the API and the jobs always run the same build:
  *   - api:  the Lambda function URL behind CloudFront. The static UI (the Next.js export) and the
  *           API on one origin, so the session cookie stays first-party.
- *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email, smsEvents) → the worker's consume().
+ *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email, smsEvents, whatsapp) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
  *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }, or
  *           { "action": "shopify-check", "shop": "<shop>.myshopify.com" }), and the owner's daily
@@ -54,7 +55,7 @@ function droppedQueues(): Queues {
       logger.warn({ queue }, "no queues in this environment: job dropped");
     },
   });
-  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email"), smsEvents: drop("smsEvents") };
+  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email"), smsEvents: drop("smsEvents"), whatsapp: drop("whatsapp") };
 }
 
 function coordinator(): Coord {
@@ -187,7 +188,7 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "product-check" | "cost-report" | "config";
+  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "product-check" | "cost-report" | "config" | "evolution-db";
   /** verify: one store (its myshopify domain) instead of every connected one; shopify-check: the store. */
   shop?: string;
   /** verify: how many finished days back (7 by default). */
@@ -216,6 +217,11 @@ export const handler = async (event: unknown, context: unknown) => {
     return withLogContext({ cron }, async () => {
       try {
         const result = await runScheduled(cron, deps);
+        // Nightly: what the WhatsApp service (Evolution API) keeps of sent messages goes after 7 days.
+        if (cron === "15 3 * * *") {
+          const url = evolutionDbUrl(process.env, "owner");
+          if (url) (result as Record<string, unknown>).evolutionPruned = await pruneEvolutionData(url, 7).catch((err: unknown) => (logger.error({ err }, "evolution data prune failed; the next night tries again"), null));
+        }
         logger.info({ cron, ...result }, "scheduled run finished");
         return result;
       } catch (err) {
@@ -287,6 +293,16 @@ export const handler = async (event: unknown, context: unknown) => {
     // value. The deploy's smoke test warns about each provider whose secret is missing.
     await ensureSecrets();
     return configReport();
+  }
+  if (action === "evolution-db") {
+    // The WhatsApp service's own database and role (evolutionDb.ts): CloudFormation invokes this before
+    // the service starts (infra/cdk/lib/whatsapp-stack.ts). Idempotent; the password comes from its secret.
+    await ensureSecrets();
+    const e = process.env;
+    if (!e.DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
+    const result = await ensureEvolutionDb({ databaseUrl: e.DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
+    logger.info(result, "evolution database ready");
+    return result;
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();

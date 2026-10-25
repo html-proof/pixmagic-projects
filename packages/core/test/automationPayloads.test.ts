@@ -13,7 +13,6 @@ import {
   scopesUpdateSchema,
   subscriptionUpdateSchema,
 } from "../src/index.js";
-import { metaInboundSchema, metaPreferenceSchema, metaStatusSchema, metaTemplateValueSchema, metaWebhookSchema, parseMeta, parseMetaList } from "../src/whatsapp/metaPayloads.js";
 
 /**
  * The payloads the automations, the app/GDPR topics and Meta's WhatsApp webhooks read, at the
@@ -186,35 +185,5 @@ describe("the app and GDPR topics", () => {
   it("customers/data_request", () => {
     parsed(customersDataRequestSchema, { customer: { id: 7, email: "pat@example.com" }, orders_requested: [1], data_request: { id: 9 } });
     expect(parseShopify(customersDataRequestSchema, { customer: { id: { nested: true } } }, "customers/data_request")).toBeNull();
-  });
-});
-
-describe("Meta's WhatsApp webhooks", () => {
-  const status = { id: "wamid.1", status: "failed", timestamp: "1760000000", recipient_id: "919876543210", errors: [{ code: 131026, title: "Message undeliverable", error_data: { details: "x" } }], pricing: { billable: false, category: "utility", pricing_model: "CBP" } };
-
-  it("statuses, messages, preferences and template updates as Meta sends them pass as they came", () => {
-    expect(parseMeta(metaStatusSchema, status, "status")).toEqual(status);
-    const message = { from: "919876543210", id: "wamid.in", timestamp: "1760000000", type: "button", button: { text: "Stop promotions", payload: "STOP" } };
-    expect(parseMeta(metaInboundSchema, message, "message")).toEqual(message);
-    const preference = { wa_id: "919876543210", detail: "User requested to stop marketing messages", category: "marketing_messages", value: "stop", timestamp: 1760000000 };
-    expect(parseMeta(metaPreferenceSchema, preference, "preference")).toEqual(preference);
-    // Template ids arrive as numbers in real payloads; the tests use strings.
-    parseMeta(metaTemplateValueSchema, { event: "APPROVED", message_template_id: 1234567890, message_template_name: "x", message_template_language: "en", reason: "NONE" }, "message_template_status_update");
-    expect(warnings).toEqual([]);
-  });
-
-  it("a list keeps the items that fit, with one warning (field paths only) for the rest", () => {
-    const list = [status, { ...status, id: "" }, { status: "read", recipient_id: "919876543210" }, { ...status, id: "wamid.2" }];
-    expect(parseMetaList(metaStatusSchema, list, "status", { wabaId: "1" }).map((s) => s.id)).toEqual(["wamid.1", "wamid.2"]);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatchObject({ payload: "status", wabaId: "1", skipped: 2, of: 4, problems: ["id: Too small: expected string to have >=1 characters"] });
-    expect(warnings[0]!.msg).toBe("Meta payload doesn't fit its schema; skipped");
-    expect(JSON.stringify(warnings)).not.toContain("919876543210");
-  });
-
-  it("a body that isn't an object is logged; one for another product is simply not ours", () => {
-    expect(parseMeta(metaWebhookSchema, { object: "page", entry: [] }, "webhook")?.object).toBe("page");
-    expect(parseMeta(metaWebhookSchema, ["not", "a", "body"], "webhook")).toBeNull();
-    expect(warnings).toHaveLength(1);
   });
 });

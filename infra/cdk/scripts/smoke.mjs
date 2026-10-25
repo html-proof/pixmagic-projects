@@ -91,10 +91,10 @@ export function configCheck(invoke, envName) {
     ),
   );
   const on = (flags) => Object.keys(flags).filter((k) => flags[k]).join("+") || "none";
-  const needs = Array.isArray(report.whatsapp.embeddedSignupNeeds) && report.whatsapp.embeddedSignupNeeds.length ? ` (needs ${report.whatsapp.embeddedSignupNeeds.join(", ")})` : "";
+  const needs = (list) => (Array.isArray(list) && list.length ? ` (needs ${list.join(", ")})` : "");
   const detail = [
     `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)}${report.ads.nango ? `, through Nango ${on(report.ads.nango)}` : ""})`,
-    `WhatsApp Embedded Signup ${report.whatsapp.embeddedSignup ? "on" : `off${needs}`}`,
+    `WhatsApp service ${report.whatsapp.evolution ? "on" : `off${needs(report.whatsapp.evolutionNeeds)}`}, Cloud API ${report.whatsapp.embeddedSignup ? "on" : `off${needs(report.whatsapp.embeddedSignupNeeds)}`}`,
     `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
     `Google sign-in ${report.auth.google ? "on" : "off"}`,
     `emailed sign-in code ${report.auth.loginCode ? "on" : "off"}`,

@@ -83,7 +83,7 @@ export const APP_SETTINGS = {
   // docs/ads-setup.md walks through all three.
   // Meta Ads: the Meta app "Insights" (971575545351940, Facebook account sebanceo@gmail.com, created 2026-10-11; use case
   // "Measure ad performance data with Marketing API"). Meta Ads stays "Coming soon" until META_APP_SECRET is set.
-  // WhatsApp Automation runs on this app too (WHATSAPP_APP_ID below is empty), with this app's secret.
+  // WhatsApp's Cloud API option runs on this app too (WHATSAPP_APP_ID below is empty), with this app's secret.
   "META_APP_ID": "971575545351940",
   // Marketing API v26.0 (2026-07-29). Every call and field the ads code uses was checked against its
   // changelog on 2026-10-19: none changed, except the multiple-id lookup (GET /?ids=), which v26.0
@@ -115,12 +115,12 @@ export const APP_SETTINGS = {
   // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it
   // shows. Offered to members who may manage integrations; empty hides the button.
   "GOOGLE_ADS_DEMO_ENABLED": "1",
-  // WhatsApp Automation (WhatsApp Business Platform, Cloud API), docs/whatsapp.md. "Connect WhatsApp"
-  // (Meta's Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login
+  // WhatsApp Automation (docs/whatsapp.md) runs on bizinsights' own Evolution API service (its address
+  // and key come from the CDK app and Secrets Manager, not from here). Its Cloud API option connects
+  // through Meta's Embedded Signup: the Meta app id (empty: META_APP_ID is used), the Facebook Login
   // for Business configuration id of its WhatsApp Embedded Signup v4 variation (WHATSAPP_CONFIG_ID),
-  // and the secrets WHATSAPP_APP_SECRET (or META_APP_SECRET), WHATSAPP_WEBHOOK_VERIFY_TOKEN and
-  // NANGO_SECRET_KEY (Nango keeps each store's token). Until then the page says connecting isn't
-  // available yet; there is no other way to connect.
+  // and the secrets WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Meta
+  // onboards a business only once it has approved bizinsights as a Tech Provider.
   // Empty since 2026-10-25 (the owner's choice): WhatsApp runs on the Meta Ads app "Insights"
   // (META_APP_ID, portfolio Zodiix Pty Ltd), so META_APP_SECRET serves and WHATSAPP_APP_SECRET stays
   // unset. It ran on "pixmagic" (1799660384680551, portfolio "Testbusiness") before; nothing was ever

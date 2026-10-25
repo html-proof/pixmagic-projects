@@ -1,19 +1,35 @@
-import { customEventSchema, safeEqual, verifyMetaSignature } from "@app/shared";
-import { env, logger, receiveCustomEvent, recordWebhook, storeForEventKey, waAppSecret } from "@app/core";
-import { clientIp, HttpError, type Deps } from "../context.js";
+import { safeEqual, verifyMetaSignature } from "@app/shared";
+import { applyMetaWebhook, env, logger, metaApp, receiveEvolutionWebhook, WEBHOOK_MAX_BYTES } from "@app/core";
+import { clientIp, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
 /**
- * WhatsApp Automation's public endpoints, called by machines:
- *  - Meta's webhook (GET: the subscription handshake with bizinsights' verify token; POST: deliveries,
- *    signed with bizinsights' app secret). A signed delivery is stored once and queued, and Meta gets
- *    its 200 at once; the worker applies it (core whatsapp/webhook.ts). Every number is connected
- *    through bizinsights' own app, so its secret vouches for every delivery.
- *  - Custom events from a store's own tools (a booking system, a form, Zapier), with the store's
- *    event key: `Authorization: Bearer whev_...` (WhatsApp Automation → Settings).
+ * WhatsApp Automation's machine endpoints (docs/whatsapp.md, "Webhooks and security"):
+ *  - Evolution API's webhook, one address per instance (POST /webhooks/whatsapp/evolution/:instance):
+ *    each delivery carries an HS256 JWT made from the instance's own key (core whatsapp/webhook.ts
+ *    checks it, the body and the instance). Connection events apply at once; message events are
+ *    stored and applied by the worker.
+ *  - Meta's webhook for Cloud API numbers (GET: the subscription handshake with bizinsights' verify
+ *    token; POST: deliveries signed with bizinsights' Meta app secret, X-Hub-Signature-256).
+ * Machine endpoints answer `{ "error": code }` only. Both are outside the CSRF check and the global
+ * per-IP limit (/webhooks/*): they have their own checks and limits.
  */
 export function whatsappWebhookRoutes(app: App, deps: Deps) {
+  app.post("/webhooks/whatsapp/evolution/:instance", async (c) => {
+    const raw = await c.req.text();
+    if (Buffer.byteLength(raw, "utf8") > WEBHOOK_MAX_BYTES) return c.json({ error: "too_large" }, 413);
+    const r = await receiveEvolutionWebhook(deps, { instanceName: c.req.param("instance"), authorization: c.req.header("authorization"), rawBody: raw });
+    if (r.status === 401) {
+      // Anyone can post here: past a few refusals per address they're answered 429 and no longer logged.
+      const n = await deps.coord.hit(`rl:wa-unsigned:${clientIp(c)}`, LIMITS.waUnsignedIp.windowSec).catch(() => 0);
+      if (n > LIMITS.waUnsignedIp.max) return c.json({ error: "rate_limited" }, 429, { "retry-after": String(LIMITS.waUnsignedIp.windowSec) });
+      return c.json({ error: "unauthenticated" }, 401);
+    }
+    if (r.status !== 200) return c.json({ error: r.outcome }, r.status, r.status === 429 ? { "retry-after": "30" } : undefined);
+    return c.json({ ok: true, outcome: r.outcome });
+  });
+
   app.get("/webhooks/whatsapp", async (c) => {
     await limit(deps.coord, `rl:wa-verify:${clientIp(c)}`, LIMITS.waVerifyIp);
     const mode = c.req.query("hub.mode");
@@ -29,36 +45,20 @@ export function whatsappWebhookRoutes(app: App, deps: Deps) {
 
   app.post("/webhooks/whatsapp", async (c) => {
     const raw = await c.req.text();
-    const secret = waAppSecret();
+    const secret = metaApp()?.appSecret ?? "";
     if (!secret || !verifyMetaSignature(raw, c.req.header("x-hub-signature-256"), secret)) {
-      // Anyone can post here: past a few refusals per address they're answered 429 and no longer logged.
       const n = await deps.coord.hit(`rl:wa-unsigned:${clientIp(c)}`, LIMITS.waUnsignedIp.windowSec).catch(() => 0);
       if (n > LIMITS.waUnsignedIp.max) return c.json({ error: "rate_limited" }, 429, { "retry-after": String(LIMITS.waUnsignedIp.windowSec) });
       if (n <= 5) logger.warn({ ip: clientIp(c), configured: !!secret }, "whatsapp webhook rejected: its signature didn't verify");
       return c.json({ error: "invalid_signature" }, 401);
     }
-    const { stored, duplicate } = await recordWebhook(raw, deps);
-    if (!stored) return c.json({ ok: true, ignored: true });
-    return c.json({ ok: true, ...(duplicate ? { duplicate: true } : {}) });
-  });
-
-  /** A custom event, sent with the store's event key. Idempotent per event id. */
-  app.post("/whatsapp/events", async (c) => {
-    const auth = c.req.header("authorization") ?? "";
-    const key = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-    const store = key ? await storeForEventKey(key) : null;
-    if (!store) {
-      await limit(deps.coord, `rl:wa-event-key:${clientIp(c)}`, LIMITS.waEventKeyIp, "Too many attempts with an unknown key.");
-      throw new HttpError(401, "Send the store's event key as Authorization: Bearer whev_... (WhatsApp Automation → Settings).", "invalid_key");
-    }
-    await limit(deps.coord, `rl:wa-events:${store.id}`, LIMITS.waEvents, "Too many events in a minute. Slow down and try again.");
-    let raw: unknown;
+    let body: unknown;
     try {
-      raw = await c.req.json();
+      body = JSON.parse(raw);
     } catch {
-      throw new HttpError(400, "The body must be JSON.", "invalid_body");
+      return c.json({ error: "invalid_body" }, 400);
     }
-    const event = customEventSchema.parse(raw);
-    return c.json(await receiveCustomEvent(deps, { store, event }));
+    const r = await applyMetaWebhook(deps, body);
+    return c.json({ ok: true, ...r });
   });
 }

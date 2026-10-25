@@ -1,139 +1,111 @@
 /**
- * Customers' WhatsApp numbers and what they agreed to. A contact is made only when there is a
- * reason to keep the number: a workflow is about to message them, they wrote to the store, they
- * agreed to marketing (Shopify's consent, START, the store recording it), or the store's team added
- * them. Every consent change is kept in wa_consent_events with where it came from.
- *
- * Consent rules (who may receive what) are `consentProblem` in @app/shared/whatsapp.
+ * Customers' WhatsApp numbers at a store and what they agreed to (docs/whatsapp.md, "Consent").
+ * A number is stored encrypted, found by its keyed hash and shown masked. Every change of consent
+ * is recorded with where it came from; STOP from a customer stops everything at once.
  */
-import { Prisma, systemDb, type Store, type WaContact } from "@app/db";
-import { maskPhone, type ConsentFacts, type ConsentSource, type MarketingStatus, type NormalizedPhone } from "@app/shared";
+import { systemDb, type Prisma, type WappContact } from "@app/db";
+import { maskPhone, normalizePhone, type NormalizedPhone, type WaConsentFacts, type WaConsentSource, type WaMarketingState, type WaSuppressionScope } from "@app/shared";
 import { logger } from "../logger.js";
-import { waDecrypt, waEncrypt, waPhoneHash } from "./common.js";
+import { audit } from "../notify.js";
+import { waDecrypt, waEncrypt, waPhoneHash, WhatsappError } from "./common.js";
 
+/** What an event knows about the customer behind a number. */
 export interface ContactDetails {
   firstName?: string | null;
   shopifyCustomerId?: string | null;
-  /** Shopify's order count and lifetime spend for the customer, when the event carried them. */
   ordersCount?: number | null;
   totalSpent?: number | null;
   lastOrderAt?: Date | null;
-  /** The customer wrote to the store at this time (opens the 24-hour window). */
-  inboundAt?: Date | null;
 }
 
-const digitsOf = (p: NormalizedPhone) => p.e164.replace(/\D/g, "");
-
-/** Find a store's contact by number, without decrypting anything. */
-export async function findContact(storeId: string, phone: NormalizedPhone): Promise<WaContact | null> {
-  return systemDb.waContact.findUnique({ where: { storeId_phoneHash: { storeId, phoneHash: waPhoneHash(storeId, digitsOf(phone)) } } });
-}
-
-/** The fields an event may move forward: counts only grow, dates only move later. */
-function updates(c: WaContact | null, storeId: string, d: ContactDetails): Prisma.WaContactUpdateInput {
-  const out: Prisma.WaContactUpdateInput = {};
-  if (d.firstName?.trim()) out.firstNameEnc = waEncrypt(storeId, "name", d.firstName.trim().slice(0, 60));
-  if (d.shopifyCustomerId && c?.shopifyCustomerId !== d.shopifyCustomerId) out.shopifyCustomerId = d.shopifyCustomerId;
-  if (d.ordersCount != null && d.ordersCount > (c?.ordersCount ?? 0)) out.ordersCount = d.ordersCount;
-  if (d.totalSpent != null && Number.isFinite(d.totalSpent) && d.totalSpent > Number(c?.totalSpent ?? 0)) out.totalSpent = d.totalSpent.toFixed(2);
-  if (d.lastOrderAt && (!c?.lastOrderAt || d.lastOrderAt > c.lastOrderAt)) out.lastOrderAt = d.lastOrderAt;
-  if (d.inboundAt && (!c?.lastInboundAt || d.inboundAt > c.lastInboundAt)) out.lastInboundAt = d.inboundAt;
-  return out;
-}
-
-/** The store's contact for this number, made if new; what the event knows is added. */
-export async function upsertContact(store: Pick<Store, "id" | "workspaceId">, phone: NormalizedPhone, d: ContactDetails = {}): Promise<WaContact> {
-  const existing = await findContact(store.id, phone);
-  if (existing) {
-    const data = updates(existing, store.id, d);
-    return Object.keys(data).length ? systemDb.waContact.update({ where: { id: existing.id }, data }) : existing;
-  }
+/** The contact for a number at a store, made when it is first seen. Details only fill in or move forward. */
+export async function upsertContact(store: { id: string; workspaceId: string }, phone: NormalizedPhone, d: ContactDetails = {}): Promise<WappContact> {
+  const phoneHash = waPhoneHash(store.id, phone.waId);
+  const firstName = d.firstName?.trim().slice(0, 60) || null;
+  const known = await systemDb.wappContact.findUnique({ where: { storeId_phoneHash: { storeId: store.id, phoneHash } } });
+  const details: Prisma.WappContactUpdateInput = {
+    ...(firstName ? { firstNameEnc: waEncrypt(store.id, "name", firstName) } : {}),
+    ...(d.shopifyCustomerId ? { shopifyCustomerId: d.shopifyCustomerId } : {}),
+    ...(d.ordersCount != null && d.ordersCount >= (known?.ordersCount ?? 0) ? { ordersCount: d.ordersCount } : {}),
+    ...(d.totalSpent != null && Number.isFinite(d.totalSpent) && d.totalSpent >= Number(known?.totalSpent ?? 0) ? { totalSpent: d.totalSpent } : {}),
+    ...(d.lastOrderAt && (!known?.lastOrderAt || d.lastOrderAt > known.lastOrderAt) ? { lastOrderAt: d.lastOrderAt } : {}),
+  };
+  if (known) return Object.keys(details).length ? systemDb.wappContact.update({ where: { id: known.id }, data: details }) : known;
   try {
-    const data = updates(null, store.id, d) as Prisma.WaContactUncheckedCreateInput;
-    return await systemDb.waContact.create({
+    return await systemDb.wappContact.create({
       data: {
-        ...data,
         workspaceId: store.workspaceId,
         storeId: store.id,
-        phoneHash: waPhoneHash(store.id, digitsOf(phone)),
+        phoneHash,
         phoneEnc: waEncrypt(store.id, "phone", phone.e164),
         phoneMasked: maskPhone(phone.e164),
         country: phone.country,
+        firstNameEnc: firstName ? waEncrypt(store.id, "name", firstName) : null,
+        shopifyCustomerId: d.shopifyCustomerId ?? null,
+        ordersCount: d.ordersCount ?? 0,
+        totalSpent: d.totalSpent != null && Number.isFinite(d.totalSpent) ? d.totalSpent : 0,
+        lastOrderAt: d.lastOrderAt ?? null,
       },
     });
   } catch (e) {
-    // Two events for one new number at once: the other one made it.
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      const again = await findContact(store.id, phone);
-      if (again) return again;
-    }
+    // Two events for a new number at once: the other one made it.
+    if ((e as { code?: string }).code === "P2002") return systemDb.wappContact.findUniqueOrThrow({ where: { storeId_phoneHash: { storeId: store.id, phoneHash } } });
     throw e;
   }
 }
 
-/** The contact's number (E.164, "+61412345678"). */
-export const contactPhone = (c: Pick<WaContact, "storeId" | "phoneEnc">) => waDecrypt(c.storeId, "phone", c.phoneEnc);
-
-/** The contact's first name, or null (an unreadable one is treated as unknown). */
-export function contactFirstName(c: Pick<WaContact, "storeId" | "firstNameEnc" | "id">): string | null {
-  if (!c.firstNameEnc) return null;
-  try {
-    return waDecrypt(c.storeId, "name", c.firstNameEnc);
-  } catch (err) {
-    logger.warn({ err, contactId: c.id }, "whatsapp contact name unreadable");
-    return null;
-  }
+export async function contactByPhone(storeId: string, phone: NormalizedPhone): Promise<WappContact | null> {
+  return systemDb.wappContact.findUnique({ where: { storeId_phoneHash: { storeId, phoneHash: waPhoneHash(storeId, phone.waId) } } });
 }
 
-export const consentFacts = (c: Pick<WaContact, "optedOut" | "optedIn" | "marketing">): ConsentFacts => ({ optedOut: c.optedOut, optedIn: c.optedIn, marketing: c.marketing as MarketingStatus });
+export const contactPhone = (c: Pick<WappContact, "storeId" | "phoneEnc">) => waDecrypt(c.storeId, "phone", c.phoneEnc);
+export const contactFirstName = (c: Pick<WappContact, "storeId" | "firstNameEnc">) => (c.firstNameEnc ? waDecrypt(c.storeId, "name", c.firstNameEnc) : null);
 
-export interface ConsentChange {
-  /** "all": every message (STOP / START); "marketing": offers only. */
-  scope: "all" | "marketing";
+/** The store's do-not-message list for a number: which scopes it is on. */
+export async function suppressionsOf(storeId: string, phoneHash: string): Promise<Set<WaSuppressionScope>> {
+  const rows = await systemDb.wappSuppression.findMany({ where: { storeId, phoneHash }, select: { scope: true } });
+  return new Set(rows.map((r) => r.scope as WaSuppressionScope));
+}
+
+/** What consent says about a contact, for a message of `category`. */
+export async function consentFacts(c: WappContact, category: "transactional" | "marketing"): Promise<WaConsentFacts> {
+  const scopes = await suppressionsOf(c.storeId, c.phoneHash);
+  return { optedOut: c.optedOut, optedIn: c.optedIn, marketing: c.marketing as WaMarketingState, suppressed: scopes.has("all") || (category === "marketing" && scopes.has("marketing")) };
+}
+
+interface ConsentChange {
+  scope: "all" | "order_updates" | "marketing";
   status: "opted_in" | "opted_out";
-  source: ConsentSource;
-  at: Date;
+  source: WaConsentSource;
   actorUserId?: string | null;
   note?: string | null;
+  at?: Date;
 }
 
-/** Sources the customer acts through themselves: only they can undo their own STOP. */
-const CUSTOMER_SOURCES = new Set<ConsentSource>(["whatsapp_start", "whatsapp_stop", "stop_promotions", "meta_preferences", "meta_error"]);
-
-/**
- * Apply a consent change and record it. Returns the contact as it is now, and whether anything
- * changed. Rules:
- *  - a change older than the last one recorded (Meta and Shopify redeliver late) changes nothing;
- *  - a STOP is undone only by the customer (START, or their WhatsApp setting), never by Shopify's
- *    consent or the store's own record;
- *  - "Stop promotions" stops marketing; order updates continue.
- * Waiting messages the change rules out are cancelled.
- */
-export async function setConsent(contact: WaContact, change: ConsentChange): Promise<{ contact: WaContact; changed: boolean }> {
-  if (contact.consentUpdatedAt && change.at < contact.consentUpdatedAt && CUSTOMER_SOURCES.has(change.source)) return { contact, changed: false };
-  const data: Prisma.WaContactUpdateInput = {};
-  if (change.scope === "all" && change.status === "opted_out") {
-    if (!contact.optedOut) data.optedOut = true;
-  } else if (change.scope === "all" && change.status === "opted_in") {
-    if (contact.optedOut && !CUSTOMER_SOURCES.has(change.source)) return { contact, changed: false };
-    if (contact.optedOut) data.optedOut = false;
-    if (!contact.optedIn) data.optedIn = true;
-    if (contact.marketing !== "opted_in") data.marketing = "opted_in";
-  } else if (change.scope === "marketing" && change.status === "opted_out") {
-    if (contact.marketing !== "opted_out") data.marketing = "opted_out";
+/** Records a consent change and applies it to the contact. Returns the contact as it stands after. */
+export async function recordConsent(contact: WappContact, change: ConsentChange): Promise<WappContact> {
+  const at = change.at ?? new Date();
+  // An older change (a retried Shopify event) never overrides a newer one.
+  if (contact.consentUpdatedAt && at < contact.consentUpdatedAt && change.source !== "whatsapp_stop") return contact;
+  const data: Prisma.WappContactUpdateInput = { consentUpdatedAt: at };
+  if (change.scope === "all") {
+    data.optedOut = change.status === "opted_out";
+    if (change.status === "opted_out") {
+      data.optedIn = false;
+      data.marketing = "opted_out";
+    } else {
+      data.optedIn = true;
+    }
+  } else if (change.scope === "order_updates") {
+    data.optedIn = change.status === "opted_in";
+    if (change.status === "opted_in") data.optedOut = false;
   } else {
-    // Marketing opt-in: not over a STOP (only START undoes that), and not over the customer's own
-    // "stop promotions" unless the customer is the one changing it.
-    if (contact.optedOut) return { contact, changed: false };
-    if (contact.marketing === "opted_out" && !CUSTOMER_SOURCES.has(change.source) && change.source !== "merchant") return { contact, changed: false };
-    if (contact.marketing !== "opted_in") data.marketing = "opted_in";
-    if (!contact.optedIn) data.optedIn = true;
+    data.marketing = change.status;
+    if (change.status === "opted_in") data.optedOut = false;
   }
-  if (!Object.keys(data).length) return { contact, changed: false };
-  data.consentUpdatedAt = change.at;
   const [updated] = await systemDb.$transaction([
-    systemDb.waContact.update({ where: { id: contact.id }, data }),
-    systemDb.waConsentEvent.create({
+    systemDb.wappContact.update({ where: { id: contact.id }, data }),
+    systemDb.wappConsentEvent.create({
       data: {
         workspaceId: contact.workspaceId,
         storeId: contact.storeId,
@@ -143,25 +115,84 @@ export async function setConsent(contact: WaContact, change: ConsentChange): Pro
         source: change.source,
         actorUserId: change.actorUserId ?? null,
         note: change.note?.slice(0, 300) ?? null,
-        occurredAt: change.at,
+        occurredAt: at,
       },
     }),
   ]);
-  if (change.status === "opted_out") {
-    // What was waiting for them and is now ruled out: everything on a STOP, marketing on "stop promotions".
-    const r = await systemDb.waMessage.updateMany({
-      where: { contactId: contact.id, status: "queued", ...(change.scope === "marketing" ? { category: "MARKETING" } : {}) },
-      data: { status: "skipped", reason: change.scope === "all" ? "opted_out" : "no_marketing_consent", finalAt: new Date(), payloadEnc: null },
-    });
-    if (r.count) logger.info({ contactId: contact.id, cancelled: r.count, scope: change.scope }, "whatsapp: waiting messages cancelled after an opt-out");
-  }
-  return { contact: updated, changed: true };
+  return updated;
 }
 
-/** Shopify's text-message marketing consent on an order, checkout or customer, when the store says it covers WhatsApp. */
-export function shopifySmsConsent(state: string | null | undefined, acceptsSms?: boolean | null): "opted_in" | "opted_out" | null {
-  const s = String(state ?? "").toLowerCase();
-  if (s === "subscribed" || acceptsSms === true) return "opted_in";
-  if (s === "unsubscribed") return "opted_out";
-  return null;
+/**
+ * Shopify's text-message marketing consent on an event, recorded as WhatsApp marketing consent only
+ * when the store says its consent wording covers WhatsApp (Settings). Only a change is recorded.
+ */
+export async function applyShopifyConsent(contact: WappContact, state: string | null | undefined, enabled: boolean, at: Date): Promise<WappContact> {
+  if (!enabled || !state) return contact;
+  const s = state.toLowerCase();
+  const status = s === "subscribed" ? "opted_in" : s === "unsubscribed" || s === "redacted" ? "opted_out" : null;
+  if (!status || contact.marketing === status || contact.optedOut) return contact;
+  return recordConsent(contact, { scope: "marketing", status, source: "shopify_sms", at });
+}
+
+/** The store records (or withdraws) a customer's consent, given some other way. Audited. */
+export async function setConsentByMerchant(
+  store: { id: string; workspaceId: string },
+  input: { phone: string; country?: string | null; scope: "all" | "order_updates" | "marketing"; status: "opted_in" | "opted_out"; note?: string | null; userId: string; ip?: string },
+): Promise<WappContact> {
+  const phone = normalizePhone(input.phone, input.country ?? null);
+  if (!phone) throw new WhatsappError("That isn't a valid international phone number. Include the country code, for example +61 412 345 678.", 400, "invalid_phone");
+  const contact = await upsertContact(store, phone);
+  if (contact.optedOut && input.status === "opted_in" && input.scope !== "all") {
+    throw new WhatsappError("This customer replied STOP. Only they can opt back in (by replying START), or you can record that they asked to receive messages again.", 409, "opted_out");
+  }
+  const updated = await recordConsent(contact, { scope: input.scope, status: input.status, source: "merchant", actorUserId: input.userId, note: input.note ?? null });
+  await audit({ workspaceId: store.workspaceId, actorUserId: input.userId, action: "whatsapp.consent_recorded", targetType: "whatsapp_contact", targetId: contact.id, metadata: { scope: input.scope, status: input.status }, ip: input.ip });
+  return updated;
+}
+
+/** STOP from a customer: nothing more is sent, and the number goes on the do-not-message list. */
+export async function optOutByReply(contact: WappContact, at: Date): Promise<WappContact> {
+  await systemDb.wappSuppression.upsert({
+    where: { storeId_phoneHash_scope: { storeId: contact.storeId, phoneHash: contact.phoneHash, scope: "all" } },
+    create: { workspaceId: contact.workspaceId, storeId: contact.storeId, phoneHash: contact.phoneHash, phoneMasked: contact.phoneMasked, scope: "all", reason: "stop_reply" },
+    update: {},
+  });
+  logger.info({ storeId: contact.storeId, contactId: contact.id }, "whatsapp opt-out (STOP)");
+  return recordConsent(contact, { scope: "all", status: "opted_out", source: "whatsapp_stop", at });
+}
+
+/** START from a customer: they asked to receive messages again (the STOP entry on the list goes). */
+export async function optInByReply(contact: WappContact, at: Date): Promise<WappContact> {
+  await systemDb.wappSuppression.deleteMany({ where: { storeId: contact.storeId, phoneHash: contact.phoneHash, scope: "all", reason: "stop_reply" } });
+  return recordConsent(contact, { scope: "all", status: "opted_in", source: "whatsapp_start", at });
+}
+
+/** Adds a number to the store's do-not-message list (the merchant). */
+export async function addWaSuppression(
+  store: { id: string; workspaceId: string },
+  input: { phone: string; country?: string | null; scope: WaSuppressionScope; note?: string | null; userId: string; ip?: string },
+) {
+  const phone = normalizePhone(input.phone, input.country ?? null);
+  if (!phone) throw new WhatsappError("That isn't a valid international phone number. Include the country code.", 400, "invalid_phone");
+  const phoneHash = waPhoneHash(store.id, phone.waId);
+  const row = await systemDb.wappSuppression.upsert({
+    where: { storeId_phoneHash_scope: { storeId: store.id, phoneHash, scope: input.scope } },
+    create: { workspaceId: store.workspaceId, storeId: store.id, phoneHash, phoneMasked: maskPhone(phone.e164), scope: input.scope, reason: "merchant", note: input.note?.slice(0, 300) ?? null, createdBy: input.userId },
+    update: { note: input.note?.slice(0, 300) ?? null },
+  });
+  // Messages already waiting for it go too.
+  await systemDb.wappMessage.updateMany({
+    where: { storeId: store.id, phoneHash, direction: "out", status: "queued", ...(input.scope === "marketing" ? { category: "marketing" } : {}) },
+    data: { status: "cancelled", reason: "suppressed", finalAt: new Date(), payloadEnc: null },
+  });
+  await audit({ workspaceId: store.workspaceId, actorUserId: input.userId, action: "whatsapp.suppression_added", targetType: "whatsapp_suppression", targetId: row.id, metadata: { scope: input.scope }, ip: input.ip });
+  return row;
+}
+
+export async function removeWaSuppression(store: { id: string; workspaceId: string }, id: string, actor: { userId: string; ip?: string }) {
+  const row = await systemDb.wappSuppression.findFirst({ where: { id, storeId: store.id } });
+  if (!row) throw new WhatsappError("Not found", 404, "not_found");
+  if (row.reason === "stop_reply") throw new WhatsappError("This customer replied STOP. Only their reply START takes them off the list.", 409, "stop_reply");
+  await systemDb.wappSuppression.delete({ where: { id: row.id } });
+  await audit({ workspaceId: store.workspaceId, actorUserId: actor.userId, action: "whatsapp.suppression_removed", targetType: "whatsapp_suppression", targetId: row.id, metadata: { scope: row.scope }, ip: actor.ip });
 }

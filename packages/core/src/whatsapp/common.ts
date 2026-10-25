@@ -1,15 +1,26 @@
 /**
- * What every part of WhatsApp Automation shares: its dependencies and errors, encryption of
- * customers' numbers and messages, bizinsights' Meta app (Embedded Signup and the webhooks), the
- * store's connection and settings, and the queue jobs.
+ * What every part of WhatsApp Automation shares (docs/whatsapp.md): its dependencies and errors,
+ * encryption of customers' numbers, message texts and the instances' keys, the store's connection
+ * and settings, and the queue it runs on.
  */
-import { systemDb, type Store, type WaConnection, type WaSettings } from "@app/db";
-import { decrypt, encrypt, hmacSha256Hex, keyVersionOf, type OrderUpdateBasis } from "@app/shared";
+import { systemDb, type Store, type WappConnection, type WappSettings } from "@app/db";
+import {
+  decrypt,
+  encrypt,
+  hmacSha256Hex,
+  keyVersionOf,
+  WA_DAILY_LIMIT,
+  WA_DEFAULT_RETENTION_DAYS,
+  type WaConnectionStatus,
+  type WaOrderUpdateBasis,
+  type WaProvider,
+  type WaSendWindow,
+} from "@app/shared";
 import type { Coord } from "../coord.js";
 import { env } from "../env.js";
 import { AppError } from "../errors.js";
 import type { Mailer } from "../mailer.js";
-import type { Producer, Queues } from "../queues.js";
+import type { BlobStore, Producer, Queues, WhatsappJob } from "../queues.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
 
@@ -18,40 +29,30 @@ export interface WaDeps {
   queues: Queues;
   fetchImpl: FetchLike;
   mailer: Mailer;
+  /** Attachments waiting to be sent (S3 on AWS). */
+  payloads: BlobStore;
 }
 
 /** A WhatsApp rule the merchant broke, or a step they must take first (the message is written for them). */
 export class WhatsappError extends AppError {
-  constructor(message: string, status: 400 | 403 | 404 | 409 | 429 | 502 | 503, code: string, detail?: unknown) {
+  constructor(message: string, status: 400 | 403 | 404 | 409 | 422 | 429 | 502 | 503, code: string, detail?: unknown) {
     super(message, status, code, detail);
     this.name = "WhatsappError";
   }
 }
 
-// ---------------------------------------------------------------------------
-// Queue jobs: they ride the sync queue (like SMS's), told apart by `kind`.
-// ---------------------------------------------------------------------------
+export const waQueue = (queues: Queues): Producer<WhatsappJob> => queues.whatsapp;
 
-export type WhatsappJob =
-  /** Send one message (its row carries everything). */
-  | { kind: "whatsapp"; messageId: string }
-  /** Make the next batch of a campaign's messages. */
-  | { kind: "whatsapp_dispatch"; campaignId: string; storeId: string }
-  /** Apply one stored webhook delivery from Meta. */
-  | { kind: "whatsapp_webhook"; eventId: string };
-
-export const waQueue = (queues: Queues) => queues.sync as unknown as Producer<WhatsappJob>;
-
-/** The longest a queued send waits in the queue; sends due later are picked up by the sweep. */
-export const WA_MAX_QUEUE_DELAY_S = 12 * 3600;
+/** SQS delays a message by at most 15 minutes; sends due later are queued by the sweep. */
+export const WA_MAX_QUEUE_DELAY_S = 900;
 
 // ---------------------------------------------------------------------------
-// Encryption. The AAD binds each ciphertext to its store (or the webhook row) and purpose.
+// Encryption. The AAD binds each ciphertext to its store and purpose.
 // ---------------------------------------------------------------------------
 
-export type WaSecretKind = "phone" | "name" | "payload" | "preview" | "pin" | "test_phone" | "webhook";
+export type WaSecretKind = "phone" | "name" | "payload" | "preview" | "instance_token" | "webhook_key" | "linked_phone" | "test_phone" | "webhook";
 
-const aad = (scope: string, kind: WaSecretKind) => `wa2:${scope}:${kind}`;
+const aad = (scope: string, kind: WaSecretKind) => `wapp:${scope}:${kind}`;
 export const waEncrypt = (scope: string, kind: WaSecretKind, plaintext: string) => encrypt(plaintext, keyring(), aad(scope, kind));
 export const waDecrypt = (scope: string, kind: WaSecretKind, ciphertext: string) => decrypt(ciphertext, keyring(), aad(scope, kind));
 /** A ciphertext encrypted again with the active key (key rotation), or null when it already is. */
@@ -62,60 +63,11 @@ export function waReencrypt(scope: string, kind: WaSecretKind, ciphertext: strin
 }
 
 /**
- * Finds a number at a store without decrypting anything (`digits`: E.164 without the plus). The same
- * keyed hash the earlier WhatsApp feature used, so a recorded privacy request (data_requests.phone_hash)
- * finds the customer in both.
+ * Finds a number at a store without decrypting anything (`digits`: E.164 without the plus). The
+ * same keyed hash every WhatsApp feature used, so a recorded privacy request (data_requests.phone_hash)
+ * finds the customer.
  */
 export const waPhoneHash = (storeId: string, digits: string) => hmacSha256Hex(env().CUSTOMER_HASH_KEY, `wa:${storeId}:${digits}`);
-
-// ---------------------------------------------------------------------------
-// bizinsights' Meta app (apps/aws/src/settings.ts and the app secret)
-// ---------------------------------------------------------------------------
-
-export interface WaPlatform {
-  appId: string;
-  appSecret: string;
-  /** The Facebook Login for Business configuration of the WhatsApp Embedded Signup variation. */
-  configId: string;
-  version: string;
-  verifyToken: string;
-}
-
-/**
- * The app's secret: its own, or the Meta Ads app's only when WhatsApp runs on that same app (no
- * WHATSAPP_APP_ID, or the same id). On an app of its own, the Ads app's secret signs nothing WhatsApp sends.
- */
-function appSecretOf(e: ReturnType<typeof env>): string {
-  if (e.WHATSAPP_APP_SECRET) return e.WHATSAPP_APP_SECRET;
-  return !e.WHATSAPP_APP_ID || e.WHATSAPP_APP_ID === e.META_APP_ID ? e.META_APP_SECRET : "";
-}
-
-/** The secret Meta signs this app's webhooks with ("" when it isn't set). */
-export const waAppSecret = () => appSecretOf(env());
-
-/** What "Connect WhatsApp" still lacks on this server, by setting name (empty: it works). */
-export function waPlatformMissing(): string[] {
-  const e = env();
-  return [
-    !e.WHATSAPP_APP_ID && !e.META_APP_ID ? "WHATSAPP_APP_ID" : null,
-    !e.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
-    !appSecretOf(e) ? "WHATSAPP_APP_SECRET" : null,
-    !e.WHATSAPP_WEBHOOK_VERIFY_TOKEN ? "WHATSAPP_WEBHOOK_VERIFY_TOKEN" : null,
-    !e.NANGO_SECRET_KEY ? "NANGO_SECRET_KEY" : null,
-  ].filter((x): x is string => !!x);
-}
-
-/** bizinsights' Meta app, or null until every setting Embedded Signup needs is there (the page then says so). */
-export function waPlatform(): WaPlatform | null {
-  if (waPlatformMissing().length) return null;
-  const e = env();
-  return { appId: e.WHATSAPP_APP_ID || e.META_APP_ID, appSecret: appSecretOf(e), configId: e.WHATSAPP_CONFIG_ID, version: e.WHATSAPP_API_VERSION, verifyToken: e.WHATSAPP_WEBHOOK_VERIFY_TOKEN };
-}
-
-export const waVersion = () => env().WHATSAPP_API_VERSION;
-
-/** Where Meta sends this app's WhatsApp webhooks. */
-export const waWebhookUrl = () => `${env().API_URL.replace(/\/$/, "")}/webhooks/whatsapp`;
 
 // ---------------------------------------------------------------------------
 // The store, its connection and its settings
@@ -127,60 +79,90 @@ export async function storeById(id: string): Promise<Store | null> {
   return systemDb.store.findUnique({ where: { id } });
 }
 
-/** The store's connection, unless it was disconnected. */
-export async function liveConnection(storeId: string): Promise<WaConnection | null> {
-  const c = await systemDb.waConnection.findUnique({ where: { storeId } });
-  return c && c.status !== "disconnected" ? c : null;
+export async function connectionOf(storeId: string): Promise<WappConnection | null> {
+  return systemDb.wappConnection.findUnique({ where: { storeId } });
 }
 
-/** Whether a connection can send right now. */
-export const canSend = (c: Pick<WaConnection, "status" | "registered" | "phoneNumberId" | "nangoConnectionId"> | null) =>
-  !!c && c.status === "active" && c.registered && !!c.phoneNumberId && !!c.nangoConnectionId;
+/** The store's connection unless the merchant disconnected it (it may be pairing, connected, down). */
+export async function liveConnection(storeId: string): Promise<WappConnection | null> {
+  const c = await connectionOf(storeId);
+  return c && c.status !== "disconnected" && c.instanceName ? c : null;
+}
+
+/** Whether a connection can be sent through now (the provider last said it is open). */
+export const connectionCanSend = (c: Pick<WappConnection, "status" | "instanceName"> | null): boolean => !!c && c.status === "connected" && !!c.instanceName;
+
+/** Whether the store's automations listen at all: a connection that is up, or down for less than its grace period. */
+export const connectionListens = (c: Pick<WappConnection, "status" | "instanceName"> | null): boolean =>
+  !!c && !!c.instanceName && (c.status === "connected" || c.status === "reconnecting" || c.status === "logged_out");
 
 export interface WaSettingsView {
-  orderUpdates: OrderUpdateBasis;
+  businessName: string | null;
+  orderUpdates: WaOrderUpdateBasis;
   orderUpdatesSetBy: string | null;
   orderUpdatesSetAt: Date | null;
+  marketingEnabled: boolean;
   shopifySmsConsent: boolean;
-  sendWindow: { start: number; end: number };
+  sendWindow: WaSendWindow;
+  /** The zone the sending hours are in: the setting, else the store's. */
+  timeZone: string;
+  timeZoneSet: string | null;
   dailyLimit: number | null;
+  perCustomerDailyLimit: number;
+  retentionDays: number;
+  configuredAt: Date | null;
   testPhoneMasked: string | null;
-  hasTestPhone: boolean;
-  /** The custom-event key's last characters and when it was made (null: none yet). */
-  eventKey: { hint: string; createdAt: Date } | null;
-  /** "Pause all automation": since when (null: automation runs), and who paused it. */
+  testVerifiedAt: Date | null;
+  testPassedAt: Date | null;
+  /** A verification code is waiting to be entered (until when). */
+  testCodeExpiresAt: Date | null;
   automationPausedAt: Date | null;
   automationPausedBy: string | null;
 }
 
-export function waSettingsView(s: WaSettings | null): WaSettingsView {
+export function waSettingsView(s: WappSettings | null, store: Pick<Store, "timezone">): WaSettingsView {
+  const pending = s?.testCodeHash && s.testCodeExpiresAt && s.testCodeExpiresAt > new Date() ? s.testCodeExpiresAt : null;
   return {
-    automationPausedAt: s?.automationPausedAt ?? null,
-    automationPausedBy: s?.automationPausedBy ?? null,
-    orderUpdates: (s?.orderUpdates ?? "unset") as OrderUpdateBasis,
+    businessName: s?.businessName ?? null,
+    orderUpdates: (s?.orderUpdates ?? "unset") as WaOrderUpdateBasis,
     orderUpdatesSetBy: s?.orderUpdatesSetBy ?? null,
     orderUpdatesSetAt: s?.orderUpdatesSetAt ?? null,
+    marketingEnabled: s?.marketingEnabled ?? false,
     shopifySmsConsent: s?.shopifySmsConsent ?? false,
     sendWindow: { start: s?.sendWindowStart ?? 9, end: s?.sendWindowEnd ?? 20 },
+    timeZone: s?.timeZone || store.timezone || "UTC",
+    timeZoneSet: s?.timeZone ?? null,
     dailyLimit: s?.dailyLimit ?? null,
+    perCustomerDailyLimit: s?.perCustomerDailyLimit ?? 3,
+    retentionDays: s?.retentionDays ?? WA_DEFAULT_RETENTION_DAYS,
+    configuredAt: s?.configuredAt ?? null,
     testPhoneMasked: s?.testPhoneMasked ?? null,
-    hasTestPhone: !!s?.testPhoneEnc,
-    eventKey: s?.eventKeyHint && s.eventKeyCreatedAt ? { hint: s.eventKeyHint, createdAt: s.eventKeyCreatedAt } : null,
+    testVerifiedAt: s?.testVerifiedAt ?? null,
+    testPassedAt: s?.testPassedAt ?? null,
+    testCodeExpiresAt: pending,
+    automationPausedAt: s?.automationPausedAt ?? null,
+    automationPausedBy: s?.automationPausedBy ?? null,
   };
 }
 
-export async function settingsOf(storeId: string): Promise<WaSettingsView> {
-  return waSettingsView(await systemDb.waSettings.findUnique({ where: { storeId } }));
+export async function settingsOf(store: Pick<Store, "id" | "timezone">): Promise<WaSettingsView> {
+  return waSettingsView(await systemDb.wappSettings.findUnique({ where: { storeId: store.id } }), store);
 }
 
-/** Since when the store paused all automation (null: it runs). */
-export async function automationPausedSince(storeId: string): Promise<Date | null> {
-  const s = await systemDb.waSettings.findUnique({ where: { storeId }, select: { automationPausedAt: true } });
-  return s?.automationPausedAt ?? null;
+/** The most business-started messages the store sends a day on this provider. */
+export const dailyLimitOf = (s: Pick<WaSettingsView, "dailyLimit">, provider: WaProvider) => Math.min(s.dailyLimit ?? WA_DAILY_LIMIT[provider].default, WA_DAILY_LIMIT[provider].max);
+
+/** The store's verified test number (E.164), or null. */
+export async function verifiedTestPhone(storeId: string): Promise<string | null> {
+  const s = await systemDb.wappSettings.findUnique({ where: { storeId }, select: { testPhoneEnc: true, testVerifiedAt: true } });
+  return s?.testPhoneEnc && s.testVerifiedAt ? waDecrypt(storeId, "test_phone", s.testPhoneEnc) : null;
 }
 
-/** The merchant's own number for test messages (E.164), or null. */
-export async function testPhoneOf(storeId: string): Promise<string | null> {
-  const s = await systemDb.waSettings.findUnique({ where: { storeId }, select: { testPhoneEnc: true } });
-  return s?.testPhoneEnc ? waDecrypt(storeId, "test_phone", s.testPhoneEnc) : null;
-}
+/** What {{store_name}} says: the business name in Settings, else the store's name. */
+export const businessNameOf = (store: Pick<Store, "name" | "shopDomain">, s: Pick<WaSettingsView, "businessName">) => s.businessName?.trim() || storeLabel(store);
+
+/** Days down after which waiting messages are cancelled rather than held. */
+export const DOWN_GRACE_MS = 48 * 3600_000;
+
+/** Statuses in which the store's connection holds a live instance at the provider. */
+export const INSTANCE_STATUSES: WaConnectionStatus[] = ["pairing", "connected", "reconnecting", "logged_out", "failed"];

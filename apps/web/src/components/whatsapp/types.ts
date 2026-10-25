@@ -1,97 +1,107 @@
-// The WhatsApp Automation API's answers (apps/api/src/routes/whatsapp.ts, whatsappAutomation.ts,
-// whatsappCommon.ts), as the dashboard reads them. Dates arrive as ISO strings.
 import type {
-  AutomationState,
-  CampaignAudience,
-  OrderUpdateBasis,
-  StarterTemplate,
-  TemplateComponent,
-  TemplateMapping,
-  TemplateShape,
-  TriggerInfo,
-  VariableSource,
+  WaAudience,
+  WaAutomationState,
+  WaCondition,
   WaConnectionStatus,
   WaMessageStatus,
-  WorkflowCondition,
-  WorkflowTiming,
-  WorkflowTrigger,
+  WaOrderUpdateBasis,
+  WaProvider,
+  WaRecipient,
+  WaSendWindow,
+  WaSetupStep,
+  WaTemplateCategory,
+  WaTrigger,
+  WaValues,
 } from "@app/shared/whatsapp";
 
-export interface WaCan {
-  /** Connect, choose a number, enter the PIN, check again, disconnect ("Manage integrations"). */
-  connect: boolean;
-  /** Templates, workflows, campaigns, settings, sends (owners and admins). */
-  manage: boolean;
-  /** Customers' numbers, names and what was said ("View contact information"). */
-  contacts: boolean;
-  /** See the PIN bizinsights set on the number (owners and admins). */
-  pin: boolean;
-}
+// What the WhatsApp Automation API answers (apps/api/src/routes/whatsapp.ts). Dates arrive as ISO strings.
 
 export interface WaConnection {
+  provider: WaProvider;
   status: WaConnectionStatus;
   statusLabel: string;
-  step: string | null;
-  statusDetail: string | null;
-  signupFlow: string | null;
-  businessId: string | null;
-  wabaId: string;
-  wabaName: string | null;
+  /** Why it is in that state, in the merchant's words (null: nothing to say). */
+  reason: string | null;
+  pairingMethod: "qr" | "code" | null;
+  phone: string | null;
+  profileName: string | null;
+  wabaId: string | null;
   phoneNumberId: string | null;
-  displayPhoneNumber: string | null;
-  verifiedName: string | null;
-  nameStatus: string | null;
-  qualityRating: string | null;
-  qualityLabel: string | null;
-  messagingLimitTier: string | null;
-  dailyConversationLimit: number | null;
-  registered: boolean;
-  subscribed: boolean;
-  subscribedAt: string | null;
-  /** The permissions Meta said bizinsights' access holds (whatsapp_business_management, whatsapp_business_messaging). */
-  grantedScopes: string[];
-  hasPin: boolean;
-  lastWebhookAt: string | null;
-  lastCheckedAt: string | null;
-  connectedAt: string;
+  qrCount: number;
+  pairingStartedAt: string | null;
+  connectedAt: string | null;
   disconnectedAt: string | null;
+  downSince: string | null;
+  lastEventAt: string | null;
+  lastCheckedAt: string | null;
+}
+
+/** POST /connection and GET /connection/pairing: the provider's current code, or the state reached. */
+export interface WaPairing {
+  status: WaConnectionStatus;
+  /** A PNG data URL of the QR code WhatsApp issued. */
+  qr: string | null;
+  pairingCode: string | null;
+  qrCount: number;
+  reason: string | null;
+  phone: string | null;
+  profileName: string | null;
 }
 
 export interface WaSettings {
-  orderUpdates: OrderUpdateBasis;
+  businessName: string | null;
+  orderUpdates: WaOrderUpdateBasis;
   orderUpdatesSetAt: string | null;
+  marketingEnabled: boolean;
   shopifySmsConsent: boolean;
-  sendWindow: { start: number; end: number };
+  sendWindow: WaSendWindow;
+  /** The zone the sending hours are in (the setting, or the store's). */
+  timeZone: string;
+  timeZoneSet: string | null;
   dailyLimit: number | null;
-  /** The merchant's own number for tests, masked. */
+  perCustomerDailyLimit: number;
+  retentionDays: number;
+  configuredAt: string | null;
   testPhone: string | null;
-  eventKey: { hint: string; createdAt: string } | null;
-  /** "Pause all automation": since when (null: automation runs). */
+  testVerifiedAt: string | null;
+  testPassedAt: string | null;
+  testCodeExpiresAt: string | null;
   automationPausedAt: string | null;
+}
+
+export interface WaStats {
+  waiting: number;
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  notSent: number;
+  received: number;
+  deliveryRate: number | null;
+  readRate: number | null;
 }
 
 export interface WaMessage {
   id: string;
   direction: "out" | "in";
   source: string;
+  category: WaTemplateCategory | null;
   type: string;
-  templateName: string | null;
-  templateLanguage: string | null;
-  category: string | null;
   status: WaMessageStatus;
   statusLabel: string;
   reason: string | null;
   reasonLabel: string | null;
   errorCode: string | null;
-  errorTitle: string | null;
-  /** Meta's id for it, once Meta accepted it (or a customer's message). */
-  wamid: string | null;
+  errorDetail: string | null;
+  providerMessageId: string | null;
   phone: string | null;
   contactId: string | null;
-  /** What the customer reads (or wrote): only for those who may see contact information. */
+  /** The text (only for people who may see contact information; null after the store's retention). */
   preview: string | null;
-  workflowId: string | null;
+  automationId: string | null;
   campaignId: string | null;
+  templateId: string | null;
+  attempts: number;
   createdAt: string;
   sendAfter: string;
   acceptedAt: string | null;
@@ -99,185 +109,137 @@ export interface WaMessage {
   deliveredAt: string | null;
   readAt: string | null;
   failedAt: string | null;
-  attempts: number;
   canRetry: boolean;
 }
 
-export interface WaStats {
-  pending: number;
-  sent: number;
-  delivered: number;
-  read: number;
-  failed: number;
-  skipped: number;
-  received: number;
+export interface WaMessageEvent {
+  status: string;
+  providerStatus: string | null;
+  at: string;
 }
 
-export interface WaPlatform {
-  ready: boolean;
-  appId?: string;
-  configId?: string;
-  version?: string;
-  /** For who may connect: the server settings still missing. */
-  missing?: string[];
-  /** For who may connect: how Meta last answered when bizinsights pointed its app's webhook at itself (null: not yet). */
-  webhook?: { outcome: "set" | "already" | "in_use" | "failed"; at: string; detail?: string } | null;
+export interface WaCan {
+  /** Connect and disconnect the number (Manage integrations, signed in). */
+  connect: boolean;
+  /** Settings, templates, automations, campaigns, sends (owners and admins, signed in). */
+  manage: boolean;
+  /** Customers' numbers, names and texts (View contact information). */
+  contacts: boolean;
 }
+
+export type WaTriggerAvailability = Record<WaTrigger, { available: boolean; reason: string | null }>;
 
 export interface WaOverview {
-  /** Meta's public ids come once connecting is switched on (the page loads Meta's SDK with them). */
-  platform: WaPlatform;
+  store: { id: string; name: string; timezone: string };
+  platform: { evolution: boolean; cloudApi: { missing: string[] } };
   connection: WaConnection | null;
-  legacy: { displayPhoneNumber: string | null; connectedAt: string } | null;
-  can: WaCan;
-  store: { name: string; timezone: string; currency: string };
   settings: WaSettings;
-  /** Where automation stands, from the stored state (never the page's guess). */
-  automation: { state: AutomationState; label: string; pausedAt: string | null; blocked: Array<{ id: string; name: string; problem: string }> };
-  /** Messages waiting to go: how many, how many are held and why, and when the next one is due. */
-  queue: { waiting: number; held: number; heldReasons: Array<{ reason: string; count: number }>; nextDueAt: string | null };
-  /** The last week's failed messages, newest first (five at most). */
-  recentFailures: WaMessage[];
-  stats: { last7Days: WaStats; last30Days: WaStats };
-  checklist: { connected: boolean; registered: boolean; subscribed: boolean; approvedTemplates: number; consentChosen: boolean; testPhone: boolean; activeWorkflows: number };
-  counts: { templates: { approved: number; pending: number; rejected: number }; workflows: { active: number; total: number }; campaigns: { scheduled: number; sending: number; total: number } };
-  problems: Array<{ key: string; title: string; detail: string }>;
+  setup: { done: Record<WaSetupStep, boolean>; current: WaSetupStep | null };
+  automation: { state: WaAutomationState; total: number; active: number; testMode: number; blocked: Array<{ id: string; name: string; problems: string[] }> };
+  templates: { active: number };
+  campaigns: Record<string, number>;
+  stats: { week: WaStats; month: WaStats };
+  limits: { dailyLimit: number; dailyMax: number; sentToday: number };
+  queue: {
+    waiting: number;
+    held: Array<{ reason: string | null; label: string | null; count: number }>;
+    failures: Array<{ reason: string | null; label: string | null; errorCode: string | null; count: number }>;
+  };
+  health: { lastWebhookAt: string | null; lastEventAt: string | null; lastCheckedAt: string | null };
   recent: WaMessage[];
-  webhookUrl: string;
+  retired: { displayPhoneNumber: string | null; connectedAt: string } | null;
+  /** Evolution API's licence notice. */
+  notice: string;
+  can: WaCan;
+  triggers: WaTriggerAvailability;
+  /** The Meta app's public ids for Embedded Signup (only for people who may connect; null when it isn't set up). */
+  cloudSignup: { appId: string; configId: string; version: string } | null;
 }
 
 export interface WaTemplate {
   id: string;
   name: string;
-  language: string;
-  category: string;
-  status: string;
-  statusLabel: string;
-  rejectedReason: string | null;
-  qualityScore: string | null;
-  components: TemplateComponent[];
-  shape: TemplateShape;
-  texts: { header: string | null; headerFormat: TemplateShape["headerFormat"]; body: string; footer: string | null; buttons: string[] };
-  madeHere: boolean;
-  usedBy: { workflows: number; campaigns: number } | null;
+  category: WaTemplateCategory;
+  body: string;
+  active: boolean;
+  variables: string[];
+  usable: boolean;
+  unusableReason: string | null;
+  meta: { name: string; language: string | null; status: string | null; reason: string | null; checkedAt: string | null } | null;
+  usedBy: { automations: number; campaigns: number } | null;
   updatedAt: string;
 }
 
-export interface WaTemplatesAnswer {
+export interface WaTemplatesResponse {
   templates: WaTemplate[];
-  starters: StarterTemplate[];
+  samples: WaValues;
 }
 
-export interface WaWorkflowStats {
-  waiting: number;
-  sent: number;
-  delivered: number;
-  read: number;
-  failed: number;
-  skipped: number;
-  cancelled: number;
-}
-
-export interface WaWorkflow {
+export interface WaAutomation {
   id: string;
   name: string;
-  trigger: WorkflowTrigger;
-  eventName?: string | null;
-  conditions: WorkflowCondition[];
-  /** Null for a "Customer sends a message" workflow, which replies with `replyText`. */
-  template: { name: string; language: string } | null;
-  mapping: TemplateMapping;
-  headerMediaUrl?: string | null;
-  replyText?: string | null;
-  replyCooldownMinutes?: number | null;
-  timing: WorkflowTiming;
-  sendWindow?: { start: number; end: number } | null;
-  conditionsText: string[];
+  description: string | null;
+  trigger: WaTrigger;
+  conditions: WaCondition[];
+  templateId: string;
+  recipient: WaRecipient;
+  delayMinutes: number;
+  sendWindow: WaSendWindow | null;
+  testMode: boolean;
+  cooldownMinutes: number | null;
   status: "draft" | "active" | "paused";
   version: number;
-  problems: string[];
-  stats: WaWorkflowStats | null;
-  lastRunAt: string | null;
+  triggerLabel: string;
+  conditionLabels: string[];
+  /** Why it can't be switched on (null: not checked in this answer). */
+  problems: string[] | null;
+  /** The last 30 days' runs. */
+  stats: { queued: number; skipped: number } | null;
   activatedAt: string | null;
+  lastRunAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface WaTriggerOption extends Omit<TriggerInfo, "variables"> {
-  key: WorkflowTrigger;
-  /** Whether it can start a message for this store, and why not. */
-  available: boolean;
-  reason: string | null;
-  fix: "shopify_access" | "whatsapp_webhooks" | null;
-  conditionFields: Array<{ key: WorkflowCondition["field"]; label: string }>;
-  variables: Array<{ key: VariableSource; label: string; sample: string; help?: string }>;
-}
-
-export interface WaPreset {
-  key: string;
-  title: string;
-  description: string;
-  trigger: WorkflowTrigger;
-  /** The starter template it is written for (template workflows). */
-  starter?: string;
-  timing: WorkflowTiming;
-  eventName?: string;
-  /** Reply workflows: the reply it starts with, its cool-down and conditions. */
-  replyText?: string;
-  replyCooldownMinutes?: number;
-  conditions?: WorkflowCondition[];
-}
-
-export interface WaWorkflowsAnswer {
-  workflows: WaWorkflow[];
-  presets: WaPreset[];
-  triggers: WaTriggerOption[];
-}
-
-export interface WaRun {
+export interface WaAutomationRun {
   id: string;
   subject: string | null;
-  outcome: string;
+  outcome: "queued" | "skipped";
   reason: string | null;
+  reasonLabel: string | null;
+  detail: string | null;
+  testMode: boolean;
+  messageId: string | null;
+  messageStatus: WaMessageStatus | null;
   at: string;
-  version: number;
-  message: WaMessage | null;
 }
 
-export interface WaCampaignProgress {
+export interface WaCampaignReport {
+  total: number;
   waiting: number;
   sent: number;
   delivered: number;
   read: number;
   failed: number;
-  skipped: number;
+  notSent: number;
 }
 
 export interface WaCampaign {
   id: string;
   name: string;
-  template: { name: string; language: string };
-  mapping: TemplateMapping;
-  headerMediaUrl?: string | null;
-  audience: CampaignAudience;
-  audienceText: string;
+  templateId: string;
+  audience: WaAudience;
+  audienceLabel: string;
   status: "draft" | "scheduled" | "sending" | "completed" | "cancelled";
   scheduledAt: string | null;
+  confirmedRecipients: number | null;
+  recipients: number;
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
   cancelReason: string | null;
-  estimatedRecipients: number | null;
-  recipients: number;
-  lastTestAt: string | null;
-  progress?: WaCampaignProgress;
+  report: WaCampaignReport | null;
   createdAt: string;
-}
-
-export interface WaCampaignDetail {
-  campaign: WaCampaign & { materialized: boolean; can: { edit: boolean; schedule: boolean; cancel: boolean; delete: boolean; test: boolean } };
-  report: { total: number; queued: number; sent: number; delivered: number; read: number; failed: number; skipped: number; cancelled: number; failures: Array<{ code: string | null; title: string | null; reason: string | null; count: number }> };
-  problems: string[];
 }
 
 export interface WaContact {
@@ -289,22 +251,16 @@ export interface WaContact {
   optedIn: boolean;
   marketing: "opted_in" | "opted_out" | "unknown";
   lastInboundAt: string | null;
-  windowOpen: boolean;
-  ordersCount?: number;
-  lastOrderAt?: string | null;
-  createdAt?: string;
+  lastOutboundAt: string | null;
+  ordersCount: number;
+  history: Array<{ scope: string; status: string; source: string; sourceLabel: string; note: string | null; at: string }>;
 }
 
-export interface WaContactDetail {
-  contact: WaContact;
-  consent: Array<{ scope: string; status: string; source: string; note: string | null; at: string }>;
-  messages: WaMessage[];
-}
-
-export interface WaNumber {
+export interface WaSuppression {
   id: string;
-  displayPhoneNumber: string | null;
-  verifiedName: string | null;
-  registered: boolean;
-  inUse: boolean;
+  phone: string;
+  scope: "all" | "marketing";
+  reason: string;
+  note: string | null;
+  createdAt: string;
 }
