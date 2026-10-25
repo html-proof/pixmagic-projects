@@ -111,6 +111,7 @@ export const SMS_VARIABLES = [
   "customer_name",
   "store_name",
   "business_name",
+  "date",
   "order_number",
   "order_status",
   "order_total",
@@ -129,7 +130,7 @@ export interface VariableInfo {
   sample: string;
   /** Longest value that goes into a text: longer values are shortened (names, products) or refused (links, codes). */
   maxLength: number;
-  kind: "text" | "url" | "money" | "code" | "currency";
+  kind: "text" | "url" | "money" | "code" | "currency" | "date";
   description: string;
 }
 
@@ -137,6 +138,7 @@ export const SMS_VARIABLE_INFO: Record<SmsVariable, VariableInfo> = {
   customer_name: { label: "Customer first name", sample: "Sam", maxLength: 24, kind: "text", description: "The first name on the order or checkout. Only letters, spaces, hyphens and apostrophes are kept." },
   store_name: { label: "Store name", sample: "Acme Outfitters", maxLength: 40, kind: "text", description: "Your store's name in Shopify." },
   business_name: { label: "Business name", sample: "Acme", maxLength: 40, kind: "text", description: "The business name you gave in SMS setup (your store's name until you give one)." },
+  date: { label: "Today's date", sample: "Sat 25 Oct", maxLength: 16, kind: "date", description: "The day the text is sent, where the customer is (your store's time zone when their country has several), such as Sat 25 Oct." },
   order_number: { label: "Order number", sample: "#1042", maxLength: 20, kind: "code", description: "The order's name in Shopify, such as #1042." },
   order_status: { label: "Order status", sample: "confirmed", maxLength: 20, kind: "text", description: "What happened to the order, in a word: confirmed, paid, shipped, delivered, cancelled or refunded." },
   order_total: { label: "Order total", sample: "89.95", maxLength: 16, kind: "money", description: "The order total, two decimals, without a currency sign." },
@@ -149,11 +151,12 @@ export const SMS_VARIABLE_INFO: Record<SmsVariable, VariableInfo> = {
 };
 
 /** Where each variable sits in the editor's Personalize list. */
-export type SmsVariableGroup = "Customer" | "Order" | "Store" | "Links" | "Offer";
+export type SmsVariableGroup = "Customer" | "Order" | "Store" | "Date" | "Links" | "Offer";
 export const SMS_VARIABLE_GROUP: Record<SmsVariable, SmsVariableGroup> = {
   customer_name: "Customer",
   store_name: "Store",
   business_name: "Store",
+  date: "Date",
   order_number: "Order",
   order_status: "Order",
   order_total: "Order",
@@ -164,7 +167,21 @@ export const SMS_VARIABLE_GROUP: Record<SmsVariable, SmsVariableGroup> = {
   checkout_url: "Links",
   opt_out_url: "Links",
 };
-export const SMS_VARIABLE_GROUPS: readonly SmsVariableGroup[] = ["Customer", "Order", "Store", "Links", "Offer"];
+export const SMS_VARIABLE_GROUPS: readonly SmsVariableGroup[] = ["Customer", "Order", "Store", "Date", "Links", "Offer"];
+
+/** Filled in by the send itself whatever started it, so every trigger, campaign and one-off text may use them. */
+export const ALWAYS_FILLED: readonly SmsVariable[] = ["store_name", "business_name", "date"];
+
+/** {{date}}: the day a text goes, in words every phone shows the same way ("Sat 25 Oct"). */
+export function smsDate(at: Date, timeZone: string): string {
+  let tz = timeZone;
+  try {
+    new Intl.DateTimeFormat("en-AU", { timeZone: tz });
+  } catch {
+    tz = "UTC";
+  }
+  return new Intl.DateTimeFormat("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: tz }).format(at).replace(/,/g, "");
+}
 
 /** `{{name}}`, and the dotted names other tools use (`{{customer.first_name}}`), which are aliases to fix. */
 const PLACEHOLDER = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}/g;
@@ -209,6 +226,9 @@ export const SMS_VARIABLE_ALIASES: Record<string, SmsVariable> = {
   brand: "business_name",
   company_name: "business_name",
   shop_name: "store_name",
+  today: "date",
+  current_date: "date",
+  send_date: "date",
   status: "order_status",
   total: "order_total",
   tracking_link: "tracking_url",
@@ -300,6 +320,8 @@ export function cleanVariable(variable: SmsVariable, raw: string | number | null
       const v = text.replace(LINK_LIKE, "").replace(/\s{2,}/g, " ").trim();
       return v ? clip(v, info.maxLength) : null;
     }
+    case "date":
+      return /^[A-Za-z0-9 ]{1,16}$/.test(text) ? text : null;
     case "order_number":
       return /^[#A-Za-z0-9_-]{1,20}$/.test(text) ? text : null;
     case "order_total": {
@@ -602,9 +624,9 @@ export const ORDER_STATUS_WORD: Partial<Record<SmsTrigger, string>> = {
   refund_issued: "refunded",
 };
 
-/** Variables a template uses that a trigger can't fill (the rule can't be approved with them). The store's and business's names are always there. */
+/** Variables a template uses that a trigger can't fill (the rule can't be approved with them). The store's and business's names and the date are always there. */
 export function missingForTrigger(body: string, trigger: SmsTrigger): SmsVariable[] {
-  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, "store_name", "business_name"]);
+  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, ...ALWAYS_FILLED]);
   return templateVariables(body).used.filter((v) => !can.has(v));
 }
 
@@ -708,20 +730,81 @@ export const SMS_STATUSES = ["scheduled", "sending", "accepted", "pending", "del
 export type SmsStatus = (typeof SMS_STATUSES)[number];
 
 export const SMS_STATUS_LABEL: Record<SmsStatus, string> = {
-  scheduled: "Scheduled",
+  scheduled: "Queued",
   sending: "Sending",
-  accepted: "Accepted by AWS",
-  pending: "With the carrier",
+  accepted: "Sent",
+  pending: "Sent, with the carrier",
   delivered: "Delivered",
-  carrier_accepted: "Accepted by carrier",
+  carrier_accepted: "Sent, no delivery receipt",
   failed: "Failed",
   unknown: "Unknown outcome",
   uncertain: "Outcome uncertain",
   opted_out: "Opted out",
   skipped: "Not sent",
   cancelled: "Cancelled",
-  dry_run: "Dry run",
+  dry_run: "Practice run",
 };
+
+/**
+ * Where a message is, in the few words a merchant reads: Queued, Sending, Sent, Delivered, or how
+ * it ended. A failure is told apart by who said no: the SMS provider refusing the send (a number
+ * or country it won't text, a sender not registered there) or the carrier refusing it (blocked,
+ * spam) is "Rejected"; a carrier that couldn't get it to the phone (unreachable, not a mobile,
+ * expired) "Undeliverable"; bizinsights giving up (the provider stayed busy) "Failed".
+ */
+export type SmsStage = "queued" | "sending" | "sent" | "delivered" | "failed" | "rejected" | "undeliverable" | "unknown" | "opted_out" | "not_sent" | "cancelled" | "practice";
+
+export const SMS_STAGE_LABEL: Record<SmsStage, string> = {
+  queued: "Queued",
+  sending: "Sending",
+  sent: "Sent",
+  delivered: "Delivered",
+  failed: "Failed",
+  rejected: "Rejected",
+  undeliverable: "Undeliverable",
+  unknown: "Unknown outcome",
+  opted_out: "Opted out",
+  not_sent: "Not sent",
+  cancelled: "Cancelled",
+  practice: "Practice run",
+};
+
+/** The carrier's final words that mean it refused the text, rather than failing to reach the phone. */
+const CARRIER_REFUSED = new Set(["BLOCKED", "CARRIER_BLOCKED", "SPAM", "PROTECT_BLOCKED", "INVALID_MESSAGE"]);
+
+export function smsStage(m: { status: string; reason?: string | null; errorCode?: string | null; providerStatus?: string | null }): SmsStage {
+  switch (m.status as SmsStatus) {
+    case "scheduled":
+      return "queued";
+    case "sending":
+      return "sending";
+    case "accepted":
+    case "pending":
+    case "carrier_accepted":
+      return "sent";
+    case "delivered":
+      return "delivered";
+    case "failed":
+      // The carrier's delivery report (delivery.ts keeps its status as the error code).
+      if (m.providerStatus && m.errorCode === m.providerStatus.toLowerCase()) return CARRIER_REFUSED.has(m.providerStatus.toUpperCase()) ? "rejected" : "undeliverable";
+      // The provider refusing the send itself (classifySendError's "fail": the reason is its code).
+      if (m.errorCode && m.reason === m.errorCode) return "rejected";
+      return "failed";
+    case "unknown":
+    case "uncertain":
+      return "unknown";
+    case "opted_out":
+      return "opted_out";
+    case "skipped":
+      return "not_sent";
+    case "cancelled":
+      return "cancelled";
+    case "dry_run":
+      return "practice";
+    default:
+      return "unknown";
+  }
+}
 
 /** Statuses that end a message's story (no event will move it on, except a late final event for accepted/pending ones). */
 export const FINAL_STATUSES: readonly SmsStatus[] = ["delivered", "carrier_accepted", "failed", "unknown", "uncertain", "opted_out", "skipped", "cancelled", "dry_run"];
@@ -828,22 +911,24 @@ export function classifySendError(f: SendErrorFacts): { action: SendErrorAction;
     if (/SPEND_LIMIT/.test(reason)) return { action: "hold_account", code: "aws_spend_limit" };
     return { action: "retry", code: "aws_quota" };
   }
-  if (type === "ConflictException") {
-    if (/OPTED_OUT/.test(reason)) return { action: "opt_out", code: "opted_out" };
-    if (/DESTINATION_COUNTRY_BLOCKED|COUNTRY/.test(reason)) return { action: "fail", code: "country_blocked" };
-    return { action: "fail", code: reason.toLowerCase() || "conflict" };
-  }
+  // AWS's Reason says more than the exception's name, and one reason comes under more than one
+  // name: the SMS sandbox refuses an unverified number with a ConflictException
+  // (DESTINATION_PHONE_NUMBER_NOT_VERIFIED: AWS's answer to a DryRun from this account,
+  // 2026-10-25), a blocked country with a ValidationException. So the reason is read first, and
+  // only a number AWS can't use counts as invalid (that one is suppressed).
+  if (/OPTED_OUT/.test(reason)) return { action: "opt_out", code: "opted_out" };
+  if (/VERIF/.test(reason)) return { action: "fail", code: "destination_not_verified" };
+  if (/DESTINATION_COUNTRY_BLOCKED|INTERNATIONAL_SENDING_NOT_SUPPORTED/.test(reason)) return { action: "fail", code: "country_blocked" };
+  if (/SENDER_ID_NOT_REGISTERED|SENDER_ID_REQUIRES_REGISTRATION|REGISTRATION_NOT_COMPLETE/.test(reason)) return { action: "fail", code: "sender_unregistered" };
+  if (/INVALID_IDENTITY_FOR_DESTINATION_COUNTRY|SENDER_ID_NOT_SUPPORTED|NO_ORIGINATION_IDENTITIES_FOUND/.test(reason)) return { action: "fail", code: "sender_not_for_country" };
+  if (/PRICE/.test(reason)) return { action: "fail", code: "over_max_price" };
+  if (type === "ConflictException") return { action: "fail", code: reason.toLowerCase() || "conflict" };
   if (type === "ValidationException") {
-    if (/VERIF/.test(reason)) return { action: "fail", code: "destination_not_verified" };
-    if (/PHONE|DESTINATION/.test(reason)) return { action: "fail", code: "invalid_number" };
-    if (/PRICE/.test(reason)) return { action: "fail", code: "over_max_price" };
+    if (/PHONE|DESTINATION|CANNOT_PARSE|COUNTRY_CODE_MISMATCH/.test(reason)) return { action: "fail", code: "invalid_number" };
     return { action: "fail", code: "rejected" };
   }
   if (type === "ResourceNotFoundException") return { action: "hold_sender", code: "sender_not_found" };
-  if (type === "AccessDeniedException") {
-    if (/VERIF/.test(reason)) return { action: "fail", code: "destination_not_verified" };
-    return { action: "hold_sender", code: "sender_not_allowed" };
-  }
+  if (type === "AccessDeniedException") return { action: "hold_sender", code: "sender_not_allowed" };
   return { action: "uncertain", code: type === "InternalServerException" ? "aws_internal_error" : type === "timeout" ? "timeout" : "no_answer" };
 }
 
@@ -901,6 +986,9 @@ export const SKIP_LABEL: Record<string, string> = {
   segment_missing: "The automation's customer segment was deleted",
   values_unreadable: "The text's details couldn't be read, so it wasn't sent",
   conditions: "Its conditions didn't match",
+  send_cancelled: "You cancelled this send",
+  country_unknown: "The number's country couldn't be told, so it isn't texted",
+  no_first_name: "No first name on file for this customer, and the message uses it",
   not_in_audience: "The customer isn't one the automation is for",
   // The SMS provider's answers (classifySendError).
   aws_opt_out: "The customer replied STOP or opted out with their carrier",
@@ -908,6 +996,8 @@ export const SKIP_LABEL: Record<string, string> = {
   country_blocked: "Texts to this country aren't allowed for your SMS sender",
   destination_not_verified: "Until your SMS account is verified, texts only reach approved test recipients",
   over_max_price: "The text would have cost more than the highest price allowed",
+  sender_unregistered: "Your SMS sender name isn't registered for this country yet",
+  sender_not_for_country: "Your SMS sender can't text this country",
   rejected: "The SMS provider didn't accept this text",
   conflict: "The SMS provider didn't accept this text",
   sender_not_found: "Your SMS sender is no longer available",
@@ -932,6 +1022,8 @@ export const SKIP_FIX: Record<string, { label: string; href: string }> = {
   sender_not_ready: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
   sender_not_found: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
   sender_not_allowed: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
+  sender_unregistered: { label: "Check your SMS sender", href: "/messaging/setup?step=sender" },
+  sender_not_for_country: { label: "Choose your countries", href: "/messaging/sender" },
   sending_disabled: { label: "Turn on automatic SMS", href: "/messaging/settings" },
   marketing_disabled: { label: "Turn on marketing texts", href: "/messaging/sender" },
   budget_reached: { label: "Change your monthly limit", href: "/messaging/setup?step=automate" },
@@ -1964,6 +2056,76 @@ export function checkAutomationMessage(body: string, trigger: SmsTrigger, discou
 
 /** The variables the builder's editor offers for a trigger, in the module's order ({{business_name}} stands in for {{store_name}}). */
 export function automationVariables(trigger: SmsTrigger): SmsVariable[] {
-  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, "business_name"]);
+  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, ...ALWAYS_FILLED]);
   return SMS_VARIABLES.filter((v) => can.has(v) && v !== "store_name");
+}
+
+// ---------------------------------------------------------------------------
+// Send SMS: one message to customers the merchant chooses, now or at a time
+// ---------------------------------------------------------------------------
+
+/** The most customers one send may text; a bigger audience is a campaign (a saved segment, with its count confirmed). */
+export const SMS_SEND_MAX_RECIPIENTS = 200;
+/** How far ahead a send may be scheduled. */
+export const SMS_SEND_MAX_AHEAD_DAYS = 60;
+
+/** Details the merchant types in for a text they send: with one customer, that customer's order; with several, only what is the same for everyone. */
+export const SEND_VALUES_ONE = ["order_number", "order_total", "currency", "product_name", "tracking_url", "discount_code"] as const satisfies readonly SmsVariable[];
+export const SEND_VALUES_MANY = ["product_name", "discount_code"] as const satisfies readonly SmsVariable[];
+export type SendValue = (typeof SEND_VALUES_ONE)[number];
+
+const sendValuesSchema = z.object({
+  order_number: z.string().max(20).nullish(),
+  order_total: z.string().max(16).nullish(),
+  currency: z.string().max(3).nullish(),
+  product_name: z.string().max(100).nullish(),
+  tracking_url: z.string().max(300).nullish(),
+  discount_code: z.string().max(30).nullish(),
+});
+
+const sendFields = {
+  /** A saved, approved message. */
+  templateId: z.string().min(1).max(40).nullish(),
+  /** Or a new one written on the page: saved as a message template and approved in the sender's name when it is sent. */
+  message: z.object({ name: z.string().trim().min(1).max(80), category: z.enum(SMS_CATEGORIES), body: z.string().max(2000) }).nullish(),
+  values: sendValuesSchema.default({}),
+  /** Later than now: when the texts go (the customer's quiet hours still apply). */
+  scheduledAt: z.coerce.date().nullish(),
+};
+const oneMessage = (x: { templateId?: string | null; message?: unknown }) => !!x.templateId !== !!x.message;
+
+export const smsSendPreviewSchema = z.object({ contactIds: z.array(z.string().min(1).max(40)).max(SMS_SEND_MAX_RECIPIENTS).default([]), ...sendFields }).refine(oneMessage, { message: "Choose a saved message or write a new one.", path: ["templateId"] });
+
+export const smsSendSchema = z
+  .object({
+    /** One per press of Send (the browser's): the same request again finds the send already made. */
+    requestId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/),
+    contactIds: z.array(z.string().min(1).max(40)).min(1).max(SMS_SEND_MAX_RECIPIENTS),
+    ...sendFields,
+  })
+  .refine(oneMessage, { message: "Choose a saved message or write a new one.", path: ["templateId"] });
+export type SmsSendInput = z.infer<typeof smsSendSchema>;
+
+const tokens = (vs: readonly SmsVariable[]) => vs.map((v) => `{{${v}}}`).join(", ");
+const labels = (vs: readonly SmsVariable[]) => vs.map((v) => SMS_VARIABLE_INFO[v].label.toLowerCase()).join(" and ");
+
+/**
+ * What keeps a message from going to `recipients` customers as the merchant sends it: details
+ * nothing fills in (a checkout link has no checkout here), details that differ per customer
+ * when there are several (an order number), and details used but not typed in or not usable.
+ */
+export function sendValueProblems(body: string, recipients: number, values: SmsValues): TemplateIssue[] {
+  const out: TemplateIssue[] = [];
+  const used = templateVariables(body).used;
+  const typed: readonly SmsVariable[] = recipients > 1 ? SEND_VALUES_MANY : SEND_VALUES_ONE;
+  const filled = (v: SmsVariable) => v === "customer_name" || v === "opt_out_url" || ALWAYS_FILLED.includes(v);
+  const perCustomer = used.filter((v) => !filled(v) && !typed.includes(v) && (SEND_VALUES_ONE as readonly SmsVariable[]).includes(v));
+  const never = used.filter((v) => !filled(v) && !(SEND_VALUES_ONE as readonly SmsVariable[]).includes(v));
+  if (perCustomer.length) out.push({ level: "error", code: "per_customer_value", message: `The ${labels(perCustomer)} differ from customer to customer: send to one customer, or take ${tokens(perCustomer)} out.` });
+  if (never.length) out.push({ level: "error", code: "unsupported_variable", message: `A text you send yourself has no ${labels(never)} to fill in: take ${tokens(never)} out.` });
+  const empty = used.filter((v) => typed.includes(v) && !String(values[v] ?? "").trim());
+  if (empty.length) out.push({ level: "error", code: "value_missing", message: `Fill in the ${labels(empty)}: the message uses ${tokens(empty)}.` });
+  const bad = used.filter((v) => typed.includes(v) && String(values[v] ?? "").trim() && cleanVariable(v, values[v]) === null);
+  if (bad.length) out.push({ level: "error", code: "value_invalid", message: `The ${labels(bad)} you entered can't go in a text (check its format).` });
+  return out;
 }

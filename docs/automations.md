@@ -346,9 +346,10 @@ conversations are Meta's, billed on the merchant's Meta account.
 
 ## Setting up the providers
 
-- **SMS:** [sms.md](sms.md), "Setting it up" and "Going live": production access and spending limit
-  at AWS, a registered and tagged sender per merchant, `SMS_MODE=live`. Until then the hub says
-  *test mode* everywhere and texts only verified test numbers.
+- **SMS:** [sms.md](sms.md), "Setting it up" and "Going live": `SMS_MODE=live` ships since
+  2026-10-25; production access and spending limit at AWS and a registered and tagged sender per
+  merchant are the owner's steps. Until AWS grants production access only verified numbers
+  receive texts, and the dashboard says the account is still being verified.
 - **Email:** [email.md](email.md) sections 5–7: Google (Gmail API, `gmail.send`, verification) and
   Microsoft (Entra app, `Mail.Send`) OAuth clients (`EMAIL_GOOGLE_CLIENT_ID`/`SECRET`,
   `EMAIL_MICROSOFT_CLIENT_ID`/`SECRET`); SMTP needs nothing from the platform.

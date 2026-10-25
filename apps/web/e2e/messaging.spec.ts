@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { insertStore, signUp, uniqueEmail } from "./helpers";
+import { insertStore, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Customer Messaging in the browser, against the local server's stand-in for AWS (apps/aws
@@ -19,9 +19,10 @@ async function ownerWithStore(page: Page) {
     const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Green Leaf" }) });
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   });
-  const store = await insertStore(db, ws, `sms-${Date.now()}.myshopify.com`);
+  const shop = `sms-${Date.now()}.myshopify.com`;
+  const store = await insertStore(db, ws, shop);
   await db.query(`UPDATE stores SET name = 'Green Leaf', last_synced_at = now() WHERE id = $1`, [store]);
-  return { ws, store, base: `/api/workspaces/${ws}/stores/${store}/sms` };
+  return { ws, store, shop, base: `/api/workspaces/${ws}/stores/${store}/sms` };
 }
 
 /** A JSON call from the page (its session cookie and origin). */
@@ -62,14 +63,15 @@ test("an owner sets up a sender, verifies a test number, writes a template and t
   await page.goto("/messaging/templates");
   await expect(page.getByText("Order confirmed").first()).toBeVisible();
 
-  // The test text: accepted by AWS, then delivered (the stand-in's delivery event).
+  // The test text: sent to (the stand-in for) AWS, then delivered (the stand-in's delivery event).
   await page.goto("/messaging/send");
+  await page.getByText("Send yourself a test").click();
   // Options read "<name> · <category> · <state>": pick it by its id.
-  await page.getByLabel("Template").first().selectOption((t.json as { template: { id: string } }).template.id);
-  await page.getByLabel("Test number").selectOption({ index: 1 });
+  await page.getByLabel("Message to test").selectOption((t.json as { template: { id: string } }).template.id);
+  await page.getByLabel("Test recipient").selectOption({ index: 1 });
   await expect(page.getByText("Hi Sam, Acme Outfitters got order #1042.")).toBeVisible();
   await page.getByRole("button", { name: "Send test" }).click();
-  await expect(page.getByText(/Accepted by AWS|Delivered/).first()).toBeVisible();
+  await expect(page.getByText(/Sent: the delivery report|Delivered/).first()).toBeVisible();
   await expect
     .poll(async () => ((await call(page, "GET", `${base}/messages?purpose=test`)).json as { messages: Array<{ status: string }> }).messages[0]?.status, { timeout: 15_000 })
     .toBe("delivered");
@@ -231,4 +233,47 @@ test("an owner creates an SMS automation from one button: when, who, the message
 test("the opt-out page says so for a link that names nothing", async ({ page }) => {
   await page.goto("/stop?c=Nothing1234");
   await expect(page.getByText(/isn't valid any more/)).toBeVisible();
+});
+
+test("an owner texts chosen customers in four steps (Send SMS) and follows the texts", async ({ page }) => {
+  const { base, shop } = await ownerWithStore(page);
+  expect((await call(page, "PUT", `${base}/sender`, { senderType: "sender_id", originationIdentity: "LOCALTEST", countries: ["AU"], monthlyBudgetUsd: 5, hardStop: true, transactionalBasis: "checkout_notice", quietStart: 0, quietEnd: 0, maxPerCustomerDay: 3, maxMarketingPerWeek: 2 })).status).toBe(200);
+  expect((await call(page, "POST", `${base}/sender/verify`)).status).toBe(200);
+  // Two customers, from their Shopify orders (the store's webhooks, signed as Shopify signs them).
+  for (const [i, name] of ["Ana", "Ben"].entries()) {
+    const order = { id: 7000 + i, name: `#70${i}`, currency: "AUD", created_at: new Date().toISOString(), total_price: "20.00", customer: { id: 900 + i, first_name: name }, shipping_address: { country_code: "AU", phone: `0412 000 50${i}` }, line_items: [] };
+    expect((await signedWebhook("orders/create", shop, order, `wh-send-${Date.now()}-${i}`)).status).toBe(200);
+  }
+  await expect.poll(async () => ((await call(page, "GET", `${base}/sends/customers`)).json as { customers?: unknown[] }).customers?.length ?? 0, { timeout: 20_000 }).toBe(2);
+
+  await page.goto("/messaging");
+  await page.getByRole("link", { name: "Send SMS" }).first().click();
+  await expect(page).toHaveURL(/\/messaging\/send/);
+
+  // 1. Who: two customers, checked for what they may receive.
+  await page.getByLabel(/^Ana,/).check();
+  await page.getByLabel(/^Ben,/).check();
+  await expect(page.getByTestId("send-chosen")).toHaveText("2 customers chosen");
+  await page.getByRole("button", { name: "Next" }).click();
+
+  // 2. What: a new message, with its length and parts as it is typed.
+  await page.getByRole("radio", { name: "Write a new message" }).check();
+  await page.getByLabel("Message", { exact: true }).fill("Hi {{customer_name}}, we're closed on {{date}}. {{business_name}}");
+  await expect(page.getByText(/characters · 1 SMS part/)).toBeVisible();
+  await page.getByRole("button", { name: "Preview message" }).click();
+
+  // 3. Check: the first customer's own text, and who gets it.
+  await expect(page.getByTestId("preview-text")).toHaveText(/^Hi Ana, we're closed on \w{3} \d{1,2} \w{3}\. Green Leaf$/);
+  await expect(page.getByTestId("send-going")).toContainText("2 customers will get it");
+  await page.getByRole("button", { name: "Next" }).click();
+
+  // 4. When: now, after saying yes; then followed (test mode here: recorded, not sent).
+  await page.getByRole("button", { name: "Send SMS" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByTestId("send-progress")).toBeVisible();
+  await expect(page.getByTestId("send-progress")).toContainText("Practice run · 2");
+  await expect(page.getByRole("heading", { name: "Recorded in test mode" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your sends" })).toBeVisible();
+  const [m] = ((await call(page, "GET", `${base}/messages?purpose=manual`)).json as { messages: Array<{ status: string; statusLabel: string }> }).messages;
+  expect(m).toMatchObject({ status: "dry_run", statusLabel: "Practice run" });
 });

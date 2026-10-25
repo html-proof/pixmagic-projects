@@ -6,9 +6,10 @@ import { MessageSquareText } from "lucide-react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { SectionLayout, ToastProvider, type SectionItem } from "@/components/AppUi";
 
-/** What every member uses: see how texting is going, build automations, read the history. */
+/** What every member uses: see how texting is going, send a message, build automations, read the history. */
 const MAIN = [
   ["", "Overview"],
+  ["send", "Send SMS"],
   ["automations", "Automations"],
   ["history", "Message History"],
   ["settings", "Settings"],
@@ -26,7 +27,6 @@ const ADVANCED = [
   ["templates", "Message templates"],
   ["campaigns", "Campaigns"],
   ["segments", "Customer segments"],
-  ["send", "Send one SMS"],
   ["analytics", "Delivery analytics"],
 ] as const;
 const READ_ONLY = new Set<string>(["campaigns", "analytics"]);
