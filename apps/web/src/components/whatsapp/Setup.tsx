@@ -282,9 +282,21 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
   }, [pairing?.status, onConnected]);
 
   const status = pairing?.status ?? overview.connection?.status ?? null;
+  // Always on the page, so a screen reader announces what appears after the button that started it went.
+  const announcement =
+    status === "connected"
+      ? "Linked: the phone is connected. Taking you to the settings."
+      : status === "pairing" && pairing?.pairingCode
+        ? `Pairing code ${pairing.pairingCode.split("").join(" ")}. Type it on the phone, under Linked devices.`
+        : status === "pairing" && pairing?.qr
+          ? "QR code shown. Scan it with the phone, under Linked devices."
+          : "";
   return (
     <div className="card space-y-4">
       <h2 className="text-base font-semibold">2. Link your phone</h2>
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
       {status === "connected" ? (
         <Alert kind="success">
           WhatsApp confirmed the link{pairing?.phone ? ` for ${pairing.phone}` : ""}
@@ -297,8 +309,9 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
               // A data URL from the provider: WhatsApp's own code, never one made here.
               <img src={pairing.qr} alt="QR code to link WhatsApp" width={264} height={264} className="rounded-lg border border-border bg-white p-2" data-testid="wa-qr" />
             ) : pairing.pairingCode ? (
-              <p className="rounded-lg border border-border bg-bg px-5 py-4 font-mono text-3xl font-semibold tracking-[0.3em]" data-testid="wa-pairing-code" aria-label={`Pairing code ${pairing.pairingCode.split("").join(" ")}`}>
-                {pairing.pairingCode}
+              <p className="rounded-lg border border-border bg-bg px-5 py-4 font-mono text-3xl font-semibold tracking-[0.3em]" data-testid="wa-pairing-code">
+                <span aria-hidden>{pairing.pairingCode}</span>
+                <span className="sr-only">Pairing code {pairing.pairingCode.split("").join(" ")}</span>
               </p>
             ) : (
               <div className="skeleton h-[264px] w-[264px] rounded-lg" aria-label="Waiting for WhatsApp's code" />
@@ -316,7 +329,11 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
               {pairing.pairingCode ? <li>Tap &quot;Link with phone number instead&quot; and type the code shown here.</li> : <li>Point the phone at this code.</li>}
             </ol>
             <p className="text-muted">The page changes by itself once WhatsApp confirms. The phone shows &quot;bizinsights&quot; under Linked devices; removing it there disconnects.</p>
-            {pollError && <p className="text-danger">{pollError}</p>}
+            {pollError && (
+              <p className="text-danger" role="alert">
+                {pollError}
+              </p>
+            )}
           </div>
         </div>
       ) : (
@@ -513,9 +530,17 @@ export function LiveStatus({ base, messageId, onReached }: { base: string; messa
       stop = true;
     };
   }, [base, messageId, onReached]);
-  if (!m) return <p className="text-sm text-muted">Queued…</p>;
+  // One live region from "Queued" on, so the first real status (even a final one) is announced.
   return (
     <div className="space-y-1 rounded-lg border border-border bg-bg p-3 text-sm" aria-live="polite">
+      {!m ? <p className="text-muted">Queued…</p> : <LiveStatusDetails m={m} gaveUp={gaveUp} />}
+    </div>
+  );
+}
+
+function LiveStatusDetails({ m, gaveUp }: { m: { message: WaMessage; events: WaMessageEvent[] }; gaveUp: boolean }) {
+  return (
+    <>
       <p className="flex items-center gap-2">
         Status: <MessageStatus m={m.message} />
       </p>
@@ -530,7 +555,7 @@ export function LiveStatus({ base, messageId, onReached }: { base: string; messa
       {m.message.errorDetail && <p className="text-xs text-danger">{m.message.errorDetail}</p>}
       {m.message.reasonLabel && m.message.status !== "accepted" && <p className="text-xs text-muted">{m.message.reasonLabel}</p>}
       {gaveUp && <p className="text-xs text-muted">No more reports in two minutes. The message history shows anything that comes later.</p>}
-    </div>
+    </>
   );
 }
 

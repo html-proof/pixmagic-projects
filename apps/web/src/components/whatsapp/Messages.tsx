@@ -102,7 +102,13 @@ export function Messages({ base, overview }: { base: string; overview: WaOvervie
               <label className="label" htmlFor={`${id}-phone`}>
                 Number
               </label>
-              <input id={`${id}-phone`} className="input" type="search" inputMode="tel" placeholder="+61412345678" value={phone} onChange={(e) => (e.target.value ? setPhone(e.target.value) : (setPhone(""), setPhoneQuery("")))} />
+              <div className="flex gap-2">
+                <input id={`${id}-phone`} className="input min-w-0 flex-1" type="search" inputMode="tel" placeholder="+61412345678" value={phone} onChange={(e) => (e.target.value ? setPhone(e.target.value) : (setPhone(""), setPhoneQuery("")))} />
+                {/* A phone's number keypad has no Return key: the filter needs a button of its own. */}
+                <button type="submit" className="btn-secondary shrink-0">
+                  Search
+                </button>
+              </div>
             </form>
           )}
         </div>
@@ -332,7 +338,8 @@ function Composer({ base, overview, onClose, onSent }: { base: string; overview:
             >
               Send another
             </button>
-            <button type="button" className="btn-primary" onClick={onClose}>
+            {/* The form (and its focused Send button) just went: focus moves here, inside the dialog. */}
+            <button type="button" className="btn-primary" onClick={onClose} autoFocus>
               Done
             </button>
           </div>
@@ -350,7 +357,7 @@ function Composer({ base, overview, onClose, onSent }: { base: string; overview:
               <label className="label" htmlFor={`${id}-to`}>
                 To (WhatsApp number)
               </label>
-              <input id={`${id}-to`} className="input" inputMode="tel" placeholder="+61 412 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} required />
+              <input id={`${id}-to`} className="input" inputMode="tel" placeholder="+61 412 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} required autoFocus />
             </div>
             <div>
               <label className="label" htmlFor={`${id}-cc`}>
