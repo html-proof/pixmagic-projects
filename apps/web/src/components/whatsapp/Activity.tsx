@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { WA_MESSAGE_STATUSES, WA_STATUS_LABEL } from "@app/shared/whatsapp";
@@ -7,10 +8,50 @@ import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import { Drawer, fmtWhen, usePagedList } from "@/components/messaging/MessagingUi";
 import { SendMessage } from "./SendMessage";
-import type { WaMessage, WaOverview } from "./types";
+import type { WaMessage, WaOverview, WaWorkflowsAnswer } from "./types";
 import { ChatBubble, MessageStatus, reasonText, sourceLabel, useWaAction, waHref } from "./WaUi";
 
 const EVENT_LABEL: Record<string, string> = { sent: "Sent", delivered: "Delivered", read: "Read", failed: "Failed" };
+
+/** Why a message failed, wasn't sent or waits: the reasons the history filters by. */
+const REASONS = [
+  "refused",
+  "undeliverable",
+  "uncertain",
+  "account",
+  "template_not_approved",
+  "opted_out",
+  "no_marketing_consent",
+  "no_order_update_consent",
+  "outside_window",
+  "missing_values",
+  "no_phone",
+  "automation_paused",
+  "waiting_for_connection",
+  "daily_limit",
+  "meta_throttled",
+  "disconnected",
+  "reconnect_timeout",
+];
+
+/** The moment a store-time day starts (YYYY-MM-DD in `timeZone`), as an ISO instant; `next`: the day after's. */
+export function zonedDayStart(ymd: string, timeZone: string, next = false): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return null;
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + (next ? 1 : 0));
+  // Read the zone's offset back through Intl, twice, so a day that starts a daylight-saving change lands right.
+  let t = wall;
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(t));
+    const get = (k: string) => Number(parts.find((p) => p.type === k)?.value ?? 0);
+    const seen = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
+    t = wall - (seen - t);
+  }
+  return new Date(t).toISOString();
+}
+
+const FILTER_KEYS = ["status", "direction", "source", "campaignId", "workflowId", "from", "to", "phone", "template", "reason"] as const;
+type Filters = Record<(typeof FILTER_KEYS)[number], string>;
 
 /** One message: what it said (for those who may see it), every status Meta reported, and Retry. */
 function MessageDrawer({ base, id, tz, canManage, onClose, onChanged }: { base: string; id: string; tz: string; canManage: boolean; onClose: () => void; onChanged: () => void }) {
@@ -48,9 +89,43 @@ function MessageDrawer({ base, id, tz, canManage, onClose, onChanged }: { base: 
                 <dd>{fmtWhen(m.acceptedAt, tz)}</dd>
               </div>
             )}
+            {m.deliveredAt && (
+              <div>
+                <dt className="text-xs text-muted">Delivered</dt>
+                <dd>{fmtWhen(m.deliveredAt, tz)}</dd>
+              </div>
+            )}
+            {m.readAt && (
+              <div>
+                <dt className="text-xs text-muted">Read</dt>
+                <dd>{fmtWhen(m.readAt, tz)}</dd>
+              </div>
+            )}
+            {m.failedAt && (
+              <div>
+                <dt className="text-xs text-muted">Failed</dt>
+                <dd>{fmtWhen(m.failedAt, tz)}</dd>
+              </div>
+            )}
             <div>
               <dt className="text-xs text-muted">Tries</dt>
               <dd>{m.attempts}</dd>
+            </div>
+            {m.workflowId && (
+              <div>
+                <dt className="text-xs text-muted">Workflow</dt>
+                <dd>
+                  <Link className="text-accent underline-offset-2 hover:underline" href={waHref("workflows", { workflow: m.workflowId })}>
+                    Its history
+                  </Link>
+                </dd>
+              </div>
+            )}
+            <div className="col-span-2">
+              <dt className="text-xs text-muted">bizinsights message ID · Meta message ID</dt>
+              <dd className="break-all font-mono text-xs">
+                {m.id} · {m.wamid ?? "none yet (Meta hasn't accepted it)"}
+              </dd>
             </div>
           </dl>
           {data.events.length > 0 && (
@@ -94,14 +169,27 @@ function MessageDrawer({ base, id, tz, canManage, onClose, onChanged }: { base: 
 export function Activity({ base, overview }: { base: string; overview: WaOverview }) {
   const router = useRouter();
   const params = useSearchParams();
-  const filters = { status: params.get("status") ?? "", direction: params.get("direction") ?? "", source: params.get("source") ?? "", campaignId: params.get("campaignId") ?? "", workflowId: params.get("workflowId") ?? "" };
-  const q = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)).toString();
-  const list = usePagedList<WaMessage>(`${base}/messages${q ? `?${q}` : ""}`, "messages");
+  const tz = overview.store.timezone;
+  const filters = Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) ?? ""])) as Filters;
+  // Days are the store's; the API takes instants (the end day is included).
+  const asked: Record<string, string> = {};
+  for (const k of FILTER_KEYS) {
+    const v = filters[k];
+    if (!v) continue;
+    if (k === "from") asked.from = zonedDayStart(v, tz) ?? "";
+    else if (k === "to") asked.to = zonedDayStart(v, tz, true) ?? "";
+    else asked[k] = v;
+  }
+  const q = new URLSearchParams(Object.entries(asked).filter(([, v]) => v)).toString();
+  const list = usePagedList<WaMessage>(`${base}/messages${q ? `?${q}` : ""}`, "messages", 400);
+  const workflows = useApi<WaWorkflowsAnswer>(`${base}/workflows`);
   const [open, setOpen] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const tz = overview.store.timezone;
+  const [phone, setPhone] = useState(filters.phone);
+  const [template, setTemplate] = useState(filters.template);
   const setFilter = (k: string, v: string) => router.replace(waHref("activity", Object.fromEntries(Object.entries({ ...filters, [k]: v }).filter(([, x]) => x))));
   const canSend = overview.can.manage && overview.can.contacts && overview.connection?.status === "active";
+  const any = FILTER_KEYS.some((k) => filters[k]);
 
   return (
     <div className="space-y-4">
@@ -139,10 +227,66 @@ export function Activity({ base, overview }: { base: string; overview: WaOvervie
               </option>
             ))}
           </select>
+          <select className="input" aria-label="Workflow" value={filters.workflowId} onChange={(e) => setFilter("workflowId", e.target.value)}>
+            <option value="">Any workflow</option>
+            {(workflows.data?.workflows ?? []).map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+          <select className="input" aria-label="Error or reason" value={filters.reason} onChange={(e) => setFilter("reason", e.target.value)}>
+            <option value="">Any reason</option>
+            {REASONS.map((r) => (
+              <option key={r} value={r}>
+                {reasonText(r)}
+              </option>
+            ))}
+          </select>
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setFilter("template", template.trim());
+            }}
+          >
+            <input className="input" aria-label="Template name" placeholder="Template name" value={template} onChange={(e) => setTemplate(e.target.value)} onBlur={() => template.trim() !== filters.template && setFilter("template", template.trim())} />
+          </form>
+          <label className="flex items-center gap-2 text-sm">
+            <span className="shrink-0 text-muted">From</span>
+            <input className="input" type="date" aria-label="From day" value={filters.from} onChange={(e) => setFilter("from", e.target.value)} />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <span className="shrink-0 text-muted">To</span>
+            <input className="input" type="date" aria-label="To day" value={filters.to} onChange={(e) => setFilter("to", e.target.value)} />
+          </label>
+          {overview.can.contacts && (
+            <form
+              className="flex gap-2 sm:col-span-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setFilter("phone", phone.trim());
+              }}
+            >
+              <input className="input" type="tel" aria-label="Customer's number" placeholder="Customer's number, like +61412345678" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              <button type="submit" className="btn-secondary shrink-0">
+                Find
+              </button>
+            </form>
+          )}
         </div>
-        {(filters.campaignId || filters.workflowId) && (
-          <button type="button" className="mt-2 text-xs text-accent underline" onClick={() => router.replace(waHref("activity"))}>
-            Showing one {filters.campaignId ? "campaign" : "workflow"}&apos;s messages · show all
+        <p className="mt-2 text-xs text-muted">Days are your store&apos;s ({tz}). A customer&apos;s number is matched without being stored as you typed it.</p>
+        {any && (
+          <button
+            type="button"
+            className="mt-2 text-xs text-accent underline"
+            onClick={() => {
+              setPhone("");
+              setTemplate("");
+              router.replace(waHref("activity"));
+            }}
+          >
+            {filters.campaignId ? "Showing one campaign's messages · " : filters.workflowId ? "Showing one workflow's messages · " : ""}Clear the filters
           </button>
         )}
       </section>
@@ -151,7 +295,7 @@ export function Activity({ base, overview }: { base: string; overview: WaOvervie
       ) : !list.rows ? (
         <p className="text-sm text-muted">Loading…</p>
       ) : !list.rows.length ? (
-        <EmptyState title="No messages" body={q ? "Nothing matches these filters." : "Messages appear here as workflows, campaigns and your team send them, and as customers reply."} />
+        <EmptyState title="No messages" body={any ? "Nothing matches these filters." : "Messages appear here as workflows, campaigns and your team send them, and as customers reply."} />
       ) : (
         <div className="card overflow-x-auto">
           <table className="w-full min-w-[40rem] text-sm">

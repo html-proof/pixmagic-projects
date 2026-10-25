@@ -7,14 +7,24 @@
  * why (its conditions, no number, no consent, the template not approved), and so does every
  * message: the history is the merchant's way to see what happened. Workflows never trigger each
  * other, so they can't loop.
+ *
+ * "Customer sends a message" workflows (`runReplyWorkflows`) answer a customer's message with the
+ * merchant's own text: WhatsApp allows that without a template because the customer has just
+ * written (its 24-hour window is open). They run once per message, and the same customer gets a
+ * workflow's reply at most once in its cool-down, so a conversation isn't answered over and over.
+ *
+ * While the store has paused all automation, every trigger is recorded as a run that sent nothing
+ * ("automation_paused"), so the merchant sees what they missed.
  */
 import { randomBytes } from "node:crypto";
-import { Prisma, systemDb, type Store, type WaConnection, type WaTemplate, type WaWorkflow } from "@app/db";
+import { Prisma, systemDb, type Store, type WaConnection, type WaContact, type WaTemplate, type WaWorkflow } from "@app/db";
 import {
   consentProblem,
   CONSENT_SOURCE_LABEL,
+  DEFAULT_REPLY_COOLDOWN_MINUTES,
   DEFAULT_SEND_WINDOW,
   evaluateWorkflowConditions,
+  expandScopes,
   missingValues,
   normalizePhone,
   renderTemplate,
@@ -22,7 +32,9 @@ import {
   templateShape,
   TRIGGER_INFO,
   VARIABLE_INFO,
+  WORKFLOW_TRIGGERS,
   workflowSchema,
+  zonedHour,
   type CustomEventInput,
   type NormalizedPhone,
   type SendValues,
@@ -33,6 +45,7 @@ import {
   type WorkflowInput,
   type WorkflowTrigger,
 } from "@app/shared";
+import { appWebhookTopics } from "../apps.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import { canSend, liveConnection, settingsOf, storeLabel, testPhoneOf, waEncrypt, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
@@ -41,17 +54,24 @@ import { cancelQueued, queueMessage } from "./messages.js";
 
 /** Events older than this start nothing (a replayed webhook, a backfill): customers aren't told about old news. */
 export const STALE_EVENT_MS = 48 * 3600_000;
+/** A customer's message older than this gets no automatic reply (a webhook Meta held back): it would answer old news. */
+export const STALE_REPLY_MS = 60 * 60_000;
+
+const isReply = (trigger: WorkflowTrigger) => TRIGGER_INFO[trigger].sends === "reply";
 
 /** What a workflow row says, as the builder's input. */
 export function workflowInput(w: WaWorkflow): WorkflowInput {
+  const trigger = w.trigger as WorkflowTrigger;
   return {
     name: w.name,
-    trigger: w.trigger as WorkflowTrigger,
+    trigger,
     eventName: w.eventName,
     conditions: (w.conditions ?? []) as unknown as WorkflowCondition[],
-    template: { name: w.templateName, language: w.templateLanguage },
+    template: w.templateName ? { name: w.templateName, language: w.templateLanguage } : null,
     mapping: w.mapping as unknown as TemplateMapping,
     headerMediaUrl: w.headerMediaUrl,
+    replyText: w.replyText,
+    replyCooldownMinutes: w.replyCooldownMinutes,
     timing: w.timingMode === "before_event" ? { mode: "before_event", minutes: w.timingMinutes } : { mode: "after_trigger", minutes: w.timingMinutes },
     sendWindow: w.sendWindowStart !== null && w.sendWindowEnd !== null ? { start: w.sendWindowStart, end: w.sendWindowEnd } : null,
   };
@@ -60,15 +80,19 @@ export function workflowInput(w: WaWorkflow): WorkflowInput {
 function rowData(input: WorkflowInput, templateCategory: string | null) {
   // Marketing messages wait for sending hours unless the merchant chose others (or none).
   const window = input.sendWindow === undefined ? (templateCategory === "MARKETING" ? DEFAULT_SEND_WINDOW : null) : input.sendWindow;
+  const reply = isReply(input.trigger);
   return {
     name: input.name,
     trigger: input.trigger,
     eventName: input.trigger === "custom_event" ? (input.eventName ?? null) : null,
     conditions: input.conditions as unknown as Prisma.InputJsonValue,
-    templateName: input.template.name,
-    templateLanguage: input.template.language,
+    // A reply workflow has no template: "" keeps the columns as the release before reads them.
+    templateName: reply ? "" : (input.template?.name ?? ""),
+    templateLanguage: reply ? "" : (input.template?.language ?? ""),
     mapping: input.mapping as unknown as Prisma.InputJsonValue,
-    headerMediaUrl: input.headerMediaUrl ?? null,
+    headerMediaUrl: reply ? null : (input.headerMediaUrl ?? null),
+    replyText: reply ? (input.replyText ?? null) : null,
+    replyCooldownMinutes: reply ? (input.replyCooldownMinutes ?? DEFAULT_REPLY_COOLDOWN_MINUTES) : null,
     timingMode: input.timing.mode,
     timingMinutes: input.timing.minutes,
     sendWindowStart: window ? window.start : null,
@@ -76,13 +100,66 @@ function rowData(input: WorkflowInput, templateCategory: string | null) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Which triggers this store can use
+// ---------------------------------------------------------------------------
+
+export interface TriggerAvailability {
+  available: boolean;
+  /** Why not, in the merchant's words (null when it is). */
+  reason: string | null;
+  /** What fixes it: Shopify access to grant, or WhatsApp's webhooks to finish. */
+  fix: "shopify_access" | "whatsapp_webhooks" | null;
+}
+
+const NOT_SENT_BY_APP =
+  "Your store is connected through bizinsights' App Store app, which Shopify doesn't send order and checkout events to until it approves bizinsights' access to protected customer data. This trigger can't start a message yet.";
+
+/**
+ * What each trigger can do for this store: Shopify's events only where the store's app receives
+ * them (an App Store store gets no order or checkout events until Shopify approves protected
+ * customer data), new customers only with read_customers, customers' messages only once WhatsApp's
+ * webhooks reach bizinsights. Nothing is offered as working when it can't start a message.
+ */
+export function triggerAvailability(store: Pick<Store, "shopifyAppKey" | "grantedScopes">, conn: Pick<WaConnection, "subscribedAt"> | null): Record<WorkflowTrigger, TriggerAvailability> {
+  const app = appWebhookTopics(store.shopifyAppKey);
+  const scopes = expandScopes(store.grantedScopes);
+  const ok: TriggerAvailability = { available: true, reason: null, fix: null };
+  const out = {} as Record<WorkflowTrigger, TriggerAvailability>;
+  for (const t of WORKFLOW_TRIGGERS) {
+    const info = TRIGGER_INFO[t];
+    if (t === "message_received") {
+      out[t] = conn?.subscribedAt ? ok : { available: false, reason: "Customers' messages aren't reaching bizinsights yet. Press Check again on the Overview; once WhatsApp's webhooks are set up this trigger works.", fix: "whatsapp_webhooks" };
+    } else if (t === "customer_created") {
+      out[t] = scopes.has("read_customers")
+        ? ok
+        : { available: false, reason: "bizinsights needs permission to read your customers in Shopify to hear about new ones. Update the bizinsights app's access in Shopify, then come back.", fix: "shopify_access" };
+    } else if (info.topics.length && app && !info.topics.some((topic) => app.includes(topic))) {
+      out[t] = { available: false, reason: NOT_SENT_BY_APP, fix: null };
+    } else {
+      out[t] = ok;
+    }
+  }
+  return out;
+}
+
 /**
  * Why a workflow can't be switched on (empty: it can). The same list the builder shows, so the
  * merchant sees every reason before pressing Activate.
  */
-export function workflowProblems(input: WorkflowInput, ctx: { template: WaTemplate | null; conn: WaConnection | null; settings: WaSettingsView }): string[] {
+export function workflowProblems(input: WorkflowInput, ctx: { template: WaTemplate | null; conn: WaConnection | null; settings: WaSettingsView; availability?: Record<WorkflowTrigger, TriggerAvailability> | null }): string[] {
   const out: string[] = [];
   if (!canSend(ctx.conn)) out.push("Connect WhatsApp and finish its setup first.");
+  const available = ctx.availability?.[input.trigger];
+  if (available && !available.available && available.reason) out.push(available.reason);
+  if (isReply(input.trigger)) {
+    if (!input.replyText?.trim()) out.push("Write the reply customers receive.");
+    return out;
+  }
+  if (!input.template) {
+    out.push("Choose the approved template to send.");
+    return out;
+  }
   const t = ctx.template;
   if (!t) out.push(`The template "${input.template.name}" (${input.template.language}) isn't in your WhatsApp account.`);
   else if (t.status === "PENDING" || t.status === "IN_APPEAL") out.push(`The template "${t.name}" is waiting for Meta's review.`);
@@ -102,8 +179,15 @@ export function workflowProblems(input: WorkflowInput, ctx: { template: WaTempla
   return out;
 }
 
-async function templateOf(storeId: string, ref: { name: string; language: string }) {
+async function templateOf(storeId: string, ref: { name: string; language: string } | null | undefined) {
+  if (!ref?.name) return null;
   return systemDb.waTemplate.findUnique({ where: { storeId_name_language: { storeId, name: ref.name, language: ref.language } } });
+}
+
+/** Everything workflowProblems reads, for one store. */
+export async function workflowContext(store: Pick<Store, "id" | "shopifyAppKey" | "grantedScopes">, template: { name: string; language: string } | null | undefined) {
+  const conn = await liveConnection(store.id);
+  return { template: await templateOf(store.id, template), conn, settings: await settingsOf(store.id), availability: triggerAvailability(store, conn) };
 }
 
 /** Save a workflow (new, or an edit). An active workflow stays active only if it still could be switched on. */
@@ -114,7 +198,7 @@ export async function saveWorkflow(input: { store: Store; userId: string | null;
     const current = await systemDb.waWorkflow.findFirst({ where: { id: input.id, storeId: input.store.id } });
     if (!current) throw new WhatsappError("That workflow wasn't found.", 404, "not_found");
     if (current.status === "active") {
-      const problems = workflowProblems(data, { template, conn: await liveConnection(input.store.id), settings: await settingsOf(input.store.id) });
+      const problems = workflowProblems(data, await workflowContext(input.store, data.template));
       if (problems.length) throw new WhatsappError(`Pause the workflow before saving this change: ${problems[0]}`, 409, "workflow_problems", { problems });
     }
     const updated = await systemDb.waWorkflow.update({ where: { id: current.id }, data: { ...rowData(data, template?.category ?? null), version: { increment: 1 }, updatedByUserId: input.userId } });
@@ -136,9 +220,33 @@ async function workflowOf(storeId: string, id: string): Promise<WaWorkflow> {
   return w;
 }
 
-/** Problems of a stored workflow, as the builder and Activate see them. */
-export async function storedWorkflowProblems(w: WaWorkflow): Promise<string[]> {
-  return workflowProblems(workflowInput(w), { template: await templateOf(w.storeId, { name: w.templateName, language: w.templateLanguage }), conn: await liveConnection(w.storeId), settings: await settingsOf(w.storeId) });
+/** Problems of a stored workflow, as the builder and Activate see them (`store`: its store, when the caller has it). */
+export async function storedWorkflowProblems(w: WaWorkflow, store?: Pick<Store, "id" | "shopifyAppKey" | "grantedScopes"> | null): Promise<string[]> {
+  const input = workflowInput(w);
+  const s = store ?? (await systemDb.store.findUnique({ where: { id: w.storeId }, select: { id: true, shopifyAppKey: true, grantedScopes: true } }));
+  if (!s) return ["The store isn't connected to bizinsights any more."];
+  return workflowProblems(input, await workflowContext(s, input.template));
+}
+
+/**
+ * The store's switched-on workflows that something stops from sending (a template Meta rejected
+ * later, the consent choice undone, a trigger the store's Shopify app no longer receives), with why.
+ * The overview reads it to say "Needs attention" rather than "Active".
+ */
+export async function blockedActiveWorkflows(store: Pick<Store, "id" | "shopifyAppKey" | "grantedScopes">): Promise<Array<{ id: string; name: string; problems: string[] }>> {
+  const active = await systemDb.waWorkflow.findMany({ where: { storeId: store.id, status: "active" }, orderBy: { createdAt: "asc" }, take: 50 });
+  if (!active.length) return [];
+  const conn = await liveConnection(store.id);
+  const [settings, templates] = await Promise.all([settingsOf(store.id), systemDb.waTemplate.findMany({ where: { storeId: store.id } })]);
+  const availability = triggerAvailability(store, conn);
+  const byRef = new Map(templates.map((t) => [`${t.name}|${t.language}`, t]));
+  const out: Array<{ id: string; name: string; problems: string[] }> = [];
+  for (const w of active) {
+    const input = workflowInput(w);
+    const problems = workflowProblems(input, { template: input.template ? (byRef.get(`${input.template.name}|${input.template.language}`) ?? null) : null, conn, settings, availability });
+    if (problems.length) out.push({ id: w.id, name: w.name, problems });
+  }
+  return out;
 }
 
 /**
@@ -148,7 +256,7 @@ export async function storedWorkflowProblems(w: WaWorkflow): Promise<string[]> {
  */
 export async function activateWorkflow(input: { store: Store; id: string; userId: string | null; ip?: string; subscribeCustomers?: () => Promise<string | null> }): Promise<WaWorkflow> {
   const w = await workflowOf(input.store.id, input.id);
-  const problems = await storedWorkflowProblems(w);
+  const problems = await storedWorkflowProblems(w, input.store);
   if (problems.length) throw new WhatsappError(problems[0]!, 409, "workflow_problems", { problems });
   if (w.trigger === "customer_created" && input.subscribeCustomers) {
     const why = await input.subscribeCustomers().catch((err: unknown) => {
@@ -256,6 +364,10 @@ export async function runWorkflows(deps: Pick<WaDeps, "queues">, subject: Workfl
       await systemDb.waWorkflowRun.update({ where: { id: run.id }, data: { outcome: "skipped", reason: detail ? `${reason}: ${detail}`.slice(0, 300) : reason } });
       result.skipped++;
     };
+    if (settings.automationPausedAt) {
+      await skip("automation_paused");
+      continue;
+    }
     if (now - subject.occurredAt.getTime() > STALE_EVENT_MS) {
       await skip("stale");
       continue;
@@ -322,6 +434,122 @@ export async function runWorkflows(deps: Pick<WaDeps, "queues">, subject: Workfl
   return result;
 }
 
+/** A customer's message, as "Customer sends a message" workflows read it. */
+export interface InboundSubject {
+  conn: WaConnection;
+  contact: WaContact;
+  /** Meta's id of the customer's message: each workflow answers a message once. */
+  wamid: string;
+  /** What it says (null: media without a caption, a location...). */
+  text: string | null;
+  at: Date;
+}
+
+/**
+ * Answer a customer's message with every switched-on "Customer sends a message" workflow whose
+ * conditions hold. Safe to run again for the same message (one run per workflow and message), and
+ * the same customer gets a workflow's reply at most once in its cool-down. STOP and START never get
+ * here (webhook.ts handles them); a customer who stopped messages gets nothing.
+ */
+export async function runReplyWorkflows(deps: Pick<WaDeps, "queues" | "coord">, s: InboundSubject): Promise<RunResult> {
+  const result: RunResult = { workflows: 0, scheduled: 0, skipped: 0 };
+  if (!canSend(s.conn)) return result;
+  const workflows = await systemDb.waWorkflow.findMany({ where: { storeId: s.conn.storeId, trigger: "message_received", status: "active" }, orderBy: { createdAt: "asc" } });
+  if (!workflows.length) return result;
+  const [store, settings] = await Promise.all([systemDb.store.findUnique({ where: { id: s.conn.storeId }, select: { id: true, workspaceId: true, timezone: true, status: true } }), settingsOf(s.conn.storeId)]);
+  if (!store || store.status === "uninstalled") return result;
+  const now = Date.now();
+  const facts: WorkflowFacts = {
+    orderTotal: null,
+    country: s.contact.country,
+    productTitles: [],
+    customerType: null,
+    tags: [],
+    paymentMethods: [],
+    messageText: s.text,
+    localHour: zonedHour(s.at, store.timezone || "UTC").hour,
+  };
+  for (const wf of workflows) {
+    result.workflows++;
+    let run;
+    try {
+      run = await systemDb.waWorkflowRun.create({
+        data: { workspaceId: wf.workspaceId, storeId: wf.storeId, workflowId: wf.id, workflowVersion: wf.version, trigger: "message_received", subjectKey: `message:${s.wamid}`, subjectLabel: `Message from ${s.contact.phoneMasked}`.slice(0, 120), outcome: "pending", contactId: s.contact.id },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") continue;
+      throw e;
+    }
+    const skip = async (reason: string, detail?: string) => {
+      await systemDb.waWorkflowRun.update({ where: { id: run.id }, data: { outcome: "skipped", reason: detail ? `${reason}: ${detail}`.slice(0, 300) : reason } });
+      result.skipped++;
+    };
+    if (settings.automationPausedAt) {
+      await skip("automation_paused");
+      continue;
+    }
+    if (s.contact.optedOut) {
+      await skip("opted_out");
+      continue;
+    }
+    if (now - s.at.getTime() > STALE_REPLY_MS) {
+      await skip("stale");
+      continue;
+    }
+    const input = workflowInput(wf);
+    const cond = evaluateWorkflowConditions(input.conditions, facts);
+    if (!cond.pass) {
+      await skip("conditions_not_met", cond.failed.join("; "));
+      continue;
+    }
+    const text = input.replyText?.trim();
+    if (!text) {
+      await skip("missing_values", "the reply is empty");
+      continue;
+    }
+    // Once per customer per cool-down: the lease stops two messages answered at the same moment,
+    // the run history stops it across leases (a lost lease, a lease shorter than a long cool-down).
+    const cooldown = input.replyCooldownMinutes ?? DEFAULT_REPLY_COOLDOWN_MINUTES;
+    const lease = `wa:reply:${wf.id}:${s.contact.id}`;
+    if (cooldown > 0) {
+      const recent = await systemDb.waWorkflowRun.findFirst({ where: { workflowId: wf.id, contactId: s.contact.id, outcome: "scheduled", createdAt: { gte: new Date(now - cooldown * 60_000) } }, select: { id: true } });
+      if (recent || !(await deps.coord.acquire(lease, cooldown * 60_000).catch(() => true))) {
+        await skip("recently_replied");
+        continue;
+      }
+    }
+    let message;
+    try {
+      ({ message } = await queueMessage(
+        {
+          store,
+          connectionId: s.conn.id,
+          contact: s.contact,
+          source: "workflow",
+          idempotencyKey: `wf:${wf.id}:message:${s.wamid}`,
+          workflowId: wf.id,
+          workflowRunId: run.id,
+          template: null,
+          payload: { kind: "text", body: text },
+          preview: text,
+          sendAfter: new Date(Math.max(now, s.at.getTime() + input.timing.minutes * 60_000)),
+        },
+        deps,
+      ));
+    } catch (err) {
+      // Nothing was queued: the next message (or this one, retried) may still be answered.
+      if (cooldown > 0) await deps.coord.release(lease).catch(() => undefined);
+      await systemDb.waWorkflowRun.delete({ where: { id: run.id } }).catch(() => undefined);
+      throw err;
+    }
+    await systemDb.waWorkflowRun.update({ where: { id: run.id }, data: { outcome: "scheduled", messageId: message.id } });
+    await systemDb.waWorkflow.update({ where: { id: wf.id }, data: { lastRunAt: new Date() } });
+    result.scheduled++;
+  }
+  if (result.workflows) logger.info({ storeId: s.conn.storeId, trigger: "message_received", ...result }, "whatsapp workflows ran");
+  return result;
+}
+
 /** A checkout reminder still waiting moves to `delay` after the customer's latest change. */
 async function retimeRun(wf: WaWorkflow, subject: WorkflowSubject, input: WorkflowInput) {
   const run = await systemDb.waWorkflowRun.findUnique({ where: { workflowId_subjectKey: { workflowId: wf.id, subjectKey: subject.key } } });
@@ -375,6 +603,33 @@ export async function sendTest(deps: Pick<WaDeps, "queues">, input: { store: Sto
       template: { name: template.name, language: template.language, category: template.category },
       payload: { kind: "template", mapping: input.mapping, values, headerMediaUrl: input.headerMediaUrl ?? null },
       preview: renderTemplate(template.components as unknown as TemplateComponent[], input.mapping, values).body,
+      createdByUserId: input.userId,
+    },
+    deps,
+  );
+  return message;
+}
+
+/**
+ * A reply workflow's text to the merchant's own test number. WhatsApp delivers text without a
+ * template only within 24 hours of that number's last message to the business, so Meta refuses it
+ * otherwise (the history then says so in plain words).
+ */
+export async function sendTestReply(deps: Pick<WaDeps, "queues">, input: { store: Store; userId: string | null; text: string; label: string }) {
+  const conn = await liveConnection(input.store.id);
+  if (!canSend(conn)) throw new WhatsappError("Connect WhatsApp and finish its setup before sending a test.", 409, "not_connected");
+  const to = await testPhoneOf(input.store.id);
+  if (!to) throw new WhatsappError("Add your own WhatsApp number in Settings first: tests go only to it.", 409, "no_test_phone");
+  const { message } = await queueMessage(
+    {
+      store: input.store,
+      connectionId: conn!.id,
+      to,
+      source: "test",
+      idempotencyKey: `test:${input.label}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      template: null,
+      payload: { kind: "text", body: input.text },
+      preview: input.text,
       createdByUserId: input.userId,
     },
     deps,

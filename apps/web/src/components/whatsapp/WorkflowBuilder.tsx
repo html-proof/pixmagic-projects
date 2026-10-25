@@ -2,8 +2,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  DEFAULT_REPLY_COOLDOWN_MINUTES,
   DEFAULT_SEND_WINDOW,
   describeCondition,
+  REPLY_MAX_DELAY_MINUTES,
+  REPLY_MAX_LENGTH,
   type ConditionField,
   type StarterTemplate,
   type TemplateMapping,
@@ -16,7 +19,7 @@ import { api } from "@/lib/api";
 import { CountryPicker, fmtDelay, fmtHour } from "@/components/messaging/MessagingUi";
 import { fitMapping, MappingEditor } from "./MappingEditor";
 import type { WaTemplate, WaTriggerOption, WaWorkflow, WaWorkflowsAnswer } from "./types";
-import { problemsOf, useWaAction, waError, waHref } from "./WaUi";
+import { ChatBubble, problemsOf, useWaAction, waError, waHref } from "./WaUi";
 
 interface Form {
   name: string;
@@ -26,8 +29,50 @@ interface Form {
   template: { name: string; language: string } | null;
   mapping: TemplateMapping;
   headerMediaUrl: string;
+  /** "Customer sends a message" workflows: the reply, and how often one customer may get it. */
+  replyText: string;
+  cooldown: number;
   timing: WorkflowTiming;
   window: { start: number; end: number } | null;
+}
+
+const HOURS = Array.from({ length: 24 }, (_x, h) => h);
+
+function HourSelect({ label, value, onChange }: { label: string; value: number; onChange: (h: number) => void }) {
+  return (
+    <select className="input w-auto" aria-label={label} value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      {HOURS.map((h) => (
+        <option key={h} value={h}>
+          {fmtHour(h)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** Words typed with commas, as the condition keeps them. */
+const splitWords = (s: string) =>
+  s
+    .split(",")
+    .map((w) => w.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+
+/** The words box keeps what is typed (commas, a trailing space) and saves the list as it changes. */
+function WordsInput({ value, onChange }: { value: string[]; onChange: (words: string[]) => void }) {
+  const [text, setText] = useState(value.join(", "));
+  return (
+    <input
+      className="input w-72"
+      aria-label="Words or phrases, separated by commas"
+      placeholder="open, hours, delivery"
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(splitWords(e.target.value));
+      }}
+    />
+  );
 }
 
 const UNITS: Array<[string, number]> = [
@@ -70,6 +115,10 @@ function newCondition(field: ConditionField): WorkflowCondition {
       return { field, op: "has", value: "" };
     case "payment_method":
       return { field, op: "contains", value: "cash on delivery" };
+    case "message_text":
+      return { field, op: "contains_any", value: ["hours"] };
+    case "received_at":
+      return { field, op: "outside_hours", value: { start: 9, end: 17 } };
   }
 }
 
@@ -102,6 +151,27 @@ function ConditionRow({ c, onChange, onRemove }: { c: WorkflowCondition; onChang
         <option value="new">It&apos;s the customer&apos;s first order</option>
         <option value="returning">The customer has ordered before</option>
       </select>
+    );
+  } else if (c.field === "message_text") {
+    body = (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm">The message contains any of</span>
+        <WordsInput value={c.value} onChange={(value) => onChange({ ...c, value: value.length ? value : c.value })} />
+        <span className="text-xs text-muted">Any case; separate with commas.</span>
+      </div>
+    );
+  } else if (c.field === "received_at") {
+    body = (
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <select className="input w-auto" aria-label="Outside or within" value={c.op} onChange={(e) => onChange({ ...c, op: e.target.value as "outside_hours" | "within_hours" })}>
+          <option value="outside_hours">It arrives outside</option>
+          <option value="within_hours">It arrives between</option>
+        </select>
+        <HourSelect label="From" value={c.value.start} onChange={(start) => onChange({ ...c, value: { ...c.value, start } })} />
+        {c.op === "outside_hours" ? "to" : "and"}
+        <HourSelect label="To" value={c.value.end} onChange={(end) => onChange({ ...c, value: { ...c.value, end } })} />
+        <span className="text-xs text-muted">(your store&apos;s time)</span>
+      </div>
     );
   } else if (c.field === "order_tag") {
     body = (
@@ -163,23 +233,29 @@ export function WorkflowBuilder({
         template: editing.template,
         mapping: editing.mapping,
         headerMediaUrl: editing.headerMediaUrl ?? "",
+        replyText: editing.replyText ?? "",
+        cooldown: editing.replyCooldownMinutes ?? DEFAULT_REPLY_COOLDOWN_MINUTES,
         timing: editing.timing,
         window: editing.sendWindow ?? null,
       };
     }
-    const starter = preset ? starters.find((s) => s.key === preset.starter) : null;
+    const starter = preset?.starter ? starters.find((s) => s.key === preset.starter) : null;
     const t = starter ? usable.find((x) => x.name === starter.draft.name && x.language === starter.draft.language) ?? null : null;
-    const trig = meta.triggers.find((x) => x.key === (preset?.trigger ?? "order_created"))!;
+    // A preset whose trigger this store can't use, or none: the first trigger that works here.
+    const wanted = meta.triggers.find((x) => x.key === (preset?.trigger ?? "order_created"));
+    const trig = (wanted?.available || preset ? wanted : null) ?? meta.triggers.find((x) => x.available) ?? meta.triggers[0]!;
     return {
       name: preset?.title ?? "",
       trigger: trig.key,
       eventName: preset?.eventName ?? "",
-      conditions: [],
+      conditions: preset?.conditions ?? [],
       template: t ? { name: t.name, language: t.language } : null,
       mapping: t ? (starter?.mapping && starter.mapping.body.length === t.shape.bodyVars ? starter.mapping : fitMapping(t, null, trig.variables.map((v) => v.key))) : { body: [], buttons: [] },
       headerMediaUrl: "",
+      replyText: preset?.replyText ?? "",
+      cooldown: preset?.replyCooldownMinutes ?? DEFAULT_REPLY_COOLDOWN_MINUTES,
       timing: preset?.timing ?? { mode: "after_trigger", minutes: 0 },
-      window: trig.category === "MARKETING" ? DEFAULT_SEND_WINDOW : null,
+      window: trig.category === "MARKETING" && trig.sends === "template" ? DEFAULT_SEND_WINDOW : null,
     };
     // The form starts once; later changes are the person's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -189,26 +265,31 @@ export function WorkflowBuilder({
   const [error, setError] = useState<string | null>(null);
   const { busy, run } = useWaAction();
   const trigger: WaTriggerOption = meta.triggers.find((t) => t.key === f.trigger)!;
+  const reply = trigger.sends === "reply";
   const allowed = trigger.variables.map((v) => v.key);
   const template = f.template ? (templates.find((t) => t.name === f.template!.name && t.language === f.template!.language) ?? null) : null;
-  const starterMissing = !editing && preset && !f.template ? starters.find((s) => s.key === preset.starter) : null;
+  const starterMissing = !editing && preset?.starter && !f.template && !reply ? starters.find((s) => s.key === preset.starter) : null;
   const unit = unitOf(f.timing.minutes);
+  const cooldownUnit = unitOf(f.cooldown);
+  const ready = reply ? !!f.replyText.trim() : !!f.template;
 
   const body = () => ({
     name: f.name,
     trigger: f.trigger,
     eventName: f.trigger === "custom_event" ? f.eventName : null,
     conditions: f.conditions,
-    template: f.template ?? { name: "", language: "en" },
-    mapping: f.mapping,
-    headerMediaUrl: f.headerMediaUrl.trim() || null,
+    template: reply ? null : (f.template ?? { name: "", language: "en" }),
+    mapping: reply ? { body: [], buttons: [] } : f.mapping,
+    headerMediaUrl: reply ? null : f.headerMediaUrl.trim() || null,
+    replyText: reply ? f.replyText : null,
+    replyCooldownMinutes: reply ? f.cooldown : null,
     timing: f.timing,
     sendWindow: f.window,
   });
 
   // What would stop it being switched on, asked as the form settles.
   useEffect(() => {
-    if (!f.template) {
+    if (!ready) {
       setProblems(null);
       return;
     }
@@ -236,7 +317,7 @@ export function WorkflowBuilder({
         let w = saved.workflow;
         if (activate && w.status !== "active") w = (await api<{ workflow: WaWorkflow }>(`${base}/workflows/${w.id}/activate`, { method: "POST", body: {} })).workflow;
         onDone(w);
-        return activate ? `"${w.name}" is on. It runs for every new ${trigger.label.toLowerCase()} from now on.` : `"${w.name}" saved.`;
+        return activate ? (reply ? `"${w.name}" is on. It answers customers who write to you from now on.` : `"${w.name}" is on. It runs for every new ${trigger.label.toLowerCase()} from now on.`) : `"${w.name}" saved.`;
       } catch (e) {
         const list = problemsOf(e);
         if (list.length) setProblems(list);
@@ -262,25 +343,53 @@ export function WorkflowBuilder({
         </div>
       </section>
 
-      <Step n={1} title="When" explain="What starts this workflow. It runs once for each order, checkout, customer or event.">
+      <Step n={1} title="When" explain="What starts this workflow. It runs once for each order, checkout, customer, event or message.">
         <div className="grid gap-2 sm:grid-cols-2">
-          {meta.triggers.map((t) => (
-            <label key={t.key} className={`flex cursor-pointer gap-2 rounded-lg border p-3 text-sm ${f.trigger === t.key ? "border-accent bg-accent/5" : "border-border"}`}>
-              <input
-                type="radio"
-                name="wf-trigger"
-                checked={f.trigger === t.key}
-                onChange={() => {
-                  const vars = t.variables.map((v) => v.key);
-                  setF({ ...f, trigger: t.key, conditions: f.conditions.filter((c) => t.conditionFields.some((x) => x.key === c.field)), mapping: fitMapping(template, f.mapping, vars), timing: t.key === "custom_event" ? f.timing : { mode: "after_trigger", minutes: f.timing.minutes } });
-                }}
-              />
-              <span>
-                <span className="font-medium">{t.label}</span>
-                <span className="block text-xs text-muted">{t.when}</span>
-              </span>
-            </label>
-          ))}
+          {meta.triggers.map((t) => {
+            // A trigger this store can't use isn't offered, unless it is the one being edited.
+            const off = !t.available && f.trigger !== t.key;
+            return (
+              <label key={t.key} className={`flex gap-2 rounded-lg border p-3 text-sm ${off ? "cursor-not-allowed opacity-70" : "cursor-pointer"} ${f.trigger === t.key ? "border-accent bg-accent/5" : "border-border"}`}>
+                <input
+                  type="radio"
+                  name="wf-trigger"
+                  checked={f.trigger === t.key}
+                  disabled={off}
+                  aria-describedby={!t.available ? `wf-trigger-why-${t.key}` : undefined}
+                  onChange={() => {
+                    const vars = t.variables.map((v) => v.key);
+                    const toReply = t.sends === "reply";
+                    setF({
+                      ...f,
+                      trigger: t.key,
+                      conditions: f.conditions.filter((c) => t.conditionFields.some((x) => x.key === c.field)),
+                      template: toReply ? null : f.template,
+                      mapping: toReply ? { body: [], buttons: [] } : fitMapping(template, f.mapping, vars),
+                      timing: t.key === "custom_event" ? f.timing : { mode: "after_trigger", minutes: toReply ? Math.min(f.timing.minutes, REPLY_MAX_DELAY_MINUTES) : f.timing.minutes },
+                      window: toReply ? null : f.window,
+                    });
+                  }}
+                />
+                <span>
+                  <span className="font-medium">{t.label}</span>
+                  <span className="block text-xs text-muted">{t.when}</span>
+                  {!t.available && t.reason && (
+                    <span id={`wf-trigger-why-${t.key}`} className="mt-1 block text-xs text-warn">
+                      Not available for your store: {t.reason}
+                      {t.fix === "whatsapp_webhooks" && (
+                        <>
+                          {" "}
+                          <Link className="underline" href={waHref("overview")}>
+                            Go to the Overview
+                          </Link>
+                        </>
+                      )}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
         </div>
         {f.trigger === "custom_event" && (
           <div className="mt-3 max-w-md">
@@ -315,8 +424,25 @@ export function WorkflowBuilder({
         )}
       </Step>
 
-      <Step n={3} title="Send" explain="The approved template to send, and what fills its blanks for each customer.">
-        {!usable.length ? (
+      <Step
+        n={3}
+        title="Send"
+        explain={reply ? "Your reply, as the customer will read it. WhatsApp allows replies without a template because the customer has just written." : "The approved template to send, and what fills its blanks for each customer."}
+      >
+        {reply ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="wf-reply">
+                Reply
+              </label>
+              <textarea id="wf-reply" className="input min-h-28" maxLength={REPLY_MAX_LENGTH} value={f.replyText} onChange={(e) => setF({ ...f, replyText: e.target.value })} placeholder="Thanks for your message! We'll reply within a few hours." />
+              <p className="mt-1 text-xs text-muted">
+                {f.replyText.length} / {REPLY_MAX_LENGTH} characters. Customers who replied STOP never get it; STOP and START themselves never start this workflow.
+              </p>
+            </div>
+            <ChatBubble body={f.replyText} />
+          </div>
+        ) : !usable.length ? (
           <Alert kind="info">
             You don&apos;t have a template yet.{" "}
             <Link className="underline" href={waHref("templates")}>
@@ -362,8 +488,29 @@ export function WorkflowBuilder({
         )}
       </Step>
 
-      <Step n={4} title="Timing" explain="When the message goes, and the hours it may go out.">
+      <Step n={4} title="Timing" explain={reply ? "When the reply goes, and how often one customer may get it." : "When the message goes, and the hours it may go out."}>
         <div className="space-y-3">
+          {reply && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
+              <span className="text-sm">Reply to the same customer at most once every</span>
+              <input
+                className="input w-20"
+                type="number"
+                min={0}
+                aria-label="How often"
+                value={f.cooldown / cooldownUnit}
+                onChange={(e) => setF({ ...f, cooldown: Math.max(0, Math.round((Number(e.target.value) || 0) * cooldownUnit)) })}
+              />
+              <select className="input w-auto" aria-label="Unit" value={cooldownUnit} onChange={(e) => setF({ ...f, cooldown: Math.round((f.cooldown / cooldownUnit) * Number(e.target.value)) })}>
+                {UNITS.map(([label, n]) => (
+                  <option key={n} value={n}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-muted">{f.cooldown ? "so a conversation isn't answered over and over." : "0: every message gets the reply."}</span>
+            </div>
+          )}
           {f.trigger === "custom_event" && (
             <select className="input w-auto" aria-label="Relative to" value={f.timing.mode} onChange={(e) => setF({ ...f, timing: { ...f.timing, mode: e.target.value as WorkflowTiming["mode"] } })}>
               <option value="after_trigger">After the event arrives</option>
@@ -428,9 +575,10 @@ export function WorkflowBuilder({
         <p className="text-sm">
           When <strong>{trigger.label.toLowerCase()}</strong>
           {f.trigger === "custom_event" && f.eventName ? ` "${f.eventName}"` : ""}
-          {f.conditions.length ? `, and ${f.conditions.map(describeCondition).join(" and ").toLowerCase()}` : ""}, send <strong>{f.template?.name ?? "a template"}</strong>{" "}
+          {f.conditions.length ? `, and ${f.conditions.map(describeCondition).join(" and ").toLowerCase()}` : ""}, send <strong>{reply ? "your reply" : (f.template?.name ?? "a template")}</strong>{" "}
           {f.timing.mode === "before_event" ? `${fmtDelay(f.timing.minutes)} before the event` : f.timing.minutes ? `${fmtDelay(f.timing.minutes)} later` : "right away"}
-          {f.window ? `, between ${fmtHour(f.window.start)} and ${fmtHour(f.window.end)}` : ""}. Every message is checked for the customer&apos;s consent right before it goes.
+          {f.window ? `, between ${fmtHour(f.window.start)} and ${fmtHour(f.window.end)}` : ""}
+          {reply && f.cooldown ? `, at most once every ${fmtDelay(f.cooldown)} to the same customer` : ""}. Every message is checked for the customer&apos;s consent right before it goes.
         </p>
         {problems && problems.length > 0 && (
           <Alert kind="info">
@@ -445,11 +593,11 @@ export function WorkflowBuilder({
         )}
         {error && <Alert>{error}</Alert>}
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn-primary" disabled={!f.name.trim() || !f.template || !!busy || (problems?.length ?? 1) > 0} onClick={() => void save(true)}>
+          <button type="button" className="btn-primary" disabled={!f.name.trim() || !ready || !!busy || (problems?.length ?? 1) > 0} onClick={() => void save(true)}>
             {busy === "activate" ? "Switching on…" : editing?.status === "active" ? "Save" : "Save and switch on"}
           </button>
           {editing?.status !== "active" && (
-            <button type="button" className="btn-secondary" disabled={!f.name.trim() || !f.template || !!busy} onClick={() => void save(false)}>
+            <button type="button" className="btn-secondary" disabled={!f.name.trim() || !ready || !!busy} onClick={() => void save(false)}>
               {busy === "save" ? "Saving…" : "Save as draft"}
             </button>
           )}

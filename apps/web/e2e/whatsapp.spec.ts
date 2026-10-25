@@ -74,15 +74,22 @@ async function connect(ws: string, storeId: string, opts: { status?: string; ste
 
 const FINISH = { type: "WA_EMBEDDED_SIGNUP", event: "FINISH", data: { waba_id: "1111111111", phone_number_id: "2222222222", business_id: "9999999" } };
 
-test("not connected: the onboarding explains the three steps; a blocked or closed Meta window connects nothing", async ({ page }) => {
+test("not connected: the real state, the button and what Meta asks; a blocked or closed Meta window connects nothing", async ({ page }) => {
   await ownerWithStore(page, "wa-onboard");
   await stubMeta(page);
   await page.goto("/whatsapp");
   await expect(page.getByRole("heading", { level: 1, name: /WhatsApp Automation/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Connect your WhatsApp Business number" })).toBeVisible();
+  // The same tiles as when connected, with what is true now: nothing connected, nothing running.
+  const tiles = page.getByTestId("wa-status");
+  await expect(tiles).toContainText("Not connected");
+  await expect(tiles).toContainText("Disconnected");
+  await expect(tiles).toContainText("None yet");
+  await expect(page.getByRole("heading", { name: "Connect WhatsApp Business" })).toBeVisible();
   await expect(page.getByText("Sign in with Meta")).toBeVisible();
   await expect(page.getByText("bizinsights sets it up")).toBeVisible();
-  await expect(page.getByText("Send yourself a test")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What Meta will ask you for" })).toBeVisible();
+  // Connecting is set up in this environment: no "not available" note.
+  await expect(page.getByTestId("wa-not-available")).toHaveCount(0);
   // Only the onboarding until a number is connected.
   await expect(tabs(page).getByRole("link", { name: "Automated workflows" })).toHaveCount(0);
 
@@ -143,6 +150,26 @@ test("connected: the overview, the tabs, and choosing how customers agree", asyn
   await expect(page.getByText("+61 400 000 000 · Spices WABA")).toBeVisible();
   await expect(page.getByRole("heading", { name: /Finish setting up/ })).toBeVisible();
   await expect(page.getByText("Choose how customers agree to updates.", { exact: false })).toBeVisible();
+  // Meta's ids, the connection's health and automation's real state (connected, nothing switched on).
+  await expect(page.getByText("1111111111", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("wa-health")).toContainText("Replies and delivery reports reach bizinsights");
+  await expect(page.getByTestId("wa-automation")).toContainText("No workflow on");
+  // A test needs the merchant's own number first.
+  await page.getByTestId("wa-send-test-open").click();
+  await expect(page.getByTestId("wa-send-test")).toContainText("Tests go only to your own WhatsApp number");
+  await page.getByTestId("wa-send-test").getByRole("button", { name: "Done" }).click();
+  await expect(page.getByTestId("wa-send-test")).toHaveCount(0);
+
+  // Pause all automation, confirmed; then resume.
+  const automation = page.getByTestId("wa-automation");
+  await automation.getByRole("button", { name: "Pause all automation" }).click();
+  await page.getByRole("button", { name: "Pause automation" }).click();
+  await expect(automation).toContainText("Paused");
+  await expect(automation.getByRole("button", { name: "Resume automation" })).toBeVisible();
+  const paused = await db.query("SELECT automation_paused_at FROM wa_settings WHERE store_id = $1", [storeId]);
+  expect(paused.rows[0]?.automation_paused_at).toBeTruthy();
+  await automation.getByRole("button", { name: "Resume automation" }).click();
+  await expect(automation).toContainText("No workflow on");
 
   await tabs(page).getByRole("link", { name: "Automated workflows" }).click();
   await expect(page.getByRole("button", { name: /Order confirmation/ })).toBeVisible();

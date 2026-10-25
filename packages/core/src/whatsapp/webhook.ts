@@ -3,21 +3,23 @@
  * delivery, since every number is connected through bizinsights' app) and calls `recordWebhook`,
  * which stores the body once (keyed by its hash: Meta's retries of a body are the same body),
  * encrypted, and queues it; Meta gets its 200 at once. The worker then applies it
- * (`processWebhookEvent`): delivery statuses, customers' messages (STOP / START), their marketing
- * setting, template reviews, the number's quality and name, and the account's state.
+ * (`processWebhookEvent`): delivery statuses, customers' messages (STOP / START, and the
+ * "Customer sends a message" workflows that answer them), their marketing setting, template
+ * reviews, the number's quality and name, and the account's state.
  *
  * Each change is applied only to the store whose number (or account) it names. Everything is
  * idempotent and safe out of order: a status only moves a message forward (statusAfterEvent), each
  * status is stored once per message, an inbound message once per Meta id, and consent changes
  * older than the last one change nothing.
  */
-import { Prisma, systemDb, type Store, type WaConnection } from "@app/db";
+import { Prisma, systemDb, type Store, type WaConnection, type WaContact } from "@app/db";
 import { isStartKeyword, isStopKeyword, isStopPromotionsReply, metaErrorExplanation, normalizePhone, sha256Hex, statusAfterEvent } from "@app/shared";
 import { logger } from "../logger.js";
 import { raiseAlert } from "../notify.js";
 import { waDecrypt, waEncrypt, waQueue, type WaDeps } from "./common.js";
 import { findContact, setConsent, upsertContact } from "./contacts.js";
 import { markAccountProblem, markReconnect, WA_ALERT } from "./tokens.js";
+import { runReplyWorkflows } from "./workflows.js";
 import {
   metaAccountValueSchema,
   metaChangeSchema,
@@ -185,12 +187,27 @@ function inboundText(m: MetaInbound): string {
   return `[${(m.type ?? "message").replace(/_/g, " ")}]`;
 }
 
-async function applyInbound(conn: WaConnection, store: Pick<Store, "id" | "workspaceId">, m: MetaInbound): Promise<boolean> {
+/** What a customer can send that a "Customer sends a message" workflow answers (not reactions, system notices or unsupported types). */
+const REPLYABLE = new Set(["text", "image", "video", "document", "audio", "voice", "sticker", "location", "contacts", "button", "interactive", "order"]);
+
+async function applyInbound(conn: WaConnection, store: Pick<Store, "id" | "workspaceId">, m: MetaInbound, deps: WaDeps): Promise<boolean> {
   const phone = normalizePhone(`+${m.from}`, null);
   if (!phone) return false;
   const at = tsDate(m.timestamp);
+  const words = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? null;
+  const keyword = isStopPromotionsReply(words) || isStopKeyword(words) || isStartKeyword(words);
+  const replyTo = async (contact: WaContact) => {
+    if (keyword || !REPLYABLE.has(m.type ?? "text")) return;
+    await runReplyWorkflows(deps, { conn, contact, wamid: m.id, text: m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? m.image?.caption ?? m.video?.caption ?? m.document?.caption ?? null, at });
+  };
   const known = await systemDb.waMessage.findUnique({ where: { wamid: m.id }, select: { id: true } });
-  if (known) return false;
+  if (known) {
+    // Seen before (Meta redelivered, or applying it failed part-way): its replies are made once per
+    // workflow and message, so asking again only finishes what a failed try left.
+    const contact = await findContact(store.id, phone);
+    if (contact) await replyTo(contact);
+    return false;
+  }
   let contact = await upsertContact(store, phone, { inboundAt: at });
   const text = inboundText(m);
   try {
@@ -217,7 +234,6 @@ async function applyInbound(conn: WaConnection, store: Pick<Store, "id" | "works
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return false;
     throw e;
   }
-  const words = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? null;
   if (isStopPromotionsReply(words)) {
     contact = (await setConsent(contact, { scope: "marketing", status: "opted_out", source: "stop_promotions", at })).contact;
   } else if (isStopKeyword(words)) {
@@ -225,6 +241,7 @@ async function applyInbound(conn: WaConnection, store: Pick<Store, "id" | "works
   } else if (isStartKeyword(words)) {
     contact = (await setConsent(contact, { scope: "all", status: "opted_in", source: "whatsapp_start", at })).contact;
   }
+  await replyTo(contact);
   return true;
 }
 
@@ -292,7 +309,7 @@ export async function applyMetaWebhook(payload: unknown, deps: WaDeps): Promise<
         const conn = conns.find((c) => c.phoneNumberId && c.phoneNumberId === String(v.metadata?.phone_number_id ?? ""));
         if (!conn) continue;
         for (const s of parseMetaList(metaStatusSchema, v.statuses ?? [], "status", ids)) if (await applyStatus(conn, s)) applied++;
-        for (const m of parseMetaList(metaInboundSchema, v.messages ?? [], "message", ids)) if (await applyInbound(conn, storeOf(conn), m)) applied++;
+        for (const m of parseMetaList(metaInboundSchema, v.messages ?? [], "message", ids)) if (await applyInbound(conn, storeOf(conn), m, deps)) applied++;
       } else if (field === "user_preferences") {
         const v = parseMeta(metaPreferencesValueSchema, change.value, field, ids);
         if (!v) continue;

@@ -16,6 +16,11 @@
  *     with no answer at all may have reached Meta, so it is never repeated on its own: it is marked
  *     failed as "uncertain" and the merchant may retry it.
  *  5. "Accepted" is not "delivered": Meta's status webhooks (webhook.ts) move it on.
+ *
+ * Two brakes on top: a store that paused all automation holds its workflows' and campaigns'
+ * messages (released on resume, cancelled after 48 hours), and a number Meta throttles or can't
+ * serve trips a circuit breaker, so its other waiting messages wait it out instead of each being
+ * refused in turn (30 s, doubling to 10 minutes while Meta keeps refusing; no attempt is spent).
  */
 import { Prisma, systemDb, type Store, type WaConnection, type WaContact, type WaMessage } from "@app/db";
 import {
@@ -157,6 +162,65 @@ const SENDS_PER_SECOND = 20;
 /** Waiting messages are held this long while the connection needs the merchant, then cancelled by the sweep. */
 export const HOLD_LIMIT_MS = 48 * 3600_000;
 
+// ---------------------------------------------------------------------------
+// The circuit breaker: one per sending number
+// ---------------------------------------------------------------------------
+
+/** How long a number waits after Meta throttles it or can't serve it: 30 s, doubling while it keeps happening, at most 10 minutes. */
+export const BREAKER_BASE_S = 30;
+export const BREAKER_MAX_S = 600;
+const breakerKey = (phoneNumberId: string) => `wa:breaker:${phoneNumberId}`;
+
+/** Meta codes that say the number (not one message) is throttled, or Meta itself is busy. */
+const NUMBER_WIDE = new Set([4, 80007, 130429, 131048, 131000, 1, 2, 133004]);
+
+/**
+ * The number's breaker as stored: "<open until, ms>:<trips in a row>". The record outlives the wait
+ * by BREAKER_MAX_S, so a refusal soon after it closed waits twice as long; a send Meta takes clears it.
+ */
+async function readBreaker(coord: WaDeps["coord"], phoneNumberId: string): Promise<{ until: number; trips: number } | null> {
+  const raw = await coord.peek(breakerKey(phoneNumberId)).catch(() => null);
+  if (!raw) return null;
+  const [until, trips] = raw.split(":").map(Number);
+  return Number.isFinite(until) && Number.isFinite(trips) && trips! > 0 ? { until: until!, trips: trips! } : null;
+}
+
+/** Until when the number's breaker is open (null: closed). */
+export async function breakerOpenUntil(coord: WaDeps["coord"], phoneNumberId: string): Promise<number | null> {
+  const b = await readBreaker(coord, phoneNumberId);
+  return b && b.until > Date.now() ? b.until : null;
+}
+
+/** Open the number's breaker after a refusal that holds for every message it sends. Returns until when. */
+export async function tripBreaker(coord: WaDeps["coord"], phoneNumberId: string): Promise<number> {
+  const prev = await readBreaker(coord, phoneNumberId);
+  // Several sends refused in the same moment trip it once.
+  if (prev && prev.until > Date.now()) return prev.until;
+  const trips = (prev?.trips ?? 0) + 1;
+  const wait = Math.min(BREAKER_MAX_S, BREAKER_BASE_S * 2 ** (trips - 1));
+  const until = Date.now() + wait * 1000;
+  await coord.put(breakerKey(phoneNumberId), `${until}:${trips}`, wait + BREAKER_MAX_S).catch(() => undefined);
+  logger.warn({ phoneNumberId, wait, trips }, "whatsapp: Meta throttled the number; its sends wait");
+  return until;
+}
+
+/** Meta took a message from the number again: the breaker closes. */
+async function closeBreaker(coord: WaDeps["coord"], phoneNumberId: string): Promise<void> {
+  await coord.put(breakerKey(phoneNumberId), "0:0", 1).catch(() => undefined);
+}
+
+/** A refusal that holds for every message the number sends (a throttle, Meta busy), not just this one. */
+const numberWide = (err: WhatsappApiError) => (err.code !== null && NUMBER_WIDE.has(err.code)) || (err.code === null && (err.httpStatus >= 500 || err.httpStatus === 429));
+
+/** Messages held while their store paused automation are released at once on resume (the sweep takes the rest). */
+export async function releasePausedMessages(storeId: string, deps: Pick<WaDeps, "queues">): Promise<number> {
+  const now = new Date();
+  await systemDb.waMessage.updateMany({ where: { storeId, status: "queued", reason: "automation_paused" }, data: { reason: null, sendAfter: now, enqueuedAt: null } });
+  const rows = await systemDb.waMessage.findMany({ where: { storeId, status: "queued", enqueuedAt: null, sendAfter: { lte: now } }, select: { id: true, sendAfter: true, status: true }, take: 1000 });
+  for (const m of rows) await enqueueSend(m, deps);
+  return rows.length;
+}
+
 /** How many customers the store started conversations with in the last 24 hours (template sends). */
 async function recipientsToday(storeId: string, coord: WaDeps["coord"]): Promise<number> {
   const key = `wa:daily:${storeId}`;
@@ -242,9 +306,15 @@ export async function sendWaMessage(messageId: string, deps: WaDeps): Promise<Se
     // Meta's category now decides who may receive it (Meta can move a template to Marketing).
     category = t.category;
   }
+  const settings = await settingsOf(m.storeId);
+  // "Pause all automation": workflows' and campaigns' messages wait (released on resume), for 48 hours at most.
+  if ((m.source === "workflow" || m.source === "campaign") && settings.automationPausedAt) {
+    const pausedAt = settings.automationPausedAt.getTime();
+    if (Date.now() - pausedAt > HOLD_LIMIT_MS) return finish(m, "cancelled", "automation_paused");
+    return later(m, new Date(pausedAt + HOLD_LIMIT_MS + 60_000), deps, "automation_paused");
+  }
   if (contact) {
     if (m.type === "template") {
-      const settings = await settingsOf(m.storeId);
       const problem = consentProblem(category, consentFacts(contact), { orderUpdates: settings.orderUpdates });
       if (problem) return finish(m, "skipped", problem);
     } else {
@@ -270,11 +340,13 @@ export async function sendWaMessage(messageId: string, deps: WaDeps): Promise<Se
 
   // The store's daily limit (its own, else Meta's tier) and the number's pace.
   if (m.type === "template" && m.source !== "test" && m.source !== "team_alert") {
-    const settings = await settingsOf(m.storeId);
     const tier = tierLimit(conn.messagingLimitTier);
     const cap = [tier, settings.dailyLimit].filter((x): x is number => x !== null).reduce((a, b) => Math.min(a, b), Number.POSITIVE_INFINITY);
     if (Number.isFinite(cap) && (await recipientsToday(m.storeId, deps.coord)) >= cap) return later(m, new Date(Date.now() + 3600_000), deps, "daily_limit");
   }
+  // Meta throttled this number a moment ago: wait it out (no attempt spent) instead of being refused again.
+  const breaker = await readBreaker(deps.coord, conn.phoneNumberId);
+  if (breaker && breaker.until > Date.now()) return later(m, new Date(breaker.until + Math.floor(Math.random() * 5000)), deps, "meta_throttled");
   const second = Math.floor(Date.now() / 1000);
   if ((await deps.coord.hit(`wa:pace:${conn.phoneNumberId}:${second}`, 2).catch(() => 0)) > SENDS_PER_SECOND) {
     return later(m, new Date(Date.now() + 1000 + Math.floor(Math.random() * 2000)), deps, null);
@@ -308,6 +380,7 @@ export async function sendWaMessage(messageId: string, deps: WaDeps): Promise<Se
       data: { status: "accepted", wamid, acceptedAt: now, reason: null, errorCode: null, errorTitle: null, payloadEnc: null },
     });
     if (conn.status !== "active") await markWorking(conn);
+    if (breaker) await closeBreaker(deps.coord, conn.phoneNumberId);
     return "accepted";
   } catch (err) {
     if (!(err instanceof WhatsappApiError)) throw err;
@@ -332,6 +405,7 @@ async function onMetaError(m: WaMessage, conn: WaConnection, contact: WaContact 
       // Meta may have it: never sent again on its own.
       return finish(m, "failed", "uncertain", { errorTitle: "WhatsApp didn't answer, so it may or may not have been sent. Check with the customer before sending it again." });
     case "retry":
+      if (conn.phoneNumberId && numberWide(err)) await tripBreaker(deps.coord, conn.phoneNumberId);
       return retryLater(m, deps, `meta_${code ?? err.httpStatus}`);
     case "reconnect":
       await markReconnect(conn, "Meta no longer accepts bizinsights' access", deps);

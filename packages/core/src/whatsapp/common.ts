@@ -148,10 +148,15 @@ export interface WaSettingsView {
   hasTestPhone: boolean;
   /** The custom-event key's last characters and when it was made (null: none yet). */
   eventKey: { hint: string; createdAt: Date } | null;
+  /** "Pause all automation": since when (null: automation runs), and who paused it. */
+  automationPausedAt: Date | null;
+  automationPausedBy: string | null;
 }
 
 export function waSettingsView(s: WaSettings | null): WaSettingsView {
   return {
+    automationPausedAt: s?.automationPausedAt ?? null,
+    automationPausedBy: s?.automationPausedBy ?? null,
     orderUpdates: (s?.orderUpdates ?? "unset") as OrderUpdateBasis,
     orderUpdatesSetBy: s?.orderUpdatesSetBy ?? null,
     orderUpdatesSetAt: s?.orderUpdatesSetAt ?? null,
@@ -166,6 +171,12 @@ export function waSettingsView(s: WaSettings | null): WaSettingsView {
 
 export async function settingsOf(storeId: string): Promise<WaSettingsView> {
   return waSettingsView(await systemDb.waSettings.findUnique({ where: { storeId } }));
+}
+
+/** Since when the store paused all automation (null: it runs). */
+export async function automationPausedSince(storeId: string): Promise<Date | null> {
+  const s = await systemDb.waSettings.findUnique({ where: { storeId }, select: { automationPausedAt: true } });
+  return s?.automationPausedAt ?? null;
 }
 
 /** The merchant's own number for test messages (E.164), or null. */

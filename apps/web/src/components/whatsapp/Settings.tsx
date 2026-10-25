@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { ORDER_UPDATE_BASIS_INFO, type OrderUpdateBasis } from "@app/shared/whatsapp";
 import { PHONE_COUNTRIES } from "@app/shared/messaging";
@@ -7,8 +8,10 @@ import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api } from "@/lib/api";
 import { countryName, fmtHour, fmtWhen } from "@/components/messaging/MessagingUi";
+import { ConnectWhatsApp } from "./ConnectWhatsApp";
+import { AutomationControl, HealthChecks } from "./Status";
 import type { WaOverview, WaSettings } from "./types";
-import { CONNECTION_TONE, Hint, useWaAction } from "./WaUi";
+import { CONNECTION_TONE, Hint, useWaAction, waHref } from "./WaUi";
 
 function Card({ id, title, explain, children }: { id: string; title: string; explain?: string; children: ReactNode }) {
   return (
@@ -76,6 +79,12 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
               </dd>
             </div>
             <div>
+              <dt className="text-xs text-muted">Meta business portfolio · phone number ID</dt>
+              <dd className="font-mono text-xs">
+                {c!.businessId ?? "—"} · {c!.phoneNumberId ?? "—"}
+              </dd>
+            </div>
+            <div>
               <dt className="text-xs text-muted">Display name review</dt>
               <dd>{c!.nameStatus ? c!.nameStatus.toLowerCase().replace(/_/g, " ") : "—"}</dd>
             </div>
@@ -91,22 +100,6 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
           {c!.statusDetail && <Alert kind="info">{c!.statusDetail}</Alert>}
           {(can.connect || can.pin) && (
             <div className="flex flex-wrap gap-2">
-              {can.connect && (
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  disabled={busy === "check"}
-                  onClick={() =>
-                    void run("check", "check WhatsApp again", async () => {
-                      await api(`${base}/connect/check`, { method: "POST", body: {} });
-                      reload();
-                      return "Checked with WhatsApp: your number, webhooks and templates are up to date.";
-                    })
-                  }
-                >
-                  {busy === "check" ? "Checking…" : "Check again"}
-                </button>
-              )}
               {can.pin && c!.hasPin && (
                 <button
                   type="button"
@@ -135,6 +128,37 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
               audit log.
             </Alert>
           )}
+          {can.connect && overview.platform.ready && (
+            <div className="border-t border-border pt-3">
+              <p className="mb-2 text-sm text-muted">
+                Refresh bizinsights&apos; access (a permission was removed, or you want another number or account): go through Meta&apos;s window again. The same connection is updated; your history,
+                templates and workflows stay.
+              </p>
+              <ConnectWhatsApp base={base} platform={overview.platform} label="Reconnect WhatsApp" onConnected={() => reload()} />
+            </div>
+          )}
+        </Card>
+      )}
+      {connected && <HealthChecks data={overview} base={base} reload={reload} />}
+      {connected && <AutomationControl data={overview} base={base} reload={reload} />}
+      {connected && (
+        <Card id="wa-records-h" title="Templates and opt-outs" explain="Where to manage what customers receive, and who asked not to.">
+          <ul className="space-y-1 text-sm">
+            <li>
+              <Link className="text-accent underline-offset-2 hover:underline" href={waHref("templates")}>
+                Message templates
+              </Link>{" "}
+              <span className="text-muted">· write, check with Meta and remove templates</span>
+            </li>
+            {can.contacts && (
+              <li>
+                <Link className="text-accent underline-offset-2 hover:underline" href={waHref("contacts")}>
+                  Customers and their consent
+                </Link>{" "}
+                <span className="text-muted">· everyone who replied STOP is never messaged; record an opt-out given another way</span>
+              </li>
+            )}
+          </ul>
         </Card>
       )}
 

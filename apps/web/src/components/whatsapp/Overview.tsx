@@ -6,38 +6,43 @@ import { Alert } from "@/components/ui";
 import { api, fmtNum, useApi } from "@/lib/api";
 import { fmtWhen, plural } from "@/components/messaging/MessagingUi";
 import { ConnectWhatsApp } from "./ConnectWhatsApp";
+import { SendTestMessage } from "./SendTest";
+import { AutomationControl, HealthChecks, META_LINKS, MetaRequirements, PlatformNotReady, PlatformWebhook, StatusStrip } from "./Status";
 import type { WaNumber, WaOverview, WaStats } from "./types";
-import { CONNECTION_TONE, MessageStatus, sourceLabel, useWaAction, waHref, WhatsappIcon } from "./WaUi";
+import { CONNECTION_TONE, MessageStatus, reasonText, sourceLabel, useWaAction, waHref, WhatsappIcon } from "./WaUi";
 
 // ---------------------------------------------------------------------------
-// The page's first tab: not connected, how to connect; connected, how the number stands, what
-// was sent, what needs the merchant, and the one step Meta's sign-up may have left.
+// The page's first tab. Not connected: the same status tiles as when connected (real values: not
+// connected, nothing running), the button that starts Meta's sign-up, or, while bizinsights' Meta
+// app isn't set up, exactly that and nothing pretending otherwise. Connected: the account and its
+// ids, its health, automation and its pause, what is waiting and what failed, and the one step
+// Meta's sign-up may have left.
 // ---------------------------------------------------------------------------
 
-function Steps() {
+/** What happens when the merchant presses the button, in three lines. */
+function HowItWorks() {
   const steps: Array<[string, string]> = [
-    ["Sign in with Meta", "Meta's own window opens. Sign in with the Facebook account that manages your business, then choose (or create) your WhatsApp Business account and the phone number customers will see."],
-    ["bizinsights sets it up", "bizinsights checks what you shared, registers the number for sending, and starts receiving delivery reports and replies. You never copy a token, key or webhook address."],
-    ["Send yourself a test", "Add your own WhatsApp number in Settings, pick an approved message template, and see exactly what customers will receive."],
+    ["Sign in with Meta", "Meta's own window opens: sign in, choose (or create) your business and WhatsApp Business account, and add or pick the number customers will see."],
+    ["bizinsights sets it up", "It checks what you granted, saves the access encrypted, registers the number, and subscribes to delivery reports and replies. No token, key or webhook address to copy."],
+    ["Turn on what you need", "Send yourself a test, then switch on order confirmations, shipping updates or support replies, one by one."],
   ];
   return (
-    <ol className="grid gap-3 sm:grid-cols-3">
+    <ol className="grid gap-2 sm:grid-cols-3">
       {steps.map(([title, body], i) => (
-        <li key={title} className="rounded-lg border border-border bg-bg p-3">
-          <p className="flex items-center gap-2 text-sm font-semibold">
-            <span aria-hidden className="grid size-6 place-items-center rounded-full bg-accent text-xs text-white">
-              {i + 1}
-            </span>
-            {title}
-          </p>
-          <p className="mt-1 text-sm text-muted">{body}</p>
+        <li key={title} className="flex gap-2 text-sm">
+          <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-full bg-accent text-xs text-white">
+            {i + 1}
+          </span>
+          <span>
+            <span className="font-medium">{title}.</span> <span className="text-muted">{body}</span>
+          </span>
         </li>
       ))}
     </ol>
   );
 }
 
-/** Not connected (or disconnected): what WhatsApp Automation does, and the button. */
+/** Not connected (or disconnected): the dashboard as it truly stands, and the way to connect. */
 export function Onboarding({ data, base, onConnected }: { data: WaOverview; base: string; onConnected: () => void }) {
   const { platform, can, legacy, connection } = data;
   return (
@@ -53,39 +58,42 @@ export function Onboarding({ data, base, onConnected }: { data: WaOverview; base
           WhatsApp was disconnected{connection.disconnectedAt ? ` on ${fmtWhen(connection.disconnectedAt, data.store.timezone)}` : ""}. Your message history is kept. Connect again to start sending.
         </Alert>
       )}
+      <StatusStrip data={data} />
       <section className="card animate-rise" aria-labelledby="wa-start-h">
         <div className="flex flex-wrap items-start gap-4">
           <WhatsappIcon size={44} className="shrink-0" />
           <div className="min-w-0 flex-1">
             <h2 id="wa-start-h" className="text-lg font-semibold">
-              Connect your WhatsApp Business number
+              Connect WhatsApp Business
             </h2>
             <p className="mt-1 max-w-2xl text-sm text-muted">
-              Send order confirmations, shipping updates, reminders and campaigns from your own WhatsApp Business number, through Meta&apos;s official WhatsApp Business Platform. Customers only
+              Send order confirmations, shipping updates, reminders and support replies from your own WhatsApp Business number, through Meta&apos;s official WhatsApp Business Platform. Customers only
               receive messages they agreed to, and every reply of STOP is respected.
             </p>
           </div>
         </div>
-        <div className="mt-4">
-          <Steps />
-        </div>
         <div className="mt-5">
           {!platform.ready ? (
-            <Alert kind="info">
-              <strong>Connecting WhatsApp isn&apos;t switched on yet.</strong> bizinsights is finishing its setup with Meta. Everything else on this page is ready for when it is.
-              {platform.missing?.length ? <span className="mt-1 block text-xs">Still to set on the server: {platform.missing.join(", ")} (docs/whatsapp.md).</span> : null}
-            </Alert>
+            <PlatformNotReady platform={platform} canConnect={can.connect} />
           ) : can.connect ? (
-            <ConnectWhatsApp base={base} platform={platform} onConnected={onConnected} />
+            <ConnectWhatsApp base={base} platform={platform} label="Connect WhatsApp Business" onConnected={onConnected} />
           ) : (
             <p className="text-sm text-muted">Ask an owner, an admin or someone with the Manage integrations permission to connect WhatsApp.</p>
           )}
         </div>
-        <p className="mt-4 text-xs text-muted">
-          You&apos;ll need a Facebook account that can manage your business, and a phone number that can receive a code by text or call (or an existing WhatsApp Business account). Meta charges your
-          business directly for the conversations it sends; add a payment method in WhatsApp Manager when Meta asks.
-        </p>
+        <div className="mt-5 border-t border-border pt-4">
+          <HowItWorks />
+        </div>
       </section>
+      <MetaRequirements />
+      {connection && (
+        <section aria-labelledby="wa-past-h" className="space-y-2">
+          <h2 id="wa-past-h" className="text-sm font-semibold">
+            Before it was disconnected: the last 30 days
+          </h2>
+          <StatTiles s={data.stats.last30Days} days={30} />
+        </section>
+      )}
     </div>
   );
 }
@@ -213,10 +221,69 @@ function Check({ done, href, children }: { done: boolean; href: string; children
   );
 }
 
-/** Connected: the number, the week, what needs the merchant, and the latest messages. */
+/** An id Meta gave the business, shown so the merchant (or support) can find the same thing in Meta's tools. */
+function Id({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="truncate font-mono text-xs">{value ?? "—"}</dd>
+    </div>
+  );
+}
+
+/** What is waiting to go, and the last week's failures with Meta's reason. */
+function QueueAndFailures({ data }: { data: WaOverview }) {
+  const tz = data.store.timezone;
+  const q = data.queue;
+  return (
+    <section className="card animate-rise" aria-labelledby="wa-queue-h">
+      <div className="flex items-center justify-between gap-2">
+        <h2 id="wa-queue-h" className="font-semibold">
+          Waiting and failed
+        </h2>
+        <Link className="text-sm text-accent underline-offset-2 hover:underline" href={waHref("activity", { status: "failed" })}>
+          All failed messages
+        </Link>
+      </div>
+      <p className="mt-1 text-sm">
+        {q.waiting ? (
+          <>
+            {plural(q.waiting, "message")} waiting to send{q.nextDueAt ? `, the next ${fmtWhen(q.nextDueAt, tz)}` : ""}.
+            {q.held ? <span className="block text-xs text-warn">Held: {q.heldReasons.map((r) => `${fmtNum(r.count)} ${reasonText(r.reason)?.toLowerCase() ?? r.reason}`).join("; ")}.</span> : null}
+          </>
+        ) : (
+          <span className="text-muted">Nothing waiting to send.</span>
+        )}
+      </p>
+      {!data.recentFailures.length ? (
+        <p className="mt-2 text-sm text-muted">No message failed in the last 7 days.</p>
+      ) : (
+        <ul className="mt-2 divide-y divide-border">
+          {data.recentFailures.map((m) => (
+            <li key={m.id} className="py-2 text-sm">
+              <span className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium">
+                  {m.templateName ?? m.type} <span className="font-normal text-muted">· {m.phone ?? "—"} · {sourceLabel(m.source)}</span>
+                </span>
+                <span className="text-xs text-muted">{fmtWhen(m.failedAt ?? m.createdAt, tz)}</span>
+              </span>
+              <span className="block text-xs text-danger">
+                {m.errorTitle ?? reasonText(m.reason) ?? "WhatsApp couldn't send it."}
+                {m.errorCode ? ` (Meta ${m.errorCode})` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Connected: the account and its ids, its health, automation, the queue, the week, and the latest messages. */
 export function Overview({ data, base, reload }: { data: WaOverview; base: string; reload: () => void }) {
   const c = data.connection!;
   const [period, setPeriod] = useState<7 | 30>(7);
+  const [testing, setTesting] = useState(false);
   const ck = data.checklist;
   const checks: Array<[boolean, string, string]> = [
     [ck.registered, waHref("overview"), "Register your number for sending"],
@@ -229,6 +296,7 @@ export function Overview({ data, base, reload }: { data: WaOverview; base: strin
   const todo = checks.filter(([d]) => !d).length;
   return (
     <div className="space-y-4">
+      <StatusStrip data={data} />
       <section className="card animate-rise" aria-labelledby="wa-acct-h">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex min-w-0 items-start gap-3">
@@ -243,9 +311,24 @@ export function Overview({ data, base, reload }: { data: WaOverview; base: strin
               </p>
             </div>
           </div>
-          {(c.status === "reconnect" || c.status === "error") && data.can.connect && data.platform.ready && <ConnectWhatsApp base={base} platform={data.platform} label="Reconnect WhatsApp" onConnected={() => reload()} />}
+          <div className="flex flex-wrap items-start gap-2">
+            {(c.status === "reconnect" || c.status === "error") && data.can.connect && data.platform.ready && <ConnectWhatsApp base={base} platform={data.platform} label="Reconnect WhatsApp" onConnected={() => reload()} />}
+            <Link className="btn-primary" href={waHref("workflows")}>
+              Manage automation
+            </Link>
+            {data.can.manage && (
+              <button type="button" className="btn-secondary" disabled={c.status !== "active"} title={c.status !== "active" ? "Finish connecting first" : undefined} onClick={() => setTesting(true)} data-testid="wa-send-test-open">
+                Send test message
+              </button>
+            )}
+          </div>
         </div>
-        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        <dl className="mt-4 grid grid-cols-1 gap-3 rounded-lg bg-bg p-3 sm:grid-cols-3">
+          <Id label="Meta business portfolio ID" value={c.businessId} />
+          <Id label="WhatsApp Business account ID" value={c.wabaId} />
+          <Id label="Phone number ID" value={c.phoneNumberId} />
+        </dl>
+        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
           <div>
             <dt className="text-xs text-muted">Quality</dt>
             <dd>{c.qualityLabel ?? "Not rated yet"}</dd>
@@ -253,10 +336,6 @@ export function Overview({ data, base, reload }: { data: WaOverview; base: strin
           <div>
             <dt className="text-xs text-muted">New conversations a day</dt>
             <dd>{c.dailyConversationLimit === null ? "No limit" : fmtNum(c.dailyConversationLimit)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted">Replies reaching bizinsights</dt>
-            <dd>{c.subscribed ? (c.lastWebhookAt ? `Yes · last ${fmtWhen(c.lastWebhookAt, data.store.timezone)}` : "Yes") : "Not yet"}</dd>
           </div>
           <div>
             <dt className="text-xs text-muted">Connected</dt>
@@ -267,12 +346,28 @@ export function Overview({ data, base, reload }: { data: WaOverview; base: strin
 
       {c.status === "action_required" && <ConnectionStep data={data} base={base} reload={reload} />}
       {data.problems
-        .filter((p) => !p.key.startsWith("step:"))
+        .filter((p) => !p.key.startsWith("step:") && !p.key.startsWith("workflow:"))
         .map((p) => (
-          <Alert key={p.key} kind={p.key.startsWith("failed") || p.key === "consent" ? "info" : "error"}>
+          <Alert key={p.key} kind={p.key.startsWith("failed") || p.key === "consent" || p.key === "paused" ? "info" : "error"}>
             <strong>{p.title}.</strong> {p.detail}
+            {(p.key === "account" || p.key === "quality") && (
+              <>
+                {" "}
+                <a className="underline" href={META_LINKS.whatsappManager} target="_blank" rel="noopener noreferrer">
+                  Open WhatsApp Manager
+                </a>
+                .
+              </>
+            )}
           </Alert>
         ))}
+      <PlatformWebhook data={data} />
+
+      <AutomationControl data={data} base={base} reload={reload} manageLink={false} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <HealthChecks data={data} base={base} reload={reload} />
+        <QueueAndFailures data={data} />
+      </div>
 
       {todo > 0 && (
         <section className="card animate-rise" aria-labelledby="wa-setup-h">
@@ -360,6 +455,7 @@ export function Overview({ data, base, reload }: { data: WaOverview; base: strin
           )}
         </section>
       </div>
+      <SendTestMessage base={base} overview={data} open={testing} onClose={() => setTesting(false)} />
     </div>
   );
 }

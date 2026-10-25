@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  automationState,
   buildSendComponents,
   campaignCan,
+  describeCondition,
   checkTemplateDraft,
   classifyMetaError,
   consentProblem,
@@ -225,6 +227,59 @@ describe("workflows", () => {
     expect(workflowSchema.safeParse({ ...base, trigger: "checkout_abandoned", timing: { mode: "after_trigger", minutes: 5 } }).success).toBe(false);
     expect(workflowSchema.safeParse({ ...base, trigger: "customer_created", mapping: { body: [{ source: "tracking_number" }] } }).success).toBe(false);
     expect(workflowSchema.safeParse({ ...base, trigger: "customer_created", conditions: [{ field: "order_total", op: "gte", value: 5 }] }).success).toBe(false);
+    // Order triggers can't check a customer's message, and the other way round.
+    expect(workflowSchema.safeParse({ ...base, trigger: "order_created", conditions: [{ field: "message_text", op: "contains_any", value: ["hi"] }] }).success).toBe(false);
+  });
+
+  describe("answering a customer's message", () => {
+    const reply = { name: "Away", trigger: "message_received", mapping: { body: [] }, replyText: "We're closed, back at 9." };
+    it("is the merchant's own text, within WhatsApp's window, never a template", () => {
+      expect(workflowSchema.safeParse(reply).success).toBe(true);
+      expect(workflowSchema.safeParse({ ...reply, replyText: "" }).success).toBe(false);
+      expect(workflowSchema.safeParse({ ...reply, template: { name: "t", language: "en" } }).success).toBe(false);
+      expect(workflowSchema.safeParse({ ...reply, timing: { mode: "after_trigger", minutes: 13 * 60 } }).success).toBe(false);
+      expect(workflowSchema.safeParse({ ...reply, replyText: "x".repeat(1001) }).success).toBe(false);
+      expect(workflowSchema.safeParse({ ...reply, conditions: [{ field: "order_total", op: "gte", value: 5 }] }).success).toBe(false);
+      // A template workflow must name its template, and has no reply of its own.
+      expect(workflowSchema.safeParse({ name: "x", trigger: "order_created", mapping: { body: [] } }).success).toBe(false);
+      expect(workflowSchema.safeParse({ name: "x", trigger: "order_created", template: { name: "t", language: "en" }, mapping: { body: [] }, replyText: "hi" }).success).toBe(false);
+    });
+
+    const msg = (text: string | null, localHour: number): WorkflowFacts => ({ ...facts, messageText: text, localHour });
+    it("matches words in any case, and an empty message matches none", () => {
+      const c = [{ field: "message_text" as const, op: "contains_any" as const, value: ["open", "Opening hours"] }];
+      expect(evaluateWorkflowConditions(c, msg("Are you OPEN today?", 10)).pass).toBe(true);
+      expect(evaluateWorkflowConditions(c, msg("what are your opening hours", 10)).pass).toBe(true);
+      expect(evaluateWorkflowConditions(c, msg("where's my order", 10)).pass).toBe(false);
+      expect(evaluateWorkflowConditions(c, msg(null, 10)).pass).toBe(false);
+    });
+    it("tells business hours from outside them, through midnight too", () => {
+      const away = [{ field: "received_at" as const, op: "outside_hours" as const, value: { start: 9, end: 17 } }];
+      expect(evaluateWorkflowConditions(away, msg("hi", 8)).pass).toBe(true);
+      expect(evaluateWorkflowConditions(away, msg("hi", 9)).pass).toBe(false);
+      expect(evaluateWorkflowConditions(away, msg("hi", 16)).pass).toBe(false);
+      expect(evaluateWorkflowConditions(away, msg("hi", 17)).pass).toBe(true);
+      const night = [{ field: "received_at" as const, op: "within_hours" as const, value: { start: 22, end: 6 } }];
+      expect(evaluateWorkflowConditions(night, msg("hi", 23)).pass).toBe(true);
+      expect(evaluateWorkflowConditions(night, msg("hi", 3)).pass).toBe(true);
+      expect(evaluateWorkflowConditions(night, msg("hi", 12)).pass).toBe(false);
+      expect(evaluateWorkflowConditions(away, { ...facts }).pass).toBe(false);
+      expect(describeCondition(away[0]!)).toBe("It arrives outside 9am to 5pm (store time)");
+    });
+  });
+});
+
+describe("automation state", () => {
+  const working = { status: "active", registered: true, subscribed: true };
+  it("says Active only when a workflow is on and nothing stops it", () => {
+    expect(automationState({ connection: null, paused: false, activeWorkflows: 2, blockedWorkflows: 0 })).toBe("disconnected");
+    expect(automationState({ connection: { ...working, status: "disconnected" }, paused: false, activeWorkflows: 2, blockedWorkflows: 0 })).toBe("disconnected");
+    expect(automationState({ connection: working, paused: true, activeWorkflows: 2, blockedWorkflows: 0 })).toBe("paused");
+    expect(automationState({ connection: { ...working, status: "reconnect" }, paused: false, activeWorkflows: 2, blockedWorkflows: 0 })).toBe("needs_attention");
+    expect(automationState({ connection: { ...working, subscribed: false }, paused: false, activeWorkflows: 2, blockedWorkflows: 0 })).toBe("needs_attention");
+    expect(automationState({ connection: working, paused: false, activeWorkflows: 2, blockedWorkflows: 1 })).toBe("needs_attention");
+    expect(automationState({ connection: working, paused: false, activeWorkflows: 0, blockedWorkflows: 0 })).toBe("idle");
+    expect(automationState({ connection: working, paused: false, activeWorkflows: 1, blockedWorkflows: 0 })).toBe("active");
   });
 });
 
