@@ -18,5 +18,6 @@ export * from "./events.js";
 export * from "./rules.js";
 export * from "./engine.js";
 export * from "./activity.js";
+export * from "./actions.js";
 export * from "./settings.js";
 export * from "./sweep.js";

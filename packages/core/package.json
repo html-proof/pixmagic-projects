@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./reports": "./src/reports/index.ts",
     "./mailer": "./src/mailer.ts",
-    "./sms": "./src/sms/index.ts"
+    "./sms": "./src/sms/index.ts",
+    "./automations": "./src/automations/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -24,7 +24,7 @@ import {
   removeDomain,
   restoreTemplateVersion,
   ruleExecutions,
-  sendNow,
+  sendTemplateTest,
   setRuleEnabled,
   previewTemplate,
   templateVersions,
@@ -50,7 +50,6 @@ import {
   templateUpdateSchema,
   UNSUBSCRIBE_VARIABLE,
   CUSTOMER_FIELDS,
-  accountCanSend,
 } from "@app/shared/email";
 import { body, HttpError, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -211,13 +210,7 @@ export function emailContentRoutes(app: App, deps: Deps) {
     if (!user.emailVerified) throw new HttpError(403, "Verify your own email address first: test emails go to it.", "email_unverified");
     const { senderId } = z.object({ senderId: z.string().max(64).optional() }).parse(await body(c));
     await limit(deps.coord, `rl:email:testsend:${ws}`, LIMITS.emailTestSend);
-    const sender = await withTenant(ws, (tx) =>
-      tx.emailSenderIdentity.findFirst({ where: { workspaceId: ws, authorizationStatus: "verified", ...(senderId ? { id: senderId } : { isDefault: true }) }, include: { account: true } }),
-    );
-    if (!sender || sender.account.deletedAt || !accountCanSend(sender.account.status)) throw new HttpError(409, "Choose a verified sender on a working account (or set a default sender).", "sender_unavailable");
-    const t = await getTemplate(ws, id);
-    const content = await previewTemplate(ws, { subject: t.subjectTemplate, html: t.htmlTemplate, text: t.textTemplate, category: t.category, eventType: t.eventType }, undefined, user.email);
-    const result = await sendNow({ workspaceId: ws, account: sender.account, sender, to: user.email, content: { ...content, subject: `[Test] ${content.subject}` }, kind: "test", category: t.category }, deps);
+    const result = await sendTemplateTest(ws, id, { email: user.email, verified: true }, senderId, deps);
     return c.json({ result });
   });
 

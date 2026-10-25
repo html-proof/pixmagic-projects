@@ -38,5 +38,6 @@ the code, the code wins and the page is the bug.
 | Dashboard numbers | [kpis.md](kpis.md) |
 | Meta Ads, Google Ads, AdSense | [ads-setup.md](ads-setup.md), [ads-review-packs.md](ads-review-packs.md) |
 | WhatsApp | [whatsapp.md](whatsapp.md) |
+| Automations: one four-step setup and one message history over SMS and email | [automations.md](automations.md) |
 | Customer Messaging (SMS through AWS End User Messaging) | [sms.md](sms.md) |
 | Inventory (stock per location, alerts, stock changes) | [inventory.md](inventory.md) |

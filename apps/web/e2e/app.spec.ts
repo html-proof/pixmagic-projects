@@ -611,7 +611,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   const nav = page.getByRole("navigation", { name: "App" });
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
-  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging", "Automations"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(page.getByTestId("about-data")).toBeVisible();
   await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
 
@@ -624,7 +624,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
 
   // Their pages are closed as well, typed in or bookmarked.
-  for (const path of ["/whatsapp", "/messaging", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
+  for (const path of ["/whatsapp", "/messaging", "/automations", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
     await page.goto(path);
     await expect(page.getByTestId("access-notice")).toContainText("You don't have access to that page.");
     await expect(page).toHaveURL(/\/dashboard/);

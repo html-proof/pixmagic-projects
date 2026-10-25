@@ -24,6 +24,13 @@ export const BILLING_PAGE: boolean = BILLING_ENABLED || process.env.NEXT_PUBLIC_
  */
 export const API_KEYS_ENABLED: boolean = false;
 
+/**
+ * Automations (/automations): one four-step setup and one message history over SMS and email
+ * (docs/automations.md). Flip to `false` to take it out of the menus again; Customer Messaging's
+ * and Email's own pages, and every automation already running, are unaffected either way.
+ */
+export const AUTOMATIONS_HUB: boolean = true;
+
 /** The parts of the app beyond the Shopify dashboard, each built on another company's accounts. */
 export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "sms";
 

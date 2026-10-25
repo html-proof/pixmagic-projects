@@ -29,7 +29,8 @@
     "./traffic": "./src/traffic.ts",
     "./staff": "./src/staff/index.ts",
     "./team": "./src/team.ts",
-    "./email": "./src/email/index.ts"
+    "./email": "./src/email/index.ts",
+    "./automations": "./src/automations.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

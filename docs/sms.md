@@ -31,6 +31,7 @@ Nothing reaches a customer until all of these are true, and none is true by defa
 | The 15-minute sweep, retention | `sweep.ts` |
 | Figures (overview, analytics, billing); GDPR | `analytics.ts`, `privacy.ts` |
 | Set up SMS (the five-step setup) and SMS Settings | `setup.ts`; rules in `@app/shared/sms` (`checkSenderName`, `SENDER_ID_SUPPORT`, `SETUP_AUTOMATIONS`); API `apps/api/src/routes/smsSetup.ts`; pages `/messaging/setup`, `/messaging/settings` (`components/messaging/Setup.tsx`, `SmsSettings.tsx`, `PhonePreview.tsx`) |
+| The Automations hub (one setup and history over SMS and email, [automations.md](automations.md)) | `packages/core/src/automations/sms.ts` calls the builder below; nothing else |
 | Automations (the four-step builder) | `builder.ts`; rules in `@app/shared/sms` (`AUTOMATION_TRIGGER_CARDS`, `TRIGGER_SOURCES`, `AUTOMATION_STARTERS`, `smsAutomationSchema`, `checkAutomationMessage`); each app's toml topics in core `apps.ts` (`APP_WEBHOOK_TOPICS`); API `apps/api/src/routes/smsAutomations.ts`; pages `/messaging/automations`, `/messaging/automations/edit` (`components/messaging/Automations.tsx`, `AutomationBuilder.tsx`, `AutomationUi.tsx`) |
 | AWS adapter (signed calls to sms-voice) | `apps/aws/src/smsProvider.ts` |
 | API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts` |

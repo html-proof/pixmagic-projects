@@ -57,7 +57,7 @@ The database is unreachable from the functions. Queue consumers notice the same 
 1. Dashboard → Queue depth and Jobs / cron errors; alarms `insights-production-queue-*-age`. The failures are in `/aws/lambda/insights-production-jobs`.
 2. If the errors are database timeouts, see the `"db":false` entry above.
 3. Concurrency is `maxConcurrency` per queue (`sources` in `infra/cdk/lib/app-stack.ts`, kept small while the account's Lambda concurrency is 10); raising it only helps when the consumers are healthy and Shopify is not the bottleneck. It ships by merging to `main`.
-4. `insights-production-dlq` has no consumer (alarm `insights-production-dlq-not-empty`): messages there were given up on (after a long outage, or a crash). Re-sync the affected stores, or, once the cause is fixed, redrive them (SQS console → the DLQ → Start DLQ redrive).
+4. `insights-production-dlq` has no consumer (alarm `insights-production-dlq-not-empty`): messages there were given up on (after a long outage, or a crash). Re-sync the affected stores, or, once the cause is fixed, redrive them: `node infra/cdk/scripts/dlq.mjs` lists what is parked (kind and ids only), `--redrive --yes` sends it back to the queues it came from, `--status` follows the redrive (or the SQS console → the DLQ → Start DLQ redrive). Every job is safe to run twice ([automations.md](automations.md#runbook)).
 
 ### API 5xx spike
 1. `/aws/lambda/insights-production-api`: every unhandled error is logged as `"unhandled error"` with the path (Logs Insights: `filter @message like /unhandled error/`).

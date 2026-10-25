@@ -126,6 +126,8 @@ export const LIMITS = {
   // ---- Customer Messaging (SMS) ----
   /** "Check with AWS" on the sender (a few AWS calls each), per store. */
   smsVerify: { max: 10, windowSec: 600 },
+  /** Automations hub: changes to automations and channel connections, per workspace. */
+  automations: { max: 120, windowSec: 600 },
   /** Verification codes AWS texts to a test number, per store (each costs a text). */
   smsVerificationCode: { max: 5, windowSec: 3600 },
   /** Codes typed in for one test number (AWS's codes are short: this stops guessing). */
