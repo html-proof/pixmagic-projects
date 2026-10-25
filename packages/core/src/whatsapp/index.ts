@@ -11,6 +11,7 @@ export * from "./events.js";
 export * from "./campaigns.js";
 export * from "./manual.js";
 export * from "./webhook.js";
+export * from "./automation.js";
 export * from "./sweep.js";
 export * from "./privacy.js";
 export * from "./purge.js";

@@ -143,6 +143,8 @@ export const reasonText = (reason: string | null | undefined): string | null => 
     waiting_for_connection: "Waiting for WhatsApp to be reconnected or finished setting up",
     sending_hours: "Waiting for sending hours",
     daily_limit: "Waiting: the daily limit was reached",
+    meta_throttled: "Waiting: WhatsApp asked to slow down for a moment",
+    automation_paused: "Held: automation is paused",
     uncertain: "WhatsApp didn't answer: it may or may not have been sent",
     refused: "WhatsApp refused it",
     undeliverable: "WhatsApp couldn't deliver it",

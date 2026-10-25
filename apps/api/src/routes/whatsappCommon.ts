@@ -87,6 +87,9 @@ export function connectionView(c: WaConnection | null) {
     dailyConversationLimit: tierLimit(c.messagingLimitTier),
     registered: c.registered,
     subscribed: !!c.subscribedAt,
+    subscribedAt: c.subscribedAt,
+    /** The permissions Meta said bizinsights' access holds when it was last connected. */
+    grantedScopes: c.grantedScopes,
     hasPin: !!c.pinEnc,
     lastWebhookAt: c.lastWebhookAt,
     lastCheckedAt: c.lastCheckedAt,
@@ -104,6 +107,7 @@ export function settingsJson(s: WaSettingsView) {
     dailyLimit: s.dailyLimit,
     testPhone: s.testPhoneMasked,
     eventKey: s.eventKey,
+    automationPausedAt: s.automationPausedAt,
   };
 }
 
@@ -143,6 +147,8 @@ export function messageView(m: WaMessage, opts: { contacts: boolean }) {
     reasonLabel: skipLabel(m.reason),
     errorCode: m.errorCode,
     errorTitle: m.errorTitle,
+    /** Meta's id for it, once Meta accepted it (or for a customer's message). */
+    wamid: m.wamid,
     phone: m.phoneMasked,
     contactId: opts.contacts ? m.contactId : null,
     preview: opts.contacts ? messagePreview(m) : null,

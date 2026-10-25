@@ -637,6 +637,8 @@ export const SKIP_REASONS = [
   "conditions_not_met",
   "stale",
   "erased",
+  "automation_paused",
+  "recently_replied",
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
@@ -659,6 +661,8 @@ export const SKIP_LABEL: Record<SkipReason, string> = {
   conditions_not_met: "The workflow's conditions didn't match",
   stale: "The event was too old to message about",
   erased: "The customer's data was erased",
+  automation_paused: "Automation was paused for the store",
+  recently_replied: "This customer already got this reply recently",
 };
 
 export const skipLabel = (reason: string | null | undefined): string | null => (reason ? (SKIP_LABEL[reason as SkipReason] ?? reason.replace(/_/g, " ")) : null);
@@ -854,40 +858,47 @@ export function signupStepLabel(step: string | null | undefined): string | null 
 // Workflows: trigger → conditions → message → timing
 // ---------------------------------------------------------------------------
 
-export const WORKFLOW_TRIGGERS = ["order_created", "order_paid", "order_fulfilled", "order_cancelled", "checkout_abandoned", "customer_created", "custom_event"] as const;
+export const WORKFLOW_TRIGGERS = ["order_created", "order_paid", "order_fulfilled", "order_cancelled", "checkout_abandoned", "customer_created", "custom_event", "message_received"] as const;
 export type WorkflowTrigger = (typeof WORKFLOW_TRIGGERS)[number];
 
 export interface TriggerInfo {
   label: string;
   /** What starts it, in a sentence a store owner understands. */
   when: string;
-  /** Shopify's webhook topics that start it (none for custom events). */
+  /** Shopify's webhook topics that start it (none for custom events and customers' messages). */
   topics: string[];
   /** The values its messages can use. */
   variables: VariableSource[];
   /** The kind of template it usually sends (marketing ones only reach opted-in customers). */
   category: TemplateCategory;
+  /**
+   * What it sends: an approved template, or (a customer's message) a reply the merchant writes,
+   * which WhatsApp allows without a template because the customer has just written.
+   */
+  sends: "template" | "reply";
 }
 
 const ORDER_VARS: VariableSource[] = ["customer_first_name", "store_name", "order_number", "order_total", "order_status_url", "product_names", "custom_text"];
 
 export const TRIGGER_INFO: Record<WorkflowTrigger, TriggerInfo> = {
-  order_created: { label: "New order", when: "A customer places an order in your Shopify store.", topics: ["orders/create"], variables: ORDER_VARS, category: "UTILITY" },
-  order_paid: { label: "Order paid", when: "An order is paid, including cash on delivery or bank transfer orders paid later.", topics: ["orders/paid"], variables: ORDER_VARS, category: "UTILITY" },
+  order_created: { label: "New order", when: "A customer places an order in your Shopify store.", topics: ["orders/create"], variables: ORDER_VARS, category: "UTILITY", sends: "template" },
+  order_paid: { label: "Order paid", when: "An order is paid, including cash on delivery or bank transfer orders paid later.", topics: ["orders/paid"], variables: ORDER_VARS, category: "UTILITY", sends: "template" },
   order_fulfilled: {
     label: "Order shipped",
     when: "You fulfill an order in Shopify (all of it, or the first parcel).",
     topics: ["orders/fulfilled", "orders/partially_fulfilled"],
     variables: [...ORDER_VARS, "tracking_number", "tracking_url", "carrier"],
     category: "UTILITY",
+    sends: "template",
   },
-  order_cancelled: { label: "Order cancelled", when: "An order is cancelled in Shopify.", topics: ["orders/cancelled"], variables: ORDER_VARS, category: "UTILITY" },
+  order_cancelled: { label: "Order cancelled", when: "An order is cancelled in Shopify.", topics: ["orders/cancelled"], variables: ORDER_VARS, category: "UTILITY", sends: "template" },
   checkout_abandoned: {
     label: "Checkout abandoned",
     when: "A customer gives a phone number in checkout and doesn't finish within the wait you choose.",
     topics: ["checkouts/create", "checkouts/update"],
     variables: ["customer_first_name", "store_name", "product_names", "order_total", "checkout_url", "custom_text"],
     category: "MARKETING",
+    sends: "template",
   },
   customer_created: {
     label: "New customer",
@@ -895,6 +906,7 @@ export const TRIGGER_INFO: Record<WorkflowTrigger, TriggerInfo> = {
     topics: ["customers/create"],
     variables: ["customer_first_name", "store_name", "custom_text"],
     category: "MARKETING",
+    sends: "template",
   },
   custom_event: {
     label: "Custom event",
@@ -902,11 +914,22 @@ export const TRIGGER_INFO: Record<WorkflowTrigger, TriggerInfo> = {
     topics: [],
     variables: ["customer_first_name", "store_name", "event_date", "event_time", "event_value", "custom_text"],
     category: "UTILITY",
+    sends: "template",
+  },
+  message_received: {
+    label: "Customer sends a message",
+    when: "A customer writes to your WhatsApp number. STOP, START and \"stop promotions\" are handled by bizinsights and never start a workflow.",
+    topics: [],
+    variables: [],
+    category: "UTILITY",
+    sends: "reply",
   },
 };
 
-export const CONDITION_FIELDS = ["order_total", "country", "product", "customer_type", "order_tag", "payment_method"] as const;
+export const CONDITION_FIELDS = ["order_total", "country", "product", "customer_type", "order_tag", "payment_method", "message_text", "received_at"] as const;
 export type ConditionField = (typeof CONDITION_FIELDS)[number];
+
+const hourSchema = z.number().int().min(0).max(23);
 
 export const workflowConditionSchema = z.discriminatedUnion("field", [
   z.object({ field: z.literal("order_total"), op: z.enum(["gte", "lte"]), value: z.number().min(0).max(1e9) }),
@@ -915,18 +938,25 @@ export const workflowConditionSchema = z.discriminatedUnion("field", [
   z.object({ field: z.literal("customer_type"), op: z.literal("is"), value: z.enum(["new", "returning"]) }),
   z.object({ field: z.literal("order_tag"), op: z.enum(["has", "lacks"]), value: z.string().trim().min(1).max(60) }),
   z.object({ field: z.literal("payment_method"), op: z.literal("contains"), value: z.string().trim().min(1).max(60) }),
+  /** The customer's message contains one of these words or phrases (any case). */
+  z.object({ field: z.literal("message_text"), op: z.literal("contains_any"), value: z.array(z.string().trim().min(1).max(60)).min(1).max(20) }),
+  /** The customer wrote outside (or within) these store-time hours: an "away" message, or business hours only. */
+  z.object({ field: z.literal("received_at"), op: z.enum(["outside_hours", "within_hours"]), value: z.object({ start: hourSchema, end: hourSchema }).refine((w) => w.start !== w.end, "The start and end can't be the same hour") }),
 ]);
 export type WorkflowCondition = z.output<typeof workflowConditionSchema>;
+
+const ORDER_CONDITIONS: ConditionField[] = ["order_total", "country", "product", "customer_type", "order_tag", "payment_method"];
 
 /** Which conditions make sense for which trigger. */
 export function conditionFieldsFor(trigger: WorkflowTrigger): ConditionField[] {
   if (trigger === "custom_event") return [];
+  if (trigger === "message_received") return ["message_text", "received_at"];
   if (trigger === "customer_created") return ["country"];
   if (trigger === "checkout_abandoned") return ["order_total", "country", "product", "customer_type"];
-  return [...CONDITION_FIELDS];
+  return [...ORDER_CONDITIONS];
 }
 
-/** What an event says about the order, checkout or customer it is about. Unknown facts are null. */
+/** What an event says about the order, checkout, customer or message it is about. Unknown facts are null. */
 export interface WorkflowFacts {
   orderTotal: number | null;
   country: string | null;
@@ -935,6 +965,10 @@ export interface WorkflowFacts {
   customerType: "new" | "returning" | null;
   tags: string[];
   paymentMethods: string[];
+  /** A customer's message: what it says (null for media without a caption). */
+  messageText?: string | null;
+  /** A customer's message: the hour (0-23, store time) it was written. */
+  localHour?: number | null;
 }
 
 export const CONDITION_LABEL: Record<ConditionField, string> = {
@@ -944,7 +978,13 @@ export const CONDITION_LABEL: Record<ConditionField, string> = {
   customer_type: "Customer",
   order_tag: "Order tags",
   payment_method: "Payment method",
+  message_text: "Words in the message",
+  received_at: "Time it arrives",
 };
+
+const hour12 = (h: number) => `${h % 12 || 12}${h < 12 ? "am" : "pm"}`;
+/** Whether a store-time hour is inside start..end (end not included; a window may run past midnight). */
+const hourIn = (hour: number, start: number, end: number) => (start < end ? hour >= start && hour < end : hour >= start || hour < end);
 
 /** A condition in words: "Order total is at least 50". */
 export function describeCondition(c: WorkflowCondition): string {
@@ -961,6 +1001,10 @@ export function describeCondition(c: WorkflowCondition): string {
       return `The order ${c.op === "has" ? "has" : "doesn't have"} the tag "${c.value}"`;
     case "payment_method":
       return `The payment method contains "${c.value}"`;
+    case "message_text":
+      return `The message contains ${c.value.map((w) => `"${w}"`).join(" or ")}`;
+    case "received_at":
+      return `It arrives ${c.op === "outside_hours" ? "outside" : "between"} ${hour12(c.value.start)} ${c.op === "outside_hours" ? "to" : "and"} ${hour12(c.value.end)} (store time)`;
   }
 }
 
@@ -990,6 +1034,16 @@ export function evaluateWorkflowConditions(conditions: WorkflowCondition[], f: W
       case "payment_method":
         ok = f.paymentMethods.some((p) => p.toLowerCase().includes(c.value.toLowerCase()));
         break;
+      case "message_text": {
+        const text = (f.messageText ?? "").toLowerCase();
+        ok = !!text && c.value.some((w) => text.includes(w.toLowerCase()));
+        break;
+      }
+      case "received_at": {
+        const h = f.localHour;
+        ok = h !== null && h !== undefined && (c.op === "within_hours") === hourIn(h, c.value.start, c.value.end);
+        break;
+      }
     }
     if (!ok) failed.push(describeCondition(c));
   }
@@ -1012,6 +1066,13 @@ export const DEFAULT_SEND_WINDOW = { start: 9, end: 20 };
 
 export const templateRefSchema = z.object({ name: z.string().trim().min(1).max(512), language: z.string().trim().min(2).max(10) });
 
+/** The longest automatic reply to a customer's message (Meta allows 4,096 characters; replies should be short). */
+export const REPLY_MAX_LENGTH = 1000;
+/** A reply waits at most this long: WhatsApp's 24-hour window must still be open when it goes. */
+export const REPLY_MAX_DELAY_MINUTES = 12 * 60;
+/** By default the same customer gets a workflow's reply at most once a day, so a conversation isn't answered over and over. */
+export const DEFAULT_REPLY_COOLDOWN_MINUTES = 24 * 60;
+
 export const workflowSchema = z
   .object({
     name: z.string().trim().min(1, "Name the workflow").max(80),
@@ -1019,15 +1080,28 @@ export const workflowSchema = z
     /** Custom events only: which event name starts it ("appointment_booked"). */
     eventName: z.string().trim().regex(/^[a-z0-9_.-]{1,60}$/i, "Use letters, numbers, dots, dashes and underscores").nullable().optional(),
     conditions: z.array(workflowConditionSchema).max(10).default([]),
-    template: templateRefSchema,
+    /** The approved template it sends; none for a "Customer sends a message" workflow, which replies with `replyText`. */
+    template: templateRefSchema.nullable().optional(),
     mapping: mappingSchema,
     headerMediaUrl: z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "Links must start with https://").nullable().optional(),
+    /** "Customer sends a message" only: the reply, as written (no variables). */
+    replyText: z.string().trim().max(REPLY_MAX_LENGTH, `Keep the reply under ${REPLY_MAX_LENGTH} characters`).nullable().optional(),
+    /** "Customer sends a message" only: the same customer gets the reply at most once in this many minutes (0: every message). */
+    replyCooldownMinutes: z.number().int().min(0).max(30 * 24 * 60).nullable().optional(),
     timing: timingSchema.default({ mode: "after_trigger", minutes: 0 }),
     /** Null: any hour. Marketing workflows default to DEFAULT_SEND_WINDOW. */
     sendWindow: sendWindowSchema.nullable().optional(),
   })
   .superRefine((w, ctx) => {
     if (w.trigger === "custom_event" && !w.eventName) ctx.addIssue({ code: "custom", path: ["eventName"], message: "Name the event that starts this workflow" });
+    if (TRIGGER_INFO[w.trigger].sends === "reply") {
+      if (!w.replyText) ctx.addIssue({ code: "custom", path: ["replyText"], message: "Write the reply customers receive" });
+      if (w.template) ctx.addIssue({ code: "custom", path: ["template"], message: "A reply to a customer's message is your own text, not a template" });
+      if (w.timing.minutes > REPLY_MAX_DELAY_MINUTES) ctx.addIssue({ code: "custom", path: ["timing"], message: "Reply within 12 hours: WhatsApp only allows replies without a template for 24 hours after the customer writes" });
+    } else {
+      if (!w.template) ctx.addIssue({ code: "custom", path: ["template"], message: "Choose the approved template to send" });
+      if (w.replyText) ctx.addIssue({ code: "custom", path: ["replyText"], message: "Only a workflow answering a customer's message sends a reply of its own" });
+    }
     if (w.timing.mode === "before_event" && w.trigger !== "custom_event") ctx.addIssue({ code: "custom", path: ["timing"], message: '"Before the event" only works with custom events that send a time' });
     if (w.trigger === "checkout_abandoned" && w.timing.minutes < 30) ctx.addIssue({ code: "custom", path: ["timing"], message: "Wait at least 30 minutes before reminding about a checkout" });
     const allowed = new Set(conditionFieldsFor(w.trigger));
@@ -1046,14 +1120,77 @@ export type WorkflowInput = z.output<typeof workflowSchema>;
 export const WORKFLOW_STATUSES = ["draft", "active", "paused"] as const;
 export type WorkflowStatus = (typeof WORKFLOW_STATUSES)[number];
 
-/** Ready-made workflows the builder starts from (each names the starter template it is written for). */
-export const WORKFLOW_PRESETS: Array<{ key: string; title: string; description: string; trigger: WorkflowTrigger; starter: string; timing: WorkflowTiming; eventName?: string }> = [
+/**
+ * Where a store's automation stands, in one word the dashboard shows: what the merchant can rely on.
+ *  - disconnected: no WhatsApp number connected;
+ *  - paused: the merchant paused all automation;
+ *  - needs_attention: connected, but something stops messages (reconnect, a step, no webhooks, a
+ *    switched-on workflow that can't send);
+ *  - idle: working, but no workflow is switched on;
+ *  - active: working, and at least one workflow is on with nothing stopping it.
+ */
+export type AutomationState = "disconnected" | "paused" | "needs_attention" | "idle" | "active";
+
+export const AUTOMATION_STATE_LABEL: Record<AutomationState, string> = {
+  disconnected: "Disconnected",
+  paused: "Paused",
+  needs_attention: "Needs attention",
+  idle: "No workflow on",
+  active: "Active",
+};
+
+export function automationState(f: {
+  connection: { status: string; registered: boolean; subscribed: boolean } | null;
+  paused: boolean;
+  activeWorkflows: number;
+  /** Switched-on workflows that something stops from sending. */
+  blockedWorkflows: number;
+}): AutomationState {
+  const c = f.connection;
+  if (!c || c.status === "disconnected") return "disconnected";
+  if (f.paused) return "paused";
+  if (c.status !== "active" || !c.registered || !c.subscribed || f.blockedWorkflows > 0) return "needs_attention";
+  return f.activeWorkflows > 0 ? "active" : "idle";
+}
+
+/** Ready-made workflows the builder starts from (a starter template it is written for, or a reply of its own). */
+export const WORKFLOW_PRESETS: Array<{
+  key: string;
+  title: string;
+  description: string;
+  trigger: WorkflowTrigger;
+  starter?: string;
+  timing: WorkflowTiming;
+  eventName?: string;
+  replyText?: string;
+  replyCooldownMinutes?: number;
+  conditions?: WorkflowCondition[];
+}> = [
   { key: "order_confirmation", title: "Order confirmation", description: "Thank customers and confirm every new order.", trigger: "order_created", starter: "order_confirmation", timing: { mode: "after_trigger", minutes: 0 } },
   { key: "shipping_update", title: "Shipping update", description: "Tell customers their order is on its way, with tracking.", trigger: "order_fulfilled", starter: "shipping_update", timing: { mode: "after_trigger", minutes: 0 } },
   { key: "abandoned_checkout", title: "Abandoned checkout reminder", description: "Remind opted-in customers about an unfinished checkout after an hour.", trigger: "checkout_abandoned", starter: "abandoned_checkout", timing: { mode: "after_trigger", minutes: 60 } },
   { key: "follow_up", title: "Customer follow-up", description: "Check in with customers a week after their order ships.", trigger: "order_fulfilled", starter: "follow_up", timing: { mode: "after_trigger", minutes: 7 * 24 * 60 } },
   { key: "welcome", title: "Welcome new customers", description: "Greet new customers who agreed to marketing.", trigger: "customer_created", starter: "welcome", timing: { mode: "after_trigger", minutes: 10 } },
   { key: "appointment_reminder", title: "Appointment reminder", description: "Remind customers a day before a booking your booking tool sends.", trigger: "custom_event", starter: "appointment_reminder", timing: { mode: "before_event", minutes: 24 * 60 }, eventName: "appointment_booked" },
+  {
+    key: "support_reply",
+    title: "Support auto-reply",
+    description: "Tell customers who write to you that their message arrived and when you'll answer.",
+    trigger: "message_received",
+    timing: { mode: "after_trigger", minutes: 0 },
+    replyText: "Thanks for your message! We've received it and will reply as soon as we can, usually within a few hours.",
+    replyCooldownMinutes: DEFAULT_REPLY_COOLDOWN_MINUTES,
+  },
+  {
+    key: "away_message",
+    title: "Away message",
+    description: "Answer customers who write outside your opening hours.",
+    trigger: "message_received",
+    timing: { mode: "after_trigger", minutes: 0 },
+    replyText: "Thanks for getting in touch! We're closed right now and will reply when we open.",
+    replyCooldownMinutes: 12 * 60,
+    conditions: [{ field: "received_at", op: "outside_hours", value: { start: 9, end: 17 } }],
+  },
 ];
 
 /** A custom event another tool (or the dashboard's test) sends: who it is for, when, and its values. */

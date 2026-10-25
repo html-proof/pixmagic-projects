@@ -15,11 +15,13 @@ import {
   saveWorkflow,
   scheduleCampaign,
   sendTest,
-  settingsOf,
+  sendTestReply,
   storedCampaignProblems,
   storedWorkflowProblems,
   storeGraphql,
   testCampaign,
+  triggerAvailability,
+  workflowContext,
   workflowInput,
   workflowProblems,
 } from "@app/core";
@@ -86,19 +88,29 @@ function workflowView(w: WaWorkflow, problems: string[], stats?: Record<string, 
 export function whatsappAutomationRoutes(app: App, deps: Deps) {
   // ---------------------------------------------------------------- workflows
 
-  /** The store's workflows with their results, and what the builder offers. */
+  /**
+   * The store's workflows with their results, and what the builder offers: each trigger says
+   * whether it can start a message for this store, and why not (never offered as working when it can't).
+   */
   app.get(`${base}/workflows`, async (c) => {
     const { ws, storeId } = c.req.param();
     await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
+    const store = await waStore(ws, storeId);
     const rows = await withTenant(ws, (tx) => tx.waWorkflow.findMany({ where: { storeId, workspaceId: ws }, orderBy: { createdAt: "asc" } }));
     const stats = await workflowStats(ws, storeId, rows.map((r) => r.id));
     const workflows = [];
-    for (const w of rows) workflows.push(workflowView(w, await storedWorkflowProblems(w), stats.get(w.id)));
+    for (const w of rows) workflows.push(workflowView(w, await storedWorkflowProblems(w, store), stats.get(w.id)));
+    const availability = triggerAvailability(store, await liveConnection(storeId));
     return c.json({
       workflows,
       presets: WORKFLOW_PRESETS,
-      triggers: WORKFLOW_TRIGGERS.map((t) => ({ key: t, ...TRIGGER_INFO[t], conditionFields: conditionFieldsFor(t).map((f) => ({ key: f, label: CONDITION_LABEL[f] })), variables: TRIGGER_INFO[t].variables.map((v) => ({ key: v, ...VARIABLE_INFO[v] })) })),
+      triggers: WORKFLOW_TRIGGERS.map((t) => ({
+        key: t,
+        ...TRIGGER_INFO[t],
+        ...availability[t],
+        conditionFields: conditionFieldsFor(t).map((f) => ({ key: f, label: CONDITION_LABEL[f] })),
+        variables: TRIGGER_INFO[t].variables.map((v) => ({ key: v, ...VARIABLE_INFO[v] })),
+      })),
     });
   });
 
@@ -106,12 +118,11 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
   app.post(`${base}/workflows/check`, async (c) => {
     const { ws, storeId } = c.req.param();
     await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
+    const store = await waStore(ws, storeId);
     const parsed = workflowSchema.safeParse(await body(c));
     if (!parsed.success) return c.json({ problems: parsed.error.issues.slice(0, 5).map((i) => i.message) });
     const input = parsed.data;
-    const template = await withTenant(ws, (tx) => tx.waTemplate.findFirst({ where: { storeId, workspaceId: ws, name: input.template.name, language: input.template.language } }));
-    return c.json({ problems: workflowProblems(input, { template, conn: await liveConnection(storeId), settings: await settingsOf(storeId) }) });
+    return c.json({ problems: workflowProblems(input, await workflowContext(store, input.template)) });
   });
 
   app.post(`${base}/workflows`, async (c) => {
@@ -119,14 +130,14 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
     const a = await requireWaManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     const w = await saveWorkflow({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
-    return c.json({ workflow: workflowView(w, await storedWorkflowProblems(w)) }, 201);
+    return c.json({ workflow: workflowView(w, await storedWorkflowProblems(w, store)) }, 201);
   });
 
   /** One workflow, with its latest runs (what happened each time its trigger fired). */
   app.get(`${base}/workflows/:id`, async (c) => {
     const { ws, storeId, id } = c.req.param();
     await requireWaView(c, deps, ws);
-    await waStore(ws, storeId);
+    const store = await waStore(ws, storeId);
     const q = z.object({ cursor: idParam.optional() }).parse(c.req.query());
     const found = await withTenant(ws, async (tx) => {
       const w = await tx.waWorkflow.findFirst({ where: { id: idParam.parse(id), storeId, workspaceId: ws } });
@@ -140,7 +151,7 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
     const page = found.runs.slice(0, 50);
     const stats = await workflowStats(ws, storeId, [found.w.id]);
     return c.json({
-      workflow: workflowView(found.w, await storedWorkflowProblems(found.w), stats.get(found.w.id)),
+      workflow: workflowView(found.w, await storedWorkflowProblems(found.w, store), stats.get(found.w.id)),
       runs: page.map((r) => {
         const m = r.messageId ? byId.get(r.messageId) : null;
         return {
@@ -162,7 +173,7 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
     const a = await requireWaManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     const w = await saveWorkflow({ store, userId: a.user.id, id: idParam.parse(id), data: await body(c), ip: clientIp(c) });
-    return c.json({ workflow: workflowView(w, await storedWorkflowProblems(w)) });
+    return c.json({ workflow: workflowView(w, await storedWorkflowProblems(w, store)) });
   });
 
   app.post(`${base}/workflows/:id/activate`, async (c) => {
@@ -178,7 +189,7 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
     const a = await requireWaManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     const { workflow, cancelled } = await pauseWorkflow({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
-    return c.json({ workflow: workflowView(workflow, await storedWorkflowProblems(workflow)), cancelled });
+    return c.json({ workflow: workflowView(workflow, await storedWorkflowProblems(workflow, store)), cancelled });
   });
 
   app.delete(`${base}/workflows/:id`, async (c) => {
@@ -189,7 +200,10 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
-  /** The workflow's message to the merchant's own test number, with sample values. */
+  /**
+   * The workflow's message to the merchant's own test number, with sample values. A reply workflow
+   * sends its text, which WhatsApp delivers only within 24 hours of that number's last message.
+   */
   app.post(`${base}/workflows/:id/test`, async (c) => {
     const { ws, storeId, id } = c.req.param();
     const a = await requireWaManage(c, deps, ws);
@@ -198,7 +212,9 @@ export function whatsappAutomationRoutes(app: App, deps: Deps) {
     if (!w) throw new HttpError(404, "That workflow wasn't found.", "not_found");
     await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest, "Too many test messages. Wait a few minutes.");
     const input = workflowInput(w);
-    const message = await sendTest(deps, { store, userId: a.user.id, template: input.template, mapping: input.mapping, headerMediaUrl: input.headerMediaUrl, label: `workflow:${w.id}` });
+    const message = input.template
+      ? await sendTest(deps, { store, userId: a.user.id, template: input.template, mapping: input.mapping, headerMediaUrl: input.headerMediaUrl, label: `workflow:${w.id}` })
+      : await sendTestReply(deps, { store, userId: a.user.id, text: input.replyText ?? "", label: `workflow:${w.id}` });
     return c.json({ message: messageView(message, { contacts: true }) }, 202);
   });
 

@@ -17,6 +17,13 @@ function timingText(w: Pick<WaWorkflow, "timing" | "sendWindow">) {
   return `${when}${w.sendWindow ? `, ${fmtHour(w.sendWindow.start)}–${fmtHour(w.sendWindow.end)}` : ""}`;
 }
 
+/** What it sends: the template's name, or (a reply workflow) the start of the reply. */
+function sendsText(w: Pick<WaWorkflow, "template" | "replyText">) {
+  if (w.template) return w.template.name;
+  const t = (w.replyText ?? "").trim();
+  return `the reply "${t.length > 60 ? `${t.slice(0, 57)}…` : t}"`;
+}
+
 /** One workflow's results and what happened each time its trigger fired. */
 function WorkflowDetail({ base, w, timezone, onBack }: { base: string; w: WaWorkflow; timezone: string; onBack: () => void }) {
   const runs = usePagedList<WaRun>(`${base}/workflows/${w.id}`, "runs");
@@ -31,7 +38,8 @@ function WorkflowDetail({ base, w, timezone, onBack }: { base: string; w: WaWork
             </h2>
             <p className="mt-1 text-sm text-muted">
               {TRIGGER_INFO[w.trigger].label}
-              {w.eventName ? ` "${w.eventName}"` : ""} → {w.template.name} · {timingText(w)}
+              {w.eventName ? ` "${w.eventName}"` : ""} → {sendsText(w)} · {timingText(w)}
+              {w.replyCooldownMinutes ? ` · at most once every ${fmtDelay(w.replyCooldownMinutes)} per customer` : ""}
             </p>
             {w.conditionsText.length > 0 && <p className="mt-1 text-xs text-muted">Only if: {w.conditionsText.join("; ")}</p>}
           </div>
@@ -163,7 +171,9 @@ export function Workflows({ base, overview }: { base: string; overview: WaOvervi
   const test = (w: WaWorkflow) =>
     run(`test:${w.id}`, "send the test", async () => {
       await api(`${base}/workflows/${w.id}/test`, { method: "POST", body: {} });
-      return "Test sent to your own number with sample values.";
+      return w.template
+        ? "Test sent to your own number with sample values. Message history shows whether it was delivered."
+        : "Reply sent to your own number. WhatsApp delivers it only if you messaged your business number in the last 24 hours: Message history shows what happened.";
     });
 
   return (
@@ -171,8 +181,8 @@ export function Workflows({ base, overview }: { base: string; overview: WaOvervi
       <section className="card animate-rise">
         <h2 className="font-semibold">Automated workflows</h2>
         <p className="mt-1 max-w-2xl text-sm text-muted">
-          A workflow sends an approved template when something happens in your store: a new order, a shipment, an abandoned checkout, a booking. It runs once per order or event, and checks each
-          customer&apos;s consent right before sending.
+          A workflow sends an approved template when something happens in your store (a new order, a shipment, an abandoned checkout, a booking), or answers customers who write to you. It runs
+          once per order, event or message, and checks each customer&apos;s consent right before sending.
         </p>
         {can.manage && (
           <div className="mt-4">
@@ -206,7 +216,7 @@ export function Workflows({ base, overview }: { base: string; overview: WaOvervi
                   <p className="mt-1 text-sm text-muted">
                     When {TRIGGER_INFO[w.trigger].label.toLowerCase()}
                     {w.eventName ? ` "${w.eventName}"` : ""}
-                    {w.conditionsText.length ? ` and ${w.conditionsText.join(" and ").toLowerCase()}` : ""}, send {w.template.name} {timingText(w)}.
+                    {w.conditionsText.length ? ` and ${w.conditionsText.join(" and ").toLowerCase()}` : ""}, send {sendsText(w)} {timingText(w)}.
                   </p>
                   {w.stats && (
                     <p className="mt-1 text-xs text-muted">

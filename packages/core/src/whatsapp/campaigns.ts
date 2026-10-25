@@ -10,6 +10,8 @@
  *    spread over time at CAMPAIGN_SENDS_PER_SECOND, and each one is checked again right before it goes
  *    (consent, the campaign not cancelled).
  *  - Cancel stops everything still waiting; what Meta already has can't be called back.
+ *  - While the store has paused all automation, a due campaign waits to start, a sending one makes
+ *    no more batches, and its waiting messages are held (messages.ts); resuming carries on.
  */
 import { Prisma, systemDb, type Store, type WaCampaign, type WaConnection, type WaTemplate } from "@app/db";
 import {
@@ -28,7 +30,7 @@ import {
 } from "@app/shared";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
-import { canSend, liveConnection, storeLabel, waQueue, WhatsappError, type WaDeps } from "./common.js";
+import { automationPausedSince, canSend, liveConnection, storeLabel, waQueue, WhatsappError, type WaDeps } from "./common.js";
 import { contactFirstName } from "./contacts.js";
 import { cancelQueued, enqueueSend, queueMessage } from "./messages.js";
 import { sendTest } from "./workflows.js";
@@ -152,7 +154,8 @@ export async function scheduleCampaign(deps: Pick<WaDeps, "queues">, input: { st
   const at = input.scheduledAt && input.scheduledAt > now ? input.scheduledAt : now;
   const updated = await systemDb.waCampaign.update({ where: { id: c.id }, data: { status: "scheduled", scheduledAt: at, estimatedRecipients: count, scheduledByUserId: input.userId } });
   await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.campaign_scheduled", targetType: "whatsapp_campaign", targetId: c.id, metadata: { name: c.name, recipients: count, at: at.toISOString() }, ip: input.ip });
-  if (at <= now) return startCampaign(updated, deps);
+  // While automation is paused it stays scheduled, and starts when the store resumes.
+  if (at <= now && !(await automationPausedSince(c.storeId))) return startCampaign(updated, deps);
   return updated;
 }
 
@@ -167,6 +170,25 @@ async function startCampaign(c: WaCampaign, deps: Pick<WaDeps, "queues">): Promi
 /** Scheduled campaigns whose time has come (the sweep). */
 export async function startDueCampaigns(deps: Pick<WaDeps, "queues">): Promise<number> {
   const due = await systemDb.waCampaign.findMany({ where: { status: "scheduled", scheduledAt: { lte: new Date() } }, take: 50 });
+  let started = 0;
+  for (const c of due) {
+    // A store that paused all automation starts nothing; the campaign starts once it resumes.
+    if (await automationPausedSince(c.storeId)) continue;
+    await startCampaign(c, deps);
+    started++;
+  }
+  return started;
+}
+
+/** After a store resumes automation: its sending campaigns make their next batch again. */
+export async function resumeCampaigns(storeId: string, deps: Pick<WaDeps, "queues">): Promise<number> {
+  const sending = await systemDb.waCampaign.findMany({ where: { storeId, status: "sending", materializedAt: null }, select: { id: true, storeId: true } });
+  for (const c of sending) await waQueue(deps.queues).send({ kind: "whatsapp_dispatch", campaignId: c.id, storeId: c.storeId });
+  return sending.length + (await startDueCampaignsOf(storeId, deps));
+}
+
+async function startDueCampaignsOf(storeId: string, deps: Pick<WaDeps, "queues">): Promise<number> {
+  const due = await systemDb.waCampaign.findMany({ where: { storeId, status: "scheduled", scheduledAt: { lte: new Date() } }, take: 50 });
   for (const c of due) await startCampaign(c, deps);
   return due.length;
 }
@@ -180,6 +202,8 @@ export async function dispatchCampaign(job: { campaignId: string; storeId: strin
   try {
     const c = await systemDb.waCampaign.findUnique({ where: { id: job.campaignId } });
     if (!c || c.status !== "sending" || c.materializedAt) return { made: 0, done: true };
+    // Paused: no more batches until the store resumes (resumeCampaigns queues this again).
+    if (await automationPausedSince(c.storeId)) return { made: 0, done: false };
     const conn = await liveConnection(c.storeId);
     const store = await systemDb.store.findUnique({ where: { id: c.storeId } });
     if (!conn || !store) {

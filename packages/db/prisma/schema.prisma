@@ -1907,6 +1907,10 @@ model WaSettings {
   /// The key's last characters, so the merchant can tell which one is in use.
   eventKeyHint      String?   @map("event_key_hint")
   eventKeyCreatedAt DateTime? @map("event_key_created_at")
+  /// "Pause all automation": since when workflows start nothing and their (and campaigns') waiting
+  /// messages are held; null when automation runs. Who paused it is audited too.
+  automationPausedAt DateTime? @map("automation_paused_at")
+  automationPausedBy String?   @map("automation_paused_by")
   updatedByUserId   String?   @map("updated_by_user_id")
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
@@ -2116,10 +2120,15 @@ model WaWorkflow {
   /// custom_event only: the event's name.
   eventName        String?   @map("event_name")
   conditions       Json      @default("[]")
+  /// "" for a message_received workflow, which answers with replyText instead of a template.
   templateName     String    @map("template_name")
   templateLanguage String    @map("template_language")
   mapping          Json
   headerMediaUrl   String?   @map("header_media_url")
+  /// message_received only: the free-form reply (WhatsApp's 24-hour window is open: the customer just wrote).
+  replyText        String?   @map("reply_text")
+  /// message_received only: the same customer gets this workflow's reply at most once in this many minutes.
+  replyCooldownMinutes Int?  @map("reply_cooldown_minutes")
   /// after_trigger | before_event
   timingMode       String    @default("after_trigger") @map("timing_mode")
   timingMinutes    Int       @default(0) @map("timing_minutes")

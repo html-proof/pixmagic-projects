@@ -2,8 +2,12 @@ import { z } from "zod";
 import { systemDb, withTenant, type Prisma } from "@app/db";
 import {
   accountNumbers,
+  appWebhookState,
   audit,
+  blockedActiveWorkflows,
   checkConnection,
+  pauseAutomation,
+  resumeAutomation,
   chooseNumber,
   disconnect,
   finishSignup,
@@ -35,6 +39,8 @@ import {
 } from "@app/core";
 import {
   allows,
+  AUTOMATION_STATE_LABEL,
+  automationState,
   customEventSchema,
   mappingSchema,
   maskPhone,
@@ -67,6 +73,8 @@ import { base, connectionView, messageView, requireContacts, requireWaConnect, r
 
 const DAY = 86_400_000;
 const idParam = z.string().trim().min(1).max(64);
+/** Why a waiting message is held rather than just not due yet (messages.ts). */
+const HELD_REASONS = new Set(["waiting_for_connection", "automation_paused", "daily_limit", "sending_hours", "meta_throttled"]);
 
 export function whatsappRoutes(app: App, deps: Deps) {
   /**
@@ -81,7 +89,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const can = waCan(a);
     const now = Date.now();
     const data = await withTenant(ws, async (tx) => {
-      const [conn, templates, week, month, recent, workflows, campaigns] = await Promise.all([
+      const [conn, templates, week, month, recent, workflows, campaigns, recentFailures, waiting] = await Promise.all([
         tx.waConnection.findUnique({ where: { storeId } }),
         tx.waTemplate.findMany({ where: { storeId, workspaceId: ws }, select: { status: true } }),
         tx.waMessage.groupBy({ by: ["status", "direction"], where: { storeId, workspaceId: ws, createdAt: { gte: new Date(now - 7 * DAY) }, source: { not: "test" } }, _count: { _all: true } }),
@@ -89,6 +97,9 @@ export function whatsappRoutes(app: App, deps: Deps) {
         tx.waMessage.findMany({ where: { storeId, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 8 }),
         tx.waWorkflow.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
         tx.waCampaign.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
+        tx.waMessage.findMany({ where: { storeId, workspaceId: ws, direction: "out", status: "failed", createdAt: { gte: new Date(now - 7 * DAY) } }, orderBy: { createdAt: "desc" }, take: 5 }),
+        // The queue: what is waiting, why the held ones wait, and when the next one is due.
+        tx.waMessage.groupBy({ by: ["reason"], where: { storeId, workspaceId: ws, status: { in: ["queued", "sending"] } }, _count: { _all: true }, _min: { sendAfter: true } }),
       ]);
       const failures = await tx.waMessage.groupBy({
         by: ["errorTitle", "reason"],
@@ -97,7 +108,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
         orderBy: { _count: { id: "desc" } },
         take: 5,
       });
-      return { conn, templates, week, month, recent, workflows, campaigns, failures };
+      return { conn, templates, week, month, recent, workflows, campaigns, failures, recentFailures, waiting };
     });
     const conn = data.conn;
     const live = conn && conn.status !== "disconnected" ? conn : null;
@@ -126,9 +137,24 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const missing = waPlatformMissing();
     const platform = waPlatform();
     const legacy = live ? null : await legacyConnection(storeId);
+    const blocked = live ? await blockedActiveWorkflows(store) : [];
+    const activeWorkflows = count(data.workflows, "active");
+    const state = automationState({
+      connection: live ? { status: live.status, registered: live.registered, subscribed: !!live.subscribedAt } : null,
+      paused: !!settings.automationPausedAt,
+      activeWorkflows,
+      blockedWorkflows: blocked.length,
+    });
+    const waiting = data.waiting.reduce((s, r) => s + r._count._all, 0);
+    const heldReasons = data.waiting.filter((r) => r.reason && HELD_REASONS.has(r.reason)).map((r) => ({ reason: r.reason!, count: r._count._all }));
+    const nextDue = data.waiting.map((r) => r._min.sendAfter).filter((d): d is Date => !!d).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
 
     // What needs the merchant, in the order it matters.
     const problems: Array<{ key: string; title: string; detail: string }> = [];
+    if (live && settings.automationPausedAt) {
+      problems.push({ key: "paused", title: "All automation is paused", detail: "Workflows start nothing and campaigns wait until you resume it in Settings. Messages held for more than 48 hours are cancelled rather than sent late." });
+    }
+    for (const b of blocked) problems.push({ key: `workflow:${b.id}`, title: `"${b.name}" is on but can't send`, detail: b.problems[0]! });
     if (live?.status === "reconnect") problems.push({ key: "reconnect", title: "Reconnect WhatsApp", detail: live.statusDetail ?? "Meta no longer accepts bizinsights' access. Nothing is sent until you reconnect." });
     if (live?.status === "error") problems.push({ key: "account", title: "Problem with your WhatsApp account", detail: live.statusDetail ?? "Meta restricted the account. Check WhatsApp Manager." });
     if (live?.status === "action_required" && live.statusDetail) problems.push({ key: `step:${live.step}`, title: "One more step", detail: live.statusDetail });
@@ -139,13 +165,20 @@ export function whatsappRoutes(app: App, deps: Deps) {
     if (live && settings.orderUpdates === "unset") problems.push({ key: "consent", title: "Choose how customers agree to updates", detail: "Order and service updates go to nobody until you choose, in Settings." });
 
     return c.json({
-      // Public ids (Meta's SDK needs them in the page); the secret never leaves the server.
-      platform: { ready: !!platform, ...(platform ? { appId: platform.appId, configId: platform.configId, version: platform.version } : {}), ...(can.connect ? { missing } : {}) },
+      // Public ids (Meta's SDK needs them in the page); the secret never leaves the server. Who may
+      // connect also sees what the server still lacks and how Meta last answered about the app's webhook.
+      platform: {
+        ready: !!platform,
+        ...(platform ? { appId: platform.appId, configId: platform.configId, version: platform.version } : {}),
+        ...(can.connect ? { missing, webhook: platform ? await appWebhookState(deps.coord) : null } : {}),
+      },
       connection: connectionView(conn),
       legacy,
       can,
       store: { name: store.name ?? store.shopDomain, timezone: store.timezone, currency: store.currency },
       settings: settingsJson(settings),
+      automation: { state, label: AUTOMATION_STATE_LABEL[state], pausedAt: settings.automationPausedAt, blocked: blocked.map((b) => ({ id: b.id, name: b.name, problem: b.problems[0]! })) },
+      queue: { waiting, held: heldReasons.reduce((s, r) => s + r.count, 0), heldReasons, nextDueAt: nextDue },
       stats: { last7Days: stats(data.week), last30Days: stats(data.month) },
       checklist: {
         connected: !!live,
@@ -154,7 +187,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
         approvedTemplates: approved,
         consentChosen: settings.orderUpdates !== "unset",
         testPhone: settings.hasTestPhone,
-        activeWorkflows: count(data.workflows, "active"),
+        activeWorkflows,
       },
       counts: {
         templates: { approved, pending: data.templates.filter((t) => t.status === "PENDING" || t.status === "IN_APPEAL").length, rejected: data.templates.filter((t) => ["REJECTED", "PAUSED", "DISABLED"].includes(t.status)).length },
@@ -163,8 +196,29 @@ export function whatsappRoutes(app: App, deps: Deps) {
       },
       problems,
       recent: seesCampaigns ? data.recent.map((m) => messageView(m, { contacts: can.contacts })) : [],
+      recentFailures: seesCampaigns ? data.recentFailures.map((m) => messageView(m, { contacts: can.contacts })) : [],
       webhookUrl: waWebhookUrl(),
     });
+  });
+
+  // ---------------------------------------------------------------- pausing all automation
+
+  /** Pause all automation: workflows start nothing, campaigns wait, waiting messages are held. Audited. */
+  app.post(`${base}/automation/pause`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const settings = await pauseAutomation({ store, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ settings: settingsJson(settings) });
+  });
+
+  /** Resume: what was held goes now, sending campaigns carry on, due ones start. Audited. */
+  app.post(`${base}/automation/resume`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWaManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await resumeAutomation(deps, { store, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ settings: settingsJson(r.settings), released: r.released, campaigns: r.campaigns });
   });
 
   // ---------------------------------------------------------------- connecting
@@ -424,11 +478,22 @@ export function whatsappRoutes(app: App, deps: Deps) {
         workflowId: idParam.optional(),
         campaignId: idParam.optional(),
         contactId: idParam.optional(),
+        /** Created from / before (ISO times; the page sends the store's days). */
+        from: z.string().datetime({ offset: true }).optional(),
+        to: z.string().datetime({ offset: true }).optional(),
+        /** One customer's number (needs "View contact information"): matched by its keyed hash, never stored as typed. */
+        phone: z.string().trim().min(6).max(40).optional(),
+        template: z.string().trim().min(1).max(512).optional(),
+        /** Why it failed, wasn't sent or waits (SKIP_REASONS and the sender's reasons), or Meta's error code. */
+        reason: z.string().trim().regex(/^[a-z0-9_]{1,40}$/).optional(),
+        errorCode: z.string().trim().regex(/^\d{1,10}$/).optional(),
         cursor: idParam.optional(),
         limit: z.coerce.number().int().min(1).max(100).default(50),
       })
       .parse(c.req.query());
-    if (q.contactId) requireContacts(a);
+    if (q.contactId || q.phone) requireContacts(a);
+    const phone = q.phone ? normalizePhone(q.phone, null) : null;
+    if (q.phone && !phone) return c.json({ messages: [], nextCursor: null });
     const rows = await withTenant(ws, (tx) =>
       tx.waMessage.findMany({
         where: {
@@ -440,6 +505,11 @@ export function whatsappRoutes(app: App, deps: Deps) {
           ...(q.workflowId ? { workflowId: q.workflowId } : {}),
           ...(q.campaignId ? { campaignId: q.campaignId } : {}),
           ...(q.contactId ? { contactId: q.contactId } : {}),
+          ...(phone ? { phoneHash: waPhoneHash(storeId, phone.waId) } : {}),
+          ...(q.template ? { templateName: q.template } : {}),
+          ...(q.reason ? { reason: q.reason } : {}),
+          ...(q.errorCode ? { errorCode: q.errorCode } : {}),
+          ...(q.from || q.to ? { createdAt: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lt: new Date(q.to) } : {}) } } : {}),
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: q.limit + 1,

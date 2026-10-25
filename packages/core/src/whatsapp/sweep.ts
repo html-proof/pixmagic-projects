@@ -13,11 +13,13 @@
  * Each part runs on its own: one that throws is logged and the rest still run.
  */
 import { systemDb } from "@app/db";
+import { providerDetail } from "../errors.js";
 import { logger } from "../logger.js";
+import { recordAppWebhook } from "./automation.js";
 import { waPlatform, waQueue, waWebhookUrl, type WaDeps } from "./common.js";
 import { checkConnection } from "./connect.js";
 import { completeCampaigns, resumeStalledDispatch, startDueCampaigns } from "./campaigns.js";
-import { ensureAppWebhook } from "./graph.js";
+import { ensureAppWebhook, WhatsappApiError } from "./graph.js";
 import { enqueueSend, HOLD_LIMIT_MS } from "./messages.js";
 import { sweepStrayNangoTokens } from "./nango.js";
 import { setWebhookAside, WA_WEBHOOK_MAX_ATTEMPTS } from "./webhook.js";
@@ -121,7 +123,15 @@ export async function sweepWhatsapp(deps: WaDeps, now = new Date()) {
   const appWebhook = await part("app_webhook", async () => {
     const p = waPlatform();
     if (!p || !(await deps.coord.acquire("wa:app-webhook", 6 * 3600_000))) return null;
-    const outcome = await ensureAppWebhook(p, waWebhookUrl(), deps.fetchImpl);
+    let outcome: Awaited<ReturnType<typeof ensureAppWebhook>>;
+    try {
+      outcome = await ensureAppWebhook(p, waWebhookUrl(), deps.fetchImpl);
+    } catch (err) {
+      // Kept for the dashboard's platform check, then thrown so the sweep logs it.
+      await recordAppWebhook(deps.coord, { outcome: "failed", detail: err instanceof WhatsappApiError ? `${err.httpStatus}${err.code !== null ? ` #${err.code}` : ""}: ${providerDetail(err.details ?? err.title)}`.slice(0, 200) : "no answer" });
+      throw err;
+    }
+    await recordAppWebhook(deps.coord, { outcome });
     if (outcome === "in_use") logger.warn({ appId: p.appId }, "whatsapp: the app's webhook points elsewhere; set it to bizinsights' URL in Meta's dashboard (docs/whatsapp.md)");
     return outcome;
   });

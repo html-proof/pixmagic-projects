@@ -201,8 +201,11 @@ describe("connecting", () => {
     ctx.setEnv(OFF);
     const o = await owner();
     const r = (await call("GET", o.base, o.headers)).json();
-    expect(r.platform).toEqual({ ready: false, missing: ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"] });
+    expect(r.platform).toEqual({ ready: false, missing: ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "NANGO_SECRET_KEY"], webhook: null });
     expect(r.connection).toBeNull();
+    // Nothing pretends to be connected or running.
+    expect(r.automation).toMatchObject({ state: "disconnected", label: "Disconnected" });
+    expect(r.queue).toEqual({ waiting: 0, held: 0, heldReasons: [], nextDueAt: null });
     expect((await call("POST", `${o.base}/connect/start`, o.headers)).json()).toMatchObject({ error: "not_configured" });
   });
 
@@ -286,6 +289,8 @@ describe("tenant isolation", () => {
       ["POST", `${a.base}/connect/start`],
       ["DELETE", a.base],
       ["POST", `${a.base}/pin`],
+      ["POST", `${a.base}/automation/pause`],
+      ["GET", `${a.base}/workflows`],
     ] as const) {
       expect((await call(m, path, b.headers)).statusCode, `${m} ${path}`).toBe(404);
     }
@@ -307,6 +312,10 @@ describe("tenant isolation", () => {
     expect((await call("POST", `${o.base}/connect/start`, v.headers)).statusCode).toBe(403);
     expect((await call("DELETE", o.base, v.headers)).statusCode).toBe(403);
     expect((await call("PUT", `${o.base}/settings`, v.headers, { orderUpdates: "checkout_notice" })).statusCode).toBe(403);
+    expect((await call("POST", `${o.base}/automation/pause`, v.headers)).statusCode).toBe(403);
+    expect((await call("POST", `${o.base}/automation/resume`, v.headers)).statusCode).toBe(403);
+    // Searching the history by a customer's number needs "View contact information".
+    expect((await call("GET", `${o.base}/messages?phone=%2B61412345678`, v.headers)).statusCode).toBe(403);
     // Someone who may only see how integrations stand (Settings → Integrations' card): the connection, no messages.
     const i = await signIn(ctx, "integrations", "integrations@acme.test");
     await systemDb.membership.create({ data: { workspaceId: o.ws, userId: i.user.id, role: "custom", permissions: ["integrations.status"] } });
@@ -411,6 +420,23 @@ describe("sending", () => {
     // The same click twice makes one message.
     await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d21");
     expect(await systemDb.waMessage.count({ where: { storeId: o.store.id } })).toBe(1);
+    // The throttle tripped the number's circuit breaker: due again at once, it waits it out without asking
+    // Meta (no attempt spent), and so does every other message from the number.
+    const passThrough = meta.fetch;
+    let calls = 0;
+    ctx.setFetch(async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith(`${PHONE}/messages`)) calls++;
+      return passThrough(input, init);
+    });
+    await systemDb.waMessage.update({ where: { id: m.id }, data: { sendAfter: new Date() } });
+    await sendWaMessage(m.id, ctx.deps);
+    m = await systemDb.waMessage.findUniqueOrThrow({ where: { id: m.id } });
+    expect(m).toMatchObject({ status: "queued", reason: "meta_throttled", attempts: 1 });
+    expect(m.sendAfter.getTime()).toBeGreaterThan(Date.now() + 20_000);
+    expect(calls).toBe(0);
+    ctx.setFetch(meta.fetch);
+    // Its wait over (the breaker's record expired).
+    ctx.deps.coord.clear();
 
     // Meta no longer accepts the token: the connection waits for a reconnect, the message is held.
     meta.sendError = { status: 401, body: { error: { message: "Error validating access token", type: "OAuthException", code: 190 } } };
@@ -618,6 +644,190 @@ describe("custom events", () => {
     const m = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } });
     // A day before the appointment.
     expect(Math.abs(m.sendAfter.getTime() - (new Date(at).getTime() - 86_400_000))).toBeLessThan(1000);
+  });
+});
+
+const confirmation = { template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "order_number" }], buttons: [] } };
+const anOrder = (id: number) => ({
+  id,
+  name: `#${id}`,
+  created_at: new Date().toISOString(),
+  processed_at: new Date().toISOString(),
+  total_price: "80.00",
+  currency: "AUD",
+  phone: "+61412345678",
+  customer: { id: 77, first_name: "Pat", orders_count: 1 },
+  shipping_address: { country_code: "AU", first_name: "Pat" },
+  line_items: [{ title: "Tea", quantity: 1, price: "80.00" }],
+  tags: "",
+});
+
+describe("pausing all automation", () => {
+  it("records what it stopped, holds what was waiting, and sends it on resume", async () => {
+    const o = await owner();
+    await connect(o);
+    expect((await call("GET", o.base, o.headers)).json().automation.state).toBe("idle");
+    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
+    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { name: "Order confirmation", trigger: "order_created", ...confirmation, timing: { mode: "after_trigger", minutes: 0 } })).json().workflow;
+    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
+    expect((await call("GET", o.base, o.headers)).json().automation).toMatchObject({ state: "active", label: "Active", pausedAt: null, blocked: [] });
+    const store = await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } });
+    // An order before the pause: its message is queued (the queue hasn't run yet).
+    await whatsappOnShopifyEvent(store, "orders/create", anOrder(6001), ctx.deps);
+
+    const paused = await call("POST", `${o.base}/automation/pause`, o.headers);
+    expect(paused.statusCode).toBe(200);
+    const pausedAt = paused.json().settings.automationPausedAt;
+    expect(pausedAt).toBeTruthy();
+    // Pausing again keeps the first time.
+    expect((await call("POST", `${o.base}/automation/pause`, o.headers)).json().settings.automationPausedAt).toBe(pausedAt);
+    // An order during the pause starts nothing (and says so); the waiting message is held, not sent.
+    await whatsappOnShopifyEvent(store, "orders/create", anOrder(6002), ctx.deps);
+    await drain();
+    expect(meta.sends).toHaveLength(0);
+    const runs = await systemDb.waWorkflowRun.findMany({ where: { workflowId: wf.id }, orderBy: { subjectKey: "asc" } });
+    expect(runs.map((r) => [r.subjectKey, r.outcome, r.reason])).toEqual([
+      ["order:6001", "scheduled", null],
+      ["order:6002", "skipped", "automation_paused"],
+    ]);
+    const held = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } });
+    expect(held).toMatchObject({ status: "queued", reason: "automation_paused", attempts: 0 });
+    const ov = (await call("GET", o.base, o.headers)).json();
+    expect(ov.automation.state).toBe("paused");
+    expect(ov.problems[0]).toMatchObject({ key: "paused" });
+    expect(ov.queue).toMatchObject({ waiting: 1, held: 1, heldReasons: [{ reason: "automation_paused", count: 1 }] });
+
+    // Resume: the held message goes now.
+    const resumed = await call("POST", `${o.base}/automation/resume`, o.headers);
+    expect(resumed.json()).toMatchObject({ released: 1, settings: { automationPausedAt: null } });
+    await drain();
+    expect(meta.sends).toHaveLength(1);
+    expect((await systemDb.waMessage.findUniqueOrThrow({ where: { id: held.id } })).status).toBe("accepted");
+    expect(await systemDb.auditLog.count({ where: { workspaceId: o.ws, action: { in: ["whatsapp.automation_paused", "whatsapp.automation_resumed"] } } })).toBe(2);
+  });
+
+  it("cancels what it held once the pause passes 48 hours, rather than sending old news", async () => {
+    const o = await owner();
+    await connect(o);
+    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
+    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { name: "Order confirmation", trigger: "order_created", ...confirmation, timing: { mode: "after_trigger", minutes: 0 } })).json().workflow;
+    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
+    await whatsappOnShopifyEvent(await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } }), "orders/create", anOrder(6101), ctx.deps);
+    await systemDb.waSettings.update({ where: { storeId: o.store.id }, data: { automationPausedAt: new Date(Date.now() - 49 * 3600_000) } });
+    await drain();
+    expect(meta.sends).toHaveLength(0);
+    expect(await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: wf.id } })).toMatchObject({ status: "cancelled", reason: "automation_paused" });
+  });
+});
+
+describe("customers' messages", () => {
+  const inbound = (id: string, from: string, text: string) => ({
+    object: "whatsapp_business_account",
+    entry: [{ id: WABA, changes: [{ field: "messages", value: { metadata: { phone_number_id: PHONE }, messages: [{ id, from, timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body: text } }] } }] }],
+  });
+  const reply = { name: "Support auto-reply", trigger: "message_received", conditions: [], template: null, mapping: { body: [], buttons: [] }, replyText: "Thanks! We'll reply soon.", replyCooldownMinutes: 24 * 60, timing: { mode: "after_trigger", minutes: 0 } };
+
+  it("answers once per message and once per customer in its cool-down, and never a STOP", async () => {
+    const o = await owner();
+    // A reply needs its words, and is the merchant's own text, not a template.
+    expect((await call("POST", `${o.base}/workflows`, o.headers, { ...reply, replyText: "" })).statusCode).toBe(400);
+    expect((await call("POST", `${o.base}/workflows`, o.headers, { ...reply, template: { name: "order_confirmation", language: "en" } })).statusCode).toBe(400);
+    const made = await call("POST", `${o.base}/workflows`, o.headers, reply);
+    expect(made.statusCode).toBe(201);
+    const id = made.json().workflow.id;
+    // Not connected yet: customers' messages don't reach bizinsights, so it can't be switched on.
+    expect((await call("POST", `${o.base}/workflows/${id}/activate`, o.headers)).json()).toMatchObject({ error: "workflow_problems" });
+    await connect(o);
+    expect((await call("POST", `${o.base}/workflows/${id}/activate`, o.headers)).json().workflow.status).toBe("active");
+
+    await signedWebhook(inbound("wamid.q1", "61412345678", "Hi, are you open on Sunday?"));
+    // Meta delivers the same body again: one reply.
+    await signedWebhook(inbound("wamid.q1", "61412345678", "Hi, are you open on Sunday?"));
+    await drain();
+    expect(meta.sends).toEqual([expect.objectContaining({ to: "61412345678", type: "text", text: { body: "Thanks! We'll reply soon.", preview_url: false } })]);
+    // A second message soon after gets no second auto-reply.
+    await signedWebhook(inbound("wamid.q2", "61412345678", "Also, do you ship to Perth?"));
+    await drain();
+    expect(meta.sends).toHaveLength(1);
+    const runs = await systemDb.waWorkflowRun.findMany({ where: { workflowId: id }, orderBy: { createdAt: "asc" } });
+    expect(runs.map((r) => [r.subjectKey, r.outcome, r.reason])).toEqual([
+      ["message:wamid.q1", "scheduled", null],
+      ["message:wamid.q2", "skipped", "recently_replied"],
+    ]);
+    const m = await systemDb.waMessage.findFirstOrThrow({ where: { workflowId: id } });
+    expect(m).toMatchObject({ type: "text", category: "SERVICE", status: "accepted" });
+
+    // STOP is consent, not a question: no reply, and someone who stopped gets none afterwards.
+    await signedWebhook(inbound("wamid.s1", "61499999999", "STOP"));
+    await drain();
+    await signedWebhook(inbound("wamid.s2", "61499999999", "ok but one question"));
+    await drain();
+    expect(meta.sends).toHaveLength(1);
+    expect(await systemDb.waWorkflowRun.count({ where: { workflowId: id, subjectKey: "message:wamid.s1" } })).toBe(0);
+    expect((await systemDb.waWorkflowRun.findFirstOrThrow({ where: { workflowId: id, subjectKey: "message:wamid.s2" } })).reason).toBe("opted_out");
+  });
+
+  it("answers only the messages its conditions name", async () => {
+    const o = await owner();
+    await connect(o);
+    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { ...reply, name: "Opening hours", conditions: [{ field: "message_text", op: "contains_any", value: ["open", "hours"] }], replyCooldownMinutes: 0 })).json().workflow;
+    await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers);
+    await signedWebhook(inbound("wamid.c1", "61412345678", "What are your HOURS today?"));
+    await signedWebhook(inbound("wamid.c2", "61412345678", "Where is my parcel?"));
+    await drain();
+    expect(meta.sends).toHaveLength(1);
+    expect((await systemDb.waWorkflowRun.findFirstOrThrow({ where: { workflowId: wf.id, subjectKey: "message:wamid.c2" } })).reason).toContain("conditions_not_met");
+  });
+});
+
+describe("triggers", () => {
+  it("offers only the triggers this store can use, and refuses to switch on one it can't", async () => {
+    const o = await owner();
+    // An App Store store without read_customers.
+    await systemDb.store.update({ where: { id: o.store.id }, data: { shopifyAppKey: "appstore", grantedScopes: ["read_orders"] } });
+    type Trigger = { key: string; available: boolean; reason: string | null; fix: string | null };
+    const triggers = async () => (await call("GET", `${o.base}/workflows`, o.headers)).json().triggers as Trigger[];
+    const of = (all: Trigger[], key: string) => all.find((t) => t.key === key)!;
+    let all = await triggers();
+    expect(of(all, "message_received")).toMatchObject({ available: false, fix: "whatsapp_webhooks" });
+    await connect(o);
+    all = await triggers();
+    expect(of(all, "order_created")).toMatchObject({ available: false, fix: null });
+    expect(of(all, "order_created").reason).toContain("App Store app");
+    expect(of(all, "checkout_abandoned").available).toBe(false);
+    expect(of(all, "customer_created")).toMatchObject({ available: false, fix: "shopify_access" });
+    expect(of(all, "custom_event")).toMatchObject({ available: true, reason: null });
+    expect(of(all, "message_received")).toMatchObject({ available: true });
+    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
+    const wf = (await call("POST", `${o.base}/workflows`, o.headers, { name: "Order confirmation", trigger: "order_created", ...confirmation, timing: { mode: "after_trigger", minutes: 0 } })).json().workflow;
+    const refused = (await call("POST", `${o.base}/workflows/${wf.id}/activate`, o.headers)).json();
+    expect(refused.error).toBe("workflow_problems");
+    expect(refused.detail.problems.join(" ")).toContain("App Store app");
+  });
+});
+
+describe("message history", () => {
+  it("filters by number, template, error and date, and shows recent failures on the overview", async () => {
+    const o = await owner();
+    await connect(o);
+    await call("PUT", `${o.base}/settings`, o.headers, { orderUpdates: "checkout_notice" });
+    const send = (id: string, phone: string) =>
+      call("POST", `${o.base}/messages`, o.headers, { requestId: id, to: { phone }, message: { kind: "template", template: { name: "order_confirmation", language: "en" }, mapping: { body: [{ source: "customer_first_name" }, { source: "custom_text", text: "#1" }], buttons: [] } } });
+    await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d51", "+61412345678");
+    await drain();
+    meta.sendError = { status: 400, body: { error: { message: "Message undeliverable", code: 131026 } } };
+    await send("8a6e0f2e-1f39-4c5a-9a1e-6f9e2b0c1d52", "+61499888777");
+    await drain();
+    const list = async (q: string) => (await call("GET", `${o.base}/messages?${q}`, o.headers)).json().messages as Array<{ status: string; wamid: string | null; errorCode: string | null }>;
+    expect(await list("phone=%2B61%20412%20345%20678")).toMatchObject([{ status: "accepted", wamid: "wamid.1" }]);
+    expect(await list("errorCode=131026")).toMatchObject([{ status: "failed", errorCode: "131026" }]);
+    expect(await list("reason=refused")).toHaveLength(1);
+    expect(await list("template=order_confirmation")).toHaveLength(2);
+    expect(await list(`from=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`)).toHaveLength(0);
+    expect(await list(`to=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`)).toHaveLength(2);
+    const ov = (await call("GET", o.base, o.headers)).json();
+    expect(ov.recentFailures).toMatchObject([{ errorCode: "131026", errorTitle: "This number isn't on WhatsApp, or couldn't receive the message." }]);
+    expect(ov.connection.grantedScopes).toEqual(["whatsapp_business_management", "whatsapp_business_messaging"]);
   });
 });
 

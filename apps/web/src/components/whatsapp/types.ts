@@ -1,6 +1,7 @@
 // The WhatsApp Automation API's answers (apps/api/src/routes/whatsapp.ts, whatsappAutomation.ts,
 // whatsappCommon.ts), as the dashboard reads them. Dates arrive as ISO strings.
 import type {
+  AutomationState,
   CampaignAudience,
   OrderUpdateBasis,
   StarterTemplate,
@@ -46,6 +47,9 @@ export interface WaConnection {
   dailyConversationLimit: number | null;
   registered: boolean;
   subscribed: boolean;
+  subscribedAt: string | null;
+  /** The permissions Meta said bizinsights' access holds (whatsapp_business_management, whatsapp_business_messaging). */
+  grantedScopes: string[];
   hasPin: boolean;
   lastWebhookAt: string | null;
   lastCheckedAt: string | null;
@@ -62,6 +66,8 @@ export interface WaSettings {
   /** The merchant's own number for tests, masked. */
   testPhone: string | null;
   eventKey: { hint: string; createdAt: string } | null;
+  /** "Pause all automation": since when (null: automation runs). */
+  automationPausedAt: string | null;
 }
 
 export interface WaMessage {
@@ -78,6 +84,8 @@ export interface WaMessage {
   reasonLabel: string | null;
   errorCode: string | null;
   errorTitle: string | null;
+  /** Meta's id for it, once Meta accepted it (or a customer's message). */
+  wamid: string | null;
   phone: string | null;
   contactId: string | null;
   /** What the customer reads (or wrote): only for those who may see contact information. */
@@ -110,7 +118,10 @@ export interface WaPlatform {
   appId?: string;
   configId?: string;
   version?: string;
+  /** For who may connect: the server settings still missing. */
   missing?: string[];
+  /** For who may connect: how Meta last answered when bizinsights pointed its app's webhook at itself (null: not yet). */
+  webhook?: { outcome: "set" | "already" | "in_use" | "failed"; at: string; detail?: string } | null;
 }
 
 export interface WaOverview {
@@ -121,6 +132,12 @@ export interface WaOverview {
   can: WaCan;
   store: { name: string; timezone: string; currency: string };
   settings: WaSettings;
+  /** Where automation stands, from the stored state (never the page's guess). */
+  automation: { state: AutomationState; label: string; pausedAt: string | null; blocked: Array<{ id: string; name: string; problem: string }> };
+  /** Messages waiting to go: how many, how many are held and why, and when the next one is due. */
+  queue: { waiting: number; held: number; heldReasons: Array<{ reason: string; count: number }>; nextDueAt: string | null };
+  /** The last week's failed messages, newest first (five at most). */
+  recentFailures: WaMessage[];
   stats: { last7Days: WaStats; last30Days: WaStats };
   checklist: { connected: boolean; registered: boolean; subscribed: boolean; approvedTemplates: number; consentChosen: boolean; testPhone: boolean; activeWorkflows: number };
   counts: { templates: { approved: number; pending: number; rejected: number }; workflows: { active: number; total: number }; campaigns: { scheduled: number; sending: number; total: number } };
@@ -167,9 +184,12 @@ export interface WaWorkflow {
   trigger: WorkflowTrigger;
   eventName?: string | null;
   conditions: WorkflowCondition[];
-  template: { name: string; language: string };
+  /** Null for a "Customer sends a message" workflow, which replies with `replyText`. */
+  template: { name: string; language: string } | null;
   mapping: TemplateMapping;
   headerMediaUrl?: string | null;
+  replyText?: string | null;
+  replyCooldownMinutes?: number | null;
   timing: WorkflowTiming;
   sendWindow?: { start: number; end: number } | null;
   conditionsText: string[];
@@ -185,13 +205,32 @@ export interface WaWorkflow {
 
 export interface WaTriggerOption extends Omit<TriggerInfo, "variables"> {
   key: WorkflowTrigger;
+  /** Whether it can start a message for this store, and why not. */
+  available: boolean;
+  reason: string | null;
+  fix: "shopify_access" | "whatsapp_webhooks" | null;
   conditionFields: Array<{ key: WorkflowCondition["field"]; label: string }>;
   variables: Array<{ key: VariableSource; label: string; sample: string; help?: string }>;
 }
 
+export interface WaPreset {
+  key: string;
+  title: string;
+  description: string;
+  trigger: WorkflowTrigger;
+  /** The starter template it is written for (template workflows). */
+  starter?: string;
+  timing: WorkflowTiming;
+  eventName?: string;
+  /** Reply workflows: the reply it starts with, its cool-down and conditions. */
+  replyText?: string;
+  replyCooldownMinutes?: number;
+  conditions?: WorkflowCondition[];
+}
+
 export interface WaWorkflowsAnswer {
   workflows: WaWorkflow[];
-  presets: Array<{ key: string; title: string; description: string; trigger: WorkflowTrigger; starter: string; timing: WorkflowTiming; eventName?: string }>;
+  presets: WaPreset[];
   triggers: WaTriggerOption[];
 }
 

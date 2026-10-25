@@ -157,7 +157,8 @@ export function maskPhone(e164: string): string {
 // Sending hours (store time)
 // ---------------------------------------------------------------------------
 
-function zonedHour(at: Date, timeZone: string): { hour: number; minute: number } {
+/** The hour and minute of `at` in a time zone (0-23). */
+export function zonedHour(at: Date, timeZone: string): { hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(at);
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   return { hour: get("hour") % 24, minute: get("minute") };
