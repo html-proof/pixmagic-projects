@@ -80,7 +80,7 @@ test("an owner creates an SMS automation in four steps, tests it on themself and
   await expect
     .poll(async () => ((await call(page, "GET", `${hub}/messages?storeId=${store}`)).json as { messages: Array<{ kind: string; status: string }> }).messages.find((m) => m.kind === "test")?.status, { timeout: 15_000 })
     .toBe("delivered");
-  const turnOn = page.getByRole("button", { name: "Turn on" });
+  const turnOn = page.getByRole("button", { name: "Turn on", exact: true });
   await expect(turnOn).toBeDisabled();
   await page.getByLabel(/I understand/).check();
   await turnOn.click();
