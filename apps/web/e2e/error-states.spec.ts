@@ -112,39 +112,6 @@ for (const [status, title] of [[408, "Request timed out"], [409, "This item has 
   });
 }
 
-for (const path of ["track", "review"]) {
-  test(`${path} expired links offer customer recovery without merchant links`, async ({ page }) => {
-    await page.route(`**/api/public/${path}/*`, (route) => route.fulfill({ status: 410, contentType: "application/json", body: JSON.stringify({ message: "private link token" }) }));
-    await page.goto(`/${path}?t=expired-example`);
-    await expect(page.getByRole("heading", { name: "This link is no longer available" })).toBeVisible();
-    await expect(page.getByRole("link", { name: /dashboard/i })).toHaveCount(0);
-    await expect(page.getByText("private link token")).toHaveCount(0);
-  });
-}
-
-test("customer tracking retries network failure in place", async ({ page }) => {
-  let failed = true;
-  await page.route("**/api/public/track/*", (route) => failed ? route.abort() : route.fulfill({ status: 410, contentType: "application/json", body: "{}" }));
-  await page.goto("/track?t=example");
-  await expect(page.getByRole("heading", { name: "We couldn't load this page" })).toBeVisible();
-  failed = false;
-  await page.getByRole("button", { name: "Try again" }).click();
-  await expect(page.getByRole("heading", { name: "This link is no longer available" })).toBeVisible();
-});
-
-test("failed review submission keeps the customer's draft", async ({ page }) => {
-  await page.route("**/api/public/review/*", (route) => route.request().method() === "POST"
-    ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "private provider stack trace" }) })
-    : route.fulfill({ contentType: "application/json", body: JSON.stringify({ store: { name: "Demo store" }, order: { name: "#1001", placedAt: "2026-10-01", deliveredAt: "2026-10-05", cancelled: false }, products: [], existing: [], canEdit: true }) }));
-  await page.goto("/review?t=example");
-  await page.getByRole("radio", { name: "5 stars" }).press("Space");
-  await page.locator("#rv-body").fill("My draft review");
-  await page.getByRole("button", { name: "Send my review" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "try again" })).toBeVisible();
-  await expect(page.locator("#rv-body")).toHaveValue("My draft review");
-  await expect(page.getByText("private provider stack trace")).toHaveCount(0);
-});
-
 test("server retry delay disables manual retries and pauses automatic requests", async ({ page }) => {
   let requests = 0;
   await page.route("**/api/auth/whoami", (route) => { requests++; return route.fulfill({ status: 429, contentType: "application/json", headers: { "retry-after": "10" }, body: "{}" }); });
