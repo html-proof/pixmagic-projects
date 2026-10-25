@@ -33,6 +33,7 @@ import {
   SMS_MAX_BODY,
   SMS_MAX_SEGMENTS,
   SMS_VARIABLE_INFO,
+  smsDate,
   templateVariables,
   type SmsCategory,
   type SmsRuleInput,
@@ -326,6 +327,8 @@ export async function sendSmsJob(jobId: string, deps: SmsDeps): Promise<SendOutc
   values.store_name ??= store.name ?? store.shopDomain.replace(/\.myshopify\.com$/, "");
   if (contact && values.customer_name === undefined) values.customer_name = contactFirstName(contact);
   const uses = templateVariables(version.body).used;
+  // The day it goes, where the customer is: quiet hours or a schedule may have moved it.
+  if (uses.includes("date")) values.date = smsDate(now, customerTimeZone(country, store.timezone, cfg.useCustomerTimezone ?? true));
   if (uses.includes("business_name") && !values.business_name) values.business_name = (await businessNameOf(store.id)) ?? values.store_name;
   let optOut: { code: string; hash: string } | null = null;
   if (uses.includes("opt_out_url")) {
@@ -547,8 +550,17 @@ export async function sendTestSms(store: Store, templateId: string, testNumberId
 
 const anyVersion = async (templateId: string, version: number) => systemDb.smsTemplateVersion.findUnique({ where: { templateId_version: { templateId, version } }, include: { template: true } });
 
-/** One approved template to one customer, now (Send SMS page). Every consent and budget check applies, as for a rule. */
-export async function sendManualSms(store: Store, templateId: string, contactId: string, values: SmsValues, deps: SmsDeps, actor: Actor): Promise<SmsMessageJob> {
+/**
+ * One approved template to one customer, now. Every consent and budget check applies, as for a
+ * rule. `requestId` (one per press of the button) makes a retried request return the text already
+ * sent instead of sending another.
+ */
+export async function sendManualSms(store: Store, templateId: string, contactId: string, values: SmsValues, deps: SmsDeps, actor: Actor, requestId?: string | null): Promise<SmsMessageJob> {
+  const dedupeKey = requestId ? `manual:req:${requestId}` : `manual:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+  if (requestId) {
+    const already = await systemDb.smsMessageJob.findUnique({ where: { storeId_dedupeKey: { storeId: store.id, dedupeKey } } });
+    if (already) return already;
+  }
   const contact = await systemDb.smsContact.findFirst({ where: { id: contactId, storeId: store.id } });
   if (!contact) throw new SmsError("Customer not found.", 404, "not_found");
   const v = await approvedVersionOf(store.id, templateId);
@@ -559,7 +571,7 @@ export async function sendManualSms(store: Store, templateId: string, contactId:
       purpose: "manual",
       // The approved version's category: that is the text that goes, so its consent rule applies.
       category: v.category as SmsCategory,
-      dedupeKey: `manual:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+      dedupeKey,
       templateId,
       templateVersion: v.version,
       contact,

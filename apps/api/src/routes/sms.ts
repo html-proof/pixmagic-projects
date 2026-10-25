@@ -41,13 +41,15 @@ import { actorNames, actorOf, base, publicMessage, publicSender, publicTemplate,
 import { smsActivityRoutes } from "./smsActivity.js";
 import { smsOpsRoutes } from "./smsOps.js";
 import { smsAutomationRoutes } from "./smsAutomations.js";
+import { smsSendRoutes } from "./smsSends.js";
 import { smsSetupRoutes } from "./smsSetup.js";
 
 /**
  * Customer Messaging: the overview, the sender, test numbers, templates and one-off sends
  * (docs/sms.md). Rules, segments and campaigns are in smsOps.ts; history, figures, billing and
  * consent in smsActivity.ts; Set up SMS in smsSetup.ts; the automation builder in
- * smsAutomations.ts; the customers' opt-out page in smsPublic.ts.
+ * smsAutomations.ts; Send SMS to chosen customers in smsSends.ts; the customers' opt-out page in
+ * smsPublic.ts.
  *
  * Seeing it needs Marketing → campaigns; numbers and consent also "View contact information";
  * changing what customers receive (and approving it) is for owners and admins.
@@ -306,12 +308,16 @@ export function smsRoutes(app: App, deps: Deps) {
       .object({
         templateId: z.string().min(1).max(40),
         contactId: z.string().min(1).max(40),
+        requestId: z
+          .string()
+          .regex(/^[A-Za-z0-9-]{8,64}$/)
+          .nullish(),
         values: z
           .object({ order_number: z.string().max(20).nullish(), order_total: z.string().max(16).nullish(), currency: z.string().max(3).nullish(), product_name: z.string().max(100).nullish(), tracking_url: z.string().max(300).nullish(), discount_code: z.string().max(30).nullish() })
           .default({}),
       })
       .parse(await body(c));
-    const job = await sendManualSms(store, input.templateId, input.contactId, input.values, smsDeps(deps), actorOf(c, a));
+    const job = await sendManualSms(store, input.templateId, input.contactId, input.values, smsDeps(deps), actorOf(c, a), input.requestId);
     return c.json({ message: publicMessage(job, true) });
   });
 
@@ -328,4 +334,5 @@ export function smsRoutes(app: App, deps: Deps) {
   smsActivityRoutes(app, deps);
   smsSetupRoutes(app, deps);
   smsAutomationRoutes(app, deps);
+  smsSendRoutes(app, deps);
 }

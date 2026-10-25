@@ -131,14 +131,16 @@ export const APP_SETTINGS = {
   "WHATSAPP_APP_ID": "",
   "WHATSAPP_CONFIG_ID": "2228218088074576",
   "WHATSAPP_API_VERSION": "v26.0",
-  // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "sandbox": merchants can
-  // set up senders, templates and rules and send test texts to numbers they verified with AWS;
-  // rules and campaigns only record dry runs, so no customer is texted. "live" once the account is
-  // out of AWS's SMS sandbox, its spending limit is raised and a sender is registered (docs/sms.md,
-  // "Going live"). Marketing texts have their own switch, off. The configuration set comes from
-  // the App stack.
-  "SMS_MODE": "sandbox",
-  "SMS_MARKETING_ENABLED": "",
+  // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "live" since 2026-10-25:
+  // automations, campaigns and Send SMS hand texts to AWS, each after every check (sender verified
+  // and tagged for the store, sending on, consent, opt-outs, quiet hours, the monthly limit). AWS
+  // itself still decides who can receive: while the account is in its SMS sandbox (ACCOUNT_TIER
+  // SANDBOX, US$1 a month, checked 2026-10-25) only verified numbers get texts, and the dashboard
+  // says so ("Your SMS account is still being verified"). "sandbox" records automations' texts as
+  // dry runs instead; "off" stops everything (docs/sms.md, "Rollback"). Marketing texts need this
+  // switch and each store's own. The configuration set comes from the App stack.
+  "SMS_MODE": "live",
+  "SMS_MARKETING_ENABLED": "1",
   "SMS_ACCOUNT_MONTHLY_LIMIT_USD": "20",
   // A merchant asking for a sender name in Set up SMS emails this address: the platform owner
   // requests it from AWS, registers it where the country requires that, and tags it for the

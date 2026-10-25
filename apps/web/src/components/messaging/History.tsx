@@ -68,7 +68,7 @@ function MessageDetail({ base, id, templates, onClose }: { base: string; id: str
         <>
           <section className="card space-y-2 p-4 text-sm">
             <p className="flex flex-wrap items-center gap-2">
-              <SmsStatusBadge status={m.status} />
+              <SmsStatusBadge status={m.status} label={m.statusLabel} />
               {outcomeOf(m) && <span className="text-muted">{outcomeOf(m)}</span>}
             </p>
             {fix && manage && (
@@ -93,7 +93,7 @@ function MessageDetail({ base, id, templates, onClose }: { base: string; id: str
               <Row label="Country">{countryName(m.country)}</Row>
               <Row label={m.campaignId ? "Campaign" : m.purpose === "automation" ? "Automation" : "Sent by"}>{sentBy(m)}</Row>
               <Row label="Trigger">{m.purpose === "automation" ? purposeLabel(m.purpose, m.trigger) : "—"}</Row>
-              <Row label="Delivery status">{SMS_STATUS_LABEL[m.status] ?? m.status}</Row>
+              <Row label="Delivery status">{m.statusLabel ?? SMS_STATUS_LABEL[m.status] ?? m.status}</Row>
               <Row label="Failure reason">{m.status === "failed" || m.status === "skipped" || m.status === "opted_out" || m.status === "cancelled" ? (outcomeOf(m) ?? "—") : "—"}</Row>
               <Row label="Created">{fmtWhen(m.createdAt, tz)}</Row>
               <Row label="Final outcome">{fmtWhen(m.finalAt, tz)}</Row>
@@ -299,7 +299,7 @@ export function MessageHistory() {
                       {m.purpose === "automation" && <span className="block text-xs text-muted">{purposeLabel(m.purpose, m.trigger)}</span>}
                     </td>
                     <td className="py-2 pr-3">
-                      <SmsStatusBadge status={m.status} why={m.reasonLabel} />
+                      <SmsStatusBadge status={m.status} why={m.reasonLabel} label={m.statusLabel} />
                     </td>
                     <td className="whitespace-nowrap py-2 pr-3 text-muted">{fmtWhen(m.acceptedAt ?? m.createdAt, tz)}</td>
                     <td className="max-w-xs py-2 pr-3 text-xs text-muted">{outcomeOf(m) ?? "—"}</td>

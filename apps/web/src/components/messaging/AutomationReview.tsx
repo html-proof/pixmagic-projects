@@ -247,7 +247,7 @@ export function TestStep({
           {message && result && (
             <div className={`rounded-lg border p-3 text-sm ${result.ok === false ? "border-warn/40 bg-warn/5" : result.ok ? "border-good/40 bg-good/5" : "border-border bg-bg/50"}`} role="status" aria-live="polite">
               <p className="flex flex-wrap items-center gap-2 font-semibold">
-                {result.title} <SmsStatusBadge status={message.status} />
+                {result.title} <SmsStatusBadge status={message.status} label={message.statusLabel} />
                 {message.to && <span className="font-normal text-muted">to {message.to}</span>}
               </p>
               {result.detail && <p className="mt-1">{result.detail}</p>}

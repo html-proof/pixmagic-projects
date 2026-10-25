@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowRight, Check, CircleAlert, Clock, History, Plus, Settings, ShoppingCart, Sparkles, Truck, Workflow, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, CircleAlert, Clock, History, Plus, Send, Settings, ShoppingCart, Sparkles, Truck, Workflow, type LucideIcon } from "lucide-react";
 import { Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
@@ -107,9 +107,14 @@ export function MessagingOverview() {
             <p className="max-w-2xl text-sm text-muted">{statusLine(r, missing, active)}</p>
           </div>
           {manage ? (
-            <Link href="/messaging/automations/edit" className="btn-primary inline-flex h-11 items-center gap-2 px-5 text-base">
-              <Plus aria-hidden className="h-5 w-5" /> Create SMS Automation
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/messaging/send" className="btn-secondary inline-flex h-11 items-center gap-2 px-5 text-base">
+                <Send aria-hidden className="h-5 w-5" /> Send SMS
+              </Link>
+              <Link href="/messaging/automations/edit" className="btn-primary inline-flex h-11 items-center gap-2 px-5 text-base">
+                <Plus aria-hidden className="h-5 w-5" /> Create SMS Automation
+              </Link>
+            </div>
           ) : null}
         </div>
         <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">

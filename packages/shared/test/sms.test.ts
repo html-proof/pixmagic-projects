@@ -59,6 +59,12 @@ import {
   SMS_VARIABLE_GROUP,
   SMS_VARIABLES,
   TRIGGER_SUBJECT,
+  sendValueProblems,
+  SMS_SEND_MAX_RECIPIENTS,
+  SMS_STAGE_LABEL,
+  smsDate,
+  smsSendSchema,
+  smsStage,
 } from "../src/sms.js";
 
 describe("smsSegments", () => {
@@ -253,6 +259,20 @@ describe("send errors", () => {
     expect(classifySendError({ type: "ConflictException", reason: "DESTINATION_PHONE_NUMBER_OPTED_OUT" })).toEqual({ action: "opt_out", code: "opted_out" });
     expect(classifySendError({ type: "ValidationException", reason: "INVALID_PHONE_NUMBER" })).toEqual({ action: "fail", code: "invalid_number" });
     expect(classifySendError({ type: "ResourceNotFoundException" }).action).toBe("hold_sender");
+  });
+
+  it("reads AWS's reason before its exception's name, and suppresses only numbers AWS can't use", () => {
+    // The SMS sandbox's answer to an unverified number, as AWS gave it to a DryRun from this account (2026-10-25).
+    expect(classifySendError({ type: "ConflictException", reason: "DESTINATION_PHONE_NUMBER_NOT_VERIFIED" })).toEqual({ action: "fail", code: "destination_not_verified" });
+    expect(classifySendError({ type: "ValidationException", reason: "DESTINATION_PHONE_NUMBER_NOT_VERIFIED" })).toEqual({ action: "fail", code: "destination_not_verified" });
+    // A blocked country is not an invalid number (which would put the customer on the suppression list).
+    expect(classifySendError({ type: "ValidationException", reason: "DESTINATION_COUNTRY_BLOCKED" })).toEqual({ action: "fail", code: "country_blocked" });
+    expect(classifySendError({ type: "ValidationException", reason: "INTERNATIONAL_SENDING_NOT_SUPPORTED" })).toEqual({ action: "fail", code: "country_blocked" });
+    expect(classifySendError({ type: "ValidationException", reason: "SENDER_ID_NOT_REGISTERED" })).toEqual({ action: "fail", code: "sender_unregistered" });
+    expect(classifySendError({ type: "ConflictException", reason: "REGISTRATION_NOT_COMPLETE" })).toEqual({ action: "fail", code: "sender_unregistered" });
+    expect(classifySendError({ type: "ValidationException", reason: "INVALID_IDENTITY_FOR_DESTINATION_COUNTRY" })).toEqual({ action: "fail", code: "sender_not_for_country" });
+    expect(classifySendError({ type: "ValidationException", reason: "CANNOT_PARSE" })).toEqual({ action: "fail", code: "invalid_number" });
+    expect(classifySendError({ type: "ValidationException", reason: "PRICE_OVER_THRESHOLD" })).toEqual({ action: "fail", code: "over_max_price" });
   });
 
   it("never re-sends on its own when AWS may have the text", () => {
@@ -552,7 +572,10 @@ describe("personalizing and plain words", () => {
       { type: "ServiceQuotaExceededException", reason: "OTHER" },
       { type: "ConflictException", reason: "DESTINATION_PHONE_NUMBER_OPTED_OUT" },
       { type: "ConflictException", reason: "DESTINATION_COUNTRY_BLOCKED" },
+      { type: "ConflictException", reason: "DESTINATION_PHONE_NUMBER_NOT_VERIFIED" },
       { type: "ConflictException", reason: "" },
+      { type: "ValidationException", reason: "SENDER_ID_REQUIRES_REGISTRATION" },
+      { type: "ValidationException", reason: "INVALID_IDENTITY_FOR_DESTINATION_COUNTRY" },
       { type: "ValidationException", reason: "DESTINATION_PHONE_NUMBER_NOT_VERIFIED" },
       { type: "ValidationException", reason: "INVALID_PHONE_NUMBER" },
       { type: "ValidationException", reason: "PRICE_OVER_THRESHOLD" },
@@ -570,5 +593,50 @@ describe("personalizing and plain words", () => {
     expect(Object.values(SKIP_LABEL).join(" ")).not.toMatch(/\bAWS\b/);
     expect(skipFix("budget_reached")).toMatchObject({ href: expect.stringMatching(/^\/messaging\//) });
     expect(skipFix("quiet_hours")).toBeNull();
+  });
+});
+
+describe("Send SMS and delivery stages", () => {
+  it("fills {{date}} with the day a text goes, where the customer is", () => {
+    const at = new Date("2026-10-25T14:30:00Z");
+    expect(smsDate(at, "Australia/Sydney")).toBe("Mon 26 Oct");
+    expect(smsDate(at, "America/New_York")).toBe("Sun 25 Oct");
+    expect(smsDate(at, "Not/AZone")).toBe("Sun 25 Oct");
+    expect(renderSms("See you {{date}}", { date: smsDate(at, "UTC") })).toMatchObject({ ok: true, text: "See you Sun 25 Oct" });
+    expect(cleanVariable("date", "Sun 25 Oct <b>")).toBeNull();
+    expect(fixVariableAliases("Today, {{today}}")).toBe("Today, {{date}}");
+    // Every trigger can use it: the send fills it in.
+    expect(missingForTrigger("Hi {{customer_name}}, {{date}}", "order_created")).toEqual([]);
+  });
+
+  it("names where a message is: queued, sending, sent, delivered, or rejected, undeliverable or failed by who said no", () => {
+    expect(smsStage({ status: "scheduled" })).toBe("queued");
+    expect(smsStage({ status: "sending" })).toBe("sending");
+    expect(smsStage({ status: "accepted" })).toBe("sent");
+    expect(smsStage({ status: "pending" })).toBe("sent");
+    expect(smsStage({ status: "delivered" })).toBe("delivered");
+    // The provider refused the send (classifySendError: the reason is its code).
+    expect(smsStage({ status: "failed", reason: "invalid_number", errorCode: "invalid_number" })).toBe("rejected");
+    // The carrier's report.
+    expect(smsStage({ status: "failed", reason: null, errorCode: "unreachable", providerStatus: "UNREACHABLE" })).toBe("undeliverable");
+    expect(smsStage({ status: "failed", reason: null, errorCode: "spam", providerStatus: "SPAM" })).toBe("rejected");
+    // bizinsights gave up.
+    expect(smsStage({ status: "failed", reason: "too_many_retries", errorCode: "throttled" })).toBe("failed");
+    expect(smsStage({ status: "uncertain" })).toBe("unknown");
+    expect(smsStage({ status: "skipped" })).toBe("not_sent");
+    expect(smsStage({ status: "dry_run" })).toBe("practice");
+    for (const st of ["queued", "sent", "delivered", "rejected", "undeliverable", "failed"] as const) expect(SMS_STAGE_LABEL[st]).toMatch(/^[A-Z]/);
+  });
+
+  it("says which details a text the merchant sends can carry, for one customer or several", () => {
+    const body = "Hi {{customer_name}}, order {{order_number}}: {{discount_code}} {{date}} {{business_name}}";
+    expect(sendValueProblems(body, 1, { order_number: "#7", discount_code: "SAVE5" })).toEqual([]);
+    expect(sendValueProblems(body, 2, { discount_code: "SAVE5" }).map((i) => i.code)).toEqual(["per_customer_value"]);
+    expect(sendValueProblems("Back to your cart: {{checkout_url}}", 1, {}).map((i) => i.code)).toEqual(["unsupported_variable"]);
+    expect(sendValueProblems("Order {{order_number}}", 1, {}).map((i) => i.code)).toEqual(["value_missing"]);
+    expect(sendValueProblems("Order {{order_number}}", 1, { order_number: "no spaces allowed" }).map((i) => i.code)).toEqual(["value_invalid"]);
+    expect(smsSendSchema.safeParse({ requestId: "abcdefgh12", contactIds: ["c1"], templateId: "t1" }).success).toBe(true);
+    expect(smsSendSchema.safeParse({ requestId: "abcdefgh12", contactIds: ["c1"] }).success).toBe(false);
+    expect(smsSendSchema.safeParse({ requestId: "abcdefgh12", contactIds: Array.from({ length: SMS_SEND_MAX_RECIPIENTS + 1 }, (_, i) => `c${i}`), templateId: "t1" }).success).toBe(false);
   });
 });
