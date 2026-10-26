@@ -304,6 +304,18 @@ describe("review fixes: grants nobody can vouch for are never revoked", () => {
       return base(input, init);
     });
     expect(await connectError("google")).toBe("no_accounts");
+    // With `email` in the grant the card names the Google account Google picked; the log never does.
+    nango.googleEmail = "shop.owner@gmail.com";
+    const logged: unknown[][] = [];
+    const info = vi.spyOn(logger, "info").mockImplementation((...a: unknown[]) => void logged.push(a));
+    let finish: Awaited<ReturnType<typeof connectThroughNango>>["finish"] = null;
+    try {
+      ({ finish } = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider: "google", headers }));
+    } finally {
+      info.mockRestore();
+    }
+    expect(finish!.json()).toMatchObject({ error: "no_accounts", detail: { login: "shop.owner@gmail.com" } });
+    expect(JSON.stringify(logged)).not.toContain("shop.owner");
   });
 
   it("a login that reaches only an empty manager account, or an account Google won't report on yet, is told which", async () => {

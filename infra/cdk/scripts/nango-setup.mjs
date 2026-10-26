@@ -57,12 +57,13 @@ function settings() {
  * bizinsights reads with. Meta with a Login for Business configuration (META_CONFIG_ID) takes no
  * scope: the configuration decides, and bizinsights sends its config_id with every session. Google's
  * also ask for `openid` (who the account is, nothing else), so a disconnect
- * knows whose grant it is taking back (packages/core/src/ads/googleOAuth.ts GOOGLE_IDENTITY_SCOPE).
+ * knows whose grant it is taking back (packages/core/src/ads/googleOAuth.ts GOOGLE_IDENTITY_SCOPE), and
+ * `email`, so a sign-in that reaches no account can say which Google account was used (GOOGLE_EMAIL_SCOPE).
  */
 export function wanted(provider, s, secret) {
   if (provider === "meta") return { clientId: s.META_APP_ID, clientSecret: secret.META_APP_SECRET, scopes: s.META_CONFIG_ID ? "" : "ads_read" };
   const scope = provider === "adsense" ? "https://www.googleapis.com/auth/adsense.readonly" : "https://www.googleapis.com/auth/adwords";
-  return { clientId: s.GOOGLE_ADS_CLIENT_ID, clientSecret: secret.GOOGLE_ADS_CLIENT_SECRET, scopes: `${scope},openid` };
+  return { clientId: s.GOOGLE_ADS_CLIENT_ID, clientSecret: secret.GOOGLE_ADS_CLIENT_SECRET, scopes: `${scope},openid,email` };
 }
 
 /**

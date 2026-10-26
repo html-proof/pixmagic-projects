@@ -48,6 +48,8 @@ export interface FakeNango {
   tokenFetches: number;
   /** Who Google's tokeninfo says a token Nango holds belongs to (null: it doesn't say). */
   googleSub: string | null;
+  /** The Google account's email tokeninfo gives for a token carrying `email` (null: the token doesn't carry it). */
+  googleEmail: string | null;
   /** Wrap the test's platform fake: Nango's API, and Google's tokeninfo for Nango's tokens, are answered here. */
   fetch(platform: FetchLike): FetchLike;
 }
@@ -66,6 +68,7 @@ export function fakeNango(opts: { googleClientId?: string } = {}): FakeNango {
     refuseRenewal: new Set(),
     tokenFetches: 0,
     googleSub: "100200300",
+    googleEmail: null,
     fetch: (platform) => async (input, init) => {
       const u = new URL(String(input));
       const method = init?.method ?? "GET";
@@ -117,7 +120,10 @@ export function fakeNango(opts: { googleClientId?: string } = {}): FakeNango {
       if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") {
         const held = [...n.connections.values()].find((c) => c.token === u.searchParams.get("access_token"));
         const p = held ? platformOf(held.key) : null;
-        if (p && p !== "meta") return json({ aud: opts.googleClientId ?? "g_client", ...(n.googleSub ? { sub: n.googleSub } : {}), scope: SCOPE[p] });
+        if (p && p !== "meta") {
+          const email = n.googleEmail ? { email: n.googleEmail, email_verified: "true" } : {};
+          return json({ aud: opts.googleClientId ?? "g_client", ...(n.googleSub ? { sub: n.googleSub } : {}), ...email, scope: n.googleEmail ? `${SCOPE[p]} email` : SCOPE[p] });
+        }
       }
       return platform(input, init);
     },

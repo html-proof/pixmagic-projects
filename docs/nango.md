@@ -30,8 +30,8 @@ AdSense has neither limit (`adsense.readonly` is non-sensitive and the consent s
 | Platform | Nango integration | Made from Nango provider | Scopes | Read with |
 | --- | --- | --- | --- | --- |
 | Meta Ads | `bizinsights-meta-ads` | `facebook` (not `meta-marketing-api`: only `facebook` gets Nango's long-lived-token renewal) | none: Facebook Login for Business configuration `META_CONFIG_ID` sent as `config_id` (else `ads_read`, re-asked) | Marketing API `v26.0`, every call signed with `appsecret_proof` |
-| Google Ads | `bizinsights-google-ads` | `google` | `https://www.googleapis.com/auth/adwords,openid` | Google Ads API `v25` (access level Explorer: 2,880 operations a day, counted by bizinsights) |
-| Google AdSense | `bizinsights-google-adsense` | `google` | `https://www.googleapis.com/auth/adsense.readonly,openid` | AdSense Management API v2 |
+| Google Ads | `bizinsights-google-ads` | `google` | `https://www.googleapis.com/auth/adwords,openid,email` | Google Ads API `v25` (access level Explorer: 2,880 operations a day, counted by bizinsights) |
+| Google AdSense | `bizinsights-google-adsense` | `google` | `https://www.googleapis.com/auth/adsense.readonly,openid,email` | AdSense Management API v2 |
 
 The same environment also holds **`whatsapp-business`** (provider `whatsapp-business`, an API-key integration made in
 Nango's dashboard on 2026-10-24, not by nango-setup.mjs), where the retired 2026-10-25 WhatsApp design kept each
@@ -41,6 +41,9 @@ store's retired token there (`whatsapp/purge.ts`), so keep it until the old What
 
 `openid` is who the Google account is: Google's tokeninfo didn't name the person for an
 adsense.readonly-only token (first real connect, 2026-10-22), so its disconnect couldn't revoke the grant.
+`email` (since 2026-10-26) is only for a sign-in that reaches nothing: the finish's `detail.login` names the
+Google account Google picked ("You signed in to Google as …"), never stored or logged. A grant made before it
+says nothing until it is made again.
 The integrations are made by `infra/cdk/scripts/nango-setup.mjs` from bizinsights' own keys
 (`packages/core/src/ads/nango.ts` `NANGO_INTEGRATION`, `NANGO_PROVIDER_TEMPLATE`; Nango's API reference:
 https://nango.dev/docs/reference/backend/http-api).

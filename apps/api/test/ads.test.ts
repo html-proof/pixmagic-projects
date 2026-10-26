@@ -260,6 +260,19 @@ describe("connecting ad accounts", () => {
     expect(nango.deleted).toEqual([none.connectionId, closed.connectionId]);
   });
 
+  it("a Google login with nothing to connect is named by its email, when the grant carries it, only to the person who signed in", async () => {
+    nango.googleEmail = "shop.owner@gmail.com";
+    usePlatform(async () => json({ error: { code: 403, message: "User does not have an AdSense account.", status: "PERMISSION_DENIED" } }, 403));
+    const none = await connectFlow("adsense");
+    expect(none.finish.json()).toMatchObject({ error: "no_accounts", detail: { login: "shop.owner@gmail.com" } });
+    usePlatform(async () => json({ accounts: [{ name: "accounts/pub-9", state: "CLOSED" }] }));
+    expect((await connectFlow("adsense")).finish.json()).toMatchObject({ error: "account_not_ready", detail: { login: "shop.owner@gmail.com" } });
+    // A grant without `email` (made before it was asked for) says nothing about the login.
+    nango.googleEmail = null;
+    usePlatform(async () => json({}));
+    expect((await connectFlow("adsense")).finish.json().detail).toBeUndefined();
+  });
+
   it("choosing accounts: only the ticked ones are connected, a choice is this person's and works once", async () => {
     usePlatform(metaPlatform);
     const { finish } = await connectFlow("meta");

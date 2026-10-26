@@ -24,6 +24,13 @@ export interface GoogleOAuthClient {
  */
 export const GOOGLE_IDENTITY_SCOPE = "openid";
 
+/**
+ * Asked for next to GOOGLE_IDENTITY_SCOPE: the Google account's email address, only so a sign-in that
+ * reaches nothing ("no AdSense account") can tell the person who just signed in which account Google
+ * picked. Shown to them once, never stored or logged. Non-sensitive: no Google verification.
+ */
+export const GOOGLE_EMAIL_SCOPE = "email";
+
 async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string; scope?: string }> {
   const res = await (c.fetchImpl ?? fetch)("https://oauth2.googleapis.com/token", {
     method: "POST",

@@ -14,6 +14,9 @@ test("a login that reaches nothing is named first, on its platform's own words",
   assert.match(meta, /^You signed in to Facebook as “Sebastian Thomas”\. That Facebook login can't reach any ad account/);
   assert.match(callbackErrorMessage("none_shared", "meta", "A"), /^You signed in to Facebook as “A”\. No ad account was shared/);
   assert.match(callbackErrorMessage("no_accounts", "google", "B"), /^You signed in to Google as “B”\. That Google login has no Google Ads account/);
+  // Google names the login by its email (the `email` scope); AdSense says whether there's none or only a closed one.
+  assert.match(callbackErrorMessage("no_accounts", "adsense", "shop.owner@gmail.com"), /^You signed in to Google as “shop\.owner@gmail\.com”\. That Google login has no AdSense account/);
+  assert.match(callbackErrorMessage("account_not_ready", "adsense", "shop.owner@gmail.com"), /^You signed in to Google as “shop\.owner@gmail\.com”\. That Google login's AdSense account is closed/);
   // Without a name, or for any other failure, the words stay as they were.
   assert.match(callbackErrorMessage("no_accounts", "meta"), /^That Facebook login can't reach any ad account/);
   assert.equal(callbackErrorMessage("rate_limited", "meta", "C").includes("C”"), false);

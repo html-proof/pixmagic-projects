@@ -33,7 +33,8 @@ export const metadata: Metadata = {
  *     took to checkout and bought, and one word each for the kind of device, the country and where the visit
  *     came from; the referring host and link tags the pixel sends for that are not kept (apps/api/src/routes/pixel.ts,
  *     packages/shared/src/journey.ts `cleanPath`, packages/shared/src/funnel.ts `funnelDevice`, `arrivalSource`);
- *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
+ *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly; Google's
+ *     openid and email only name the account: packages/core/src/ads/googleOAuth.ts, the email never stored) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
  *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL, and Meta's
  *     deauthorize and data deletion callbacks (POST /webhooks/meta/deauthorize, /webhooks/meta/data-deletion, once
@@ -49,7 +50,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-25";
+const UPDATED = "2026-10-26";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -290,7 +291,9 @@ export default function PrivacyPage() {
         <p>
           We keep these figures so the dashboard can compare periods. With each connection we also keep the platform&apos;s ID for the
           person who signed in (Google&apos;s account ID, Meta&apos;s app-scoped user ID) and the permissions they granted, so that
-          disconnecting returns access only when no other account you connected relies on it.
+          disconnecting returns access only when no other account you connected relies on it. Google also tells us the email address
+          of the Google account that signed in; we use it only to tell you which account you used when it has no account to connect,
+          and we don&apos;t keep it.
         </p>
         <p>
           When you disconnect an account, bizinsights deletes its figures and access token immediately and then returns the access to

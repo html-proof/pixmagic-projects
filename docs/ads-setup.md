@@ -42,7 +42,9 @@ Access is **read-only**: Google's `adwords` scope (the only Google Ads scope the
 `adsense.readonly`, and Meta's `ads_read`. bizinsights never creates, changes or pauses an ad. Google sign-ins also
 ask for `openid` (only which Google account it is, nothing about it; non-sensitive): without it Google's tokeninfo
 may not say whose a token is, and a disconnect then can't take the Google grant back (it never revokes a grant
-whose person it doesn't know). Connections made before 2026-10-23 learn it when they reconnect.
+whose person it doesn't know). Connections made before 2026-10-23 learn it when they reconnect. They also ask for
+`email` (non-sensitive), only so a sign-in that reaches no account can say which Google account was used; it is
+never stored or logged.
 
 ## The card states
 

@@ -15,6 +15,7 @@ import {
   adsenseAccounts,
   AdsApiError,
   AdsAuthError,
+  AdsNoAccountsError,
   googleAdAccounts,
   metaAdAccounts,
   metaGrantedPermissions,
@@ -233,18 +234,27 @@ export async function finishNangoSignIn(provider: AdProvider, connectionId: stri
   if (!cfg) throw new AdsApiError(`${provider === "adsense" ? "Google AdSense" : "Google Ads"} isn't set up on this server`, 503, undefined, "not_configured");
   // Google: tokeninfo says whose token it is and refuses one issued to another client (AdsAuthError).
   const externalUserId = await platformPerson(provider, token, fetchImpl);
-  const scopes = await googleTokenScopes(token, fetchImpl);
+  const { scopes, email } = await googleTokenInfo(token, fetchImpl);
   if (scopes && !scopes.includes(REQUIRED_AD_SCOPE[provider])) throw new NangoPermissionMissingError(`${REQUIRED_AD_SCOPE[provider]} was not granted`);
-  const accounts = provider === "adsense" ? await adsenseAccounts(cfg, token) : await googleAdAccounts(googleClient(fetchImpl)!, token);
+  const listed = provider === "adsense" ? adsenseAccounts(cfg, token) : googleAdAccounts(googleClient(fetchImpl)!, token);
+  // Nothing to connect: the card names the Google account Google picked (its email), for the person who just used it.
+  const accounts = await listed.catch((err: unknown) => {
+    if (err instanceof AdsNoAccountsError && email && !err.loginName) err.loginName = email;
+    throw err;
+  });
   return { connectionId, integrationKey, expiresAt, externalUserId, grantedScopes: scopes, accounts };
 }
 
-/** The scopes a Google access token carries (tokeninfo), or undefined when Google doesn't say. */
-async function googleTokenScopes(token: string, fetchImpl?: FetchLike): Promise<string[] | undefined> {
+/**
+ * What tokeninfo says of a Google access token: its scopes (undefined when Google doesn't say), and the
+ * account's email address when the token carries GOOGLE_EMAIL_SCOPE (null otherwise).
+ */
+async function googleTokenInfo(token: string, fetchImpl?: FetchLike): Promise<{ scopes: string[] | undefined; email: string | null }> {
   const res = await (fetchImpl ?? fetch)(`https://oauth2.googleapis.com/tokeninfo?${new URLSearchParams({ access_token: token })}`, { method: "GET" }).catch(() => null);
-  if (!res?.ok) return undefined;
-  const body = (await res.json().catch(() => ({}))) as { scope?: unknown };
-  return typeof body.scope === "string" ? body.scope.split(" ").filter(Boolean) : undefined;
+  if (!res?.ok) return { scopes: undefined, email: null };
+  const body = (await res.json().catch(() => ({}))) as { scope?: unknown; email?: unknown };
+  const email = typeof body.email === "string" && /^[^\s@]+@[^\s@]+$/.test(body.email.trim()) ? body.email.trim().slice(0, 120) : null;
+  return { scopes: typeof body.scope === "string" ? body.scope.split(" ").filter(Boolean) : undefined, email };
 }
 
 /**
