@@ -92,11 +92,20 @@ export interface WaShopifyCustomers {
 /** A WhatsApp contact counts as "not on WhatsApp" this long after WhatsApp said so (messages.ts skips sends to it as long). */
 const NOT_ON_WHATSAPP_MS = 30 * 86_400_000;
 
+/** Whether WhatsApp said lately (`notOnWhatsappAt`) that the number has no account. */
+export const waNotOnWhatsapp = (at: Date | null, now = Date.now()) => !!at && now - at.getTime() < NOT_ON_WHATSAPP_MS;
+
 /** "gid://shopify/Customer/123" → "123". */
 const numericId = (gid: string) => gid.split("/").pop() ?? gid;
 
 /** A number as people type one: digits, spaces, "+", brackets, dots and dashes, with at least 6 digits. */
 const looksLikePhone = (s: string) => /^[+\d\s().-]+$/.test(s) && (s.match(/\d/g)?.length ?? 0) >= 6;
+
+/**
+ * Whether a search is a phone number. It is all a member who may not see customers' names may
+ * search by: a name searched for would come back with that person's number next to it.
+ */
+export const waSearchIsPhone = (text: string) => looksLikePhone(text.trim());
 
 /**
  * The merchant's search as Shopify's customer search syntax, or null for none. Quotes, colons,
@@ -123,11 +132,13 @@ export function waCustomerSearch(text: string | null | undefined, country: strin
 /**
  * One page of the store's customers, newest first (or best match first when searching), each with
  * their best phone number and WhatsApp's state for it. `after` is the cursor from the previous page.
+ * `phoneOnly`: the search must read as a whole phone number (Shopify's `phone:` filter), never as
+ * free text, which Shopify matches against names and addresses (waSearchIsPhone).
  */
 export async function waShopifyCustomers(
   deps: Pick<WaDeps, "coord" | "fetchImpl">,
   store: Pick<Store, "id" | "workspaceId" | "shopDomain" | "status" | "currency">,
-  opts: { after?: string | null; search?: string | null; first?: number } = {},
+  opts: { after?: string | null; search?: string | null; first?: number; phoneOnly?: boolean } = {},
 ): Promise<WaShopifyCustomers> {
   const first = Math.max(1, Math.min(WA_CUSTOMER_PAGE, Math.trunc(opts.first ?? WA_CUSTOMER_PAGE)));
   const shopAdminUrl = `https://${store.shopDomain}/admin`;
@@ -150,6 +161,9 @@ export async function waShopifyCustomers(
     let country: string | null = null;
     if (typed && looksLikePhone(typed) && !normalizePhone(typed, null)) country = await storeCountryOf(store.id, await gql<GqlShopCountry>(SHOP_COUNTRY_QUERY, {}));
     const search = waCustomerSearch(typed, country);
+    if (opts.phoneOnly && typed && !search?.byPhone) {
+      throw new WhatsappError("Search with the customer's whole phone number, including its country code (+61…).", 400, "invalid_phone");
+    }
     data = await gql<GqlCustomers>(CUSTOMERS_QUERY, {
       first,
       after: opts.after || null,
@@ -158,6 +172,7 @@ export async function waShopifyCustomers(
       reverse: !search,
     });
   } catch (err) {
+    if (err instanceof WhatsappError) throw err;
     if (err instanceof StoreDisconnectedError) throw new WhatsappError("This store isn't connected any more. Reconnect it to see its customers.", 409, "store_disconnected");
     if (err instanceof ShopifyHttpError && (err.status === 401 || err.status === 403)) {
       throw new WhatsappError("Shopify stopped accepting our access. Reconnect the store to see its customers.", 409, "store_disconnected");
@@ -229,7 +244,7 @@ async function whatsappStateOf(store: Pick<Store, "id" | "workspaceId">, numbers
       optedIn: c.optedIn,
       marketing: c.marketing as WaMarketingState,
       suppressed: suppressedOf(c.phoneHash),
-      notOnWhatsapp: !!c.notOnWhatsappAt && now - c.notOnWhatsappAt.getTime() < NOT_ON_WHATSAPP_MS,
+      notOnWhatsapp: waNotOnWhatsapp(c.notOnWhatsappAt, now),
       lastOutboundAt: c.lastOutboundAt,
     });
   }

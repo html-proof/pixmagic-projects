@@ -195,8 +195,10 @@ export default function PrivacyPage() {
         <h3>Your customers&apos; personal data</h3>
         <p>
           The analytics we store contain none of your customers&apos; personal data: no names, email addresses, postal addresses or
-          phone numbers are saved for the dashboard. The one feature that shows them, Customers to follow up, reads them from Shopify
-          while you look. WhatsApp and text messaging, if you turn them on, are the only exceptions. They are described in section 3. Where the
+          phone numbers are saved for the dashboard. Two features show them: Customers to follow up on the dashboard, and the customer
+          list of WhatsApp Automation (which also shows how many orders each customer placed and how much they spent). Both read them
+          from Shopify while you look and save none of it. WhatsApp and text messaging, if you turn them on, are the only exceptions to
+          what is saved. They are described in section 3. Where the
           dashboard distinguishes new from returning buyers, it uses a one-way keyed hash of the Shopify customer ID, scoped to a
           single store, from which no identity can be recovered.
         </p>
@@ -243,8 +245,9 @@ export default function PrivacyPage() {
           the customers an automation messages, who write to your business, or who agree to receive your marketing on WhatsApp. Both are
           encrypted with AES-256-GCM, together with a one-way keyed hash of the number used to recognise replies; the dashboard shows
           these numbers in full only to the workspace&apos;s owners and admins and to members given permission to see customers&apos;
-          contact details. WhatsApp Automation&apos;s list of your store&apos;s customers, with the phone number Shopify has for each, is
-          read from Shopify each time you open it, shown only to those same people and not saved in our database; we record only that it
+          contact details. WhatsApp Automation&apos;s list of your store&apos;s customers, with the phone number Shopify has for each (and,
+          for those allowed to see them, their names, order counts and amounts spent), is read from Shopify each time you open it, even
+          before WhatsApp is connected, shown only to those same people and not saved in our database; we record only that it
           was viewed, and by whom, in your workspace&apos;s audit log. We keep a record of every consent and opt-out (when, how, and who
           recorded it), so that nobody who replied STOP is messaged again, and the text of each message sent and received, encrypted, with
           its delivery reports. Messages leave through

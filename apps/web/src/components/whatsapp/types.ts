@@ -274,7 +274,10 @@ export interface WaContact {
   marketing: "opted_in" | "opted_out" | "unknown";
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
-  ordersCount: number;
+  /** WhatsApp said in the last 30 days that the number has no account. */
+  notOnWhatsapp: boolean;
+  /** Only with "View order history". */
+  ordersCount: number | null;
   history: Array<{ scope: string; status: string; source: string; sourceLabel: string; note: string | null; at: string }>;
 }
 
@@ -322,6 +325,7 @@ export interface WaCustomersPage {
   page: { count: number; withNumber: number; withoutCountryCode: number };
   /** "https://<shop>/admin". */
   shopAdminUrl: string;
+  /** What this member may see, on every answer: without names, a search may only be a phone number. */
   shown: { names: boolean; orders: boolean };
 }
 

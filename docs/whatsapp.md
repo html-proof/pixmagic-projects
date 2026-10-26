@@ -174,7 +174,9 @@ One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; af
 - **Customers** (with "View contact information"), in two views:
   - **All customers** (`GET …/whatsapp/customers`, `packages/core/src/whatsapp/shopifyCustomers.ts`):
     the store's customers read live from Shopify, 50 a page, newest first or searched by name, email
-    or phone number. Each shows the whole number from wherever Shopify keeps one (profile, checkout,
+    or phone number (by phone number only without "View customer profiles": a name searched for
+    would come back with its number, so the API refuses any other search before asking Shopify, and
+    every answer says what is `shown` so the page offers the right search). Each shows the whole number from wherever Shopify keeps one (profile, checkout,
     saved address, last order, read with its address's country, else the store's), where it came
     from, and what WhatsApp knows of it, joined by the number's keyed hash: agreed to marketing,
     opted out, on the do-not-message list, not on WhatsApp, or new to WhatsApp. A line says how many
@@ -183,7 +185,9 @@ One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; af
     the Shopify link need "View customer profiles", orders and spend "View order history". Nothing of
     the list is stored; the search goes in the `x-search` header, never in the address.
   - **Consent records**: the customers WhatsApp keeps (whole numbers), consent and its history,
-    recording consent or an opt-out given another way.
+    recording consent or an opt-out given another way. Names need "View customer profiles" and
+    order counts "View order history" here too. After a send from All customers, the row's
+    WhatsApp state is read again from here by its number, so the pages already loaded stay.
 
   Then the do-not-message list (masked: it keeps no whole number).
 - **Settings**: Step 3's settings, Pause all automation / Resume, Reconnect, Disconnect, and
@@ -279,7 +283,7 @@ token (constant-time).
 | --- | --- |
 | See the page and its data | **View campaigns** (`marketing.campaigns`) |
 | See how the connection stands (Settings → Integrations) | **View integration connection status** too: the overview answers that person with the connection alone |
-| See customers' whole numbers and what was said; the Customers tab | **View contact information** as well (names there also need **View customer profiles**, orders and spend **View order history**); a shared link given these may look but never change anything |
+| See customers' whole numbers and what was said; the Customers tab | **View contact information** as well (names there, and searching by name or email, also need **View customer profiles**; orders and spend **View order history**); a shared link given these may look but never change anything |
 | Change what customers receive: settings, test number, templates, automations, campaigns, sends, retries, consent records, the do-not-message list | The store's **owners and admins** (`stores:manage`), signed in themselves |
 | Connect, reconnect, disconnect | **Manage integrations**, signed in themselves |
 

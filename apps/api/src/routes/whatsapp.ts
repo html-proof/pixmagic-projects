@@ -50,7 +50,9 @@ import {
   waConnectionView,
   waDecrypt,
   waMessageView,
+  waNotOnWhatsapp,
   waPhoneHash,
+  waSearchIsPhone,
   waShopifyCustomers,
   whatsappOverview,
   WhatsappError,
@@ -674,6 +676,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    * need "View contact information"; names and the Shopify link "View customer profiles"; orders and
    * amount spent "View order history" (owners and admins see everything). A shared link given those
    * may look, as on the dashboard's Customers to follow up; it can't send or record anything.
+   * Every answer says what is `shown`, so the page knows before a search what it may search by.
    */
   app.get(`${base}/customers`, async (c) => {
     const { ws, storeId } = c.req.param();
@@ -686,12 +689,17 @@ export function whatsappRoutes(app: App, deps: Deps) {
     // Shopify's opaque cursor, as it gave it.
     const q = z.object({ cursor: z.string().max(400).regex(/^[A-Za-z0-9+/=_-]+$/).optional() }).parse(c.req.query());
     const search = searched(c);
+    const shown = { names: allows(a.access, "customers.profiles"), orders: allows(a.access, "customers.orders") };
+    // Without names, a search by name (or email) would come back with that person's number next to
+    // it: only a phone number may be searched, and Shopify is never asked anything else.
+    if (search && !shown.names && !waSearchIsPhone(search)) {
+      throw new HttpError(403, "You don't have permission to see customers' names, so you can search by phone number only.", "phone_search_only");
+    }
     await limit(deps.coord, `rl:wa-customers:${ws}:${a.user?.id ?? clientIp(c)}`, LIMITS.contacts);
     // Personal data: never let a browser or proxy keep a copy.
     c.header("cache-control", "no-store");
-    const page = await waShopifyCustomers(deps, store, { after: q.cursor, search });
+    const page = await waShopifyCustomers(deps, store, { after: q.cursor, search, phoneOnly: !shown.names });
     await auditViewed(c, a, store, "whatsapp.customers_viewed", !!search);
-    const shown = { names: allows(a.access, "customers.profiles"), orders: allows(a.access, "customers.orders") };
     return c.json({
       ...page,
       shown,
@@ -701,7 +709,8 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   /**
    * The customers WhatsApp keeps a record of (it messaged them, they wrote, or their consent was
-   * recorded), with their whole number for those who may see contact details.
+   * recorded), with their whole number for those who may see contact details. Searched by one
+   * number, it is also how All customers reads that row's WhatsApp state again after a send.
    */
   app.get(`${base}/contacts`, async (c) => {
     const { ws, storeId } = c.req.param();
@@ -725,8 +734,11 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const page = rows.slice(0, 50);
     const events = await withTenant(ws, (tx) => tx.wappConsentEvent.findMany({ where: { workspaceId: ws, contactId: { in: page.map((r) => r.id) } }, orderBy: { occurredAt: "desc" } }));
     await auditViewed(c, a, store, "whatsapp.contacts_viewed", !!phone);
-    // Names as the dashboard's customer lists give them: with "View customer profiles" (redactContact).
+    // Names and order counts as the dashboard's customer lists give them: with "View customer
+    // profiles" and "View order history" (redactContact), as on All customers.
     const names = allows(a.access, "customers.profiles");
+    const orders = allows(a.access, "customers.orders");
+    const now = Date.now();
     return c.json({
       contacts: page.map((r) => ({
         id: r.id,
@@ -739,7 +751,8 @@ export function whatsappRoutes(app: App, deps: Deps) {
         marketing: r.marketing,
         lastInboundAt: r.lastInboundAt,
         lastOutboundAt: r.lastOutboundAt,
-        ordersCount: r.ordersCount,
+        notOnWhatsapp: waNotOnWhatsapp(r.notOnWhatsappAt, now),
+        ordersCount: orders ? r.ordersCount : null,
         history: events.filter((e) => e.contactId === r.id).slice(0, 5).map((e) => ({ scope: e.scope, status: e.status, source: e.source, sourceLabel: WA_CONSENT_SOURCE_LABEL[e.source as WaConsentSource] ?? e.source, note: e.note, at: e.occurredAt })),
       })),
       nextCursor: rows.length > 50 ? page.at(-1)!.id : null,

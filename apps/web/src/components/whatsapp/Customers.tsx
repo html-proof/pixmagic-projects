@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Search, Send } from "lucide-react";
-import { CUSTOMER_PHONE_SOURCE_LABEL, formatPhone } from "@app/shared/messaging";
+import { CUSTOMER_PHONE_SOURCE_LABEL, formatPhone, phoneCodeTyped } from "@app/shared/messaging";
 import { WA_ORDER_UPDATE_INFO } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
@@ -11,7 +11,7 @@ import { Alert } from "@/components/ui";
 import { api, ApiError, fmtMoney, fmtNum, useApi } from "@/lib/api";
 import { COUNTRY_CHOICES, countryName, plural } from "@/components/messaging/MessagingUi";
 import { Composer } from "./Messages";
-import type { WaContact, WaCustomersPage, WaOverview, WaShopifyCustomer, WaSuppression } from "./types";
+import type { WaContact, WaCustomersPage, WaCustomerWhatsapp, WaOverview, WaShopifyCustomer, WaSuppression } from "./types";
 import { fmtAgo, useWaAction, waError, waHref } from "./WaUi";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,8 @@ import { fmtAgo, useWaAction, waError, waHref } from "./WaUi";
 //    given another way.
 // Then the store's do-not-message list, whose numbers stay masked (it keeps no whole number).
 // Whole numbers show only to members allowed to see contact details (the tab needs it). A search
-// can be a phone number, so it goes to the API in a header, never in an address.
+// can be a phone number, so it goes to the API in a header, never in an address. A member who may
+// not see names may search by phone number only (a name searched for would give its number).
 // ---------------------------------------------------------------------------
 
 const MARKETING: Record<WaContact["marketing"], { tone: Tone; label: string }> = {
@@ -82,6 +83,8 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
 /**
  * The pages of a list loaded so far, each page's whole answer kept. `search` goes in the `x-search`
  * header: it can be a phone number or an email, and an address ends up in logs and browser tools.
+ * `last` is the latest answer of any search (kept while another loads or fails); `patch` changes
+ * the rows loaded so far in place, every page kept, where `reload` starts again from the first.
  */
 function usePages<P extends { nextCursor: string | null }>(path: string, search: string) {
   const key = `${path}\n${search}`;
@@ -110,9 +113,10 @@ function usePages<P extends { nextCursor: string | null }>(path: string, search:
   useEffect(() => {
     void load(null);
   }, [load]);
+  const patch = useCallback((change: (page: P) => P) => setState((prev) => (prev?.key === key ? { key, pages: prev.pages.map(change) } : prev)), [key]);
   const pages = state?.key === key ? state.pages : null;
   const cursor = pages?.at(-1)?.nextCursor ?? null;
-  return { pages, cursor, loading, error, loadMore: () => void load(cursor), reload: () => load(null) };
+  return { pages, cursor, loading, error, last: state?.pages.at(-1) ?? null, loadMore: () => void load(cursor), reload: () => load(null), patch };
 }
 
 /** A search box with its own Search button (a phone's number keypad has no Return key); Clear also resets the filters `onClear` names. */
@@ -166,8 +170,22 @@ function AllCustomers({ base, overview }: { base: string; overview: WaOverview }
   const first = list.pages?.[0];
   const seen = new Set<string>();
   const rows = (list.pages ?? []).flatMap((p) => p.customers).filter((r) => !seen.has(r.customerId) && !!seen.add(r.customerId));
-  const shown = list.pages?.at(-1)?.shown ?? { names: true, orders: true };
+  // What this member may see is on every answer, the first list's included, so it is known before
+  // any search. Without names only a phone number may be searched (the API refuses anything else).
+  const known = list.last?.shown ?? { names: true, orders: true };
+  const shown = list.error instanceof ApiError && list.error.code === "phone_search_only" ? { ...known, names: false } : known;
   const canSend = overview.can.manage && overview.connection?.status === "connected";
+
+  /** After a send: WhatsApp's record of that number read again, into its rows on every page loaded. */
+  const refreshNumber = async (e164: string) => {
+    try {
+      const { contacts } = await api<{ contacts: WaContact[] }>(`${base}/contacts`, { headers: { "x-search": encodeURIComponent(e164) } });
+      const c = contacts[0];
+      if (c) list.patch((p) => ({ ...p, customers: p.customers.map((r) => (r.phoneE164 === e164 ? { ...r, whatsapp: whatsappOf(c, r.whatsapp) } : r)) }));
+    } catch {
+      // The rows stay as they were; the next time the list loads shows the change.
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -179,7 +197,14 @@ function AllCustomers({ base, overview }: { base: string; overview: WaOverview }
             and doesn&apos;t keep a copy.
           </p>
         </div>
-        <SearchForm id={`${id}-search`} label="Find a customer" placeholder="Name, email or phone number" onSearch={setSearch} active={!!search} />
+        <SearchForm
+          id={`${id}-search`}
+          label={shown.names ? "Find a customer" : "Find a customer by phone number"}
+          placeholder={shown.names ? "Name, email or phone number" : "+61 412 345 678"}
+          inputMode={shown.names ? undefined : "tel"}
+          onSearch={setSearch}
+          active={!!search}
+        />
       </div>
 
       {list.error ? (
@@ -196,7 +221,13 @@ function AllCustomers({ base, overview }: { base: string; overview: WaOverview }
         </Alert>
       ) : !rows.length ? (
         <div className="card">
-          <Empty>{search ? "No customer matches. Try their name, their email, or their whole phone number." : "No customers in your store yet."}</Empty>
+          <Empty>
+            {!search
+              ? "No customers in your store yet."
+              : shown.names
+                ? "No customer matches. Try their name, their email, or their whole phone number."
+                : "No customer matches. Search with their whole phone number, including its country code."}
+          </Empty>
         </div>
       ) : (
         <div className="card animate-rise space-y-3">
@@ -228,9 +259,11 @@ function AllCustomers({ base, overview }: { base: string; overview: WaOverview }
           initialPhone={composeTo.phone}
           initialName={composeTo.name}
           onClose={() => {
+            const to = composeTo.phone;
             setComposeTo(null);
-            // What WhatsApp knows of the number changed: read the list again.
-            if (sent.current) void list.reload();
+            // What WhatsApp knows of the number changed: read it again for its row alone, so the
+            // pages loaded so far (and where the merchant was in them) stay.
+            if (sent.current) void refreshNumber(to);
             sent.current = false;
           }}
           onSent={() => {
@@ -245,6 +278,8 @@ function AllCustomers({ base, overview }: { base: string; overview: WaOverview }
 /** Why the list couldn't load, in the merchant's words: a permission Shopify must give, a store to reconnect, Shopify having a moment. */
 function CustomersError({ error, busy, onRetry }: { error: unknown; busy: boolean; onRetry: () => void }) {
   const code = error instanceof ApiError ? error.code : null;
+  // A search this member may not make (a name without "View customer profiles"), or a number that can't be read.
+  if (code === "phone_search_only" || code === "invalid_phone") return <Alert kind="info">{waError(error, "search your customers")}</Alert>;
   if (code === "missing_scopes") {
     return (
       <Alert kind="info">
@@ -315,6 +350,17 @@ function hue(key: string) {
 
 const digitsOf = (s: string) => s.replace(/\D/g, "");
 
+/** A consent record (GET /contacts) as a row's WhatsApp state; a send doesn't change the do-not-message list, so that is kept. */
+const whatsappOf = (c: WaContact, before: WaCustomerWhatsapp | null): WaCustomerWhatsapp => ({
+  contactId: c.id,
+  optedOut: c.optedOut,
+  optedIn: c.optedIn,
+  marketing: c.marketing,
+  suppressed: before?.suppressed ?? null,
+  notOnWhatsapp: c.notOnWhatsapp,
+  lastOutboundAt: c.lastOutboundAt,
+});
+
 /** What WhatsApp knows of the number, as badges (nothing for a row without an international number). */
 function whatsappBadges(r: WaShopifyCustomer): Array<{ tone: Tone; label: string }> {
   if (!r.phoneE164) return [];
@@ -362,9 +408,11 @@ function PhoneNumber({ r }: { r: WaShopifyCustomer }) {
   const shownAs = r.phoneE164 ? formatPhone(r.phoneE164) : r.phone;
   const dial = r.phoneE164 ?? r.phone.replace(/[^\d+]/g, "");
   const typed = r.phoneE164 && r.phoneRaw && digitsOf(r.phoneRaw) !== digitsOf(r.phoneE164) ? r.phoneRaw : null;
+  // Only a code the customer didn't type was added ("0412 345 678" read as Australian); "0044 …" or an extension is the same number typed another way.
+  const added = typed && r.phoneE164 && !phoneCodeTyped(typed, r.phoneE164) ? (r.phoneCountryAssumed ? "your store's country" : "their address") : null;
   const notes = [
     r.phoneSource ? CUSTOMER_PHONE_SOURCE_LABEL[r.phoneSource] : null,
-    typed ? `As typed: ${typed} (country code added from ${r.phoneCountryAssumed ? "your store's country" : "their address"})` : null,
+    typed ? `As typed: ${typed}${added ? ` (country code added from ${added})` : ""}` : null,
     r.smsSubscribed ? "Agreed to marketing texts in Shopify" : null,
   ].filter(Boolean);
   return (
@@ -507,12 +555,15 @@ function ContactList({ path, search, filtered }: { path: string; search: string;
                     {c.firstName && <span className="text-muted">{c.firstName}</span>}
                   </div>
                   <p className="text-xs text-muted">
-                    {c.country ? countryName(c.country) : "Country unknown"} · {c.ordersCount} order{c.ordersCount === 1 ? "" : "s"} · last message from them {fmtAgo(c.lastInboundAt)} · last sent {fmtAgo(c.lastOutboundAt)}
+                    {c.country ? countryName(c.country) : "Country unknown"}
+                    {/* The order count only with "View order history" (null without it). */}
+                    {c.ordersCount != null && ` · ${plural(c.ordersCount, "order")}`} · last message from them {fmtAgo(c.lastInboundAt)} · last sent {fmtAgo(c.lastOutboundAt)}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {c.optedOut ? <Badge tone="danger">Opted out of everything</Badge> : <Badge tone={MARKETING[c.marketing].tone}>{MARKETING[c.marketing].label}</Badge>}
                   {!c.optedOut && c.optedIn && <Badge tone="good">Agreed to order updates</Badge>}
+                  {c.notOnWhatsapp && <Badge tone="neutral">Not on WhatsApp</Badge>}
                 </div>
               </div>
               {c.history.length > 0 && (

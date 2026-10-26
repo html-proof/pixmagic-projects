@@ -1130,4 +1130,77 @@ describe("the Customers tab: whole numbers, and the store's customers from Shopi
     expect(ok(await o.call("GET", "/customers"), 403).error).toBe("missing_scopes");
     expect(asked).toHaveLength(0);
   });
+
+  it("lets a member who may not see names search by phone number only, refused before Shopify is asked", async () => {
+    const o = await owner();
+    await connected(o);
+    const asked = shopify(() => answer(PAGE_ONE.slice(0, 1), null));
+    const contactOnly = await member(o, "n1", ["marketing.campaigns", "customers.list", "customers.contact"]);
+    // The first list, before any search, already says names are hidden, so the page offers a number search.
+    expect(ok(await o.call("GET", "/customers", undefined, contactOnly)).shown).toEqual({ names: false, orders: false });
+
+    // A name, an email, a number among words: refused, and Shopify never sees them.
+    const before = asked.length;
+    for (const text of ["Jane Doe", "jane@shop.test", "Jane 0412 345 678"]) {
+      expect(ok(await o.call("GET", "/customers", undefined, search(text, contactOnly)), 403).error).toBe("phone_search_only");
+    }
+    expect(asked).toHaveLength(before);
+
+    // A whole number is searched as one (Shopify's phone filter, never free text), still without the name.
+    const found = ok(await o.call("GET", "/customers", undefined, search("+61 412 345 678", contactOnly)));
+    expect(asked.at(-1)!.variables.query).toBe("phone:+61412345678");
+    expect(found.shown).toEqual({ names: false, orders: false });
+    expect(found.customers[0]).toMatchObject({ phone: CUSTOMER, name: null, adminUrl: null });
+    // Digits that make no number aren't sent to Shopify as free text either.
+    const n = asked.length;
+    expect(ok(await o.call("GET", "/customers", undefined, search("+12 3456", contactOnly)), 400).error).toBe("invalid_phone");
+    expect(asked.slice(n).some((q) => q.query.includes("WaCustomers"))).toBe(false);
+
+    // A shared link given the same permissions: the same refusal.
+    ok(await ctx.app.inject({ method: "POST", url: `/workspaces/${o.ws}/team/invitations`, headers: o.headers, payload: { email: "guest@example.com", role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact"] } }));
+    const mail = [...ctx.mailer.sent].reverse().find((x) => x.to === "guest@example.com")!;
+    const token = /#token=([A-Za-z0-9_-]+)/.exec(mail.text)![1];
+    const link = { cookie: cookiesFrom(await ctx.app.inject({ method: "POST", url: "/invitations/open", headers: ORIGIN, payload: { token } })), ...ORIGIN };
+    const m = asked.length;
+    expect(ok(await o.call("GET", "/customers", undefined, search("Jane Doe", link)), 403).error).toBe("phone_search_only");
+    expect(asked).toHaveLength(m);
+
+    // With "View customer profiles", a name is searched as before.
+    const withProfiles = await member(o, "n2", ["marketing.campaigns", "customers.list", "customers.contact", "customers.profiles"]);
+    expect(ok(await o.call("GET", "/customers", undefined, search("Jane Doe", withProfiles))).customers[0]).toMatchObject({ name: "Jane Doe", phone: CUSTOMER });
+    expect(asked.at(-1)!.variables.query).toBe("Jane Doe");
+  });
+
+  it("gives a consent record's order count only with View order history", async () => {
+    const o = await owner();
+    const { contact } = ok(await o.call("POST", "/contacts/consent", { phone: CUSTOMER, scope: "marketing", status: "opted_in" }));
+    await systemDb.wappContact.update({ where: { id: contact.id }, data: { ordersCount: 3 } });
+    expect(ok(await o.call("GET", "/contacts")).contacts[0]).toMatchObject({ phone: CUSTOMER, ordersCount: 3 });
+    const contactOnly = await member(o, "q1", ["marketing.campaigns", "customers.list", "customers.contact"]);
+    expect(ok(await o.call("GET", "/contacts", undefined, contactOnly)).contacts[0]).toMatchObject({ phone: CUSTOMER, ordersCount: null });
+    const withOrders = await member(o, "q2", ["marketing.campaigns", "customers.list", "customers.contact", "customers.orders"]);
+    expect(ok(await o.call("GET", "/contacts", undefined, withOrders)).contacts[0]).toMatchObject({ phone: CUSTOMER, ordersCount: 3, firstName: null });
+  });
+
+  it("reads one number's WhatsApp state again after a send, as All customers does for the messaged row", async () => {
+    const o = await owner();
+    await connect(o);
+    await configure(o, { orderUpdates: "opt_in_only" });
+    const send = (phone: string, idempotencyKey: string) => o.call("POST", "/messages", { phone, reason: "order_update", text: "Your order is on its way.", idempotencyKey, customerAsked: true });
+    ok(await send(CUSTOMER, "row-00000001"), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    // By its number: the consent the send recorded and when it went out, nothing about anyone else.
+    const [sent] = ok(await o.call("GET", "/contacts", undefined, search(CUSTOMER, o.headers))).contacts;
+    expect(sent).toMatchObject({ phone: CUSTOMER, optedIn: true, optedOut: false, notOnWhatsapp: false, lastOutboundAt: expect.any(String) });
+
+    // A number WhatsApp says has no account: said so on its record, for the row to stop offering Message.
+    evo.notOnWhatsapp.add("61498765432");
+    ok(await send("+61498765432", "row-00000002"), 201);
+    await drain();
+    const [skipped] = ok(await o.call("GET", "/contacts", undefined, search("+61498765432", o.headers))).contacts;
+    expect(skipped).toMatchObject({ phone: "+61498765432", notOnWhatsapp: true, lastOutboundAt: null });
+    // Only lately: after 30 days the number is tried again.
+    await systemDb.wappContact.update({ where: { id: skipped.id }, data: { notOnWhatsappAt: new Date(Date.now() - 31 * 86_400_000) } });
+    expect(ok(await o.call("GET", "/contacts", undefined, search("+61498765432", o.headers))).contacts[0].notOnWhatsapp).toBe(false);
+  });
 });
