@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { bestPhone, formatPhone, normalizePhone } from "../src/messaging.js";
+import { bestPhone, formatPhone, normalizePhone, phoneCodeTyped } from "../src/messaging.js";
+
+describe("phoneCodeTyped", () => {
+  it("tells a typed calling code from one added from a country", () => {
+    expect(phoneCodeTyped("+61 412 345 678", "+61412345678")).toBe(true);
+    expect(phoneCodeTyped("0044 7700 900123", "+447700900123")).toBe(true);
+    expect(phoneCodeTyped("+61 412 345 678 ext 5", "+61412345678")).toBe(true);
+    expect(phoneCodeTyped("61412345678", "+61412345678")).toBe(true);
+    expect(phoneCodeTyped("0412 345 678", "+61412345678")).toBe(false);
+    expect(phoneCodeTyped("412 345 678", "+61412345678")).toBe(false);
+  });
+});
 
 describe("normalizePhone", () => {
   it("reads a local number with its address's country", () => {
@@ -28,6 +39,15 @@ describe("formatPhone", () => {
     expect(formatPhone("+97150123456")).toBe("+971 5012 3456");
   });
 
+  it("splits off the right calling code for countries it has no local rules for", () => {
+    expect(formatPhone("+79161234567")).toBe("+7 916 123 4567");
+    expect(formatPhone("+36201234567")).toBe("+36 201 234 567");
+    expect(formatPhone("+584121234567")).toBe("+58 412 123 4567");
+    expect(formatPhone("+989121234567")).toBe("+98 912 123 4567");
+    expect(formatPhone("+67712345")).toBe("+677 12 345");
+    expect(formatPhone("+359881234567")).toBe("+359 881 234 567");
+  });
+
   it("leaves what isn't an international number as it was", () => {
     expect(formatPhone("0412 345 678")).toBe("0412 345 678");
     expect(formatPhone(" +12 ")).toBe("+12");
@@ -50,6 +70,10 @@ describe("bestPhone", () => {
     expect(bestPhone([src("0412 345 678", null, "customer")], "AU")).toEqual({ e164: "+61412345678", raw: "0412 345 678", source: "customer", countryAssumed: true });
     // A number that reads with its own country wins over an earlier one that needs the store's.
     expect(bestPhone([src("0412 345 678", null, "customer"), src("+64 21 123 4567", null, "order")], "AU")?.source).toBe("order");
+  });
+
+  it("doesn't call a calling code the customer typed assumed", () => {
+    expect(bestPhone([src("61412345678", null, "customer")], "AU")).toMatchObject({ e164: "+61412345678", countryAssumed: false });
   });
 
   it("keeps a number it can't read, as typed", () => {

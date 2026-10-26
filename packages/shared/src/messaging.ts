@@ -164,8 +164,7 @@ export function maskPhone(e164: string): string {
 export function formatPhone(e164: string): string {
   const digits = e164.replace(/\D/g, "");
   if (!e164.trim().startsWith("+") || digits.length < 8 || digits.length > 15) return e164.trim();
-  const hit = BY_CODE.find((c) => digits.startsWith(c.code));
-  const cc = hit ? hit.code : digits.slice(0, Math.min(3, digits.length - 6));
+  const cc = callingCodeOf(digits);
   const rest = digits.slice(cc.length);
   const groups: string[] = [];
   let at = 0;
@@ -174,6 +173,34 @@ export function formatPhone(e164: string): string {
     at += n;
   }
   return `+${cc} ${groups.join(" ")}`;
+}
+
+/**
+ * Every calling code shorter than three digits (ITU-T E.164: 1 and 7, and these two-digit ones). The
+ * codes are prefix-free, so any other number's code is its first three digits, whether or not we
+ * know its country's local rules (Russia's +7 isn't in COUNTRIES and must still read "+7 …").
+ */
+const SHORT_CALLING_CODES = new Set([
+  "1", "7",
+  "20", "27", "30", "31", "32", "33", "34", "36", "39", "40", "41", "43", "44", "45", "46", "47", "48", "49",
+  "51", "52", "53", "54", "55", "56", "57", "58", "60", "61", "62", "63", "64", "65", "66",
+  "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98",
+]);
+
+/** The calling code an international number (digits only, no "+") starts with. */
+function callingCodeOf(digits: string): string {
+  if (SHORT_CALLING_CODES.has(digits.slice(0, 1))) return digits.slice(0, 1);
+  if (SHORT_CALLING_CODES.has(digits.slice(0, 2))) return digits.slice(0, 2);
+  return digits.slice(0, 3);
+}
+
+/**
+ * Whether the customer typed the calling code themselves ("+61…", "0061…", "61412…"), rather than it
+ * being added from a country ("0412 345 678" read as Australian). An extension doesn't count.
+ */
+export function phoneCodeTyped(raw: string, e164: string): boolean {
+  const digits = raw.replace(/\s*(ext|x)\.?\s*\d+$/i, "").replace(/\D/g, "").replace(/^00/, "");
+  return digits === e164.replace(/\D/g, "");
 }
 
 /** 9 → 3 3 3, 10 → 3 3 4, 8 → 4 4, 11 → 3 4 4, 7 → 3 4. */
@@ -216,7 +243,7 @@ export interface BestPhone<S extends string = string> {
   /** The number as the customer typed it. */
   raw: string;
   source: S;
-  /** The country code came from `fallbackCountry` (the store's), not from the number or its address. */
+  /** The calling code came from `fallbackCountry` (the store's): not typed, and not from its address. */
   countryAssumed: boolean;
 }
 
@@ -235,7 +262,8 @@ export function bestPhone<S extends string>(candidates: ReadonlyArray<PhoneCandi
   if (fallbackCountry) {
     for (const c of typed) {
       const n = normalizePhone(c.raw, fallbackCountry);
-      if (n) return { e164: n.e164, raw: c.raw, source: c.source, countryAssumed: true };
+      // "61412345678" needs a country only to be read: its code was typed, nothing was assumed.
+      if (n) return { e164: n.e164, raw: c.raw, source: c.source, countryAssumed: !phoneCodeTyped(c.raw, n.e164) };
     }
   }
   const first = typed[0];

@@ -939,7 +939,7 @@ describe("the Customers tab: whole numbers, and the store's customers from Shopi
     return m.headers;
   }
 
-  const search = (text: string, headers: Record<string, string>) => ({ ...headers, "x-search": encodeURIComponent(text) });
+  const search = (text: string, headers: Owner["headers"]) => ({ ...headers, "x-search": encodeURIComponent(text) });
   const contactsCount = (o: Owner) => systemDb.wappContact.count({ where: { storeId: o.store.id } });
 
   const node = (id: number, name: string | null, extra: Record<string, unknown> = {}) => ({
