@@ -141,6 +141,8 @@ export default function AdAccountsPage() {
           onTryDemo={ads.openDemo}
           onDemoSync={() => void ads.syncDemo()}
           onDemoReset={() => void ads.resetDemo()}
+          onCheckLogin={(l) => void ads.checkLogin(l)}
+          onDisconnectLogin={(l) => void ads.disconnectLogin(l)}
           rowExtra={(c) => (c.provider === "adsense" ? <AdsenseSites c={c} base={base} manage={manage} onSaved={ads.reload} /> : null)}
         />
       ))}

@@ -10,6 +10,7 @@ import {
   AdsNoAccountsError,
   AdsRateLimitedError,
   AdsRetryableError,
+  audit,
   claimNangoConsent,
   connectableAdProviders,
   countGoogleAdsOperations,
@@ -17,6 +18,7 @@ import {
   finishNangoSignIn,
   googleAdsPaused,
   handleNangoAuthEvent,
+  holdAdLogin,
   holdNangoConnection,
   holdPendingAdConnect,
   isNangoConnectionId,
@@ -26,6 +28,7 @@ import {
   nangoConnectionFromSession,
   nangoConsentProviders,
   nangoConsentReturned,
+  NangoLoginWaitingError,
   NangoPermissionMissingError,
   nangoProviders,
   parseNangoWebhook,
@@ -182,6 +185,34 @@ export function adsNangoRoutes(app: App, deps: Deps) {
     try {
       signIn = await finishNangoSignIn(provider, input.connectionId, state.integrationKey, counter?.fetchImpl ?? deps.fetchImpl);
     } catch (err) {
+      // Signed in and granted, with no ad account to list yet (or the platform slow to list them): connected
+      // all the same, never refused. The card says who is connected, and the accounts follow by themselves.
+      if (err instanceof NangoLoginWaitingError) {
+        signIn = { ...err.signIn, accounts: [] };
+        // Logged as a refusal used to be, with Meta's diagnosis of the empty list (docs/ads-setup.md reads it).
+        connectFailure(err.cause, provider, storeId);
+        if (!(await mayStillConnect(ws, storeId, user.id))) throw await fail("not_allowed", 403);
+        await holdAdLogin(
+          {
+            workspaceId: ws,
+            storeId,
+            provider,
+            connectionId: input.connectionId,
+            integrationKey: state.integrationKey,
+            externalUserId: err.signIn.externalUserId,
+            loginName: err.loginName,
+            grantedScopes: err.signIn.grantedScopes,
+            expiresAt: err.signIn.expiresAt,
+            userId: user.id,
+            reason: err.reason,
+          },
+          deps.fetchImpl,
+        );
+        await audit({ workspaceId: ws, actorUserId: user.id, action: "ads.login_connected", targetType: "store", targetId: storeId, metadata: { provider, reason: err.reason }, ip: clientIp(c) }).catch((e: unknown) =>
+          logger.warn({ err: e }, "audit failed"),
+        );
+        return c.json({ connected: 0, waiting: true, reason: err.reason, provider });
+      }
       if (err instanceof NangoPermissionMissingError) throw await fail("permission_missing");
       // A token Nango holds but the platform refuses, or one issued to another app (Meta: our appsecret_proof
       // refused): the Nango integration's keys aren't bizinsights' own.

@@ -2,7 +2,8 @@
 import { FlaskConical } from "lucide-react";
 import type { StoreSummary } from "@/components/AppContext";
 import { friendlyError } from "@/lib/api";
-import { accountLabel, stateInfo, type AdConnection, type AdProvider, type AdState } from "@/lib/adConnections";
+import { accountLabel, adLoginOf, stateInfo, type AdConnection, type AdProvider, type AdState } from "@/lib/adConnections";
+import { loginOfPlatform, loginWords } from "../settings/ads/LoginPanel";
 import { AD_PLATFORMS } from "./adPlatforms";
 import { ConnectButton, IntegrationRow, ManageLink, RowPill } from "./IntegrationRow";
 import type { useAdConnections } from "./useAdConnections";
@@ -53,8 +54,11 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
   const connect = () => void ads.connect(p);
   const tryDemo = () => ads.openDemo();
 
+  // Signed in with no ad account yet: connected, its accounts follow by themselves.
+  const login = mine.length ? null : adLoginOf(answer, p);
+
   const action =
-    mine.length > 0 ? (
+    mine.length > 0 || login ? (
       <ManageLink name={P.name} href="/settings/ads" attention={ATTENTION.has(state)} />
     ) : canAct && configured ? (
       <ConnectButton name={P.name} onClick={connect} disabled={!!ads.busy} busy={leaving ? P.opening : null} testid={`int-${p}-connect`} />
@@ -83,6 +87,11 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
         </button>
       )}
     </>
+  ) : login ? (
+    <p data-testid={`int-${p}-login`}>
+      <span className="text-muted">Signed in as:</span> {login.name ?? `Your ${loginOfPlatform(login)}`}
+      <span className="text-muted"> · {loginWords(login).short}</span>
+    </p>
   ) : state === "coming_soon" ? (
     <p className="text-muted">{P.name} sign-in is being switched on for bizinsights.</p>
   ) : canAct && configured && demoOffered ? (

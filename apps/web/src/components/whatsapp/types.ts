@@ -63,6 +63,8 @@ export interface WaSettings {
   retentionDays: number;
   configuredAt: string | null;
   testPhone: string | null;
+  /** The verified test number is the linked phone's own: its tests land in that phone's chat with itself. */
+  testIsLinkedNumber?: boolean;
   testVerifiedAt: string | null;
   testPassedAt: string | null;
   testCodeExpiresAt: string | null;

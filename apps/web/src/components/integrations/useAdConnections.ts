@@ -1,9 +1,11 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
+import type { AdLoginReason } from "@app/shared/ads";
+import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdLogin, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { openNangoConnect } from "@/lib/nangoConnect";
 import { callbackErrorMessage, loginOf } from "../settings/ads/callbackErrors";
+import { loginConnectedNote, loginOfPlatform, loginWords } from "../settings/ads/LoginPanel";
 import { AD_PLATFORMS } from "./adPlatforms";
 import type { Note } from "./AdUi";
 import type { DemoConnected } from "./GoogleAdsDemoDialog";
@@ -140,11 +142,17 @@ export function useAdConnections(base: string | null) {
     }
     try {
       // Longer than the API's own limit (55 s): listing a big login's accounts and saving them can take a while.
-      const r = await api<{ connected?: number; choose?: string }>(`${base}/ads/${p}/nango/finish`, {
+      const r = await api<{ connected?: number; choose?: string; waiting?: boolean; reason?: AdLoginReason }>(`${base}/ads/${p}/nango/finish`, {
         method: "POST",
         body: { nonce: session.nonce, connectionId: outcome.connectionId },
         timeoutMs: 58_000,
       });
+      // Connected with no ad account yet: the card says who, and the accounts follow by themselves.
+      if (r.waiting) {
+        stop({ kind: "success", text: loginConnectedNote(name, { provider: p, reason: r.reason ?? "no_ads_account" }) });
+        await reload();
+        return;
+      }
       if (r.choose) window.location.assign(`/settings/ads?${new URLSearchParams({ choose: r.choose, provider: p, store: storeId })}`);
       else window.location.assign(`/dashboard?${new URLSearchParams({ adsConnected: p, accounts: String(r.connected ?? 0), store: storeId })}`);
     } catch (e) {
@@ -218,6 +226,50 @@ export function useAdConnections(base: string | null) {
 
   const cancelDisconnect = useCallback(() => setConfirming(null), []);
 
+  /** "Check for ad accounts" on a sign-in connected with none yet: the platform is asked now, and what it lists is connected. */
+  const checkLogin = async (l: AdLogin) => {
+    if (!base) return;
+    const name = AD_PLATFORMS[l.provider].name;
+    begin(`login-check-${l.id}`);
+    try {
+      const r = await api<{ connected?: number; waiting?: boolean; reason?: AdLoginReason; ended?: boolean }>(`${base}/ads/logins/${l.id}/check`, { method: "POST", body: {}, timeoutMs: 58_000 });
+      setNote(
+        r.connected
+          ? { kind: "success", text: `Found ${r.connected} ${name} ad account${r.connected === 1 ? "" : "s"} and connected ${r.connected === 1 ? "it" : "them"}. The figures are on their way: the badge says Synchronizing until they're in.` }
+          : r.ended
+            ? { kind: "info", text: `Your ${loginOfPlatform(l)} no longer lets bizinsights in, so it was disconnected. Press ${AD_PLATFORMS[l.provider].button} to connect again.` }
+            : { kind: "info", text: loginWords({ provider: l.provider, reason: r.reason ?? l.reason }).text },
+      );
+      await reload();
+    } catch (e) {
+      setNote({ kind: "error", text: actionError(e, "check for ad accounts") });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Disconnect a sign-in that has no ad account yet: nothing was fetched with it, so only the access goes. */
+  const disconnectLogin = async (l: AdLogin) => {
+    if (!base) return;
+    const name = AD_PLATFORMS[l.provider].name;
+    begin(`login-delete-${l.id}`);
+    try {
+      const r = await api<{ ok: true; revoked?: RevokeOutcome }>(`${base}/ads/logins/${l.id}`, { method: "DELETE" }).catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) return { ok: true as const, revoked: undefined };
+        throw e;
+      });
+      const after = revokeNote(l.provider, r.revoked);
+      const text = `${name} is disconnected.`;
+      setNote(after?.kind === "info" ? { kind: "info", text: `${text} ${after.text}`, link: after.link, focus: true } : { kind: "success", text: after ? `${text} ${after.text}` : text, focus: true });
+      setGone((s) => new Map([...s, [l.provider, false]]));
+    } catch (e) {
+      setNote({ kind: "error", text: actionError(e, `disconnect ${name}`) });
+    } finally {
+      setBusy(null);
+      await reload();
+    }
+  };
+
   // ---- The Google Ads demo: a simulated account, connected and managed without any Google sign-in.
   const demoConnection = connections.find((c) => c.provider === "google" && c.demo) ?? null;
   const openDemo = () => {
@@ -285,6 +337,9 @@ export function useAdConnections(base: string | null) {
     askDisconnect: setConfirming,
     disconnect,
     cancelDisconnect,
+    /** A sign-in connected with no ad account yet. */
+    checkLogin,
+    disconnectLogin,
     /** The Google Ads demo. */
     demoEnabled: !!ads.data?.demo?.google,
     demoConnection,

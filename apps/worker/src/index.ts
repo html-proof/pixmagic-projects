@@ -50,6 +50,7 @@ import {
   seedSalesRereads,
   sweepAdConnectionAlerts,
   sweepNangoLeftovers,
+  checkWaitingAdLogins,
   moveDirectAdConnections,
   UnrecoverableError,
   type WorkerDeps,
@@ -442,6 +443,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "nango leftover sweep failed; the next tick tries again");
       return null;
     });
+    // Sign-ins connected with no ad account yet: asked again, and their accounts connected once listed.
+    const adLogins = await checkWaitingAdLogins(deps).catch((err: unknown) => {
+      logger.error({ err }, "waiting ad login check failed; the next tick tries again");
+      return null;
+    });
     // WhatsApp Automation: due messages, webhook retries, campaigns, health checks, retention. On its own leases.
     const whatsapp = await sweepWhatsapp(deps).catch((err: unknown) => {
       logger.error({ err }, "whatsapp sweep failed; the next tick tries again");
@@ -495,7 +501,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync records prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedToNango, adsSynced, adAlerts, nangoReleased, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedToNango, adsSynced, adAlerts, nangoReleased, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

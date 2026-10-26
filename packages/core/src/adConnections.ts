@@ -19,3 +19,4 @@ export * from "./adConnections/demo.js";
 export * from "./adConnections/nango.js";
 export * from "./adConnections/migrate.js";
 export * from "./adConnections/health.js";
+export * from "./adConnections/logins.js";

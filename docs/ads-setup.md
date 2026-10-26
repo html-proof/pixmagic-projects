@@ -141,8 +141,9 @@ the people who manage integrations, and closes it when the connection works agai
   `DELETE /me/permissions/ads_read` (only ads_read), or, when the person's token has ended, the same on their user id
   with the app token. The outcome (`revoked`, `still_used`, `unknown_person`,
   `failed`) is in the response and the audit log.
-- **A connect that ends without connecting** (cancelled picker, nothing to connect, the platform refusing) drops the
-  grant it just made under the same rules, and its Nango connection (`abandonNangoConnection`).
+- **A connect that ends without connecting** (cancelled picker, the platform refusing) drops the grant it just made
+  under the same rules, and its Nango connection (`abandonNangoConnection`). A Meta login with no ad account yet
+  stays connected instead (see "When a Facebook login has no ad account yet").
 - **A member removed from a workspace**: their ad connections there are released (`releaseUserAdGrants`): the tokens
   are cleared, the accounts wait for someone else to press Reconnect (`connector_left`), the figures stay, and the
   grant is revoked when nothing else uses it. A sync running at that moment can't undo it.
@@ -270,18 +271,26 @@ To set up a new app from scratch:
 
 Refused requests are limited per address, and a request is acted on once.
 
-### When a Facebook login has nothing to connect
+### When a Facebook login has no ad account yet
 
-bizinsights asks Meta's token inspector which ad accounts the grant names, and Settings says which case it is, with
-**Connect again**, **Open Ads Manager** and **Open Business settings**:
-- `error=none_shared`: accounts were picked on Facebook's screen but none shared;
-- `error=no_accounts`: the login reaches no ad account (business-portfolio accounts need the person assigned in
-  Business settings → Ad accounts). Facebook has no account chooser: log out of Facebook in that browser to use
-  another login.
+Since 2026-10-26 such a sign-in is **connected, never refused** (`packages/core/src/adConnections/logins.ts`, table
+`ad_logins`, one per store and platform). The person authorized bizinsights, so the card says **Connected**, "Signed in
+as …", and what happens next; the finish answers `{ connected: 0, waiting: true, reason }` instead of a 409:
+- `no_ads_account`: the login reaches no ad account (none of its own, or a business-portfolio account it isn't
+  assigned to in Business settings → Ad accounts);
+- `none_shared`: none was ticked on Facebook's screen (**Choose ad accounts** opens it again);
+- `unanswered`: Meta didn't list the accounts in time (asked again after 10 minutes);
+- `choose`: it now lists more than 10 (`AD_LOGIN_AUTO_CONNECT_MAX`): the person picks them with **Choose ad accounts**.
 
-The card starts with the Facebook profile the sign-in used ("You signed in to Facebook as …"): a browser signed
-in to another profile, or two profiles with one name, is the usual cause. No code change can make Meta list an ad
-account the profile has no access to.
+The cron tick asks Meta again every hour (`checkAdLogins`), and **Check for ad accounts** on the card asks at once
+(`POST …/ads/logins/:id/check`). As soon as Meta lists ad accounts they are connected through the same Nango
+connection, their catch-up is queued, and the `ad_logins` row goes. The login holds its Nango connection and the
+person's grant like a connection does: Disconnect (`DELETE …/ads/logins/:id`), Nango deleting the connection, the
+person removing bizinsights on Facebook or asking for their data to be deleted, the store going, and its connector
+leaving all let it go, giving the grant back unless something else relies on it. Each waiting login takes one of
+Nango's connections (free plan: 10).
+
+No code change can make Meta list an ad account the profile has no access to: the card only waits for it.
 
 **Which case it is, from the log.** The API's line `ads: nothing to connect for this login` (Logs Insights on
 `/aws/lambda/insights-production-api`) carries `diagnosis`. It holds ids, counts and permission names, never the

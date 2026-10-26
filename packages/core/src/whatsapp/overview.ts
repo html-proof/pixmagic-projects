@@ -26,6 +26,7 @@ import { evolutionConfigured } from "./evolution.js";
 import { retiredConnection } from "./legacy.js";
 import { sentToday } from "./messages.js";
 import { automationProblemsFor } from "./automations.js";
+import { testIsLinkedNumber } from "./settings.js";
 
 /** What the Cloud API way of connecting still lacks on this server, by setting name (empty: it can be offered). */
 export function cloudApiMissing(): string[] {
@@ -185,7 +186,7 @@ export async function whatsappOverview(store: Store, opts: { contacts: boolean }
     store: { id: store.id, name: store.name ?? store.shopDomain, timezone: store.timezone },
     platform: { evolution: evolutionConfigured(), cloudApi: { missing: cloudApiMissing() } },
     connection: waConnectionView(conn),
-    settings: waSettingsJson(settings),
+    settings: { ...waSettingsJson(settings), testIsLinkedNumber: await testIsLinkedNumber(store, conn) },
     setup,
     automation: {
       state: waAutomationState({ connected, paused: !!settings.automationPausedAt, setupDone: !setup.current, active: active.length, blocked: blocked.length }),

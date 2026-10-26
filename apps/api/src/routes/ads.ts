@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { systemDb, withTenant, type AdConnection } from "@app/db";
+import { systemDb, withTenant, type AdConnection, type AdLogin } from "@app/db";
 import {
   abandonNangoConnection,
   AD_PROVIDER_NAME,
@@ -17,12 +17,14 @@ import {
   adToday,
   AD_REPORT_BUDGET_MS,
   audit,
+  checkAdLogin,
   connectableAdProviders,
   enqueueAdCatchUp,
   enqueueAdSync,
   env,
   googleReportForConnection,
   disconnectGoogleAdsDemo,
+  dropAdLoginOf,
   googleAdsConnectionStatus,
   googleAdsDemoEnabled,
   googleProductionMissing,
@@ -36,6 +38,7 @@ import {
   peekPendingAdConnect,
   pendingSource,
   pendingTokens,
+  releaseAdLogin,
   REQUIRED_AD_SCOPE,
   revokeAdAccessIfUnused,
   saveAdConnections,
@@ -49,6 +52,7 @@ import {
 } from "@app/core";
 import {
   AD_CONNECTION_STATUSES,
+  AD_LOGIN_REASONS,
   AD_PROVIDERS,
   ADSENSE_REPORT_LEVELS,
   adErrorMessage,
@@ -187,6 +191,31 @@ export async function publicConnections(ws: string, rows: AdConnection[], viewer
   return rows.map((r) => publicConnection(r, ctx));
 }
 
+/**
+ * A sign-in kept connected while it reaches no ad account (core's logins.ts), as the browser may see it:
+ * who it signed in as and why nothing is connected yet. Never a token or the platform's ids.
+ */
+async function publicLogins(ws: string, rows: AdLogin[], viewer: { id: string | null; seesEmail: boolean }) {
+  const userIds = [...new Set(rows.map((r) => r.connectedByUserId).filter((id): id is string => !!id))];
+  const members = userIds.length
+    ? await withTenant(ws, (tx) => tx.membership.findMany({ where: { workspaceId: ws, userId: { in: userIds } }, select: { userId: true, user: { select: { displayName: true, email: true } } } }))
+    : [];
+  const connectors = new Map(members.map((m) => [m.userId, { name: m.user.displayName, email: m.user.email }]));
+  return rows.map((r) => {
+    const connector = r.connectedByUserId ? connectors.get(r.connectedByUserId) : undefined;
+    return {
+      id: r.id,
+      provider: r.provider,
+      /** The name the platform's sign-in went by ("Connected as …"), when the platform said. */
+      name: r.loginName,
+      reason: (AD_LOGIN_REASONS as readonly string[]).includes(r.reason) ? r.reason : "no_ads_account",
+      connectedAt: r.createdAt,
+      checkedAt: r.checkedAt,
+      connectedBy: connector ? { name: connector.name, email: viewer.seesEmail ? connector.email : null, you: r.connectedByUserId === viewer.id } : null,
+    };
+  });
+}
+
 export async function storeInWorkspace(ws: string, storeId: string) {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true, status: true } }));
   if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
@@ -231,6 +260,8 @@ export async function connectAccounts(
   for (const conn of saved) {
     if (conn.enabled) await enqueueAdCatchUp(deps.queues, conn, { interactive: true });
   }
+  // The store has accounts of this platform now: a login that was waiting for some isn't needed any more.
+  if (saved.length) await dropAdLoginOf(input.storeId, input.provider, deps.fetchImpl);
   await audit({
     workspaceId: input.workspaceId,
     actorUserId: input.userId,
@@ -408,12 +439,18 @@ export function adsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, ["marketing.ads", "integrations.status"]);
     await storeInWorkspace(ws, storeId);
-    const rows = await withTenant(ws, (tx) => tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }));
-    const connections = await publicConnections(ws, rows, { id: access.user?.id ?? null, seesEmail: allows(access.access, "integrations.manage") });
+    const [rows, waiting] = await withTenant(ws, async (tx) => [
+      await tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }),
+      await tx.adLogin.findMany({ where: { workspaceId: ws, storeId }, orderBy: { provider: "asc" } }),
+    ] as const);
+    const viewer = { id: access.user?.id ?? null, seesEmail: allows(access.access, "integrations.manage") };
+    const connections = await publicConnections(ws, rows, viewer);
     return c.json({
       configured: await connectableAdProviders(deps.coord, deps.fetchImpl),
       restricted: adsRestricted(),
       connections,
+      /** Sign-ins connected with no ad account yet (Meta): the card says who, and their accounts follow by themselves. */
+      logins: await publicLogins(ws, waiting, viewer),
       /** Which platforms offer a simulated account ("Try demo"): Google Ads, when this server switches it on. */
       demo: { google: googleAdsDemoEnabled() },
       /** The settings each platform's real sign-in still lacks on this server, by name (empty once set up). */
@@ -602,6 +639,37 @@ export function adsRoutes(app: App, deps: Deps) {
       metadata: { provider: conn.provider, accountId: conn.accountId, revoked },
       ip: clientIp(c),
     }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
+    return c.json({ ok: true, revoked });
+  });
+
+  /**
+   * "Check for ad accounts" on a connected sign-in that has none yet: Meta is asked now (as the cron tick
+   * does every hour), and the accounts it lists are connected. `connected`: how many; `waiting`: still
+   * none (or more than are connected without asking: `reason` "choose"); `ended`: the access is gone.
+   */
+  app.post("/workspaces/:ws/stores/:storeId/ads/logins/:id/check", async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    await limit(deps.coord, `rl:ads-sync:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsSync);
+    await storeInWorkspace(ws, storeId);
+    const row = await withTenant(ws, (tx) => tx.adLogin.findFirst({ where: { id, workspaceId: ws, storeId } }));
+    if (!row) throw new HttpError(404, "Not found", "not_found");
+    const r = await checkAdLogin(row, deps, { interactive: true });
+    if (r.outcome === "connected") return c.json({ connected: r.connected });
+    if (r.outcome === "ended") return c.json({ ended: true });
+    return c.json({ waiting: true, reason: r.outcome === "waiting" ? r.reason : row.reason });
+  });
+
+  /** Disconnect a sign-in that has no ad account yet: it goes, and its grant goes back to the platform unless something else relies on it. */
+  app.delete("/workspaces/:ws/stores/:storeId/ads/logins/:id", async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    const row = await withTenant(ws, (tx) => tx.adLogin.findFirst({ where: { id, workspaceId: ws, storeId } }));
+    if (!row) throw new HttpError(404, "Not found", "not_found");
+    const revoked = await releaseAdLogin(row, deps.fetchImpl);
+    await audit({ workspaceId: ws, actorUserId: access.user?.id ?? null, action: "ads.login_disconnected", targetType: "store", targetId: storeId, metadata: { provider: row.provider, revoked }, ip: clientIp(c) }).catch(
+      (err: unknown) => logger.warn({ err }, "audit failed"),
+    );
     return c.json({ ok: true, revoked });
   });
 

@@ -4,7 +4,7 @@
  * and "Pause all automation".
  */
 import { createHash, randomInt } from "node:crypto";
-import { systemDb, type Store, type WappSettings } from "@app/db";
+import { systemDb, type Store, type WappConnection, type WappSettings } from "@app/db";
 import { isTimeZone, maskPhone, normalizePhone, renderWaText, waSampleValues, waSettingsSchema, WA_DAILY_LIMIT, type WaProvider } from "@app/shared";
 import { audit } from "../notify.js";
 import { businessNameOf, liveConnection, settingsOf, waDecrypt, waEncrypt, waPhoneHash, WhatsappError, type WaDeps } from "./common.js";
@@ -57,11 +57,41 @@ export async function saveWaSettings(input: { store: Store; userId: string; data
   return row;
 }
 
+/** The number a linked phone (QR) is WhatsApp for: WhatsApp itself said so when the phone was linked. */
+function isLinkedNumber(storeId: string, conn: Pick<WappConnection, "provider" | "phoneEnc"> | null, e164: string): boolean {
+  if (conn?.provider !== "qr" || !conn.phoneEnc) return false;
+  try {
+    return waDecrypt(storeId, "linked_phone", conn.phoneEnc) === e164;
+  } catch {
+    return false;
+  }
+}
+
+/** The verified test number is the linked phone's own (its tests land in that phone's chat with itself). */
+export async function testIsLinkedNumber(store: Pick<Store, "id">, conn: Pick<WappConnection, "provider" | "phoneEnc"> | null): Promise<boolean> {
+  if (conn?.provider !== "qr" || !conn.phoneEnc) return false;
+  const s = await systemDb.wappSettings.findUnique({ where: { storeId: store.id }, select: { testVerifiedAt: true, testPhoneEnc: true } });
+  if (!s?.testVerifiedAt || !s.testPhoneEnc) return false;
+  try {
+    return isLinkedNumber(store.id, conn, waDecrypt(store.id, "test_phone", s.testPhoneEnc));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Step 4, first half: a 6-digit code to the merchant's own number, over the connected WhatsApp. Only
  * a number whose code comes back is used for tests (the person entering it has that phone).
+ *
+ * The linked phone's own number gets no code: a code sent from a number to itself arrives as no new
+ * message (WhatsApp files it in that phone's chat with itself, without a notification; in production
+ * it was reported sent and never delivered). That number is the store's by WhatsApp's own word (the
+ * phone was linked with it), and a test to it reaches no one else, so it is verified as it is entered.
  */
-export async function startTestVerification(deps: Pick<WaDeps, "queues" | "coord">, input: { store: Store; userId: string; phone: string; country?: string | null; ip?: string }): Promise<{ expiresAt: Date; phone: string }> {
+export async function startTestVerification(
+  deps: Pick<WaDeps, "queues" | "coord">,
+  input: { store: Store; userId: string; phone: string; country?: string | null; ip?: string },
+): Promise<{ expiresAt: Date | null; phone: string; linkedNumber: boolean }> {
   const conn = await liveConnection(input.store.id);
   if (!conn || conn.status !== "connected") throw new WhatsappError("Connect WhatsApp first: the code is sent from your connected number.", 409, "not_connected");
   const phone = normalizePhone(input.phone, input.country ?? null);
@@ -69,6 +99,22 @@ export async function startTestVerification(deps: Pick<WaDeps, "queues" | "coord
   const phoneHash = waPhoneHash(input.store.id, phone.waId);
   if (await onDoNotMessageList(input.store.id, phoneHash, "transactional")) {
     throw new WhatsappError("That number asked not to get WhatsApp messages from this store (it replied STOP). Use another number, or reply START from it first.", 409, "suppressed");
+  }
+  if (isLinkedNumber(input.store.id, conn, phone.e164)) {
+    const fields = {
+      testPhoneHash: phoneHash,
+      testPhoneEnc: waEncrypt(input.store.id, "test_phone", phone.e164),
+      testPhoneMasked: maskPhone(phone.e164),
+      testCodeHash: null,
+      testCodeExpiresAt: null,
+      testCodeAttempts: 0,
+      testVerifiedAt: new Date(),
+      testPassedAt: null,
+      updatedByUserId: input.userId,
+    };
+    await systemDb.wappSettings.upsert({ where: { storeId: input.store.id }, create: { storeId: input.store.id, workspaceId: input.store.workspaceId, ...fields }, update: fields });
+    await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.test_number_verified", targetType: "store", targetId: input.store.id, metadata: { linkedNumber: true }, ip: input.ip });
+    return { expiresAt: null, phone: maskPhone(phone.e164), linkedNumber: true };
   }
   if ((await deps.coord.hit(`wapp:verify:${input.store.id}`, 3600)) > CODES_PER_HOUR) throw new WhatsappError("Too many codes sent in the last hour. Try again later.", 429, "rate_limited");
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
@@ -99,7 +145,7 @@ export async function startTestVerification(deps: Pick<WaDeps, "queues" | "coord
     createdByUserId: input.userId,
   });
   await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.test_number_code_sent", targetType: "store", targetId: input.store.id, ip: input.ip });
-  return { expiresAt, phone: maskPhone(phone.e164) };
+  return { expiresAt, phone: maskPhone(phone.e164), linkedNumber: false };
 }
 
 /** Step 4, second half: the code the merchant read on their phone. */

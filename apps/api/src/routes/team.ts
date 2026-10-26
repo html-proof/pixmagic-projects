@@ -15,6 +15,7 @@ import {
   previewTeamInvitation,
   queryTeam,
   recordLinkOpened,
+  releaseAdLoginsWhere,
   releaseUserAdGrants,
   removeMember,
   renewTeamAccess,
@@ -97,6 +98,8 @@ export async function removeMemberReleasingAds(c: Ctx, deps: Deps, a: WorkspaceA
   const { userId } = await loadMember(a.workspaceId, memberId);
   const removed = await removeMember(teamActor(c, a), memberId, opts);
   await releaseUserAdGrants(userId, a.workspaceId, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's ad connections weren't released"));
+  // A login of theirs still waiting for its ad accounts goes too (the cron's check would let it go within the hour).
+  await releaseAdLoginsWhere({ workspaceId: a.workspaceId, connectedByUserId: userId }, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's waiting ad logins weren't released"));
   return removed;
 }
 
