@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { PROVIDER_INFO, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO } from "@app/shared/whatsapp";
+import { PROVIDER_INFO, waPreset, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaPresetKey } from "@app/shared/whatsapp";
 import { Badge, Empty, Panel, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -8,10 +8,13 @@ import type { WaOverview, WaStats } from "./types";
 import { CONNECTION_TONE, fmtAgo, fmtShare, MessageStatus, SOURCE_LABEL, waHref, useWaAction } from "./WaUi";
 
 // The page's first tab: the connection as the provider last reported it, the setup, automation as a
-// whole, the counts (from the message records), what is waiting or held, recent failures and the
-// latest messages.
+// whole (with the three most common ready-made automations while none is on), the counts (from the
+// message records), what is waiting or held, recent failures and the latest messages.
 
 const STATE_TONE: Record<string, Tone> = { not_connected: "neutral", paused: "warn", setup: "warn", needs_attention: "danger", idle: "neutral", active: "good" };
+
+/** What most stores turn on first: each opens its "Turn on" dialog on the Automations tab. */
+const FIRST_PRESETS: WaPresetKey[] = ["order_confirmation", "shipping_update", "cart_reminder"];
 
 export function Overview({ base, overview: o, reload }: { base: string; overview: WaOverview; reload: () => void }) {
   const conn = o.connection && o.connection.status !== "disconnected" ? o.connection : null;
@@ -57,6 +60,27 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
           </ol>
           <Link href={waHref("setup")} className="btn-primary mt-3 inline-flex">
             Continue setup
+          </Link>
+        </Panel>
+      )}
+
+      {!o.setup.current && o.automation.active === 0 && o.can.manage && (
+        <Panel id="wa-first" title="Turn on your first automation" help="Ready-made: check the message, choose who gets it, and turn it on in one step.">
+          <ul className="grid gap-2 sm:grid-cols-3">
+            {FIRST_PRESETS.map((key) => {
+              const p = waPreset(key);
+              return (
+                <li key={key}>
+                  <Link href={waHref("automations", { preset: key })} className="flex h-full flex-col gap-0.5 rounded-lg border border-border p-3 text-sm transition hover:border-accent hover:bg-accent/5" data-testid={`wa-first-${key}`}>
+                    <span className="font-medium">{p.name}</span>
+                    <span className="text-xs text-muted">{p.when}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          <Link href={waHref("automations")} className="mt-3 inline-block text-sm text-accent underline">
+            See every ready-made automation
           </Link>
         </Panel>
       )}

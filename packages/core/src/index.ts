@@ -31,3 +31,4 @@ export * from "./configReport.js";
 export * from "./inventory/index.js";
 export * from "./salesCalculation.js";
 export * from "./orderHistory.js";
+export * from "./customerPhones.js";

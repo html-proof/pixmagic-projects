@@ -95,6 +95,10 @@ describe("customer contacts", () => {
         name: "Bob Lee",
         email: "bob@example.com",
         phone: null,
+        phoneE164: null,
+        phoneRaw: null,
+        phoneSource: null,
+        phoneCountryAssumed: false,
         subscribed: false,
         smsSubscribed: false,
         adminUrl: `https://${SHOP}/admin/customers/12`,
@@ -107,7 +111,7 @@ describe("customer contacts", () => {
     ]);
     expect(body.subscribers.map((s: { email: string }) => s.email)).toEqual(["jane@example.com"]);
     expect(body.recent).toHaveLength(2);
-    expect(body.recent[1]).toMatchObject({ name: "Jane Doe", orders: 2, spent: 120.5, currency: "AUD", subscribed: true, phone: "+61400000000", smsSubscribed: true });
+    expect(body.recent[1]).toMatchObject({ name: "Jane Doe", orders: 2, spent: 120.5, currency: "AUD", subscribed: true, phone: "+61400000000", phoneE164: "+61400000000", phoneSource: "customer", smsSubscribed: true });
 
     // Viewing personal data is audited; the data itself is nowhere in our database.
     const log = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: ws, action: "customers.contacts_viewed" } });
@@ -138,9 +142,106 @@ describe("customer contacts", () => {
     });
     const body = (await get(store.id)).json();
     expect(sent).toContain("shippingAddress");
-    expect(body.abandoned[0]).toMatchObject({ id: "901", customerId: null, name: "Ana Ruiz", email: null, phone: "+61411111111", adminUrl: null });
+    expect(body.abandoned[0]).toMatchObject({ id: "901", customerId: null, name: "Ana Ruiz", email: null, phone: "+61411111111", phoneE164: "+61411111111", phoneSource: "checkout_billing", smsSubscribed: false, adminUrl: null });
     // The customer's own details win over whatever was typed into the address.
-    expect(body.abandoned[1]).toMatchObject({ name: "Jane Doe", phone: "+61400000000", smsSubscribed: true });
+    expect(body.abandoned[1]).toMatchObject({ name: "Jane Doe", phone: "+61400000000", phoneSource: "customer", smsSubscribed: true });
+  });
+
+  describe("a complete phone number for every customer", () => {
+    const sentBodies: string[] = [];
+    const answer = (data: Record<string, unknown>) =>
+      ctx.setFetch(async (input, init) => {
+        sentBodies.push(String(init?.body ?? ""));
+        return reply({ data: { abandonedCheckouts: { nodes: [] }, subscribers: { nodes: [] }, ...data } })(input, init);
+      });
+    const customer = (id: number, extra: Record<string, unknown>) => ({ ...bob, id: `gid://shopify/Customer/${id}`, displayName: `Customer ${id}`, ...extra });
+    beforeEach(() => {
+      sentBodies.length = 0;
+    });
+
+    it("asks Shopify for every place a number can be, with each address's country and the store's", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      answer({ recent: { nodes: [] } });
+      expect((await get(store.id)).statusCode).toBe(200);
+      const query = JSON.parse(sentBodies.at(-1)!).query as string;
+      for (const field of ["defaultPhoneNumber", "defaultAddress", "lastOrder", "countryCodeV2", "shopAddress"]) expect(query).toContain(field);
+      // Both of the checkout's addresses carry their country too.
+      expect(query).toMatch(/shippingAddress \{ firstName lastName phone countryCodeV2 \}/);
+      expect(query).toMatch(/billingAddress \{ firstName lastName phone countryCodeV2 \}/);
+    });
+
+    it("turns a local number into an international one with the customer's address country", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      const local = customer(21, {
+        defaultPhoneNumber: { phoneNumber: "0412 345 678", smsMarketingConsent: { state: "SUBSCRIBED" } },
+        defaultAddress: { phone: null, countryCodeV2: "AU" },
+      });
+      answer({ recent: { nodes: [local] } });
+      const body = (await get(store.id)).json();
+      expect(body.recent[0]).toMatchObject({
+        phone: "+61412345678",
+        phoneE164: "+61412345678",
+        phoneRaw: "0412 345 678",
+        phoneSource: "customer",
+        phoneCountryAssumed: false,
+        smsSubscribed: true,
+      });
+    });
+
+    it("finds the number on the last order's delivery address when the profile has none", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      const ordered = customer(22, {
+        defaultPhoneNumber: null,
+        defaultAddress: { phone: null, countryCodeV2: "NZ" },
+        lastOrder: { phone: null, shippingAddress: { phone: "021 555 0123", countryCodeV2: "NZ" }, billingAddress: null },
+      });
+      // A guest's checkout: the number typed into its delivery address, read with that address's country.
+      const guest = {
+        ...shopifyData.abandonedCheckouts.nodes[0]!,
+        id: "gid://shopify/AbandonedCheckout/903",
+        customer: null,
+        shippingAddress: { firstName: "Ana", lastName: "Ruiz", phone: "0412 345 678", countryCodeV2: "AU" },
+        billingAddress: null,
+      };
+      answer({ recent: { nodes: [ordered] }, abandonedCheckouts: { nodes: [guest] } });
+      const body = (await get(store.id)).json();
+      expect(body.recent[0]).toMatchObject({ phone: "+64215550123", phoneE164: "+64215550123", phoneRaw: "021 555 0123", phoneSource: "last_order_shipping", smsSubscribed: false });
+      expect(body.abandoned[0]).toMatchObject({ name: "Ana Ruiz", phone: "+61412345678", phoneSource: "checkout_shipping", phoneCountryAssumed: false });
+    });
+
+    it("adds the store's country code only when nothing else gives one, and says so", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      const noCountry = customer(23, { defaultPhoneNumber: { phoneNumber: "0433 333 333", smsMarketingConsent: { state: "NOT_SUBSCRIBED" } } });
+      answer({ recent: { nodes: [noCountry] }, shop: { shopAddress: { countryCodeV2: "AU" } } });
+      const fromShop = (await get(store.id)).json();
+      expect(fromShop.recent[0]).toMatchObject({ phone: "+61433333333", phoneE164: "+61433333333", phoneRaw: "0433 333 333", phoneSource: "customer", phoneCountryAssumed: true });
+
+      // No Shopify address country either: the country chosen in Customer Messaging's setup.
+      await systemDb.smsSetup.create({ data: { workspaceId: ws, storeId: store.id, country: "AU" } });
+      answer({ recent: { nodes: [noCountry] } });
+      const fromSetup = (await get(store.id)).json();
+      expect(fromSetup.recent[0]).toMatchObject({ phoneE164: "+61433333333", phoneCountryAssumed: true });
+    });
+
+    it("shows a number it can't read as typed, with no international form, and never guesses a country", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      const unreadable = customer(24, { defaultPhoneNumber: { phoneNumber: " 0412 345 678 ", smsMarketingConsent: { state: "SUBSCRIBED" } } });
+      answer({ recent: { nodes: [unreadable] } });
+      const body = (await get(store.id)).json();
+      expect(body.recent[0]).toMatchObject({ phone: "0412 345 678", phoneE164: null, phoneRaw: "0412 345 678", phoneSource: "customer", phoneCountryAssumed: false, smsSubscribed: true });
+    });
+
+    it("keeps text-message consent to the profile's own number", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      // The profile's number can't be read; the last order's can. Its consent isn't the profile's.
+      const other = customer(25, {
+        defaultPhoneNumber: { phoneNumber: "555 0100", smsMarketingConsent: { state: "SUBSCRIBED" } },
+        lastOrder: { phone: "+61455555555", shippingAddress: null, billingAddress: null },
+      });
+      answer({ recent: { nodes: [other] } });
+      const body = (await get(store.id)).json();
+      expect(body.recent[0]).toMatchObject({ phone: "+61455555555", phoneSource: "last_order", smsSubscribed: false });
+    });
   });
 
   it("says when Shopify withholds contact details instead of showing an empty list", async () => {

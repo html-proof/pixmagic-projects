@@ -201,6 +201,17 @@ export async function sendTestMessage(deps: Pick<WaDeps, "queues">, input: { sto
   return { messageId: message.id };
 }
 
+/**
+ * Marketing messages on or off, and nothing else of the settings (a ready-made cart reminder or
+ * welcome switches it on when the merchant ticks it in the same dialog). Customers still each need
+ * their own yes to marketing.
+ */
+export async function setMarketingEnabled(input: { store: Store; userId: string; enabled: boolean; ip?: string }): Promise<void> {
+  const data = { marketingEnabled: input.enabled, updatedByUserId: input.userId };
+  await systemDb.wappSettings.upsert({ where: { storeId: input.store.id }, create: { storeId: input.store.id, workspaceId: input.store.workspaceId, ...data }, update: data });
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.marketing_switched", targetType: "store", targetId: input.store.id, metadata: { marketingEnabled: input.enabled }, ip: input.ip });
+}
+
 /** "Pause all automation": automations start nothing, and their (and campaigns') waiting messages are held. */
 export async function setAutomationPaused(input: { store: Store; userId: string; paused: boolean; ip?: string }) {
   const data = input.paused ? { automationPausedAt: new Date(), automationPausedBy: input.userId } : { automationPausedAt: null, automationPausedBy: null };

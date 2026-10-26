@@ -758,13 +758,141 @@ export type WaAutomationStatus = (typeof WA_AUTOMATION_STATUSES)[number];
 /** The cool-down a reply automation gets when none is set: a day. */
 export const WA_DEFAULT_REPLY_COOLDOWN = 24 * 60;
 
-/** Ready-made automations (with the starter template each uses). */
-export const WA_AUTOMATION_PRESETS: Array<{ key: string; name: string; trigger: WaTrigger; template: string; delayMinutes: number; description: string }> = [
-  { key: "order_confirmation", name: "Order confirmation", trigger: "order_created", template: "order_confirmation", delayMinutes: 0, description: "Thank customers and confirm their order as soon as it's placed." },
-  { key: "shipping_update", name: "Shipping update", trigger: "order_fulfilled", template: "shipping_update", delayMinutes: 0, description: "Send the tracking link when an order ships." },
-  { key: "cart_reminder", name: "Cart reminder", trigger: "checkout_abandoned", template: "abandoned_checkout", delayMinutes: 60, description: "Remind customers who agreed to marketing about the checkout they left, an hour later." },
-  { key: "auto_reply", name: "Auto-reply", trigger: "message_received", template: "auto_reply", delayMinutes: 0, description: "Let customers who write in know you'll get back to them (once a day each)." },
+/** Ready-made automations, one per trigger, in the order the Automations tab shows them. */
+export const WA_PRESET_KEYS = ["order_confirmation", "payment_received", "shipping_update", "order_cancelled", "cart_reminder", "welcome", "auto_reply"] as const;
+export type WaPresetKey = (typeof WA_PRESET_KEYS)[number];
+
+export interface WaAutomationPreset {
+  key: WaPresetKey;
+  name: string;
+  trigger: WaTrigger;
+  /** The starter template it sends (WA_STARTER_TEMPLATES' key). */
+  template: string;
+  delayMinutes: number;
+  description: string;
+  /** When it sends, in one short line (the ready-made card). */
+  when: string;
+  /** Exactly what happens once it is on and sends to customers, in one sentence (the dialog says it before the button). */
+  sentence: string;
+}
+
+export const WA_AUTOMATION_PRESETS: WaAutomationPreset[] = [
+  {
+    key: "order_confirmation",
+    name: "Order confirmation",
+    trigger: "order_created",
+    template: "order_confirmation",
+    delayMinutes: 0,
+    description: "Thank customers and confirm their order as soon as it's placed.",
+    when: "As soon as an order is placed",
+    sentence: "Every customer who places an order gets this message on WhatsApp, within your sending hours.",
+  },
+  {
+    key: "payment_received",
+    name: "Payment received",
+    trigger: "order_paid",
+    template: "payment_received",
+    delayMinutes: 0,
+    description: "Tell customers their payment came through.",
+    when: "When an order is paid",
+    sentence: "Every customer whose order is paid gets this message on WhatsApp, within your sending hours.",
+  },
+  {
+    key: "shipping_update",
+    name: "Shipping update",
+    trigger: "order_fulfilled",
+    template: "shipping_update",
+    delayMinutes: 0,
+    description: "Send the tracking link when an order ships.",
+    when: "When an order ships",
+    sentence: "Every customer whose order ships gets this message on WhatsApp, within your sending hours.",
+  },
+  {
+    key: "order_cancelled",
+    name: "Order cancelled",
+    trigger: "order_cancelled",
+    template: "order_cancelled",
+    delayMinutes: 0,
+    description: "Let customers know when their order is cancelled.",
+    when: "When an order is cancelled",
+    sentence: "Every customer whose order is cancelled gets this message on WhatsApp, within your sending hours.",
+  },
+  {
+    key: "cart_reminder",
+    name: "Cart reminder",
+    trigger: "checkout_abandoned",
+    template: "abandoned_checkout",
+    delayMinutes: 60,
+    description: "Remind customers who agreed to marketing about the checkout they left, an hour later.",
+    when: "An hour after a checkout is left unfinished",
+    sentence: "Every customer who agreed to marketing messages and leaves a checkout unfinished gets this message an hour later, within your sending hours. Finishing the order cancels it.",
+  },
+  {
+    key: "welcome",
+    name: "Welcome",
+    trigger: "customer_created",
+    template: "welcome",
+    delayMinutes: 0,
+    description: "Welcome new customers who agreed to marketing messages.",
+    when: "When a customer signs up",
+    sentence: "Every new customer who agreed to marketing messages gets this message on WhatsApp, within your sending hours.",
+  },
+  {
+    key: "auto_reply",
+    name: "Auto-reply",
+    trigger: "message_received",
+    template: "auto_reply",
+    delayMinutes: 0,
+    description: "Let customers who write in know you'll get back to them (once a day each).",
+    when: "When a customer writes to you",
+    sentence: "Every customer who writes to your WhatsApp number gets this reply, at most once a day each, within your sending hours.",
+  },
 ];
+
+export const waPreset = (key: WaPresetKey): WaAutomationPreset => WA_AUTOMATION_PRESETS.find((p) => p.key === key)!;
+
+/** The starter text a ready-made automation sends unless the merchant edits it. */
+export const waPresetStarter = (p: Pick<WaAutomationPreset, "template">) => WA_STARTER_TEMPLATES.find((s) => s.key === p.template)!;
+
+/** The variables a text uses that a trigger's events don't carry (those messages would be skipped). {{store_name}} always has a value. */
+export const waMissingVariables = (body: string, trigger: WaTrigger): string[] => variablesIn(body).filter((v) => v !== "store_name" && !(WA_TRIGGER_INFO[trigger].variables as string[]).includes(v));
+
+/**
+ * What's wrong with an automation's message for its trigger: the template's own checks (in the
+ * trigger's category: a marketing one must say how to stop) and variables the trigger doesn't carry.
+ */
+export function waAutomationMessageIssues(body: string, trigger: WaTrigger): WaTemplateIssue[] {
+  const info = WA_TRIGGER_INFO[trigger];
+  const out = waTemplateIssues({ body, category: info.category });
+  // An unknown name is already the template check's error.
+  const missing = waMissingVariables(body, trigger).filter((v) => (WA_VARIABLES as readonly string[]).includes(v));
+  if (missing.length) out.push({ level: "error", message: `"${info.label}" has no ${missing.map((v) => `{{${v}}}`).join(", ")} to fill in: take ${missing.length > 1 ? "them" : "it"} out, or those messages won't send.` });
+  return out;
+}
+
+/** Who a ready-made automation sends to: the store's customers, or only the merchant's verified test number while they try it (test mode). */
+export const WA_SEND_TO = ["customers", "me"] as const;
+export type WaSendTo = (typeof WA_SEND_TO)[number];
+
+/** "Turn on" a ready-made automation in one go (POST …/automations/quick). */
+export const waQuickAutomationSchema = z.object({
+  preset: z.enum(WA_PRESET_KEYS),
+  /** The message, as the merchant edited it (the preset's starter when left out). */
+  body: z.string().trim().min(1, "Write the message").max(WA_TEXT_MAX, `At most ${WA_TEXT_MAX} characters`).optional(),
+  sendTo: z.enum(WA_SEND_TO).default("customers"),
+  /** A marketing automation: also switch marketing messages on in Settings (it is off until the store says so). */
+  enableMarketing: z.boolean().optional(),
+});
+export type WaQuickAutomationInput = z.output<typeof waQuickAutomationSchema>;
+
+/** Where the merchant fixes what stops an automation: a tab of the page (null: nothing on the page fixes it). */
+export type WaAutomationFix = "setup" | "settings" | "templates" | null;
+
+/** One reason an automation can't be switched on, with where to fix it. */
+export interface WaAutomationIssue {
+  message: string;
+  fix: WaAutomationFix;
+}
 
 // ---------------------------------------------------------------------------
 // Campaigns

@@ -459,7 +459,8 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     // Only the lists they may see were asked of Shopify.
     expect(JSON.parse(sent).variables).toMatchObject({ abandoned: false, customers: true });
     expect(c.shown).toEqual({ abandoned: false, customers: true, names: false, contact: false, orders: false });
-    expect(c.recent[0]).toMatchObject({ customerId: "11", name: null, email: null, phone: null, adminUrl: null, orders: null, spent: null });
+    // No number in any form, nor where it came from, without "View contact information".
+    expect(c.recent[0]).toMatchObject({ customerId: "11", name: null, email: null, phone: null, phoneE164: null, phoneRaw: null, phoneSource: null, phoneCountryAssumed: false, adminUrl: null, orders: null, spent: null });
     expect(c.abandoned).toEqual([]);
 
     ok(await setAccess(b, memberId, "custom", ["analytics.sales", "finance.breakdown", "finance.refunds", "finance.reports", "products.inventory", "products.prices", "orders.list", "orders.payments", "customers.list", "customers.profiles", "customers.contact", "customers.orders"]));
@@ -470,7 +471,7 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     expect(ov.modules.inventory.current).toHaveProperty("retailValue");
     expect(ov.modules.recent_orders.items[0].financialStatus).toBe("paid");
     c = ok(await contacts(guest.headers));
-    expect(c.recent[0]).toMatchObject({ name: "Jane Doe", email: "jane@example.com", phone: "+61400000000", orders: 2, spent: 120.5 });
+    expect(c.recent[0]).toMatchObject({ name: "Jane Doe", email: "jane@example.com", phone: "+61400000000", phoneE164: "+61400000000", phoneRaw: "+61400000000", phoneSource: "customer", orders: 2, spent: 120.5 });
   });
 });
 

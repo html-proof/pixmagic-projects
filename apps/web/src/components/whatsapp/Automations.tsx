@@ -5,17 +5,15 @@ import {
   describeWaCondition,
   renderWaText,
   waConditionFields,
-  WA_AUTOMATION_PRESETS,
   WA_CONDITION_LABEL,
   WA_DEFAULT_REPLY_COOLDOWN,
-  WA_DEFAULT_SEND_WINDOW,
   WA_MESSAGE_LABEL,
   WA_MAX_DELAY_MINUTES,
   WA_RECIPIENT_LABEL,
   WA_RECIPIENTS,
-  WA_STARTER_TEMPLATES,
   WA_TRIGGER_INFO,
   WA_TRIGGERS,
+  type WaAutomationIssue,
   type WaCondition,
   type WaConditionField,
   type WaRecipient,
@@ -27,13 +25,16 @@ import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import { CountryPicker, Drawer, fmtDelay, fmtHour, fmtWhen, plural } from "@/components/messaging/MessagingUi";
+import { AutomationSwitches, ReadyMade } from "./ReadyMade";
 import type { WaAutomation, WaAutomationRun, WaOverview, WaTemplate, WaTemplatesResponse, WaTriggerAvailability } from "./types";
-import { AUTOMATION_STATUS, MessageStatus, problemsOf, useWaAction, WaBubble, waError, waHref } from "./WaUi";
+import { AUTOMATION_STATUS, IssueList, issuesOf, MessageStatus, useWaAction, WaBubble, waError, waHref } from "./WaUi";
 
 // ---------------------------------------------------------------------------
-// Automations (docs/whatsapp.md, "Automations"): the list, a five-step builder (trigger, conditions,
-// message, recipient and timing, review) and each automation's runs. Nothing is switched on except
-// by pressing Activate; a new automation starts in test mode (only the store's verified number).
+// Automations (docs/whatsapp.md, "Automations"): the ready-made automations first (ReadyMade.tsx: one
+// button and one short dialog each), then every automation of the store with its switches, and the
+// advanced way, a five-step builder (trigger, conditions, message, recipient and timing, review), with
+// each automation's runs. A builder-made automation starts in test mode (only the store's verified
+// number) and is switched on only by Activate.
 // ---------------------------------------------------------------------------
 
 type DelayUnit = "minutes" | "hours" | "days";
@@ -47,9 +48,6 @@ interface Draft {
   recipient: WaRecipient;
   delayValue: string;
   delayUnit: DelayUnit;
-  ownWindow: boolean;
-  windowStart: number;
-  windowEnd: number;
   testMode: boolean;
   cooldownMinutes: number;
 }
@@ -73,9 +71,6 @@ function draftOf(a: WaAutomation | null): Draft {
       recipient: "customer",
       delayValue: "0",
       delayUnit: "minutes",
-      ownWindow: false,
-      windowStart: WA_DEFAULT_SEND_WINDOW.start,
-      windowEnd: WA_DEFAULT_SEND_WINDOW.end,
       testMode: true,
       cooldownMinutes: WA_DEFAULT_REPLY_COOLDOWN,
     };
@@ -90,9 +85,6 @@ function draftOf(a: WaAutomation | null): Draft {
     recipient: a.recipient,
     delayValue: d.value,
     delayUnit: d.unit,
-    ownWindow: !!a.sendWindow,
-    windowStart: a.sendWindow?.start ?? WA_DEFAULT_SEND_WINDOW.start,
-    windowEnd: a.sendWindow?.end ?? WA_DEFAULT_SEND_WINDOW.end,
     testMode: a.testMode,
     cooldownMinutes: a.cooldownMinutes ?? WA_DEFAULT_REPLY_COOLDOWN,
   };
@@ -100,8 +92,11 @@ function draftOf(a: WaAutomation | null): Draft {
 
 const delayMinutesOf = (d: Draft) => Math.round(Number(d.delayValue || "0") * UNIT_MINUTES[d.delayUnit]);
 
-/** The draft as the API takes it (waAutomationSchema). */
-function bodyOf(d: Draft) {
+/**
+ * The draft as the API takes it (waAutomationSchema). Automations send within the store's sending
+ * hours (Settings): a new one has no hours of its own, and an older one keeps what it was saved with.
+ */
+function bodyOf(d: Draft, existing: WaAutomation | null) {
   return {
     name: d.name.trim(),
     description: d.description.trim() || null,
@@ -110,7 +105,7 @@ function bodyOf(d: Draft) {
     templateId: d.templateId,
     recipient: d.trigger === "message_received" ? "customer" : d.recipient,
     delayMinutes: delayMinutesOf(d),
-    sendWindow: d.ownWindow ? { start: d.windowStart, end: d.windowEnd } : null,
+    sendWindow: existing?.sendWindow ?? null,
     testMode: d.testMode,
     cooldownMinutes: d.trigger === "message_received" ? d.cooldownMinutes : null,
   };
@@ -124,7 +119,6 @@ function draftProblems(d: Draft): string[] {
   if (!d.name.trim()) out.push("Name the automation.");
   const delay = delayMinutesOf(d);
   if (!Number.isFinite(delay) || delay < 0 || delay > WA_MAX_DELAY_MINUTES) out.push("The wait must be between 0 and 30 days.");
-  if (d.ownWindow && d.windowStart === d.windowEnd) out.push("The sending hours can't start and end at the same hour.");
   return out;
 }
 
@@ -159,8 +153,6 @@ function blankCondition(field: WaConditionField): WaCondition {
   }
 }
 
-const hours = Array.from({ length: 24 }, (_, h) => h);
-
 // ---------------------------------------------------------------------------
 // The tab
 // ---------------------------------------------------------------------------
@@ -172,7 +164,6 @@ export function Automations({ base, overview, reload }: { base: string; overview
   const [detail, setDetail] = useState<WaAutomation | null>(null);
   const [deleting, setDeleting] = useState<WaAutomation | null>(null);
   const [tested, setTested] = useState<{ name: string; messageId: string } | null>(null);
-  const [refused, setRefused] = useState<{ id: string; problems: string[] } | null>(null);
   const { busy, run } = useWaAction();
   const manage = overview.can.manage;
   const triggers = list.data?.triggers ?? overview.triggers;
@@ -206,45 +197,14 @@ export function Automations({ base, overview, reload }: { base: string; overview
     );
   }
 
-  const activate = (a: WaAutomation) =>
-    run(`activate:${a.id}`, "switch the automation on", async () => {
-      setRefused(null);
-      try {
-        await api(`${base}/automations/${a.id}/activate`, { method: "POST" });
-      } catch (e) {
-        const problems = problemsOf(e);
-        if (problems.length) setRefused({ id: a.id, problems });
-        throw e;
-      }
-      refresh();
-      return a.testMode ? `"${a.name}" is on, in test mode: its messages go only to your verified test number.` : `"${a.name}" is on.`;
-    });
-
-  const presetDraft = (key: string): Draft => {
-    const p = WA_AUTOMATION_PRESETS.find((x) => x.key === key)!;
-    const starter = WA_STARTER_TEMPLATES.find((s) => s.key === p.template);
-    const tpl = starter ? tpls.find((t) => t.name === starter.name) : undefined;
-    const d = splitDelay(p.delayMinutes);
-    return { ...draftOf(null), name: p.name, description: p.description, trigger: p.trigger, templateId: tpl?.id ?? "", delayValue: d.value, delayUnit: d.unit };
-  };
-
   return (
     <div className="space-y-4">
       <div className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold">Automations</h2>
-            <p className="mt-1 text-sm text-muted">
-              An automation sends a message when something happens in your store: a trigger, optional conditions, a template, then who gets it and when. Each one runs at most once per order,
-              checkout or customer, so a repeated event never sends twice.
-            </p>
-          </div>
-          {manage && (
-            <button type="button" className="btn-primary" onClick={() => setEditing({ automation: null, draft: draftOf(null) })}>
-              New automation
-            </button>
-          )}
-        </div>
+        <h2 className="text-base font-semibold">Automations</h2>
+        <p className="mt-1 text-sm text-muted">
+          An automation sends a WhatsApp message when something happens in your store, at most once per order, checkout or customer, so a repeated event never sends twice. Turn on a ready-made one below:
+          it takes one step.
+        </p>
         {overview.settings.automationPausedAt && (
           <div className="mt-3">
             <Alert kind="info">All automation is paused (Settings). Automations record what happened but send nothing until you resume.</Alert>
@@ -262,137 +222,96 @@ export function Automations({ base, overview, reload }: { base: string; overview
         </Alert>
       )}
 
-      {manage && (
-        <div className="card">
-          <h3 className="text-sm font-semibold">Start from a ready-made automation</h3>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {WA_AUTOMATION_PRESETS.map((p) => {
-              const starter = WA_STARTER_TEMPLATES.find((s) => s.key === p.template);
-              const tpl = starter ? tpls.find((t) => t.name === starter.name) : undefined;
-              const avail = triggers[p.trigger];
-              return (
-                <div key={p.key} className="rounded-lg border border-border p-3">
-                  <p className="text-sm font-medium">{p.name}</p>
-                  <p className="mt-1 text-xs text-muted">{p.description}</p>
-                  <p className="mt-1 text-xs text-muted">
-                    When: {WA_TRIGGER_INFO[p.trigger].label.toLowerCase()} · {fmtDelay(p.delayMinutes)}
-                  </p>
-                  {!avail?.available && <p className="mt-1 text-xs text-warn">{avail?.reason}</p>}
-                  {!tpl && starter && (
-                    <p className="mt-1 text-xs text-muted">
-                      Uses the template &ldquo;{starter.name}&rdquo;: create it on the{" "}
-                      <Link className="underline" href={waHref("templates")}>
-                        Templates tab
-                      </Link>{" "}
-                      first (start from its ready-made text).
-                    </p>
-                  )}
-                  <button type="button" className="btn-secondary mt-2 h-8 px-3 text-xs" disabled={!avail?.available} onClick={() => setEditing({ automation: null, draft: presetDraft(p.key) })}>
-                    Use this
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <ReadyMade
+        base={base}
+        overview={overview}
+        automations={all}
+        templates={tpls}
+        samples={templates.data.samples as Record<string, string>}
+        triggers={triggers}
+        onChanged={refresh}
+        onEdit={(a) => setEditing({ automation: a, draft: draftOf(a) })}
+      />
 
-      {all.length === 0 ? (
-        <EmptyState title="No automations yet" body="Create one from a ready-made automation above, or build your own. It starts in test mode, so only your own verified number receives its messages until you say otherwise." />
-      ) : (
-        <ul className="space-y-3">
-          {all.map((a) => {
-            const st = AUTOMATION_STATUS[a.status] ?? { tone: "neutral" as const, label: a.status };
-            const problems = a.problems ?? [];
-            return (
-              <li key={a.id} className="card">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button type="button" className="text-left font-medium hover:underline" onClick={() => setDetail(a)}>
-                        {a.name}
-                      </button>
-                      <Badge tone={st.tone}>{st.label}</Badge>
-                      {a.testMode && <Badge tone="warn">Test mode</Badge>}
-                    </div>
-                    <p className="mt-1 text-sm text-muted">
-                      {a.triggerLabel}
-                      {a.conditionLabels.length ? `, if ${a.conditionLabels.join(" and ").toLowerCase()}` : ""} · sends {fmtDelay(a.delayMinutes)}
-                    </p>
-                    {a.stats && (
-                      <p className="mt-1 text-xs text-muted">
-                        Last 30 days: {plural(a.stats.queued, "message")} queued, {plural(a.stats.skipped, "run")} that sent nothing
-                        {a.lastRunAt ? ` · last ran ${fmtWhen(a.lastRunAt, tz)}` : ""}
-                      </p>
-                    )}
-                    {problems.length > 0 && (
-                      <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-warn">
-                        {problems.map((p) => (
-                          <li key={p}>{p}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {refused?.id === a.id && (
-                      <div className="mt-2">
-                        <Alert kind="error" onDismiss={() => setRefused(null)}>
-                          It can&apos;t be switched on yet:
-                          <ul className="mt-1 list-disc pl-5">
-                            {refused.problems.map((p) => (
-                              <li key={p}>{p}</li>
-                            ))}
-                          </ul>
-                        </Alert>
+      <section aria-labelledby="wa-yours-title" className="space-y-3">
+        <div>
+          <h3 id="wa-yours-title" className="text-base font-semibold">
+            Your automations
+          </h3>
+          <p className="mt-1 text-sm text-muted">Every automation of this store, ready-made or built by you. Press a name to see each time it ran.</p>
+        </div>
+        {all.length === 0 ? (
+          <EmptyState title="No automations yet" body="Turn on a ready-made automation above, or build your own below." />
+        ) : (
+          <ul className="space-y-3">
+            {all.map((a) => {
+              const st = AUTOMATION_STATUS[a.status] ?? { tone: "neutral" as const, label: a.status };
+              return (
+                <li key={a.id} className="card space-y-3" data-testid={`wa-automation-${a.id}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" className="text-left font-medium hover:underline" onClick={() => setDetail(a)}>
+                          {a.name}
+                        </button>
+                        <Badge tone={st.tone}>{st.label}</Badge>
+                        {!manage && a.testMode && <Badge tone="warn">Test mode</Badge>}
                       </div>
-                    )}
-                  </div>
-                  {manage && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {a.status === "active" ? (
+                      <p className="mt-1 text-sm text-muted">
+                        {a.triggerLabel}
+                        {a.conditionLabels.length ? `, if ${a.conditionLabels.join(" and ").toLowerCase()}` : ""} · sends {fmtDelay(a.delayMinutes)}
+                      </p>
+                      {a.stats && (
+                        <p className="mt-1 text-xs text-muted">
+                          Last 30 days: {plural(a.stats.queued, "message")} queued, {plural(a.stats.skipped, "time")} it sent nothing
+                          {a.lastRunAt ? ` · last ran ${fmtWhen(a.lastRunAt, tz)}` : ""}
+                        </p>
+                      )}
+                      <IssueList issues={a.issues ?? (a.problems ?? []).map((message) => ({ message, fix: null }))} className="mt-2" />
+                    </div>
+                    {manage && (
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           className="btn-secondary h-8 px-3 text-xs"
                           disabled={!!busy}
+                          title="Sends it once, with sample values, to your verified number"
                           onClick={() =>
-                            void run(`pause:${a.id}`, "pause the automation", async () => {
-                              const r = await api<{ cancelled: number }>(`${base}/automations/${a.id}/pause`, { method: "POST" });
-                              refresh();
-                              return r.cancelled ? `Paused. ${plural(r.cancelled, "waiting message")} cancelled.` : "Paused.";
+                            void run(`test:${a.id}`, "send a test", async () => {
+                              const r = await api<{ messageId: string }>(`${base}/automations/${a.id}/test`, { method: "POST" });
+                              setTested({ name: a.name, messageId: r.messageId });
                             })
                           }
                         >
-                          {busy === `pause:${a.id}` ? "Pausing…" : "Pause"}
+                          {busy === `test:${a.id}` ? "Sending…" : "Test"}
                         </button>
-                      ) : (
-                        <button type="button" className="btn-primary h-8 px-3 text-xs" disabled={!!busy} onClick={() => void activate(a)}>
-                          {busy === `activate:${a.id}` ? "Switching on…" : "Activate"}
+                        <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing({ automation: a, draft: draftOf(a) })}>
+                          Edit
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn-secondary h-8 px-3 text-xs"
-                        disabled={!!busy}
-                        onClick={() =>
-                          void run(`test:${a.id}`, "send a test", async () => {
-                            const r = await api<{ messageId: string }>(`${base}/automations/${a.id}/test`, { method: "POST" });
-                            setTested({ name: a.name, messageId: r.messageId });
-                          })
-                        }
-                      >
-                        {busy === `test:${a.id}` ? "Sending…" : "Test"}
-                      </button>
-                      <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing({ automation: a, draft: draftOf(a) })}>
-                        Edit
-                      </button>
-                      <button type="button" className="btn-danger h-8 px-3 text-xs" onClick={() => setDeleting(a)}>
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                        <button type="button" className="btn-danger h-8 px-3 text-xs" onClick={() => setDeleting(a)}>
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {manage && <AutomationSwitches base={base} automation={a} overview={overview} onChanged={refresh} />}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {manage && (
+        <div className="card flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">The advanced way</h3>
+            <p className="mt-1 text-sm text-muted">Choose the trigger, conditions, template, recipient and wait yourself. It starts sending only to your number, until you switch it to your customers.</p>
+          </div>
+          <button type="button" className="btn-secondary" onClick={() => setEditing({ automation: null, draft: draftOf(null) })}>
+            Build your own automation
+          </button>
+        </div>
       )}
 
       {detail && <RunsDrawer base={base} automation={detail} tz={tz} onClose={() => setDetail(null)} />}
@@ -446,7 +365,7 @@ function Builder({
   const [step, setStep] = useState<Step>(initial.trigger ? "conditions" : "trigger");
   const [saved, setSaved] = useState<WaAutomation | null>(automation);
   const [error, setError] = useState<string | null>(null);
-  const [problems, setProblems] = useState<string[]>([]);
+  const [problems, setProblems] = useState<WaAutomationIssue[]>([]);
   const { busy, run } = useWaAction();
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
   const info = d.trigger ? WA_TRIGGER_INFO[d.trigger] : null;
@@ -460,14 +379,14 @@ function Builder({
     setProblems([]);
     try {
       const r = saved
-        ? await api<{ automation: WaAutomation }>(`${base}/automations/${saved.id}`, { method: "PUT", body: bodyOf(d) })
-        : await api<{ automation: WaAutomation }>(`${base}/automations`, { method: "POST", body: bodyOf(d) });
+        ? await api<{ automation: WaAutomation }>(`${base}/automations/${saved.id}`, { method: "PUT", body: bodyOf(d, saved) })
+        : await api<{ automation: WaAutomation }>(`${base}/automations`, { method: "POST", body: bodyOf(d, null) });
       setSaved(r.automation);
-      setProblems(r.automation.problems ?? []);
+      setProblems(r.automation.issues ?? []);
       return true;
     } catch (e) {
       setError(waError(e, "save the automation"));
-      setProblems(problemsOf(e));
+      setProblems(issuesOf(e));
       return false;
     }
   };
@@ -477,7 +396,7 @@ function Builder({
       <div className="card animate-rise">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold">{automation ? `Edit "${automation.name}"` : "New automation"}</h2>
+            <h2 className="text-base font-semibold">{automation ? `Edit "${automation.name}"` : "Build your own automation"}</h2>
             <p className="mt-1 text-sm text-muted">Trigger → conditions → message → recipient and timing. Saving never switches it on: you do that with Activate.</p>
           </div>
           <button type="button" className="btn-secondary" onClick={() => onDone(null)}>
@@ -636,34 +555,14 @@ function Builder({
               </div>
               <p className="mt-1 text-xs text-muted">Sends {fmtDelay(delayMinutesOf(d))} after the event (at most 30 days). Old events (over 2 days) never send.</p>
             </div>
-            <div>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" className="accent-[var(--accent)]" checked={d.ownWindow} onChange={(e) => set({ ownWindow: e.target.checked })} />
-                Its own sending hours (instead of the store&apos;s {fmtHour(overview.settings.sendWindow.start)}–{fmtHour(overview.settings.sendWindow.end % 24)})
-              </label>
-              {d.ownWindow && (
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-                  <label htmlFor="wa-auto-from">From</label>
-                  <select id="wa-auto-from" className="input w-auto" value={d.windowStart} onChange={(e) => set({ windowStart: Number(e.target.value) })}>
-                    {hours.map((h) => (
-                      <option key={h} value={h}>
-                        {fmtHour(h)}
-                      </option>
-                    ))}
-                  </select>
-                  <label htmlFor="wa-auto-to">to</label>
-                  <select id="wa-auto-to" className="input w-auto" value={d.windowEnd} onChange={(e) => set({ windowEnd: Number(e.target.value) })}>
-                    {[...hours.slice(1), 24].map((h) => (
-                      <option key={h} value={h}>
-                        {h === 24 ? "midnight" : fmtHour(h)}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="text-xs text-muted">({overview.settings.timeZone})</span>
-                </div>
-              )}
-              <p className="mt-1 text-xs text-muted">A message due outside its hours waits for the next opening.</p>
-            </div>
+            <p className="text-sm text-muted">
+              Every automation sends within your store&apos;s sending hours, {fmtHour(overview.settings.sendWindow.start)} to {overview.settings.sendWindow.end % 24 === 0 ? "midnight" : fmtHour(overview.settings.sendWindow.end)} (
+              {overview.settings.timeZone}), set in{" "}
+              <Link className="underline" href={waHref("settings")}>
+                Settings
+              </Link>
+              : a message due outside them waits for the next opening.
+            </p>
             {d.trigger === "message_received" && (
               <div>
                 <label className="label" htmlFor="wa-auto-cooldown">
@@ -694,8 +593,7 @@ function Builder({
                 {d.trigger === "message_received" ? "the customer who wrote" : WA_RECIPIENT_LABEL[d.recipient].toLowerCase()}
               </p>
               <p>
-                <span className="font-medium">{fmtDelay(delayMinutesOf(d))}</span>
-                {d.ownWindow ? `, between ${fmtHour(d.windowStart)} and ${d.windowEnd === 24 ? "midnight" : fmtHour(d.windowEnd)}` : ", within the store's sending hours"}.
+                <span className="font-medium">{fmtDelay(delayMinutesOf(d))}</span>, within the store&apos;s sending hours.
               </p>
             </div>
             <label className="flex items-start gap-2 text-sm">
@@ -716,17 +614,18 @@ function Builder({
                 </ul>
               </Alert>
             )}
-            {error && <Alert kind="error">{error}</Alert>}
+            {error && (
+              <Alert kind="error">
+                {error}
+                <IssueList issues={problems} className="mt-1" />
+              </Alert>
+            )}
             {saved && !error && (
               <Alert kind={problems.length ? "info" : "success"}>
                 {problems.length ? (
                   <>
                     Saved. Before it can be switched on:
-                    <ul className="mt-1 list-disc pl-5">
-                      {problems.map((p) => (
-                        <li key={p}>{p}</li>
-                      ))}
-                    </ul>
+                    <IssueList issues={problems} className="mt-1" />
                   </>
                 ) : saved.status === "active" ? (
                   "Saved. It's on."
@@ -750,7 +649,7 @@ function Builder({
                         const r = await api<{ automation: WaAutomation }>(`${base}/automations/${saved.id}/activate`, { method: "POST" });
                         onDone(r.automation);
                       } catch (e) {
-                        setProblems(problemsOf(e));
+                        setProblems(issuesOf(e));
                         throw e;
                       }
                       return d.testMode ? "Switched on, in test mode." : "Switched on.";

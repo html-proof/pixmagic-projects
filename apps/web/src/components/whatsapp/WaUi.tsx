@@ -1,5 +1,7 @@
 "use client";
+import Link from "next/link";
 import { useCallback, useState, type ReactNode } from "react";
+import type { WaAutomationFix, WaAutomationIssue } from "@app/shared/whatsapp";
 import { useApp } from "@/components/AppContext";
 import { useToast } from "@/components/AppUi";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
@@ -135,6 +137,53 @@ export const SOURCE_LABEL: Record<string, string> = {
   reply: "Reply",
   inbound: "From the customer",
 };
+
+// ---------------------------------------------------------------------------
+// Why an automation can't be switched on, with where to fix it
+// ---------------------------------------------------------------------------
+
+const FIX_LINK: Record<NonNullable<WaAutomationFix>, string> = { setup: "Go to Setup", settings: "Open Settings", templates: "Open Templates" };
+
+/** The issues the API sends with a refusal (`detail.issues`); else its problems, with nowhere to fix them named. */
+export function issuesOf(e: unknown): WaAutomationIssue[] {
+  const detail = e instanceof ApiError ? (e.data.detail as { issues?: unknown } | undefined) : undefined;
+  if (Array.isArray(detail?.issues)) {
+    return detail.issues.filter((i): i is WaAutomationIssue => !!i && typeof (i as WaAutomationIssue).message === "string").map((i) => ({ message: i.message, fix: i.fix ?? null }));
+  }
+  return problemsOf(e).map((message) => ({ message, fix: null }));
+}
+
+/** Each reason on its own line, with a link to the tab that fixes it. */
+export function IssueList({ issues, className = "" }: { issues: WaAutomationIssue[]; className?: string }) {
+  if (!issues.length) return null;
+  return (
+    <ul className={`list-disc space-y-1 pl-5 text-xs text-warn ${className}`}>
+      {issues.map((i) => (
+        <li key={i.message}>
+          <span className="text-text">{i.message}</span>
+          {i.fix && (
+            <>
+              {" "}
+              <Link className="font-medium text-accent underline" href={waHref(i.fix)}>
+                {FIX_LINK[i.fix]}
+              </Link>
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** An on/off switch with its words beside it (a checkbox announced as a switch). */
+export function WaSwitch({ checked, onChange, label, disabled, testId }: { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean; testId?: string }) {
+  return (
+    <label className={`inline-flex shrink-0 items-center gap-2 text-xs font-medium ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+      <span className={checked ? "text-good" : "text-muted"}>{checked ? "On" : "Off"}</span>
+      <input type="checkbox" role="switch" className="h-5 w-5 accent-[var(--accent)]" aria-label={label} checked={checked} disabled={disabled} data-testid={testId} onChange={(e) => onChange(e.target.checked)} />
+    </label>
+  );
+}
 
 /** A WhatsApp message as it looks on a phone (the store's side). */
 export function WaBubble({ children, mine = true }: { children: ReactNode; mine?: boolean }) {

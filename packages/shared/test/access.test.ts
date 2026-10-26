@@ -298,11 +298,51 @@ describe("redactOverview", () => {
 });
 
 describe("redactContact", () => {
-  const row = { customerId: "1", name: "Jane", email: "j@x.com", phone: "+61", subscribed: true, smsSubscribed: false, adminUrl: "https://a", orders: 2, spent: 10, recoveryUrl: "https://r" };
+  const row = {
+    customerId: "1",
+    name: "Jane",
+    email: "j@x.com",
+    phone: "+61412345678",
+    phoneE164: "+61412345678",
+    phoneRaw: "0412 345 678",
+    phoneSource: "customer",
+    phoneCountryAssumed: true,
+    subscribed: true,
+    smsSubscribed: false,
+    adminUrl: "https://a",
+    orders: 2,
+    spent: 10,
+    recoveryUrl: "https://r",
+  };
   it("shows a customer number only, until names, contact details and order history are granted", () => {
-    expect(redactContact(row, member(["customers.list"]))).toEqual({ ...row, name: null, adminUrl: null, email: null, phone: null, recoveryUrl: null, orders: null, spent: null });
-    expect(redactContact(row, member(["customers.list", "customers.profiles"]))).toMatchObject({ name: "Jane", email: null });
-    expect(redactContact(row, member(["customers.list", "customers.contact", "customers.orders"]))).toMatchObject({ name: null, email: "j@x.com", recoveryUrl: "https://r", orders: 2 });
+    // The phone in every form goes with "View contact information": the typed number never slips through.
+    expect(redactContact(row, member(["customers.list"]))).toEqual({
+      ...row,
+      name: null,
+      adminUrl: null,
+      email: null,
+      phone: null,
+      phoneE164: null,
+      phoneRaw: null,
+      phoneSource: null,
+      phoneCountryAssumed: false,
+      recoveryUrl: null,
+      orders: null,
+      spent: null,
+    });
+    expect(redactContact(row, member(["customers.list", "customers.profiles"]))).toMatchObject({ name: "Jane", email: null, phoneRaw: null });
+    expect(redactContact(row, member(["customers.list", "customers.contact", "customers.orders"]))).toMatchObject({
+      name: null,
+      email: "j@x.com",
+      phoneE164: "+61412345678",
+      phoneRaw: "0412 345 678",
+      phoneSource: "customer",
+      recoveryUrl: "https://r",
+      orders: 2,
+    });
+    // A row without the phone details (another caller's) gains none.
+    const { phoneE164: _e, phoneRaw: _r, phoneSource: _s, phoneCountryAssumed: _a, ...plain } = row;
+    expect(redactContact(plain, member(["customers.list"]))).not.toHaveProperty("phoneRaw");
     expect(redactContact(row, member([], "owner"))).toBe(row);
   });
 });
