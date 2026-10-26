@@ -49,7 +49,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-25";
+const UPDATED = "2026-10-26";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -242,8 +242,12 @@ export default function PrivacyPage() {
           To send the order updates, reminders, campaigns and replies you set up, bizinsights keeps the WhatsApp number and first name of
           the customers an automation messages, who write to your business, or who agree to receive your marketing on WhatsApp. Both are
           encrypted with AES-256-GCM, together with a one-way keyed hash of the number used to recognise replies; the dashboard shows
-          numbers masked. We keep a record of every consent and opt-out (when, how, and who recorded it), so that nobody who replied STOP
-          is messaged again, and the text of each message sent and received, encrypted, with its delivery reports. Messages leave through
+          these numbers in full only to the workspace&apos;s owners and admins and to members given permission to see customers&apos;
+          contact details. WhatsApp Automation&apos;s list of your store&apos;s customers, with the phone number Shopify has for each, is
+          read from Shopify each time you open it, shown only to those same people and not saved in our database; we record only that it
+          was viewed, and by whom, in your workspace&apos;s audit log. We keep a record of every consent and opt-out (when, how, and who
+          recorded it), so that nobody who replied STOP is messaged again, and the text of each message sent and received, encrypted, with
+          its delivery reports. Messages leave through
           bizinsights&apos; own WhatsApp service, which runs on our AWS infrastructure: either from a phone you link with a QR code (the
           service keeps that phone&apos;s WhatsApp session, as WhatsApp Web does, until you disconnect) or through Meta&apos;s WhatsApp
           Business Platform (the service keeps your WhatsApp Business account&apos;s access token, encrypted). Messages from people who

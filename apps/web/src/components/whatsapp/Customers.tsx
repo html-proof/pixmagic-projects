@@ -1,19 +1,31 @@
 "use client";
 import Link from "next/link";
-import { useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Check, Copy, Search, Send } from "lucide-react";
+import { CUSTOMER_PHONE_SOURCE_LABEL, formatPhone } from "@app/shared/messaging";
 import { WA_ORDER_UPDATE_INFO } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
-import { api, useApi } from "@/lib/api";
-import { COUNTRY_CHOICES, countryName, usePagedList } from "@/components/messaging/MessagingUi";
-import type { WaContact, WaOverview, WaSuppression } from "./types";
-import { fmtAgo, useWaAction, waHref } from "./WaUi";
+import { Alert } from "@/components/ui";
+import { api, ApiError, fmtMoney, fmtNum, useApi } from "@/lib/api";
+import { COUNTRY_CHOICES, countryName, plural } from "@/components/messaging/MessagingUi";
+import { Composer } from "./Messages";
+import type { WaContact, WaCustomersPage, WaOverview, WaShopifyCustomer, WaSuppression } from "./types";
+import { fmtAgo, useWaAction, waError, waHref } from "./WaUi";
 
 // ---------------------------------------------------------------------------
-// Customers: who agreed to what (docs/whatsapp.md, "Consent"), recording consent given another way,
-// and the store's do-not-message list. Numbers are shown masked; a customer is found by their full
-// number (the API matches it by its keyed hash, nothing is decrypted to search).
+// Customers, in two views:
+//  - All customers: the store's customers, read live from Shopify a page at a time, each with the
+//    whole phone number Shopify has for them (their profile, a checkout, their address, their last
+//    order), where it came from, and what WhatsApp knows of it. Owners and admins can message one
+//    from here. bizinsights keeps no copy of the list.
+//  - Consent records: the customers WhatsApp keeps a record of (it messaged them, they wrote, their
+//    consent was recorded), who agreed to what (docs/whatsapp.md, "Consent"), and recording consent
+//    given another way.
+// Then the store's do-not-message list, whose numbers stay masked (it keeps no whole number).
+// Whole numbers show only to members allowed to see contact details (the tab needs it). A search
+// can be a phone number, so it goes to the API in a header, never in an address.
 // ---------------------------------------------------------------------------
 
 const MARKETING: Record<WaContact["marketing"], { tone: Tone; label: string }> = {
@@ -26,11 +38,14 @@ const SCOPE_LABEL: Record<string, string> = { all: "Every message", order_update
 const SUPPRESSION_SCOPE: Record<string, string> = { all: "Every message", marketing: "Marketing only" };
 const SUPPRESSION_REASON: Record<string, string> = { stop_reply: "Replied STOP", merchant: "Added by your team", invalid_number: "Invalid number", redact: "Erased at the customer's request" };
 
+type View = "all" | "consent";
+const VIEWS: Array<{ id: View; label: string }> = [
+  { id: "all", label: "All customers" },
+  { id: "consent", label: "Consent records" },
+];
+
 export function Customers({ base, overview }: { base: string; overview: WaOverview }) {
-  const [phone, setPhone] = useState("");
-  const [search, setSearch] = useState("");
-  const [consent, setConsent] = useState<"" | "opted_in" | "opted_out" | "unknown">("");
-  const [recording, setRecording] = useState(false);
+  const [view, setView] = useState<View>("all");
   const manage = overview.can.manage;
 
   if (!overview.can.contacts) {
@@ -42,11 +57,390 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
     );
   }
 
-  const params = new URLSearchParams();
-  if (search) params.set("phone", search);
-  if (consent) params.set("consent", consent);
-  const q = params.toString();
-  const path = `${base}/contacts${q ? `?${q}` : ""}`;
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 overflow-x-auto rounded-xl border border-border bg-bg p-1 sm:w-fit" role="tablist" aria-label="Which customers">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            type="button"
+            role="tab"
+            aria-selected={view === v.id}
+            onClick={() => setView(v.id)}
+            className={`flex-1 shrink-0 rounded-lg px-3 py-1.5 text-sm transition sm:flex-none ${view === v.id ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-text"}`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+      {view === "all" ? <AllCustomers base={base} overview={overview} /> : <ConsentRecords base={base} overview={overview} />}
+      <DoNotMessage base={base} manage={manage} />
+    </div>
+  );
+}
+
+/**
+ * The pages of a list loaded so far, each page's whole answer kept. `search` goes in the `x-search`
+ * header: it can be a phone number or an email, and an address ends up in logs and browser tools.
+ */
+function usePages<P extends { nextCursor: string | null }>(path: string, search: string) {
+  const key = `${path}\n${search}`;
+  const [state, setState] = useState<{ key: string; pages: P[] } | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [loading, setLoading] = useState(false);
+  const latest = useRef(0);
+  const load = useCallback(
+    async (after: string | null) => {
+      const request = ++latest.current;
+      setLoading(true);
+      setError(null);
+      try {
+        const sep = path.includes("?") ? "&" : "?";
+        const page = await api<P>(`${path}${after ? `${sep}cursor=${encodeURIComponent(after)}` : ""}`, { headers: search ? { "x-search": encodeURIComponent(search) } : {} });
+        if (request !== latest.current) return;
+        setState((prev) => ({ key, pages: after && prev?.key === key ? [...prev.pages, page] : [page] }));
+      } catch (e) {
+        if (request === latest.current) setError(e);
+      } finally {
+        if (request === latest.current) setLoading(false);
+      }
+    },
+    [key, path, search],
+  );
+  useEffect(() => {
+    void load(null);
+  }, [load]);
+  const pages = state?.key === key ? state.pages : null;
+  const cursor = pages?.at(-1)?.nextCursor ?? null;
+  return { pages, cursor, loading, error, loadMore: () => void load(cursor), reload: () => load(null) };
+}
+
+/** A search box with its own Search button (a phone's number keypad has no Return key); Clear also resets the filters `onClear` names. */
+function SearchForm({ id, label, placeholder, inputMode, onSearch, onClear, active, children }: { id: string; label: string; placeholder: string; inputMode?: "tel" | "text"; onSearch: (text: string) => void; onClear?: () => void; active: boolean; children?: ReactNode }) {
+  const [text, setText] = useState("");
+  return (
+    <form
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSearch(text.trim());
+      }}
+    >
+      <div className="min-w-0 flex-1 sm:max-w-sm">
+        <label className="label" htmlFor={id}>
+          {label}
+        </label>
+        <input id={id} className="input" type="search" inputMode={inputMode} maxLength={80} placeholder={placeholder} value={text} onChange={(e) => (e.target.value ? setText(e.target.value) : (setText(""), onSearch("")))} />
+      </div>
+      {children}
+      <button type="submit" className="btn-secondary">
+        <Search size={16} aria-hidden /> Search
+      </button>
+      {active && (
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            setText("");
+            onSearch("");
+            onClear?.();
+          }}
+        >
+          Clear
+        </button>
+      )}
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// All customers (from Shopify)
+// ---------------------------------------------------------------------------
+
+function AllCustomers({ base, overview }: { base: string; overview: WaOverview }) {
+  const id = useId();
+  const [search, setSearch] = useState("");
+  const [composeTo, setComposeTo] = useState<{ phone: string; name: string | null } | null>(null);
+  const sent = useRef(false);
+  const list = usePages<WaCustomersPage>(`${base}/customers`, search);
+  const first = list.pages?.[0];
+  const seen = new Set<string>();
+  const rows = (list.pages ?? []).flatMap((p) => p.customers).filter((r) => !seen.has(r.customerId) && !!seen.add(r.customerId));
+  const shown = list.pages?.at(-1)?.shown ?? { names: true, orders: true };
+  const canSend = overview.can.manage && overview.connection?.status === "connected";
+
+  return (
+    <div className="space-y-4">
+      <div className="card animate-rise space-y-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold">All customers</h2>
+          <p className="mt-1 text-sm text-muted">
+            Your store&apos;s customers in Shopify, newest first, with the whole phone number Shopify has for each one. bizinsights reads them from Shopify each time you open this list
+            and doesn&apos;t keep a copy.
+          </p>
+        </div>
+        <SearchForm id={`${id}-search`} label="Find a customer" placeholder="Name, email or phone number" onSearch={setSearch} active={!!search} />
+      </div>
+
+      {list.error ? (
+        <CustomersError error={list.error} busy={list.loading} onRetry={() => void list.reload()} />
+      ) : !list.pages || !first ? (
+        <Skeleton lines={5} />
+      ) : first.restricted ? (
+        <Alert kind="info">
+          Shopify hasn&apos;t approved bizinsights to show customers&apos; names and phone numbers for this store yet. You can still see them in{" "}
+          <a className="underline" href={`${first.shopAdminUrl}/customers`} target="_blank" rel="noopener noreferrer">
+            your Shopify admin
+          </a>
+          .
+        </Alert>
+      ) : !rows.length ? (
+        <div className="card">
+          <Empty>{search ? "No customer matches. Try their name, their email, or their whole phone number." : "No customers in your store yet."}</Empty>
+        </div>
+      ) : (
+        <div className="card animate-rise space-y-3">
+          <NumberSummary rows={rows} shopAdminUrl={first.shopAdminUrl} />
+          <ul className="divide-y divide-border" aria-label="Customers">
+            {rows.map((r) => (
+              <CustomerRow
+                key={r.customerId}
+                r={r}
+                showOrders={shown.orders}
+                manage={overview.can.manage}
+                canSend={canSend}
+                onMessage={() => setComposeTo({ phone: r.phoneE164!, name: r.name })}
+              />
+            ))}
+          </ul>
+          {list.cursor && (
+            <button type="button" className="btn-secondary w-full" onClick={list.loadMore} disabled={list.loading}>
+              {list.loading ? "Loading…" : "Load more"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {composeTo && (
+        <Composer
+          base={base}
+          overview={overview}
+          initialPhone={composeTo.phone}
+          initialName={composeTo.name}
+          onClose={() => {
+            setComposeTo(null);
+            // What WhatsApp knows of the number changed: read the list again.
+            if (sent.current) void list.reload();
+            sent.current = false;
+          }}
+          onSent={() => {
+            sent.current = true;
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Why the list couldn't load, in the merchant's words: a permission Shopify must give, a store to reconnect, Shopify having a moment. */
+function CustomersError({ error, busy, onRetry }: { error: unknown; busy: boolean; onRetry: () => void }) {
+  const code = error instanceof ApiError ? error.code : null;
+  if (code === "missing_scopes") {
+    return (
+      <Alert kind="info">
+        bizinsights needs access to your customers in Shopify to list them here. Allow it in{" "}
+        <Link className="underline" href="/settings/stores">
+          Settings → Stores
+        </Link>
+        , then come back.
+      </Alert>
+    );
+  }
+  if (code === "store_disconnected" || code === "shopify_unavailable") {
+    return (
+      <Alert>
+        {waError(error, "load your customers")}{" "}
+        <button type="button" className="underline" onClick={onRetry} disabled={busy}>
+          {busy ? "Trying…" : "Try again"}
+        </button>
+      </Alert>
+    );
+  }
+  return <LoadError what="your customers" error={error} onRetry={onRetry} busy={busy} />;
+}
+
+/** "38 of the 50 customers shown have a phone number; 12 don't." and where to ask for one at checkout. */
+function NumberSummary({ rows, shopAdminUrl }: { rows: WaShopifyCustomer[]; shopAdminUrl: string }) {
+  const total = rows.length;
+  const withNumber = rows.filter((r) => r.phone).length;
+  const without = total - withNumber;
+  const noCode = rows.filter((r) => r.phone && !r.phoneE164).length;
+  const text =
+    total === 1
+      ? withNumber
+        ? "This customer has a phone number."
+        : "This customer has no phone number."
+      : `${fmtNum(withNumber)} of the ${fmtNum(total)} customers shown ${withNumber === 1 ? "has" : "have"} a phone number${without ? `; ${fmtNum(without)} ${without === 1 ? "doesn't" : "don't"}` : ""}.`;
+  return (
+    <div className="rounded-lg border border-border bg-bg px-3 py-2 text-sm">
+      <p>
+        <span className="font-medium">{text}</span>
+        {noCode > 0 && ` ${plural(noCode, "number")} ${noCode === 1 ? "has" : "have"} no country code, so WhatsApp can't use ${noCode === 1 ? "it" : "them"} as typed.`}
+      </p>
+      {without > 0 && (
+        <p className="mt-0.5 text-xs text-muted">
+          To get one from every new customer,{" "}
+          <a className="underline" href={`${shopAdminUrl}/settings/checkout`} target="_blank" rel="noopener noreferrer">
+            ask for a phone number at checkout
+          </a>{" "}
+          in Shopify.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Two letters for the avatar from the name; "#" when there is none to show. */
+function initials(name: string | null) {
+  const words = (name ?? "").split(/[\s._-]+/).filter(Boolean);
+  return words.length ? ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? "")).toUpperCase() : "#";
+}
+
+/** A steady colour per customer, so the same person always looks the same. */
+function hue(key: string) {
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+const digitsOf = (s: string) => s.replace(/\D/g, "");
+
+/** What WhatsApp knows of the number, as badges (nothing for a row without an international number). */
+function whatsappBadges(r: WaShopifyCustomer): Array<{ tone: Tone; label: string }> {
+  if (!r.phoneE164) return [];
+  const w = r.whatsapp;
+  if (!w) return [{ tone: "neutral", label: "New to WhatsApp" }];
+  const out: Array<{ tone: Tone; label: string }> = [];
+  if (w.optedOut) out.push({ tone: "danger", label: "Opted out" });
+  if (w.suppressed === "all") out.push({ tone: "danger", label: "On the do-not-message list" });
+  else if (w.suppressed === "marketing") out.push({ tone: "warn", label: "On the do-not-message list for marketing" });
+  if (!w.optedOut && w.suppressed !== "all") {
+    if (w.suppressed !== "marketing") out.push(MARKETING[w.marketing]);
+    if (w.optedIn) out.push({ tone: "good", label: "Agreed to order updates" });
+  }
+  if (w.notOnWhatsapp) out.push({ tone: "neutral", label: "Not on WhatsApp" });
+  return out;
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-muted transition hover:border-accent hover:text-accent"
+      title={label}
+      aria-label={label}
+      onClick={() =>
+        void navigator.clipboard.writeText(text).then(
+          () => {
+            setDone(true);
+            window.setTimeout(() => setDone(false), 1500);
+          },
+          // Clipboard blocked: the number is on screen to select by hand.
+          () => undefined,
+        )
+      }
+    >
+      {done ? <Check size={16} className="text-good" aria-hidden /> : <Copy size={16} aria-hidden />}
+    </button>
+  );
+}
+
+/** The whole number (a link to call it) with Copy, where Shopify had it, and how it was read. */
+function PhoneNumber({ r }: { r: WaShopifyCustomer }) {
+  if (!r.phone) return <p className="text-sm text-muted">No phone number on file</p>;
+  const shownAs = r.phoneE164 ? formatPhone(r.phoneE164) : r.phone;
+  const dial = r.phoneE164 ?? r.phone.replace(/[^\d+]/g, "");
+  const typed = r.phoneE164 && r.phoneRaw && digitsOf(r.phoneRaw) !== digitsOf(r.phoneE164) ? r.phoneRaw : null;
+  const notes = [
+    r.phoneSource ? CUSTOMER_PHONE_SOURCE_LABEL[r.phoneSource] : null,
+    typed ? `As typed: ${typed} (country code added from ${r.phoneCountryAssumed ? "your store's country" : "their address"})` : null,
+    r.smsSubscribed ? "Agreed to marketing texts in Shopify" : null,
+  ].filter(Boolean);
+  return (
+    <div className="space-y-0.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <a className="font-medium tabular-nums hover:text-accent hover:underline" href={`tel:${dial}`} title={`Call ${shownAs}`} data-testid="wa-customer-phone">
+          {shownAs}
+        </a>
+        <CopyButton text={r.phoneE164 ?? r.phone} label={`Copy ${shownAs}`} />
+      </div>
+      {notes.length > 0 && <p className="text-xs text-muted">{notes.join(" · ")}</p>}
+      {!r.phoneE164 && <p className="text-xs text-warn">No country code, so WhatsApp can&apos;t use this number as typed. Add the country code to it in Shopify.</p>}
+    </div>
+  );
+}
+
+function CustomerRow({ r, showOrders, manage, canSend, onMessage }: { r: WaShopifyCustomer; showOrders: boolean; manage: boolean; canSend: boolean; onMessage: () => void }) {
+  const name = r.name ?? `Customer #${r.customerId}`;
+  const w = r.whatsapp;
+  const badges = whatsappBadges(r);
+  // Only to a number WhatsApp can use, that didn't ask not to be messaged (the send checks consent again).
+  const messageable = !!r.phoneE164 && !w?.optedOut && w?.suppressed !== "all" && !w?.notOnWhatsapp;
+  return (
+    <li className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start" data-testid="wa-customer">
+      <div className="flex min-w-0 flex-1 gap-3">
+        <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: `hsl(${hue(r.customerId)} 45% 45%)` }}>
+          {initials(r.name)}
+        </span>
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <p className="flex flex-wrap items-baseline gap-x-2">
+            {r.adminUrl ? (
+              <a className="font-medium hover:text-accent hover:underline" href={r.adminUrl} target="_blank" rel="noopener noreferrer" title="Open in Shopify">
+                {name}
+              </a>
+            ) : (
+              <span className="font-medium">{name}</span>
+            )}
+            {showOrders && r.orders != null && (
+              <span className="text-xs text-muted">
+                {plural(r.orders, "order")} · {fmtMoney(r.spent ?? 0, r.currency ?? undefined)} spent
+              </span>
+            )}
+          </p>
+          <PhoneNumber r={r} />
+          {(badges.length > 0 || w?.lastOutboundAt) && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {badges.map((b) => (
+                <Badge key={b.label} tone={b.tone}>
+                  {b.label}
+                </Badge>
+              ))}
+              {w?.lastOutboundAt && <span className="text-xs text-muted">Last WhatsApp message {fmtAgo(w.lastOutboundAt)}</span>}
+            </div>
+          )}
+        </div>
+      </div>
+      {manage && messageable && (
+        <button type="button" className="btn-secondary shrink-0 self-start" onClick={onMessage} disabled={!canSend} title={canSend ? undefined : "Connect WhatsApp first"}>
+          <Send size={16} aria-hidden /> Message
+        </button>
+      )}
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Consent records (what WhatsApp keeps)
+// ---------------------------------------------------------------------------
+
+function ConsentRecords({ base, overview }: { base: string; overview: WaOverview }) {
+  const id = useId();
+  const [search, setSearch] = useState("");
+  const [consent, setConsent] = useState<"" | "opted_in" | "opted_out" | "unknown">("");
+  const [recording, setRecording] = useState(false);
+  const manage = overview.can.manage;
+  const path = `${base}/contacts${consent ? `?consent=${consent}` : ""}`;
 
   return (
     <div className="space-y-4">
@@ -65,105 +459,83 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
             </button>
           )}
         </div>
-        <form
-          className="flex flex-wrap items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setSearch(phone.trim());
-          }}
-        >
-          <div className="min-w-0 flex-1 sm:max-w-xs">
-            <label className="label" htmlFor="wa-cust-phone">
-              Find a number
-            </label>
-            <input id="wa-cust-phone" className="input" inputMode="tel" placeholder="+61 412 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          </div>
+        <SearchForm id={`${id}-phone`} label="Find a number" placeholder="+61 412 345 678" inputMode="tel" onSearch={setSearch} onClear={() => setConsent("")} active={!!(search || consent)}>
           <div>
-            <label className="label" htmlFor="wa-cust-consent">
+            <label className="label" htmlFor={`${id}-consent`}>
               Marketing consent
             </label>
-            <select id="wa-cust-consent" className="input" value={consent} onChange={(e) => setConsent(e.target.value as typeof consent)}>
+            <select id={`${id}-consent`} className="input" value={consent} onChange={(e) => setConsent(e.target.value as typeof consent)}>
               <option value="">Everyone</option>
               <option value="opted_in">Agreed to marketing</option>
               <option value="unknown">Not asked</option>
               <option value="opted_out">Opted out</option>
             </select>
           </div>
-          <button type="submit" className="btn-secondary">
-            Search
-          </button>
-          {(search || consent) && (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setPhone("");
-                setSearch("");
-                setConsent("");
-              }}
-            >
-              Clear
-            </button>
-          )}
-        </form>
+        </SearchForm>
       </div>
-      <ContactList path={path} filtered={!!(search || consent)} />
-      <DoNotMessage base={base} manage={manage} />
+      <ContactList path={path} search={search} filtered={!!(search || consent)} />
       {recording && <RecordConsentDialog base={base} onClose={() => setRecording(false)} />}
     </div>
   );
 }
 
-function ContactList({ path, filtered }: { path: string; filtered: boolean }) {
-  const { rows, cursor, loading, error, loadMore, reload } = usePagedList<WaContact>(path, "contacts");
+function ContactList({ path, search, filtered }: { path: string; search: string; filtered: boolean }) {
+  const { pages, cursor, loading, error, loadMore, reload } = usePages<{ contacts: WaContact[]; nextCursor: string | null }>(path, search);
   if (error) return <LoadError what="the customers" error={error} onRetry={() => void reload()} busy={loading} />;
-  if (!rows) return <Skeleton lines={4} />;
+  if (!pages) return <Skeleton lines={4} />;
+  const rows = pages.flatMap((p) => p.contacts);
   if (!rows.length)
     return (
       <div className="card">
-        <Empty>{filtered ? "No customer matches. Search with the full number, including its country code." : "No customers yet: a customer appears here once a message is sent to them or their consent is recorded."}</Empty>
+        <Empty>{filtered ? "No customer matches. Search with the full number, including its country code." : "No consent records yet: a customer appears here once a message is sent to them, they write to you, or their consent is recorded."}</Empty>
       </div>
     );
   return (
     <div className="card animate-rise space-y-3">
       <ul className="divide-y divide-border">
-        {rows.map((c) => (
-          <li key={c.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-medium">
-                  {c.phone}
-                  {c.firstName && <span className="ml-2 font-normal text-muted">{c.firstName}</span>}
-                </p>
-                <p className="text-xs text-muted">
-                  {c.country ? countryName(c.country) : "Country unknown"} · {c.ordersCount} order{c.ordersCount === 1 ? "" : "s"} · last message from them {fmtAgo(c.lastInboundAt)} · last sent {fmtAgo(c.lastOutboundAt)}
-                </p>
+        {rows.map((c) => {
+          // The masked form only when the number couldn't be read (the API says so by sending it as is).
+          const whole = c.phone !== c.phoneMasked;
+          const shownAs = whole ? formatPhone(c.phone) : c.phone;
+          return (
+            <li key={c.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium tabular-nums">{shownAs}</span>
+                    {whole && <CopyButton text={c.phone} label={`Copy ${shownAs}`} />}
+                    {c.firstName && <span className="text-muted">{c.firstName}</span>}
+                  </div>
+                  <p className="text-xs text-muted">
+                    {c.country ? countryName(c.country) : "Country unknown"} · {c.ordersCount} order{c.ordersCount === 1 ? "" : "s"} · last message from them {fmtAgo(c.lastInboundAt)} · last sent {fmtAgo(c.lastOutboundAt)}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {c.optedOut ? <Badge tone="danger">Opted out of everything</Badge> : <Badge tone={MARKETING[c.marketing].tone}>{MARKETING[c.marketing].label}</Badge>}
+                  {!c.optedOut && c.optedIn && <Badge tone="good">Agreed to order updates</Badge>}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {c.optedOut ? <Badge tone="danger">Opted out of everything</Badge> : <Badge tone={MARKETING[c.marketing].tone}>{MARKETING[c.marketing].label}</Badge>}
-                {!c.optedOut && c.optedIn && <Badge tone="good">Agreed to order updates</Badge>}
-              </div>
-            </div>
-            {c.history.length > 0 && (
-              <details className="text-xs">
-                <summary className="cursor-pointer text-muted hover:text-text">Consent history</summary>
-                <ol className="mt-2 space-y-1 border-l border-border pl-3">
-                  {c.history.map((h, i) => (
-                    <li key={i}>
-                      <span className="font-medium">
-                        {SCOPE_LABEL[h.scope] ?? h.scope}: {h.status === "opted_in" ? "agreed" : "opted out"}
-                      </span>{" "}
-                      <span className="text-muted">
-                        · {h.sourceLabel} · {fmtAgo(h.at)}
-                      </span>
-                      {h.note && <span className="block text-muted">“{h.note}”</span>}
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            )}
-          </li>
-        ))}
+              {c.history.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted hover:text-text">Consent history</summary>
+                  <ol className="mt-2 space-y-1 border-l border-border pl-3">
+                    {c.history.map((h, i) => (
+                      <li key={i}>
+                        <span className="font-medium">
+                          {SCOPE_LABEL[h.scope] ?? h.scope}: {h.status === "opted_in" ? "agreed" : "opted out"}
+                        </span>{" "}
+                        <span className="text-muted">
+                          · {h.sourceLabel} · {fmtAgo(h.at)}
+                        </span>
+                        {h.note && <span className="block text-muted">“{h.note}”</span>}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {cursor && (
         <button type="button" className="btn-secondary w-full" onClick={loadMore} disabled={loading}>

@@ -1,7 +1,11 @@
 /**
  * Customers' WhatsApp numbers at a store and what they agreed to (docs/whatsapp.md, "Consent").
- * A number is stored encrypted, found by its keyed hash and shown masked. Every change of consent
- * is recorded with where it came from; STOP from a customer stops everything at once.
+ * A number is stored encrypted, found by its keyed hash and kept with a masked form too; the whole
+ * number is shown only to members allowed to see contact details (apps/api/src/routes/whatsapp.ts).
+ * Only numbers WhatsApp messages, hears from or records consent for are kept here: the store's
+ * full customer list is read from Shopify each time (shopifyCustomers.ts) and never stored.
+ * Every change of consent is recorded with where it came from; STOP from a customer stops
+ * everything at once.
  */
 import { systemDb, type Prisma, type WappContact } from "@app/db";
 import { maskPhone, normalizePhone, type NormalizedPhone, type WaConsentFacts, type WaConsentSource, type WaMarketingState, type WaSuppressionScope } from "@app/shared";
@@ -60,6 +64,16 @@ export async function contactByPhone(storeId: string, phone: NormalizedPhone): P
 
 export const contactPhone = (c: Pick<WappContact, "storeId" | "phoneEnc">) => waDecrypt(c.storeId, "phone", c.phoneEnc);
 export const contactFirstName = (c: Pick<WappContact, "storeId" | "firstNameEnc">) => (c.firstNameEnc ? waDecrypt(c.storeId, "name", c.firstNameEnc) : null);
+
+/** The contact's whole number, or its masked form when it can't be decrypted (a key retired before it was sealed again). */
+export function contactPhoneOrMasked(c: Pick<WappContact, "storeId" | "phoneEnc" | "phoneMasked">): string {
+  try {
+    return contactPhone(c);
+  } catch (err) {
+    logger.warn({ err, storeId: c.storeId }, "whatsapp contact number could not be decrypted");
+    return c.phoneMasked;
+  }
+}
 
 /** The store's do-not-message list for a number: which scopes it is on. */
 export async function suppressionsOf(storeId: string, phoneHash: string): Promise<Set<WaSuppressionScope>> {
