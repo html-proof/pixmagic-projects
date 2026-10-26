@@ -1268,6 +1268,15 @@ describe("the WhatsApp stack (Evolution API)", () => {
     expect(bad).toEqual([]);
   });
 
+  it("leaves nothing behind when its first creation rolls back, so the next deploy can create it again", () => {
+    // A plain Retain survives a failed first create, and its fixed name then fails every later create
+    // (the log group did, on the second deploy). RetainExceptOnCreate keeps it only once the stack exists.
+    const resources = Object.entries(w.toJSON().Resources as Record<string, { Type: string; DeletionPolicy?: string }>);
+    expect(resources.filter(([, r]) => r.DeletionPolicy === "Retain").map(([id]) => id)).toEqual([]);
+    const [logs] = Object.values(w.findResources("AWS::Logs::LogGroup", { Properties: { LogGroupName: "/ecs/insights-production-evolution-a" } }));
+    expect(logs!.DeletionPolicy).toBe("RetainExceptOnCreate");
+  });
+
   it("raises an alarm when no task runs or memory runs short", () => {
     for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) w.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: name });
   });
