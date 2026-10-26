@@ -121,10 +121,11 @@ export class WhatsappStack extends Stack {
       ipProtocol: "tcp",
       fromPort: 5432,
       toPort: 5432,
-      description: "WhatsApp's Evolution API service (its own database)",
+      // EC2 accepts only a-zA-Z0-9 and . _-:/()#,@[]+=&;{}!$* here (no apostrophe).
+      description: "WhatsApp Evolution API service (its own database)",
     });
 
-    const namespace = new servicediscovery.PrivateDnsNamespace(this, "Namespace", { name: evolutionNamespace(cfg), vpc: data.vpc, description: "Insights WhatsApp: Evolution API's private address" });
+    const namespace = new servicediscovery.PrivateDnsNamespace(this, "Namespace", { name: evolutionNamespace(cfg), vpc: data.vpc, description: "Insights WhatsApp: the private address of Evolution API" });
     const cluster = new ecs.Cluster(this, "Cluster", { clusterName: `${prefix}-whatsapp`, vpc: data.vpc, containerInsightsV2: ecs.ContainerInsights.DISABLED });
 
     const logGroup = new logs.LogGroup(this, "EvolutionLogs", { logGroupName: `/ecs/${prefix}-evolution`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN });
