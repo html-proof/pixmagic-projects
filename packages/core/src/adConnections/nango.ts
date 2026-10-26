@@ -96,6 +96,8 @@ export interface NangoSessionState {
   storeId: string;
   provider: AdProvider;
   integrationKey: string;
+  /** When it was started (ms), for how long a sign-in closed without a connection was open. Absent on older sessions. */
+  startedAt?: number;
 }
 
 const sessionKey = (nonce: string) => `oauth:ads-nango:${nonce}`;
@@ -128,7 +130,7 @@ export async function startNangoSession(
     tags: { end_user_id: input.userId, organization_id: input.workspaceId, bi_store: input.storeId, bi_provider: input.provider, bi_session: nonce },
     authorizationParams: nangoAuthorizationParams(input.provider),
   });
-  const state: NangoSessionState = { ...input, integrationKey };
+  const state: NangoSessionState = { ...input, integrationKey, startedAt: Date.now() };
   await coord.put(sessionKey(nonce), JSON.stringify(state), NANGO_SESSION_TTL_S);
   return session;
 }
@@ -172,6 +174,36 @@ export async function claimNangoConsent(coord: Coord, nonce: string): Promise<bo
 /** Whether a consent for this session came back through bizinsights' callback (claimNangoConsent). */
 export async function nangoConsentReturned(coord: Coord, nonce: string): Promise<boolean> {
   return (await coord.peek(consentKey(nonce))) !== null;
+}
+
+const refusalKey = (nonce: string) => `oauth:ads-nango-refusal:${nonce}`;
+
+/** The platform's error code as it names it (`access_denied`, `user_denied`), or "other": nothing else of its answer is kept. */
+const platformCode = (v: string | null) => (v === null ? null : /^[A-Za-z0-9_]{1,40}$/.test(v) ? v : "other");
+
+/**
+ * The platform answered its consent screen without an authorization code (the person pressed Cancel, or
+ * an error at the platform): its `error` and `error_reason`, noted for the log line of a session closed
+ * without a connection (nangoSignInAnswer). The answer doesn't say which session it is for, so it is
+ * noted for each one named.
+ */
+export async function noteNangoRefusal(coord: Coord, nonces: string[], query: URLSearchParams) {
+  const answer = JSON.stringify({ error: platformCode(query.get("error")) ?? "other", reason: platformCode(query.get("error_reason")) });
+  await Promise.all(nonces.map((n) => coord.put(refusalKey(n), answer, NANGO_SESSION_TTL_S)));
+}
+
+/**
+ * What came back from the platform for a session closed without a connection: its consent (`consent`),
+ * a refusal (`refused`, with the platform's error code), or nothing at all (`none`: the person closed the
+ * window first, or the platform showed a page of its own instead of its consent screen, as Facebook's
+ * "Feature Unavailable" for a profile with no role on the app).
+ */
+export async function nangoSignInAnswer(coord: Coord, nonce: string): Promise<{ answered: "consent" | "refused" | "none"; platformError?: string; platformReason?: string }> {
+  if (await nangoConsentReturned(coord, nonce)) return { answered: "consent" };
+  const raw = await coord.peek(refusalKey(nonce));
+  if (!raw) return { answered: "none" };
+  const { error, reason } = JSON.parse(raw) as { error: string; reason: string | null };
+  return { answered: "refused", platformError: error, ...(reason ? { platformReason: reason } : {}) };
 }
 
 /** The connection the browser named isn't one this session made (another session's, or someone else's). */

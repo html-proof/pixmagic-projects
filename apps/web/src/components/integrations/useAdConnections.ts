@@ -128,7 +128,9 @@ export function useAdConnections(base: string | null) {
       outcome = { kind: "error", type: "load_timeout", message: "" };
     }
     if (outcome.kind !== "connected") {
-      await api(`${base}/ads/${p}/nango/cancel`, { method: "POST", body: { nonce: session.nonce } }).catch(() => undefined);
+      // How the window ended goes in the server's log line for it (with what the platform sent back).
+      const ended = outcome.kind === "closed" ? "closed" : outcome.type;
+      await api(`${base}/ads/${p}/nango/cancel`, { method: "POST", body: { nonce: session.nonce, ended } }).catch(() => undefined);
       if (outcome.kind === "closed") return stop();
       return stop({
         kind: "error",

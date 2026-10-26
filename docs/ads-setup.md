@@ -314,7 +314,12 @@ What to do, by what it says:
 
 ### Facebook says "Feature Unavailable"
 
-Facebook's own page, shown instead of its login; nothing reaches our logs. Two causes, both fixed in Meta:
+Facebook's own page, shown instead of its login; Facebook sends nothing back to bizinsights. The log line it
+leaves is the one for the window being closed: `ads: sign-in closed without a connection` with
+`provider: "meta"` and `answered: "none"` (Logs Insights on `/aws/lambda/insights-production-api`; `openSeconds`
+says how long the window was open, `ended` how it closed). `answered: "refused"` is the person pressing Cancel on
+Facebook's screen (`platformError: "access_denied"`), and `answered: "consent"` means Facebook's screen was
+finished but the window was closed before Nango said so. Two causes, both fixed in Meta:
 
 1. **The Facebook account has no role on the app** (usual for anyone but the admin, while `ads_read` has only
    Standard Access). Add the person under App roles → Roles → **Testers**; they accept at

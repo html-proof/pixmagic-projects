@@ -31,6 +31,8 @@ import {
   NangoLoginWaitingError,
   NangoPermissionMissingError,
   nangoProviders,
+  nangoSignInAnswer,
+  noteNangoRefusal,
   parseNangoWebhook,
   startNangoSession,
   takeNangoSessionState,
@@ -274,15 +276,27 @@ export function adsNangoRoutes(app: App, deps: Deps) {
     }
   });
 
-  /** The person closed the Connect UI without connecting: the session is used up (a connection it made anyway is let go by the leftover sweep). */
+  /**
+   * The person closed the Connect UI without connecting: the session is used up (a connection it made
+   * anyway is let go by the leftover sweep), and logged with its platform, how long it was open, how the
+   * window ended (`ended`, as the Connect UI said) and what came back from the platform (docs/ads-setup.md
+   * reads it: nothing at all is how Facebook's "Feature Unavailable" page shows).
+   */
   app.post("/workspaces/:ws/stores/:storeId/ads/:provider/nango/cancel", async (c) => {
     const { ws, storeId } = c.req.param();
     providerSchema.parse(c.req.param("provider"));
     const access = await requireWorkspace(c, deps, ws, "integrations.manage");
-    const { nonce } = z.object({ nonce: nonceSchema }).parse(await body(c));
+    const input = await body(c);
+    const { nonce } = z.object({ nonce: nonceSchema }).parse(input);
+    const ended = z.object({ ended: z.string().regex(/^[a-z_]{1,40}$/) }).safeParse(input).data?.ended ?? "unknown";
     // Only this person's own session for this store is used up; anyone else's is left alone.
     const state = await peekNangoSessionState(deps.coord, nonce);
-    if (state && state.userId === access.user?.id && state.workspaceId === ws && state.storeId === storeId) await takeNangoSessionState(deps.coord, nonce);
+    if (state && state.userId === access.user?.id && state.workspaceId === ws && state.storeId === storeId) {
+      await takeNangoSessionState(deps.coord, nonce);
+      const answer = await nangoSignInAnswer(deps.coord, nonce).catch(() => ({ answered: "unknown" }));
+      const openSeconds = state.startedAt ? Math.round((Date.now() - state.startedAt) / 1000) : undefined;
+      logger.info({ provider: state.provider, storeId, ended, openSeconds, ...answer }, "ads: sign-in closed without a connection");
+    }
     return c.json({ ok: true });
   });
 
@@ -299,7 +313,8 @@ export function adsNangoRoutes(app: App, deps: Deps) {
    * its scopes, Meta none): the newest of this person's open sessions in this browser that hasn't had one,
    * noted for that session's finish (the receipt cookie and the coordinator). Each session forwards one
    * consent; a consent for a platform this person has no open session for is refused. A callback without
-   * a code (declined, an error) can't make a connection: it goes on to Nango and uses nothing up.
+   * a code (declined, an error) can't make a connection: it goes on to Nango and uses nothing up, its
+   * error code noted for the log line of this person's open sessions when they are closed.
    */
   app.get("/ads/nango/oauth-callback", async (c) => {
     const cfg = nangoConfig();
@@ -330,6 +345,8 @@ export function adsNangoRoutes(app: App, deps: Deps) {
       }
       if (!claimed) return refuse("every matching Nango session of this person already had its consent");
       setCookie(c, CONSENT_COOKIE, [claimed, ...sessionsOf(getCookie(c, CONSENT_COOKIE))].slice(0, MAX_SESSIONS).join("."), cookieOpts());
+    } else {
+      await noteNangoRefusal(deps.coord, mine.map((s) => s.nonce), url.searchParams).catch(() => undefined);
     }
     return c.redirect(`${cfg.apiUrl.replace(/\/+$/, "")}/oauth/callback${url.search}`, 308);
   });

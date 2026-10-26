@@ -82,6 +82,9 @@ Settings → Integrations / Advertising card — "Continue with Google Ads" (or 
       (ad_logins, adConnections/logins.ts), {waiting: true, reason}; its accounts are connected once Meta lists them
     → anything else (permission unticked, the platform refusing, a Google login with nothing): the grant is
       revoked and the Nango connection deleted; the card words why
+  Connect UI closed (or its error) instead: POST .../ads/:provider/nango/cancel {nonce, ended}
+    → state used up; log "ads: sign-in closed without a connection" {provider, ended, openSeconds,
+      answered: consent | refused (platformError, platformReason) | none}
 ```
 
 - **A connection** is an `ad_connections` row: `id`, `workspace_id` / `store_id` (ownership; RLS),

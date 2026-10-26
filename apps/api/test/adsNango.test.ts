@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { checkAdLogins, encryptAdTokens, forgetNangoIntegrations, forgetNangoToken, metaDataDeletion, metaDeauthorized, sweepNangoOrphans, syncAdConnection, type FetchLike } from "@app/core";
+import { checkAdLogins, encryptAdTokens, forgetNangoIntegrations, forgetNangoToken, logger, metaDataDeletion, metaDeauthorized, sweepNangoOrphans, syncAdConnection, type FetchLike } from "@app/core";
 import { LEGACY_GRANTS } from "@app/shared";
 import { clean, cookiesFrom, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -773,5 +773,55 @@ describe("bizinsights' address for Nango's OAuth callback", () => {
       expect(done.json()).toEqual({ connected: 1, provider });
     }
     expect(await systemDb.adConnection.count()).toBe(2);
+  });
+});
+
+describe("a sign-in closed without a connection", () => {
+  const CLOSED = "ads: sign-in closed without a connection";
+  const close = (provider: string, payload: Record<string, unknown>, h = headers, w2 = ws, s = storeId) => ctx.app.inject({ method: "POST", url: `${adsUrl(w2, s)}/${provider}/nango/cancel`, headers: h, payload });
+
+  /** The lines closed sign-ins leave in the log while `run` runs. */
+  async function closedLines(run: () => Promise<void>) {
+    const lines: unknown[] = [];
+    vi.spyOn(logger, "info").mockImplementation((obj: unknown, msg?: string) => void (msg === CLOSED && lines.push(obj)));
+    await run();
+    return lines;
+  }
+
+  it("is logged with its platform, how long it was open and how the window ended: nothing came back when the platform never answered (Facebook's Feature Unavailable)", async () => {
+    const lines = await closedLines(async () => {
+      const { nonce } = await start("meta");
+      expect((await close("meta", { nonce, ended: "closed" })).statusCode).toBe(200);
+    });
+    expect(lines).toEqual([{ provider: "meta", storeId, ended: "closed", openSeconds: expect.any(Number), answered: "none" }]);
+  });
+
+  it("names the platform's refusal (Cancel on its screen), and says when its consent came back before the window closed", async () => {
+    const lines = await closedLines(async () => {
+      const declined = await start("meta");
+      expect((await callback("error=access_denied&error_reason=user_denied&error_description=Permissions+error&state=nango-state", declined.browser)).statusCode).toBe(308);
+      await close("meta", { nonce: declined.nonce, ended: "window_closed" });
+      const granted = await start("adsense");
+      await consent("adsense", granted.browser);
+      await close("adsense", { nonce: granted.nonce, ended: "closed" });
+    });
+    expect(lines).toEqual([
+      { provider: "meta", storeId, ended: "window_closed", openSeconds: expect.any(Number), answered: "refused", platformError: "access_denied", platformReason: "user_denied" },
+      { provider: "adsense", storeId, ended: "closed", openSeconds: expect.any(Number), answered: "consent" },
+    ]);
+    // Only the codes are kept, never the platform's own text.
+    expect(JSON.stringify(lines)).not.toContain("Permissions");
+  });
+
+  it("an odd or missing 'ended' is logged as unknown; someone else's session is neither used up nor logged", async () => {
+    const mine = await start("meta");
+    const other = await signIn(ctx, "nango-closer", "closer@x.com");
+    const otherWs = await createWorkspace(ctx, other.headers);
+    const otherStore = (await createStore(otherWs, "closer-shop.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+    const lines = await closedLines(async () => {
+      expect((await close("meta", { nonce: mine.nonce }, other.headers, otherWs, otherStore)).statusCode).toBe(200);
+      await close("meta", { nonce: mine.nonce, ended: "<script>" });
+    });
+    expect(lines).toEqual([{ provider: "meta", storeId, ended: "unknown", openSeconds: expect.any(Number), answered: "none" }]);
   });
 });
