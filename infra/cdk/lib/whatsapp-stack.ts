@@ -67,12 +67,20 @@ const START = [
   'export DATABASE_CONNECTION_URI="postgresql://${EVO_DB_USER}:${EVO_DB_PASSWORD}@${EVO_DB_HOST}:${EVO_DB_PORT}/evolution?schema=public&connection_limit=5&${TLS}"',
   "unset EVO_DB_PASSWORD",
   ". ./Docker/scripts/deploy_database.sh",
-  // Evolution's own logger (LOG_COLOR=false) starts every line with "[Evolution API]"; its stray
-  // console.log calls print every message received, numbers and text, whatever LOG_LEVEL says
-  // (whatsapp.baileys.service.ts in 2.3.7). Only the logger's lines reach CloudWatch; errors
-  // (console.error) are left alone.
+  // Only Evolution's own logger reaches CloudWatch from the console, whichever method is called: it
+  // prints through console.log, every line starting with "[Evolution API]" (LOG_COLOR=false), its
+  // ERROR and WARN lines included. Everything else is dropped. Evolution's stray console.log calls
+  // print every message received, numbers and text, whatever LOG_LEVEL says (whatsapp.baileys.service.ts
+  // in 2.3.7), and libsignal (Baileys' fork, commit 1c30d7d in 2.3.7's lockfile) prints whole Signal
+  // sessions, private keys included: console.info on "Closing session", "Opening session" and
+  // "Removing old closed session", console.warn on "Session already closed". Baileys' own logger
+  // (pino's JSON lines) writes to stdout itself, not through the console, and is left as it is.
   "cat > /tmp/quiet-console.cjs <<'JS'",
-  'const log = console.log; console.log = (...a) => { if (a[0] === "[Evolution API]") log(...a); };',
+  'const evolution = (a) => typeof a[0] === "string" && a[0].startsWith("[Evolution API]");',
+  'for (const m of ["log", "info", "debug", "warn", "error", "trace", "dir", "dirxml", "table", "group", "groupCollapsed", "assert", "count", "timeLog", "timeEnd"]) {',
+  "  const print = console[m];",
+  "  console[m] = (...a) => { if (evolution(a)) print(...a); };",
+  "}",
   "JS",
   "exec node --require /tmp/quiet-console.cjs dist/main",
 ].join("\n");

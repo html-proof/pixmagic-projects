@@ -402,9 +402,14 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
     <div className="space-y-4">
       <div className="card space-y-3">
         <h2 className="text-base font-semibold">4a. Verify your own number</h2>
-        <p className="text-sm text-muted">Tests only ever go to a number you prove is yours: bizinsights sends it a 6-digit code over WhatsApp.</p>
+        <p className="text-sm text-muted">
+          Tests only ever go to a number you prove is yours: bizinsights sends it a 6-digit code over WhatsApp. The number your WhatsApp is linked with needs no code.
+        </p>
         {s.testVerifiedAt ? (
-          <Alert kind="success">Verified: {s.testPhone}. Tests go to this number.</Alert>
+          <Alert kind="success">
+            Verified: {s.testPhone}. Tests go to this number.
+            {s.testIsLinkedNumber && " It's the number your WhatsApp is linked with, so WhatsApp puts them in your chat with yourself (“Message yourself”), without a notification."}
+          </Alert>
         ) : !manage ? (
           <p className="text-sm text-muted">Only the store&apos;s owners and admins can verify a test number.</p>
         ) : (
@@ -420,7 +425,11 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
                 disabled={busy === "code" || phone.trim().length < 8}
                 onClick={() =>
                   void run("code", "send the code", async () => {
-                    const r = await api<{ expiresAt: string; phone: string }>(`${base}/test-number`, { method: "POST", body: { phone } });
+                    const r = await api<{ expiresAt: string | null; phone: string; linkedNumber?: boolean }>(`${base}/test-number`, { method: "POST", body: { phone } });
+                    if (r.linkedNumber) {
+                      reload();
+                      return `${r.phone} is the number your WhatsApp is linked with: verified, no code needed.`;
+                    }
                     setSentCode(r.expiresAt);
                     return `Code sent to ${r.phone} on WhatsApp.`;
                   })
