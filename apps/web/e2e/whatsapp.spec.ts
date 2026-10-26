@@ -89,3 +89,29 @@ test("an owner links a phone, configures, verifies their number and sees WhatsAp
   await page.getByRole("link", { name: "Overview", exact: true }).click();
   await expect(page.getByText("Connected").first()).toBeVisible();
 });
+
+test("the linked phone's own number is verified without a code, and the page says where its tests land", async ({ page }) => {
+  await ownerWithStore(page);
+  const linked = `614${String(Date.now()).slice(-8)}`;
+  await page.goto("/dashboard/whatsapp-automation");
+  await page.getByRole("radio", { name: /Link a WhatsApp phone with a QR code/ }).check();
+  await page.getByRole("checkbox", { name: /the way WhatsApp Web does/ }).check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("wa-start-pairing").click();
+  await expect(page.getByTestId("wa-qr")).toBeVisible();
+  await control("scan", { phone: linked });
+  await expect(page.getByRole("heading", { name: "3. Configure" })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("radio", { name: /Customers told at checkout/ }).check();
+  await page.getByRole("button", { name: "Save and continue" }).click();
+
+  await page.getByLabel("Your WhatsApp number").fill(`+${linked}`);
+  await page.getByRole("button", { name: "Send code" }).click();
+  await expect(page.getByText(/^Verified: \+61/)).toContainText("Message yourself");
+  await expect(page.getByLabel("The code from WhatsApp")).toHaveCount(0);
+  expect(await sendsTo(linked)).toHaveLength(0);
+
+  await page.getByRole("button", { name: "Send test to my number" }).click();
+  await expect.poll(async () => (await sendsTo(linked)).length, { timeout: 30_000 }).toBe(1);
+  await control("report", { id: (await sendsTo(linked))[0]!.id, status: "SERVER_ACK" });
+  await expect(page.getByRole("heading", { name: "WhatsApp Automation is set up" })).toBeVisible({ timeout: 20_000 });
+});

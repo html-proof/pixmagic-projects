@@ -328,6 +328,36 @@ describe("the test number and the test message (Step 4)", () => {
     expect(detail.events.map((e: { status: string }) => e.status)).toEqual(["accepted", "sent", "delivered"]);
   });
 
+  it("verifies the linked phone's own number without a code (a code to itself never arrives)", async () => {
+    const o = await owner();
+    const name = await connect(o, "61400000099");
+    await configure(o);
+    const sendsBefore = evo.sends.length;
+    const r = ok(await o.call("POST", "/test-number", { phone: "+61 400 000 099" }));
+    expect(r).toMatchObject({ linkedNumber: true, expiresAt: null });
+    expect(r.phone).toMatch(/099$/);
+    expect(await drain()).toEqual([]);
+    expect(evo.sends.length).toBe(sendsBefore);
+    expect(ok(await o.call("GET", "/messages?source=verification")).messages).toEqual([]);
+    const ov = ok(await o.call("GET"));
+    expect(ov.settings).toMatchObject({ testIsLinkedNumber: true, testCodeExpiresAt: null });
+    expect(ov.settings.testVerifiedAt).toBeTruthy();
+    expect(ov.setup.current).toBe("test");
+
+    // The test still has to be reported sent by WhatsApp.
+    const { messageId } = ok(await o.call("POST", "/test-message", {}), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)).toMatchObject({ instance: name, path: "sendText", body: { number: "61400000099" } });
+    await deliver(evo.webhook(name, "messages.update", { keyId: evo.sends.at(-1)!.id, remoteJid: "61400000099@s.whatsapp.net", fromMe: true, status: "SERVER_ACK" }));
+    await drain();
+    expect(ok(await o.call("GET", `/messages/${messageId}`)).message.status).toBe("sent");
+    expect(ok(await o.call("GET")).setup.current).toBeNull();
+
+    // Another number still needs its code, and is then no longer the linked one.
+    expect(ok(await o.call("POST", "/test-number", { phone: TEST_PHONE }))).toMatchObject({ linkedNumber: false });
+    expect(ok(await o.call("GET")).settings).toMatchObject({ testIsLinkedNumber: false, testVerifiedAt: null });
+  });
+
   it("allows three codes an hour and five tries at one", async () => {
     const o = await owner();
     await connect(o);

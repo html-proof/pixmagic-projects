@@ -141,6 +141,12 @@ One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; af
      that phone's own chat, so there the check is that the number is right and on WhatsApp); then a
      test message, whose real status the page follows. The step is done only when WhatsApp reports
      it **sent** (not when Evolution accepted it). Then a completion screen.
+     **The linked phone's own number is verified as it is entered, with no code**: a message from a
+     number to itself arrives as no new message (WhatsApp files it in that phone's "Message yourself"
+     chat, without a notification; in production on 2026-10-26 the code was reported sent and never
+     delivered, so the merchant never saw it). The number is the store's by WhatsApp's own word, and
+     a test to it reaches no one else. The page then says its tests are in that chat
+     (`settings.testIsLinkedNumber`). Cloud API numbers still get a code.
 - **Overview**: connection health as last reported (Check again), the automation state, sent today
   against the limit, what waits and why, 7- and 30-day counts from each message's own record, the
   latest messages.
