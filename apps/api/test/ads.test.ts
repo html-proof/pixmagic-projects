@@ -247,6 +247,19 @@ describe("connecting ad accounts", () => {
     expect(nango.deleted).toEqual([connectionId]);
   });
 
+  it("an AdSense answer with no account, or only closed ones, is told apart, and neither Nango connection is kept", async () => {
+    usePlatform(async () => json({}));
+    const none = await connectFlow("adsense");
+    expect(none.finish.statusCode).toBe(409);
+    expect(none.finish.json().error).toBe("no_accounts");
+    usePlatform(async () => json({ accounts: [{ name: "accounts/pub-9", displayName: "Old site", state: "CLOSED" }] }));
+    const closed = await connectFlow("adsense");
+    expect(closed.finish.statusCode).toBe(409);
+    expect(closed.finish.json().error).toBe("account_not_ready");
+    expect(await systemDb.adConnection.count()).toBe(0);
+    expect(nango.deleted).toEqual([none.connectionId, closed.connectionId]);
+  });
+
   it("choosing accounts: only the ticked ones are connected, a choice is this person's and works once", async () => {
     usePlatform(metaPlatform);
     const { finish } = await connectFlow("meta");

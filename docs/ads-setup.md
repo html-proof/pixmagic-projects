@@ -352,7 +352,10 @@ and limited to 30 reports per 10 minutes.
 Same Cloud project and OAuth client as Google Ads. In that project: enable the **AdSense Management API**, add the
 AdSense callback to the client, and add `https://www.googleapis.com/auth/adsense.readonly` under Data Access. Google
 lists it as **non-sensitive**, so AdSense needs no scope verification and never shows the unverified-app screen. There
-is no access level to request. A Google login with no AdSense account gets "That Google login has no AdSense account".
+is no access level to request. A Google login with no AdSense account gets "That Google login has no AdSense account"
+(`no_accounts`), whether AdSense answers its 403 or an empty list; one whose AdSense accounts are all closed gets
+`account_not_ready` ("…AdSense account is closed"). Each case logs "ads: nothing to connect for this login"; the
+answers with a list add `diagnosis: {listed, closed}`.
 
 **The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform&from=&to=`): estimated
 earnings, page views, ads shown and clicks by site, country or device type, limited to the store's chosen sites.

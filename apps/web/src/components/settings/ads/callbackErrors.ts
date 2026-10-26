@@ -14,7 +14,8 @@ const ERRORS: Record<string, string> = {
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
   no_accounts_meta:
     "That Facebook login can't reach any ad account, so nothing was connected. If your ads run in a business portfolio, assign this login to the ad account in Meta Business settings → Ad accounts (admins have to assign themselves too). If your ads are on another Facebook login, log out of Facebook in this browser first. No ad account yet? Create one in Meta Ads Manager. Then press Continue with Meta Ads again.",
-  no_accounts_adsense: "That Google login has no AdSense account. Choose the Google account that owns your AdSense, or ask its owner to add this login as a user.",
+  no_accounts_adsense:
+    "That Google login has no AdSense account, so nothing was connected. Choose the Google account that owns your AdSense, or ask its owner to add this login as a user. AdSense is only for sites that earn from Google ads shown on them; your ad spend comes in through Google Ads, not AdSense.",
   no_accounts_google:
     "That Google login has no Google Ads account, so nothing was connected. Choose the Google account you use at ads.google.com, or ask the Google Ads account's owner to add this login as a user. No Google Ads account yet? Create one at ads.google.com first.",
   none_shared: "No account was shared with bizinsights on the platform's screen, so nothing was connected. Press the button again and choose the accounts to share.",
@@ -26,7 +27,8 @@ const ERRORS: Record<string, string> = {
   account_not_ready: "The platform won't report on the account that login reaches yet: its set-up isn't finished, or it's closed. Finish it there, or choose another login.",
   account_not_ready_google:
     "Google Ads won't report on the account that login reaches yet: its setup at ads.google.com isn't finished, or it's cancelled or suspended. Finish setting it up there, or choose another Google account.",
-  account_not_ready_adsense: "AdSense won't report on that account yet: its sign-up isn't finished or Google is still reviewing it. Finish it at adsense.google.com, then connect again.",
+  account_not_ready_adsense:
+    "That Google login's AdSense account is closed, so nothing was connected. Choose the Google account that owns an open AdSense account; adsense.google.com shows an account's state.",
   no_refresh_token: "Google didn't grant lasting access. Please try again and allow access on Google's screen.",
   permission_missing: "The permission to read reports wasn't granted, so nothing could be connected. Press the button again and leave it ticked.",
   permission_missing_meta: "Meta's permission to read your ad reports (ads_read) wasn't granted, so nothing was connected. Press Continue with Meta Ads again and allow it.",

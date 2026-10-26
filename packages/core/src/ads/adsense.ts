@@ -68,22 +68,31 @@ function accountState(a: AdsenseAccount): Pick<AdAccount, "status" | "statusDeta
 /**
  * The AdSense accounts the person can read, with their state (an account whose sign-up isn't
  * finished, or that needs attention, says so); closed ones are left out. The account doesn't say
- * its currency: the first report does, and the sync stores it then.
+ * its currency: the first report does, and the sync stores it then. Never []: a login with nothing
+ * left to connect is an AdsNoAccountsError, "not_ready" when all it has is closed accounts.
  */
 export async function adsenseAccounts(c: AdsenseConfig, accessToken: string): Promise<AdAccount[]> {
   const out: AdAccount[] = [];
+  let closed = 0;
   let pageToken = "";
   for (let i = 0; i < 20; i++) {
     const q = new URLSearchParams({ pageSize: "100" });
     if (pageToken) q.set("pageToken", pageToken);
     const page = await adsenseGet<{ accounts?: AdsenseAccount[]; nextPageToken?: string }>(c, accessToken, "accounts", q);
     for (const a of page.accounts ?? []) {
-      if (!a.name || a.state === "CLOSED") continue;
+      if (!a.name) continue;
+      if (a.state === "CLOSED") {
+        closed++;
+        continue;
+      }
       out.push({ accountId: adsenseAccountId(a.name), name: a.displayName ?? null, currency: null, timezone: a.timeZone?.id ?? null, ...accountState(a) });
     }
     pageToken = page.nextPageToken ?? "";
     if (!pageToken) break;
   }
+  // An answer with no open account is "nothing to connect" as much as the 403 is; the finish logs these counts with it.
+  if (!out.length && closed) throw new AdsNoAccountsError(`Every AdSense account this login reaches is closed (${closed})`, "not_ready", { listed: closed, closed });
+  if (!out.length) throw new AdsNoAccountsError("AdSense listed no account for this login", "no_ads_account", { listed: 0, closed: 0 });
   return out;
 }
 

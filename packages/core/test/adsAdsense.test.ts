@@ -99,6 +99,16 @@ describe("AdSense accounts and their state", () => {
     expect(await adsenseAccountHealth(adsense(f.fetchImpl), "AT", "accounts/pub-4")).toMatchObject({ status: "closed" });
     await expect(adsenseAccountHealth(adsense(f.fetchImpl), "AT", "../pub-4")).rejects.toThrow("Invalid AdSense account");
   });
+
+  it("a login with nothing left to connect is never an empty list: none at all, or only closed accounts, says which", async () => {
+    const empty = await adsenseAccounts(adsense(fake(() => json({})).fetchImpl), "AT").catch((e: unknown) => e);
+    expect(empty).toBeInstanceOf(AdsNoAccountsError);
+    expect(empty).toMatchObject({ reason: "no_ads_account", diagnosis: { listed: 0, closed: 0 } });
+    const closed = fake(() => json({ accounts: [{ name: "accounts/pub-4", displayName: "Old site", state: "CLOSED" }, { name: "accounts/pub-5", state: "CLOSED" }] }));
+    const allClosed = await adsenseAccounts(adsense(closed.fetchImpl), "AT").catch((e: unknown) => e);
+    expect(allClosed).toBeInstanceOf(AdsNoAccountsError);
+    expect(allClosed).toMatchObject({ reason: "not_ready", diagnosis: { listed: 2, closed: 2 } });
+  });
 });
 
 describe("the AdSense report", () => {
