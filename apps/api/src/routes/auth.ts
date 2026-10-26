@@ -194,6 +194,8 @@ export function enabledProviders(): Set<FederatedProvider> {
 
 /** Whether a password sign-in also asks for the emailed code (AUTH_LOGIN_EMAIL_CODE; apps/aws/src/settings.ts). */
 export const loginCodeOn = () => env().AUTH_LOGIN_EMAIL_CODE === "1";
+/** An address the emailed code isn't asked of (AUTH_LOGIN_CODE_EXEMPT): a reviewer's account, whose inbox they can't read. */
+const loginCodeExempt = (email: string) => env().AUTH_LOGIN_CODE_EXEMPT.split(",").some((a) => a.trim().toLowerCase() === email);
 
 /** Same-origin paths only (the web app's isSafePath). */
 // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
@@ -534,10 +536,15 @@ export function authRoutes(app: App, deps: Deps) {
    * (encrypted, under an id only this browser's httpOnly cookie knows), email a 6-digit code, and
    * answer `{ next: "code" }`. The session is set only once the code is entered (POST
    * /auth/login/code), so nothing of the sign-in exists in the browser until then. `null` when the
-   * deployment doesn't ask for the code (AUTH_LOGIN_EMAIL_CODE).
+   * deployment doesn't ask for the code (AUTH_LOGIN_EMAIL_CODE), or not of this address
+   * (AUTH_LOGIN_CODE_EXEMPT).
    */
   async function askForEmailedCode(c: Ctx, email: string, tokens: CognitoTokens, keep: boolean | undefined) {
     if (!loginCodeOn()) return null;
+    if (loginCodeExempt(email)) {
+      logger.info({ event: "login_code_exempt" }, "signed in without the emailed code: the address is on AUTH_LOGIN_CODE_EXEMPT");
+      return null;
+    }
     const id = randomToken(24);
     const pending = { v: 1 as const, email, tokens: encrypt(JSON.stringify(tokens), keyring(), tokensAad(id)), ...(keep === false && { keep: false as const }) };
     try {
