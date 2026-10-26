@@ -401,6 +401,11 @@ code emailed after the password) follows the same rules, enforced by the API on 
   Google sign-ins have Google's own verification and get neither.
 - **Off switch**: `AUTH_LOGIN_EMAIL_CODE` empty (`apps/aws/src/settings.ts`, then a deploy) and the
   password alone signs in, as before; `GET /api/auth/config` says `loginCode`.
+- **Exempt addresses**: `AUTH_LOGIN_CODE_EXEMPT` (same file, comma-separated) lists accounts whose
+  password alone signs in while everyone else gets the code: the account given to Meta's App Review
+  reviewers, who can't read its inbox ([ads-review-packs.md](ads-review-packs.md)). An authenticator
+  app still applies to them. Each such sign-in logs `login_code_exempt`; the config report counts
+  the addresses (`auth.loginCodeExempt`). Empty it once the review is over.
 - The pages: six boxes (`OtpInput` in `apps/web/src/components/auth/CodeStep.tsx`: typing moves on,
   Backspace back, a pasted or autofilled code fills them all and the sixth digit sends), "Code
   expires in 00:59", "Resend code in 00:59" then "Resend verification code", "Use a different email
