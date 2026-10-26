@@ -26,7 +26,7 @@ import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import { CountryPicker, Drawer, fmtDelay, fmtHour, fmtWhen, plural } from "@/components/messaging/MessagingUi";
 import { AutomationSwitches, ReadyMade } from "./ReadyMade";
-import type { WaAutomation, WaAutomationRun, WaOverview, WaTemplate, WaTemplatesResponse, WaTriggerAvailability } from "./types";
+import type { WaAutomation, WaAutomationRun, WaOverview, WaQuickAutomationResult, WaTemplate, WaTemplatesResponse, WaTriggerAvailability } from "./types";
 import { AUTOMATION_STATUS, IssueList, issuesOf, MessageStatus, useWaAction, WaBubble, waError, waHref } from "./WaUi";
 
 // ---------------------------------------------------------------------------
@@ -171,11 +171,20 @@ export function Automations({ base, overview, reload }: { base: string; overview
 
   if (list.error && !list.data) return <LoadError what="automations" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />;
   if (!list.data || !templates.data) return <Skeleton lines={5} />;
-  const all = list.data.automations;
-  const tpls = templates.data.templates;
+  const listed = list.data;
+  const loaded = templates.data;
+  const all = listed.automations;
+  const tpls = loaded.templates;
   const refresh = () => {
     void list.reload();
+    // A Turn on or a save may have made a template: the cards and the builder show it.
+    void templates.reload();
     reload();
+  };
+  /** A ready-made automation just turned on (or saved off): it and its message show at once, before the lists come back. */
+  const turnedOn = (r: WaQuickAutomationResult) => {
+    list.setData({ ...listed, automations: [...all.filter((x) => x.id !== r.automation.id), r.automation] });
+    templates.setData({ ...loaded, templates: [...tpls.filter((t) => t.id !== r.template.id), r.template] });
   };
 
   if (editing) {
@@ -230,6 +239,7 @@ export function Automations({ base, overview, reload }: { base: string; overview
         samples={templates.data.samples as Record<string, string>}
         triggers={triggers}
         onChanged={refresh}
+        onTurnedOn={turnedOn}
         onEdit={(a) => setEditing({ automation: a, draft: draftOf(a) })}
       />
 
@@ -601,7 +611,8 @@ function Builder({
               <span>
                 <span className="font-medium">Test mode</span>
                 <span className="block text-xs text-muted">
-                  Every message goes to your verified test number instead of the customer, so you see exactly what customers will get. Untick it only when you&apos;re happy with it.
+                  Every message goes to your verified test number instead of the customer, so you see exactly what customers will get. Saved with it ticked, what it still waits to send to customers is
+                  cancelled. Untick it only when you&apos;re happy with it.
                 </span>
               </span>
             </label>

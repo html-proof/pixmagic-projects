@@ -150,7 +150,8 @@ export function SettingsForm({ base, overview, onSaved, submitLabel = "Save sett
           </div>
         </div>
         <p className="-mt-3 text-xs text-muted">
-          Automated messages and campaigns wait for these hours. Order updates the customer is expecting, replies, tests and codes go at once.
+          Every automation waits for these hours, order updates included, and so do campaigns and stock alerts to your team. Messages you send yourself, the replies to STOP and START, tests and
+          codes go at once.
           {sameHours && <span className="block text-danger">The start and end can&apos;t be the same hour.</span>}
         </p>
 

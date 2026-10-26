@@ -167,7 +167,21 @@ export async function automationProblemsFor(store: Store, a: WappAutomation): Pr
   return (await automationIssuesFor(store, a)).map((i) => i.message);
 }
 
-/** Creates or edits an automation. Editing a switched-on one keeps it on only while it still has no problems. */
+/**
+ * Cancels what an automation still waits to send to customers (a reminder due later, a message held
+ * for the sending hours) once it sends only to the store's verified number (test mode). The sender
+ * checks again at the moment of sending (sendQueuedMessage), for a message this misses.
+ */
+async function cancelCustomerMessages(automationId: string): Promise<number> {
+  const { count } = await systemDb.wappMessage.updateMany({ where: { automationId, status: "queued", contactId: { not: null } }, data: { status: "cancelled", reason: "manual_cancel", finalAt: new Date(), payloadEnc: null } });
+  return count;
+}
+
+/**
+ * Creates or edits an automation. Editing a switched-on one keeps it on only while it still has no
+ * problems. Saved in test mode, what it still waits to send to customers is cancelled, as the
+ * "Sending to" switch does (setAutomationTestMode); the audit records how many.
+ */
 export async function saveAutomation(input: { store: Store; userId: string; id?: string; data: unknown; ip?: string }): Promise<WappAutomation> {
   const a = waAutomationSchema.parse(input.data);
   const template = await systemDb.wappTemplate.findFirst({ where: { id: a.templateId, storeId: input.store.id } });
@@ -187,6 +201,7 @@ export async function saveAutomation(input: { store: Store; userId: string; id?:
     updatedByUserId: input.userId,
   };
   let row: WappAutomation;
+  let cancelled = 0;
   if (input.id) {
     const existing = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
     if (!existing) throw new WhatsappError("Not found", 404, "not_found");
@@ -196,10 +211,20 @@ export async function saveAutomation(input: { store: Store; userId: string; id?:
       if (issues.length) throw new WhatsappError("This change would stop the automation from working. Pause it first, or fix what's listed.", 409, "automation_blocked", { problems: issues.map((i) => i.message), issues });
     }
     row = await systemDb.wappAutomation.update({ where: { id: existing.id }, data: { ...data, version: { increment: 1 } } });
+    // The builder's "Test mode" box: nothing more reaches a customer from it, as with the switch.
+    if (row.testMode) cancelled = await cancelCustomerMessages(row.id);
   } else {
     row = await systemDb.wappAutomation.create({ data: { ...data, workspaceId: input.store.workspaceId, storeId: input.store.id, status: "draft", createdByUserId: input.userId } });
   }
-  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: input.id ? "whatsapp.automation_updated" : "whatsapp.automation_created", targetType: "whatsapp_automation", targetId: row.id, metadata: { trigger: a.trigger, testMode: a.testMode }, ip: input.ip });
+  await audit({
+    workspaceId: input.store.workspaceId,
+    actorUserId: input.userId,
+    action: input.id ? "whatsapp.automation_updated" : "whatsapp.automation_created",
+    targetType: "whatsapp_automation",
+    targetId: row.id,
+    metadata: { trigger: a.trigger, testMode: a.testMode, ...(input.id ? { cancelled } : {}) },
+    ip: input.ip,
+  });
   return row;
 }
 
@@ -242,15 +267,15 @@ export async function deleteAutomation(input: { store: Store; id: string; userId
 /**
  * The list's "Sending to: your customers / only you" switch. Switched to only you, what the
  * automation still waits to send to customers is cancelled (a reminder due later, a message held for
- * the sending hours): nothing more reaches a customer from it until it is switched back.
+ * the sending hours): nothing more reaches a customer from it until it is switched back. The
+ * builder's "Test mode" box does the same (saveAutomation), and so does the sender at the moment of
+ * sending.
  */
 export async function setAutomationTestMode(input: { store: Store; id: string; userId: string; testMode: boolean; ip?: string }): Promise<{ automation: WappAutomation; cancelled: number }> {
   const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
   if (!a) throw new WhatsappError("Not found", 404, "not_found");
   const row = a.testMode === input.testMode ? a : await systemDb.wappAutomation.update({ where: { id: a.id }, data: { testMode: input.testMode, version: { increment: 1 }, updatedByUserId: input.userId } });
-  const { count } = input.testMode
-    ? await systemDb.wappMessage.updateMany({ where: { automationId: a.id, status: "queued", contactId: { not: null } }, data: { status: "cancelled", reason: "manual_cancel", finalAt: new Date(), payloadEnc: null } })
-    : { count: 0 };
+  const count = input.testMode ? await cancelCustomerMessages(a.id) : 0;
   await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_test_mode", targetType: "whatsapp_automation", targetId: a.id, metadata: { testMode: input.testMode, cancelled: count }, ip: input.ip });
   return { automation: row, cancelled: count };
 }
@@ -355,14 +380,29 @@ export async function quickAutomation(
         automation = await activateAutomation({ store: input.store, id: automation.id, userId: input.userId, ip: input.ip, subscribeCustomers: input.subscribeCustomers });
         activated = true;
       } catch (e) {
-        // Shopify refused the new customers' webhook ("A customer signs up"): saved, off, and why.
-        if (!(e instanceof WhatsappError) || e.code !== "automation_blocked") throw e;
-        found = (e.detail as { issues?: WaAutomationIssue[] } | undefined)?.issues ?? [{ message: e.message, fix: null }];
+        if (e instanceof WhatsappError && e.code === "automation_blocked") {
+          // Shopify refused the new customers' webhook ("A customer signs up"): saved, off, and why.
+          found = (e.detail as { issues?: WaAutomationIssue[] } | undefined)?.issues ?? [{ message: e.message, fix: null }];
+        } else {
+          // It is saved already: an error now (Shopify unreachable, throttled or refusing its token)
+          // leaves it off on its card, with why, never a half-made automation the page can't see.
+          logger.warn({ storeId: input.store.id, automationId: automation.id, trigger: preset.trigger, err: e instanceof Error ? e.message : String(e) }, "whatsapp quick automation: switching on failed");
+          found = [
+            {
+              message:
+                preset.trigger === "customer_created"
+                  ? "Shopify couldn't be reached to tell bizinsights about new customers just now. Switch it on from its card in a moment."
+                  : "It couldn't be switched on just now. Switch it on from its card in a moment.",
+              fix: null,
+            },
+          ];
+        }
       }
     }
     return { automation, template, activated, problems: found.map((i) => i.message), issues: found, notice };
   } finally {
-    await deps.coord.release(lock);
+    // A failed release (DynamoDB throttled) mustn't turn the answer into an error: the lock's TTL frees it.
+    await deps.coord.release(lock).catch((err: unknown) => logger.warn({ storeId: input.store.id, err: err instanceof Error ? err.message : String(err) }, "whatsapp quick automation: lock release failed"));
   }
 }
 
