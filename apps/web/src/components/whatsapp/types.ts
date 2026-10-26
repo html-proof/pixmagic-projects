@@ -1,5 +1,6 @@
 import type {
   WaAudience,
+  WaAutomationIssue,
   WaAutomationState,
   WaCondition,
   WaConnectionStatus,
@@ -195,12 +196,25 @@ export interface WaAutomation {
   conditionLabels: string[];
   /** Why it can't be switched on (null: not checked in this answer). */
   problems: string[] | null;
+  /** The same reasons, each with the tab that fixes it. */
+  issues: WaAutomationIssue[] | null;
   /** The last 30 days' runs. */
   stats: { queued: number; skipped: number } | null;
   activatedAt: string | null;
   lastRunAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** POST /automations/quick: a ready-made automation turned on in one go (or saved off, with why). */
+export interface WaQuickAutomationResult {
+  automation: WaAutomation;
+  template: WaTemplate;
+  activated: boolean;
+  problems: string[];
+  issues: WaAutomationIssue[];
+  /** Something to know that isn't a problem (Meta reviewing the message). */
+  notice: string | null;
 }
 
 export interface WaAutomationRun {

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import { systemDb, type Store } from "@app/db";
 import { dispatchCampaign, processWebhookEvent, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
+import { WA_STARTER_TEMPLATES } from "@app/shared";
 import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, QR_PNG, type EvolutionFake } from "../../../test-support/evolutionFake.js";
 import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -589,6 +590,173 @@ describe("automations from Shopify's events", () => {
     const res = ok(await o.call("POST", `/automations/${a.id}/activate`), 409);
     expect(res.error).toBe("automation_blocked");
     expect(res.detail.problems.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("ready-made automations in one go", () => {
+  async function ready(extra: Record<string, unknown> = {}) {
+    const o = await owner();
+    await connect(o);
+    await configure(o, extra);
+    await finishSetup(o);
+    const store = (await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } })) as Store;
+    return { o, store };
+  }
+  const quick = (o: Owner, payload: Record<string, unknown>) => o.call("POST", "/automations/quick", payload);
+
+  it("makes the template and switches the automation on, to customers unless asked, and customers get it", async () => {
+    const { o, store } = await ready();
+    const r = ok(await quick(o, { preset: "order_confirmation" }), 201);
+    expect(r).toMatchObject({ activated: true, problems: [], issues: [], notice: null });
+    expect(r.template).toMatchObject({ name: "Order confirmation", category: "transactional", usable: true });
+    expect(r.template.body).toMatch(/^Hi \{\{customer_first_name\}\}, thanks for your order \{\{order_number\}\}/);
+    expect(r.automation).toMatchObject({ name: "Order confirmation", trigger: "order_created", status: "active", testMode: false, templateId: r.template.id, sendWindow: null, recipient: "customer", conditions: [], problems: [], issues: [] });
+
+    // Only you while you try it: test mode.
+    const shipping = ok(await quick(o, { preset: "shipping_update", sendTo: "me" }), 201);
+    expect(shipping.automation).toMatchObject({ trigger: "order_fulfilled", status: "active", testMode: true });
+
+    evo.sends.length = 0;
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(3001), ctx.deps);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)!.body).toMatchObject({ number: "61412345678", text: expect.stringMatching(/^Hi Pat, thanks for your order #3001 from Green Leaf!/) });
+    const audits = (await systemDb.auditLog.findMany({ where: { workspaceId: o.ws, action: { startsWith: "whatsapp." } }, orderBy: { createdAt: "asc" } })).map((x) => x.action);
+    expect(audits).toEqual(expect.arrayContaining(["whatsapp.template_created", "whatsapp.automation_created", "whatsapp.automation_activated"]));
+  });
+
+  it("reuses the store's template with the same text, and gives a new one a free name", async () => {
+    const { o } = await ready();
+    const starter = WA_STARTER_TEMPLATES.find((t) => t.key === "payment_received")!;
+    const mine = ok(await o.call("POST", "/templates", { name: "Paid, thanks", category: "transactional", body: starter.body }), 201).template;
+    ok(await o.call("POST", "/templates", { name: "Order confirmation", category: "transactional", body: "Thanks {{customer_first_name}}!" }), 201);
+
+    const paid = ok(await quick(o, { preset: "payment_received" }), 201);
+    expect(paid.template.id).toBe(mine.id);
+    expect(paid.automation).toMatchObject({ templateId: mine.id, status: "active" });
+
+    const custom = ok(await quick(o, { preset: "order_confirmation", body: "  Thanks for order {{order_number}}, {{customer_first_name}}!  " }), 201);
+    expect(custom.template).toMatchObject({ name: "Order confirmation 2", body: "Thanks for order {{order_number}}, {{customer_first_name}}!" });
+    expect(custom.automation.status).toBe("active");
+    expect(await systemDb.wappTemplate.count({ where: { storeId: o.store.id } })).toBe(3);
+  });
+
+  it("refuses a second automation on a trigger, even two asked at once", async () => {
+    const { o } = await ready();
+    const first = ok(await quick(o, { preset: "order_confirmation" }), 201).automation;
+    const again = ok(await quick(o, { preset: "order_confirmation", sendTo: "me" }), 409);
+    expect(again).toMatchObject({ error: "automation_exists", detail: { id: first.id } });
+
+    // One built in the builder counts too.
+    const t = ok(await o.call("POST", "/templates", { name: "Paid", category: "transactional", body: "Paid, thanks {{customer_first_name}}." }), 201).template;
+    const built = ok(await o.call("POST", "/automations", { name: "Paid", trigger: "order_paid", templateId: t.id }), 201).automation;
+    expect(ok(await quick(o, { preset: "payment_received" }), 409)).toMatchObject({ error: "automation_exists", detail: { id: built.id } });
+
+    const both = await Promise.all([quick(o, { preset: "order_cancelled" }), quick(o, { preset: "order_cancelled" })]);
+    expect(both.map((r) => r.statusCode).sort()).toEqual([201, 409]);
+    expect(["automation_exists", "busy"]).toContain(both.find((r) => r.statusCode === 409)!.json().error);
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id, trigger: "order_cancelled" } })).toBe(1);
+    expect(await systemDb.wappTemplate.count({ where: { storeId: o.store.id, name: { startsWith: "Order cancelled" } } })).toBe(1);
+  });
+
+  it("saves it off before the setup is done, saying where to fix each thing", async () => {
+    const o = await owner();
+    await connect(o);
+    const r = ok(await quick(o, { preset: "order_confirmation" }), 201);
+    expect(r.activated).toBe(false);
+    expect(r.automation.status).toBe("draft");
+    expect(r.problems).toEqual(r.issues.map((i: { message: string }) => i.message));
+    expect(r.issues).toEqual(
+      expect.arrayContaining([
+        { message: expect.stringMatching(/Step 3/), fix: "setup" },
+        { message: expect.stringMatching(/Step 4/), fix: "setup" },
+        { message: "Choose how customers agree to order updates in Settings.", fix: "settings" },
+      ]),
+    );
+    // The list says the same, and the automation is switched on once the setup is done.
+    const [listed] = ok(await o.call("GET", "/automations")).automations;
+    expect(listed).toMatchObject({ id: r.automation.id, issues: r.issues, problems: r.problems });
+    await configure(o);
+    await finishSetup(o);
+    expect(ok(await o.call("POST", `/automations/${r.automation.id}/activate`)).automation.status).toBe("active");
+  });
+
+  it("says marketing is off for a marketing one, and switches it on when asked", async () => {
+    const { o } = await ready({ marketingEnabled: false });
+    const welcome = ok(await quick(o, { preset: "welcome" }), 201);
+    expect(welcome.activated).toBe(false);
+    expect(welcome.issues).toEqual([{ message: "Marketing messages are switched off in Settings.", fix: "settings" }]);
+    expect(ok(await o.call("GET")).settings.marketingEnabled).toBe(false);
+
+    const cart = ok(await quick(o, { preset: "cart_reminder", enableMarketing: true }), 201);
+    expect(cart).toMatchObject({ activated: true, issues: [] });
+    expect(cart.template).toMatchObject({ name: "Cart reminder", category: "marketing" });
+    expect(cart.automation).toMatchObject({ trigger: "checkout_abandoned", status: "active", delayMinutes: 60 });
+    expect(ok(await o.call("GET")).settings).toMatchObject({ marketingEnabled: true, orderUpdates: "checkout_notice", sendWindow: { start: 0, end: 24 } });
+    expect(await systemDb.auditLog.findFirst({ where: { workspaceId: o.ws, action: "whatsapp.marketing_switched" } })).toMatchObject({ actorUserId: o.user.id, metadata: { marketingEnabled: true } });
+    // An order update never switches marketing on.
+    ok(await o.call("PUT", "/settings", { ...SETTINGS, marketingEnabled: false }));
+    ok(await quick(o, { preset: "order_cancelled", enableMarketing: true }), 201);
+    expect(ok(await o.call("GET")).settings.marketingEnabled).toBe(false);
+  });
+
+  it("refuses a message that breaks the rules, and a trigger the store can't use, creating nothing", async () => {
+    const { o } = await ready();
+    for (const [preset, text] of [
+      ["order_confirmation", "Hi {{first_name}}"],
+      ["order_confirmation", "Your parcel: {{tracking_url}}"],
+      ["cart_reminder", "You left something behind, {{customer_first_name}}!"],
+    ] as const) {
+      const res = ok(await quick(o, { preset, body: text }), 400);
+      expect(res.error, text).toBe("template_invalid");
+      expect(res.detail.issues.length, text).toBeGreaterThan(0);
+    }
+    expect(ok(await quick(o, { preset: "nope" }), 400).error).toBe("validation");
+    await systemDb.store.update({ where: { id: o.store.id }, data: { grantedScopes: ["read_orders"] } });
+    expect(ok(await quick(o, { preset: "welcome" }), 409).error).toBe("trigger_unavailable");
+    expect(await systemDb.wappTemplate.count({ where: { storeId: o.store.id } })).toBe(0);
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id } })).toBe(0);
+  });
+
+  it("switches between customers and only you, audited, cancelling what still waits for customers", async () => {
+    const { o, store } = await ready();
+    const a = ok(await quick(o, { preset: "order_confirmation" }), 201).automation;
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(4001), ctx.deps);
+    const waiting = await systemDb.wappMessage.findFirstOrThrow({ where: { automationId: a.id } });
+    expect(waiting).toMatchObject({ status: "queued", contactId: expect.any(String) });
+
+    const toMe = ok(await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: true }));
+    expect(toMe).toMatchObject({ automation: { id: a.id, testMode: true, status: "active", issues: [] }, cancelled: 1 });
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: "cancelled", reason: "manual_cancel" });
+    // Its job finds nothing to send: the customer gets nothing.
+    const before = evo.sends.length;
+    expect(await drain()).toEqual(["not_due"]);
+    expect(evo.sends.length).toBe(before);
+    const back = ok(await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: false }));
+    expect(back).toMatchObject({ automation: { testMode: false }, cancelled: 0 });
+    const audits = await systemDb.auditLog.findMany({ where: { workspaceId: o.ws, action: "whatsapp.automation_test_mode" }, orderBy: { createdAt: "asc" } });
+    expect(audits.map((x) => [x.targetId, x.actorUserId, (x.metadata as { testMode: boolean }).testMode])).toEqual([
+      [a.id, o.user.id, true],
+      [a.id, o.user.id, false],
+    ]);
+    expect(ok(await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: "yes" }), 400).error).toBe("validation");
+    expect(ok(await o.call("POST", "/automations/c000000000000000000000000/test-mode", { testMode: true }), 404).error).toBe("not_found");
+  });
+
+  it("lets neither a viewer nor a shared link use them", async () => {
+    const { o } = await ready();
+    const a = ok(await quick(o, { preset: "order_confirmation" }), 201).automation;
+    const v = await signIn(ctx, "v", "v@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact"] } });
+    ok(await ctx.app.inject({ method: "POST", url: `/workspaces/${o.ws}/team/invitations`, headers: o.headers, payload: { email: "guest@example.com", role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact", "integrations.status", "integrations.manage"] } }));
+    const mail = [...ctx.mailer.sent].reverse().find((x) => x.to === "guest@example.com")!;
+    const token = /#token=([A-Za-z0-9_-]+)/.exec(mail.text)![1];
+    const link = { cookie: cookiesFrom(await ctx.app.inject({ method: "POST", url: "/invitations/open", headers: ORIGIN, payload: { token } })), ...ORIGIN };
+    for (const headers of [v.headers, link]) {
+      expect((await o.call("POST", "/automations/quick", { preset: "shipping_update" }, headers)).statusCode).toBe(403);
+      expect((await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: true }, headers)).statusCode).toBe(403);
+    }
+    expect(await systemDb.wappAutomation.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ testMode: false });
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id } })).toBe(1);
   });
 });
 

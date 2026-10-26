@@ -575,11 +575,12 @@ function Complete({ overview }: { overview: WaOverview }) {
         <CheckCircle2 size={20} className="text-good" aria-hidden /> WhatsApp Automation is set up
       </h2>
       <p className="text-sm text-muted">
-        Connected{overview.connection?.phone ? ` as ${overview.connection.phone}` : ""}, configured, and WhatsApp reported your test message sent. New automations start in test mode: they send only to your number until you switch test mode off.
+        Connected{overview.connection?.phone ? ` as ${overview.connection.phone}` : ""}, configured, and WhatsApp reported your test message sent. Next, turn on a ready-made automation: check its message,
+        choose your customers or only you while you try it, and press Turn on.
       </p>
       <div className="flex flex-wrap gap-2">
-        <Link href={waHref("automations", { new: "1" })} className="btn-primary">
-          Create an automation
+        <Link href={waHref("automations")} className="btn-primary">
+          Turn on ready-made automations
         </Link>
         <Link href={waHref("messages", { compose: "1" })} className="btn-secondary">
           Send a message

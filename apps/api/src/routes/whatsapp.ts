@@ -4,7 +4,7 @@ import {
   activateAutomation,
   addWaSuppression,
   automationInput,
-  automationProblemsFor,
+  automationIssuesFor,
   campaignReport,
   cancelCampaign,
   checkConnection,
@@ -23,6 +23,7 @@ import {
   metaSignupConfig,
   pairingState,
   pauseAutomation,
+  quickAutomation,
   removeWaSuppression,
   restartConnection,
   retryMessage,
@@ -32,6 +33,7 @@ import {
   sendManualMessage,
   sendTestMessage,
   setAutomationPaused,
+  setAutomationTestMode,
   setConsentByMerchant,
   storeGraphql,
   startPairing,
@@ -63,6 +65,7 @@ import {
   WA_MESSAGE_STATUSES,
   WA_TRIGGER_INFO,
   type WaAudience,
+  type WaAutomationIssue,
   type WaCondition,
   type WaConsentSource,
 } from "@app/shared";
@@ -130,7 +133,8 @@ function templateView(t: WappTemplate, conn: Awaited<ReturnType<typeof connectio
   };
 }
 
-function automationView(a: WappAutomation, problems: string[] | null, stats?: { queued: number; skipped: number }) {
+/** An automation as the page shows it; `issues` (with `problems`, their words alone): why it can't be switched on, null when not checked in this answer. */
+function automationView(a: WappAutomation, issues: WaAutomationIssue[] | null, stats?: { queued: number; skipped: number }) {
   const input = automationInput(a);
   return {
     id: a.id,
@@ -139,7 +143,8 @@ function automationView(a: WappAutomation, problems: string[] | null, stats?: { 
     version: a.version,
     triggerLabel: WA_TRIGGER_INFO[input.trigger]?.label ?? input.trigger,
     conditionLabels: input.conditions.map((x: WaCondition) => describeWaCondition(x)),
-    problems,
+    problems: issues ? issues.map((i) => i.message) : null,
+    issues,
     stats: stats ?? null,
     activatedAt: a.activatedAt,
     lastRunAt: a.lastRunAt,
@@ -460,7 +465,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     for (const r of rows) {
       const stats = { queued: 0, skipped: 0 };
       for (const x of runs.filter((x) => x.automationId === r.id)) stats[x.outcome === "queued" ? "queued" : "skipped"] += x._count._all;
-      out.push(automationView(r, await automationProblemsFor(store, r), stats));
+      out.push(automationView(r, await automationIssuesFor(store, r), stats));
     }
     return c.json({ automations: out, triggers: triggerAvailability(store) });
   });
@@ -470,7 +475,29 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     const r = await saveAutomation({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
-    return c.json({ automation: automationView(r, await automationProblemsFor(store, r)) }, 201);
+    return c.json({ automation: automationView(r, await automationIssuesFor(store, r)) }, 201);
+  });
+
+  /**
+   * A ready-made automation turned on in one go: its message becomes a template (or reuses the
+   * store's own with the same text), and the automation is saved and switched on when nothing stops
+   * it. Saved but off, the answer's `issues` say why, each with the tab that fixes it.
+   */
+  app.post(`${base}/automations/quick`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    // It may write a template and ask Meta to review it: the templates' limit.
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const r = await quickAutomation(deps, {
+      store,
+      userId: a.user.id,
+      data: await body(c),
+      ip: clientIp(c),
+      subscribeCustomers: () => ensureCustomerWebhook(store, storeGraphql(store, deps.coord, deps.fetchImpl)),
+    });
+    const conn = await connectionOf(store.id);
+    return c.json({ automation: automationView(r.automation, r.issues), template: templateView(r.template, conn), activated: r.activated, problems: r.problems, issues: r.issues, notice: r.notice }, 201);
   });
 
   app.get(`${base}/automations/:id`, async (c) => {
@@ -483,7 +510,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const messages = await withTenant(ws, (tx) => tx.wappMessage.findMany({ where: { id: { in: runs.map((x) => x.messageId).filter((x): x is string => !!x) }, workspaceId: ws }, select: { id: true, status: true } }));
     const statusOf = new Map(messages.map((m) => [m.id, m.status]));
     return c.json({
-      automation: automationView(r, await automationProblemsFor(store, r)),
+      automation: automationView(r, await automationIssuesFor(store, r)),
       runs: runs.map((x) => ({ id: x.id, subject: x.subjectLabel, outcome: x.outcome, reason: x.reason, reasonLabel: waSkipLabel(x.reason), detail: x.detail, testMode: x.testMode, messageId: x.messageId, messageStatus: x.messageId ? (statusOf.get(x.messageId) ?? null) : null, at: x.createdAt })),
     });
   });
@@ -493,7 +520,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     const r = await saveAutomation({ store, userId: a.user.id, id: idParam.parse(id), data: await body(c), ip: clientIp(c) });
-    return c.json({ automation: automationView(r, await automationProblemsFor(store, r)) });
+    return c.json({ automation: automationView(r, await automationIssuesFor(store, r)) });
   });
 
   app.delete(`${base}/automations/:id`, async (c) => {
@@ -518,6 +545,16 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const store = await waStore(ws, storeId);
     const r = await pauseAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
     return c.json({ automation: automationView(r.automation, null), cancelled: r.cancelled });
+  });
+
+  /** "Sending to: your customers / only you" (test mode), without opening the builder. */
+  app.post(`${base}/automations/:id/test-mode`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const { testMode } = z.object({ testMode: z.boolean() }).parse(await body(c));
+    const r = await setAutomationTestMode({ store, id: idParam.parse(id), userId: a.user.id, testMode, ip: clientIp(c) });
+    return c.json({ automation: automationView(r.automation, await automationIssuesFor(store, r.automation)), cancelled: r.cancelled });
   });
 
   app.post(`${base}/automations/:id/test`, async (c) => {
