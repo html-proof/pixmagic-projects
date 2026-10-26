@@ -378,7 +378,7 @@ now"); people with a role (admins, developers, testers) can connect their own bu
 
 - **`whatsapp-service-down`** (no task running) or **`whatsapp-service-unreachable`** (the sweep
   couldn't reach it): ECS console → cluster `insights-production-whatsapp` → service
-  `insights-production-evolution-a` → its stopped tasks' reason; logs in `/ecs/insights-production-evolution`.
+  `insights-production-evolution-a` → its stopped tasks' reason; logs in `/ecs/insights-production-evolution-a`.
   A task that can't reach its database fails its migration at start: check the `evolution` database
   and role (re-run: invoke `insights-production-cron` with `{"action":"evolution-db"}`). Messages
   wait meanwhile; stores see "WhatsApp messages are waiting".

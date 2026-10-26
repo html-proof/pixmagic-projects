@@ -128,7 +128,10 @@ export class WhatsappStack extends Stack {
     const namespace = new servicediscovery.PrivateDnsNamespace(this, "Namespace", { name: evolutionNamespace(cfg), vpc: data.vpc, description: "Insights WhatsApp: the private address of Evolution API" });
     const cluster = new ecs.Cluster(this, "Cluster", { clusterName: `${prefix}-whatsapp`, vpc: data.vpc, containerInsightsV2: ecs.ContainerInsights.DISABLED });
 
-    const logGroup = new logs.LogGroup(this, "EvolutionLogs", { logGroupName: `/ecs/${prefix}-evolution`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN });
+    // Kept when the stack is deleted or the group replaced, but not when the stack's first creation rolls
+    // back (RetainExceptOnCreate): a kept group of the same name would fail every later create. The shard
+    // in the name keeps clear of the empty /ecs/<prefix>-evolution the first, failed deploy left behind.
+    const logGroup = new logs.LogGroup(this, "EvolutionLogs", { logGroupName: `/ecs/${prefix}-evolution-${shard}`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE });
     const task = new ecs.FargateTaskDefinition(this, "EvolutionTask", {
       family: `${prefix}-evolution-${shard}`,
       cpu: cfg.whatsapp.cpu,
