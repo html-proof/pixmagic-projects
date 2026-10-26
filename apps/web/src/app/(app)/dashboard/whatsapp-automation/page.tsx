@@ -23,15 +23,16 @@ import { CONNECTION_TONE, useWa, waHref, WhatsappIcon } from "@/components/whats
 
 const TABS = [
   ["overview", "Overview"],
-  ["setup", "Setup"],
-  ["messages", "Messages"],
   ["automations", "Automations"],
-  ["templates", "Templates"],
-  ["campaigns", "Campaigns"],
+  ["messages", "Messages"],
   ["customers", "Customers"],
+  ["campaigns", "Campaigns"],
+  ["templates", "Templates"],
   ["settings", "Settings"],
 ] as const;
-type Tab = (typeof TABS)[number][0];
+/** First while the setup isn't done, last once it is. */
+const SETUP_TAB = ["setup", "Setup"] as const;
+type Tab = (typeof TABS)[number][0] | (typeof SETUP_TAB)[0];
 
 export default function WhatsappAutomationPage() {
   return (
@@ -47,7 +48,7 @@ function WhatsappAutomation() {
   const { base } = useWa();
   const overview = useApi<WaOverview>(base);
   const data = overview.data;
-  const tabs = TABS.filter(([key]) => key !== "customers" || data?.can.contacts);
+  const tabs = (data?.setup.current ? [SETUP_TAB, ...TABS] : [...TABS, SETUP_TAB]).filter(([key]) => key !== "customers" || data?.can.contacts);
   const asked = params.get("tab");
   // Without ?tab=, the page opens on the setup until its four steps are done, else the overview: chosen
   // once per store, so finishing a step (which reloads the overview) doesn't move the page away.

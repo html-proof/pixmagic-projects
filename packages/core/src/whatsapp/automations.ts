@@ -1,7 +1,7 @@
 /**
  * Automations: trigger → conditions → template → recipient and timing (docs/whatsapp.md,
- * "Automations"). Shopify's verified webhooks (events.ts) and customers' messages (inbound.ts)
- * start them.
+ * "Automations"), or a ready-made one turned on in one go (quickAutomation). Shopify's verified
+ * webhooks (events.ts) and customers' messages (inbound.ts) start them.
  *
  * An automation runs at most once per order, checkout, customer or message window (a unique run
  * row), so Shopify's retries and duplicate deliveries message nobody twice. A run that doesn't
@@ -17,15 +17,23 @@ import {
   normalizePhone,
   renderWaText,
   variablesIn,
+  waAutomationMessageIssues,
   waAutomationSchema,
+  waHasErrors,
   WaMissingValueError,
+  waMissingVariables,
+  waPreset,
+  waPresetStarter,
+  waQuickAutomationSchema,
   waSetupProgress,
   WA_DEFAULT_REPLY_COOLDOWN,
   waSampleValues,
   WA_TRIGGER_INFO,
   WA_TRIGGERS,
   type NormalizedPhone,
+  type WaAutomationFix,
   type WaAutomationInput,
+  type WaAutomationIssue,
   type WaCondition,
   type WaFacts,
   type WaRecipient,
@@ -40,7 +48,8 @@ import { audit } from "../notify.js";
 import { businessNameOf, connectionListens, liveConnection, settingsOf, verifiedTestPhone, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
 import { applyShopifyConsent, upsertContact, type ContactDetails } from "./contacts.js";
 import { consentBlock, queueMessage } from "./messages.js";
-import { templateUsable } from "./templates.js";
+import { setMarketingEnabled } from "./settings.js";
+import { createWaTemplate, submitTemplateToMeta, templateUsable } from "./templates.js";
 
 /** Events older than this start nothing (a replayed webhook, a backfill): customers aren't told old news. */
 export const STALE_EVENT_MS = 48 * 3600_000;
@@ -102,17 +111,18 @@ export function automationInput(a: WappAutomation): WaAutomationInput {
   };
 }
 
+type ProblemContext = { template: WappTemplate | null; conn: WappConnection | null; settings: WaSettingsView; availability: Record<WaTrigger, TriggerAvailability> };
+
 /**
- * Why an automation can't be switched on (empty: it can): the same list the builder shows, so the
- * merchant sees every reason before pressing Activate.
+ * Why an automation can't be switched on (empty: it can), each with the tab of the page that fixes
+ * it: the same list the builder and the ready-made cards show, so the merchant sees every reason
+ * before switching it on.
  */
-export function automationProblems(
-  a: WaAutomationInput,
-  ctx: { template: WappTemplate | null; conn: WappConnection | null; settings: WaSettingsView; availability: Record<WaTrigger, TriggerAvailability> },
-): string[] {
-  const out: string[] = [];
+export function automationIssues(a: WaAutomationInput, ctx: ProblemContext): WaAutomationIssue[] {
+  const out: WaAutomationIssue[] = [];
+  const add = (message: string, fix: WaAutomationFix) => out.push({ message, fix });
   const info = WA_TRIGGER_INFO[a.trigger];
-  if (!ctx.conn || ctx.conn.status !== "connected") out.push("WhatsApp isn't connected. Connect it on the Setup step first.");
+  if (!ctx.conn || ctx.conn.status !== "connected") add("WhatsApp isn't connected. Connect it on the Setup step first.", "setup");
   const setup = waSetupProgress({
     provider: (ctx.conn?.provider as "qr" | "cloud_api" | undefined) ?? null,
     status: (ctx.conn?.status as "connected" | undefined) ?? null,
@@ -121,21 +131,24 @@ export function automationProblems(
     testVerifiedAt: ctx.settings.testVerifiedAt,
     testPassedAt: ctx.settings.testPassedAt,
   });
-  if (!setup.done.configure) out.push("Finish Step 3 (Configure): choose how customers agree to messages.");
-  if (!setup.done.test) out.push("Finish Step 4: verify your test number and send it a test message.");
-  if (!ctx.availability[a.trigger].available) out.push(ctx.availability[a.trigger].reason!);
-  if (!ctx.template) out.push("Pick a message template.");
+  if (!setup.done.configure) add("Finish Step 3 (Configure): choose how customers agree to messages.", "setup");
+  if (!setup.done.test) add("Finish Step 4: verify your test number and send it a test message.", "setup");
+  if (!ctx.availability[a.trigger].available) add(ctx.availability[a.trigger].reason!, null);
+  if (!ctx.template) add("Pick a message template.", "templates");
   else {
     const usable = templateUsable(ctx.template, ctx.conn);
-    if (!usable.ok) out.push(`The template "${ctx.template.name}" can't be used: ${usable.reason}`);
-    if (info.category === "marketing" && ctx.template.category !== "marketing") out.push(`"${info.label}" sends marketing: pick a marketing template (it tells customers how to stop).`);
-    if (ctx.template.category === "marketing" && !ctx.settings.marketingEnabled) out.push("Marketing messages are switched off in Settings.");
-    const missing = variablesIn(ctx.template.body).filter((v) => !(info.variables as string[]).includes(v) && v !== "store_name");
-    if (missing.length) out.push(`The template uses ${missing.map((v) => `{{${v}}}`).join(", ")}, which "${info.label}" doesn't provide.`);
+    if (!usable.ok) add(`The template "${ctx.template.name}" can't be used: ${usable.reason}`, "templates");
+    if (info.category === "marketing" && ctx.template.category !== "marketing") add(`"${info.label}" sends marketing: pick a marketing template (it tells customers how to stop).`, "templates");
+    if (ctx.template.category === "marketing" && !ctx.settings.marketingEnabled) add("Marketing messages are switched off in Settings.", "settings");
+    const missing = waMissingVariables(ctx.template.body, a.trigger);
+    if (missing.length) add(`The template uses ${missing.map((v) => `{{${v}}}`).join(", ")}, which "${info.label}" doesn't provide.`, "templates");
   }
-  if (ctx.settings.orderUpdates === "unset" && (ctx.template?.category ?? info.category) === "transactional") out.push("Choose how customers agree to order updates in Settings.");
+  if (ctx.settings.orderUpdates === "unset" && (ctx.template?.category ?? info.category) === "transactional") add("Choose how customers agree to order updates in Settings.", "settings");
   return out;
 }
+
+/** automationIssues' messages alone: what every answer has said since automations existed. */
+export const automationProblems = (a: WaAutomationInput, ctx: ProblemContext): string[] => automationIssues(a, ctx).map((i) => i.message);
 
 async function context(store: Store, templateId: string | null) {
   const [conn, settings, template] = await Promise.all([
@@ -146,8 +159,12 @@ async function context(store: Store, templateId: string | null) {
   return { conn, settings, template, availability: triggerAvailability(store) };
 }
 
+export async function automationIssuesFor(store: Store, a: WappAutomation): Promise<WaAutomationIssue[]> {
+  return automationIssues(automationInput(a), await context(store, a.templateId));
+}
+
 export async function automationProblemsFor(store: Store, a: WappAutomation): Promise<string[]> {
-  return automationProblems(automationInput(a), await context(store, a.templateId));
+  return (await automationIssuesFor(store, a)).map((i) => i.message);
 }
 
 /** Creates or edits an automation. Editing a switched-on one keeps it on only while it still has no problems. */
@@ -175,8 +192,8 @@ export async function saveAutomation(input: { store: Store; userId: string; id?:
     if (!existing) throw new WhatsappError("Not found", 404, "not_found");
     if (existing.trigger !== a.trigger) throw new WhatsappError("An automation's trigger can't change. Make a new automation instead.", 409, "trigger_fixed");
     if (existing.status === "active") {
-      const problems = automationProblems(a, await context(input.store, a.templateId));
-      if (problems.length) throw new WhatsappError("This change would stop the automation from working. Pause it first, or fix what's listed.", 409, "automation_blocked", { problems });
+      const issues = automationIssues(a, await context(input.store, a.templateId));
+      if (issues.length) throw new WhatsappError("This change would stop the automation from working. Pause it first, or fix what's listed.", 409, "automation_blocked", { problems: issues.map((i) => i.message), issues });
     }
     row = await systemDb.wappAutomation.update({ where: { id: existing.id }, data: { ...data, version: { increment: 1 } } });
   } else {
@@ -193,11 +210,11 @@ export async function saveAutomation(input: { store: Store; userId: string; id?:
 export async function activateAutomation(input: { store: Store; id: string; userId: string; ip?: string; subscribeCustomers?: () => Promise<string | null> }): Promise<WappAutomation> {
   const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
   if (!a) throw new WhatsappError("Not found", 404, "not_found");
-  const problems = await automationProblemsFor(input.store, a);
-  if (problems.length) throw new WhatsappError("This automation can't be switched on yet.", 409, "automation_blocked", { problems });
+  const issues = await automationIssuesFor(input.store, a);
+  if (issues.length) throw new WhatsappError("This automation can't be switched on yet.", 409, "automation_blocked", { problems: issues.map((i) => i.message), issues });
   if (a.trigger === "customer_created" && input.subscribeCustomers) {
     const why = await input.subscribeCustomers();
-    if (why) throw new WhatsappError(why, 409, "automation_blocked", { problems: [why] });
+    if (why) throw new WhatsappError(why, 409, "automation_blocked", { problems: [why], issues: [{ message: why, fix: null }] });
   }
   const row = await systemDb.wappAutomation.update({ where: { id: a.id }, data: { status: "active", activatedAt: new Date(), updatedByUserId: input.userId } });
   await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_activated", targetType: "whatsapp_automation", targetId: a.id, metadata: { trigger: a.trigger, testMode: a.testMode }, ip: input.ip });
@@ -220,6 +237,133 @@ export async function deleteAutomation(input: { store: Store; id: string; userId
   await systemDb.wappMessage.updateMany({ where: { automationId: a.id, status: "queued" }, data: { status: "cancelled", reason: "automation_off", finalAt: new Date(), payloadEnc: null } });
   await systemDb.$transaction([systemDb.wappAutomationRun.deleteMany({ where: { automationId: a.id } }), systemDb.wappAutomation.delete({ where: { id: a.id } })]);
   await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_deleted", targetType: "whatsapp_automation", targetId: a.id, metadata: { name: a.name }, ip: input.ip });
+}
+
+/**
+ * The list's "Sending to: your customers / only you" switch. Switched to only you, what the
+ * automation still waits to send to customers is cancelled (a reminder due later, a message held for
+ * the sending hours): nothing more reaches a customer from it until it is switched back.
+ */
+export async function setAutomationTestMode(input: { store: Store; id: string; userId: string; testMode: boolean; ip?: string }): Promise<{ automation: WappAutomation; cancelled: number }> {
+  const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!a) throw new WhatsappError("Not found", 404, "not_found");
+  const row = a.testMode === input.testMode ? a : await systemDb.wappAutomation.update({ where: { id: a.id }, data: { testMode: input.testMode, version: { increment: 1 }, updatedByUserId: input.userId } });
+  const { count } = input.testMode
+    ? await systemDb.wappMessage.updateMany({ where: { automationId: a.id, status: "queued", contactId: { not: null } }, data: { status: "cancelled", reason: "manual_cancel", finalAt: new Date(), payloadEnc: null } })
+    : { count: 0 };
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_test_mode", targetType: "whatsapp_automation", targetId: a.id, metadata: { testMode: input.testMode, cancelled: count }, ip: input.ip });
+  return { automation: row, cancelled: count };
+}
+
+// ---------------------------------------------------------------------------
+// Ready-made automations in one go
+// ---------------------------------------------------------------------------
+
+/** How long one store's "Turn on" may hold its lock (it may wait on Meta's review call and Shopify's webhooks). */
+const QUICK_LOCK_MS = 60_000;
+
+export interface QuickAutomationResult {
+  automation: WappAutomation;
+  template: WappTemplate;
+  /** Switched on now (false: saved off, `issues` says why). */
+  activated: boolean;
+  problems: string[];
+  issues: WaAutomationIssue[];
+  /** Something the merchant should know that isn't a problem of theirs (Meta reviewing the message). */
+  notice: string | null;
+}
+
+/** The first of "Order confirmation", "Order confirmation 2", "Order confirmation 3"… no template of the store is called (names are unique per store). */
+async function freeTemplateName(storeId: string, name: string): Promise<string> {
+  const taken = new Set((await systemDb.wappTemplate.findMany({ where: { storeId, name: { startsWith: name } }, select: { name: true } })).map((t) => t.name));
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? name : `${name} ${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * "Turn on" a ready-made automation: its message (the starter, or as the merchant edited it) becomes
+ * a template, or reuses the store's own with the same text, and the automation is saved and, when
+ * nothing stops it, switched on, to the store's customers or only the merchant's verified number
+ * (test mode). A trigger already has its automation: two would message a customer twice. On the
+ * Cloud API the new template goes to Meta for review and the automation stays off until Meta
+ * approves it. One store's "Turn on" runs one at a time.
+ */
+export async function quickAutomation(
+  deps: Pick<WaDeps, "coord" | "fetchImpl">,
+  input: { store: Store; userId: string; data: unknown; ip?: string; subscribeCustomers?: () => Promise<string | null> },
+): Promise<QuickAutomationResult> {
+  const d = waQuickAutomationSchema.parse(input.data);
+  const preset = waPreset(d.preset);
+  const info = WA_TRIGGER_INFO[preset.trigger];
+  const lock = `wapp:quick:${input.store.id}`;
+  if (!(await deps.coord.acquire(lock, QUICK_LOCK_MS))) throw new WhatsappError("Another automation is being switched on for this store. Try again in a moment.", 409, "busy");
+  try {
+    const existing = await systemDb.wappAutomation.findFirst({ where: { storeId: input.store.id, trigger: preset.trigger }, orderBy: { createdAt: "asc" } });
+    if (existing) throw new WhatsappError(`"${existing.name}" already sends when ${info.label.toLowerCase()}. Switch that one on or edit it: two would message a customer twice.`, 409, "automation_exists", { id: existing.id });
+    const availability = triggerAvailability(input.store)[preset.trigger];
+    if (!availability.available) throw new WhatsappError(availability.reason!, 409, "trigger_unavailable");
+
+    const body = d.body ?? waPresetStarter(preset).body;
+    const issues = waAutomationMessageIssues(body, preset.trigger);
+    if (waHasErrors(issues)) throw new WhatsappError(issues.filter((i) => i.level === "error").map((i) => i.message).join(" "), 400, "template_invalid", { issues });
+
+    // The store's own template with this exact text, switched on (one that works now first); else a new one.
+    const conn = await liveConnection(input.store.id);
+    const same = await systemDb.wappTemplate.findMany({ where: { storeId: input.store.id, body, category: info.category, active: true }, orderBy: { createdAt: "asc" } });
+    let template = same.find((t) => templateUsable(t, conn).ok) ?? same[0] ?? null;
+    if (!template) {
+      template = await createWaTemplate(input.store, { data: { name: await freeTemplateName(input.store.id, preset.name), category: info.category, body, active: true }, userId: input.userId, ip: input.ip });
+    }
+    let notice: string | null = null;
+    if (conn?.provider === "cloud_api" && conn.status === "connected" && !template.metaStatus) {
+      try {
+        // The same samples the Templates tab's "Submit to Meta for review" sends.
+        template = await submitTemplateToMeta(deps, conn, template, waSampleValues(input.store.name) as Record<string, string>);
+        if (!templateUsable(template, conn).ok) notice = "Meta reviews every new WhatsApp message before it can be sent, usually within minutes and at most a day. Switch the automation on here once Meta approves it.";
+      } catch (e) {
+        logger.warn({ storeId: input.store.id, err: e instanceof Error ? e.message : String(e) }, "whatsapp quick automation: Meta's review couldn't be asked for");
+        notice = "Meta couldn't be asked to review the message just now. Submit it for review on the Templates tab, then switch the automation on.";
+      }
+    }
+
+    const settings = await settingsOf(input.store);
+    if (info.category === "marketing" && d.enableMarketing && !settings.marketingEnabled) await setMarketingEnabled({ store: input.store, userId: input.userId, enabled: true, ip: input.ip });
+
+    let automation = await saveAutomation({
+      store: input.store,
+      userId: input.userId,
+      ip: input.ip,
+      data: {
+        name: preset.name,
+        description: preset.description,
+        trigger: preset.trigger,
+        conditions: [],
+        templateId: template.id,
+        recipient: "customer",
+        delayMinutes: preset.delayMinutes,
+        sendWindow: null,
+        testMode: d.sendTo === "me",
+        cooldownMinutes: preset.trigger === "message_received" ? WA_DEFAULT_REPLY_COOLDOWN : null,
+      },
+    });
+    let found = await automationIssuesFor(input.store, automation);
+    let activated = false;
+    if (!found.length) {
+      try {
+        automation = await activateAutomation({ store: input.store, id: automation.id, userId: input.userId, ip: input.ip, subscribeCustomers: input.subscribeCustomers });
+        activated = true;
+      } catch (e) {
+        // Shopify refused the new customers' webhook ("A customer signs up"): saved, off, and why.
+        if (!(e instanceof WhatsappError) || e.code !== "automation_blocked") throw e;
+        found = (e.detail as { issues?: WaAutomationIssue[] } | undefined)?.issues ?? [{ message: e.message, fix: null }];
+      }
+    }
+    return { automation, template, activated, problems: found.map((i) => i.message), issues: found, notice };
+  } finally {
+    await deps.coord.release(lock);
+  }
 }
 
 // ---------------------------------------------------------------------------
