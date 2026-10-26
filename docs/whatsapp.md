@@ -162,8 +162,21 @@ One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; af
 - **Campaigns**: an audience of customers who agreed to marketing (country, new or returning,
   ordered within / not for N days, minimum orders or spend), a live count for the chosen template,
   launch now or later **only with the exact count confirmed**, cancel, a delivery report.
-- **Customers** (with "View contact information"): consent and its history, recording consent or an
-  opt-out given another way, the do-not-message list.
+- **Customers** (with "View contact information"), in two views:
+  - **All customers** (`GET …/whatsapp/customers`, `packages/core/src/whatsapp/shopifyCustomers.ts`):
+    the store's customers read live from Shopify, 50 a page, newest first or searched by name, email
+    or phone number. Each shows the whole number from wherever Shopify keeps one (profile, checkout,
+    saved address, last order, read with its address's country, else the store's), where it came
+    from, and what WhatsApp knows of it, joined by the number's keyed hash: agreed to marketing,
+    opted out, on the do-not-message list, not on WhatsApp, or new to WhatsApp. A line says how many
+    of those shown have no number, with a link to ask for one at checkout in Shopify. Owners and
+    admins can message a customer from their row (the send dialog, addressed in memory). Names and
+    the Shopify link need "View customer profiles", orders and spend "View order history". Nothing of
+    the list is stored; the search goes in the `x-search` header, never in the address.
+  - **Consent records**: the customers WhatsApp keeps (whole numbers), consent and its history,
+    recording consent or an opt-out given another way.
+
+  Then the do-not-message list (masked: it keeps no whole number).
 - **Settings**: Step 3's settings, Pause all automation / Resume, Reconnect, Disconnect, and
   Evolution API's licence notice.
 
@@ -240,8 +253,14 @@ token (constant-time).
   to it. Queries run under row-level security for that workspace, and every row carries
   `workspace_id` and `store_id`. A browser-supplied id is never trusted alone.
 - Instance names, instance tokens, webhook keys, the global key, QR codes (except to the person
-  pairing, with `cache-control: no-store`), Meta tokens and full phone numbers never
-  appear in an answer; numbers are masked, stored encrypted and matched by a keyed hash.
+  pairing, with `cache-control: no-store`) and Meta tokens never appear in an answer.
+- Customers' whole numbers appear only in the Customers tab's answers (`/customers`, `/contacts`),
+  only to owners, admins and members allowed to see contact details, sent `no-store`, and each
+  viewing is in the workspace's audit log (who, which store; never the numbers). Everywhere else
+  (messages, the do-not-message list, the linked phone, the test number) numbers are masked. The
+  numbers WhatsApp keeps are still only those it messages, who write, or whose consent is recorded:
+  stored encrypted and matched by a keyed hash. The tab's list of the store's Shopify customers is
+  read each time and never stored.
 - The logger redacts `apikey`, `token`, `jwt_key`, `qrcode`, `base64`, `pairingCode`, `remoteJid`,
   `ownerJid`, `wuid`, `text`.
 
@@ -251,7 +270,7 @@ token (constant-time).
 | --- | --- |
 | See the page and its data | **View campaigns** (`marketing.campaigns`) |
 | See how the connection stands (Settings → Integrations) | **View integration connection status** too: the overview answers that person with the connection alone |
-| See customers' numbers, names, what was said; the Customers tab | **View contact information** as well |
+| See customers' whole numbers and what was said; the Customers tab | **View contact information** as well (names there also need **View customer profiles**, orders and spend **View order history**); a shared link given these may look but never change anything |
 | Change what customers receive: settings, test number, templates, automations, campaigns, sends, retries, consent records, the do-not-message list | The store's **owners and admins** (`stores:manage`), signed in themselves |
 | Connect, reconnect, disconnect | **Manage integrations**, signed in themselves |
 

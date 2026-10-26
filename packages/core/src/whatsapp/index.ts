@@ -3,6 +3,7 @@ export * from "./common.js";
 export * from "./evolution.js";
 export * from "./connection.js";
 export * from "./contacts.js";
+export * from "./shopifyCustomers.js";
 export * from "./templates.js";
 export * from "./messages.js";
 export * from "./send.js";

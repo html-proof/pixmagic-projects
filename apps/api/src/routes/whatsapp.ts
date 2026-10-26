@@ -3,6 +3,7 @@ import { systemDb, withTenant, type Prisma, type Store, type WappAutomation, typ
 import {
   activateAutomation,
   addWaSuppression,
+  audit,
   automationInput,
   automationProblemsFor,
   campaignReport,
@@ -11,6 +12,7 @@ import {
   confirmTestVerification,
   connectCloudApi,
   connectionOf,
+  contactPhoneOrMasked,
   createWaTemplate,
   deleteAutomation,
   deleteCampaign,
@@ -20,6 +22,7 @@ import {
   evolutionConfigured,
   estimateWaAudience,
   launchCampaign,
+  logger,
   metaSignupConfig,
   pairingState,
   pauseAutomation,
@@ -46,6 +49,7 @@ import {
   waDecrypt,
   waMessageView,
   waPhoneHash,
+  waShopifyCustomers,
   whatsappOverview,
   WhatsappError,
 } from "@app/core";
@@ -54,6 +58,7 @@ import {
   allows,
   describeWaAudience,
   describeWaCondition,
+  hasCapability,
   normalizePhone,
   startOfLocalDay,
   variablesIn,
@@ -74,12 +79,15 @@ import { limit, LIMITS } from "../rateLimit.js";
  * WhatsApp Automation's merchant API (docs/whatsapp.md), one store at a time. Who may do what:
  *  - read anything here: "View campaigns" (marketing.campaigns); how the connection stands (the
  *    overview, cut down to it, for Settings → Integrations): "View integration connection status" too;
- *  - customers' numbers, names and what was said: "View contact information" as well;
+ *  - customers' numbers, names and what was said: "View contact information" as well (names on the
+ *    Customers tab also "View customer profiles", order figures "View order history");
  *  - change what customers receive (settings, templates, automations, campaigns, sends): the
  *    store's owners and admins (stores:manage), signed in themselves; a shared link never can;
  *  - connect and disconnect the number: "Manage integrations", signed in themselves.
- * Instance keys, webhook keys, QR codes (except to the person pairing), tokens and full numbers are
- * never in an answer.
+ * Instance keys, webhook keys, QR codes (except to the person pairing) and tokens are never in an
+ * answer. Customers' whole numbers are only on the Customers tab's answers (/customers, /contacts),
+ * sent `no-store` with the viewing audited; everywhere else (messages, the do-not-message list, the
+ * linked phone, the test number) numbers are masked.
  */
 const base = "/workspaces/:ws/stores/:storeId/whatsapp";
 const idParam = z.string().min(1).max(40);
@@ -600,18 +608,76 @@ export function whatsappRoutes(app: App, deps: Deps) {
   });
 
   // ---------------------------------------------------------------------------
-  // Customers: consent and the do-not-message list
+  // Customers: the store's customers from Shopify, consent and the do-not-message list
   // ---------------------------------------------------------------------------
 
+  /**
+   * What the merchant searched for. It may be a phone number or an email, so the page sends it in the
+   * `x-search` header (URI-encoded), never in the address: addresses end up in logs and browser tools.
+   */
+  const searched = (c: Ctx): string | undefined => {
+    const raw = c.req.header("x-search");
+    if (!raw) return undefined;
+    try {
+      return decodeURIComponent(raw).trim().slice(0, 80) || undefined;
+    } catch {
+      throw new HttpError(400, "That search couldn't be read. Please type it again.", "validation");
+    }
+  };
+
+  /** Viewing customers' numbers is recorded in the workspace's audit log; what was seen or searched for is not. */
+  const auditViewed = (c: Ctx, a: WorkspaceAccess, store: Store, action: string, searchedFor: boolean) =>
+    audit({ workspaceId: store.workspaceId, actorUserId: a.user?.id ?? null, action, targetType: "store", targetId: store.id, metadata: { searched: searchedFor }, ip: clientIp(c) }).catch((err: unknown) =>
+      logger.warn({ err }, "audit failed"),
+    );
+
+  /**
+   * The store's customers, a page at a time, read live from Shopify with each one's whole number and
+   * what WhatsApp knows of it (core whatsapp/shopifyCustomers.ts). Nothing of it is stored. The numbers
+   * need "View contact information"; names and the Shopify link "View customer profiles"; orders and
+   * amount spent "View order history" (owners and admins see everything). A shared link given those
+   * may look, as on the dashboard's Customers to follow up; it can't send or record anything.
+   */
+  app.get(`${base}/customers`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireView(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    if (!hasCapability(store.grantedScopes, "contacts")) {
+      throw new HttpError(403, "bizinsights needs access to your customers first. Reconnect the store and allow it.", "missing_scopes");
+    }
+    // Shopify's opaque cursor, as it gave it.
+    const q = z.object({ cursor: z.string().max(400).regex(/^[A-Za-z0-9+/=_-]+$/).optional() }).parse(c.req.query());
+    const search = searched(c);
+    await limit(deps.coord, `rl:wa-customers:${ws}:${a.user?.id ?? clientIp(c)}`, LIMITS.contacts);
+    // Personal data: never let a browser or proxy keep a copy.
+    c.header("cache-control", "no-store");
+    const page = await waShopifyCustomers(deps, store, { after: q.cursor, search });
+    await auditViewed(c, a, store, "whatsapp.customers_viewed", !!search);
+    const shown = { names: allows(a.access, "customers.profiles"), orders: allows(a.access, "customers.orders") };
+    return c.json({
+      ...page,
+      shown,
+      customers: page.customers.map((r) => ({ ...r, ...(shown.names ? {} : { name: null, adminUrl: null }), ...(shown.orders ? {} : { orders: null, spent: null }) })),
+    });
+  });
+
+  /**
+   * The customers WhatsApp keeps a record of (it messaged them, they wrote, or their consent was
+   * recorded), with their whole number for those who may see contact details.
+   */
   app.get(`${base}/contacts`, async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireView(c, deps, ws);
     requireContacts(a);
     const store = await waStore(ws, storeId);
     const q = z.object({ phone: z.string().trim().min(6).max(32).optional(), consent: z.enum(["opted_in", "opted_out", "unknown"]).optional(), cursor: idParam.optional() }).parse(c.req.query());
+    // The number searched for: from the header the page sends (or, from older callers, the address).
+    const phone = searched(c) ?? q.phone;
+    c.header("cache-control", "no-store");
     const where: Prisma.WappContactWhereInput = { storeId: store.id, workspaceId: ws };
-    if (q.phone) {
-      const p = normalizePhone(q.phone, null);
+    if (phone) {
+      const p = normalizePhone(phone, null);
       if (!p) throw new HttpError(400, "Search with a full international number (+61...).", "invalid_phone");
       where.phoneHash = waPhoneHash(store.id, p.waId);
     }
@@ -621,11 +687,15 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const rows = await withTenant(ws, (tx) => tx.wappContact.findMany({ where, orderBy: { id: "desc" }, take: 51 }));
     const page = rows.slice(0, 50);
     const events = await withTenant(ws, (tx) => tx.wappConsentEvent.findMany({ where: { workspaceId: ws, contactId: { in: page.map((r) => r.id) } }, orderBy: { occurredAt: "desc" } }));
+    await auditViewed(c, a, store, "whatsapp.contacts_viewed", !!phone);
+    // Names as the dashboard's customer lists give them: with "View customer profiles" (redactContact).
+    const names = allows(a.access, "customers.profiles");
     return c.json({
       contacts: page.map((r) => ({
         id: r.id,
-        phone: r.phoneMasked,
-        firstName: r.firstNameEnc ? waDecrypt(r.storeId, "name", r.firstNameEnc) : null,
+        phone: contactPhoneOrMasked(r),
+        phoneMasked: r.phoneMasked,
+        firstName: names && r.firstNameEnc ? waDecrypt(r.storeId, "name", r.firstNameEnc) : null,
         country: r.country,
         optedOut: r.optedOut,
         optedIn: r.optedIn,
@@ -648,9 +718,11 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional(), scope: z.enum(["all", "order_updates", "marketing"]), status: z.enum(["opted_in", "opted_out"]), note: z.string().trim().max(300).nullable().optional() })
       .parse(await body(c));
     const contact = await setConsentByMerchant(store, { ...d, userId: a.user.id, ip: clientIp(c) });
-    return c.json({ contact: { id: contact.id, phone: contact.phoneMasked, optedOut: contact.optedOut, optedIn: contact.optedIn, marketing: contact.marketing } });
+    return c.json({ contact: { id: contact.id, phone: contactPhoneOrMasked(contact), phoneMasked: contact.phoneMasked, optedOut: contact.optedOut, optedIn: contact.optedIn, marketing: contact.marketing } }, 200, { "cache-control": "no-store" });
   });
 
+  // The do-not-message list keeps no whole number (only its keyed hash and masked form: a STOP from
+  // someone who isn't a customer is kept that way and no other), so its numbers stay masked.
   app.get(`${base}/suppressions`, async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireView(c, deps, ws);
