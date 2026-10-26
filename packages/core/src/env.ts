@@ -54,6 +54,12 @@ const schema = z.object({
    */
   AUTH_LOGIN_EMAIL_CODE: z.string().optional().default(""),
   /**
+   * Addresses (comma-separated) whose password alone signs in even with AUTH_LOGIN_EMAIL_CODE on:
+   * the account given to an app store's reviewers (Meta App Review), who can't read its inbox.
+   * Empty: none.
+   */
+  AUTH_LOGIN_CODE_EXEMPT: z.string().optional().default(""),
+  /**
    * How many sign-up and sign-in codes one address may be emailed an hour and a day (each code also
    * waits 60 seconds for the next). Empty: 6 and 20.
    */
