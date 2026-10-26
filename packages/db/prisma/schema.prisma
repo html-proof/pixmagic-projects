@@ -960,6 +960,9 @@ model DailyStoreMetrics {
   additionalFees          Decimal @default(0) @map("additional_fees") @db.Decimal(18, 2)
   /// Net sales + shipping + taxes + duties + additional fees: Shopify's "Total sales".
   totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
+  /// What refunds, returns and cancellations took off total sales that day: their sales with tax,
+  /// shipping, duties and fees in (gift cards and tips aside, as total sales leaves them out).
+  totalRefunded           Decimal @default(0) @map("total_refunded") @db.Decimal(18, 2)
   /// Orders placed that day, gift-card-only orders left out (as Shopify's reports count them).
   orders                  Int     @default(0)
   /// What those orders sold on the day they were placed (items after discounts, before tax; no gift

@@ -111,6 +111,7 @@ export async function storeOverview(
       // Shopify's "Total sales breakdown", line for line: gross − discounts − returns = net sales,
       // + additional fees + duties + shipping + taxes = total sales. The lines come for the dates
       // compared with too, so the store's own calculation from them (Custom sales) compares as well.
+      // totalRefunded: what refunds took off that total sales, tax and shipping in (under the tile).
       modules.sales_overview = {
         current: {
           grossSales: c.grossSales,
@@ -118,6 +119,7 @@ export async function storeOverview(
           returns: c.refunds,
           netSales: c.netSales,
           totalSales: c.totalSales,
+          totalRefunded: c.totalRefunded,
           orders: c.orders,
           units: c.units,
           averageOrderValue: c.averageOrderValue,

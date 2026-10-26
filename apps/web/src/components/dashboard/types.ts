@@ -60,6 +60,11 @@ export interface SalesOverview {
     netSales: number;
     /** Net sales + additional fees + duties + shipping + taxes: Shopify's headline "Total sales". */
     totalSales?: number;
+    /**
+     * What refunds, returns and cancellations took off that total sales, tax and shipping in.
+     * Team & Access: both "View refunds" and the breakdown; absent from answers of older releases.
+     */
+    totalRefunded?: number;
     orders: number;
     units: number;
     averageOrderValue: number | null;

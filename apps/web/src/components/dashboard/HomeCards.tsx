@@ -1,7 +1,7 @@
 "use client";
 import { useId, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Minus, type LucideIcon } from "lucide-react";
-import { fmtPct } from "@/lib/api";
+import { fmtMoney, fmtPct } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // The top of the dashboard: four headline numbers, each on a tinted tile with its day-by-day
@@ -97,6 +97,22 @@ export function Sparkline({ values, className = "" }: { values: Array<number | n
         ) : null,
       )}
     </svg>
+  );
+}
+
+/**
+ * Under the Total sales tile: what refunds, returns and cancellations took off it in the dates
+ * picked, tax and shipping in. The figure above is already after them (Shopify's total sales), so
+ * this says by how much, never takes it off again. An item returned with no money given back takes
+ * nothing off, so a day with a return can still say A$0.00.
+ */
+export function RefundsLine({ refunded, currency }: { refunded: number; currency: string }) {
+  // Never "-A$0.00": Intl writes a negative zero with its sign.
+  const amount = refunded > 0 ? `−${fmtMoney(refunded, currency)}` : fmtMoney(refunded < 0 ? -refunded : 0, currency);
+  return (
+    <span data-testid="tile-refunds" className="block truncate" title={`Refunds in these dates took ${fmtMoney(refunded, currency)} off total sales (tax and shipping included). Total sales is already after them.`}>
+      Refunds <span className="font-semibold text-text">{amount}</span>
+    </span>
   );
 }
 
