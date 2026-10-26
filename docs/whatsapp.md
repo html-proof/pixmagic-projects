@@ -358,7 +358,11 @@ protected customer data, no `read_customers`) is shown with why and can't be swi
   `{ testMode: boolean }` (owners and admins, signed in; audited as `whatsapp.automation_test_mode`).
   Switched to only you, what the automation still waits to send to customers (a reminder due later,
   a message held for the sending hours) is cancelled (`manual_cancel`), so nothing more reaches a
-  customer from it. Back to your customers, the page asks first.
+  customer from it. Back to your customers, the page asks first. The builder's "Test mode" box does
+  the same when saved (`whatsapp.automation_updated` records `cancelled`), and the sender checks
+  again at the moment of sending: an automation message to a customer (it has a contact) whose
+  automation is in test mode now is cancelled (`manual_cancel`), whichever way it got past the
+  switch (a run racing it, a send held back to wait). Its messages to the verified number still go.
 
 ### Ready-made automations
 
@@ -408,7 +412,19 @@ limit). In one store's lock (`wapp:quick:<store>`; a second press at the same ti
 
 The answer (201) is `{ automation, template, activated, problems, issues, notice }`: saved but off
 (setup not finished, marketing off, Meta reviewing, Shopify refusing new customers' events), it
-says why, each reason with where to fix it.
+says why, each reason with where to fix it. Once the automation is saved, any failure to switch it
+on is such an answer too, logged (Shopify unreachable, throttled or refusing the token while a
+Welcome subscribes customers/create: "Shopify couldn't be reached… Switch it on from its card in
+a moment."), never an error that leaves an automation the page doesn't show. A failed release of
+the lock is logged; its 60-second TTL frees it.
+
+The page shows that answer on the card (the reasons it is off, in the card's alert, instead of the
+card's own list) only while it still describes the card's automation: switched off, to "Only you"
+and back, or deleted, it goes. The answer's automation and template show at once, and the
+automations and templates are fetched again, so the card's message and the builder's Edit show the
+merchant's own text. A refused or failed Turn on fetches the automations again too; a 409
+`automation_exists` closes the dialog, its sentence in a notice, so the card shows that automation.
+`?preset=` leaves the address once its dialog has closed, finished or couldn't open.
 
 ## Data and retention
 
@@ -542,14 +558,28 @@ Evolution is `test-support/evolutionFake.ts` (answers as 2.3.7 does, signs webho
 nothing leaves the machine. The API test covers pairing with the provider's QR, "connected" only on
 the provider's word, every way a webhook is refused, the test number and the test's real status,
 sends (consent, idempotency, attachments, uncertain sends, retries), STOP and START from anyone,
-automations from Shopify's events (once per order, test mode, stale and paused), campaigns (exact
-count, greeted by name), tenant isolation, viewers, a shared link, secrets never in answers, and
-disconnecting. The worker test covers the queue (duplicate deliveries, retries, events set aside) and
+automations from Shopify's events (once per order, test mode, stale and paused; switched to test
+mode in the builder or behind the switch's back, nothing more reaches a customer, while the
+verified number still gets its messages), ready-made automations in one go (one per trigger, even
+two presses at once; the store's template with the same text reused, a new one given a free name;
+saved off with each reason and where to fix it; the marketing switch; a Welcome saved off, with
+why, when Shopify can't be reached or refuses new customers' events, and its switch then turning
+it on; a failed lock release; the "Sending to" switch cancelling what waits for customers,
+audited; no viewer or shared link), the Customers tab (whole numbers only with View contact
+information, names and order figures only with their own permissions; the store's customers live
+from Shopify, joined to WhatsApp's records by keyed hash and stored nowhere; search by name, email
+or number through `x-search`, never the address; the viewing audited; Shopify withholding
+customers' details, a store not connected, and `missing_scopes`), campaigns (exact count, greeted
+by name), tenant isolation, viewers, a shared link, secrets never in answers, and disconnecting.
+The shared test covers, among the rest, phone numbers (read in the right country, shown with the
+right calling code, "country code added" only when it was). The worker test covers the queue (duplicate deliveries, retries, events set aside) and
 the sweep (uncertain sends, the reconcile, the service down, 48 hours down, retention). The CDK test
 covers the stack (pinned image, private, secrets only by reference, the database's CA).
 
 In a real browser, with `apps/web/e2e/evolution-stub.mjs` as Evolution:
-`apps/web/e2e/whatsapp.spec.ts` (the four steps end to end).
+`apps/web/e2e/whatsapp.spec.ts` (the four steps end to end; a ready-made automation turned on in
+its one dialog from the completion screen, then its "Sending to" switched to only you on its card,
+and back to customers asking first; the linked phone's own number verified without a code).
 
 With a real phone: run Evolution locally (`docker compose --profile whatsapp up -d evolution`, or the
 deployed one), link a spare number, send to your own number only. Don't message real customers while

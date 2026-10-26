@@ -569,6 +569,39 @@ describe("automations from Shopify's events", () => {
     expect(reasons).toEqual(["order:1001:test_mode", "order:1002:queued", "order:1003:stale_event", "order:1005:automation_paused"]);
   });
 
+  it("sends a customer nothing more once it is in test mode, whether ticked in the builder or behind the switch's back", async () => {
+    const { o, store, automation } = await ready();
+    const toCustomers = ok(await o.call("PUT", `/automations/${automation.id}`, { ...automationBody(automation), testMode: false })).automation;
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(5001), ctx.deps);
+    const first = await systemDb.wappMessage.findFirstOrThrow({ where: { automationId: automation.id, idempotencyKey: { endsWith: ":order:5001" } } });
+    expect(first).toMatchObject({ status: "queued", contactId: expect.any(String) });
+
+    // The builder's Test mode box, saved: what waits for the customer is cancelled, as the switch does, and audited with the count.
+    const saved = ok(await o.call("PUT", `/automations/${automation.id}`, { ...automationBody(toCustomers), testMode: true })).automation;
+    expect(saved).toMatchObject({ status: "active", testMode: true });
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: first.id } })).toMatchObject({ status: "cancelled", reason: "manual_cancel", payloadEnc: null });
+    const updated = await systemDb.auditLog.findMany({ where: { workspaceId: o.ws, action: "whatsapp.automation_updated" }, orderBy: { createdAt: "asc" } });
+    expect(updated.map((x) => x.metadata)).toEqual([expect.objectContaining({ testMode: false, cancelled: 0 }), expect.objectContaining({ testMode: true, cancelled: 1 })]);
+    evo.sends.length = 0;
+    expect(await drain()).toEqual(["not_due"]);
+
+    // One queued for the customer that the switch never saw (a run racing it, a send held back to
+    // wait): the sender itself cancels it.
+    ok(await o.call("PUT", `/automations/${automation.id}`, { ...automationBody(saved), testMode: false }));
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(5002), ctx.deps);
+    const raced = await systemDb.wappMessage.findFirstOrThrow({ where: { automationId: automation.id, idempotencyKey: { endsWith: ":order:5002" } } });
+    expect(raced.contactId).not.toBeNull();
+    await systemDb.wappAutomation.update({ where: { id: automation.id }, data: { testMode: true } });
+    expect(await drain()).toEqual(["cancelled"]);
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: raced.id } })).toMatchObject({ status: "cancelled", reason: "manual_cancel" });
+    expect(evo.sends).toEqual([]);
+
+    // In test mode its messages still reach the verified number.
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(5003), ctx.deps);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends).toEqual([expect.objectContaining({ body: expect.objectContaining({ number: "61400111222", text: "Hi Pat, thanks for order #5003 from Green Leaf." }) })]);
+  });
+
   it("finishes a run whose message an earlier try never linked, with one message", async () => {
     const { store, automation } = await ready();
     await systemDb.wappAutomationRun.create({
@@ -697,6 +730,92 @@ describe("ready-made automations in one go", () => {
     ok(await o.call("PUT", "/settings", { ...SETTINGS, marketingEnabled: false }));
     ok(await quick(o, { preset: "order_cancelled", enableMarketing: true }), 201);
     expect(ok(await o.call("GET")).settings.marketingEnabled).toBe(false);
+  });
+
+  describe("a Welcome, which asks Shopify to tell bizinsights about new customers", () => {
+    /** The store connected to Shopify (a token bizinsights can use), and Shopify's Admin GraphQL answering as `answer` says, next to the Evolution fake. */
+    async function shopifyAnswers(o: Owner, answer: (query: string) => Response | Promise<Response>) {
+      await systemDb.store.update({ where: { id: o.store.id }, data: encryptTokenFields(o.store.id, { accessToken: "shpat_test", scopes: ["read_orders", "read_customers"], accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }) });
+      const asked: string[] = [];
+      ctx.setFetch(async (input, init) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (!url.includes(".myshopify.com/admin/api/")) return evo.fetch(input, init);
+        const { query } = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        asked.push(query.includes("webhookSubscriptionCreate") ? "create" : "list");
+        return answer(query);
+      });
+      return asked;
+    }
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    /** No customers/create subscription yet; creating one answers `userErrors`. */
+    const subscriptions =
+      (userErrors: Array<{ message: string }> = []) =>
+      (query: string) =>
+        query.includes("webhookSubscriptionCreate")
+          ? json({ data: { webhookSubscriptionCreate: { webhookSubscription: userErrors.length ? null : { id: "gid://shopify/WebhookSubscription/1" }, userErrors } } })
+          : json({ data: { webhookSubscriptions: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } });
+
+    it("is saved off, with why, when Shopify can't be reached or refuses, and its own switch then turns it on", async () => {
+      const { o } = await ready();
+      const failures: Array<[string, (query: string) => Response | Promise<Response>, RegExp]> = [
+        [
+          "a network failure",
+          () => {
+            throw new TypeError("fetch failed");
+          },
+          /^Shopify couldn't be reached to tell bizinsights about new customers just now\. Switch it on from its card in a moment\.$/,
+        ],
+        ["Shopify down", () => json({ errors: "Service unavailable" }, 503), /^Shopify couldn't be reached/],
+        ["Shopify refusing", subscriptions([{ message: "You do not have permission to create webhooks with customers/create topic." }]), /^Shopify refused to tell bizinsights about new customers/],
+      ];
+      for (const [what, answer, why] of failures) {
+        const asked = await shopifyAnswers(o, answer);
+        const r = ok(await quick(o, { preset: "welcome" }), 201);
+        expect(asked.length, what).toBeGreaterThan(0);
+        expect(r, what).toMatchObject({ activated: false, automation: { trigger: "customer_created", status: "draft" }, issues: [{ message: expect.stringMatching(why), fix: null }] });
+        expect(r.problems, what).toEqual(r.issues.map((i: { message: string }) => i.message));
+        // The page's list has it, and pressing Turn on again points at it rather than making a second.
+        expect(ok(await o.call("GET", "/automations")).automations, what).toEqual([expect.objectContaining({ id: r.automation.id, status: "draft" })]);
+        expect(ok(await quick(o, { preset: "welcome" }), 409), what).toMatchObject({ error: "automation_exists", detail: { id: r.automation.id } });
+        // The lock was let go: the store's next Turn on isn't "busy".
+        expect(await ctx.deps.coord.acquire(`wapp:quick:${o.store.id}`, 1000), what).toBe(true);
+        await ctx.deps.coord.release(`wapp:quick:${o.store.id}`);
+        if (what !== "Shopify refusing") ok(await o.call("DELETE", `/automations/${r.automation.id}`));
+        else {
+          // Shopify answering again: the card's switch subscribes and switches it on.
+          const asked2 = await shopifyAnswers(o, subscriptions());
+          expect(ok(await o.call("POST", `/automations/${r.automation.id}/activate`)).automation).toMatchObject({ id: r.automation.id, status: "active" });
+          expect(asked2).toEqual(["list", "create"]);
+        }
+      }
+      expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id } })).toBe(1);
+    });
+
+    it("is switched on in one go when Shopify subscribes it", async () => {
+      const { o } = await ready();
+      const asked = await shopifyAnswers(o, subscriptions());
+      const r = ok(await quick(o, { preset: "welcome" }), 201);
+      expect(r).toMatchObject({ activated: true, issues: [], automation: { trigger: "customer_created", status: "active", testMode: false } });
+      expect(asked).toEqual(["list", "create"]);
+    });
+  });
+
+  it("answers with what it did even when the store's lock can't be let go, which then frees itself", async () => {
+    const { o } = await ready();
+    const release = ctx.deps.coord.release.bind(ctx.deps.coord);
+    ctx.deps.coord.release = async (key: string) => {
+      if (key.startsWith("wapp:quick:")) throw new Error("DynamoDB throttled");
+      return release(key);
+    };
+    try {
+      const r = ok(await quick(o, { preset: "order_confirmation" }), 201);
+      expect(r).toMatchObject({ activated: true, automation: { status: "active" } });
+    } finally {
+      ctx.deps.coord.release = release;
+    }
+    // Held until its TTL: another Turn on meanwhile is told to wait, and nothing is half made.
+    expect(ok(await quick(o, { preset: "payment_received" }), 409).error).toBe("busy");
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id } })).toBe(1);
   });
 
   it("refuses a message that breaks the rules, and a trigger the store can't use, creating nothing", async () => {

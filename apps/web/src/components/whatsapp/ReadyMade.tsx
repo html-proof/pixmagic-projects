@@ -1,7 +1,7 @@
 "use client";
 import { CheckCircle2 } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { useId, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   renderWaText,
   waAutomationMessageIssues,
@@ -19,9 +19,9 @@ import { ConfirmDialog, Dialog, useToast } from "@/components/AppUi";
 import { Badge } from "@/components/dashboard/Primitives";
 import { plural } from "@/components/messaging/MessagingUi";
 import { Alert } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { WaAutomation, WaOverview, WaQuickAutomationResult, WaTemplate, WaTriggerAvailability } from "./types";
-import { AUTOMATION_STATUS, issuesOf, IssueList, useWaAction, WaBubble, waError, WaSwitch } from "./WaUi";
+import { AUTOMATION_STATUS, issuesOf, IssueList, useWaAction, WaBubble, waError, waHref, WaSwitch } from "./WaUi";
 
 // ---------------------------------------------------------------------------
 // Ready-made automations (docs/whatsapp.md, "Ready-made automations"): one card per trigger. Turning
@@ -128,6 +128,7 @@ export function ReadyMade({
   samples,
   triggers,
   onChanged,
+  onTurnedOn,
   onEdit,
 }: {
   base: string;
@@ -137,10 +138,13 @@ export function ReadyMade({
   samples: Record<string, string>;
   triggers: WaTriggerAvailability;
   onChanged: () => void;
+  /** A Turn on's answer, so its automation and template show before the lists are fetched again. */
+  onTurnedOn: (r: WaQuickAutomationResult) => void;
   onEdit: (a: WaAutomation) => void;
 }) {
   const manage = overview.can.manage;
   const params = useSearchParams();
+  const router = useRouter();
   const [opening, setOpening] = useState<WaAutomationPreset | null>(null);
   const [results, setResults] = useState<Partial<Record<WaPresetKey, WaQuickAutomationResult>>>({});
   // ?preset= (the Overview's "Turn on your first automation") opens that preset's dialog, once.
@@ -150,7 +154,16 @@ export function ReadyMade({
     setHandled(asked);
     const p = WA_AUTOMATION_PRESETS.find((x) => x.key === asked);
     if (p && manage && triggers[p.trigger]?.available && !automations.some((a) => a.trigger === p.trigger)) setOpening(p);
+  } else if (!asked && handled) {
+    setHandled(null);
   }
+  // Once it is handled and no dialog is open (closed, finished, or it couldn't open), ?preset= leaves
+  // the address, as ?compose= does on Messages: back from the builder or after a refresh, the dialog
+  // doesn't open again by itself.
+  const presetDone = !!asked && handled === asked && !opening;
+  useEffect(() => {
+    if (presetDone) router.replace(waHref("automations"));
+  }, [presetDone, router]);
 
   return (
     <section aria-labelledby="wa-ready-title" className="space-y-3">
@@ -194,8 +207,10 @@ export function ReadyMade({
           onDone={(r) => {
             setResults((x) => ({ ...x, [opening.key]: r }));
             setOpening(null);
+            onTurnedOn(r);
             onChanged();
           }}
+          onFailed={onChanged}
         />
       )}
     </section>
@@ -238,7 +253,16 @@ function PresetCard({
   const body = template?.body ?? waPresetStarter(p).body;
   const preview = useMemo(() => renderWaText(body, samples, { lenient: true }), [body, samples]);
   const st = a ? (AUTOMATION_STATUS[a.status] ?? { tone: "neutral" as const, label: a.status }) : null;
-  const issues = a?.issues ?? [];
+  // The Turn on result only while it still describes this card's automation: switched off, to "Only
+  // you" and back, or deleted, it would contradict the card, so it goes.
+  const live = !!result && !!a && a.id === result.automation.id && a.status === result.automation.status && a.testMode === result.automation.testMode;
+  const shown = live ? result : null;
+  useEffect(() => {
+    if (result && !live) onDismissResult();
+  }, [result, live, onDismissResult]);
+  // Saved off, the result lists why (Shopify refusing new customers' events too, which the list's
+  // check can't see): the card's own list would repeat it.
+  const issues = shown && !shown.activated ? [] : (a?.issues ?? []);
 
   return (
     <li className={`card flex flex-col gap-3 ${a?.status === "active" ? "border-good/40" : ""} ${unavailable && !a ? "opacity-70" : ""}`} aria-labelledby={id} data-testid={`wa-preset-${p.key}`}>
@@ -259,17 +283,22 @@ function PresetCard({
         <WaBubble>{preview}</WaBubble>
       </div>
 
-      {result && (
-        <Alert kind={result.activated ? "success" : "info"} onDismiss={onDismissResult}>
-          {result.activated ? (
+      {shown && (
+        <Alert kind={shown.activated ? "success" : "info"} onDismiss={onDismissResult}>
+          {shown.activated ? (
             <span className="inline-flex items-start gap-1.5">
               <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-good" aria-hidden />
-              {result.automation.testMode ? "It's on, sending only to your number while you try it." : "It's on. Customers get it from the next time this happens."}
+              {shown.automation.testMode ? "It's on, sending only to your number while you try it." : "It's on. Customers get it from the next time this happens."}
             </span>
+          ) : shown.issues.length ? (
+            <>
+              Saved, switched off. It can be switched on once this is done:
+              <IssueList issues={shown.issues} className="mt-1" />
+            </>
           ) : (
-            "Saved, switched off. It can be switched on once what's listed below is done."
+            "Saved, switched off."
           )}
-          {result.notice && <span className="mt-1 block">{result.notice}</span>}
+          {shown.notice && <span className="mt-1 block">{shown.notice}</span>}
         </Alert>
       )}
 
@@ -312,6 +341,7 @@ function TurnOnDialog({
   samples,
   onClose,
   onDone,
+  onFailed,
 }: {
   base: string;
   preset: WaAutomationPreset;
@@ -319,6 +349,8 @@ function TurnOnDialog({
   samples: Record<string, string>;
   onClose: () => void;
   onDone: (r: WaQuickAutomationResult) => void;
+  /** After a refusal or an error: the cards look again, in case it was saved anyway. */
+  onFailed: () => void;
 }) {
   const id = useId();
   const toast = useToast();
@@ -359,6 +391,14 @@ function TurnOnDialog({
       if (r.activated) toast("success", sendTo === "me" ? `"${p.name}" is on, sending only to your number.` : `"${p.name}" is on.`);
       onDone(r);
     } catch (e) {
+      // It may have been saved before it failed (or made in another tab): the cards look again.
+      onFailed();
+      if (e instanceof ApiError && e.code === "automation_exists") {
+        // This trigger has its automation already: its card shows it, with its switches.
+        toast("info", waError(e, "turn the automation on"));
+        onClose();
+        return;
+      }
       setError(waError(e, "turn the automation on"));
       setBusy(false);
     }

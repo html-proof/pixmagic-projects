@@ -7,7 +7,8 @@
  * the store's retention).
  *
  * sendQueuedMessage (the whatsapp queue's wapp_send job) claims the row, then checks, in order:
- * the connection is up, automation isn't paused, the automation or campaign still runs, consent
+ * the connection is up, automation isn't paused, the automation or campaign still runs (and an
+ * automation switched to test mode sends nothing more to a customer), consent
  * (again: a customer may have replied STOP since), the sending hours, the store's daily limit, the
  * customer's daily limit, the pace of the linked phone. Then one call to Evolution API. Its answer
  * is recorded as "accepted": sent, delivered and read come only from WhatsApp's reports
@@ -194,8 +195,12 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
   const settings = await settingsOf(store);
 
   if (m.source === "automation" && m.automationId) {
-    const a = await systemDb.wappAutomation.findUnique({ where: { id: m.automationId }, select: { status: true } });
+    const a = await systemDb.wappAutomation.findUnique({ where: { id: m.automationId }, select: { status: true, testMode: true } });
     if (!a || a.status !== "active") return end("cancelled", "automation_off");
+    // Switched to "only you" (test mode) since this was queued for a customer: it never reaches them,
+    // however it got here (a run racing the switch, a send held back to wait). Its messages to the
+    // store's verified number (no contact) still go.
+    if (a.testMode && m.contactId) return end("cancelled", "manual_cancel");
   }
   if (m.source === "campaign" && m.campaignId) {
     const c = await systemDb.wappCampaign.findUnique({ where: { id: m.campaignId }, select: { status: true } });
