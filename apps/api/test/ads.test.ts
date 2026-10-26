@@ -128,6 +128,8 @@ describe("connecting ad accounts", () => {
       configured: { meta: false, google: false, adsense: false },
       restricted: { meta: false, google: false, adsense: false },
       connections: [],
+      // Sign-ins connected with no ad account yet: none here.
+      logins: [],
       // The Google Ads demo (docs/ads-demo.md) is offered only when switched on; the real sign-in says what it lacks.
       demo: { google: false },
       missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },

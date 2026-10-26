@@ -3,6 +3,7 @@ import { systemDb } from "@app/db";
 import {
   logger,
   ADS_RECENT_DAYS,
+  checkAdLogins,
   classifyAdError,
   enqueueAdHistory,
   enqueueAdSync,
@@ -197,6 +198,14 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
  */
 export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
   return sweepNangoOrphans(deps.coord, deps.fetchImpl);
+}
+
+/**
+ * Sign-ins connected with no ad account yet (core's logins.ts): asked again once an hour, and their ad
+ * accounts connected as soon as the platform lists some.
+ */
+export async function checkWaitingAdLogins(deps: Pick<WorkerDeps, "coord" | "queues" | "fetchImpl">) {
+  return checkAdLogins(deps);
 }
 
 /** Ad connections made before every platform went through Nango: moved there, a few sign-ins a tick (docs/nango.md). */

@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { encryptAdTokens, forgetNangoIntegrations, forgetNangoToken, sweepNangoOrphans, syncAdConnection, type FetchLike } from "@app/core";
+import { checkAdLogins, encryptAdTokens, forgetNangoIntegrations, forgetNangoToken, metaDataDeletion, metaDeauthorized, sweepNangoOrphans, syncAdConnection, type FetchLike } from "@app/core";
 import { LEGACY_GRANTS } from "@app/shared";
 import { clean, cookiesFrom, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -53,6 +53,8 @@ interface World {
   tokenFetches: number;
   /** Meta: the ad accounts the login reaches, and whether ads_read was granted. */
   metaAccounts: Array<{ id: string; name: string }>;
+  /** Meta doesn't answer for the login's ad accounts (an outage). */
+  metaAccountsDown?: boolean;
   adsRead: "granted" | "declined";
   /** Meta: the secret of the app the tokens were issued to, when it matters. A proof made with another is refused, as Meta does. */
   metaTokenAppSecret?: string;
@@ -124,7 +126,10 @@ function world(): World {
           return json({ success: true });
         }
         if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: w.adsRead }] });
-        if (u.pathname.endsWith("/me/adaccounts")) return json({ data: w.metaAccounts.map((a) => ({ ...a, currency: "USD", timezone_name: "UTC", account_status: 1 })) });
+        if (u.pathname.endsWith("/me/adaccounts")) {
+          if (w.metaAccountsDown) return json({ error: { message: "An unexpected error has occurred. Please retry your request later.", type: "OAuthException", code: 2 } }, 500);
+          return json({ data: w.metaAccounts.map((a) => ({ ...a, currency: "USD", timezone_name: "UTC", account_status: 1 })) });
+        }
         if (u.pathname.endsWith("/me")) return json({ id: "4242" });
         return json({ error: { message: `unexpected ${u.pathname}`, code: 100 } }, 400);
       }
@@ -534,6 +539,110 @@ describe("disconnecting a Nango connection", () => {
     expect((await ctx.app.inject({ method: "DELETE", url: `${adsUrl()}/connections/${row.id}`, headers: other.headers })).statusCode).toBe(404);
     expect(await systemDb.adConnection.count()).toBe(1);
     expect(w.deleted).toEqual([]);
+  });
+});
+
+describe("a Meta login with no ad account yet", () => {
+  const logins = async () => (await ctx.app.inject({ method: "GET", url: adsUrl(), headers })).json().logins as Array<{ id: string; reason: string }>;
+  const check = (id: string) => ctx.app.inject({ method: "POST", url: `${adsUrl()}/logins/${id}/check`, headers, payload: {} });
+  const deps = () => ({ coord: ctx.deps.coord, queues: ctx.deps.queues, fetchImpl: w.fetchImpl });
+
+  it("stays connected instead of being refused, and its ad accounts are connected through the same Nango connection once Meta lists them", async () => {
+    w.metaAccounts = [];
+    const { done, connectionId } = await connectThrough("meta");
+    expect(done.statusCode).toBe(200);
+    expect(done.json()).toEqual({ connected: 0, waiting: true, reason: "no_ads_account", provider: "meta" });
+    expect(w.deleted).toEqual([]);
+    expect(w.metaRevoked).toBe(0);
+    const [login] = await logins();
+    expect(login).toMatchObject({ provider: "meta", reason: "no_ads_account" });
+    expect((await systemDb.auditLog.findFirstOrThrow({ where: { action: "ads.login_connected" } })).metadata).toMatchObject({ provider: "meta", reason: "no_ads_account" });
+
+    // Still none: it keeps waiting.
+    expect((await check(login!.id)).json()).toEqual({ waiting: true, reason: "no_ads_account" });
+    // The person gets an ad account: "Check for ad accounts" connects it, and the login's row goes.
+    w.metaAccounts = [{ id: "act_9", name: "New ads" }];
+    expect((await check(login!.id)).json()).toEqual({ connected: 1 });
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId } });
+    expect(row).toMatchObject({ provider: "meta", accountId: "act_9", source: "nango", sourceLoginId: connectionId, externalUserId: "4242" });
+    expect(await logins()).toEqual([]);
+    expect(w.deleted).toEqual([]);
+    expect(ctx.deps.queues.sent.sync).toEqual([expect.objectContaining({ kind: "ads", connectionId: row.id })]);
+  });
+
+  it("the cron tick connects them by itself, and leaves more than it connects unasked for the person's choice", async () => {
+    w.metaAccounts = [];
+    await connectThrough("meta");
+    const later = Date.now() + 2 * 3600_000;
+    // Not due yet: nothing is asked.
+    expect(await checkAdLogins(deps())).toEqual({ checked: 0, connected: 0, ended: 0 });
+    w.metaAccounts = Array.from({ length: 11 }, (_, i) => ({ id: `act_${i + 1}`, name: `Ads ${i + 1}` }));
+    expect(await checkAdLogins(deps(), { now: later })).toEqual({ checked: 1, connected: 0, ended: 0 });
+    expect((await logins())[0]).toMatchObject({ reason: "choose" });
+    expect(await systemDb.adConnection.count()).toBe(0);
+    w.metaAccounts = [
+      { id: "act_1", name: "Shop ads" },
+      { id: "act_2", name: "EU ads" },
+    ];
+    expect(await checkAdLogins(deps(), { now: later + 2 * 3600_000 })).toEqual({ checked: 1, connected: 1, ended: 0 });
+    expect((await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } })).map((r) => r.accountId)).toEqual(["act_1", "act_2"]);
+    expect(await logins()).toEqual([]);
+  });
+
+  it("Meta not answering in time keeps the login too, asked again sooner; an access that ended lets it go", async () => {
+    w.metaAccountsDown = true;
+    const { done, connectionId } = await connectThrough("meta");
+    expect(done.json()).toMatchObject({ waiting: true, reason: "unanswered" });
+    expect(await checkAdLogins(deps(), { now: Date.now() + 15 * 60_000 })).toEqual({ checked: 1, connected: 0, ended: 0 });
+    // Nango can't renew the token any more: let go, nothing left to wait with.
+    w.connections.get(connectionId)!.dead = true;
+    forgetNangoToken();
+    expect(await checkAdLogins(deps(), { now: Date.now() + 30 * 60_000 })).toEqual({ checked: 1, connected: 0, ended: 1 });
+    expect(await logins()).toEqual([]);
+  });
+
+  it("disconnecting it gives the grant back and deletes the Nango connection", async () => {
+    w.metaAccounts = [];
+    const { connectionId } = await connectThrough("meta");
+    const [login] = await logins();
+    const other = await signIn(ctx, "nango-other", "other@x.com");
+    expect((await ctx.app.inject({ method: "DELETE", url: `${adsUrl()}/logins/${login!.id}`, headers: other.headers })).statusCode).toBe(404);
+    const del = await ctx.app.inject({ method: "DELETE", url: `${adsUrl()}/logins/${login!.id}`, headers });
+    expect(del.json()).toEqual({ ok: true, revoked: "revoked" });
+    expect(w.metaRevoked).toBe(1);
+    expect(w.deleted).toEqual([connectionId]);
+    expect(await logins()).toEqual([]);
+  });
+
+  it("is let go once accounts are connected with another sign-in, keeping the person's grant for them", async () => {
+    w.metaAccounts = [];
+    const waiting = await connectThrough("meta");
+    w.metaAccounts = [{ id: "act_1", name: "Shop ads" }];
+    const again = await connectThrough("meta");
+    expect(again.done.json()).toEqual({ connected: 1, provider: "meta" });
+    expect(await logins()).toEqual([]);
+    expect(w.deleted).toEqual([waiting.connectionId]);
+    expect(w.metaRevoked).toBe(0);
+  });
+
+  it("goes with its Nango connection, with the person removing bizinsights on Facebook, or asking for their data to be deleted", async () => {
+    w.metaAccounts = [];
+    const first = await connectThrough("meta");
+    // Never swept as a connection nobody finished.
+    await webhook({ type: "auth", operation: "creation", success: true, connectionId: first.connectionId, providerConfigKey: "bizinsights-meta-ads" });
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 25 * 60_000);
+    expect(await sweepNangoOrphans(ctx.deps.coord, w.fetchImpl)).toBe(0);
+    vi.restoreAllMocks();
+    expect((await webhook({ from: "nango", type: "auth", operation: "deletion", success: true, connectionId: first.connectionId, providerConfigKey: "bizinsights-meta-ads", environment: "prod" })).statusCode).toBe(200);
+    expect(await logins()).toEqual([]);
+
+    await connectThrough("meta");
+    expect(await metaDeauthorized("4242", ctx.deps.coord)).toBe(0);
+    expect(await logins()).toEqual([]);
+    await connectThrough("meta");
+    await metaDataDeletion("4242", ctx.deps.coord);
+    expect(await systemDb.adLogin.count()).toBe(0);
   });
 });
 

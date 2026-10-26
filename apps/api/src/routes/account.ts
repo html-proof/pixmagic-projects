@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { systemDb, type User } from "@app/db";
-import { accountDeletionEmail, detachUserAdGrants, env, logger, revokeReleasedAdGrants } from "@app/core";
+import { accountDeletionEmail, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants } from "@app/core";
 import { accountPasswordProblem, EMAIL_CODE_RE, safeEqual, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
@@ -671,6 +671,8 @@ export function accountRoutes(app: App, deps: Deps) {
       const outcomes = await revokeReleasedAdGrants(released.grants, deps.fetchImpl);
       logger.info({ userId: user.id, released: released.released, outcomes }, "account deletion: ad connections released");
     }
+    // A login of theirs still waiting for its ad accounts: its row (the platform profile's name) and its grant go too.
+    await releaseAdLoginsWhere({ connectedByUserId: user.id }, deps.fetchImpl).catch((err: unknown) => logger.error({ err, userId: user.id }, "account deletion: waiting ad logins weren't released"));
     await recordAuthEvent("account_deleted", null, clientIp(c), { userId: user.id, identities: identities.length });
     clearSessionCookies(c);
     return c.json({ ok: true });

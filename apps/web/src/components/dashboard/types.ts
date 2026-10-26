@@ -591,8 +591,11 @@ export interface Overview {
     catalog?: CatalogModule;
     ads?: AdsModule;
     adsense?: AdsenseModule;
-    /** How many accounts of each platform are connected to the store, hidden ones included. */
-    ad_connections?: { meta: number; google: number; adsense: number; hidden: number };
+    /**
+     * How many accounts of each platform are connected to the store, hidden ones included. `waiting`:
+     * the platforms whose sign-in is connected with no ad account yet (absent from an older API).
+     */
+    ad_connections?: { meta: number; google: number; adsense: number; hidden: number; waiting?: string[] };
     /** Which platforms this server can connect (absent: none is set up). */
     ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
     /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
