@@ -311,6 +311,24 @@ describe("the code emailed after the password", () => {
     restore = () => {};
   });
 
+  it("isn't asked of an address on AUTH_LOGIN_CODE_EXEMPT (a reviewer's account): its password alone signs in, everyone else's doesn't", async () => {
+    const outer = restore;
+    const inner = withEnv({ AUTH_LOGIN_CODE_EXEMPT: " Review@X.com , other@x.com" });
+    restore = () => (inner(), outer());
+    const reviewer = ctx.auth.addUser({ sub: "u2", email: "review@x.com", name: "Reviewer" });
+    const res = await post("/auth/login", { email: "Review@x.com", password: reviewer.password });
+    expect(res.json()).toEqual({ user: expect.objectContaining({ email: "review@x.com" }) });
+    expect(cookie(res, "__session")).toBeDefined();
+    expect(cookie(res, "__login")).toBeUndefined();
+    expect(ctx.mailer.sent).toHaveLength(0);
+    // The password still has to be right.
+    expect((await post("/auth/login", { email: "review@x.com", password: `${reviewer.password}x` })).statusCode).toBe(401);
+    // Anyone else still gets the code.
+    const u = user();
+    expect((await post("/auth/login", { email: "a@x.com", password: u.password })).json()).toMatchObject({ next: "code" });
+    expect((await get("/auth/config")).json().loginCode).toBe(true);
+  });
+
   it("is announced to the pages", async () => {
     expect((await get("/auth/config")).json().loginCode).toBe(true);
   });

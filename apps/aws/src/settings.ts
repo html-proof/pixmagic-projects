@@ -76,6 +76,10 @@ export const APP_SETTINGS = {
   "AUTH_LOGIN_EMAIL_CODE": "1",
   "AUTH_CODE_LIMIT_HOURLY": "6",
   "AUTH_CODE_LIMIT_DAILY": "20",
+  // Addresses whose password alone signs in (comma-separated): the bizinsights account given to
+  // Meta's App Review reviewers, who can't read its inbox (docs/ads-review-packs.md). Empty it
+  // again once Meta has decided.
+  "AUTH_LOGIN_CODE_EXEMPT": "",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project

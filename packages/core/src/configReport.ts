@@ -48,7 +48,7 @@ export interface ConfigReport {
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
-  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean };
+  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
   /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
   sms: { mode: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean };
   credentials: ProviderCredentials[];
@@ -188,6 +188,8 @@ export function configReport(): ConfigReport {
       google: !!e.COGNITO_DOMAIN && e.COGNITO_IDENTITY_PROVIDERS.split(",").some((p) => p.trim() === "Google"),
       emailOtp: e.COGNITO_EMAIL_OTP === "1",
       loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
+      // How many addresses skip that code (never which).
+      loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
     },
     sms: { mode: e.SMS_MODE, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim() },
     credentials,
