@@ -1,5 +1,22 @@
 import { withTenant } from "@app/db";
-import { audit, env, getAccessToken, logger, ShopifyGraphqlError, ShopifyHttpError, shopifyGraphql, StoreDisconnectedError } from "@app/core";
+import {
+  audit,
+  CUSTOMER_PHONE_FIELDS,
+  customerPhone,
+  env,
+  getAccessToken,
+  logger,
+  SHOP_COUNTRY_FIELD,
+  ShopifyGraphqlError,
+  ShopifyHttpError,
+  shopifyGraphql,
+  StoreDisconnectedError,
+  storeCountryOf,
+  type ContactPhone,
+  type GqlCustomerPhones,
+  type GqlPhoneAddress,
+  type GqlShopCountry,
+} from "@app/core";
 import { allows, hasCapability, redactContact } from "@app/shared";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -13,8 +30,14 @@ import { limit, LIMITS } from "../rateLimit.js";
  * phone numbers pass through to the merchant's browser and nowhere else. That keeps the
  * "we store no customer personal data" promise on /privacy true, and leaves customer redaction
  * entirely to Shopify. On a live store Shopify returns these fields only once the app is
- * approved for protected customer data (Level 2: name, email, phone); until then they come back
- * withheld and the response says `restricted`.
+ * approved for protected customer data (Level 2: name, email, phone, and address, whose phone and
+ * country make a number complete); until then they come back withheld and the response says
+ * `restricted`.
+ *
+ * A phone number is the most complete one Shopify has (`customerPhone`): the profile's, else one
+ * typed at this checkout, into a saved address or with the last order, in international form when
+ * its country is known. Each row says where it came from and whether the country code is the
+ * store's, so the page never passes a guess off as the customer's own.
  *
  * Team & Access: the customer lists need "View customer list", unfinished checkouts "View checkout
  * abandonment", and inside them names, contact details and order history each their own
@@ -30,11 +53,11 @@ const CUSTOMER_FIELDS = `
   createdAt
   numberOfOrders
   amountSpent { amount currencyCode }
-  defaultEmailAddress { emailAddress marketingState }
-  defaultPhoneNumber { phoneNumber smsMarketingConsent { state } }`;
+  defaultEmailAddress { emailAddress marketingState }${CUSTOMER_PHONE_FIELDS}`;
 
 const CONTACTS_QUERY = `#graphql
   query Contacts($first: Int!, $abandoned: Boolean!, $customers: Boolean!) {
+    ${SHOP_COUNTRY_FIELD}
     abandonedCheckouts(first: $first, sortKey: CREATED_AT, reverse: true, query: "status:open") @include(if: $abandoned) {
       nodes {
         id
@@ -42,8 +65,8 @@ const CONTACTS_QUERY = `#graphql
         abandonedCheckoutUrl
         totalPriceSet { shopMoney { amount currencyCode } }
         lineItems(first: 3) { nodes { title quantity } }
-        shippingAddress { firstName lastName phone }
-        billingAddress { firstName lastName phone }
+        shippingAddress { firstName lastName phone countryCodeV2 }
+        billingAddress { firstName lastName phone countryCodeV2 }
         customer { ${CUSTOMER_FIELDS} }
       }
     }
@@ -55,23 +78,22 @@ const CONTACTS_QUERY = `#graphql
     }
   }`;
 
-interface GqlCustomer {
+/** The phone fields (`GqlCustomerPhones`) are all optional: a store not approved for them leaves them out. */
+interface GqlCustomer extends GqlCustomerPhones {
   id: string;
   displayName: string | null;
   createdAt: string;
   numberOfOrders: string | number | null;
   amountSpent: { amount: string; currencyCode: string } | null;
   defaultEmailAddress: { emailAddress: string | null; marketingState: string | null } | null;
-  defaultPhoneNumber: { phoneNumber: string | null; smsMarketingConsent?: { state: string | null } | null } | null;
 }
 
-interface GqlAddress {
+interface GqlAddress extends GqlPhoneAddress {
   firstName: string | null;
   lastName: string | null;
-  phone: string | null;
 }
 
-interface GqlContacts {
+interface GqlContacts extends GqlShopCountry {
   abandonedCheckouts?: {
     nodes: Array<{
       id: string;
@@ -91,22 +113,25 @@ interface GqlContacts {
 /** "gid://shopify/Customer/123" → "123". */
 const numericId = (gid: string) => gid.split("/").pop() ?? gid;
 
-function person(c: GqlCustomer | null, shopDomain: string) {
+/**
+ * `phone` is `customerPhone`'s answer: the number, its international form, as typed, where it was
+ * found, and Shopify's text-message consent (which also covers WhatsApp here), true only for the
+ * profile's own number.
+ */
+function person(c: GqlCustomer | null, shopDomain: string, phone: ContactPhone) {
   return {
     customerId: c ? numericId(c.id) : null,
     name: c?.displayName?.trim() || null,
     email: c?.defaultEmailAddress?.emailAddress ?? null,
-    phone: c?.defaultPhoneNumber?.phoneNumber ?? null,
+    ...phone,
     subscribed: c?.defaultEmailAddress?.marketingState === "SUBSCRIBED",
-    /** Agreed to marketing by text message (Shopify's SMS consent, which also covers WhatsApp here). */
-    smsSubscribed: c?.defaultPhoneNumber?.smsMarketingConsent?.state === "SUBSCRIBED",
     adminUrl: c ? `https://${shopDomain}/admin/customers/${encodeURIComponent(numericId(c.id))}` : null,
   };
 }
 
-function customerRow(c: GqlCustomer, shopDomain: string) {
+function customerRow(c: GqlCustomer, shopDomain: string, storeCountry: string | null) {
   return {
-    ...person(c, shopDomain),
+    ...person(c, shopDomain, customerPhone(c, { storeCountry })),
     createdAt: c.createdAt,
     orders: Number(c.numberOfOrders ?? 0),
     spent: Number(c.amountSpent?.amount ?? 0),
@@ -163,18 +188,22 @@ export function contactRoutes(app: App, deps: Deps) {
       }
     }
 
+    // The country a local number is read in when neither it nor its addresses say (the store's).
+    const storeCountry = await storeCountryOf(store.id, data);
+
     const abandoned = (data.abandonedCheckouts?.nodes ?? []).map((a) => {
       const items = a.lineItems?.nodes ?? [];
-      const who = person(a.customer, store.shopDomain);
       // A guest who never got a customer record still typed a name and often a phone number into
-      // the checkout's shipping or billing address: use those, so the merchant can reach them.
+      // the checkout's shipping or billing address: use those, so the merchant can reach them. The
+      // customer's own number comes first; the checkout's addresses right after.
+      const phone = customerPhone(a.customer, { checkout: { shipping: a.shippingAddress, billing: a.billingAddress }, storeCountry });
+      const who = person(a.customer, store.shopDomain, phone);
       const address = [a.shippingAddress, a.billingAddress].filter((x): x is GqlAddress => !!x);
       const addressName = address.map((x) => [x.firstName, x.lastName].filter(Boolean).join(" ").trim()).find(Boolean) ?? null;
       return {
         id: numericId(a.id),
         ...who,
         name: who.name ?? addressName,
-        phone: who.phone ?? address.map((x) => x.phone?.trim()).find(Boolean) ?? null,
         createdAt: a.createdAt,
         total: Number(a.totalPriceSet?.shopMoney.amount ?? 0),
         currency: a.totalPriceSet?.shopMoney.currencyCode ?? store.currency,
@@ -183,7 +212,7 @@ export function contactRoutes(app: App, deps: Deps) {
       };
     });
     const rows = (list: { nodes: Array<GqlCustomer | null> } | null | undefined) =>
-      (list?.nodes ?? []).filter((n): n is GqlCustomer => n !== null).map((n) => customerRow(n, store.shopDomain));
+      (list?.nodes ?? []).filter((n): n is GqlCustomer => n !== null).map((n) => customerRow(n, store.shopDomain, storeCountry));
     const subscribers = rows(data.subscribers).filter((s) => s.subscribed);
     const recent = rows(data.recent);
 

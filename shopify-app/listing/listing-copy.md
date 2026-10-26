@@ -196,7 +196,7 @@ against the code:
   every open logged); Postgres row-level security per workspace.
 
 The organisation questions (staff access, incident response, policies) are the owner's to answer.
-Level 2 (name, email, phone) is needed only for the optional "Customers to follow up" card.
+Level 2 (name, email, phone, address) is needed only for the optional "Customers to follow up" card: it reads the phone number and country of a customer's saved address, last order and checkout addresses to show a complete number with its country code.
 
 ---
 

@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { CUSTOMER_PHONE_SOURCE_LABEL, formatPhone } from "@app/shared/messaging";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, fmtMoney, fmtNum } from "@/lib/api";
@@ -78,9 +79,24 @@ function fill(template: string, p: ContactPerson, storeName: string, abandoned?:
     .trim();
 }
 
-/** "+61 400 000 000" → "61400000000": what wa.me wants (country code, digits only). */
-const waNumber = (phone: string) => phone.replace(/^00/, "+").replace(/[^\d]/g, "");
-const telNumber = (phone: string) => phone.replace(/[^\d+]/g, "");
+/**
+ * A person's number as the card uses it: shown whole ("+61 412 345 678"), copied and dialled in
+ * international form, or as typed when it has no country code we could read. `typed` is the
+ * customer's own spelling when it differs from the international one ("0412 345 678").
+ */
+function phoneOf(p: ContactPerson) {
+  if (!p.phone) return null;
+  const e164 = p.phoneE164 ?? null;
+  const raw = (p.phoneRaw ?? p.phone).trim();
+  return {
+    e164,
+    shown: e164 ? formatPhone(e164) : raw,
+    copy: e164 ?? raw,
+    // tel: and sms: links want digits (and a leading "+"), nothing else.
+    dial: e164 ?? raw.replace(/[^\d+]/g, ""),
+    typed: e164 && raw.replace(/[^\d+]/g, "") !== e164 ? raw : null,
+  };
+}
 
 /** Two letters for the avatar: initials of the name, else the start of the email. */
 function initials(p: ContactPerson) {
@@ -142,35 +158,74 @@ function CopyIcon({ text, label }: { text: string; label: string }) {
   );
 }
 
-/** Email or phone, each in its own box, with whether the person agreed to marketing on it. */
-function ContactBox({ kind, value, agreed }: { kind: "email" | "phone"; value: string | null; agreed: boolean }) {
-  const label = kind === "email" ? "Email" : "Phone";
+function ContactBox({ icon, label, children }: { icon: IconName; label: string; children: ReactNode }) {
   return (
     <div className="min-w-0 rounded-lg border border-border bg-bg px-3 py-2">
       <p className="flex items-center gap-1.5 text-xs text-muted">
-        <Icon name={kind === "email" ? "mail" : "phone"} className="h-3.5 w-3.5" />
+        <Icon name={icon} className="h-3.5 w-3.5" />
         {label}
       </p>
-      {value ? (
+      {children}
+    </div>
+  );
+}
+
+/** The email in its own box, with whether the person agreed to marketing emails. */
+function EmailBox({ p }: { p: ContactPerson }) {
+  return (
+    <ContactBox icon="mail" label="Email">
+      {p.email ? (
         <>
           <div className="mt-0.5 flex items-center justify-between gap-2">
-            <a
-              className="min-w-0 truncate font-medium hover:text-accent hover:underline"
-              href={kind === "email" ? `mailto:${value}` : `tel:${telNumber(value)}`}
-              data-testid={`contact-${kind}`}
-            >
-              {value}
+            <a className="min-w-0 truncate font-medium hover:text-accent hover:underline" href={`mailto:${p.email}`} data-testid="contact-email">
+              {p.email}
             </a>
-            <CopyIcon text={value} label={`Copy ${value}`} />
+            <CopyIcon text={p.email} label={`Copy ${p.email}`} />
           </div>
-          <p className={`mt-0.5 text-[11px] ${agreed ? "text-good" : "text-muted"}`}>
-            {kind === "email" ? (agreed ? "Agreed to marketing emails" : "Hasn't agreed to marketing emails") : agreed ? "Agreed to marketing texts" : "Hasn't agreed to marketing texts"}
-          </p>
+          <p className={`mt-0.5 text-[11px] ${p.subscribed ? "text-good" : "text-muted"}`}>{p.subscribed ? "Agreed to marketing emails" : "Hasn't agreed to marketing emails"}</p>
         </>
       ) : (
-        <p className="mt-0.5 text-sm text-muted">{kind === "email" ? "No email on file" : "No phone number on file"}</p>
+        <p className="mt-0.5 text-sm text-muted">No email on file</p>
       )}
-    </div>
+    </ContactBox>
+  );
+}
+
+/**
+ * The whole phone number, never cut short, and where in Shopify it was found. A country code the
+ * store's country supplied is said to be so, and so is the customer's own spelling, so a guess never
+ * passes for what they typed. Shopify records text-message consent on the profile's number only.
+ */
+function PhoneBox({ p }: { p: ContactPerson }) {
+  const phone = phoneOf(p);
+  // Older answers had no source: their number was the profile's, or an address's without consent.
+  const fromProfile = !p.phoneSource || p.phoneSource === "customer";
+  return (
+    <ContactBox icon="phone" label="Phone">
+      {phone ? (
+        <>
+          <div className="mt-0.5 flex items-start justify-between gap-2">
+            <a className="min-w-0 break-words pt-1 font-medium tabular-nums hover:text-accent hover:underline" href={`tel:${phone.dial}`} data-testid="contact-phone">
+              {phone.shown}
+            </a>
+            <CopyIcon text={phone.copy} label={`Copy ${phone.shown}`} />
+          </div>
+          <div className="mt-0.5 space-y-0.5 text-[11px] text-muted">
+            {p.phoneSource && <p data-testid="contact-phone-source">{CUSTOMER_PHONE_SOURCE_LABEL[p.phoneSource]}</p>}
+            {phone.typed && <p className="break-words">As typed: {phone.typed}</p>}
+            {p.phoneCountryAssumed && <p>Country code added from your store&apos;s country</p>}
+            {!phone.e164 && <p>This number has no country code</p>}
+            {fromProfile ? (
+              <p className={p.smsSubscribed ? "text-good" : ""}>{p.smsSubscribed ? "Agreed to marketing texts" : "Hasn't agreed to marketing texts"}</p>
+            ) : (
+              <p>No text-message consent is recorded for this number</p>
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="mt-0.5 text-sm text-muted">No phone number on file</p>
+      )}
+    </ContactBox>
   );
 }
 
@@ -234,10 +289,12 @@ function ContactRow({
   const [canShare, setCanShare] = useState(false);
   useEffect(() => setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function"), []);
 
-  const whatsapp = p.phone ? `https://wa.me/${waNumber(p.phone)}?text=${encodeURIComponent(message)}` : null;
+  const phone = phoneOf(p);
+  // wa.me wants the international number as digits only: without a country code it would open a chat with someone else.
+  const whatsapp = phone?.e164 ? `https://wa.me/${phone.e164.replace(/\D/g, "")}?text=${encodeURIComponent(message)}` : null;
   const email = p.email ? `mailto:${p.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}` : null;
   // "?&body=" is the form both iPhone and Android Messages read.
-  const sms = p.phone ? `sms:${telNumber(p.phone)}?&body=${encodeURIComponent(message)}` : null;
+  const sms = phone ? `sms:${phone.dial}?&body=${encodeURIComponent(message)}` : null;
   const best = whatsapp ? "whatsapp" : email ? "email" : "sms";
 
   return (
@@ -271,8 +328,8 @@ function ContactRow({
       ) : (
       <>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        <ContactBox kind="email" value={p.email} agreed={p.subscribed} />
-        <ContactBox kind="phone" value={p.phone} agreed={p.smsSubscribed} />
+        <EmailBox p={p} />
+        <PhoneBox p={p} />
       </div>
 
       {abandoned?.recoveryUrl && (
@@ -303,7 +360,14 @@ function ContactRow({
       <div className="mt-3">
         <p className="mb-1.5 text-xs font-medium text-muted">{abandoned ? "Send them the link to finish their purchase" : "Get in touch"}</p>
         <div className="flex flex-wrap items-center gap-2">
-          <SendButton label="WhatsApp" icon="chat" href={whatsapp} disabledReason={whatsapp ? null : "No phone number"} primary={best === "whatsapp"} testId="send-whatsapp" />
+          <SendButton
+            label="WhatsApp"
+            icon="chat"
+            href={whatsapp}
+            disabledReason={whatsapp ? null : phone ? "This number has no country code" : "No phone number"}
+            primary={best === "whatsapp"}
+            testId="send-whatsapp"
+          />
           <SendButton label="Email" icon="mail" href={email} disabledReason={email ? null : "No email address"} primary={best === "email"} testId="send-email" />
           <SendButton label="Text message" icon="phone" href={sms} disabledReason={sms ? null : "No phone number"} primary={best === "sms"} testId="send-sms" />
           {canShare && (
@@ -448,7 +512,9 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
   const current = TABS.find((t) => t.id === tab)!;
   const people: ContactPerson[] = lists[tab];
   const emails = people.map((x) => x.email).filter((e): e is string => !!e);
-  const phones = people.map((x) => x.phone).filter((e): e is string => !!e);
+  // International numbers, so the list works pasted anywhere; one with no country code as typed.
+  const phones = people.map((x) => phoneOf(x)?.copy).filter((e): e is string => !!e);
+  const noPhone = people.filter((x) => !x.phone).length;
   const setTemplate = (text: string) => {
     setTemplates((t) => ({ ...t, [tab]: text }));
     saveMessage(storeId, tab, text);
@@ -516,6 +582,21 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
                 ? lists.abandoned.map((a, i) => <ContactRow key={a.id} p={a} i={i} tab={tab} template={templates[tab]} storeName={storeName} abandoned={a} shown={shown} />)
                 : lists[tab].map((c, i) => <ContactRow key={c.customerId ?? i} p={c} i={i} tab={tab} template={templates[tab]} storeName={storeName} customer={c} shown={shown} />)}
             </ul>
+            {shown.contact && noPhone > 0 && (
+              <div className="mt-3 rounded-lg border border-border bg-bg px-3 py-2 text-xs text-muted" data-testid="contacts-no-phone">
+                <p>
+                  <span className="font-medium text-text">
+                    {noPhone === 1 ? "1 of these customers has no phone number." : `${fmtNum(noPhone)} of these customers have no phone number.`}
+                  </span>{" "}
+                  <a className="font-medium text-accent hover:underline" href={`https://${shopDomain}/admin/settings/checkout`} target="_blank" rel="noopener noreferrer">
+                    Ask for a phone number at checkout
+                  </a>
+                </p>
+                <p className="mt-0.5">
+                  In Shopify&apos;s Settings → Checkout, set the shipping address phone number to Required, or let customers check out with a phone number as their contact method.
+                </p>
+              </div>
+            )}
           </>
         )
       )}

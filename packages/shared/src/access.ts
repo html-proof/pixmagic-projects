@@ -660,6 +660,11 @@ interface ContactRow {
   name: string | null;
   email: string | null;
   phone: string | null;
+  /** The number in international form, as typed, where Shopify kept it, and whether its country code is the store's (`customerPhone`). */
+  phoneE164?: string | null;
+  phoneRaw?: string | null;
+  phoneSource?: string | null;
+  phoneCountryAssumed?: boolean;
   subscribed: boolean;
   smsSubscribed: boolean;
   adminUrl: string | null;
@@ -668,8 +673,8 @@ interface ContactRow {
 /**
  * A customer list row as this member may see it: personal details only with their own permission.
  * Without "View customer profiles" no name or Shopify link; without "View contact
- * information" no email, phone or checkout recovery link; without "View order history" no order
- * count or amount spent.
+ * information" no email, phone (in any form, nor where it came from) or checkout recovery link;
+ * without "View order history" no order count or amount spent.
  */
 export function redactContact<R extends ContactRow & { orders?: number | null; spent?: number | null; recoveryUrl?: string | null }>(row: R, access: MemberAccess): R {
   if (hasFullAccess(access.role)) return row;
@@ -678,6 +683,7 @@ export function redactContact<R extends ContactRow & { orders?: number | null; s
   if (!g.has("customers.profiles")) Object.assign(out, { name: null, adminUrl: null });
   if (!g.has("customers.contact")) {
     Object.assign(out, { email: null, phone: null });
+    if ("phoneE164" in out || "phoneRaw" in out || "phoneSource" in out) Object.assign(out, { phoneE164: null, phoneRaw: null, phoneSource: null, phoneCountryAssumed: false });
     if ("recoveryUrl" in out) Object.assign(out, { recoveryUrl: null });
   }
   if (!g.has("customers.orders") && "orders" in out) Object.assign(out, { orders: null, spent: null });

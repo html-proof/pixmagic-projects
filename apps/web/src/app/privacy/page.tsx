@@ -229,7 +229,10 @@ export default function PrivacyPage() {
         <p>
           To help you get back in touch, the dashboard shows the name, email address and phone number of shoppers who left a checkout
           unfinished, signed up for your newsletter or recently became customers, together with whether they agreed to receive
-          marketing emails. bizinsights reads this information from Shopify each time you open that card, and shows it only to the
+          marketing emails or texts. When a customer&apos;s profile has no usable phone number, it shows the one they typed at that
+          checkout, into their saved address or with their last order, and reads the country of those addresses (or, failing that,
+          your store&apos;s) to add the country code.
+          bizinsights reads this information from Shopify each time you open that card, and shows it only to the
           workspace&apos;s owners and admins and to members given permission to see customers&apos; contact details. It is not saved in our
           database; we record only that the card was viewed, and by whom, in your workspace&apos;s audit log.
         </p>
