@@ -149,21 +149,43 @@ One page, its tabs in `?tab=`. Until the setup is done it opens on **Setup**; af
      (`settings.testIsLinkedNumber`). Cloud API numbers still get a code.
 - **Overview**: connection health as last reported (Check again), the automation state, sent today
   against the limit, what waits and why, 7- and 30-day counts from each message's own record, the
-  latest messages.
+  latest messages. Once the setup is done and while no automation is on, **Turn on your first
+  automation** offers order confirmation, shipping update and cart reminder (owners and admins);
+  each opens its dialog on the Automations tab (`?tab=automations&preset=<key>`).
 - **Messages**: every message, filtered by status, direction, source, automation, campaign, dates
   and (with contact access) a customer's number; each one's status history; **Retry** for a failed
   one; **Send a message** (reason, consent attestation, text or template, optional image or PDF).
-- **Automations**: trigger → conditions → template → recipient → delay and sending hours; ready-made
-  presets; switching on lists every reason it can't; **test mode is on for every new automation**
-  (it sends only to the verified test number until switched off); each automation's runs and why
-  each one did or didn't send.
+- **Automations**: first the **ready-made automations**, one card per trigger
+  ([Ready-made automations](#ready-made-automations)): **Turn on** opens one short dialog, and one
+  button makes the template and switches the automation on, with no trip to the Templates tab. Then
+  **Your automations**, every automation of the store, each with its **On/Off** switch, its
+  **Sending to: your customers / only you** switch (test mode), Test, Edit and Delete (with a
+  confirmation); then **Build your own automation**, the advanced way: trigger → conditions →
+  template → recipient → delay. Every reason an automation can't be switched on is listed with a
+  link to the tab that fixes it (Setup, Settings or Templates). Each automation's runs say why each
+  one did or didn't send.
 - **Templates**: write with variables, checked as you type (unknown variables, marketing without a
-  way to stop, link shorteners); starters; on the Cloud API, submit to Meta and follow its review.
+  way to stop, link shorteners); starters; on the Cloud API, submit to Meta and follow its review. A
+  ready-made automation makes its own template (named after it) and, on the Cloud API, submits it
+  by itself, so this tab is only needed to write other messages or change one.
 - **Campaigns**: an audience of customers who agreed to marketing (country, new or returning,
   ordered within / not for N days, minimum orders or spend), a live count for the chosen template,
   launch now or later **only with the exact count confirmed**, cancel, a delivery report.
-- **Customers** (with "View contact information"): consent and its history, recording consent or an
-  opt-out given another way, the do-not-message list.
+- **Customers** (with "View contact information"), in two views:
+  - **All customers** (`GET …/whatsapp/customers`, `packages/core/src/whatsapp/shopifyCustomers.ts`):
+    the store's customers read live from Shopify, 50 a page, newest first or searched by name, email
+    or phone number. Each shows the whole number from wherever Shopify keeps one (profile, checkout,
+    saved address, last order, read with its address's country, else the store's), where it came
+    from, and what WhatsApp knows of it, joined by the number's keyed hash: agreed to marketing,
+    opted out, on the do-not-message list, not on WhatsApp, or new to WhatsApp. A line says how many
+    of those shown have no number, with a link to ask for one at checkout in Shopify. Owners and
+    admins can message a customer from their row (the send dialog, addressed in memory). Names and
+    the Shopify link need "View customer profiles", orders and spend "View order history". Nothing of
+    the list is stored; the search goes in the `x-search` header, never in the address.
+  - **Consent records**: the customers WhatsApp keeps (whole numbers), consent and its history,
+    recording consent or an opt-out given another way.
+
+  Then the do-not-message list (masked: it keeps no whole number).
 - **Settings**: Step 3's settings, Pause all automation / Resume, Reconnect, Disconnect, and
   Evolution API's licence notice.
 
@@ -240,8 +262,14 @@ token (constant-time).
   to it. Queries run under row-level security for that workspace, and every row carries
   `workspace_id` and `store_id`. A browser-supplied id is never trusted alone.
 - Instance names, instance tokens, webhook keys, the global key, QR codes (except to the person
-  pairing, with `cache-control: no-store`), Meta tokens and full phone numbers never
-  appear in an answer; numbers are masked, stored encrypted and matched by a keyed hash.
+  pairing, with `cache-control: no-store`) and Meta tokens never appear in an answer.
+- Customers' whole numbers appear only in the Customers tab's answers (`/customers`, `/contacts`),
+  only to owners, admins and members allowed to see contact details, sent `no-store`, and each
+  viewing is in the workspace's audit log (who, which store; never the numbers). Everywhere else
+  (messages, the do-not-message list, the linked phone, the test number) numbers are masked. The
+  numbers WhatsApp keeps are still only those it messages, who write, or whose consent is recorded:
+  stored encrypted and matched by a keyed hash. The tab's list of the store's Shopify customers is
+  read each time and never stored.
 - The logger redacts `apikey`, `token`, `jwt_key`, `qrcode`, `base64`, `pairingCode`, `remoteJid`,
   `ownerJid`, `wuid`, `text`.
 
@@ -251,7 +279,7 @@ token (constant-time).
 | --- | --- |
 | See the page and its data | **View campaigns** (`marketing.campaigns`) |
 | See how the connection stands (Settings → Integrations) | **View integration connection status** too: the overview answers that person with the connection alone |
-| See customers' numbers, names, what was said; the Customers tab | **View contact information** as well |
+| See customers' whole numbers and what was said; the Customers tab | **View contact information** as well (names there also need **View customer profiles**, orders and spend **View order history**); a shared link given these may look but never change anything |
 | Change what customers receive: settings, test number, templates, automations, campaigns, sends, retries, consent records, the do-not-message list | The store's **owners and admins** (`stores:manage`), signed in themselves |
 | Connect, reconnect, disconnect | **Manage integrations**, signed in themselves |
 
@@ -312,9 +340,75 @@ is switched on); a customer sends a message (with a cool-down). Shopify's webhoo
 
 Each automation runs **at most once per order, checkout, customer or message window** (a unique run
 row), records why it didn't send when it didn't (conditions, consent, no phone, stale event over 48
-hours, missing values, paused…), never triggers another, and starts in **test mode**. A trigger the
-store can't receive (the App Store app before Shopify approves protected customer data, no
-`read_customers`) is shown with why and can't be switched on.
+hours, missing values, paused…) and never triggers another. One made in the builder starts in
+**test mode**; a ready-made one goes to the store's customers unless the merchant picks "Only to me
+while I try it". A trigger the store can't receive (the App Store app before Shopify approves
+protected customer data, no `read_customers`) is shown with why and can't be switched on.
+
+- **Sending hours**: every automation message waits for the **store's** sending hours (Settings),
+  order confirmations included. An automation has no hours of its own: the builder no longer offers
+  them (the sender never read them) and saves `sendWindow: null` for a new one; an older row keeps
+  what it was saved with, unused.
+- **Why it can't be switched on**: every automation answer carries `problems` (the reasons, as
+  before) and `issues` (`[{ message, fix }]`, the same reasons with the tab that fixes each one:
+  `"setup"`, `"settings"`, `"templates"` or `null`), both from `automationIssues` in
+  `whatsapp/automations.ts`. A refused Activate, or a refused change to a switched-on automation,
+  carries both in `detail`.
+- **Sending to** (test mode) without the builder: `POST …/automations/:id/test-mode` with
+  `{ testMode: boolean }` (owners and admins, signed in; audited as `whatsapp.automation_test_mode`).
+  Switched to only you, what the automation still waits to send to customers (a reminder due later,
+  a message held for the sending hours) is cancelled (`manual_cancel`), so nothing more reaches a
+  customer from it. Back to your customers, the page asks first.
+
+### Ready-made automations
+
+One per trigger, in this order (`WA_AUTOMATION_PRESETS` in `@app/shared/whatsapp`; each has its
+card's one-line "when" and the dialog's sentence of exactly what happens):
+
+| Ready-made | Trigger | Kind | Sends |
+| --- | --- | --- | --- |
+| Order confirmation | an order is placed | order update | right away |
+| Payment received | an order is paid | order update | right away |
+| Shipping update | an order ships | order update | right away |
+| Order cancelled | an order is cancelled | order update | right away |
+| Cart reminder | a checkout is left unfinished | marketing | an hour later |
+| Welcome | a customer signs up | marketing | right away |
+| Auto-reply | a customer writes in | order update | right away, at most once a day per customer |
+
+Each card shows its message in a WhatsApp bubble with sample values and its state from the store's
+automations for that trigger: none yet (**Turn on**), its switches and 30-day count (and Edit, which
+opens the builder), or, when the store can't receive the trigger, why, with the button disabled.
+**Turn on** opens one dialog: the message (editable, with the trigger's details to insert, checked
+as you type, previewed), for a marketing one a note and, while marketing messages are off, a "Turn
+on marketing messages" box (unticked: the automation is saved off), who gets it ("Send to my
+customers", the default, or "Only to me while I try it", with the verified number masked), the one
+sentence of what will happen, and one button.
+
+That button is `POST …/automations/quick` with `{ preset, body?, sendTo: "customers" | "me",
+enableMarketing? }` (`waQuickAutomationSchema`; owners and admins, signed in; the templates' rate
+limit). In one store's lock (`wapp:quick:<store>`; a second press at the same time gets 409 `busy`):
+
+1. A trigger that already has an automation, whichever way it was made, is refused (409
+   `automation_exists`, `detail.id`): two would message a customer twice. A trigger the store can't
+   receive is refused (409 `trigger_unavailable`).
+2. The message is checked as a template of the trigger's kind would be, and for details the trigger
+   doesn't carry (`waAutomationMessageIssues`; 400 `template_invalid` with `detail.issues`).
+3. The store's own switched-on template with exactly that text and kind is reused (one that can be
+   sent now first); otherwise a template is made, named after the ready-made automation ("Order
+   confirmation", then "Order confirmation 2"… as names are unique per store).
+4. On the Cloud API, a template Meta hasn't seen goes to Meta for review (the same sample values
+   as the Templates tab's Submit); the automation stays off until Meta approves it, and the answer's
+   `notice` says so.
+5. A marketing one with `enableMarketing` switches marketing messages on, and only that setting
+   (`setMarketingEnabled`, audited as `whatsapp.marketing_switched`). Each customer still needs their
+   own yes to marketing.
+6. The automation is saved (the preset's name, description, trigger and wait, no conditions, the
+   customer's phone, the store's sending hours, test mode only for `sendTo: "me"`) and, when nothing
+   stops it, switched on (a Welcome subscribes Shopify's customers/create, as Activate does).
+
+The answer (201) is `{ automation, template, activated, problems, issues, notice }`: saved but off
+(setup not finished, marketing off, Meta reviewing, Shopify refusing new customers' events), it
+says why, each reason with where to fix it.
 
 ## Data and retention
 

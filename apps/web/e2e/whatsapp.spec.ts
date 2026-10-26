@@ -90,6 +90,63 @@ test("an owner links a phone, configures, verifies their number and sees WhatsAp
   await expect(page.getByText("Connected").first()).toBeVisible();
 });
 
+test("an owner turns a ready-made automation on in one dialog, then sends it only to themselves", async ({ page }) => {
+  const { store } = await ownerWithStore(page);
+  const testNumber = `614${String(Date.now()).slice(-8)}`;
+  await page.goto("/dashboard/whatsapp-automation");
+  await page.getByRole("radio", { name: /Link a WhatsApp phone with a QR code/ }).check();
+  await page.getByRole("checkbox", { name: /the way WhatsApp Web does/ }).check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("wa-start-pairing").click();
+  await expect(page.getByTestId("wa-qr")).toBeVisible();
+  await control("scan", { phone: "61400000099" });
+  await expect(page.getByRole("heading", { name: "3. Configure" })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("radio", { name: /Customers told at checkout/ }).check();
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await page.getByLabel("Your WhatsApp number").fill(`+${testNumber}`);
+  await page.getByRole("button", { name: "Send code" }).click();
+  await expect.poll(async () => (await sendsTo(testNumber)).length, { timeout: 15_000 }).toBe(1);
+  await page.getByLabel("The code from WhatsApp").fill(/is (\d{6})\./.exec((await sendsTo(testNumber))[0]!.text ?? "")![1]!);
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByText(/^Verified: \+61/)).toBeVisible();
+  await page.getByRole("button", { name: "Send test to my number" }).click();
+  await expect.poll(async () => (await sendsTo(testNumber)).length, { timeout: 30_000 }).toBe(2);
+  await control("report", { id: (await sendsTo(testNumber))[1]!.id, status: "SERVER_ACK" });
+  await expect(page.getByRole("heading", { name: "WhatsApp Automation is set up" })).toBeVisible({ timeout: 20_000 });
+
+  // The completion screen leads to the ready-made automations; one the store can't use says why.
+  await page.getByRole("link", { name: "Turn on ready-made automations" }).click();
+  const card = page.getByTestId("wa-preset-order_confirmation");
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("wa-preset-welcome").getByRole("button", { name: "Turn on" })).toBeDisabled();
+  await expect(page.getByTestId("wa-preset-welcome")).toContainText("read your customers");
+
+  // One dialog: the message (edit it if you like), who gets it, exactly what happens, one button.
+  await card.getByRole("button", { name: "Turn on" }).click();
+  const dialog = page.getByTestId("wa-quick-dialog");
+  await expect(dialog.getByLabel("The message")).toHaveValue(/thanks for your order \{\{order_number\}\}/);
+  await expect(dialog.getByText(/^Hi Sam, thanks for your order #1042/)).toBeVisible();
+  await expect(dialog.getByRole("radio", { name: /Send to my customers/ })).toBeChecked();
+  await expect(page.getByTestId("wa-quick-what-happens")).toContainText("Every customer who places an order gets this message on WhatsApp, within your sending hours.");
+  await dialog.getByRole("button", { name: "Turn on" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(card.getByRole("switch")).toBeChecked({ timeout: 15_000 });
+  await expect(card.getByRole("radio", { name: "Your customers" })).toBeChecked();
+  await expect(card.getByText("Customers get it from the next time this happens.")).toBeVisible();
+  const saved = async () => (await db.query<{ status: string; test_mode: boolean }>(`SELECT status, test_mode FROM wapp_automations WHERE store_id = $1`, [store])).rows;
+  expect(await saved()).toEqual([{ status: "active", test_mode: false }]);
+
+  // "Sending to": only you, from the card.
+  await card.getByText(/^Only you/).click();
+  await expect(card.getByRole("radio", { name: /Only you/ })).toBeChecked({ timeout: 15_000 });
+  await expect.poll(saved).toEqual([{ status: "active", test_mode: true }]);
+  // Back to customers asks first.
+  await card.getByText("Your customers").click();
+  await expect(page.getByRole("dialog", { name: 'Send "Order confirmation" to your customers?' })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(card.getByRole("radio", { name: /Only you/ })).toBeChecked();
+});
+
 test("the linked phone's own number is verified without a code, and the page says where its tests land", async ({ page }) => {
   await ownerWithStore(page);
   const linked = `614${String(Date.now()).slice(-8)}`;

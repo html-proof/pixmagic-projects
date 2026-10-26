@@ -10,16 +10,25 @@ import {
   statusAfterReport,
   statusBucket,
   variablesIn,
+  waAutomationMessageIssues,
   waAutomationSchema,
   waConsentProblem,
   waHasErrors,
   waIsStart,
   waIsStop,
   WaMissingValueError,
+  waMissingVariables,
+  waPreset,
+  waPresetStarter,
+  waQuickAutomationSchema,
   waSendSchema,
   waSetupProgress,
   waTemplateIssues,
+  WA_AUTOMATION_PRESETS,
+  WA_PRESET_KEYS,
   WA_STARTER_TEMPLATES,
+  WA_TRIGGER_INFO,
+  WA_TRIGGERS,
   type WaFacts,
 } from "../src/whatsapp";
 
@@ -153,6 +162,55 @@ describe("automations", () => {
     expect(a.recipient).toBe("customer");
     expect(() => waAutomationSchema.parse({ name: "x", trigger: "customer_created", templateId: "t1", conditions: [{ field: "order_total", op: "gte", value: 1 }] })).toThrow();
     expect(() => waAutomationSchema.parse({ name: "x", trigger: "order_created", templateId: "t1", cooldownMinutes: 60 })).toThrow();
+  });
+});
+
+describe("ready-made automations", () => {
+  it("has one for every trigger, each with a starter of its trigger's kind that passes the checks for it", () => {
+    expect(WA_AUTOMATION_PRESETS.map((p) => p.key)).toEqual([...WA_PRESET_KEYS]);
+    expect(new Set(WA_AUTOMATION_PRESETS.map((p) => p.trigger))).toEqual(new Set(WA_TRIGGERS));
+    for (const p of WA_AUTOMATION_PRESETS) {
+      const starter = waPresetStarter(p);
+      const info = WA_TRIGGER_INFO[p.trigger];
+      expect(starter, p.key).toBeTruthy();
+      expect(starter.category, p.key).toBe(info.category);
+      expect(waTemplateIssues({ body: starter.body, category: info.category }), p.key).toEqual([]);
+      expect(waAutomationMessageIssues(starter.body, p.trigger), p.key).toEqual([]);
+      for (const v of variablesIn(starter.body)) expect([...info.variables, "store_name"], `${p.key}: {{${v}}}`).toContain(v);
+      expect(p.delayMinutes, p.key).toBe(info.defaultDelayMinutes);
+      expect(p.when.length, p.key).toBeGreaterThan(0);
+      expect(p.sentence, p.key).toMatch(/sending hours/);
+      expect(waPreset(p.key)).toBe(p);
+    }
+  });
+
+  it("makes every marketing one say how to stop", () => {
+    const marketing = WA_AUTOMATION_PRESETS.filter((p) => WA_TRIGGER_INFO[p.trigger].category === "marketing");
+    expect(marketing.map((p) => p.key)).toEqual(["cart_reminder", "welcome"]);
+    for (const p of marketing) {
+      expect(waPresetStarter(p).body, p.key).toMatch(/\bstop\b/i);
+      expect(p.sentence, p.key).toMatch(/agreed to marketing/);
+      // Edited without it, the message is refused.
+      expect(waHasErrors(waAutomationMessageIssues("Come back, {{customer_first_name}}!", p.trigger)), p.key).toBe(true);
+    }
+  });
+
+  it("refuses a message with a value its trigger doesn't carry, once", () => {
+    const issues = waAutomationMessageIssues("Hi {{customer_first_name}}, track it: {{tracking_url}}", "order_created");
+    expect(issues).toEqual([{ level: "error", message: expect.stringMatching(/\{\{tracking_url\}\}/) }]);
+    expect(waMissingVariables("{{store_name}} {{tracking_url}} {{nonsense}}", "order_created")).toEqual(["tracking_url", "nonsense"]);
+    // An unknown name is the template check's error alone.
+    expect(waAutomationMessageIssues("Hi {{first_name}}", "order_created")).toHaveLength(1);
+    expect(waMissingVariables("{{tracking_url}}", "order_fulfilled")).toEqual([]);
+  });
+
+  it("takes a preset, an edited message and who it goes to, sending to customers unless asked", () => {
+    expect(waQuickAutomationSchema.parse({ preset: "order_confirmation" })).toEqual({ preset: "order_confirmation", sendTo: "customers" });
+    expect(waQuickAutomationSchema.parse({ preset: "welcome", body: "  Hi!  ", sendTo: "me", enableMarketing: true })).toEqual({ preset: "welcome", body: "Hi!", sendTo: "me", enableMarketing: true });
+    expect(() => waQuickAutomationSchema.parse({ preset: "nope" })).toThrow();
+    expect(() => waQuickAutomationSchema.parse({ preset: "order_confirmation", body: "   " })).toThrow();
+    expect(() => waQuickAutomationSchema.parse({ preset: "order_confirmation", body: "x".repeat(1025) })).toThrow();
+    expect(() => waQuickAutomationSchema.parse({ preset: "order_confirmation", sendTo: "everyone" })).toThrow();
   });
 });
 

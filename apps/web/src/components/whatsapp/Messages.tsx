@@ -288,11 +288,15 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-function Composer({ base, overview, onClose, onSent }: { base: string; overview: WaOverview; onClose: () => void; onSent: () => void }) {
+/**
+ * The send dialog. `initialPhone` (and the customer's name, for the title) start it addressed to one
+ * customer, as the Customers tab's Message button does: the number is kept in memory, never in the address.
+ */
+export function Composer({ base, overview, onClose, onSent, initialPhone, initialName }: { base: string; overview: WaOverview; onClose: () => void; onSent: () => void; initialPhone?: string; initialName?: string | null }) {
   const id = useId();
   const templates = useApi<WaTemplatesResponse>(`${base}/templates`);
   const { busy, run } = useWaAction();
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState(initialPhone ?? "");
   const [country, setCountry] = useState("");
   const [reason, setReason] = useState<WaSendReason>("order_update");
   const [templateId, setTemplateId] = useState("");
@@ -322,7 +326,7 @@ function Composer({ base, overview, onClose, onSent }: { base: string; overview:
     });
 
   return (
-    <Dialog open title="Send a WhatsApp message" onClose={onClose}>
+    <Dialog open title={initialName ? `Send a WhatsApp message to ${initialName}` : "Send a WhatsApp message"} onClose={onClose}>
       {sent ? (
         <div className="space-y-3">
           <LiveStatus base={base} messageId={sent} />

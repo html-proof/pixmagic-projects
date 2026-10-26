@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import { systemDb, type Store } from "@app/db";
-import { dispatchCampaign, processWebhookEvent, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
+import { dispatchCampaign, encryptTokenFields, processWebhookEvent, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
+import { WA_STARTER_TEMPLATES } from "@app/shared";
 import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, QR_PNG, type EvolutionFake } from "../../../test-support/evolutionFake.js";
 import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -592,6 +593,173 @@ describe("automations from Shopify's events", () => {
   });
 });
 
+describe("ready-made automations in one go", () => {
+  async function ready(extra: Record<string, unknown> = {}) {
+    const o = await owner();
+    await connect(o);
+    await configure(o, extra);
+    await finishSetup(o);
+    const store = (await systemDb.store.findUniqueOrThrow({ where: { id: o.store.id } })) as Store;
+    return { o, store };
+  }
+  const quick = (o: Owner, payload: Record<string, unknown>) => o.call("POST", "/automations/quick", payload);
+
+  it("makes the template and switches the automation on, to customers unless asked, and customers get it", async () => {
+    const { o, store } = await ready();
+    const r = ok(await quick(o, { preset: "order_confirmation" }), 201);
+    expect(r).toMatchObject({ activated: true, problems: [], issues: [], notice: null });
+    expect(r.template).toMatchObject({ name: "Order confirmation", category: "transactional", usable: true });
+    expect(r.template.body).toMatch(/^Hi \{\{customer_first_name\}\}, thanks for your order \{\{order_number\}\}/);
+    expect(r.automation).toMatchObject({ name: "Order confirmation", trigger: "order_created", status: "active", testMode: false, templateId: r.template.id, sendWindow: null, recipient: "customer", conditions: [], problems: [], issues: [] });
+
+    // Only you while you try it: test mode.
+    const shipping = ok(await quick(o, { preset: "shipping_update", sendTo: "me" }), 201);
+    expect(shipping.automation).toMatchObject({ trigger: "order_fulfilled", status: "active", testMode: true });
+
+    evo.sends.length = 0;
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(3001), ctx.deps);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)!.body).toMatchObject({ number: "61412345678", text: expect.stringMatching(/^Hi Pat, thanks for your order #3001 from Green Leaf!/) });
+    const audits = (await systemDb.auditLog.findMany({ where: { workspaceId: o.ws, action: { startsWith: "whatsapp." } }, orderBy: { createdAt: "asc" } })).map((x) => x.action);
+    expect(audits).toEqual(expect.arrayContaining(["whatsapp.template_created", "whatsapp.automation_created", "whatsapp.automation_activated"]));
+  });
+
+  it("reuses the store's template with the same text, and gives a new one a free name", async () => {
+    const { o } = await ready();
+    const starter = WA_STARTER_TEMPLATES.find((t) => t.key === "payment_received")!;
+    const mine = ok(await o.call("POST", "/templates", { name: "Paid, thanks", category: "transactional", body: starter.body }), 201).template;
+    ok(await o.call("POST", "/templates", { name: "Order confirmation", category: "transactional", body: "Thanks {{customer_first_name}}!" }), 201);
+
+    const paid = ok(await quick(o, { preset: "payment_received" }), 201);
+    expect(paid.template.id).toBe(mine.id);
+    expect(paid.automation).toMatchObject({ templateId: mine.id, status: "active" });
+
+    const custom = ok(await quick(o, { preset: "order_confirmation", body: "  Thanks for order {{order_number}}, {{customer_first_name}}!  " }), 201);
+    expect(custom.template).toMatchObject({ name: "Order confirmation 2", body: "Thanks for order {{order_number}}, {{customer_first_name}}!" });
+    expect(custom.automation.status).toBe("active");
+    expect(await systemDb.wappTemplate.count({ where: { storeId: o.store.id } })).toBe(3);
+  });
+
+  it("refuses a second automation on a trigger, even two asked at once", async () => {
+    const { o } = await ready();
+    const first = ok(await quick(o, { preset: "order_confirmation" }), 201).automation;
+    const again = ok(await quick(o, { preset: "order_confirmation", sendTo: "me" }), 409);
+    expect(again).toMatchObject({ error: "automation_exists", detail: { id: first.id } });
+
+    // One built in the builder counts too.
+    const t = ok(await o.call("POST", "/templates", { name: "Paid", category: "transactional", body: "Paid, thanks {{customer_first_name}}." }), 201).template;
+    const built = ok(await o.call("POST", "/automations", { name: "Paid", trigger: "order_paid", templateId: t.id }), 201).automation;
+    expect(ok(await quick(o, { preset: "payment_received" }), 409)).toMatchObject({ error: "automation_exists", detail: { id: built.id } });
+
+    const both = await Promise.all([quick(o, { preset: "order_cancelled" }), quick(o, { preset: "order_cancelled" })]);
+    expect(both.map((r) => r.statusCode).sort()).toEqual([201, 409]);
+    expect(["automation_exists", "busy"]).toContain(both.find((r) => r.statusCode === 409)!.json().error);
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id, trigger: "order_cancelled" } })).toBe(1);
+    expect(await systemDb.wappTemplate.count({ where: { storeId: o.store.id, name: { startsWith: "Order cancelled" } } })).toBe(1);
+  });
+
+  it("saves it off before the setup is done, saying where to fix each thing", async () => {
+    const o = await owner();
+    await connect(o);
+    const r = ok(await quick(o, { preset: "order_confirmation" }), 201);
+    expect(r.activated).toBe(false);
+    expect(r.automation.status).toBe("draft");
+    expect(r.problems).toEqual(r.issues.map((i: { message: string }) => i.message));
+    expect(r.issues).toEqual(
+      expect.arrayContaining([
+        { message: expect.stringMatching(/Step 3/), fix: "setup" },
+        { message: expect.stringMatching(/Step 4/), fix: "setup" },
+        { message: "Choose how customers agree to order updates in Settings.", fix: "settings" },
+      ]),
+    );
+    // The list says the same, and the automation is switched on once the setup is done.
+    const [listed] = ok(await o.call("GET", "/automations")).automations;
+    expect(listed).toMatchObject({ id: r.automation.id, issues: r.issues, problems: r.problems });
+    await configure(o);
+    await finishSetup(o);
+    expect(ok(await o.call("POST", `/automations/${r.automation.id}/activate`)).automation.status).toBe("active");
+  });
+
+  it("says marketing is off for a marketing one, and switches it on when asked", async () => {
+    const { o } = await ready({ marketingEnabled: false });
+    const welcome = ok(await quick(o, { preset: "welcome" }), 201);
+    expect(welcome.activated).toBe(false);
+    expect(welcome.issues).toEqual([{ message: "Marketing messages are switched off in Settings.", fix: "settings" }]);
+    expect(ok(await o.call("GET")).settings.marketingEnabled).toBe(false);
+
+    const cart = ok(await quick(o, { preset: "cart_reminder", enableMarketing: true }), 201);
+    expect(cart).toMatchObject({ activated: true, issues: [] });
+    expect(cart.template).toMatchObject({ name: "Cart reminder", category: "marketing" });
+    expect(cart.automation).toMatchObject({ trigger: "checkout_abandoned", status: "active", delayMinutes: 60 });
+    expect(ok(await o.call("GET")).settings).toMatchObject({ marketingEnabled: true, orderUpdates: "checkout_notice", sendWindow: { start: 0, end: 24 } });
+    expect(await systemDb.auditLog.findFirst({ where: { workspaceId: o.ws, action: "whatsapp.marketing_switched" } })).toMatchObject({ actorUserId: o.user.id, metadata: { marketingEnabled: true } });
+    // An order update never switches marketing on.
+    ok(await o.call("PUT", "/settings", { ...SETTINGS, marketingEnabled: false }));
+    ok(await quick(o, { preset: "order_cancelled", enableMarketing: true }), 201);
+    expect(ok(await o.call("GET")).settings.marketingEnabled).toBe(false);
+  });
+
+  it("refuses a message that breaks the rules, and a trigger the store can't use, creating nothing", async () => {
+    const { o } = await ready();
+    for (const [preset, text] of [
+      ["order_confirmation", "Hi {{first_name}}"],
+      ["order_confirmation", "Your parcel: {{tracking_url}}"],
+      ["cart_reminder", "You left something behind, {{customer_first_name}}!"],
+    ] as const) {
+      const res = ok(await quick(o, { preset, body: text }), 400);
+      expect(res.error, text).toBe("template_invalid");
+      expect(res.detail.issues.length, text).toBeGreaterThan(0);
+    }
+    expect(ok(await quick(o, { preset: "nope" }), 400).error).toBe("validation");
+    await systemDb.store.update({ where: { id: o.store.id }, data: { grantedScopes: ["read_orders"] } });
+    expect(ok(await quick(o, { preset: "welcome" }), 409).error).toBe("trigger_unavailable");
+    expect(await systemDb.wappTemplate.count({ where: { storeId: o.store.id } })).toBe(0);
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id } })).toBe(0);
+  });
+
+  it("switches between customers and only you, audited, cancelling what still waits for customers", async () => {
+    const { o, store } = await ready();
+    const a = ok(await quick(o, { preset: "order_confirmation" }), 201).automation;
+    await whatsappOnShopifyEvent(store, "orders/create", ORDER(4001), ctx.deps);
+    const waiting = await systemDb.wappMessage.findFirstOrThrow({ where: { automationId: a.id } });
+    expect(waiting).toMatchObject({ status: "queued", contactId: expect.any(String) });
+
+    const toMe = ok(await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: true }));
+    expect(toMe).toMatchObject({ automation: { id: a.id, testMode: true, status: "active", issues: [] }, cancelled: 1 });
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: "cancelled", reason: "manual_cancel" });
+    // Its job finds nothing to send: the customer gets nothing.
+    const before = evo.sends.length;
+    expect(await drain()).toEqual(["not_due"]);
+    expect(evo.sends.length).toBe(before);
+    const back = ok(await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: false }));
+    expect(back).toMatchObject({ automation: { testMode: false }, cancelled: 0 });
+    const audits = await systemDb.auditLog.findMany({ where: { workspaceId: o.ws, action: "whatsapp.automation_test_mode" }, orderBy: { createdAt: "asc" } });
+    expect(audits.map((x) => [x.targetId, x.actorUserId, (x.metadata as { testMode: boolean }).testMode])).toEqual([
+      [a.id, o.user.id, true],
+      [a.id, o.user.id, false],
+    ]);
+    expect(ok(await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: "yes" }), 400).error).toBe("validation");
+    expect(ok(await o.call("POST", "/automations/c000000000000000000000000/test-mode", { testMode: true }), 404).error).toBe("not_found");
+  });
+
+  it("lets neither a viewer nor a shared link use them", async () => {
+    const { o } = await ready();
+    const a = ok(await quick(o, { preset: "order_confirmation" }), 201).automation;
+    const v = await signIn(ctx, "v", "v@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact"] } });
+    ok(await ctx.app.inject({ method: "POST", url: `/workspaces/${o.ws}/team/invitations`, headers: o.headers, payload: { email: "guest@example.com", role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact", "integrations.status", "integrations.manage"] } }));
+    const mail = [...ctx.mailer.sent].reverse().find((x) => x.to === "guest@example.com")!;
+    const token = /#token=([A-Za-z0-9_-]+)/.exec(mail.text)![1];
+    const link = { cookie: cookiesFrom(await ctx.app.inject({ method: "POST", url: "/invitations/open", headers: ORIGIN, payload: { token } })), ...ORIGIN };
+    for (const headers of [v.headers, link]) {
+      expect((await o.call("POST", "/automations/quick", { preset: "shipping_update" }, headers)).statusCode).toBe(403);
+      expect((await o.call("POST", `/automations/${a.id}/test-mode`, { testMode: true }, headers)).statusCode).toBe(403);
+    }
+    expect(await systemDb.wappAutomation.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ testMode: false });
+    expect(await systemDb.wappAutomation.count({ where: { storeId: o.store.id } })).toBe(1);
+  });
+});
+
 function automationBody(a: { name: string; trigger: string; templateId: string; conditions: unknown[]; recipient: string; delayMinutes: number; sendWindow: unknown; testMode: boolean; cooldownMinutes: number | null; description: string | null }) {
   return { name: a.name, description: a.description, trigger: a.trigger, templateId: a.templateId, conditions: a.conditions, recipient: a.recipient, delayMinutes: a.delayMinutes, sendWindow: a.sendWindow, testMode: a.testMode, ...(a.cooldownMinutes != null ? { cooldownMinutes: a.cooldownMinutes } : {}) };
 }
@@ -742,5 +910,224 @@ describe("disconnecting", () => {
     // Connecting again makes a new instance.
     ok(await o.call("POST", "/connection", { method: "qr" }), 201);
     expect(await instanceOf(o)).not.toBe(name);
+  });
+});
+
+describe("the Customers tab: whole numbers, and the store's customers from Shopify", () => {
+  /** The store as connected to Shopify (a token bizinsights can use). */
+  async function connected(o: Owner, scopes = ["read_orders", "read_customers"]) {
+    await systemDb.store.update({ where: { id: o.store.id }, data: encryptTokenFields(o.store.id, { accessToken: "shpat_test", scopes, accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }) });
+  }
+
+  /** Shopify's Admin GraphQL answering `answer` for every query, next to the Evolution fake; returns what was asked. */
+  function shopify(answer: (req: { query: string; variables: Record<string, unknown> }) => unknown) {
+    const asked: Array<{ query: string; variables: Record<string, unknown> }> = [];
+    ctx.setFetch(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.includes(".myshopify.com/admin/api/")) return evo.fetch(input, init);
+      const req = JSON.parse(String(init?.body ?? "{}")) as { query: string; variables: Record<string, unknown> };
+      asked.push(req);
+      return new Response(JSON.stringify(answer(req)), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    return asked;
+  }
+
+  /** A member of the owner's workspace with these permissions. */
+  async function member(o: Owner, uid: string, permissions: string[]) {
+    const m = await signIn(ctx, uid, `${uid}@shop.test`);
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: m.user.id, role: "custom", permissions } });
+    return m.headers;
+  }
+
+  const search = (text: string, headers: Owner["headers"]) => ({ ...headers, "x-search": encodeURIComponent(text) });
+  const contactsCount = (o: Owner) => systemDb.wappContact.count({ where: { storeId: o.store.id } });
+
+  const node = (id: number, name: string | null, extra: Record<string, unknown> = {}) => ({
+    id: `gid://shopify/Customer/${id}`,
+    displayName: name,
+    numberOfOrders: "1",
+    amountSpent: { amount: "50.00", currencyCode: "AUD" },
+    defaultPhoneNumber: null,
+    defaultAddress: null,
+    lastOrder: null,
+    ...extra,
+  });
+  const PAGE_ONE = [
+    // The profile's own number, with Shopify's text-message consent.
+    node(11, "Jane Doe", { numberOfOrders: "2", amountSpent: { amount: "120.50", currencyCode: "AUD" }, defaultPhoneNumber: { phoneNumber: "+61412345678", smsMarketingConsent: { state: "SUBSCRIBED" } } }),
+    // Typed locally on the saved address: read in that address's country.
+    node(12, "Bob Lee", { defaultAddress: { phone: "0498 765 432", countryCodeV2: "AU" } }),
+    // Only on the last order's delivery address.
+    node(13, "Ana Ruiz", { lastOrder: { phone: null, shippingAddress: { phone: "0411 000 000", countryCodeV2: "AU" }, billingAddress: null } }),
+    // No country anywhere: the store's own (from Shopify's shop address), said to be assumed.
+    node(14, "Lee Wong", { lastOrder: { phone: "412 555 999", shippingAddress: null, billingAddress: null } }),
+    // Not a number WhatsApp could use: shown as typed.
+    node(15, "Kim Park", { defaultAddress: { phone: "12345", countryCodeV2: null } }),
+    node(16, "Sam Fox"),
+  ];
+  const answer = (nodes: unknown[], next: string | null = "CURSOR1") => ({
+    data: { shop: { shopAddress: { countryCodeV2: "AU" } }, customers: { pageInfo: { hasNextPage: !!next, endCursor: next }, nodes } },
+  });
+
+  it("shows the whole number of the customers WhatsApp keeps to those allowed to see contact details, and names with profiles", async () => {
+    const o = await owner();
+    const recorded = await o.call("POST", "/contacts/consent", { phone: "+61 412 345 678", scope: "marketing", status: "opted_in", note: "Asked at the counter" });
+    expect(recorded.headers["cache-control"]).toBe("no-store");
+    const { contact } = ok(recorded);
+    expect(contact.phone).toBe(CUSTOMER);
+    expect(contact.phoneMasked).toMatch(/^\+61 •+ 678$/);
+    await systemDb.wappContact.update({ where: { id: contact.id }, data: { firstNameEnc: waEncrypt(o.store.id, "name", "Pat") } });
+
+    const res = await o.call("GET", "/contacts");
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(ok(res).contacts).toEqual([expect.objectContaining({ id: contact.id, phone: CUSTOMER, phoneMasked: contact.phoneMasked, firstName: "Pat", marketing: "opted_in" })]);
+    // Viewing them is audited (who, which store), the numbers aren't in the log.
+    const log = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: o.ws, action: "whatsapp.contacts_viewed" } });
+    expect(log).toMatchObject({ actorUserId: o.user.id, targetId: o.store.id });
+    expect(JSON.stringify(await systemDb.auditLog.findMany({ where: { workspaceId: o.ws } }))).not.toContain("412345678");
+
+    // A number is searched for from a header, never the address; the old address form still works.
+    expect(ok(await o.call("GET", "/contacts", undefined, search("+61 412 345 678", o.headers))).contacts).toHaveLength(1);
+    expect(ok(await o.call("GET", "/contacts", undefined, search("+61 499 999 999", o.headers))).contacts).toHaveLength(0);
+    expect(ok(await o.call("GET", `/contacts?phone=${encodeURIComponent(CUSTOMER)}`)).contacts).toHaveLength(1);
+    expect(ok(await o.call("GET", "/contacts", undefined, search("0412", o.headers)), 400).error).toBe("invalid_phone");
+
+    // Contact details without customer profiles: the whole number, no name.
+    const contactOnly = await member(o, "m1", ["marketing.campaigns", "customers.list", "customers.contact"]);
+    expect(ok(await o.call("GET", "/contacts", undefined, contactOnly)).contacts[0]).toMatchObject({ phone: CUSTOMER, firstName: null });
+    const withProfiles = await member(o, "m2", ["marketing.campaigns", "customers.list", "customers.contact", "customers.profiles"]);
+    expect(ok(await o.call("GET", "/contacts", undefined, withProfiles)).contacts[0]).toMatchObject({ phone: CUSTOMER, firstName: "Pat" });
+    // Without "View contact information": neither list.
+    const noContact = await member(o, "m3", ["marketing.campaigns", "customers.list", "customers.profiles"]);
+    expect((await o.call("GET", "/contacts", undefined, noContact)).statusCode).toBe(403);
+    expect((await o.call("GET", "/customers", undefined, noContact)).statusCode).toBe(403);
+    // The do-not-message list keeps no whole number: still masked.
+    ok(await o.call("POST", "/suppressions", { phone: CUSTOMER, scope: "marketing" }), 201);
+    const [s] = ok(await o.call("GET", "/suppressions")).suppressions;
+    expect(s.phone).toMatch(/^\+61 •+ 678$/);
+  });
+
+  it("lists the store's customers live from Shopify with their whole numbers and WhatsApp's records for them, and stores none of it", async () => {
+    const o = await owner();
+    await connected(o);
+    // What WhatsApp already knows: one agreed to marketing, one opted out, one only on the do-not-message list.
+    const jane = ok(await o.call("POST", "/contacts/consent", { phone: CUSTOMER, scope: "marketing", status: "opted_in" })).contact;
+    const bob = ok(await o.call("POST", "/contacts/consent", { phone: "+61498765432", scope: "all", status: "opted_out" })).contact;
+    ok(await o.call("POST", "/suppressions", { phone: "+61411000000", scope: "marketing" }), 201);
+    const before = await contactsCount(o);
+    const suppressionsBefore = await systemDb.wappSuppression.count({ where: { storeId: o.store.id } });
+
+    const asked = shopify(() => answer(PAGE_ONE));
+    const res = await o.call("GET", "/customers");
+    expect(res.headers["cache-control"]).toBe("no-store");
+    const body = ok(res);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.variables).toEqual({ first: 50, after: null, query: null, sortKey: "CREATED_AT", reverse: true });
+    for (const field of ["pageInfo", "defaultPhoneNumber", "defaultAddress", "lastOrder", "shopAddress", "countryCodeV2"]) expect(asked[0]!.query).toContain(field);
+    expect(body).toMatchObject({ restricted: false, nextCursor: "CURSOR1", page: { count: 6, withNumber: 5, withoutCountryCode: 1 }, shown: { names: true, orders: true }, shopAdminUrl: "https://u1.myshopify.com/admin" });
+
+    const [j, b, a, l, k, s] = body.customers;
+    expect(j).toEqual({
+      customerId: "11",
+      name: "Jane Doe",
+      adminUrl: "https://u1.myshopify.com/admin/customers/11",
+      phone: CUSTOMER,
+      phoneE164: CUSTOMER,
+      phoneRaw: CUSTOMER,
+      phoneSource: "customer",
+      phoneCountryAssumed: false,
+      smsSubscribed: true,
+      orders: 2,
+      spent: 120.5,
+      currency: "AUD",
+      whatsapp: { contactId: jane.id, optedOut: false, optedIn: false, marketing: "opted_in", suppressed: null, notOnWhatsapp: false, lastOutboundAt: null },
+    });
+    expect(b).toMatchObject({ phone: "+61498765432", phoneRaw: "0498 765 432", phoneSource: "default_address", phoneCountryAssumed: false, smsSubscribed: false, whatsapp: { contactId: bob.id, optedOut: true, marketing: "opted_out", suppressed: null } });
+    expect(a).toMatchObject({ phone: "+61411000000", phoneSource: "last_order_shipping", whatsapp: { contactId: null, optedOut: false, marketing: "unknown", suppressed: "marketing" } });
+    expect(l).toMatchObject({ phone: "+61412555999", phoneRaw: "412 555 999", phoneSource: "last_order", phoneCountryAssumed: true, whatsapp: null });
+    expect(k).toMatchObject({ phone: "12345", phoneE164: null, phoneRaw: "12345", whatsapp: null });
+    expect(s).toMatchObject({ customerId: "16", phone: null, phoneE164: null, phoneSource: null, whatsapp: null });
+
+    // Nothing of it was written: no new contact, no new list entry, no number in the audit log.
+    expect(await contactsCount(o)).toBe(before);
+    expect(await systemDb.wappSuppression.count({ where: { storeId: o.store.id } })).toBe(suppressionsBefore);
+    const log = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: o.ws, action: "whatsapp.customers_viewed" } });
+    expect(log).toMatchObject({ actorUserId: o.user.id, targetId: o.store.id });
+    const dump = JSON.stringify(await systemDb.auditLog.findMany({ where: { workspaceId: o.ws } }));
+    expect(dump).not.toContain("Jane");
+    expect(dump).not.toContain("498765432");
+
+    // The next page, with Shopify's cursor.
+    const asked2 = shopify(() => answer([node(17, "Max Bell")], null));
+    expect(ok(await o.call("GET", "/customers?cursor=CURSOR1"))).toMatchObject({ nextCursor: null, customers: [{ customerId: "17" }] });
+    expect(asked2[0]!.variables).toMatchObject({ after: "CURSOR1", sortKey: "CREATED_AT" });
+    expect((await o.call("GET", "/customers?cursor=not%20a%20cursor")).statusCode).toBe(400);
+
+    // WhatsApp said lately that a number has no account: shown so.
+    await systemDb.wappContact.update({ where: { id: jane.id }, data: { notOnWhatsappAt: new Date(Date.now() - 2 * 86_400_000) } });
+    shopify(() => answer(PAGE_ONE.slice(0, 1)));
+    expect(ok(await o.call("GET", "/customers")).customers[0].whatsapp.notOnWhatsapp).toBe(true);
+  });
+
+  it("searches Shopify by name, email or the whole number, without the search in the address", async () => {
+    const o = await owner();
+    await connected(o);
+    const asked = shopify(() => answer(PAGE_ONE.slice(0, 1), null));
+    ok(await o.call("GET", "/customers", undefined, search("Jane", o.headers)));
+    expect(asked.at(-1)!.variables).toMatchObject({ query: "Jane", sortKey: "RELEVANCE", reverse: false });
+    // Shopify's own syntax (fields, phrases, NOT) is taken as plain words.
+    ok(await o.call("GET", "/customers", undefined, search('email:"bob" (x) -smith', o.headers)));
+    expect(asked.at(-1)!.variables.query).toBe("email bob x smith");
+    // An international number: searched as one.
+    const n = asked.length;
+    ok(await o.call("GET", "/customers", undefined, search("+61 412 345 678", o.headers)));
+    expect(asked.length).toBe(n + 1);
+    expect(asked.at(-1)!.variables.query).toBe("phone:+61412345678");
+    // A local one: read in the store's country (Shopify's shop address), then searched.
+    ok(await o.call("GET", "/customers", undefined, search("0412 345 678", o.headers)));
+    expect(asked.length).toBe(n + 3);
+    expect(asked.at(-2)!.query).toContain("WaShopCountry");
+    expect(asked.at(-1)!.variables.query).toBe("phone:+61412345678");
+  });
+
+  it("gives names and order figures only with their own permissions, and a shared link may look", async () => {
+    const o = await owner();
+    await connected(o);
+    shopify(() => answer(PAGE_ONE.slice(0, 1)));
+    const contactOnly = await member(o, "c1", ["marketing.campaigns", "customers.list", "customers.contact"]);
+    const seen = ok(await o.call("GET", "/customers", undefined, contactOnly));
+    expect(seen.shown).toEqual({ names: false, orders: false });
+    expect(seen.customers[0]).toMatchObject({ customerId: "11", name: null, adminUrl: null, orders: null, spent: null, phone: CUSTOMER });
+    const everything = await member(o, "c2", ["marketing.campaigns", "customers.list", "customers.contact", "customers.profiles", "customers.orders"]);
+    expect(ok(await o.call("GET", "/customers", undefined, everything)).customers[0]).toMatchObject({ name: "Jane Doe", orders: 2, phone: CUSTOMER });
+    // "View campaigns" alone: no customers at all, and Shopify is never asked.
+    const asked = shopify(() => answer(PAGE_ONE));
+    const viewer = await member(o, "c3", ["marketing.campaigns"]);
+    expect((await o.call("GET", "/customers", undefined, viewer)).statusCode).toBe(403);
+    expect(asked).toHaveLength(0);
+
+    // A shared dashboard link given the same permissions may read the list (as Customers to follow up), never change anything.
+    ok(await ctx.app.inject({ method: "POST", url: `/workspaces/${o.ws}/team/invitations`, headers: o.headers, payload: { email: "guest@example.com", role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact"] } }));
+    const mail = [...ctx.mailer.sent].reverse().find((x) => x.to === "guest@example.com")!;
+    const token = /#token=([A-Za-z0-9_-]+)/.exec(mail.text)![1];
+    const link = { cookie: cookiesFrom(await ctx.app.inject({ method: "POST", url: "/invitations/open", headers: ORIGIN, payload: { token } })), ...ORIGIN };
+    expect(ok(await o.call("GET", "/customers", undefined, link)).customers[0]).toMatchObject({ phone: CUSTOMER, name: null });
+    expect((await o.call("POST", "/contacts/consent", { phone: CUSTOMER, scope: "marketing", status: "opted_out" }, link)).statusCode).toBe(403);
+  });
+
+  it("says when Shopify withholds customers' details, and needs the store connected with access to customers", async () => {
+    const o = await owner();
+    // No token yet: the store isn't connected.
+    expect(ok(await o.call("GET", "/customers"), 409).error).toBe("store_disconnected");
+    await connected(o);
+    shopify(() => ({ ...answer([node(21, null), node(22, null)]), errors: [{ message: "Access denied for displayName field", extensions: { code: "ACCESS_DENIED" } }] }));
+    expect(ok(await o.call("GET", "/customers"))).toMatchObject({ restricted: true, customers: [], nextCursor: null });
+    shopify(() => ({ data: null, errors: [{ message: "Access denied for customers field", extensions: { code: "ACCESS_DENIED" } }] }));
+    expect(ok(await o.call("GET", "/customers"))).toMatchObject({ restricted: true, customers: [] });
+    // Without read_customers: a plain refusal, and Shopify isn't asked.
+    await connected(o, ["read_orders"]);
+    const asked = shopify(() => answer(PAGE_ONE));
+    expect(ok(await o.call("GET", "/customers"), 403).error).toBe("missing_scopes");
+    expect(asked).toHaveLength(0);
   });
 });

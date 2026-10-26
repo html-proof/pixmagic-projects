@@ -131,6 +131,9 @@ export function normalizePhone(raw: string | null | undefined, country?: string 
     // the number as typed is.
     const national = c.trunk ? (strip(c.trunk) ?? strip(c.code) ?? (fits(digits) ? digits : null)) : ((fits(digits) ? digits : null) ?? strip(c.code));
     if (!national) return null;
+    // North American numbers never start their area code or exchange with 0 or 1: "0412 345 678"
+    // with a US store is an Australian number typed locally, not +1 041 234 5678.
+    if (c.code === "1" && !/^[2-9]\d{2}[2-9]\d{6}$/.test(national)) return null;
     digits = c.code + national;
   }
   if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) return null;
@@ -151,6 +154,120 @@ export function maskPhone(e164: string): string {
   const rest = digits.slice(cc.length);
   const tail = rest.slice(-3);
   return `+${cc} ${"•".repeat(Math.max(2, rest.length - 3))} ${tail}`;
+}
+
+/**
+ * "+61412345678" → "+61 412 345 678": the whole number, its calling code apart and the rest in
+ * groups of three or four, so it reads like a number and not a code. Anything that isn't an
+ * international number comes back as it was.
+ */
+export function formatPhone(e164: string): string {
+  const digits = e164.replace(/\D/g, "");
+  if (!e164.trim().startsWith("+") || digits.length < 8 || digits.length > 15) return e164.trim();
+  const cc = callingCodeOf(digits);
+  const rest = digits.slice(cc.length);
+  const groups: string[] = [];
+  let at = 0;
+  for (const n of groupSizes(rest.length)) {
+    groups.push(rest.slice(at, at + n));
+    at += n;
+  }
+  return `+${cc} ${groups.join(" ")}`;
+}
+
+/**
+ * Every calling code shorter than three digits (ITU-T E.164: 1 and 7, and these two-digit ones). The
+ * codes are prefix-free, so any other number's code is its first three digits, whether or not we
+ * know its country's local rules (Russia's +7 isn't in COUNTRIES and must still read "+7 …").
+ */
+const SHORT_CALLING_CODES = new Set([
+  "1", "7",
+  "20", "27", "30", "31", "32", "33", "34", "36", "39", "40", "41", "43", "44", "45", "46", "47", "48", "49",
+  "51", "52", "53", "54", "55", "56", "57", "58", "60", "61", "62", "63", "64", "65", "66",
+  "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98",
+]);
+
+/** The calling code an international number (digits only, no "+") starts with. */
+function callingCodeOf(digits: string): string {
+  if (SHORT_CALLING_CODES.has(digits.slice(0, 1))) return digits.slice(0, 1);
+  if (SHORT_CALLING_CODES.has(digits.slice(0, 2))) return digits.slice(0, 2);
+  return digits.slice(0, 3);
+}
+
+/**
+ * Whether the customer typed the calling code themselves ("+61…", "0061…", "61412…"), rather than it
+ * being added from a country ("0412 345 678" read as Australian). An extension doesn't count.
+ */
+export function phoneCodeTyped(raw: string, e164: string): boolean {
+  const digits = raw.replace(/\s*(ext|x)\.?\s*\d+$/i, "").replace(/\D/g, "").replace(/^00/, "");
+  return digits === e164.replace(/\D/g, "");
+}
+
+/** 9 → 3 3 3, 10 → 3 3 4, 8 → 4 4, 11 → 3 4 4, 7 → 3 4. */
+function groupSizes(n: number): number[] {
+  if (n <= 4) return [n];
+  if (n === 5) return [2, 3];
+  const tail = n % 3 === 0 ? [] : n % 3 === 1 ? [4] : [4, 4];
+  const head = Array<number>((n - tail.reduce((a, b) => a + b, 0)) / 3).fill(3);
+  return [...head, ...tail];
+}
+
+/**
+ * Where a customer's phone number was found in Shopify: their own profile, an address they typed
+ * at a checkout, their default address, or their last order. Only the profile's number carries
+ * Shopify's text-message consent.
+ */
+export const CUSTOMER_PHONE_SOURCES = ["customer", "checkout_shipping", "checkout_billing", "default_address", "last_order", "last_order_shipping", "last_order_billing"] as const;
+export type CustomerPhoneSource = (typeof CUSTOMER_PHONE_SOURCES)[number];
+
+export const CUSTOMER_PHONE_SOURCE_LABEL: Record<CustomerPhoneSource, string> = {
+  customer: "From their customer profile",
+  checkout_shipping: "Typed at checkout (delivery address)",
+  checkout_billing: "Typed at checkout (billing address)",
+  default_address: "From their saved address",
+  last_order: "From their last order",
+  last_order_shipping: "From their last order's delivery address",
+  last_order_billing: "From their last order's billing address",
+};
+
+export interface PhoneCandidate<S extends string = string> {
+  raw: string | null | undefined;
+  /** The country the number was typed in (its address's), used for a number without "+". */
+  country?: string | null;
+  source: S;
+}
+
+export interface BestPhone<S extends string = string> {
+  /** The international number, or null when it can't be read as one (no country code, too short). */
+  e164: string | null;
+  /** The number as the customer typed it. */
+  raw: string;
+  source: S;
+  /** The calling code came from `fallbackCountry` (the store's): not typed, and not from its address. */
+  countryAssumed: boolean;
+}
+
+/**
+ * The best phone number among the places a customer's number can be, in the order given: the first
+ * that reads as an international number with its own country, else the first that does with the
+ * store's country (said to be assumed), else the first one typed at all (shown as typed, with no
+ * international form). Null when no candidate has any digits.
+ */
+export function bestPhone<S extends string>(candidates: ReadonlyArray<PhoneCandidate<S>>, fallbackCountry?: string | null): BestPhone<S> | null {
+  const typed = candidates.map((c) => ({ ...c, raw: c.raw?.trim() ?? "" })).filter((c) => /\d/.test(c.raw));
+  for (const c of typed) {
+    const n = normalizePhone(c.raw, c.country);
+    if (n) return { e164: n.e164, raw: c.raw, source: c.source, countryAssumed: false };
+  }
+  if (fallbackCountry) {
+    for (const c of typed) {
+      const n = normalizePhone(c.raw, fallbackCountry);
+      // "61412345678" needs a country only to be read: its code was typed, nothing was assumed.
+      if (n) return { e164: n.e164, raw: c.raw, source: c.source, countryAssumed: !phoneCodeTyped(c.raw, n.e164) };
+    }
+  }
+  const first = typed[0];
+  return first ? { e164: null, raw: first.raw, source: first.source, countryAssumed: false } : null;
 }
 
 // ---------------------------------------------------------------------------

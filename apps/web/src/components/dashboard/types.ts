@@ -4,6 +4,7 @@ import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
+import type { CustomerPhoneSource } from "@app/shared/messaging";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
 
@@ -463,10 +464,19 @@ export interface ContactPerson {
   customerId: string | null;
   name: string | null;
   email: string | null;
+  /** The most complete number Shopify has: international ("+61412345678") when readable, else as typed. */
   phone: string | null;
+  /** The international form, or null when the number has no country code we could read (no WhatsApp link then). Absent from older answers. */
+  phoneE164?: string | null;
+  /** The number as the customer typed it ("0412 345 678"). */
+  phoneRaw?: string | null;
+  /** Where in Shopify the number was found (`CUSTOMER_PHONE_SOURCE_LABEL`). */
+  phoneSource?: CustomerPhoneSource | null;
+  /** The country code was added from the store's country, not from the number or its address. */
+  phoneCountryAssumed?: boolean;
   /** Agreed to email marketing. */
   subscribed: boolean;
-  /** Agreed to marketing by text message. */
+  /** Agreed to marketing by text message: Shopify records it on the profile's number only. */
   smsSubscribed: boolean;
   adminUrl: string | null;
 }

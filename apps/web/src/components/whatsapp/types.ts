@@ -1,5 +1,6 @@
 import type {
   WaAudience,
+  WaAutomationIssue,
   WaAutomationState,
   WaCondition,
   WaConnectionStatus,
@@ -13,6 +14,7 @@ import type {
   WaTrigger,
   WaValues,
 } from "@app/shared/whatsapp";
+import type { CustomerPhoneSource } from "@app/shared/messaging";
 
 // What the WhatsApp Automation API answers (apps/api/src/routes/whatsapp.ts). Dates arrive as ISO strings.
 
@@ -195,12 +197,25 @@ export interface WaAutomation {
   conditionLabels: string[];
   /** Why it can't be switched on (null: not checked in this answer). */
   problems: string[] | null;
+  /** The same reasons, each with the tab that fixes it. */
+  issues: WaAutomationIssue[] | null;
   /** The last 30 days' runs. */
   stats: { queued: number; skipped: number } | null;
   activatedAt: string | null;
   lastRunAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** POST /automations/quick: a ready-made automation turned on in one go (or saved off, with why). */
+export interface WaQuickAutomationResult {
+  automation: WaAutomation;
+  template: WaTemplate;
+  activated: boolean;
+  problems: string[];
+  issues: WaAutomationIssue[];
+  /** Something to know that isn't a problem (Meta reviewing the message). */
+  notice: string | null;
 }
 
 export interface WaAutomationRun {
@@ -244,9 +259,14 @@ export interface WaCampaign {
   createdAt: string;
 }
 
+/** GET /contacts: a customer WhatsApp keeps a record of (messaged, wrote, or consent recorded). */
 export interface WaContact {
   id: string;
+  /** The whole number, "+61412345678" (the masked form only if it couldn't be read). */
   phone: string;
+  /** "+61 •••• •••• 678". */
+  phoneMasked: string;
+  /** Only with "View customer profiles". */
   firstName: string | null;
   country: string | null;
   optedOut: boolean;
@@ -258,8 +278,56 @@ export interface WaContact {
   history: Array<{ scope: string; status: string; source: string; sourceLabel: string; note: string | null; at: string }>;
 }
 
+/** What WhatsApp knows of a Shopify customer's number (null on the row: nothing yet). */
+export interface WaCustomerWhatsapp {
+  contactId: string | null;
+  optedOut: boolean;
+  optedIn: boolean;
+  marketing: "opted_in" | "opted_out" | "unknown";
+  /** On the do-not-message list: for every message, or for marketing. */
+  suppressed: "all" | "marketing" | null;
+  /** WhatsApp said in the last 30 days that the number has no account. */
+  notOnWhatsapp: boolean;
+  lastOutboundAt: string | null;
+}
+
+/** GET /customers: one of the store's customers, read live from Shopify (never stored by bizinsights). */
+export interface WaShopifyCustomer {
+  customerId: string;
+  /** Null without "View customer profiles" (or when Shopify has none). */
+  name: string | null;
+  adminUrl: string | null;
+  /** The international number when there is one, else the number as typed; null: no number on file. */
+  phone: string | null;
+  phoneE164: string | null;
+  phoneRaw: string | null;
+  phoneSource: CustomerPhoneSource | null;
+  /** The country code came from the store's own country. */
+  phoneCountryAssumed: boolean;
+  /** Agreed to marketing texts in Shopify (the profile's own number only). */
+  smsSubscribed: boolean;
+  /** Null without "View order history". */
+  orders: number | null;
+  spent: number | null;
+  currency: string | null;
+  whatsapp: WaCustomerWhatsapp | null;
+}
+
+export interface WaCustomersPage {
+  fetchedAt: string;
+  /** Shopify hasn't approved bizinsights to show customers' details for this store yet. */
+  restricted: boolean;
+  customers: WaShopifyCustomer[];
+  nextCursor: string | null;
+  page: { count: number; withNumber: number; withoutCountryCode: number };
+  /** "https://<shop>/admin". */
+  shopAdminUrl: string;
+  shown: { names: boolean; orders: boolean };
+}
+
 export interface WaSuppression {
   id: string;
+  /** Masked: the list keeps no whole number. */
   phone: string;
   scope: "all" | "marketing";
   reason: string;
