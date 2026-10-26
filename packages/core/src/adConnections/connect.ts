@@ -354,6 +354,8 @@ async function grantStillUsed(provider: string, externalUserId: string, exceptId
   // A Nango row's grant is to bizinsights' own app too (Nango only keeps the token): revoking the person's grant ends it.
   const family = { provider: { in: grantFamily(provider) }, source: { in: GRANT_SOURCES }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
   if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
+  // A login of theirs still waiting for its ad accounts (logins.ts) reads through the same grant.
+  if ((await systemDb.adLogin.count({ where: { provider: { in: grantFamily(provider) }, externalUserId } })) > 0) return true;
   const unknown = await systemDb.adConnection.findMany({ where: { ...family, externalUserId: null }, orderBy: { updatedAt: "desc" }, take: 500 });
   const signIns = bySignIn(unknown);
   if (unknown.length >= 500 || signIns.length > PERSON_LOOKUPS) return true;
@@ -604,9 +606,14 @@ function nangoCredentialOf(conn: AdConnection): NangoCredential | null {
   return conn.sourceLoginId ? { connectionId: conn.sourceLoginId, integrationKey: NANGO_INTEGRATION[conn.provider as AdProvider] } : null;
 }
 
-/** Connections that still read through this Nango connection (a released one holds no credential). */
+/** Connections that still read through this Nango connection (a released one holds no credential), and waiting logins that hold it. */
 export async function nangoConnectionUsers(connectionId: string, exceptId?: string | null): Promise<number> {
-  return systemDb.adConnection.count({ where: { source: "nango", sourceLoginId: connectionId, accessTokenEnc: { not: "" }, ...(exceptId ? { NOT: { id: exceptId } } : {}) } });
+  const [rows, logins] = await Promise.all([
+    systemDb.adConnection.count({ where: { source: "nango", sourceLoginId: connectionId, accessTokenEnc: { not: "" }, ...(exceptId ? { NOT: { id: exceptId } } : {}) } }),
+    // A login waiting for its ad accounts (logins.ts) holds its connection too.
+    systemDb.adLogin.count({ where: { sourceLoginId: connectionId } }),
+  ]);
+  return rows + logins;
 }
 
 /**

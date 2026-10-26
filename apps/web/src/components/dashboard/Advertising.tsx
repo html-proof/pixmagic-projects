@@ -561,7 +561,8 @@ const offered = (ov: Overview) => (["google", "meta", "adsense"] as Provider[]).
 /** A quiet way to add the platforms that aren't connected yet, without getting in the way. */
 function ConnectMore({ ov }: { ov: Overview }) {
   const n = ov.modules.ad_connections;
-  const missing = offered(ov).filter((p) => !n || n[p] === 0);
+  // A platform whose sign-in is connected and waiting for its ad accounts isn't offered again.
+  const missing = offered(ov).filter((p) => !n || (n[p] === 0 && !n.waiting?.includes(p)));
   if (!missing.length) return null;
   return (
     <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted" data-testid="ads-connect-more">

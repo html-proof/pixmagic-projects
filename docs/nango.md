@@ -78,8 +78,10 @@ Settings → Integrations / Advertising card — "Continue with Google Ads" (or 
       Google Ads customers it reaches (counted against the daily operations) or the AdSense accounts
     → one account (or nothing new): connected, its first 90 days queued → /dashboard
       several: held 15 min for the choice → /settings/ads?choose=…
-    → anything else (no account, permission unticked, the platform refusing): the grant is revoked and the
-      Nango connection deleted; the card words why
+      Meta, no ad account yet (or Meta too slow to list them): connected all the same as a waiting login
+      (ad_logins, adConnections/logins.ts), {waiting: true, reason}; its accounts are connected once Meta lists them
+    → anything else (permission unticked, the platform refusing, a Google login with nothing): the grant is
+      revoked and the Nango connection deleted; the card words why
 ```
 
 - **A connection** is an `ad_connections` row: `id`, `workspace_id` / `store_id` (ownership; RLS),
@@ -231,7 +233,9 @@ check said "Meta REFUSES META_APP_SECRET ... Error validating client secret." wi
    read-only access (Google Ads reports, AdSense data, `ads_read`). Choose the login and, on Facebook, the
    ad accounts to share.
 3. Back on the page: one account lands on the dashboard straight away. Several accounts lead to a list to
-   tick the ones for this store.
+   tick the ones for this store. A Facebook login with no ad account yet is connected too: the card says
+   "Signed in as …", and bizinsights adds its ad accounts by itself (every hour, or **Check for ad accounts**)
+   as soon as Meta lists one.
 4. The card says **Synchronizing** while the first 90 days are read, then **Connected**, with the last
    successful sync, the last attempt, data through, freshness and recent syncs. History is then walked back to
    25 months. Recent days are refreshed about every hour (Google Ads every 3 hours), and recent conversions

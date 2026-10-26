@@ -642,7 +642,7 @@ export function GrowBusiness({ ov, adsOn }: { ov: Overview; adsOn: boolean }) {
       <ul className="flex flex-wrap gap-2.5">
         <Connection icon={<ShopifyIcon size={18} />} name="Shopify" on />
         {adsOn && <Connection icon={<GoogleAdsIcon size={18} />} name="Google Ads" on={(con?.google ?? 0) > 0} />}
-        {adsOn && <Connection icon={<MetaIcon size={18} />} name="Meta Ads" on={(con?.meta ?? 0) > 0} />}
+        {adsOn && <Connection icon={<MetaIcon size={18} />} name="Meta Ads" on={(con?.meta ?? 0) > 0 || !!con?.waiting?.includes("meta")} />}
         <li>
           <Link href="/settings/integrations" className="flex h-full min-h-[3.25rem] items-center gap-2 rounded-xl border border-dashed border-accent/40 px-3.5 text-xs font-semibold text-accent hover:bg-accent/[0.05]">
             <Plus aria-hidden className="h-4 w-4" />

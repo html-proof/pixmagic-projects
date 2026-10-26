@@ -10,11 +10,13 @@
  * they always were (connect.ts).
  */
 import { systemDb } from "@app/db";
-import type { AdProvider } from "@app/shared";
+import type { AdLoginReason, AdProvider } from "@app/shared";
 import {
   adsenseAccounts,
   AdsApiError,
   AdsAuthError,
+  AdsNoAccountsError,
+  AdsRetryableError,
   googleAdAccounts,
   metaAdAccounts,
   metaGrantedPermissions,
@@ -36,6 +38,7 @@ import type { FetchLike } from "../shopify.js";
 import { adsenseConfig, googleClient, metaConfig, nangoConfig, nangoProviders } from "./config.js";
 import { forgetNangoToken, nangoTokenFor, platformPerson } from "./credentials.js";
 import { releaseNangoConnectionIfUnused } from "./connect.js";
+import { loginReasonOf, releaseAdLoginsWhere } from "./logins.js";
 import { recordAdFailure } from "./status.js";
 
 /** How long a connect session (and its state here) lasts: Nango's own session lifetime. */
@@ -208,6 +211,23 @@ export interface NangoSignIn {
 export class NangoPermissionMissingError extends Error {}
 
 /**
+ * The person signed in and granted the permission, but the login lists no ad account yet (Meta: none of
+ * its own, none it is assigned to, none ticked on Facebook's screen), or the platform didn't list them in
+ * time. Nothing is wrong with the sign-in: it can stay connected and wait for its accounts (logins.ts).
+ */
+export class NangoLoginWaitingError extends Error {
+  constructor(
+    public signIn: Omit<NangoSignIn, "accounts">,
+    public reason: AdLoginReason,
+    /** The name the platform's sign-in went by, when the platform said. */
+    public loginName: string | null,
+    cause: unknown,
+  ) {
+    super(`The login reaches no ad account yet (${reason})`, { cause });
+  }
+}
+
+/**
  * Read a new Nango connection the way the direct callback reads a fresh sign-in: a working token from
  * Nango, the permission it carries, who granted it (which also proves, for Google, that the token was
  * issued to bizinsights' own client; for Meta every call is signed with bizinsights' app secret), and
@@ -227,7 +247,15 @@ export async function finishNangoSignIn(provider: AdProvider, connectionId: stri
     });
     if (granted && !granted.includes(REQUIRED_AD_SCOPE.meta)) throw new NangoPermissionMissingError("ads_read was not granted");
     const externalUserId = await platformPerson("meta", token, fetchImpl).catch(() => null);
-    return { connectionId, integrationKey, expiresAt, externalUserId, grantedScopes: granted, accounts: await metaAdAccounts(cfg, token) };
+    const signedIn = { connectionId, integrationKey, expiresAt, externalUserId, grantedScopes: granted };
+    try {
+      return { ...signedIn, accounts: await metaAdAccounts(cfg, token) };
+    } catch (err) {
+      // Signed in and granted: nothing to list yet, or Meta didn't list in time. The login can still stay connected.
+      if (err instanceof AdsNoAccountsError) throw new NangoLoginWaitingError(signedIn, loginReasonOf(err), err.loginName ?? null, err);
+      if (err instanceof AdsRetryableError) throw new NangoLoginWaitingError(signedIn, "unanswered", null, err);
+      throw err;
+    }
   }
   const cfg = provider === "adsense" ? adsenseConfig(fetchImpl) : googleClient(fetchImpl);
   if (!cfg) throw new AdsApiError(`${provider === "adsense" ? "Google AdSense" : "Google Ads"} isn't set up on this server`, 503, undefined, "not_configured");
@@ -330,7 +358,10 @@ export async function handleNangoAuthEvent(coord: Coord, event: NangoAuthEvent, 
   }
   const rows = await systemDb.adConnection.findMany({ where: { source: "nango", sourceLoginId: event.connectionId, accessTokenEnc: { not: "" }, status: { not: "reconnect" } }, select: { id: true } });
   for (const r of rows) await recordAdFailure(r.id, { status: "reconnect", code: "auth_expired", detail: `Nango: ${event.operation}${event.errorType ? ` (${event.errorType})` : ""}`, retryable: false, retryAfterS: null }, "sync");
-  logger.info({ provider, operation: event.operation, errorType: event.errorType, connections: rows.length }, "nango: a connection's access ended");
+  // A login waiting on it for its ad accounts has nothing left to wait with: let go (deleted at Nango already,
+  // or its grant refused, so there is nothing to give back).
+  const logins = await releaseAdLoginsWhere({ sourceLoginId: event.connectionId }, fetchImpl, { release: event.operation !== "deletion" });
+  logger.info({ provider, operation: event.operation, errorType: event.errorType, connections: rows.length, logins }, "nango: a connection's access ended");
   return rows.length;
 }
 
@@ -380,8 +411,12 @@ export async function sweepNangoOrphans(coord: Coord, fetchImpl?: FetchLike): Pr
       keep.push(id);
       continue;
     }
-    // Finished (an account reads through it) or still being chosen from (finishNangoSignIn's pending choice marks it).
-    const used = (await systemDb.adConnection.count({ where: { source: "nango", sourceLoginId: id } })) > 0 || !!(await coord.peek(nangoHeldKey(id)).catch(() => null));
+    // Finished (an account reads through it, or a login waits on it for its ad accounts) or still being
+    // chosen from (finishNangoSignIn's pending choice marks it).
+    const used =
+      (await systemDb.adConnection.count({ where: { source: "nango", sourceLoginId: id } })) > 0 ||
+      (await systemDb.adLogin.count({ where: { sourceLoginId: id } })) > 0 ||
+      !!(await coord.peek(nangoHeldKey(id)).catch(() => null));
     if (!used) {
       const outcome = await abandonNangoConnection(provider, id, integrationKey, null, fetchImpl, { coord });
       // Nango didn't answer the delete: tried again on the next tick (the note is renewed, its time kept).

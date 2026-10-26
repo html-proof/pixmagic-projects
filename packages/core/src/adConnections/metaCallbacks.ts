@@ -17,6 +17,7 @@ import { audit } from "../notify.js";
 import { resolveAdAlerts } from "./alerts.js";
 import { dropPendingAdConnectsOf, releaseNangoConnectionIfUnused } from "./connect.js";
 import { isNangoConnection, nangoCredential } from "./credentials.js";
+import { releaseAdLoginsWhere } from "./logins.js";
 import { releaseDroppedNangoChoices } from "./nango.js";
 
 /** How old a signed request may be (its issued_at), and how far ahead of this server's clock. */
@@ -77,6 +78,9 @@ async function auditByStore(rows: Array<{ workspaceId: string; storeId: string; 
 export async function metaDeauthorized(userId: string, coord?: Coord): Promise<number> {
   // A choice they had waiting through Nango: its connection holds their token, which goes too.
   if (coord) await releaseDroppedNangoChoices(await dropPendingAdConnectsOf(coord, "meta", userId));
+  // A login of theirs waiting for its ad accounts has no grant left to wait with: it goes, with its Nango connection.
+  const logins = await releaseAdLoginsWhere({ provider: "meta", externalUserId: userId });
+  if (logins) logger.info({ logins }, "meta: bizinsights removed on Facebook; the person's waiting logins let go");
   const rows = await systemDb.adConnection.findMany({
     where: { provider: "meta", externalUserId: userId, accessTokenEnc: { not: "" } },
     select: { id: true, workspaceId: true, storeId: true, provider: true, accountId: true, source: true, sourceLoginId: true, accessTokenEnc: true },
@@ -105,6 +109,8 @@ export const META_DELETION_EVENT = "meta_data_deletion";
  */
 export async function metaDataDeletion(userId: string, coord?: Coord): Promise<{ confirmationCode: string; deleted: number }> {
   if (coord) await releaseDroppedNangoChoices(await dropPendingAdConnectsOf(coord, "meta", userId));
+  // A login of theirs waiting for its ad accounts: its row (their profile's name) and its Nango connection go.
+  const logins = await releaseAdLoginsWhere({ provider: "meta", externalUserId: userId });
   const rows = await systemDb.adConnection.findMany({ where: { provider: "meta", externalUserId: userId } });
   const { count } = rows.length ? await systemDb.adConnection.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } }) : { count: 0 };
   for (const r of rows) await resolveAdAlerts(r).catch((err: unknown) => logger.warn({ err, connectionId: r.id }, "ad alerts not resolved"));
@@ -112,8 +118,8 @@ export async function metaDataDeletion(userId: string, coord?: Coord): Promise<{
   // Nango keeps the person's token for bizinsights' app: that goes too.
   await releaseNangoConnections(rows, userId);
   const confirmationCode = randomBytes(10).toString("hex");
-  await systemDb.authEvent.create({ data: { type: META_DELETION_EVENT, userId: null, ip: null, metadata: { code: confirmationCode, deleted: count } } });
-  logger.info({ connections: count }, "meta: data deletion request; the person's ad connections and figures deleted");
+  await systemDb.authEvent.create({ data: { type: META_DELETION_EVENT, userId: null, ip: null, metadata: { code: confirmationCode, deleted: count, logins } } });
+  logger.info({ connections: count, logins }, "meta: data deletion request; the person's ad connections and figures deleted");
   return { confirmationCode, deleted: count };
 }
 

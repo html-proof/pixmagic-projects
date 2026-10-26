@@ -1176,6 +1176,46 @@ model AdConnection {
   @@map("ad_connections")
 }
 
+// A platform sign-in that reaches no ad account yet, kept connected rather than refused (Meta: the
+// Facebook login has no ad account, its accounts sit in a business portfolio it isn't assigned to, it
+// shared none on Facebook's screen, or Meta didn't list them in time). The card says who is connected;
+// the cron tick asks the platform again (adConnections/logins.ts) and connects the login's ad accounts
+// once it lists some, and then this row goes. One per store and platform. Added by migration
+// 20261026150000 (the same rules as ad_connections: tenant rows, nothing secret: Nango keeps the token).
+model AdLogin {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @map("workspace_id")
+  storeId              String    @map("store_id")
+  provider             String // "meta"
+  /** The Nango connection that holds the person's token (docs/nango.md), and the integration it belongs to. */
+  sourceLoginId        String    @map("source_login_id")
+  nangoIntegrationKey  String    @map("nango_integration_key")
+  /** The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned. */
+  externalUserId       String?   @map("external_user_id")
+  /** The name the platform's sign-in went by (Meta's profile name), for "Connected as …" on the card. */
+  loginName            String?   @map("login_name")
+  /** The permissions that person granted. */
+  grantedScopes        String[]  @default([]) @map("granted_scopes")
+  accessTokenExpiresAt DateTime? @map("access_token_expires_at")
+  connectedByUserId    String?   @map("connected_by_user_id")
+  /**
+   * Why no ad account is connected yet (AD_LOGIN_REASONS in @app/shared/ads): "no_ads_account" (the login
+   * reaches none), "none_shared" (none was ticked on the platform's screen), "unanswered" (the platform
+   * didn't list them in time) or "choose" (it lists more than are connected without asking).
+   */
+  reason               String
+  /** When the platform was last asked for the login's ad accounts. */
+  checkedAt            DateTime  @default(now()) @map("checked_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, provider])
+  @@index([workspaceId])
+  @@index([externalUserId])
+  @@index([sourceLoginId])
+  @@map("ad_logins")
+}
+
 // Each sync of one ad account, as it ended: when, what it was asked to fetch and by whom, and what came
 // of it. The settings cards show the last few; kept 90 days (pruned by the daily sweep).
 model AdSyncRun {

@@ -324,9 +324,9 @@ describe("review fixes: grants nobody can vouch for are never revoked", () => {
   });
 });
 
-describe("Continue with Meta Ads: a login with nothing to connect", () => {
+describe("Continue with Meta Ads: a login with no ad account yet", () => {
   /** Meta's sign-in finishing when /me/adaccounts is empty and Meta's token inspector answers `granular`. */
-  const errorWith = async (granular: Array<{ scope: string; target_ids?: string[] }>) => {
+  const signInWith = async (granular: Array<{ scope: string; target_ids?: string[] }>) => {
     const base = metaPlatform([]);
     usePlatform(async (input, init) => {
       const u = new URL(String(input));
@@ -334,16 +334,27 @@ describe("Continue with Meta Ads: a login with nothing to connect", () => {
       if (u.pathname.endsWith("/debug_token")) return json({ data: { is_valid: true, granular_scopes: granular } });
       return base(input, init);
     });
-    return connectError("meta");
+    const { finish, connectionId } = await connectThroughNango(ctx, nango, { base: `/workspaces/${ws}/stores/${storeId}`, provider: "meta", headers });
+    return { finish: finish!, connectionId };
   };
 
-  it("says whether the login reaches no ad account or shared none on Facebook's screen", async () => {
-    expect(await errorWith([{ scope: "ads_read" }])).toBe("no_accounts");
-    expect(await errorWith([{ scope: "ads_read", target_ids: [] }])).toBe("none_shared");
+  it("stays connected, never refused, saying whether the login reaches no ad account or shared none on Facebook's screen", async () => {
+    const first = await signInWith([{ scope: "ads_read" }]);
+    expect(first.finish.statusCode).toBe(200);
+    expect(first.finish.json()).toEqual({ connected: 0, waiting: true, reason: "no_ads_account", provider: "meta" });
+    // Kept: its Nango connection (the token) stays, as for a connected account.
+    expect(nango.deleted).toEqual([]);
+    expect(await systemDb.adLogin.findFirstOrThrow({ where: { storeId } })).toMatchObject({ provider: "meta", reason: "no_ads_account", sourceLoginId: first.connectionId, externalUserId: "5550001" });
+
+    // A second sign-in replaces it: the first one's Nango connection goes, the person's grant stays (the new one relies on it).
+    const second = await signInWith([{ scope: "ads_read", target_ids: [] }]);
+    expect(second.finish.json()).toMatchObject({ waiting: true, reason: "none_shared" });
+    expect(await systemDb.adLogin.findMany({ where: { storeId } })).toEqual([expect.objectContaining({ reason: "none_shared", sourceLoginId: second.connectionId })]);
+    expect(nango.deleted).toEqual([first.connectionId]);
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 
-  it("names the Facebook login for the card and logs what Meta said about it, without the name", async () => {
+  it("names the Facebook login on the card and logs what Meta said about it, without the name", async () => {
     const base = metaPlatform([]);
     usePlatform(async (input, init) => {
       const u = new URL(String(input));
@@ -361,11 +372,16 @@ describe("Continue with Meta Ads: a login with nothing to connect", () => {
     } finally {
       info.mockRestore();
     }
-    expect(finish!.statusCode).toBe(409);
-    expect(finish!.json()).toMatchObject({ error: "no_accounts", detail: { login: "Sebastian Thomas" } });
+    expect(finish!.statusCode).toBe(200);
+    expect(finish!.json()).toMatchObject({ waiting: true, reason: "no_ads_account" });
     const line = logged.find((a) => a[1] === "ads: nothing to connect for this login");
     expect(line?.[0]).toMatchObject({ reason: "no_ads_account", provider: "meta", diagnosis: { metaUserId: "5550001", appRole: "administrators", token: { type: "USER", granted: { ads_read: "all" } } } });
     expect(JSON.stringify(line?.[0])).not.toContain("Sebastian");
+    const listed = (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers })).json();
+    expect(listed.connections).toEqual([]);
+    expect(listed.logins).toEqual([expect.objectContaining({ provider: "meta", name: "Sebastian Thomas", reason: "no_ads_account", connectedBy: expect.objectContaining({ you: true }) })]);
+    // Never a token or the platform's ids.
+    expect(JSON.stringify(listed.logins)).not.toMatch(/5550001|sourceLoginId|nango/i);
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 });

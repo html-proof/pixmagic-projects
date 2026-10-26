@@ -117,6 +117,25 @@ export function NotConnected({ ov, platform }: { ov: Overview; platform?: AdProv
   const n = ov.modules.ad_connections;
   const name = platform ? PLATFORM[platform].name : "advertising";
   const hidden = !!n && n.hidden > 0 && (platform ? n[platform] > 0 : n.meta + n.google + n.adsense > 0);
+  // The platform's sign-in is connected, and its ad accounts follow once the platform lists some: nothing to connect.
+  const waiting = !hidden && !!platform && !!n?.waiting?.includes(platform);
+  if (waiting) {
+    return (
+      <div data-testid="advertising-waiting">
+        <EmptyState
+          title={`${name} is connected`}
+          body={`The ${platform === "meta" ? "Facebook" : name} login connected to this store doesn't reach an ad account yet, so there are no figures to show. bizinsights adds its ad accounts by itself as soon as they appear, and their figures follow here.`}
+          action={
+            manage ? (
+              <Link className="btn-secondary" href="/settings/ads">
+                See {name} in Settings
+              </Link>
+            ) : undefined
+          }
+        />
+      </div>
+    );
+  }
   const body = hidden
     ? `This store's ${platform ? `${name} ` : "ad "}accounts are hidden from the dashboard. ${manage ? "Turn on the ones that belong to this store to see their figures here." : "Ask a workspace owner or admin to turn them on."}`
     : platform === "adsense"
