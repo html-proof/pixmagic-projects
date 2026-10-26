@@ -1252,6 +1252,22 @@ describe("the WhatsApp stack (Evolution API)", () => {
     expect(init!.Properties.Code.ZipFile).toContain("if (r.FunctionError) throw");
   });
 
+  it("uses only characters EC2 accepts in every security group's and rule's description, in every stack", () => {
+    // EC2 refuses anything else at deploy time (an apostrophe failed the first WhatsApp deploy).
+    const allowed = /^[a-zA-Z0-9. _\-:/()#,@[\]+=&;{}!$*]{0,255}$/;
+    const bad: string[] = [];
+    for (const tpl of [w, a, t.data, t.app, t.edge, t.auth, t.ci, t.audit]) {
+      for (const type of ["AWS::EC2::SecurityGroup", "AWS::EC2::SecurityGroupIngress", "AWS::EC2::SecurityGroupEgress"]) {
+        for (const [id, r] of Object.entries(tpl.findResources(type))) {
+          const p = r.Properties ?? {};
+          const texts = [p.GroupDescription, p.Description, ...[...(p.SecurityGroupIngress ?? []), ...(p.SecurityGroupEgress ?? [])].map((x: { Description?: unknown }) => x.Description)];
+          for (const text of texts) if (typeof text === "string" && !allowed.test(text)) bad.push(`${id}: ${text}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   it("raises an alarm when no task runs or memory runs short", () => {
     for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) w.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: name });
   });
