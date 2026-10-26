@@ -1,5 +1,4 @@
 "use client";
-import { CheckCircle2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
@@ -173,7 +172,7 @@ export function ReadyMade({
         </h3>
         <p className="mt-1 text-sm text-muted">Check the message, choose who gets it, and turn it on: one step each. They follow your sending hours and each customer&apos;s consent.</p>
       </div>
-      <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <ul className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
         {WA_AUTOMATION_PRESETS.map((p) => {
           const mine = automations.filter((a) => a.trigger === p.trigger);
           return (
@@ -286,10 +285,7 @@ function PresetCard({
       {shown && (
         <Alert kind={shown.activated ? "success" : "info"} onDismiss={onDismissResult}>
           {shown.activated ? (
-            <span className="inline-flex items-start gap-1.5">
-              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-good" aria-hidden />
-              {shown.automation.testMode ? "It's on, sending only to your number while you try it." : "It's on. Customers get it from the next time this happens."}
-            </span>
+            shown.automation.testMode ? "It's on, sending only to your number while you try it." : "It's on. Customers get it from the next time this happens."
           ) : shown.issues.length ? (
             <>
               Saved, switched off. It can be switched on once this is done:
@@ -314,7 +310,7 @@ function PresetCard({
 
       {a && (
         <div className="mt-auto space-y-2">
-          {a.stats && <p className="text-xs text-muted">Last 30 days: {plural(a.stats.queued, "message")} queued, {plural(a.stats.skipped, "time")} it sent nothing.</p>}
+          {a.stats && <p className="text-xs text-muted">Last 30 days: {plural(a.stats.queued, "message")} sent or waiting, {a.stats.skipped} skipped.</p>}
           {more > 0 && <p className="text-xs text-muted">{plural(more, "more automation")} also {more === 1 ? "sends" : "send"} for this: see Your automations below.</p>}
           <IssueList issues={issues} />
           {manage ? (

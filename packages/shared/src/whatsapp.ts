@@ -1109,7 +1109,7 @@ export const WA_AUTOMATION_STATE_LABEL: Record<WaAutomationState, string> = {
   paused: "Paused",
   setup: "Finish setting up",
   needs_attention: "Needs attention",
-  idle: "No automation on",
+  idle: "None on",
   active: "Running",
 };
 
