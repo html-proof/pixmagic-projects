@@ -106,8 +106,9 @@ jobs:
       contents: read
       pull-requests: read
       statuses: write
-    # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
-    timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
+    # A busy PC runs the integration tests 2-3 times slower than a GitHub runner: 21-30 minutes on
+    # their own, near 40 while other work loads it, which cut main's run off twice at 45 minutes.
+    timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 75 || 30 }}
     outputs:
       e2e: ${{ steps.scope.outputs.e2e }}
     services:
