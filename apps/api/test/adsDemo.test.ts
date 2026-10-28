@@ -275,7 +275,7 @@ describe("the demo's figures", () => {
 });
 
 describe("sync, reset and disconnect", () => {
-  it("Sync demo data queues one catch-up at a time, and two syncs of the same days never double a row", async () => {
+  it("Sync demo data queues one catch-up at a time; two syncs of the same days never double a row, and with the coordinator one waits for the other", async () => {
     await connectAndSync();
     const first = await post(`${base}/demo/sync`);
     expect(first.statusCode).toBe(200);
@@ -284,10 +284,17 @@ describe("sync, reset and disconnect", () => {
     expect(second.json().queued).toBe(false);
     const row = await demoRow();
     const job = (ctx.deps.queues.sent.sync as unknown as AdsSyncData[]).find((j) => j.kind === "ads")!;
-    // The same job run twice at once, as a redelivered message would be. One reads the days; the other,
-    // finding it running, reads nothing ("busy"), and the worker sends it again to run once the first has ended.
-    const sync = () => syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, coord: ctx.deps.coord });
-    for (const r of await Promise.all([sync(), sync()])) if (r.skipped && r.reason === "busy") expect(await sync()).toMatchObject({ skipped: false });
+    // The same job run twice at once, as a redelivered message would be. Without the coordinator (an ops
+    // script, or a coordinator that didn't answer) the two write side by side, and still never double a row.
+    const sync = (withCoord: boolean) =>
+      syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, ...(withCoord ? { coord: ctx.deps.coord } : {}) });
+    expect(await Promise.all([sync(false), sync(false)])).toMatchObject([{ skipped: false }, { skipped: false }]);
+    // With it, one reads the days; the other, finding it running, reads nothing ("busy"), and sent again
+    // by the worker once the first has ended, it syncs.
+    const both = await Promise.all([sync(true), sync(true)]);
+    expect(both.filter((r) => r.skipped && r.reason === "busy")).toHaveLength(1);
+    expect(both.filter((r) => !r.skipped)).toHaveLength(1);
+    expect(await sync(true)).toMatchObject({ skipped: false });
     const days = await systemDb.adCampaignDaily.findMany({ where: { connectionId: row.id }, select: { campaignId: true, day: true } });
     expect(new Set(days.map((d) => `${d.campaignId}|${d.day}`)).size).toBe(days.length);
     expect((await get(`${base}/status`)).json().demo.status).toBe("connected_demo");

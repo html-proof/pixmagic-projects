@@ -125,13 +125,15 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
 - **Meta's limit on bizinsights' app** (Graph code 4, "Application request limit reached"): Meta counts the app's
   calls across every merchant over a rolling hour, and over the limit refuses every call, whichever account it is
   for. So the first Meta Ads call told so **pauses Meta Ads** for every account (`meta-ads-paused` in the
-  coordinator): for the wait Meta names, else 15 minutes (Meta names none for this limit; a quarter of the hour lets
-  the oldest calls age out), never under a minute or over the hour. While it lasts the scheduler queues no Meta sync
-  (their leases stay free, so the first tick after it queues them); a Meta sync already queued calls nothing (a
-  Refresh's marks the card `rate_limited`, "Meta asked bizinsights to slow down for a while"; Refresh still answers
-  as usual and the card shows why once its job has looked); the sync that met the limit waits until the pause ends,
-  without spending a retry; and the live Meta report answers "Meta is busy right now" without calling Meta. Google
-  Ads and AdSense carry on, and WhatsApp's own Graph calls aren't held back.
+  coordinator) for 15 minutes: Meta names no wait for this limit, and a quarter of the hour lets the oldest calls age
+  out. The failed call's usage headers are its account's, not the app's, so a longer wait there lengthens the pause
+  (never past the hour) and a shorter one leaves it as it is; a later call told the same never shortens a pause.
+  While it lasts the scheduler queues no Meta sync (their leases stay free, so the first tick after it queues them);
+  a Meta sync already queued calls nothing (a Refresh's marks the card `rate_limited`, "Meta asked bizinsights to
+  slow down for a while", without counting a failure against the account, as Google's used-up allowance counts none;
+  Refresh still answers as usual and the card shows why once its job has looked); the sync that met the limit waits
+  until the pause ends, without spending a retry; and the live Meta report answers "Meta is busy right now" without
+  calling Meta. Google Ads and AdSense carry on, and WhatsApp's own Graph calls aren't held back.
 - **Google Ads API operations budget**: the Cloud project may make a fixed number of operations a day across every
   merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance and
   history walks at 60%, leaving the rest to people connecting accounts and opening reports. When Google says the

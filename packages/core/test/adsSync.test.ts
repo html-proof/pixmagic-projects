@@ -204,7 +204,7 @@ describe("Meta's limit on bizinsights' app", () => {
     expect(isMetaAppLimit(new AdsRetryableError("Service temporarily unavailable", 4))).toBe(false);
   });
 
-  it("pauses Meta Ads for the wait Meta gave, else a quarter of its rolling hour; never under a minute or over the hour", async () => {
+  it("pauses Meta Ads for a quarter of its rolling hour, longer when the account's own wait is, never over the hour, and never shortens a pause", async () => {
     const coord = memoryCoord();
     expect(await metaAdsPaused(coord)).toBe(false);
     expect(await pauseMetaAds(coord, null)).toBe(META_ADS_PAUSE_S);
@@ -212,9 +212,17 @@ describe("Meta's limit on bizinsights' app", () => {
     const until = (await metaAdsPausedUntil(coord))!.getTime();
     expect(until - Date.now()).toBeGreaterThan(899_000);
     expect(until - Date.now()).toBeLessThanOrEqual(900_000);
-    expect(await pauseMetaAds(coord, 420)).toBe(420);
-    expect(await pauseMetaAds(coord, 5)).toBe(60);
+    // A longer wait in the account's headers lengthens it.
+    expect(await pauseMetaAds(coord, 1800)).toBe(1800);
+    const longer = (await metaAdsPausedUntil(coord))!.getTime();
+    // Another call told the same a moment later, naming a shorter wait or none: the pause stands as it was.
+    expect(await pauseMetaAds(coord, 120)).toBeGreaterThan(1790);
+    expect(await pauseMetaAds(coord, null)).toBeGreaterThan(1790);
+    expect((await metaAdsPausedUntil(coord))!.getTime()).toBe(longer);
+    // Never past the hour.
     expect(await pauseMetaAds(coord, 7200)).toBe(3600);
+    // A short wait on its own is still the quarter hour: it is the account's, not the app's.
+    expect(await pauseMetaAds(memoryCoord(), 5)).toBe(META_ADS_PAUSE_S);
     // Google's pause is its own.
     expect(await googleAdsPaused(coord)).toBe(false);
     // A coordinator that can't keep it: nothing thrown, no pause.

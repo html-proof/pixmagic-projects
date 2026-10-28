@@ -431,10 +431,34 @@ export type AdSyncResult =
   | { skipped: true; reason: "gone" | "hidden" | "no_token" | "nothing" | "budget" | "paused" | "busy" | "health_failed" }
   | { skipped: false; stored: number; since: string; until: string; continued: boolean; health: AdAccountHealth | null };
 
+/**
+ * A sync that found another of the same account running read nothing (the result's "busy"): the worker
+ * throws this for it, and its consumer sends the job again shortly, spending none of its retries.
+ */
+export class AdSyncBusyError extends Error {
+  constructor(public connectionId: string) {
+    super("another sync of this ad account is running");
+  }
+}
+
 /** Google's allowance ran out: nothing was read, and it's bizinsights' limit, not the account's. */
 const QUOTA_FAILURE: AdFailure = { status: "error", code: "quota_exhausted", detail: null, retryable: false, retryAfterS: null };
-/** Meta Ads is paused for Meta's limit on bizinsights' app: nothing was read. Meta asked bizinsights to slow down. */
-const META_PAUSED_FAILURE: AdFailure = { status: "error", code: "rate_limited", detail: null, retryable: true, retryAfterS: null };
+
+/**
+ * A Refresh while Meta Ads is paused for Meta's limit on bizinsights' app: nothing was read, and the
+ * card says why ("Meta asked bizinsights to slow down"), marked as recordAdFailure marks it. Unlike a
+ * throttled account's failure it isn't counted: the limit is bizinsights', not the account's (as Google's
+ * quota_exhausted counts none), so pressing Refresh through a pause neither stretches the account's
+ * schedule nor raises its "keeps failing" alert.
+ */
+async function markMetaPaused(connectionId: string) {
+  const { count } = await systemDb.adConnection.updateMany({
+    where: { id: connectionId, OR: [{ errorCode: null }, { errorCode: { not: "connector_left" } }], status: { in: ["active", "error"] } },
+    data: { status: "error", errorCode: "rate_limited", lastError: null, syncRequestedAt: null },
+  });
+  // A lasting state stands already: the card keeps it, and stops saying "Synchronizing" all the same.
+  if (!count) await systemDb.adConnection.updateMany({ where: { id: connectionId, syncRequestedAt: { not: null } }, data: { syncRequestedAt: null } });
+}
 
 /**
  * Take the connection's lock: "held" (release it after), "busy" (another sync of it is running), or
@@ -480,8 +504,8 @@ export async function syncAdConnection(connectionId: string, since: string, unti
   }
   // Meta has said bizinsights' app is over its limit for the hour: every account's call would be refused.
   if (conn.provider === "meta" && opts.coord && (await metaAdsPaused(opts.coord))) {
-    // Someone asked: say why nothing changed ("Meta asked bizinsights to slow down"). The schedule comes back once the pause ends.
-    if (trigger === "request") await recordAdFailure(conn.id, META_PAUSED_FAILURE, "sync");
+    // Someone asked: say why nothing changed. The schedule comes back once the pause ends.
+    if (trigger === "request") await markMetaPaused(conn.id);
     return { skipped: true, reason: "paused" };
   }
   // The daily look at an account with nothing new to read (healthOnly) takes no lock: it is one cheap
@@ -496,7 +520,11 @@ export async function syncAdConnection(connectionId: string, since: string, unti
     return { skipped: true, reason: "busy" };
   }
   try {
-    return await attemptSync(conn, since, until, trigger, google, fetchImpl, opts);
+    // Read again once the lock is held: a sync of the account that ended just before may have moved it
+    // on (its stored days, its token), and this one starts from there, not from a copy older than that.
+    const current = lock === "held" ? await systemDb.adConnection.findUnique({ where: { id: conn.id } }) : conn;
+    if (!current) return { skipped: true, reason: "gone" };
+    return await attemptSync(current, since, until, trigger, google, fetchImpl, opts);
   } finally {
     if (lock === "held") await opts.coord!.release(syncLock(conn.id)).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad sync lock not released; it runs out by itself"));
   }

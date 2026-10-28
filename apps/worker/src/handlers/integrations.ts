@@ -3,6 +3,7 @@ import { systemDb } from "@app/db";
 import {
   logger,
   ADS_RECENT_DAYS,
+  AdSyncBusyError,
   checkAdLogins,
   classifyAdError,
   enqueueAdHistory,
@@ -57,16 +58,6 @@ export async function runSmsJob(job: SmsJob, deps: WorkerDeps) {
 /** One AWS delivery event. One that came before its send was recorded throws (SmsEventNotYetKnown), so the queue brings it back. */
 export async function runSmsEvent(body: unknown, deps: WorkerDeps) {
   return { outcome: await applySmsEvent(body, deps) };
-}
-
-/**
- * Another sync of the same ad account was running, so this one read nothing (syncAdConnection's
- * "busy"): consume sends the job again shortly, spending none of its retries.
- */
-export class AdSyncBusyError extends Error {
-  constructor(public connectionId: string) {
-    super("another sync of this ad account is running");
-  }
 }
 
 /**

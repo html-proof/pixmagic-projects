@@ -107,7 +107,10 @@ describe("one sync of an ad account at a time", () => {
     // A Refresh's catch-up of the same account, on its third attempt.
     const refresh = job(conn.id, "request", addDays(today(), -2));
     const askedFor = () => held.calls.filter((c) => c.since === addDays(today(), -2));
+    const before = held.calls.length;
     expect(await run(refresh, 3)).toEqual({ acked: true, retried: null });
+    // No call of any kind: not its days, nor the account, the person or the token.
+    expect(held.calls).toHaveLength(before);
     expect(askedFor()).toEqual([]);
     expect(waiting()).toEqual([{ ...refresh, busyDeferral: { count: 1, since: expect.any(Number) } }]);
     const delay = queues.sentOpts.sync[sent().indexOf(waiting()[0]!)]!.delaySeconds!;
@@ -211,12 +214,15 @@ describe("Meta's limit on bizinsights' app (code 4)", () => {
     expect(await run(job(b.id))).toEqual({ acked: true, retried: null });
     expect(meta).toHaveLength(asked);
     expect(await row(b.id)).toMatchObject({ status: "active", errorCode: null, consecutiveFailures: 0 });
-    // A Refresh of b: still no call, and the card says why ("Meta asked bizinsights to slow down").
-    queues.clear();
-    await enqueueAdCatchUp(queues, b, { interactive: true });
-    expect(await run(sent()[0]!)).toEqual({ acked: true, retried: null });
+    // Refresh of b, pressed again and again: still no call, and the card says why ("Meta asked bizinsights
+    // to slow down"). The limit is bizinsights', so no failure is counted against the account.
+    for (let press = 0; press < 4; press++) {
+      queues.clear();
+      await enqueueAdCatchUp(queues, await row(b.id), { interactive: true });
+      expect(await run(sent()[0]!)).toEqual({ acked: true, retried: null });
+    }
     expect(meta).toHaveLength(asked);
-    expect(await row(b.id)).toMatchObject({ status: "error", errorCode: "rate_limited", syncRequestedAt: null });
+    expect(await row(b.id)).toMatchObject({ status: "error", errorCode: "rate_limited", syncRequestedAt: null, consecutiveFailures: 0 });
     // Google's accounts sync as ever.
     expect(await run(job(g.id))).toEqual({ acked: true, retried: null });
     expect(google).toBeGreaterThan(0);

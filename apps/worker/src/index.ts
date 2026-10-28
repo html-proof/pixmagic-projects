@@ -2,6 +2,7 @@ import { dbReachable, systemDb, type StoreStatus } from "@app/db";
 import { SIGN_IN_ACTIVITY_DAYS, SIGN_IN_EVENT, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import {
   AdsRateLimitedError,
+  AdSyncBusyError,
   backoffSeconds,
   flagStaleSessions,
   logger,
@@ -54,7 +55,6 @@ import {
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
-import { AdSyncBusyError } from "./handlers/integrations.js";
 import { runShopifyReports } from "./shopifyReports.js";
 
 import { failVerify, runVerify } from "./verify.js";

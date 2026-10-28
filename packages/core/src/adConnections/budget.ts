@@ -103,10 +103,10 @@ export function googleAdsBudgetAllows(b: GoogleAdsBudget, trigger: "schedule" | 
 }
 
 /**
- * How long Meta Ads pauses when Meta says bizinsights' app is over its limit without saying for how long
- * (it gives no wait for this limit: calls fail until the hour's count falls back under it). A quarter of
- * the rolling hour lets the oldest calls age out without holding every account back for the whole hour;
- * if Meta still says no, the first call after the pause starts another.
+ * How long Meta Ads pauses when Meta says bizinsights' app is over its limit. Meta gives no wait for this
+ * limit (calls fail until the hour's count falls back under it). A quarter of the rolling hour lets the
+ * oldest calls age out without holding every account back for the whole hour; if Meta still says no,
+ * the first call after the pause starts another.
  */
 export const META_ADS_PAUSE_S = 900;
 /** Meta counts the app's calls over a rolling hour: after an hour without any, none are left in the count. */
@@ -117,14 +117,21 @@ const META_PAUSE_KEY = "meta-ads-paused";
 export const isMetaAppLimit = (err: unknown): err is AdsRateLimitedError => err instanceof AdsRateLimitedError && err.code === 4;
 
 /**
- * Meta said bizinsights' app is over its limit: hold Meta Ads syncs and live reports back for `seconds`
- * (the wait Meta gave, when it gave one), at least a minute and at most an hour. Returns how long, or
- * null when the coordinator couldn't keep it. Never throws: the call's own failure is handled the same either way.
+ * Meta said bizinsights' app is over its limit: hold Meta Ads syncs and live reports back for
+ * META_ADS_PAUSE_S, or for `seconds` when that is longer, at most an hour. `seconds` is the wait in the
+ * failed call's usage headers, which are its account's (metaRetryAfterS), not the app's: a longer one is
+ * kept, a shorter one says nothing about the app. A pause is never shortened: another call told the same
+ * a moment later, its own account naming a shorter wait, leaves the longer pause standing. Returns how
+ * long the pause still runs, or null when the coordinator couldn't keep it. Never throws: the call's own
+ * failure is handled the same either way.
  */
 export async function pauseMetaAds(coord: Coord, seconds: number | null): Promise<number | null> {
-  const s = Math.min(META_ADS_PAUSE_MAX_S, Math.max(60, Math.round(seconds ?? META_ADS_PAUSE_S)));
+  const s = Math.min(META_ADS_PAUSE_MAX_S, Math.max(META_ADS_PAUSE_S, Math.round(seconds ?? 0)));
+  const until = Date.now() + s * 1000;
   try {
-    await coord.put(META_PAUSE_KEY, new Date(Date.now() + s * 1000).toISOString(), s);
+    const current = await metaAdsPausedUntil(coord);
+    if (current && current.getTime() >= until) return Math.ceil((current.getTime() - Date.now()) / 1000);
+    await coord.put(META_PAUSE_KEY, new Date(until).toISOString(), s);
   } catch (err) {
     logger.warn({ err }, "meta ads: pause not kept");
     return null;
