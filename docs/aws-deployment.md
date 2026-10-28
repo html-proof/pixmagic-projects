@@ -903,9 +903,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   sign-in asks for the key).
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
-- **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
-  the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
-  (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
+- **WhatsApp**: Meta's Tech Provider steps (business verification done; App Review for the two
+  `whatsapp_*` permissions; the app's WhatsApp webhook), in Meta's consoles only:
+  [whatsapp.md](whatsapp.md), "Owner's steps (Meta)". Until Meta approves, no merchant can connect.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
   US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
   Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so

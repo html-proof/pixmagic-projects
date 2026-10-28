@@ -7,7 +7,6 @@
  */
 import { systemDb, type Store, type WappConnection, type WappMessage } from "@app/db";
 import {
-  EVOLUTION_NOTICE,
   statusBucket,
   waAutomationState,
   waSetupProgress,
@@ -15,47 +14,40 @@ import {
   WA_CONNECTION_LABEL,
   WA_MESSAGE_LABEL,
   WA_DAILY_LIMIT,
+  WA_QR_RETIRED,
+  WA_RETIRED_PROVIDER,
+  type WaConnectionProvider,
   type WaConnectionStatus,
   type WaMessageStatus,
   type WaProvider,
 } from "@app/shared";
-import { env } from "../env.js";
+import { cloudApiMissing } from "./cloudApi.js";
 import { connectionOf, dailyLimitOf, settingsOf, waDecrypt, type WaSettingsView } from "./common.js";
 import { statusReasonLabel } from "./connection.js";
-import { evolutionConfigured } from "./evolution.js";
 import { retiredConnection } from "./legacy.js";
 import { sentToday } from "./messages.js";
 import { automationProblemsFor } from "./automations.js";
-import { testIsLinkedNumber } from "./settings.js";
 
-/** What the Cloud API way of connecting still lacks on this server, by setting name (empty: it can be offered). */
-export function cloudApiMissing(): string[] {
-  const e = env();
-  const appId = e.WHATSAPP_APP_ID || e.META_APP_ID;
-  const secret = e.WHATSAPP_APP_SECRET || (!e.WHATSAPP_APP_ID || e.WHATSAPP_APP_ID === e.META_APP_ID ? e.META_APP_SECRET : "");
-  return [
-    !evolutionConfigured() ? "EVOLUTION_API_URL" : null,
-    !appId ? "WHATSAPP_APP_ID" : null,
-    !e.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
-    !secret ? "WHATSAPP_APP_SECRET" : null,
-    !e.WHATSAPP_WEBHOOK_VERIFY_TOKEN ? "WHATSAPP_WEBHOOK_VERIFY_TOKEN" : null,
-  ].filter((x): x is string => !!x);
-}
-
+/**
+ * The connection as the page shows it. A phone linked with a QR code is shown as what it is now,
+ * retired (disconnected, WA_QR_RETIRED), from the moment this release runs: nothing sends through it,
+ * even before the cron's cleanup has reached its row.
+ */
 export function waConnectionView(c: WappConnection | null) {
   if (!c) return null;
+  const retired = c.provider === WA_RETIRED_PROVIDER;
+  const status = (retired ? "disconnected" : c.status) as WaConnectionStatus;
+  const reasonCode = retired ? WA_QR_RETIRED : c.statusReason;
   return {
-    provider: c.provider as WaProvider,
-    status: c.status as WaConnectionStatus,
-    statusLabel: WA_CONNECTION_LABEL[c.status as WaConnectionStatus] ?? c.status,
-    reason: statusReasonLabel(c.statusReason),
-    pairingMethod: c.pairingMethod,
+    provider: c.provider as WaConnectionProvider,
+    status,
+    statusLabel: retired ? "Retired" : (WA_CONNECTION_LABEL[status] ?? c.status),
+    reason: statusReasonLabel(reasonCode),
+    reasonCode,
     phone: c.phoneMasked,
     profileName: c.profileName,
     wabaId: c.wabaId,
-    phoneNumberId: c.phoneNumberId,
-    qrCount: c.qrCount,
-    pairingStartedAt: c.pairingStartedAt,
+    phoneNumberId: retired ? null : c.phoneNumberId,
     connectedAt: c.connectedAt,
     disconnectedAt: c.disconnectedAt,
     downSince: c.downSince,
@@ -161,15 +153,17 @@ export async function whatsappOverview(store: Store, opts: { contacts: boolean }
     const problems = await automationProblemsFor(store, a);
     if (problems.length) blocked.push({ id: a.id, name: a.name, problems });
   }
+  // A retired QR link counts as no connection at all.
+  const live = conn && conn.provider === "cloud_api" ? conn : null;
   const setup = waSetupProgress({
-    provider: (conn && conn.status !== "disconnected" ? (conn.provider as WaProvider) : null) ?? null,
-    status: (conn?.status as WaConnectionStatus) ?? null,
+    provider: live && live.status !== "disconnected" ? (live.provider as WaProvider) : null,
+    status: (live?.status as WaConnectionStatus) ?? null,
     configuredAt: settings.configuredAt,
     orderUpdates: settings.orderUpdates,
     testVerifiedAt: settings.testVerifiedAt,
     testPassedAt: settings.testPassedAt,
   });
-  const connected = conn?.status === "connected";
+  const connected = live?.status === "connected";
   const [week, month, waiting, held, failures, recent, lastEvent, templates, campaigns] = await Promise.all([
     stats(store.id, new Date(now - 7 * 86_400_000)),
     stats(store.id, new Date(now - 30 * 86_400_000)),
@@ -181,12 +175,11 @@ export async function whatsappOverview(store: Store, opts: { contacts: boolean }
     systemDb.wappTemplate.count({ where: { storeId: store.id, active: true } }),
     systemDb.wappCampaign.groupBy({ by: ["status"], where: { storeId: store.id }, _count: { _all: true } }),
   ]);
-  const provider = (conn?.provider as WaProvider) ?? "qr";
   return {
     store: { id: store.id, name: store.name ?? store.shopDomain, timezone: store.timezone },
-    platform: { evolution: evolutionConfigured(), cloudApi: { missing: cloudApiMissing() } },
+    platform: { cloudApi: { missing: cloudApiMissing() } },
     connection: waConnectionView(conn),
-    settings: { ...waSettingsJson(settings), testIsLinkedNumber: await testIsLinkedNumber(store, conn) },
+    settings: waSettingsJson(settings),
     setup,
     automation: {
       state: waAutomationState({ connected, paused: !!settings.automationPausedAt, setupDone: !setup.current, active: active.length, blocked: blocked.length }),
@@ -199,8 +192,8 @@ export async function whatsappOverview(store: Store, opts: { contacts: boolean }
     campaigns: Object.fromEntries(campaigns.map((c) => [c.status, c._count._all])),
     stats: { week, month },
     limits: {
-      dailyLimit: dailyLimitOf(settings, provider),
-      dailyMax: WA_DAILY_LIMIT[provider].max,
+      dailyLimit: dailyLimitOf(settings),
+      dailyMax: WA_DAILY_LIMIT.max,
       sentToday: await sentToday(store.id, settings.timeZone),
     },
     queue: {
@@ -218,6 +211,5 @@ export async function whatsappOverview(store: Store, opts: { contacts: boolean }
     },
     recent: recent.map((m) => waMessageView(m, opts)),
     retired,
-    notice: EVOLUTION_NOTICE,
   };
 }

@@ -2,10 +2,10 @@ import type {
   WaAudience,
   WaAutomationState,
   WaCondition,
+  WaConnectionProvider,
   WaConnectionStatus,
   WaMessageStatus,
   WaOrderUpdateBasis,
-  WaProvider,
   WaRecipient,
   WaSendWindow,
   WaSetupStep,
@@ -17,35 +17,23 @@ import type {
 // What the WhatsApp Automation API answers (apps/api/src/routes/whatsapp.ts). Dates arrive as ISO strings.
 
 export interface WaConnection {
-  provider: WaProvider;
+  /** cloud_api; "qr" only for a phone linked with a QR code before 2026-10-28, shown retired. */
+  provider: WaConnectionProvider;
   status: WaConnectionStatus;
   statusLabel: string;
   /** Why it is in that state, in the merchant's words (null: nothing to say). */
   reason: string | null;
-  pairingMethod: "qr" | "code" | null;
+  /** The same as a code ("qr_linking_retired", "token_expired", ...). */
+  reasonCode: string | null;
   phone: string | null;
   profileName: string | null;
   wabaId: string | null;
   phoneNumberId: string | null;
-  qrCount: number;
-  pairingStartedAt: string | null;
   connectedAt: string | null;
   disconnectedAt: string | null;
   downSince: string | null;
   lastEventAt: string | null;
   lastCheckedAt: string | null;
-}
-
-/** POST /connection and GET /connection/pairing: the provider's current code, or the state reached. */
-export interface WaPairing {
-  status: WaConnectionStatus;
-  /** A PNG data URL of the QR code WhatsApp issued. */
-  qr: string | null;
-  pairingCode: string | null;
-  qrCount: number;
-  reason: string | null;
-  phone: string | null;
-  profileName: string | null;
 }
 
 export interface WaSettings {
@@ -63,8 +51,6 @@ export interface WaSettings {
   retentionDays: number;
   configuredAt: string | null;
   testPhone: string | null;
-  /** The verified test number is the linked phone's own: its tests land in that phone's chat with itself. */
-  testIsLinkedNumber?: boolean;
   testVerifiedAt: string | null;
   testPassedAt: string | null;
   testCodeExpiresAt: string | null;
@@ -133,7 +119,8 @@ export type WaTriggerAvailability = Record<WaTrigger, { available: boolean; reas
 
 export interface WaOverview {
   store: { id: string; name: string; timezone: string };
-  platform: { evolution: boolean; cloudApi: { missing: string[] } };
+  /** What connecting through Meta still lacks on bizinsights, by setting name (empty: it can be offered). */
+  platform: { cloudApi: { missing: string[] } };
   connection: WaConnection | null;
   settings: WaSettings;
   setup: { done: Record<WaSetupStep, boolean>; current: WaSetupStep | null };
@@ -150,8 +137,6 @@ export interface WaOverview {
   health: { lastWebhookAt: string | null; lastEventAt: string | null; lastCheckedAt: string | null };
   recent: WaMessage[];
   retired: { displayPhoneNumber: string | null; connectedAt: string } | null;
-  /** Evolution API's licence notice. */
-  notice: string;
   can: WaCan;
   triggers: WaTriggerAvailability;
   /** The Meta app's public ids for Embedded Signup (only for people who may connect; null when it isn't set up). */

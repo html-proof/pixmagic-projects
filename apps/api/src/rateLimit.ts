@@ -106,11 +106,9 @@ export const LIMITS = {
   metaDeletionStatusIp: { max: 60, windowSec: 600 },
   /** Meta's callbacks refused (a signed_request that doesn't verify), per IP: past it they're answered 429 and no longer logged. Meta's own aren't counted. */
   metaCallbackRefusedIp: { max: 20, windowSec: 600 },
-  /** WhatsApp: starting a pairing, a Cloud API sign-up, reconnecting or disconnecting (each calls Evolution API), per store. */
+  /** WhatsApp: finishing Meta's sign-up or disconnecting (each calls Meta), per store. */
   waConnect: { max: 10, windowSec: 600 },
-  /** WhatsApp: the page polling the pairing code while the phone scans (each asks Evolution API), per store. */
-  waPairing: { max: 240, windowSec: 600 },
-  /** WhatsApp: "Check again" (asks Evolution API for the state), per store. */
+  /** WhatsApp: "Check again" (asks Meta about the number), per store. */
   waRefresh: { max: 12, windowSec: 600 },
   /** WhatsApp: templates saved, submitted for Meta's review or deleted, per store. */
   waTemplateCreate: { max: 60, windowSec: 3600 },
