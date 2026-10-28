@@ -560,22 +560,31 @@ export class AppStack extends Stack {
     });
     alarm("whatsapp-service-unreachable", evolutionDown.metric({ period: Duration.minutes(15), statistic: "Sum" }), 1, "WhatsApp's Evolution API service didn't answer the sweep: no store can connect or send (docs/whatsapp.md, Runbook)", 2);
     const hour = Duration.hours(1);
-    // Sync-queue jobs that failed for good (consume's "sync job failed" with final: true: every attempt
-    // spent, or a failure no retry helps): a store's orders, catalog or stock, an ad account's sync, a
-    // check against Shopify. Each is told to its merchant already (an alert, or the ad account's card),
-    // and an account that keeps failing makes one an hour at most (its syncs back off). One store whose
-    // access ended makes a handful at once (orders, products, variants, its ad accounts); ten in an
-    // hour is more than one store makes, and points at a cause every store meets: ours, or a
-    // platform's outage that outlasted the retries.
+    // Sync-queue jobs that failed for good with every attempt spent (consume's "sync job failed" with
+    // final: true, from the sixth delivery: core's MAX_ATTEMPTS): a store's orders, catalog or stock, an
+    // ad account's sync, a check against Shopify, failing with something a retry should have got past
+    // (a platform's 5xx or 429, a network error, our own code). A failure no retry helps (final on its
+    // first attempt: UnrecoverableError) is left out: a shop that is paused, frozen or closed (Shopify
+    // 402/404/423), access Shopify refuses, protected customer data not approved, an ad connection
+    // marked for its merchant. Each of those is told to its merchant (an alert, the ad account's card;
+    // ad connections have their own alarm below) and comes back with every daily reconcile, which
+    // starts all stores in the same tick: three such stores would make ten lines in that hour every
+    // day. One store's jobs that run out of attempts are a handful at most (orders, products, variants,
+    // its check, its ad accounts); ten in an hour is more than one store makes, and points at a cause
+    // every store meets: ours, or a platform's outage that outlasted the retries.
     const syncFailures = new logs.MetricFilter(this, "SyncJobsFailedForGood", {
       logGroup: jobs.fn.logGroup,
-      filterPattern: logs.FilterPattern.all(logs.FilterPattern.stringValue("$.msg", "=", "sync job failed"), logs.FilterPattern.booleanValue("$.final", true)),
+      filterPattern: logs.FilterPattern.all(
+        logs.FilterPattern.stringValue("$.msg", "=", "sync job failed"),
+        logs.FilterPattern.booleanValue("$.final", true),
+        logs.FilterPattern.numberValue("$.attempts", ">=", 6),
+      ),
       metricNamespace: "Insights",
       metricName: `${cfg.name}-sync-jobs-failed-for-good`,
       metricValue: "1",
       defaultValue: 0,
     });
-    alarm("sync-jobs-failed-for-good", syncFailures.metric({ period: hour, statistic: "Sum" }), 10, "Ten or more sync jobs failed for good in an hour, more than one store makes: see docs/RUNBOOK.md");
+    alarm("sync-jobs-failed-for-good", syncFailures.metric({ period: hour, statistic: "Sum" }), 10, "Ten or more sync jobs ran out of attempts in an hour, more than one store makes: see docs/RUNBOOK.md");
     // Ad connections turning to "reconnect" or "permission" (core's recordAdFailure logs each once, when
     // it turns), from a sync (jobs), a live report (api) or the cron's own reads. One merchant's sign-in
     // ending turns the accounts connected with it, one to a few for a store, and each sign-in ends at a

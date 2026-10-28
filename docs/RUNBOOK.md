@@ -48,12 +48,12 @@ WhatsApp's Evolution API service: no task running, the sweep couldn't reach it, 
 nearly full. Messages wait meanwhile. Steps in [whatsapp.md](whatsapp.md), "Runbook" (and
 "Scaling" for memory).
 
-### `sync-jobs-failed-for-good` (alarm) – ten or more sync jobs failed for good in an hour
-Each failure has already reached its merchant (a `sync_*_failed` alert, or the ad account's card); the alarm is for a cause they share.
-1. Logs Insights on `/aws/lambda/insights-production-jobs`, the hour of the alarm: `filter @message like /"msg":"sync job failed"/ and @message like /"final":true/ | stats count() by err.name, err.message`.
-2. `UnrecoverableError` "ad sync stopped: the connection is marked" (its `err.cause` says what the platform answered): ad accounts losing access; see `ad-connections-need-merchants` below.
-3. Shopify `401`/`403` across stores: the app's credentials (see [Webhooks returning 401 en masse](#webhooks-returning-401-en-masse)). `429`/`5xx` after every attempt: an outage at Shopify (https://www.shopifystatus.com) or Meta/Google; the daily reconcile and the ad re-check fetch the days again once it is over.
-4. The same error from our own code everywhere (a `TypeError`, a Prisma error) right after a release: a bug. `node infra/cdk/scripts/rollback.mjs`, or a forward fix, then re-sync the stores it stopped.
+### `sync-jobs-failed-for-good` (alarm) – ten or more sync jobs ran out of attempts in an hour
+Counted: a sync-queue job's `"sync job failed"` line with `"final":true` on its sixth attempt (core's `MAX_ATTEMPTS`), so failures a retry should have got past. Not counted: a failure no retry helps, final on its first attempt (`UnrecoverableError`): a paused, frozen or closed shop (Shopify `402`/`404`/`423`), access Shopify refuses, protected customer data not approved, an ad connection marked for its merchant. Those come back with every store's daily reconcile and their merchants are told already. Each counted failure has reached its merchant too (a `sync_*_failed` alert, or the ad account's card); the alarm is for a cause they share.
+1. Logs Insights on `/aws/lambda/insights-production-jobs`, the hour of the alarm: `filter @message like /"msg":"sync job failed"/ and @message like /"final":true/ and attempts >= 6 | stats count() by err.name, err.message`.
+2. `429`/`5xx` from Shopify, Meta or Google after every attempt: an outage there (https://www.shopifystatus.com); the daily reconcile and the ad re-check fetch the days again once it is over.
+3. The same error from our own code everywhere (a `TypeError`, a Prisma error) right after a release: a bug. `node infra/cdk/scripts/rollback.mjs`, or a forward fix, then re-sync the stores it stopped.
+4. Not this alarm's to see: Shopify refusing every store's token at once (`401`/`403`, `"Shopify refused the store's token"` in the same log) is final at once. The stores turn to Reconnect with critical alerts; see [Webhooks returning 401 en masse](#webhooks-returning-401-en-masse) for the app's credentials.
 
 ### `ad-connections-need-merchants` (alarm) – ten or more ad connections turned to Reconnect or permission in an hour
 Each connection logs `"ad connection needs the merchant"` once, when it turns (core's `recordAdFailure`), and its merchant gets an `ads_reconnect` alert. Many in an hour, across stores, means something changed for everyone.

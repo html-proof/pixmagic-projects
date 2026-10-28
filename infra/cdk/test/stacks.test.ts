@@ -324,8 +324,10 @@ describe("the app stack", () => {
   it("counts sync jobs failing for good, ad connections turning to need their merchants, and stored ad figures that differ", () => {
     const filters = Object.values(t.app.findResources("AWS::Logs::MetricFilter")).map((r) => r.Properties);
     const byMetric = (name: string) => filters.filter((p) => p.MetricTransformations[0].MetricName === name);
-    // The worker's own line for a job's last failure (consume: "sync job failed", final), read as JSON.
-    expect(byMetric("production-sync-jobs-failed-for-good").map((p) => p.FilterPattern)).toEqual(['{ ($.msg = "sync job failed") && ($.final IS TRUE) }']);
+    // The worker's own line for a job's last failure (consume: "sync job failed", final), read as JSON,
+    // once its attempts ran out (core's MAX_ATTEMPTS, 6): a failure no retry helps (a paused shop,
+    // refused access) is final on its first attempt and comes back every day, so it isn't counted.
+    expect(byMetric("production-sync-jobs-failed-for-good").map((p) => p.FilterPattern)).toEqual(['{ ($.msg = "sync job failed") && ($.final IS TRUE) && ($.attempts >= 6) }']);
     // Logged once per connection when it turns (core's recordAdFailure), from whichever function met it.
     const needMerchants = byMetric("production-ad-connections-need-merchants");
     expect(needMerchants.map((p) => p.FilterPattern)).toEqual(Array(3).fill('"ad connection needs the merchant"'));
