@@ -111,8 +111,29 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
   month during the first 10 days of a month (when AdSense finalizes earnings). The same daily run reads each account's
   health. Accounts with nothing new to read (closed, or a login that lost them) are only asked once a day whether
   they're back; accounts waiting for a reconnect are left alone.
+- **One sync per account at a time**: a sync holds its connection's lock in the coordinator (`ads-sync:<id>`, 16
+  minutes, a little over the jobs function's 15, so a sync cut off there frees its account soon after). A Refresh,
+  the hourly recent days, the daily re-check, a history window and a long window's rest of the same account would
+  otherwise each call the platform at once. A sync that finds the lock taken calls nothing and is sent again
+  shortly (15 seconds, doubling to 5 minutes; after 2 hours the ordinary retries take over) **without spending a
+  retry**. A Refresh that waits this way keeps its card saying **Synchronizing** until its own days have landed: the
+  sync that was running ends only a wait it saw when it started. The daily look at an account with nothing new to
+  read (closed, or a login that lost it) takes no lock: it is one cheap read, with no days fetched or stored.
 - **Rate limits**: when a platform says "slow down", the job is sent again after the wait it names (or a backoff of 30
-  seconds to an hour) **without spending a retry**.
+  seconds to an hour) **without spending a retry**. Meta's throttling of one account or one person (Graph codes 17,
+  32, 613, and the business use case codes 80000-80099) stays with that account's job.
+- **Meta's limit on bizinsights' app** (Graph code 4, "Application request limit reached"): Meta counts the app's
+  calls across every merchant over a rolling hour, and over the limit refuses every call, whichever account it is
+  for. So the first Meta Ads call told so **pauses Meta Ads** for every account (`meta-ads-paused` in the
+  coordinator) for 15 minutes: Meta names no wait for this limit, and a quarter of the hour lets the oldest calls age
+  out. The failed call's usage headers are its account's, not the app's, so a longer wait there lengthens the pause
+  (never past the hour) and a shorter one leaves it as it is; a later call told the same never shortens a pause.
+  While it lasts the scheduler queues no Meta sync (their leases stay free, so the first tick after it queues them);
+  a Meta sync already queued calls nothing (a Refresh's marks the card `rate_limited`, "Meta asked bizinsights to
+  slow down for a while", without counting a failure against the account, as Google's used-up allowance counts none;
+  Refresh still answers as usual and the card shows why once its job has looked); the sync that met the limit waits
+  until the pause ends, without spending a retry; and the live Meta report answers "Meta is busy right now" without
+  calling Meta. Google Ads and AdSense carry on, and WhatsApp's own Graph calls aren't held back.
 - **Google Ads API operations budget**: the Cloud project may make a fixed number of operations a day across every
   merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance and
   history walks at 60%, leaving the rest to people connecting accounts and opening reports. When Google says the

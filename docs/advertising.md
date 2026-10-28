@@ -15,6 +15,11 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 | Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
 
+The stored days behind these pages are kept current by the syncs: one sync per account at a time, and Meta's
+paused for every account while Meta says bizinsights' app is over its hourly request limit
+([ads-setup.md](ads-setup.md), "Syncing"). During that pause Meta's live report answers "Meta is busy right now.
+Try again in a minute." without asking Meta, as it does when Meta throttles one account.
+
 ## The question
 
 - **Dates**: the dashboard's own address-bar state (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`), kept
