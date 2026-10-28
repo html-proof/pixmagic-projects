@@ -381,7 +381,7 @@ The hub adds no environment variables.
 
 - **Alarm `messaging-send-failures`** (25+ refusals in 5 minutes, twice): open the jobs log group,
   search `sms send refused` (its `type` and `reason` are AWS's), `email send failed`
-  (`errorCode`) or `whatsapp send refused by Meta` (`metaCode`); the hub's history filtered by *Failed*
+  (`errorCode`) or `whatsapp send refused by the provider` (its `metaCode` is Meta's); the hub's history filtered by *Failed*
   shows which store and automation (WhatsApp's: the WhatsApp Automation page's Messages tab). Common
   causes: an SMS sender not found or not allowed (the store's sender is held, the merchant is
   alerted), AWS throttling (retries absorb it), a mailbox needing sign-in (alert

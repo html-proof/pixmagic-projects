@@ -291,7 +291,7 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
       logger.warn({ messageId: m.id, attempts: m.attempts, kind: e.kind, metaCode: e.metaCode }, "whatsapp send will be retried");
       return "retry";
     }
-    logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status, metaCode: e.metaCode }, "whatsapp send refused by Meta");
+    logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status, metaCode: e.metaCode }, "whatsapp send refused by the provider");
     return end("failed", refusalReason(e.kind, e.metaCode), { errorCode, errorDetail: e.detail || null });
   }
 }
