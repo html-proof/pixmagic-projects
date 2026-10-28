@@ -1,7 +1,8 @@
 /**
  * Ad accounts connected to a store: bizinsights' own sign-in with each platform, their encrypted tokens,
  * keeping those tokens usable, and storing what the platforms report (ad_campaign_daily, and
- * adsense_daily for AdSense). The platform calls themselves are in ads/; the HTTP routes are
+ * adsense_daily for AdSense), and checking once a day that what is stored matches the platform
+ * (verify.ts). The platform calls themselves are in ads/; the HTTP routes are
  * apps/api/src/routes/ads.ts; the sync job is apps/worker. One module per job in adConnections/; this
  * file is the one place the rest of core imports them from.
  */
@@ -20,3 +21,4 @@ export * from "./adConnections/signIn.js";
 export * from "./adConnections/leaveNango.js";
 export * from "./adConnections/health.js";
 export * from "./adConnections/logins.js";
+export * from "./adConnections/verify.js";

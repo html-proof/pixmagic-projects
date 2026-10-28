@@ -559,6 +559,62 @@ export class AppStack extends Stack {
       defaultValue: 0,
     });
     alarm("whatsapp-service-unreachable", evolutionDown.metric({ period: Duration.minutes(15), statistic: "Sum" }), 1, "WhatsApp's Evolution API service didn't answer the sweep: no store can connect or send (docs/whatsapp.md, Runbook)", 2);
+    const hour = Duration.hours(1);
+    // Sync-queue jobs that failed for good with every attempt spent (consume's "sync job failed" with
+    // final: true, from the sixth delivery: core's MAX_ATTEMPTS): a store's orders, catalog or stock, an
+    // ad account's sync, a check against Shopify, failing with something a retry should have got past
+    // (a platform's 5xx or 429, a network error, our own code). A failure no retry helps (final on its
+    // first attempt: UnrecoverableError) is left out: a shop that is paused, frozen or closed (Shopify
+    // 402/404/423), access Shopify refuses, protected customer data not approved, an ad connection
+    // marked for its merchant. Each of those is told to its merchant (an alert, the ad account's card;
+    // ad connections have their own alarm below) and comes back with every daily reconcile, which
+    // starts all stores in the same tick: three such stores would make ten lines in that hour every
+    // day. One store's jobs that run out of attempts are a handful at most (orders, products, variants,
+    // its check, its ad accounts); ten in an hour is more than one store makes, and points at a cause
+    // every store meets: ours, or a platform's outage that outlasted the retries.
+    const syncFailures = new logs.MetricFilter(this, "SyncJobsFailedForGood", {
+      logGroup: jobs.fn.logGroup,
+      filterPattern: logs.FilterPattern.all(
+        logs.FilterPattern.stringValue("$.msg", "=", "sync job failed"),
+        logs.FilterPattern.booleanValue("$.final", true),
+        logs.FilterPattern.numberValue("$.attempts", ">=", 6),
+      ),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-sync-jobs-failed-for-good`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("sync-jobs-failed-for-good", syncFailures.metric({ period: hour, statistic: "Sum" }), 10, "Ten or more sync jobs ran out of attempts in an hour, more than one store makes: see docs/RUNBOOK.md");
+    // Ad connections turning to "reconnect" or "permission" (core's recordAdFailure logs each once, when
+    // it turns), from a sync (jobs), a live report (api) or the cron's own reads. One merchant's sign-in
+    // ending turns the accounts connected with it, one to a few for a store, and each sign-in ends at a
+    // time of its own (Meta's last about 60 days); ten in an hour, across stores, is a break at the
+    // platform or in bizinsights' app (access cut for the app, its secret changed, a code misread).
+    const needMerchants = `${cfg.name}-ad-connections-need-merchants`;
+    for (const [name, f] of [["api", api.fn], ["jobs", jobs.fn], ["cron", cron.fn]] as const) {
+      new logs.MetricFilter(this, `AdsNeedMerchant-${name}`, {
+        logGroup: f.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("ad connection needs the merchant"),
+        metricNamespace: "Insights",
+        metricName: needMerchants,
+        metricValue: "1",
+        defaultValue: 0,
+      });
+    }
+    alarm("ad-connections-need-merchants", new cloudwatch.Metric({ namespace: "Insights", metricName: needMerchants, period: hour, statistic: "Sum" }), 10, "Ten or more ad connections turned to Reconnect or permission in an hour: a platform-wide break, not one merchant's sign-in (docs/RUNBOOK.md)");
+    // The cron's daily check of each Meta and AdSense account's settled week against the platform (core's
+    // adConnections/verify.ts) found a figure outside its tolerance. Once a day per account and on finished
+    // days, so any one is a fault to look at; the alarm clears the hour after and fires again on the
+    // next day's check while the difference stays.
+    const figuresDiffer = new logs.MetricFilter(this, "AdFiguresDiffer", {
+      logGroup: cron.fn.logGroup,
+      filterPattern: logs.FilterPattern.anyTerm("ad figures differ from the platform"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-ad-figures-differ`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("ad-figures-differ", figuresDiffer.metric({ period: hour, statistic: "Sum" }), 1, "Stored ad figures differ from what the platform reports for the same week: see docs/RUNBOOK.md");
 
     new cloudwatch.Dashboard(this, "Dashboard", {
       dashboardName: prefix,
