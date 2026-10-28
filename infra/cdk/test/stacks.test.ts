@@ -321,6 +321,32 @@ describe("the app stack", () => {
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-whatsapp-service-unreachable" });
   });
 
+  it("counts sync jobs failing for good, ad connections turning to need their merchants, and stored ad figures that differ", () => {
+    const filters = Object.values(t.app.findResources("AWS::Logs::MetricFilter")).map((r) => r.Properties);
+    const byMetric = (name: string) => filters.filter((p) => p.MetricTransformations[0].MetricName === name);
+    // The worker's own line for a job's last failure (consume: "sync job failed", final), read as JSON.
+    expect(byMetric("production-sync-jobs-failed-for-good").map((p) => p.FilterPattern)).toEqual(['{ ($.msg = "sync job failed") && ($.final IS TRUE) }']);
+    // Logged once per connection when it turns (core's recordAdFailure), from whichever function met it.
+    const needMerchants = byMetric("production-ad-connections-need-merchants");
+    expect(needMerchants.map((p) => p.FilterPattern)).toEqual(Array(3).fill('"ad connection needs the merchant"'));
+    expect(needMerchants.map((p) => JSON.stringify(p.LogGroupName))).toEqual([/"Logsapi/, /"Logsjobs/, /"Logscron/].map((re) => expect.stringMatching(re)));
+    expect(byMetric("production-ad-figures-differ").map((p) => p.FilterPattern)).toEqual(['"ad figures differ from the platform"']);
+    // Each over an hour; one merchant's own trouble doesn't reach the first two.
+    for (const [name, threshold] of [["sync-jobs-failed-for-good", 10], ["ad-connections-need-merchants", 10], ["ad-figures-differ", 1]] as const) {
+      t.app.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: `insights-production-${name}`,
+        Namespace: "Insights",
+        MetricName: `production-${name}`,
+        Period: 3600,
+        Statistic: "Sum",
+        Threshold: threshold,
+        EvaluationPeriods: 1,
+        TreatMissingData: "notBreaching",
+        AlarmActions: [{ Ref: Match.stringLikeRegexp("^Alarms") }],
+      });
+    }
+  });
+
   it("tells the alarm topic about the database's events", () => {
     t.app.hasResourceProperties("AWS::RDS::EventSubscription", {
       SourceType: "db-instance",

@@ -48,6 +48,34 @@ WhatsApp's Evolution API service: no task running, the sweep couldn't reach it, 
 nearly full. Messages wait meanwhile. Steps in [whatsapp.md](whatsapp.md), "Runbook" (and
 "Scaling" for memory).
 
+### `sync-jobs-failed-for-good` (alarm) – ten or more sync jobs failed for good in an hour
+Each failure has already reached its merchant (a `sync_*_failed` alert, or the ad account's card); the alarm is for a cause they share.
+1. Logs Insights on `/aws/lambda/insights-production-jobs`, the hour of the alarm: `filter @message like /"msg":"sync job failed"/ and @message like /"final":true/ | stats count() by err.name, err.message`.
+2. `UnrecoverableError` "ad sync stopped: the connection is marked" (its `err.cause` says what the platform answered): ad accounts losing access; see `ad-connections-need-merchants` below.
+3. Shopify `401`/`403` across stores: the app's credentials (see [Webhooks returning 401 en masse](#webhooks-returning-401-en-masse)). `429`/`5xx` after every attempt: an outage at Shopify (https://www.shopifystatus.com) or Meta/Google; the daily reconcile and the ad re-check fetch the days again once it is over.
+4. The same error from our own code everywhere (a `TypeError`, a Prisma error) right after a release: a bug. `node infra/cdk/scripts/rollback.mjs`, or a forward fix, then re-sync the stores it stopped.
+
+### `ad-connections-need-merchants` (alarm) – ten or more ad connections turned to Reconnect or permission in an hour
+Each connection logs `"ad connection needs the merchant"` once, when it turns (core's `recordAdFailure`), and its merchant gets an `ads_reconnect` alert. Many in an hour, across stores, means something changed for everyone.
+1. Logs Insights on `/aws/lambda/insights-production-jobs`, `-api` and `-cron`: `filter @message like /ad connection needs the merchant/ | stats count() by provider, errorCode, storeId`.
+2. All one `storeId`: one merchant's sign-in with many ad accounts ended. Nothing to do: their cards say Reconnect.
+3. One `provider` across stores:
+   - Meta, `auth_expired`: Meta stopped taking bizinsights' tokens. Check the app at developers.facebook.com (restricted, a review that took `ads_read` away, the app's mode), and whether `META_APP_SECRET` was changed recently (`put-secrets.mjs`). `scope_missing`: people's `ads_read` was taken back.
+   - AdSense or Google Ads, `auth_expired`: Google stopped refreshing the tokens. Check the OAuth client in the Google Cloud project (deleted or its secret rotated without `put-secrets.mjs`, the consent screen back in Testing, where refresh tokens last 7 days).
+   - `no_access` (permission) across stores: the platform answers its permission error differently now. Compare a real answer with `metaClassifyPermissionError` / `adsenseGet` and fix the classification.
+4. Once the cause is fixed: a connection whose access really ended needs its merchant's Reconnect; one marked by our mistake goes back to working with the next sync that works (Refresh on its card).
+
+### `ad-figures-differ` (alarm) – stored ad figures differ from the platform
+The cron's daily check ([ads-setup.md](ads-setup.md), "Checked against the platform") found a figure of a settled week outside its tolerance. Merchants aren't told, and the connection isn't changed.
+1. The line, in `/aws/lambda/insights-production-cron`: `filter @message like /ad figures differ from the platform/`. It names the `provider`, `connectionId`, the week (`since`, `until`, the account's own days), `currency`, the `field`, both sides (`stored`, `platform`) and `relative` ((stored − platform) ÷ platform).
+2. What is stored, per day: `SELECT day, sum(spend), sum(impressions), sum(clicks), sum(link_clicks), sum(purchases), sum(purchase_value), string_agg(DISTINCT currency, ',') FROM ad_campaign_daily WHERE connection_id = '…' AND day BETWEEN '…' AND '…' GROUP BY day ORDER BY day;` (AdSense: `sum(earnings), sum(page_views), sum(impressions), sum(clicks)` from `adsense_daily`, every site). Set it beside Ads Manager for the same days in the ad account's time zone, attribution "each ad set's own setting" (AdSense: a report of the same dates).
+3. What it usually means:
+   - `currency`: rows stored in another currency than the account's (the account changed, or rows from another account): a re-sync of the days stores them again.
+   - One day short or missing: a window that wasn't stored whole. The daily re-check stores the last 30 days again; if the next day's check still differs, the sync reads or stores something wrong.
+   - Only `purchases` / `purchaseValue`: attribution or which actions count as purchases (`META_PURCHASE` in `packages/shared/src/ads.ts`).
+   - AdSense `earnings` in the first days of a month: AdSense finalizing the month before; the re-check reads the whole month again until the 10th.
+4. A difference that stays after the re-check has stored the week again is a bug in reading or storing: a forward fix with a test, then a re-sync of the account's days.
+
 ### Webhooks returning 401 en masse
 `SHOPIFY_API_SECRET` doesn't match the app (secret rotated in the Partner dashboard but not in the app secret, or vice versa). `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET`, then get fresh function instances (it takes effect only there). Shopify retries failed deliveries for 48 h, so nothing is lost if fixed promptly.
 
