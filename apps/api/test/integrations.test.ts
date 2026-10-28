@@ -11,8 +11,9 @@ import { dohResponse, fakeSmtp, isDoh } from "../../../test-support/emailFakes.j
  * integrations/status.ts): every connection of a store on one scale of six statuses. Each
  * provider's own states on that scale (Shopify, the three ad platforms with a waiting sign-in and
  * the Google Ads demo, WhatsApp, SMS, email), what each caller is offered to do (by their
- * permissions; a shared link and an API key only look), tenancy, and that nothing secret is in
- * the answer. Real Postgres; nothing calls a provider.
+ * permissions; a shared link and an API key only look), what stays with the channels' own pages
+ * (the SMS sender, and for an API key the mailboxes), tenancy, and that nothing secret is in the
+ * answer. Real Postgres; nothing calls a provider.
  */
 
 let ctx: TestCtx;
@@ -358,6 +359,23 @@ describe("email", () => {
     expect(email).toMatchObject({ status: "connected", code: null, actions: ["connect", "refresh", "disconnect"] });
     expect(email.accounts).toEqual([{ id: account.id, name: "billing@shopmail.com", status: "connected", lastSyncedAt: null, lastAttemptAt: account.lastVerifiedAt?.toISOString() ?? null, code: null, demo: false }]);
 
+    // A check that fails: its time is the last attempt, though only a check that works moves lastVerifiedAt.
+    smtp.opts.password = "changed-password";
+    const test = await ctx.app.inject({ method: "POST", url: `/workspaces/${b.ws}/email/accounts/${account.id}/test`, headers: b.owner.headers });
+    expect(test.statusCode, test.body).toBe(200);
+    expect(test.json().test.ok).toBe(false);
+    const failed = await systemDb.emailAccount.findUniqueOrThrow({ where: { id: account.id } });
+    expect(failed.lastErrorAt).not.toBeNull();
+    email = (await status(b)).of("email");
+    expect(email).toMatchObject({ status: "error", code: failed.statusReason, accounts: [expect.objectContaining({ status: "error", lastAttemptAt: failed.lastErrorAt!.toISOString() })] });
+
+    // Suspended by bizinsights: nothing sends, whatever the mailbox says (here: not tested yet).
+    await systemDb.emailAccount.update({ where: { id: account.id }, data: { status: "pending", statusReason: null } });
+    await systemDb.emailSettings.create({ data: { workspaceId: b.ws, suspendedAt: new Date(), suspendedReason: "complaints" } });
+    expect((await status(b)).of("email")).toMatchObject({ status: "error", code: "suspended" });
+    await systemDb.emailSettings.delete({ where: { workspaceId: b.ws } });
+    expect((await status(b)).of("email")).toMatchObject({ status: "pending", code: "pending" });
+
     await systemDb.emailAccount.update({ where: { id: account.id }, data: { status: "reauthorization_required", statusReason: "auth_failed" } });
     email = (await status(b)).of("email");
     expect(email).toMatchObject({ status: "reauthorization_required", code: "auth_failed", actions: ["connect", "reconnect", "refresh", "disconnect"] });
@@ -378,6 +396,26 @@ describe("who sees what, and who may do what", () => {
     await systemDb.wappConnection.create({ data: { workspaceId: b.ws, storeId: b.store.id, provider: "cloud_api", shard: "meta", status: "connected", instanceTokenEnc: "WA-SECRET", phoneMasked: "+61 ••• ••• 222", profileName: "Green Leaf" } });
     await systemDb.smsSetup.create({ data: { workspaceId: b.ws, storeId: b.store.id, connection: "connected" } });
     return b;
+  }
+  /** What the channels' own pages show besides: an SMS sender not checked yet, and a mailbox. */
+  async function senderAndMailbox(b: Business) {
+    await systemDb.smsSenderConfiguration.create({
+      data: { workspaceId: b.ws, storeId: b.store.id, senderType: "phone_number", originationIdentity: "+61400999888", identityCheck: "unchecked", awsRegion: "ap-southeast-2" },
+    });
+    ctx.deps.smtpConnect = fakeSmtp().connect;
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: `/workspaces/${b.ws}/email/smtp/connections`,
+      headers: b.owner.headers,
+      payload: { emailAddress: "billing@shopmail.com", host: "smtp.shopmail.com", port: 587, encryption: "starttls", username: "billing@shopmail.com", password: "right-password" },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  }
+  /** A workspace API key's Authorization header. */
+  async function apiKey(b: Business) {
+    const secret = `sk_${randomBytes(24).toString("hex")}`;
+    await systemDb.apiKey.create({ data: { workspaceId: b.ws, name: "test", prefix: secret.slice(0, 8), keyHash: sha256Hex(secret), createdById: b.owner.user.id } });
+    return { authorization: `Bearer ${secret}` };
   }
   const actionsOf = (s: Awaited<ReturnType<typeof status>>) => Object.fromEntries(s.modules.map((m) => [m.id, m.actions]));
   const statusesOf = (s: Awaited<ReturnType<typeof status>>) => Object.fromEntries(s.modules.map((m) => [m.id, m.status]));
@@ -434,11 +472,36 @@ describe("who sees what, and who may do what", () => {
     expect(statusesOf(link)).toEqual(statusesOf(owner));
     expect(link.modules.every((m) => m.actions.length === 0)).toBe(true);
 
-    const secret = `sk_${randomBytes(24).toString("hex")}`;
-    await systemDb.apiKey.create({ data: { workspaceId: b.ws, name: "test", prefix: secret.slice(0, 8), keyHash: sha256Hex(secret), createdById: b.owner.user.id } });
-    const key = await status(b, { authorization: `Bearer ${secret}` });
+    const key = await status(b, await apiKey(b));
     expect(statusesOf(key)).toEqual(statusesOf(owner));
     expect(key.modules.every((m) => m.actions.length === 0)).toBe(true);
+  });
+
+  it("the SMS sender stays with those who may see campaigns, and an API key sees SMS and email by their status alone", async () => {
+    const b = await connectedBusiness();
+    await senderAndMailbox(b);
+    const owner = await status(b);
+    expect(owner.of("sms")).toMatchObject({ status: "pending", accounts: [expect.objectContaining({ name: expect.stringMatching(/^\+61 •+ 888$/) })] });
+    expect(owner.of("sms").code).toBeTruthy();
+    expect(owner.of("email").accounts).toEqual([expect.objectContaining({ name: "billing@shopmail.com" })]);
+
+    // View integration connection status alone: SMS's status, not its sender nor why it waits; the mailboxes are email's status.
+    const viewer = await status(b, await member(b, "viewer", ["integrations.status"]));
+    expect(statusesOf(viewer)).toEqual(statusesOf(owner));
+    expect(viewer.of("sms")).toMatchObject({ status: "pending", code: null, accounts: [] });
+    expect(viewer.of("email").accounts).toEqual(owner.of("email").accounts);
+    const marketer = await status(b, await member(b, "marketer", ["integrations.status", "marketing.campaigns"]));
+    expect(marketer.of("sms")).toMatchObject({ code: owner.of("sms").code, accounts: owner.of("sms").accounts });
+
+    // An API key never reaches the hub nor the email settings: no sender, no mailbox, no reason.
+    const key = await status(b, await apiKey(b));
+    expect(statusesOf(key)).toEqual(statusesOf(owner));
+    for (const id of ["sms", "email"]) expect(key.of(id), id).toMatchObject({ code: null, accounts: [], lastSyncedAt: null, actions: [] });
+    expect(key.body).not.toContain("shopmail.com");
+    expect(key.body).not.toMatch(/•+ 888/);
+    // The rest as anyone who may view connection status sees it.
+    expect(key.of("whatsapp").accounts).toEqual(owner.of("whatsapp").accounts);
+    expect(key.of("meta_ads").accounts).toEqual(owner.of("meta_ads").accounts);
   });
 
   it("another business's store is not found, whoever asks, and so is a disconnected or made-up one", async () => {

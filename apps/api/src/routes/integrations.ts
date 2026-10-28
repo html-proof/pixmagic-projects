@@ -12,7 +12,8 @@ import { smsDeps } from "./smsCommon.js";
  * done on the provider's own routes (ads.ts, whatsapp.ts, automations.ts, workspaces.ts).
  *
  * "View integration connection status" lets someone in; what they may do is worked out from the rest
- * of their access. A shared link and an API key only look.
+ * of their access. A shared link and an API key only look, and an API key sees SMS and email by their
+ * status alone: it never reaches the email settings nor the Automations hub (emailAccess.ts, automations.ts).
  */
 export function integrationsRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/integrations", async (c) => {
@@ -20,7 +21,7 @@ export function integrationsRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "integrations.status");
     const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
     if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
-    const viewer = { access: a.access, acts: !!a.user && !a.link };
+    const viewer = { access: a.access, acts: !!a.user && !a.link, apiKey: !a.user };
     return c.json(await integrationsStatus(store, viewer, { ...smsDeps(deps), smtpConnect: deps.smtpConnect }));
   });
 }

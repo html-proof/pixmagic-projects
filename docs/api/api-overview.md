@@ -109,11 +109,19 @@ Where each provider's own states land:
   not connected → disconnected.
 - **Email** (each mailbox's status): connected; pending (not tested yet) → pending; testing →
   syncing; degraded, failed → error; reauthorization_required; disabled, revoked → disconnected. The
-  module: the hub's card when connected, else the worst mailbox still in use; with every mailbox
-  working, pending (no verified sender yet, sending paused) or error (suspended by bizinsights).
+  module: the hub's card when connected, else the worst of the mailboxes still in use and of the
+  workspace's own problems: no verified sender yet or sending paused → pending, suspended by
+  bizinsights → error (so a suspension is an error whatever the mailboxes say, `code` `suspended`).
+  A mailbox's `lastAttemptAt` is its last check that worked or its last failure, whichever is later.
 
 `actions` are what this caller may press, by their permissions and the module's state; each is done
 on the provider's own routes. A shared dashboard link and an API key get none.
+
+Every caller is told the same status for every module. What a channel's own page shows (the SMS
+sender, the mailboxes, why one needs attention) stays with whoever may open that page: SMS needs
+**View campaigns** (`marketing.campaigns`), as the Automations hub does, and a workspace API key
+sees neither SMS nor email beyond its status, since the hub and the email settings refuse keys
+(`emailAccess.ts`). For them the module comes with `accounts: []` and `code: null`.
 
 | Module | Who | Actions |
 | --- | --- | --- |

@@ -10,6 +10,7 @@ import {
   connectionState,
   emailAccountIntegrationStatus,
   emailIntegrationStatus,
+  emailSetupStatus,
   firstSyncOverdue,
   hubCardActions,
   INTEGRATION_MODULE_INFO,
@@ -199,6 +200,15 @@ describe("the six statuses", () => {
     // Every mailbox works: the workspace's own step is left, or bizinsights suspended its sending.
     expect(emailIntegrationStatus(card("needs_attention", "no_verified_sender"), ["connected"])).toBe("pending");
     expect(emailIntegrationStatus(card("needs_attention", "suspended"), ["connected"])).toBe("error");
+    // A suspension stops every mailbox, whatever they say; a step left outweighs a check under way.
+    expect(emailIntegrationStatus(card("needs_attention", "account_pending", "suspended"), ["connected", "pending"])).toBe("error");
+    expect(emailIntegrationStatus(card("needs_attention", "sending_paused", "suspended"), ["syncing"])).toBe("error");
+    expect(emailIntegrationStatus(card("needs_attention", "sending_paused"), ["connected", "syncing"])).toBe("pending");
+    // Signing in again still comes first: it's what someone must do.
+    expect(emailIntegrationStatus(card("needs_attention", "reauthorization_required", "suspended"), ["reauthorization_required"])).toBe("reauthorization_required");
+    // Needing attention for a reason none of these is: never connected.
+    expect(emailIntegrationStatus(card("needs_attention", "something_new"), ["connected"])).toBe("pending");
+    expect([emailSetupStatus("suspended"), emailSetupStatus("no_verified_sender"), emailSetupStatus("account_pending"), emailSetupStatus("toString")]).toEqual(["error", "pending", null, null]);
     // Every mailbox switched off or disconnected: nothing sends.
     expect(emailIntegrationStatus(card("needs_attention", "account_disabled"), ["disconnected", "disconnected"])).toBe("disconnected");
   });

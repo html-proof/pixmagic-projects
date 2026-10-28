@@ -317,18 +317,28 @@ export function emailAccountIntegrationStatus(status: string): IntegrationStatus
 }
 
 /**
- * Email as a whole, from the hub's card and its accounts' statuses. Needing attention is the worst of
- * the accounts still in use; with every one of them working, it's the workspace's own setup (no
- * verified sender yet, sending paused: a step left), or bizinsights suspended its sending.
+ * The workspace's own email problems on the scale (the hub card's codes): no verified sender yet, or
+ * sending paused, is a step left; bizinsights suspending its sending stops every mailbox.
+ */
+const EMAIL_SETUP_STATUS = { no_verified_sender: "pending", sending_paused: "pending", suspended: "error" } as const satisfies Record<string, IntegrationStatus>;
+
+/** One of the hub card's email problems on the scale, when it is the workspace's own (EMAIL_SETUP_STATUS); null for a mailbox's. */
+export const emailSetupStatus = (code: string): IntegrationStatus | null => (Object.hasOwn(EMAIL_SETUP_STATUS, code) ? EMAIL_SETUP_STATUS[code as keyof typeof EMAIL_SETUP_STATUS] : null);
+
+/**
+ * Email as a whole, from the hub's card and its accounts' statuses: the worst of the accounts still
+ * in use and of the workspace's own problems (EMAIL_SETUP_STATUS), so a suspension is an error
+ * whatever the mailboxes say. A card that needs attention for none of these reasons is pending, never
+ * connected.
  */
 export function emailIntegrationStatus(card: HubCard, accounts: readonly IntegrationStatus[]): IntegrationStatus {
   if (card.state === "connected") return "connected";
   if (card.state !== "needs_attention") return "disconnected";
   const inUse = accounts.filter((s) => s !== "disconnected");
   if (!inUse.length) return "disconnected";
-  const worst = worstStatus(inUse);
-  if (worst !== "connected") return worst;
-  return card.problems.some((p) => p.code === "suspended") ? "error" : "pending";
+  const setup = card.problems.map((p) => emailSetupStatus(p.code)).filter((s): s is IntegrationStatus => s !== null);
+  const worst = worstStatus([...inUse, ...setup]);
+  return worst === "connected" ? "pending" : worst;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +412,7 @@ export interface IntegrationModule<D = string> {
   code: string | null;
   /** Every account it counts is the Google Ads demo. */
   demo: boolean;
+  /** Empty, with no `code` either, for a caller who may not open the channel's own page (SMS without View campaigns; SMS and email for an API key). */
   accounts: IntegrationAccount<D>[];
   /** The latest of its accounts' last working syncs (an ad platform's: of the accounts shown on the dashboard, as its status). */
   lastSyncedAt: D | null;
