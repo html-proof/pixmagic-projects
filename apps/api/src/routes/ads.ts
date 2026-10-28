@@ -1,8 +1,13 @@
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { systemDb, withTenant, type AdConnection, type AdLogin } from "@app/db";
+import { dbReachable, systemDb, withTenant, type AdConnection, type AdLogin } from "@app/db";
 import {
-  abandonNangoConnection,
   AD_PROVIDER_NAME,
+  AdConsentNeededError,
+  AdLoginWaitingError,
+  AdNoRefreshTokenError,
+  AdPermissionMissingError,
+  adsConfigured,
   adsRestricted,
   adsenseReportForConnection,
   AdsApiError,
@@ -18,7 +23,7 @@ import {
   AD_REPORT_BUDGET_MS,
   audit,
   checkAdLogin,
-  connectableAdProviders,
+  dropUnusedGrant,
   enqueueAdCatchUp,
   enqueueAdSync,
   env,
@@ -27,22 +32,28 @@ import {
   dropAdLoginOf,
   googleAdsConnectionStatus,
   googleAdsDemoEnabled,
+  googleAdsPaused,
   googleProductionMissing,
+  holdAdLogin,
+  holdPendingAdConnect,
   isDemoConnection,
   isNangoConnection,
-  NANGO_INTEGRATION,
   logger,
   providerDetail,
   META_REPORT_JOB,
   metaReportForConnection,
   peekPendingAdConnect,
-  pendingSource,
   pendingTokens,
+  readAdSignIn,
   releaseAdLogin,
   REQUIRED_AD_SCOPE,
   revokeAdAccessIfUnused,
   saveAdConnections,
+  startAdSignIn,
+  takeAdSignInState,
   takePendingAdConnect,
+  AD_SIGN_IN_TTL_S,
+  type AdSignInProgress,
   type AdAccountList,
   type AdsenseLiveReport,
   type GoogleReport,
@@ -67,11 +78,13 @@ import {
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
   metaReportMetrics,
+  randomToken,
+  safeEqual,
   sha256Hex,
   type AdConnectionStatus,
   type AdProvider,
 } from "@app/shared";
-import { body, clientIp, HttpError, memberAllows, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, memberAllows, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -81,12 +94,56 @@ import { limit, LIMITS } from "../rateLimit.js";
  * AdSense): the connections and their sync history, the account choice, showing or hiding an account,
  * Sync now, disconnecting, and the live reports.
  *
- * Connecting is "Continue with …" through Nango (routes/adsNango.ts, docs/nango.md): the merchant
- * authorizes bizinsights' own Meta app or Google client in Nango's Connect UI. When the sign-in can see
- * several accounts (and some are new), the person chooses which to connect here; what the sign-in found
- * waits in the coordinator. A sign-in that ends without a connection gives its grant back to the
- * platform, unless something else relies on it.
+ * "Continue with Meta Ads" / "Google Ads" / "Google AdSense": bizinsights' own sign-in with the
+ * platform (core's adConnections/signIn.ts), read-only. The OAuth round trip mirrors the Shopify
+ * connect: single-use state in the coordinator, bound to this browser by a cookie, and the callback
+ * only accepted for the person who started it. When the sign-in can see several accounts (and some are
+ * new), the person chooses which to connect here; the sign-in's tokens wait, encrypted, in the
+ * coordinator. A finished connection lands on the dashboard, where the numbers are. A sign-in that ends
+ * without a connection gives its grant back to the platform, unless something else relies on it.
  */
+
+const STATE_COOKIE = "ads_oauth_state";
+/**
+ * The sign-ins this browser started that haven't come back yet, newest first. A second press of the
+ * button (or a second tab) mustn't void the first: the platform may still send the person back with
+ * the first one's state. Each is still single-use and bound to this browser.
+ */
+const MAX_PENDING_STATES = 5;
+const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
+
+const cookieOpts = () => ({ path: "/", httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production", maxAge: AD_SIGN_IN_TTL_S });
+
+/**
+ * How long a callback waits for the database before giving up on it. A database failover takes 10-20
+ * seconds, and the person has just been through the platform's sign-in, which is not theirs to repeat
+ * because of us.
+ */
+const CALLBACK_DB_WAIT_MS = 20_000;
+const DB_POLL_MS = 1_000;
+
+/** The database didn't answer before the callback's deadline. `cause` is the step's own error. */
+class DbUnavailable extends Error {}
+
+/**
+ * Run one database step of the callback, waiting out an outage: when the step fails and the database
+ * doesn't answer, wait for it to answer again (until `deadline`) and run the step again. A failure while
+ * the database answers is the step's own, and is thrown as it is.
+ */
+async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise<T>): Promise<T> {
+  const answers = deps.dbHealthy ?? (() => dbReachable());
+  for (;;) {
+    try {
+      return await step();
+    } catch (err) {
+      if (await answers()) throw err;
+      do {
+        if (Date.now() + DB_POLL_MS > deadline) throw new DbUnavailable("database unreachable", { cause: err });
+        await new Promise((r) => setTimeout(r, DB_POLL_MS));
+      } while (!(await answers()));
+    }
+  }
+}
 
 const providerSchema = z.enum(AD_PROVIDERS);
 
@@ -122,7 +179,7 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
   const adsense = provider === "adsense";
   // The Google Ads demo: simulated figures and no Google grant. Decided by the row alone, never by anything a browser sends.
   const demo = isDemoConnection(c);
-  // Authorized through Nango (docs/nango.md): bizinsights' own permission, its token kept and renewed by Nango.
+  // Made through Nango and not moved off it yet (core's leaveNango.ts): its token is still there for a few minutes.
   const nango = isNangoConnection(c);
   return {
     id: c.id,
@@ -141,7 +198,7 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     lastSyncedAt: c.lastSyncedAt,
     /** When the last sync started, whatever came of it ("Last attempted"). */
     lastSyncAttemptAt: c.lastSyncAttemptAt,
-    /** How it was authorized: "nango" (every connection made now) or "direct" (bizinsights' own older sign-in, moving to Nango by itself, docs/nango.md). */
+    /** How it is read: "direct" (bizinsights' own sign-in), or "nango" while a connection made through Nango is being moved off it. */
     source: nango ? "nango" : "direct",
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
@@ -249,11 +306,6 @@ export async function connectAccounts(
     tokens: TokenSet;
     userId: string;
     externalUserId?: string | null;
-    /** Through Nango: the connection the accounts are read with (routes/adsNango.ts). */
-    sourceLoginId?: string | null;
-    /** Default: "direct". */
-    source?: "direct" | "nango";
-    nangoIntegrationKey?: string | null;
   },
 ) {
   const saved = await saveAdConnections({ ...input, fetchImpl: deps.fetchImpl });
@@ -268,7 +320,7 @@ export async function connectAccounts(
     action: "ads.connected",
     targetType: "store",
     targetId: input.storeId,
-    metadata: { provider: input.provider, accounts: saved.length, source: input.source ?? "direct" },
+    metadata: { provider: input.provider, accounts: saved.length },
     ip,
   }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
   return saved;
@@ -293,7 +345,9 @@ async function queueRefresh(deps: Deps, conn: AdConnection): Promise<boolean> {
 /** A pending choice that belongs to this person, workspace and store, or a 404 that says it's gone. */
 async function ownPending(deps: Deps, nonce: string, userId: string | undefined, ws: string, storeId: string) {
   const p = await peekPendingAdConnect(deps.coord, nonce);
-  if (!p || !userId || p.userId !== userId || p.workspaceId !== ws || p.storeId !== storeId) {
+  // A choice held through Nango before it was removed holds a Nango connection id, not a token: it can't be used.
+  const throughNango = !!p && "source" in p && p.source === "nango";
+  if (!p || throughNango || !userId || p.userId !== userId || p.workspaceId !== ws || p.storeId !== storeId) {
     throw new HttpError(404, "That choice has expired. Press the button to connect again.", "pending_expired");
   }
   return p;
@@ -431,10 +485,7 @@ const hostSchema = z
   .pipe(z.string().max(253).regex(/^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$/, "must be a site's host name, like shop.example.com"));
 
 export function adsRoutes(app: App, deps: Deps) {
-  /**
-   * Connected ad accounts for a store, which platforms can be connected now (through Nango, whose
-   * integration for each is checked: connectableAdProviders), and which only for the people added to its app.
-   */
+  /** Connected ad accounts for a store, which platforms this server can connect at all, and which only for the people added to its app. */
   app.get("/workspaces/:ws/stores/:storeId/ads", async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, ["marketing.ads", "integrations.status"]);
@@ -446,7 +497,7 @@ export function adsRoutes(app: App, deps: Deps) {
     const viewer = { id: access.user?.id ?? null, seesEmail: allows(access.access, "integrations.manage") };
     const connections = await publicConnections(ws, rows, viewer);
     return c.json({
-      configured: await connectableAdProviders(deps.coord, deps.fetchImpl),
+      configured: adsConfigured(),
       restricted: adsRestricted(),
       connections,
       /** Sign-ins connected with no ad account yet (Meta): the card says who, and their accounts follow by themselves. */
@@ -483,16 +534,159 @@ export function adsRoutes(app: App, deps: Deps) {
     });
   });
 
+  /** Step 1: where to send the browser to approve read access to ads. */
+  app.post("/workspaces/:ws/stores/:storeId/ads/:provider/connect", async (c) => {
+    const { ws, storeId } = c.req.param();
+    const provider = providerSchema.parse(c.req.param("provider"));
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    const user = access.user!;
+    if (!user.emailVerified) throw new HttpError(403, "Verify your email first", "email_unverified");
+    await storeInWorkspace(ws, storeId);
+    if (!adsConfigured()[provider]) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
+    // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.
+    if (provider === "google" && (await googleAdsPaused(deps.coord))) throw new HttpError(503, adErrorMessage("quota_exhausted", "google")!, "rate_limited", 3600);
+    // Each sign-in writes a coordinator item and its callback lists accounts against the platform's quota.
+    await limit(deps.coord, `rl:ads-connect:${user.id}`, LIMITS.adsConnect, "That's a lot of sign-ins in a short time. Wait a few minutes and try again.");
+    const nonce = randomToken(24);
+    const url = await startAdSignIn(deps.coord, nonce, { userId: user.id, workspaceId: ws, storeId, provider });
+    if (!url) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
+    setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
+    return c.json({ url });
+  });
+
   /**
-   * The address bizinsights' own sign-in sent the platforms back to, before every platform went through
-   * Nango (routes/adsNango.ts): nothing is signed in here any more. A browser still on its way back (a
-   * sign-in started before the change) lands on the integrations page, which asks to press the button
-   * again.
+   * Nango's old callback address (2026-10-22 to 2026-10-28), still registered with Meta and Google: a
+   * browser coming back from a sign-in started through Nango before it was removed lands on the
+   * integrations page, which asks to press the button again.
    */
-  app.get("/ads/:provider/callback", (c) => {
+  app.get("/ads/nango/oauth-callback", (c) => c.redirect(`${env().APP_URL}/settings/ads?${new URLSearchParams({ error: "state_expired" })}`));
+
+  /** Step 2: the platform sends the browser back here with a code (or with the person's "no"). */
+  app.get("/ads/:provider/callback", async (c) => {
+    const appUrl = env().APP_URL;
     const parsed = providerSchema.safeParse(c.req.param("provider"));
-    const params: Record<string, string> = parsed.success ? { error: "state_expired", provider: parsed.data } : { error: "unknown_provider" };
-    return c.redirect(`${env().APP_URL}/settings/ads?${new URLSearchParams(params)}`);
+    // Problems, the account choice and a login still waiting for its accounts stay on the integrations page; success goes to the numbers.
+    const back = (params: Record<string, string>, storeId?: string) =>
+      c.redirect(`${appUrl}/settings/ads?${new URLSearchParams({ ...params, ...(storeId ? { store: storeId } : {}) })}`);
+    const toDashboard = (provider: AdProvider, accounts: number, storeId: string) =>
+      c.redirect(`${appUrl}/dashboard?${new URLSearchParams({ adsConnected: provider, accounts: String(accounts), store: storeId })}`);
+    if (!parsed.success) return back({ error: "unknown_provider" });
+    const provider = parsed.data;
+    const q = c.req.query();
+    const deadline = Date.now() + CALLBACK_DB_WAIT_MS;
+    const db = <T>(step: () => Promise<T>) => waitingOutDb(deps, deadline, step);
+
+    try {
+      const pending = pendingStates(getCookie(c, STATE_COOKIE));
+      const ours = !!q.state && pending.some((n) => safeEqual(n, q.state!));
+      // This one is used up either way; the others this browser started stay usable.
+      const rest = pending.filter((n) => n !== q.state);
+      if (rest.length) setCookie(c, STATE_COOKIE, rest.join("."), cookieOpts());
+      else deleteCookie(c, STATE_COOKIE, { path: "/" });
+      if (!ours) return back({ error: "state_mismatch", provider });
+      const state = await takeAdSignInState(deps.coord, q.state!);
+      if (!state) return back({ error: "state_expired", provider });
+      if (state.provider !== provider) return back({ error: "state_mismatch", provider }, state.storeId);
+      // They pressed Cancel / "Not now" on the platform's screen.
+      if (q.error || !q.code) return back({ error: q.error === "access_denied" || q.error_reason === "user_denied" ? "denied" : "missing_params", provider }, state.storeId);
+      // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.
+      if (provider === "google" && (await googleAdsPaused(deps.coord))) return back({ error: "rate_limited", provider }, state.storeId);
+
+      // Still no database at the deadline: go on with the sign-in and hold it for the person (below).
+      // Then the check that they are who started it happens when they finish (ownPending).
+      const user = await db(() => loadUser(c, deps)).catch((err: unknown) => {
+        if (err instanceof DbUnavailable) return undefined;
+        throw err;
+      });
+      if (user === null || (user && user.id !== state.userId)) return back({ error: "session_mismatch", provider }, state.storeId);
+
+      const progress: AdSignInProgress = { externalUserId: null, reusedRefreshToken: false };
+      /**
+       * End without a connection: the grant this sign-in made goes back to the platform first, unless
+       * it can't be told whose it is or something else relies on it (dropUnusedGrant). Best effort.
+       */
+      const fail = async (error: string) => {
+        if (progress.tokens) await dropUnusedGrant(provider, progress.tokens, progress.externalUserId, deps.fetchImpl, { coord: deps.coord, reusedRefreshToken: progress.reusedRefreshToken });
+        return back({ error, provider }, state.storeId);
+      };
+      let accounts: AdAccountList;
+      try {
+        accounts = await readAdSignIn(state, q.code, progress, { coord: deps.coord, fetchImpl: deps.fetchImpl });
+      } catch (err) {
+        if (err instanceof AdConsentNeededError) {
+          // The consent screen was skipped, and this login is one bizinsights holds no refresh token for:
+          // ask again, with it this time (Google always sends one then).
+          const again = randomToken(24);
+          const url = await startAdSignIn(deps.coord, again, { userId: state.userId, workspaceId: state.workspaceId, storeId: state.storeId, provider }, { consent: true });
+          if (!url) return back({ error: "not_configured", provider }, state.storeId);
+          setCookie(c, STATE_COOKIE, [again, ...rest].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
+          return c.redirect(url);
+        }
+        if (err instanceof AdPermissionMissingError) return await fail("permission_missing");
+        if (err instanceof AdNoRefreshTokenError) return await fail("no_refresh_token");
+        if (err instanceof AdLoginWaitingError && user && progress.tokens) {
+          // Signed in and granted, with no ad account to list yet (or the platform slow to list them): connected
+          // all the same, never refused. The card says who is connected, and the accounts follow by themselves.
+          // Logged as a refusal used to be, with Meta's diagnosis of the empty list (docs/ads-setup.md reads it).
+          connectFailure(err.cause, provider, state.storeId);
+          if (!(await db(() => mayStillConnect(state.workspaceId, state.storeId, user.id)))) return await fail("not_allowed");
+          await db(() =>
+            holdAdLogin(
+              { workspaceId: state.workspaceId, storeId: state.storeId, provider, tokens: progress.tokens!, externalUserId: progress.externalUserId, loginName: err.loginName, userId: user.id, reason: err.reason },
+              deps.fetchImpl,
+            ),
+          );
+          await audit({ workspaceId: state.workspaceId, actorUserId: user.id, action: "ads.login_connected", targetType: "store", targetId: state.storeId, metadata: { provider, reason: err.reason }, ip: clientIp(c) }).catch(
+            (e: unknown) => logger.warn({ err: e }, "audit failed"),
+          );
+          return back({ waiting: err.reason, provider }, state.storeId);
+        }
+        // Ours, not the platform's.
+        if (err instanceof DbUnavailable) throw err;
+        return await fail(connectFailure(err instanceof AdLoginWaitingError ? err.cause : err, provider, state.storeId));
+      }
+      if (!accounts.length) return await fail("no_accounts");
+      const tokens = progress.tokens!;
+
+      // One account, or a reconnect that sees nothing new: there's nothing to choose. A list the platform
+      // cut short always goes to the choice, which says so.
+      // With the database still out of reach, the sign-in waits for the person in the coordinator
+      // (which doesn't need it), and they finish on the integrations page once it answers.
+      let dbDown = !user;
+      if (user) {
+        try {
+          if (!(await db(() => mayStillConnect(state.workspaceId, state.storeId, user.id)))) return await fail("not_allowed");
+          const known = await db(() => systemDb.adConnection.findMany({ where: { storeId: state.storeId, provider }, select: { accountId: true } }));
+          const knownIds = new Set(known.map((k) => k.accountId));
+          if (!accounts.truncated && (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId)))) {
+            const saved = await db(() =>
+              connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, userId: user.id, externalUserId: progress.externalUserId }),
+            );
+            return toDashboard(provider, saved.length, state.storeId);
+          }
+        } catch (err) {
+          if (!(err instanceof DbUnavailable)) throw err;
+          dbDown = true;
+        }
+      }
+      if (dbDown) logger.warn({ provider, storeId: state.storeId }, "database unreachable after an ad platform sign-in; holding it for the person to finish");
+      const pick = randomToken(24);
+      await holdPendingAdConnect(deps.coord, pick, {
+        userId: state.userId,
+        workspaceId: state.workspaceId,
+        storeId: state.storeId,
+        provider,
+        accounts,
+        tokens,
+        externalUserId: progress.externalUserId,
+        reusedRefreshToken: progress.reusedRefreshToken,
+      });
+      return back({ choose: pick, provider }, state.storeId);
+    } catch (err) {
+      // A browser navigation: land on a page that says what happened, never on raw JSON.
+      logger.error({ err, provider }, "ads callback failed");
+      return back({ error: "temporarily_unavailable", provider });
+    }
   });
 
   /** The accounts a sign-in can see, while the person chooses which to connect. No tokens. */
@@ -550,9 +744,6 @@ export function adsRoutes(app: App, deps: Deps) {
       tokens: pendingTokens(taken),
       userId: access.user!.id,
       externalUserId: taken.externalUserId ?? null,
-      sourceLoginId: taken.sourceLoginId ?? null,
-      source: pendingSource(taken),
-      nangoIntegrationKey: taken.nangoIntegrationKey ?? null,
     });
     return c.json({ provider: taken.provider, connected: saved.length });
   });
@@ -563,13 +754,8 @@ export function adsRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await ownPending(deps, nonce, access.user?.id, ws, storeId);
     const taken = await takePendingAdConnect(deps.coord, nonce);
-    // The grant goes back and the Nango connection is deleted, unless a connection already reads through it.
-    // (A choice made by the direct sign-in before Nango, at most 15 minutes old, is only dropped.)
-    if (taken && pendingSource(taken) === "nango") {
-      await abandonNangoConnection(taken.provider, taken.sourceLoginId!, taken.nangoIntegrationKey ?? NANGO_INTEGRATION[taken.provider], taken.externalUserId, deps.fetchImpl, {
-        coord: deps.coord,
-        exceptPending: nonce,
-      });
+    if (taken) {
+      await dropUnusedGrant(taken.provider, pendingTokens(taken), taken.externalUserId, deps.fetchImpl, { coord: deps.coord, exceptPending: nonce, reusedRefreshToken: !!taken.reusedRefreshToken });
     }
     return c.json({ ok: true });
   });

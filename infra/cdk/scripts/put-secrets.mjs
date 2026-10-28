@@ -64,10 +64,9 @@ const SHAPES = {
   // The app's email provider (packages/core/src/mail; docs/aws-deployment.md "App email").
   RESEND_API_KEY: [/^re_[A-Za-z0-9_]{20,}$/, "a Resend API key (it starts with re_)"],
   RESEND_WEBHOOK_SECRET: [/^whsec_[A-Za-z0-9+/=]{20,}$/, "a Resend webhook signing secret (it starts with whsec_)"],
-  // bizinsights' Nango environment (docs/nango.md): Environment Settings → API Keys, and → Webhooks → signing key.
-  // Older keys are UUIDs; no prefix is documented, so only their length and characters.
+  // bizinsights' old Nango environment, only while the connections made through it are moved off it
+  // (docs/ads-setup.md, "Leaving Nango"). Older keys are UUIDs; no prefix is documented, so only their length and characters.
   NANGO_SECRET_KEY: [/^[A-Za-z0-9_-]{32,}$/, "a Nango secret API key (Nango → Environment Settings → API Keys)"],
-  NANGO_WEBHOOK_SECRET: [/^[A-Za-z0-9_-]{16,}$/, "a Nango webhook signing key (Nango → Environment Settings → Webhooks)"],
   // The secret of bizinsights' own OAuth client for its Zapier app (docs/zapier.md): made by the owner
   // (32 random bytes, base64url) and entered in the Zapier app's environment as CLIENT_SECRET too.
   ZAPIER_CLIENT_SECRET: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _; docs/zapier.md says how to make one)"],
@@ -89,7 +88,6 @@ const COPY = [
   "EMAIL_CREDENTIAL_KEYS",
   "TURNSTILE_SECRET",
   "NANGO_SECRET_KEY",
-  "NANGO_WEBHOOK_SECRET",
   "ZAPIER_CLIENT_SECRET",
 ];
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
@@ -255,7 +253,7 @@ async function main() {
         console.error(`Meta says that isn't the secret of app ${app.appId} (${detail}). Nothing was saved. Copy App settings → Basic → App secret (Show) of that app, then run this again.`);
         process.exit(1);
       }
-      console.log(accepted ? `Meta accepts it as app ${app.appId}'s secret.` : `Meta didn't answer (${detail}), so it is stored unchecked: run nango-setup.mjs --check afterwards.`);
+      console.log(accepted ? `Meta accepts it as app ${app.appId}'s secret.` : `Meta didn't answer (${detail}), so it is stored unchecked: connect Meta Ads once afterwards to check it.`);
     }
     if (next[name] !== value) report.push(`${name}: ${next[name] ? "replaced" : "set"} from ${source}`);
     next[name] = value;

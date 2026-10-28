@@ -984,6 +984,6 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   ]);
   // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
   for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);
-  // A sign-in still waiting for its ad accounts goes too, with its Nango connection and grant.
+  // A sign-in still waiting for its ad accounts goes too, with its grant.
   await releaseAdLoginsWhere({ storeId }, fetchImpl).catch((err: unknown) => logger.warn({ err, storeId }, "a waiting ad login wasn't let go with its store"));
 }

@@ -1155,8 +1155,9 @@ model AdConnection {
   demoSeed             Int?      @map("demo_seed")
   /**
    * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
-   * platform's) or "nango" (the same sign-in authorized through Nango, which keeps the token;
-   * sourceLoginId is the Nango connection's id; docs/nango.md). sourceLoginId is null for "direct".
+   * platform's) or "nango" (a sign-in made through Nango from 2026-10-22 to 2026-10-28 whose token is
+   * still there; sourceLoginId is the Nango connection's id) until leaveNango.ts moves it
+   * (docs/ads-setup.md, "Leaving Nango"). sourceLoginId is null for "direct".
    * Added by migration 20261022120000 (the same rules as every other column).
    */
   source               String    @default("direct")
@@ -1187,9 +1188,12 @@ model AdLogin {
   workspaceId          String    @map("workspace_id")
   storeId              String    @map("store_id")
   provider             String // "meta"
-  /** The Nango connection that holds the person's token (docs/nango.md), and the integration it belongs to. */
-  sourceLoginId        String    @map("source_login_id")
-  nangoIntegrationKey  String    @map("nango_integration_key")
+  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts); "" while it is still at Nango. */
+  accessTokenEnc       String    @default("") @map("access_token_enc")
+  tokenKeyVersion      Int?      @map("token_key_version")
+  /** A login made through Nango (2026-10-26 to 2026-10-28) not moved off it yet: its Nango connection and integration (leaveNango.ts). */
+  sourceLoginId        String?   @map("source_login_id")
+  nangoIntegrationKey  String?   @map("nango_integration_key")
   /** The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned. */
   externalUserId       String?   @map("external_user_id")
   /** The name the platform's sign-in went by (Meta's profile name), for "Connected as …" on the card. */

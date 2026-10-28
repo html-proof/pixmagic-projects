@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   AdsApiError,
@@ -8,35 +7,25 @@ import {
   classifyAdError,
   isNangoConnectionId,
   NANGO_INTEGRATION,
-  nangoAccessToken,
-  nangoConnections,
-  nangoCreateConnectSession,
+  nangoConnectionCredentials,
   nangoDeleteConnection,
-  nangoError,
-  nangoImportConnection,
-  nangoIntegrations,
-  nangoIntegrationsReady,
-  nangoProviderOf,
-  parseNangoWebhook,
-  verifyNangoSignature,
   type FetchLike,
 } from "../src/index.js";
 
 /**
- * The Nango client (packages/core/src/ads/nango.ts) against answers shaped like Nango's documented ones
- * (https://nango.dev/docs/reference/backend/http-api): connect sessions, connections with their tags and
- * credentials, deleting one, and the HMAC on its webhooks.
+ * What is left of the Nango client (packages/core/src/ads/nango.ts), kept only to move the connections
+ * made through Nango off it (adConnections/leaveNango.ts): reading a connection's tokens once, and
+ * deleting it at Nango. Answers shaped like Nango's documented ones
+ * (https://nango.dev/docs/reference/backend/http-api).
  */
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 
-type Call = { url: URL; init?: RequestInit; body: Record<string, unknown> | null };
+type Call = { url: URL; init?: RequestInit };
 function fake(route: (call: Call) => Response | Promise<Response>) {
   const calls: Call[] = [];
   const fetchImpl: FetchLike = async (input, init) => {
-    const url = new URL(String(input));
-    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
-    const call = { url, init, body };
+    const call = { url: new URL(String(input)), init };
     calls.push(call);
     return route(call);
   };
@@ -45,214 +34,90 @@ function fake(route: (call: Call) => Response | Promise<Response>) {
 
 const KEY = "nango-secret-0123456789abcdef0123456789";
 const cfg = (fetchImpl: FetchLike) => ({ secretKey: KEY, apiUrl: "https://api.nango.dev/", fetchImpl });
-const tags = { end_user_id: "u1", organization_id: "ws1", bi_store: "s1", bi_provider: "meta" as const, bi_session: "n".repeat(32) };
 
-describe("connect sessions", () => {
-  it("asks for one integration, with the session's tags and the platform's authorize parameters, the key in the header only", async () => {
-    const f = fake(() => json({ data: { token: "nango_connect_session_abc", expires_at: "2026-10-22T10:30:00Z", connect_link: "https://connect.nango.dev/?session_token=x" } }, 201));
-    const s = await nangoCreateConnectSession(cfg(f.fetchImpl), { integrationKey: NANGO_INTEGRATION.meta, tags, authorizationParams: { config_id: "1521935306664882" } });
-    expect(s).toEqual({ token: "nango_connect_session_abc", expiresAt: "2026-10-22T10:30:00Z" });
-    const [call] = f.calls;
-    expect(call!.url.href).toBe("https://api.nango.dev/connect/sessions");
-    expect(call!.init?.method).toBe("POST");
-    expect(new Headers(call!.init?.headers).get("authorization")).toBe(`Bearer ${KEY}`);
-    expect(call!.body).toEqual({
-      tags,
-      allowed_integrations: ["bizinsights-meta-ads"],
-      integrations_config_defaults: { "bizinsights-meta-ads": { authorization_params: { config_id: "1521935306664882" } } },
-    });
-    expect(call!.url.search).toBe("");
-  });
-
-  it("sends no defaults when there are no parameters, and refuses an answer without a token", async () => {
-    const f = fake(() => json({ data: {} }, 201));
-    await expect(nangoCreateConnectSession(cfg(f.fetchImpl), { integrationKey: "bizinsights-google-adsense", tags: { ...tags, bi_provider: "adsense" } })).rejects.toBeInstanceOf(AdsApiError);
-    expect(f.calls[0]!.body).not.toHaveProperty("integrations_config_defaults");
-  });
-});
-
-describe("connections", () => {
-  it("lists a connection with its tags, by id", async () => {
-    const f = fake(() =>
-      json({
-        connections: [
-          { id: 1, connection_id: "c-1", provider: "facebook", provider_config_key: "bizinsights-meta-ads", created: "2026-10-22T00:00:00Z", tags: { ...tags, junk: 3 } },
-          { id: 2, provider_config_key: "x" },
-        ],
-      }),
-    );
-    const list = await nangoConnections(cfg(f.fetchImpl), "c-1");
-    expect(f.calls[0]!.url.pathname).toBe("/connections");
-    expect(f.calls[0]!.url.searchParams.get("connectionId")).toBe("c-1");
-    expect(list).toEqual([{ connectionId: "c-1", integrationKey: "bizinsights-meta-ads", provider: "facebook", tags, createdAt: "2026-10-22T00:00:00Z" }]);
-  });
-
-  it("gets a working access token, with its expiry and the scopes the platform granted", async () => {
+describe("a connection's tokens, read to move it off Nango", () => {
+  it("asks for the refresh token too, for the platform's integration, the key in the header only", async () => {
     const f = fake(() =>
       json({
         connection_id: "c 1",
-        credentials: { type: "OAUTH2", access_token: "ya29.token", expires_at: "2026-10-22T11:00:00.000Z", raw: { scope: "openid https://www.googleapis.com/auth/adsense.readonly" } },
+        credentials: { type: "OAUTH2", access_token: "ya29.token", refresh_token: "1//google-refresh", expires_at: "2026-10-28T11:00:00.000Z", raw: { scope: "openid" } },
       }),
     );
-    const t = await nangoAccessToken(cfg(f.fetchImpl), "bizinsights-google-adsense", "c 1");
-    expect(f.calls[0]!.url.pathname).toBe("/connections/c%201");
-    expect(f.calls[0]!.url.searchParams.get("provider_config_key")).toBe("bizinsights-google-adsense");
-    // Never the refresh token: only what a call needs.
-    expect(f.calls[0]!.url.searchParams.has("refresh_token")).toBe(false);
-    expect(t).toEqual({ accessToken: "ya29.token", expiresAt: new Date("2026-10-22T11:00:00.000Z"), grantedScopes: ["openid", "https://www.googleapis.com/auth/adsense.readonly"] });
+    const held = await nangoConnectionCredentials(cfg(f.fetchImpl), NANGO_INTEGRATION.adsense, "c 1");
+    expect(held).toEqual({ accessToken: "ya29.token", refreshToken: "1//google-refresh", expiresAt: new Date("2026-10-28T11:00:00.000Z") });
+    const [call] = f.calls;
+    expect(call!.url.origin + call!.url.pathname).toBe("https://api.nango.dev/connections/c%201");
+    expect(call!.init?.method).toBe("GET");
+    // Nango leaves the refresh token out unless asked.
+    expect(call!.url.searchParams.get("refresh_token")).toBe("true");
+    expect(call!.url.searchParams.get("provider_config_key")).toBe("bizinsights-google-adsense");
+    expect(new Headers(call!.init?.headers).get("authorization")).toBe(`Bearer ${KEY}`);
+    expect(call!.url.toString()).not.toContain(KEY);
   });
 
-  it("turns a grant Nango can't renew, or a connection it doesn't have, into 'reconnect'", async () => {
-    const refreshFailed = fake(() => json({ error: { code: "invalid_credentials", message: "refresh failed" } }, 424));
-    await expect(nangoAccessToken(cfg(refreshFailed.fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsAuthError);
-    const gone = fake(() => json({ error: { code: "not_found", message: "no connection" } }, 404));
-    const err = await nangoAccessToken(cfg(gone.fetchImpl), "k", "c").catch((e: unknown) => e);
+  it("Meta's long-lived token has no refresh token; an expiry Nango doesn't give, or can't be read, is none", async () => {
+    const meta = fake(() => json({ credentials: { type: "OAUTH2", access_token: "META_LONG" } }));
+    expect(await nangoConnectionCredentials(cfg(meta.fetchImpl), NANGO_INTEGRATION.meta, "c-2")).toEqual({ accessToken: "META_LONG", refreshToken: null, expiresAt: null });
+    const odd = fake(() => json({ credentials: { type: "OAUTH2", access_token: "AT", refresh_token: "", expires_at: "not a date" } }));
+    expect(await nangoConnectionCredentials(cfg(odd.fetchImpl), NANGO_INTEGRATION.google, "c-3")).toEqual({ accessToken: "AT", refreshToken: null, expiresAt: null });
+  });
+
+  it("a connection Nango no longer has, a grant it can't renew, or one holding no OAuth token: nothing to move ('reconnect')", async () => {
+    const gone = fake(() => json({ error: { code: "not_found", message: "Connection not found" } }, 404));
+    const err = await nangoConnectionCredentials(cfg(gone.fetchImpl), "k", "c").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AdsAuthError);
     expect(classifyAdError(err)).toMatchObject({ status: "reconnect", code: "auth_expired" });
-    const noToken = fake(() => json({ credentials: { type: "API_KEY", apiKey: "x" } }));
-    await expect(nangoAccessToken(cfg(noToken.fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsAuthError);
+    const refused = fake(() => json({ error: { code: "invalid_credentials", message: "refresh failed" } }, 424));
+    await expect(nangoConnectionCredentials(cfg(refused.fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsAuthError);
+    const exhausted = fake(() => json({ error: { code: "refresh_exhausted", message: "The refresh limit has been reached" } }, 400));
+    await expect(nangoConnectionCredentials(cfg(exhausted.fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsAuthError);
+    const apiKey = fake(() => json({ credentials: { type: "API_KEY", apiKey: "x" } }));
+    await expect(nangoConnectionCredentials(cfg(apiKey.fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsAuthError);
   });
 
-  it("deletes a connection, and calls one already gone 'gone'", async () => {
+  it("Nango down or busy is tried again later, never 'reconnect'; bizinsights' own key refused is ours to fix", async () => {
+    const outage = await nangoConnectionCredentials(cfg(fake(() => json({ error: { code: "server_error" } }, 503)).fetchImpl), "k", "c").catch((e: unknown) => e);
+    expect(outage).toBeInstanceOf(AdsRetryableError);
+    expect(outage).not.toBeInstanceOf(AdsAuthError);
+    const down: FetchLike = async () => {
+      throw new TypeError("fetch failed");
+    };
+    await expect(nangoConnectionCredentials(cfg(down), "k", "c")).rejects.toBeInstanceOf(AdsRetryableError);
+    // The platform's token endpoint failing behind Nango: retried too, unless the platform refused the grant.
+    const platformDown = fake(() => json({ error: { code: "refresh_token_external_error", message: "The external API returned an error: 503" } }, 400));
+    await expect(nangoConnectionCredentials(cfg(platformDown.fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsRetryableError);
+    const slow = await nangoConnectionCredentials(cfg(fake(() => json({ error: { code: "too_many_requests" } }, 429)).fetchImpl), "k", "c").catch((e: unknown) => e);
+    expect(slow).toBeInstanceOf(AdsRateLimitedError);
+    const key = await nangoConnectionCredentials(cfg(fake(() => json({ error: { code: "unauthorized", message: "Invalid secret key" } }, 401)).fetchImpl), "k", "c").catch((e: unknown) => e);
+    expect(key).toBeInstanceOf(AdsApiError);
+    expect(key).not.toBeInstanceOf(AdsRetryableError);
+    expect(classifyAdError(key).code).toBe("not_configured");
+  });
+});
+
+describe("deleting a connection at Nango", () => {
+  it("deletes it for its integration, and calls one already gone 'gone'", async () => {
     const f = fake((c) => (c.url.pathname === "/connections/c-1" ? json({ success: true }) : json({ error: { code: "not_found" } }, 404)));
     expect(await nangoDeleteConnection(cfg(f.fetchImpl), "bizinsights-meta-ads", "c-1")).toBe("deleted");
     expect(f.calls[0]!.init?.method).toBe("DELETE");
     expect(f.calls[0]!.url.searchParams.get("provider_config_key")).toBe("bizinsights-meta-ads");
+    // Only the copy at Nango: never the refresh token asked for.
+    expect(f.calls[0]!.url.searchParams.has("refresh_token")).toBe(false);
     expect(await nangoDeleteConnection(cfg(f.fetchImpl), "bizinsights-meta-ads", "c-2")).toBe("gone");
   });
 
-  it("asks Nango to renew a token whatever its expiry when told to (force_refresh), and only then", async () => {
-    const f = fake(() => json({ credentials: { type: "OAUTH2", access_token: "AT", expires_at: "2099-01-01T00:00:00Z" } }));
-    await nangoAccessToken(cfg(f.fetchImpl), "bizinsights-google-ads", "c-1", { forceRefresh: true });
-    await nangoAccessToken(cfg(f.fetchImpl), "bizinsights-google-ads", "c-1");
-    expect(f.calls.map((c) => c.url.searchParams.get("force_refresh"))).toEqual(["true", null]);
-    expect(f.calls.every((c) => c.url.searchParams.get("provider_config_key") === "bizinsights-google-ads")).toBe(true);
-  });
-
-  it("imports a connection bizinsights held the tokens of: Nango's OAuth2 credentials, the id chosen here, ids-only tags", async () => {
-    const f = fake(() => json({ id: 1, connection_id: "11111111-2222-3333-4444-555555555555", provider_config_key: "bizinsights-google-adsense", tags: {} }));
-    const expiresAt = new Date("2026-10-24T10:00:00Z");
-    const importTags = { end_user_id: "u1", organization_id: "ws1", bi_store: "s1", bi_provider: "adsense" as const, bi_imported: "direct" as const };
-    await nangoImportConnection(cfg(f.fetchImpl), { integrationKey: "bizinsights-google-adsense", connectionId: "11111111-2222-3333-4444-555555555555", accessToken: "AT", refreshToken: "RT", expiresAt, tags: importTags });
-    const [call] = f.calls;
-    expect(call!.url.href).toBe("https://api.nango.dev/connections");
-    expect(call!.init?.method).toBe("POST");
-    expect(new Headers(call!.init?.headers).get("authorization")).toBe(`Bearer ${KEY}`);
-    expect(call!.body).toEqual({
-      provider_config_key: "bizinsights-google-adsense",
-      connection_id: "11111111-2222-3333-4444-555555555555",
-      credentials: { type: "OAUTH2", access_token: "AT", refresh_token: "RT", expires_at: "2026-10-24T10:00:00.000Z" },
-      tags: importTags,
-    });
-    // Meta's long-lived token has no refresh token; one without an expiry sends none.
-    await nangoImportConnection(cfg(f.fetchImpl), { integrationKey: "bizinsights-meta-ads", connectionId: "c-2", accessToken: "MT", refreshToken: null, expiresAt: null, tags: { ...importTags, bi_provider: "meta" } });
-    expect(f.calls[1]!.body!.credentials).toEqual({ type: "OAUTH2", access_token: "MT" });
-    // An id that could reach another path is never sent.
-    await expect(nangoImportConnection(cfg(f.fetchImpl), { integrationKey: "k", connectionId: "../x", accessToken: "A", refreshToken: null, expiresAt: null, tags: importTags })).rejects.toBeInstanceOf(AdsApiError);
-    expect(f.calls).toHaveLength(2);
-    // Nango refusing the integration is ours to fix.
-    const missing = fake(() => json({ error: { code: "unknown_provider_config", message: "Integration not found" } }, 404));
-    await expect(nangoImportConnection(cfg(missing.fetchImpl), { integrationKey: "k", connectionId: "c-3", accessToken: "A", refreshToken: null, expiresAt: null, tags: importTags })).rejects.toMatchObject({ errorCode: "not_configured" });
+  it("a failure other than 'not there' is thrown, so the move logs it", async () => {
+    await expect(nangoDeleteConnection(cfg(fake(() => json({}, 500)).fetchImpl), "k", "c")).rejects.toBeInstanceOf(AdsRetryableError);
   });
 });
 
-describe("integrations", () => {
-  it("lists what Nango holds, and a platform is ready only with its own key, the right provider and no missing credential", async () => {
-    const f = fake(() =>
-      json({
-        data: [
-          { unique_key: "bizinsights-meta-ads", display_name: "Facebook", provider: "facebook", created_at: "x", updated_at: "x" },
-          { unique_key: "bizinsights-google-ads", display_name: "Google", provider: "google", created_at: "x", updated_at: "x", missing_fields: ["oauth_client_secret"] },
-          { unique_key: "bizinsights-google-adsense", display_name: "Meta", provider: "meta-marketing-api", created_at: "x", updated_at: "x" },
-          { unique_key: "someone-elses", provider: "slack" },
-          { display_name: "no key" },
-        ],
-      }),
-    );
-    const list = await nangoIntegrations(cfg(f.fetchImpl));
-    expect(f.calls[0]!.url.href).toBe("https://api.nango.dev/integrations");
-    expect(list).toEqual([
-      { integrationKey: "bizinsights-meta-ads", provider: "facebook", missingFields: [] },
-      { integrationKey: "bizinsights-google-ads", provider: "google", missingFields: ["oauth_client_secret"] },
-      { integrationKey: "bizinsights-google-adsense", provider: "meta-marketing-api", missingFields: [] },
-      { integrationKey: "someone-elses", provider: "slack", missingFields: [] },
-    ]);
-    expect(nangoIntegrationsReady(list)).toEqual({ meta: true, google: false, adsense: false });
-    expect(nangoIntegrationsReady([])).toEqual({ meta: false, google: false, adsense: false });
-  });
-});
-
-describe("Nango's errors", () => {
-  it("are sorted like a platform's", () => {
-    expect(nangoError(429, { code: "too_many_requests" }, 30)).toBeInstanceOf(AdsRateLimitedError);
-    expect((nangoError(429, null, 30) as AdsRateLimitedError).retryAfterS).toBe(30);
-    expect(nangoError(503, null)).toBeInstanceOf(AdsRetryableError);
-    // bizinsights' own key or integration: not the merchant's to fix.
-    expect(classifyAdError(nangoError(401, { code: "unauthorized" })).code).toBe("not_configured");
-    expect(classifyAdError(nangoError(400, { code: "unknown_provider_config" })).code).toBe("not_configured");
-    expect(classifyAdError(nangoError(424, null)).code).toBe("auth_expired");
-    // Nango backing off after a failed refresh, or the platform's token endpoint failing: retried, never "reconnect".
-    expect(nangoError(424, { code: "connection_refresh_backoff", message: "A recent refresh attempt failed. Backing off before retrying" })).toBeInstanceOf(AdsRateLimitedError);
-    expect((nangoError(424, { code: "connection_refresh_backoff" }) as AdsRateLimitedError).retryAfterS).toBe(60);
-    const outage = nangoError(400, { code: "refresh_token_external_error", message: "The external API returned an error when trying to refresh the access token: 503" });
-    expect(outage).toBeInstanceOf(AdsRetryableError);
-    expect(outage).not.toBeInstanceOf(AdsAuthError);
-    // ...unless the platform refused the grant.
-    expect(nangoError(400, { code: "refresh_token_external_error", message: "invalid_grant: Token has been expired or revoked." })).toBeInstanceOf(AdsAuthError);
-    expect(nangoError(424, { code: "refresh_exhausted", message: "The refresh limit has been reached" })).toBeInstanceOf(AdsAuthError);
-  });
-
-  it("a network failure is retried, and reads a Retry-After header", async () => {
-    const down: FetchLike = async () => {
-      throw new TypeError("fetch failed");
-    };
-    await expect(nangoAccessToken(cfg(down), "k", "c")).rejects.toBeInstanceOf(AdsRetryableError);
-    const slow = fake(() => json({ error: { code: "too_many_requests" } }, 429, { "retry-after": "12" }));
-    const err = (await nangoAccessToken(cfg(slow.fetchImpl), "k", "c").catch((e: unknown) => e)) as AdsRateLimitedError;
-    expect(err.retryAfterS).toBe(12);
-  });
-});
-
-describe("webhooks", () => {
-  const body = JSON.stringify({ from: "nango", type: "auth", operation: "refresh", success: false, connectionId: "c-1", providerConfigKey: "bizinsights-meta-ads", environment: "prod", error: { type: "refresh_token_external_error", description: "x" } });
-  const sign = (raw: string, key: string) => createHmac("sha256", key).update(raw).digest("hex");
-
-  it("are Nango's only when signed with the environment's key over the raw body", () => {
-    expect(verifyNangoSignature(body, sign(body, "whk_1"), ["whk_1"])).toBe(true);
-    expect(verifyNangoSignature(body, sign(body, "whk_1").toUpperCase(), ["whk_1"])).toBe(true);
-    // During a rotation either key will do.
-    expect(verifyNangoSignature(body, sign(body, "whk_2"), ["whk_1", "whk_2"])).toBe(true);
-    expect(verifyNangoSignature(body, sign(body, "other"), ["whk_1"])).toBe(false);
-    expect(verifyNangoSignature(`${body} `, sign(body, "whk_1"), ["whk_1"])).toBe(false);
-    expect(verifyNangoSignature(body, undefined, ["whk_1"])).toBe(false);
-    expect(verifyNangoSignature(body, "not-hex", ["whk_1"])).toBe(false);
-    expect(verifyNangoSignature(body, sign(body, ""), [""])).toBe(false);
-  });
-
-  it("are read as auth events; any other type is not", () => {
-    expect(parseNangoWebhook(JSON.parse(body))).toEqual({
-      type: "auth",
-      operation: "refresh",
-      success: false,
-      connectionId: "c-1",
-      integrationKey: "bizinsights-meta-ads",
-      environment: "prod",
-      tags: {},
-      errorType: "refresh_token_external_error",
-    });
-    expect(parseNangoWebhook({ type: "sync", connectionId: "c-1", providerConfigKey: "k" })).toBeNull();
-    expect(parseNangoWebhook({ type: "auth", connectionId: "../x?y", providerConfigKey: "k" })).toBeNull();
-    expect(parseNangoWebhook("auth")).toBeNull();
-  });
-});
-
-describe("integration keys", () => {
-  it("name each platform, and only bizinsights' own", () => {
-    expect(nangoProviderOf("bizinsights-google-adsense")).toBe("adsense");
-    expect(nangoProviderOf("bizinsights-meta-ads")).toBe("meta");
-    expect(nangoProviderOf("someone-else")).toBeNull();
+describe("integration keys and connection ids", () => {
+  it("name each platform's integration; a connection id is Nango's, never a path or a query", () => {
+    expect(NANGO_INTEGRATION).toEqual({ meta: "bizinsights-meta-ads", google: "bizinsights-google-ads", adsense: "bizinsights-google-adsense" });
     expect(isNangoConnectionId("4f1c2b6e-9d1a-4b8e-8a3e-0c5d7f2e1a90")).toBe(true);
     expect(isNangoConnectionId("a/b")).toBe(false);
+    expect(isNangoConnectionId("a?b=c")).toBe(false);
     expect(isNangoConnectionId("")).toBe(false);
+    expect(isNangoConnectionId(42)).toBe(false);
   });
 });

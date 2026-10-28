@@ -2,10 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AdLoginReason } from "@app/shared/ads";
 import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdLogin, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
+import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
-import { openNangoConnect } from "@/lib/nangoConnect";
-import { callbackErrorMessage, loginOf } from "../settings/ads/callbackErrors";
-import { loginConnectedNote, loginOfPlatform, loginWords } from "../settings/ads/LoginPanel";
+import { loginOfPlatform, loginWords } from "../settings/ads/LoginPanel";
 import { AD_PLATFORMS } from "./adPlatforms";
 import type { Note } from "./AdUi";
 import type { DemoConnected } from "./GoogleAdsDemoDialog";
@@ -17,7 +16,6 @@ const POLL_MS = 5_000;
 function connectError(e: unknown, name: string): string {
   if (e instanceof ApiError && e.code === "rate_limited") return `You started connecting several times in the last few minutes. Wait a few minutes, then press the ${name} button again.`;
   if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't set up for bizinsights yet, so there's nothing to connect to. It's on our side, not yours: please try again later.`;
-  if (e instanceof ApiError && e.code === "nango_busy") return `The ${name} sign-in window couldn't be opened just now. Please try again in a minute.`;
   return actionError(e, `start connecting ${name}`);
 }
 
@@ -55,6 +53,12 @@ export function useAdConnections(base: string | null) {
       setConfirming(null);
     }
   }
+
+  // Back from the platform's sign-in without finishing it: the button isn't left on "Opening…".
+  useBackFromSignIn(() => {
+    setLeaving(null);
+    setBusy(null);
+  });
 
   // Looking again (a poll, or after an action): each look is numbered, and only the latest one's
   // answer is shown. A poll sent just before a change can come back after the change's own look, and
@@ -95,72 +99,26 @@ export function useAdConnections(base: string | null) {
   };
 
   /**
-   * "Continue with …" (docs/nango.md): Nango's Connect UI opens over this page with a session token from
-   * bizinsights, the person authorizes on the platform's own consent screen (a popup), and the page then
-   * hands bizinsights the connection Nango made, which bizinsights checks with Nango itself. One account
-   * (or a reconnect) lands on the dashboard; several go to the choice on Settings → Advertising. Closing
-   * the window ends it with nothing connected. The card says "Connected" only once bizinsights has
-   * saved the account, never because the window closed.
+   * "Continue with …": the browser goes to the platform's own sign-in (Facebook Login for Business, or
+   * Google's consent screen) for bizinsights' own app, and the platform sends it back to bizinsights'
+   * callback, which connects the account (the dashboard says so), asks which accounts to connect
+   * (Settings → Advertising), keeps a login that has no ad account yet, or says what went wrong. The
+   * card says "Connected" only once bizinsights has saved the account.
    */
   const connect = async (p: AdProvider) => {
     if (!base) return;
-    const name = AD_PLATFORMS[p].name;
-    const storeId = base.split("/").pop()!;
     begin(`connect-${p}`);
     setLeaving(p);
     setGone((s) => new Map([...s].filter(([x]) => x !== p)));
-    const stop = (n?: Note) => {
+    try {
+      const { url } = await api<{ url: string }>(`${base}/ads/${p}/connect`, { method: "POST", body: {} });
+      leavingForSignIn(p);
+      window.location.assign(url);
+      // The button stays busy while the browser leaves (useBackFromSignIn resets it if they come back).
+    } catch (e) {
       setLeaving(null);
       setBusy(null);
-      if (n) setNote(n);
-    };
-    let session: { token: string; nonce: string };
-    try {
-      session = await api<{ token: string; nonce: string }>(`${base}/ads/${p}/nango/session`, { method: "POST", body: {} });
-    } catch (e) {
-      return stop({ kind: "error", text: connectError(e, name) });
-    }
-    let outcome: Awaited<ReturnType<typeof openNangoConnect>>;
-    try {
-      outcome = await openNangoConnect(session.token);
-    } catch {
-      // The sign-in window's code didn't load (offline, or a blocked chunk).
-      outcome = { kind: "error", type: "load_timeout", message: "" };
-    }
-    if (outcome.kind !== "connected") {
-      await api(`${base}/ads/${p}/nango/cancel`, { method: "POST", body: { nonce: session.nonce } }).catch(() => undefined);
-      if (outcome.kind === "closed") return stop();
-      return stop({
-        kind: "error",
-        text:
-          outcome.type === "load_timeout"
-            ? `The ${name} sign-in window couldn't be opened. Check your connection (or any blocker that stops sign-in windows) and press the button again.`
-            : outcome.type === "window_closed"
-              ? callbackErrorMessage("denied", p)
-              : `${name} didn't finish the sign-in, so nothing was connected. Please press the button again.`,
-      });
-    }
-    try {
-      // Longer than the API's own limit (55 s): listing a big login's accounts and saving them can take a while.
-      const r = await api<{ connected?: number; choose?: string; waiting?: boolean; reason?: AdLoginReason }>(`${base}/ads/${p}/nango/finish`, {
-        method: "POST",
-        body: { nonce: session.nonce, connectionId: outcome.connectionId },
-        timeoutMs: 58_000,
-      });
-      // Connected with no ad account yet: the card says who, and the accounts follow by themselves.
-      if (r.waiting) {
-        stop({ kind: "success", text: loginConnectedNote(name, { provider: p, reason: r.reason ?? "no_ads_account" }) });
-        await reload();
-        return;
-      }
-      if (r.choose) window.location.assign(`/settings/ads?${new URLSearchParams({ choose: r.choose, provider: p, store: storeId })}`);
-      else window.location.assign(`/dashboard?${new URLSearchParams({ adsConnected: p, accounts: String(r.connected ?? 0), store: storeId })}`);
-    } catch (e) {
-      // The finish's own answers carry codes worded on the page (callbackErrors.ts). A timeout, the
-      // network or an ended session isn't one of them ("check whether it completed": the reload shows it).
-      const own = e instanceof ApiError && e.status !== 0 && e.status !== 408 && e.status !== 401 && !!e.code;
-      stop({ kind: "error", text: own ? callbackErrorMessage((e as ApiError).code!, p, loginOf((e as ApiError).data)) : actionError(e, `finish connecting ${name}`) });
-      await reload();
+      setNote({ kind: "error", text: connectError(e, AD_PLATFORMS[p].name) });
     }
   };
 

@@ -54,8 +54,9 @@ const PUBLIC = new Set([
   "GET /auth/session",
   // Signing out: without a session there is nothing to end.
   "POST /auth/logout",
-  // OAuth returns, checked against the state they started with.
+  // OAuth returns, checked against the state they started with (bizinsights' own ad sign-in: core's adConnections/signIn.ts).
   "GET /ads/:provider/callback",
+  // Nango's old callback address (2026-10-22 to 2026-10-28): only a redirect to Settings, which asks to connect again.
   "GET /ads/nango/oauth-callback",
   "GET /email/oauth/:provider/callback",
   "GET /shopify/callback",
@@ -63,7 +64,6 @@ const PUBLIC = new Set([
   "GET /shopify/claim",
   // Signed webhooks and machine endpoints (CSRF-exempt in app.ts).
   "POST /webhooks/shopify",
-  "POST /webhooks/nango",
   "POST /webhooks/email/resend",
   "POST /webhooks/meta/deauthorize",
   "POST /webhooks/meta/data-deletion",
@@ -266,6 +266,20 @@ describe("every route of the API, deny by default", () => {
     for (const list of [PUBLIC, ZAPIER_BEARER, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE, new Set(Object.keys(QUERY)), new Set(Object.keys(BODY))]) expect([...list].filter((k) => !all.has(k))).toEqual([]);
     // Enough routes that the list above can't be an empty app.
     expect(ctx.routes.filter((r) => isWorkspaceRoute(r.path)).length).toBeGreaterThan(250);
+  });
+
+  it("places the ad sign-in: starting it is a workspace's (integrations.manage), its return is public by design, and nothing else of Nango is left", () => {
+    const all = new Set(ctx.routes.map(key));
+    const start = "POST /workspaces/:ws/stores/:storeId/ads/:provider/connect";
+    expect(all.has(start)).toBe(true);
+    expect(isWorkspaceRoute(start)).toBe(true);
+    expect(PUBLIC.has(start)).toBe(false);
+    for (const r of ["GET /ads/:provider/callback", "GET /ads/nango/oauth-callback"]) {
+      expect(all.has(r)).toBe(true);
+      expect(PUBLIC.has(r)).toBe(true);
+    }
+    // Nango's sign-in routes and its webhooks went with it.
+    expect([...all].filter((k) => /nango/i.test(k))).toEqual(["GET /ads/nango/oauth-callback"]);
   });
 
   it("nobody signed in: 401 from every route behind a sign-in", async () => {

@@ -8,7 +8,7 @@
  */
 import type { AdProvider } from "@app/shared";
 import type { OAuthProvider } from "@app/shared/email";
-import { adsConfigured, adsRestricted, nangoProviders } from "./adConnections/config.js";
+import { adsConfigured, adsRestricted } from "./adConnections/config.js";
 import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
 import { env, switchedOn } from "./env.js";
@@ -30,8 +30,8 @@ export interface ProviderCredentials {
 
 export interface ConfigReport {
   /** Each ad platform: set up (Connect works), and restricted (its sign-in lets only some people through yet). */
-  /** `configured`: the platform's own app is set up here; `nango`: it is also connected through Nango (docs/nango.md). */
-  ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean>; nango: Record<AdProvider, boolean> };
+  /** `configured`: the platform's own app is set up here, so its Connect button signs in. */
+  ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean> };
   /**
    * WhatsApp Automation: linking a phone through bizinsights' Evolution API service (on once its
    * URL and key are set), connecting through Meta's Cloud API (Embedded Signup; the settings it still
@@ -129,16 +129,6 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
       "GOOGLE_ADS_CLIENT_SECRET",
       'Google Ads and AdSense say "Coming soon" and their connections stop syncing',
     ),
-    // Every ad platform is connected through Nango (docs/nango.md) with bizinsights' own Meta app or
-    // Google client: either app's id set without Nango's key leaves none of them to connect.
-    {
-      provider: "Ad platforms through Nango",
-      idSetting: vars.META_APP_ID ? "META_APP_ID" : "GOOGLE_ADS_CLIENT_ID",
-      secretSetting: "NANGO_SECRET_KEY",
-      idSet: !!vars.META_APP_ID || !!vars.GOOGLE_ADS_CLIENT_ID,
-      secretSet: !!vars.NANGO_SECRET_KEY,
-      effect: "no ad platform can be connected (each card says it isn't set up yet), while connections made before Nango keep syncing",
-    },
     whatsapp,
     pair("Gmail (email sending)", "EMAIL_GOOGLE_CLIENT_ID", "EMAIL_GOOGLE_CLIENT_SECRET", "Connect Gmail says it isn't set up"),
     pair("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", "Connect Outlook says it isn't set up"),
@@ -178,7 +168,7 @@ export function configReport(): ConfigReport {
   const e = env();
   const credentials = providerCredentials();
   return {
-    ads: { configured: adsConfigured(), restricted: adsRestricted(), nango: nangoProviders() },
+    ads: { configured: adsConfigured(), restricted: adsRestricted() },
     whatsapp: {
       evolution: evolutionNeeds().length === 0,
       evolutionNeeds: evolutionNeeds(),
