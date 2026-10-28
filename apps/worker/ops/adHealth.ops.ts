@@ -4,10 +4,9 @@ import { disconnectDb } from "@app/db";
 
 /**
  * How the ad connections stand (packages/core/src/adConnections/health.ts): per platform, how each is
- * authorized (Nango or the older direct sign-in) and its status, what is still to move to Nango, the
- * ones that stopped syncing or keep failing, the last day's syncs, and whether Nango holds each
- * platform's integration (asked when the env file has NANGO_SECRET_KEY). Reads only. Ids and counts,
- * never a token, a Nango connection id, an email or an account's name.
+ * read and its status, what is still to move off Nango, the ones that stopped syncing or keep failing,
+ * the last day's syncs, and which platforms can be connected. Reads only. Ids and counts, never a
+ * token, an email or an account's name.
  *   pnpm --filter @app/worker ops:ad-health
  */
 afterAll(async () => disconnectDb());

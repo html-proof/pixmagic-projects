@@ -1155,8 +1155,9 @@ model AdConnection {
   demoSeed             Int?      @map("demo_seed")
   /**
    * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
-   * platform's) or "nango" (the same sign-in authorized through Nango, which keeps the token;
-   * sourceLoginId is the Nango connection's id; docs/nango.md). sourceLoginId is null for "direct".
+   * platform's) or "nango" (a sign-in made through Nango from 2026-10-22 to 2026-10-28 whose token is
+   * still there; sourceLoginId is the Nango connection's id) until leaveNango.ts moves it
+   * (docs/ads-setup.md, "Leaving Nango"). sourceLoginId is null for "direct".
    * Added by migration 20261022120000 (the same rules as every other column).
    */
   source               String    @default("direct")
