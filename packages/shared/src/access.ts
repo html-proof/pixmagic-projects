@@ -575,7 +575,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       const lines = ["tax", "shipping", "duties", "additionalFees", "totalSales"];
       s = {
         ...s,
-        current: omit(s.current, ["grossSales", "discounts", ...lines]),
+        // What refunds took off total sales holds their tax and shipping too.
+        current: omit(s.current, ["grossSales", "discounts", "totalRefunded", ...lines]),
         previous: omit(s.previous, ["grossSales", ...lines]),
         deltas: omit(s.deltas, ["grossSales", "totalSales"]),
       };
@@ -587,7 +588,7 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
     if (!g.has("finance.reports")) delete s.year;
     // Returns are refunds (and cancellations and edits), for the range, each day and each month.
     if (!g.has("finance.refunds")) {
-      s = { ...s, current: omit(s.current, ["returns"]) };
+      s = { ...s, current: omit(s.current, ["returns", "totalRefunded"]) };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
       if (s.year !== undefined) s.year = omitFromMonths(s.year, ["refunds"]);
     }

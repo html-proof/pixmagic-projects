@@ -11,7 +11,7 @@ import { TopicDetail } from "@/components/dashboard/TopicDetail";
 import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { KpiCard } from "@/components/dashboard/HomeCards";
+import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
 import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
@@ -496,13 +496,19 @@ export default function DashboardPage() {
               compared={compared}
               versus={versus}
               spark={s.series.map((d) => d.totalSales ?? d.netSales)}
-              // The store's own calculation, when it shows it: under Shopify's figure, named, never instead of it.
+              // What refunds took off it (it is already after them), for a member who may see refunds;
+              // then the store's own calculation, when it shows it: under Shopify's figure, named, never instead of it.
               extra={
-                custom ? (
-                  <span data-testid="tile-custom-sales" title={`Custom sales · ${custom.name}: ${fmtMoney(custom.current, cur)}`}>
-                    Custom sales <span className="font-semibold text-text">{fmtMoney(custom.current, cur)}</span>
-                    <span className="block truncate">{custom.name}</span>
-                  </span>
+                s.current.totalRefunded !== undefined || custom ? (
+                  <>
+                    {s.current.totalRefunded !== undefined && <RefundsLine refunded={s.current.totalRefunded} currency={cur} />}
+                    {custom && (
+                      <span data-testid="tile-custom-sales" className="mt-1 block first:mt-0" title={`Custom sales · ${custom.name}: ${fmtMoney(custom.current, cur)}`}>
+                        Custom sales <span className="font-semibold text-text">{fmtMoney(custom.current, cur)}</span>
+                        <span className="block truncate">{custom.name}</span>
+                      </span>
+                    )}
+                  </>
                 ) : undefined
               }
               onClick={() => detail.open("sales")}

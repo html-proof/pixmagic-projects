@@ -72,6 +72,8 @@ test("total sales line by line, Custom sales from it, saved and shown across the
 
   await page.goto("/dashboard?preset=today");
   await expect(page.getByTestId("metric-Total sales")).toContainText("$1,210.00");
+  // What refunds took off it, said even when nothing was refunded (never "-$0.00").
+  await expect(page.getByTestId("tile-refunds")).toHaveText("Refunds $0.00");
   await page.getByTestId("metric-Total sales").click();
 
   const card = page.getByTestId("module-d-sales-breakdown");

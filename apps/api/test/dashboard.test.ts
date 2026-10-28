@@ -186,8 +186,9 @@ describe("order modules (store time zone, DST weekend)", () => {
     const { modules: m, range, data } = res.json();
     expect(range).toEqual({ from: "2026-03-07", to: "2026-03-09" });
 
-    // B 8 + C 4 + D 2.40 (F's 100 is reversed by its cancellation); B 5 + D 3.
-    expect(m.sales_overview.current).toMatchObject({ tax: 14.4, shipping: 8, netSales: 200, totalSales: 222.4, returns: 500, orders: 5 });
+    // B 8 + C 4 + D 2.40 (F's 100 is reversed by its cancellation); B 5 + D 3. The cancellation took
+    // F's 600 (tax in) off total sales: what the Total sales tile says refunds took.
+    expect(m.sales_overview.current).toMatchObject({ tax: 14.4, shipping: 8, netSales: 200, totalSales: 222.4, totalRefunded: 600, returns: 500, orders: 5 });
 
     expect(m.channels.items).toEqual([
       { source: "web", label: "Online Store", orders: 3, sales: 150, share: 0.75 },

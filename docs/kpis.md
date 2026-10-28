@@ -23,6 +23,7 @@ approval; until then the card says why it has no figure, never shows 0.
 | Additional fees | Sales report: additional fees | Records | Exact | Fee and additional-fee sales, and any sale Shopify gives no type, before tax |
 | Taxes | Sales report: taxes | Records | Exact | Gift cards and tips left out, as Shopify does |
 | Total sales | Sales report: total sales | Records | Exact | Net sales + additional fees + duties + shipping + taxes |
+| Total refunded | (bizinsights; Shopify's order page "Refunded", added up) | Records | n/a | What refunds, returns and cancellations took off total sales, tax and shipping in; shown under the Total sales tile, which is already after it |
 | Custom sales | none (the store's own calculation) | Records | Its own definition | The lines of total sales the store chose; always shown beside Shopify's figures, named, never instead of them (section "Total sales breakdown and Custom sales") |
 | Orders | Sales report: orders | Orders placed | Exact | On the day Shopify processed them (`processedAt`, see Conventions). Cancelled included; test, deleted and gift-card-only orders never. An order edited on a later day counts once, on its own day, in Shopify's report by day too |
 | Average order value | Sales report: AOV | Records | Exact | What the orders sold on the day they were placed (their items after discounts, before tax; gift cards and what an edit on a later day added left out: "excluding post-order adjustments") ÷ orders |
@@ -239,6 +240,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Additional fees | Σ (amount − tax) of fee, additional-fee and unknown sales | A sale Shopify gives no type is counted here, so the lines always add up to total sales |
 | Taxes | Σ tax of every sale (gift cards and tips aside) | On items, shipping, duties and fees alike, counted once |
 | **Total sales** | Net sales + Additional fees + Duties + Shipping + Taxes | Shopify's headline figure; the first tile |
+| Total refunded (`total_refunded`) | − Σ amount (tax in) of every sale of a return action (refunds, returns, cancellations), gift cards and tips aside, with the signs Shopify gave them | Under the Total sales tile as "Refunds −A$62.00": what refunds took off total sales in the dates, which is already after them. A refund's adjustment lines count, so it is the money given back: an item returned with nothing refunded (Shopify adds a refund discrepancy that evens it out, PixMagic #2821S on 2026-10-23) takes nothing off. Edits (action `update`) aren't refunds. Team & Access: needs both "View refunds" and the breakdown, as it holds the refunds' tax and shipping |
 | Custom sales | Σ of the lines of total sales the store's calculation counts | The store's own figure, never Shopify's (below) |
 | Orders | count of orders placed, on the day Shopify processed them (cancelled included; test orders never stored; gift-card-only orders left out) | |
 | Units (items sold) | Σ quantity sold − Σ quantity returned, gift cards included | Shopify's net items sold |
@@ -339,7 +341,9 @@ carries; nothing is estimated.
 
 - **Headline tiles**: Total sales (Net sales without `finance.breakdown`), Orders, Average order
   value, Total products sold, each with its change and a sparkline of the same figure day by day
-  (`series`; a day's `units` are its net items sold).
+  (`series`; a day's `units` are its net items sold). Under Total sales: "Refunds −A$…", what
+  refunds took off it in the dates (`sales_overview.current.totalRefunded`, Total refunded above),
+  then the store's Custom sales when it shows them.
 - **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
   in the store's currency and none is the Google Ads demo, as for MER.
