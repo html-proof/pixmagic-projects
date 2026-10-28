@@ -284,11 +284,10 @@ describe("sync, reset and disconnect", () => {
     expect(second.json().queued).toBe(false);
     const row = await demoRow();
     const job = (ctx.deps.queues.sent.sync as unknown as AdsSyncData[]).find((j) => j.kind === "ads")!;
-    // The same job run twice at once, as a redelivered message would be.
-    await Promise.all([
-      syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, coord: ctx.deps.coord }),
-      syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, coord: ctx.deps.coord }),
-    ]);
+    // The same job run twice at once, as a redelivered message would be. One reads the days; the other,
+    // finding it running, reads nothing ("busy"), and the worker sends it again to run once the first has ended.
+    const sync = () => syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, coord: ctx.deps.coord });
+    for (const r of await Promise.all([sync(), sync()])) if (r.skipped && r.reason === "busy") expect(await sync()).toMatchObject({ skipped: false });
     const days = await systemDb.adCampaignDaily.findMany({ where: { connectionId: row.id }, select: { campaignId: true, day: true } });
     expect(new Set(days.map((d) => `${d.campaignId}|${d.day}`)).size).toBe(days.length);
     expect((await get(`${base}/status`)).json().demo.status).toBe("connected_demo");
