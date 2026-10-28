@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import { systemDb, type Store } from "@app/db";
 import { dispatchCampaign, processWebhookEvent, queueMessage, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
@@ -233,6 +233,78 @@ describe("connecting through Meta's Embedded Signup (Steps 1-2)", () => {
     await releasePace();
     expect(await sendQueuedMessage(ctx.deps, m.id)).toBe("accepted");
     expect(meta.sends.map((x) => x.text)).toEqual(["Yes, it is."]);
+  });
+});
+
+describe("connecting with a token of bizinsights' own Meta app (its own team only)", () => {
+  afterEach(() => ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: "" }));
+
+  /** A token someone with a role on the app made in Meta's dashboard (a system user's: it never expires), for a test number already on the Cloud API. */
+  const appToken = (opts: Parameters<CloudFake["signup"]>[0] = {}) => {
+    const s = meta.signup({ registered: true, ...opts });
+    const t = [...meta.tokens.values()].at(-1)!;
+    t.expiresAt = null;
+    return { accessToken: t.token, wabaId: s.wabaId, phoneNumberId: s.phoneNumberId };
+  };
+
+  it("is offered only to the workspaces listed, and refused to every other one before Meta is asked", async () => {
+    const o = await owner();
+    expect(ok(await o.call("GET")).tokenConnect).toBe(false);
+    const body = appToken();
+    expect(ok(await o.call("POST", "/connection/cloud-token", body), 403).error).toBe("token_connect_off");
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: "cmvsomeotherworkspace0001" });
+    expect(ok(await o.call("GET")).tokenConnect).toBe(false);
+    expect(ok(await o.call("POST", "/connection/cloud-token", body), 403).error).toBe("token_connect_off");
+    expect(meta.calls).toEqual([]);
+    expect(ok(await o.call("GET")).connection).toBeNull();
+
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: ` cmvsomeotherworkspace0001 , ${o.ws} ` });
+    expect(ok(await o.call("GET")).tokenConnect).toBe(true);
+    // Not to someone in that workspace who may not connect.
+    const v = await signIn(ctx, "v", "v@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "custom", permissions: ["marketing.campaigns"] } });
+    expect(ok(await o.call("GET", "", undefined, v.headers)).tokenConnect).toBe(false);
+    expect((await o.call("POST", "/connection/cloud-token", body, v.headers)).statusCode).toBe(403);
+  });
+
+  it("connects with the same checks as Meta's window, keeps the token sealed, and shows none of it", async () => {
+    const o = await owner();
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: o.ws });
+    const body = appToken();
+    const { connection } = ok(await o.call("POST", "/connection/cloud-token", body), 201);
+    expect(connection).toMatchObject({ provider: "cloud_api", status: "connected" });
+    // Meta's token inspector, the account's numbers, its webhooks (the test number is already on the Cloud API: no registration).
+    expect(meta.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET debug_token", `GET ${body.wabaId}/phone_numbers`, `POST ${body.wabaId}/subscribed_apps`]);
+    expect(meta.subscribed.has(body.wabaId)).toBe(true);
+    const row = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+    expect(row).toMatchObject({ provider: "cloud_api", status: "connected", wabaId: body.wabaId, phoneNumberId: body.phoneNumberId, businessId: null, tokenExpiresAt: null });
+    expect(row.instanceTokenEnc).toBeTruthy();
+    expect(row.instanceTokenEnc).not.toContain(body.accessToken);
+    expect((await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: o.ws, action: "whatsapp.connected" } })).metadata).toMatchObject({ via: "app_token", wabaId: body.wabaId });
+    for (const res of [await o.call("GET"), await o.call("POST", "/connection/check")]) expect(res.body).not.toContain(body.accessToken);
+
+    // It sends like any connection, and a second token while connected is refused.
+    await configure(o);
+    await customerWrites(o, { code: "", wabaId: body.wabaId, phoneNumberId: body.phoneNumberId, businessId: "" }, CUSTOMER, "Hello?");
+    ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "reply", text: "Hi from the test number", idempotencyKey: "token-00000001" }), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(meta.sends.at(-1)).toMatchObject({ phoneNumberId: body.phoneNumberId, text: "Hi from the test number" });
+    expect(ok(await o.call("POST", "/connection/cloud-token", appToken()), 409).error).toBe("already_connected");
+  });
+
+  it("refuses a token Meta doesn't vouch for, in its own words, and changes nothing", async () => {
+    const o = await owner();
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: o.ws });
+    const attempt = async (body: Record<string, unknown>, status = 400) => ok(await o.call("POST", "/connection/cloud-token", body), status);
+    expect(await attempt(appToken({ appId: "1111111111" }))).toMatchObject({ error: "wrong_app", message: expect.stringMatching(/isn't a valid one of bizinsights' Meta app/) });
+    expect(await attempt({ ...appToken(), accessToken: `EAAG${"z".repeat(40)}` })).toMatchObject({ error: "wrong_app" });
+    expect(await attempt(appToken({ scopes: ["whatsapp_business_management"] }))).toMatchObject({ error: "missing_permissions", message: expect.stringMatching(/whatsapp_business_messaging/) });
+    expect(await attempt({ ...appToken(), wabaId: "123456789" })).toMatchObject({ error: "waba_not_granted" });
+    expect(await attempt(appToken({ inAccount: false }))).toMatchObject({ error: "phone_not_in_account", message: expect.stringMatching(/API Setup/) });
+    expect((await attempt({ wabaId: "123456789", phoneNumberId: "987654321", accessToken: "short" })).error).toBe("validation");
+    // Nothing was subscribed, registered or kept.
+    expect(meta.calls.filter((c) => c.method !== "GET")).toEqual([]);
+    expect(ok(await o.call("GET")).connection).toBeNull();
   });
 });
 
@@ -699,6 +771,7 @@ describe("who may see and do what", () => {
     expect((await o.call("GET", `/messages?phone=${encodeURIComponent(CUSTOMER)}`, undefined, v.headers)).statusCode).toBe(403);
     for (const [method, path, payload] of [
       ["POST", "/connection/cloud", { code: "AQ0000000000", wabaId: "100000", phoneNumberId: "200000" }],
+      ["POST", "/connection/cloud-token", { accessToken: `EAAG${"x".repeat(40)}`, wabaId: "100000", phoneNumberId: "200000" }],
       ["DELETE", "/connection", undefined],
       ["PUT", "/settings", SETTINGS],
       ["POST", "/settings/pause", { paused: true }],
@@ -738,6 +811,7 @@ describe("who may see and do what", () => {
     expect(ov.can).toMatchObject({ connect: false, manage: false });
     for (const [method, path, payload] of [
       ["POST", "/connection/cloud", { code: "AQ0000000000", wabaId: "100000", phoneNumberId: "200000" }],
+      ["POST", "/connection/cloud-token", { accessToken: `EAAG${"x".repeat(40)}`, wabaId: "100000", phoneNumberId: "200000" }],
       ["DELETE", "/connection", undefined],
       ["PUT", "/settings", SETTINGS],
       ["POST", "/templates", { name: "x", category: "transactional", body: "x" }],

@@ -135,6 +135,11 @@ export const APP_SETTINGS = {
   "WHATSAPP_APP_ID": "",
   "WHATSAPP_CONFIG_ID": "2228218088074576",
   "WHATSAPP_API_VERSION": "v26.0",
+  // Workspaces (ids, comma-separated) that may also connect WhatsApp with a token of the Insights app
+  // made in Meta's dashboard, instead of Meta's window (docs/whatsapp.md, "Connecting with the app's own
+  // token"): bizinsights' own team, to record App Review with the app's test number before Meta
+  // approves bizinsights as a Tech Provider. Since 2026-10-29: the PixMagic workspace. Empty: no one.
+  "WHATSAPP_TOKEN_CONNECT_WORKSPACES": "cmvarpfwa000002jngkgh5ji2",
   // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "live" since 2026-10-25:
   // automations, campaigns and Send SMS hand texts to AWS, each after every check (sender verified
   // and tagged for the store, sending on, consent, opt-outs, quiet hours, the monthly limit). AWS

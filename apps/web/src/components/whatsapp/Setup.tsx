@@ -6,6 +6,7 @@ import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaSetupStep } f
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
+import { AppTokenConnect } from "./AppTokenConnect";
 import { CloudSignup } from "./CloudSignup";
 import { SettingsForm } from "./SettingsForm";
 import type { WaMessage, WaMessageEvent, WaOverview, WaTemplatesResponse } from "./types";
@@ -151,7 +152,10 @@ function ConnectStep({ base, overview, onConnected }: { base: string; overview: 
               needs changing in your accounts.
             </Alert>
           ) : (
-            <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} />
+            <>
+              <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} />
+              {overview.tokenConnect && <AppTokenConnect base={base} onConnected={onConnected} />}
+            </>
           )}
         </>
       )}
