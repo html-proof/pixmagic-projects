@@ -7,9 +7,9 @@
  * hours, Pause all automation, Meta's limits and the circuit breaker.
  *
  * Only for a connection that was given the scope "whatsapp_send" on the consent page, while the member
- * who connected it may still send from the WhatsApp page (owners and admins). Never free text: a Zap
- * doesn't know whether the customer wrote in the last 24 hours, and only an approved template reaches
- * someone who hasn't.
+ * who connected it may still send from the WhatsApp page (owners and admins). Never free text: always
+ * one of the store's templates the WhatsApp page would send now (on Meta's WhatsApp Business Platform,
+ * one Meta approved: a Zap doesn't know whether the customer wrote in the last 24 hours).
  */
 import { systemDb, type WappTemplate, type ZapierGrant } from "@app/db";
 import { allows, localDay, normalizePhone, renderWaText, sha256Hex, variablesIn, WaMissingValueError, waSkipLabel, WA_CATEGORY_INFO, type WaTemplateCategory } from "@app/shared";
@@ -51,11 +51,21 @@ function templateView(t: WappTemplate) {
   };
 }
 
-/** The store's templates a Zap can send now: switched on and approved by Meta. */
+/**
+ * Whether a template can go through this connection now: the WhatsApp page's own rule (switched on;
+ * on Meta's WhatsApp Business Platform, approved by Meta and known to Meta by name).
+ */
+function sendable(t: WappTemplate, conn: Parameters<typeof templateUsable>[1]): { ok: boolean; reason: string | null } {
+  const usable = templateUsable(t, conn);
+  if (usable.ok && conn?.provider === "cloud_api" && !t.metaName) return { ok: false, reason: "It hasn't been submitted to Meta yet." };
+  return usable;
+}
+
+/** The store's templates a Zap can send now, through the connection it has. */
 export async function zapierWhatsappTemplates(grant: ZapierGrant, who: AuthorizerAccess) {
   requireWhatsappSend(grant, who);
-  const rows = await systemDb.wappTemplate.findMany({ where: { storeId: grant.storeId, active: true, metaStatus: "APPROVED", metaName: { not: null } }, orderBy: { name: "asc" } });
-  return rows.map(templateView);
+  const [conn, rows] = await Promise.all([liveConnection(grant.storeId), systemDb.wappTemplate.findMany({ where: { storeId: grant.storeId, active: true }, orderBy: { name: "asc" } })]);
+  return rows.filter((t) => sendable(t, conn).ok).map(templateView);
 }
 
 /** What the action answers: the message as bizinsights queued it (the customer's number masked). */
@@ -91,8 +101,8 @@ export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">,
 
   const t = await systemDb.wappTemplate.findFirst({ where: { id: d.template_id, storeId: store.id } });
   if (!t) throw new ZapierError("Choose one of this store's WhatsApp templates.", 400, "template_not_found");
-  const usable = templateUsable(t, conn);
-  if (!usable.ok || !t.metaName) throw new ZapierError(`That template can't be sent: ${usable.reason ?? "Meta hasn't approved it."}`, 409, "template_unavailable");
+  const usable = sendable(t, conn);
+  if (!usable.ok) throw new ZapierError(`That template can't be sent: ${usable.reason}`, 409, "template_unavailable");
   const category = t.category as WaTemplateCategory;
 
   // The same purpose sends once: the Zap's own key (a lead's id), or else the same Zap, number,
@@ -161,7 +171,8 @@ export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">,
     category,
     phone,
     contactId: contact.id,
-    payload: { text, meta: { name: t.metaName, language: t.metaLanguage ?? "en", params: variablesIn(t.body).map((v) => values[v] ?? "") } },
+    // Meta's template by name when Meta approved it (the Cloud API sends that); a phone linked another way sends the text.
+    payload: { text, meta: t.metaName ? { name: t.metaName, language: t.metaLanguage ?? "en", params: variablesIn(t.body).map((v) => values[v] ?? "") } : null },
     templateId: t.id,
     idempotencyKey: key,
     createdByUserId: grant.userId,
