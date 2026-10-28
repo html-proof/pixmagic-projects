@@ -56,8 +56,9 @@ Done:
   2026-10-19, and the workers.dev redirect URI was removed on 2026-10-20. From 2026-10-22 to 2026-10-28 the ad
   sign-ins went through Nango; since 2026-10-28 bizinsights signs in with Meta and Google itself again, and Facebook
   sends the browser back to `https://bizinsights.io/api/ads/meta/callback` (listed next to Nango's callback on
-  2026-10-22; confirm it is still there: [ads-setup.md](ads-setup.md#leaving-nango), step (e)). Nango's
-  `https://bizinsights.io/api/ads/nango/oauth-callback` is removed once the move off Nango is done (step (d) there).
+  2026-10-22; a Meta connect came back to it on 2026-10-28: [ads-setup.md](ads-setup.md#leaving-nango), step (e)).
+  Nango's `https://bizinsights.io/api/ads/nango/oauth-callback` is removed once the move code is gone (step (d)
+  there; the move itself finished on 2026-10-28).
 
 Still open (details in each pack; checked 2026-10-20). Each of these needs the owner's login, certificate or payment
 method; Claude has nothing left to do alone until one of them moves.
