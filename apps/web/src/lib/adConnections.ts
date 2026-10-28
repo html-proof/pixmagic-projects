@@ -1,14 +1,17 @@
 /**
  * Ad connections as the UI sees them: what GET /workspaces/:ws/stores/:storeId/ads answers
  * (apps/api/src/routes/ads.ts, publicConnection), and where each connection and each platform
- * stands. Settings → Integrations and Settings → Advertising both word a connection
+ * stands (worked out in @app/shared/integrations, which the API's integrations status uses too, and
+ * re-exported here). Settings → Integrations and Settings → Advertising both word a connection
  * through this module, so a state has one name and one badge on both pages.
  */
-import { AD_CONNECTION_STATUSES, AD_ERROR_STATUS, adErrorMessage, isAdAccountStatus, isAdErrorCode } from "@app/shared/ads";
+import { AD_CONNECTION_STATUSES, adErrorMessage, isAdAccountStatus, isAdErrorCode } from "@app/shared/ads";
 import type { AdAccountStatus, AdConnectionStatus, AdErrorCode, AdLoginReason, AdProvider } from "@app/shared/ads";
 import type { GoogleAdsConnectionStatus } from "@app/shared/adsDemo";
+import { ownErrorCode, type AdState } from "@app/shared/integrations";
 
 export type { AdProvider };
+export { adLoginOf, connectionState, firstSyncOverdue, platformState, syncRunning, type AdState, type PlatformInput } from "@app/shared/integrations";
 
 export interface AdConnection {
   id: string;
@@ -114,9 +117,6 @@ export interface AdLogin {
   connectedBy: { name: string | null; email: string | null; you: boolean } | null;
 }
 
-/** The store's sign-in for this platform that waits for its ad accounts, if there is one. */
-export const adLoginOf = (state: AdsState | null, provider: AdProvider): AdLogin | null => state?.logins?.find((l) => l.provider === provider) ?? null;
-
 /** One sync of a connection as it ended (GET .../ads/connections/:id/syncs). */
 export interface AdSyncRun {
   trigger: "request" | "schedule" | "history" | string;
@@ -158,13 +158,10 @@ export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_c
 /** The status a code stands for when the API doesn't send one that matches (the rule adAlertsFor follows too). */
 const STATUS_CODE: Record<Exclude<AdConnectionStatus, "active">, AdErrorCode> = { reconnect: "auth_expired", permission: "no_access", unavailable: "account_not_ready", error: "provider_error" };
 
-/** The error code, only when it belongs to the status (a row written half-way through a change can disagree). */
-const codeOf = (c: Pick<AdConnection, "status" | "errorCode">): AdErrorCode | null => (c.errorCode && AD_ERROR_STATUS[c.errorCode] === c.status ? c.errorCode : null);
-
 /** The headline for a status, worded as the API words it (`message`), for an API that doesn't send it. */
 function statusWording(c: Pick<AdConnection, "status" | "errorCode" | "provider">): string | null {
   if (c.status === "active") return null;
-  return adErrorMessage(codeOf(c) ?? STATUS_CODE[c.status], c.provider);
+  return adErrorMessage(ownErrorCode(c) ?? STATUS_CODE[c.status], c.provider);
 }
 
 /** The store's connections, with every field the UI reads (an older API's answer gets the defaults). */
@@ -208,49 +205,7 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
 // States
 // ---------------------------------------------------------------------------
 
-/**
- * Where a connection, or a platform's card, stands. Every state is reachable:
- *
- * | State                  | Badge                  | When                                                                                                      |
- * | ---------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
- * | checking               | Checking…              | the card's first answer hasn't arrived                                                                    |
- * | unknown                | Status unavailable     | the first answer failed (an outage): never shown as "Not connected"                                        |
- * | coming_soon            | Coming soon            | the platform isn't set up on this server (configured false) and nothing is connected                      |
- * | not_connected          | Not connected          | nothing connected, and the platform is set up on this server (or offers its demo)                         |
- * | connecting             | Connecting             | leaving for the platform's sign-in, or back from it with accounts to choose                               |
- * | synchronizing          | Synchronizing          | shown on the dashboard, and a sync someone asked for is on its way (syncRequestedAt, for up to 30 minutes), |
- * |                        |                        | or active and never synced, in the first 30 minutes after connecting                                      |
- * | connected              | Connected              | active, and a sync has worked; or hidden from the dashboard before its first sync (nothing is fetched for a |
- * |                        |                        | hidden account, so nothing is under way: its row says so); or no account yet, but a sign-in connected     |
- * |                        |                        | that waits for its ad accounts (AdLogin)                                                                  |
- * | authorization_required | Authorization required | reconnect + connector_left: the person whose login powered it left; someone with access must authorize again |
- * | permission_missing     | Permission missing     | reconnect + scope_missing (the read permission was taken back), or status permission (this login lost the account) |
- * | verification_pending   | Verification pending   | error + not_approved; unavailable + account_not_ready;                                                    |
- * |                        |                        | an active account the platform has under review, not finished setting up, or needing attention           |
- * | sync_failed            | Sync failed            | error (other than not_approved); unavailable + account_disabled; an active account the platform disabled; |
- * |                        |                        | shown on the dashboard and still never synced 30 minutes after connecting (the first sync went missing)   |
- * | reconnect_required     | Reconnect required     | reconnect + auth_expired (or no code): the sign-in expired or was revoked                                  |
- * | disconnected           | Disconnected           | unavailable + account_closed, or the platform says the account is closed; and, for a moment, a card whose  |
- * |                        |                        | last account the person just disconnected                                                                 |
- *
- * A requested sync shows "Synchronizing" for every status but reconnect (nothing is queued for those).
- * Only accounts shown on the dashboard can be synchronizing: the worker skips a hidden one, so a page
- * never waits (or keeps looking again) for it.
- */
-export type AdState =
-  | "checking"
-  | "unknown"
-  | "coming_soon"
-  | "not_connected"
-  | "connecting"
-  | "synchronizing"
-  | "connected"
-  | "authorization_required"
-  | "permission_missing"
-  | "verification_pending"
-  | "sync_failed"
-  | "reconnect_required"
-  | "disconnected";
+// AdState (every state and when it is reached), connectionState and platformState: @app/shared/integrations.
 
 /** The badge colours (components/dashboard/Primitives Tone): the label always says it, the colour only backs it up. */
 export type StateTone = "good" | "warn" | "danger" | "neutral";
@@ -288,95 +243,6 @@ export const stateInfo = (state: AdState, demo = false) => (demo ? (DEMO_STATE[s
 
 /** States that signing in again (Reconnect) fixes. */
 export const RECONNECT_STATES: ReadonlySet<AdState> = new Set(["reconnect_required", "authorization_required", "permission_missing"]);
-
-/** The account statuses that mean "not ready at the platform yet". */
-const NOT_READY: ReadonlySet<AdAccountStatus> = new Set(["under_review", "setup_unfinished", "needs_attention"]);
-
-/**
- * A requested sync older than this is taken as lost (the API's ADS_REQUEST_STALE_MS): the card stops
- * saying "Synchronizing". So is a first sync that hasn't landed this long after connecting (its retries
- * take a few minutes; after an hour the worker's schedule tries the account again by itself).
- */
-const SYNC_REQUEST_STALE_MS = 30 * 60_000;
-
-/**
- * A sync someone asked for is still on its way. The worker clears syncRequestedAt when the last window
- * asked for has landed, or failed, or a health check ended; lastSyncedAt moves on after every window,
- * so it says nothing about the request (a long catch-up lands in several). A hidden account's sync is
- * skipped, so it never counts there.
- */
-export function syncRunning(c: Pick<AdConnection, "enabled" | "syncRequestedAt">, now = Date.now()): boolean {
-  if (!c.enabled || !c.syncRequestedAt) return false;
-  const asked = Date.parse(c.syncRequestedAt);
-  return !Number.isNaN(asked) && now - asked <= SYNC_REQUEST_STALE_MS;
-}
-
-/** Shown on the dashboard, connected over 30 minutes ago, and its first sync still hasn't landed. */
-export function firstSyncOverdue(c: Pick<AdConnection, "enabled" | "status" | "lastSyncedAt" | "connectedAt">, now = Date.now()): boolean {
-  if (!c.enabled || c.status !== "active" || c.lastSyncedAt) return false;
-  const at = Date.parse(c.connectedAt);
-  return !Number.isNaN(at) && now - at > SYNC_REQUEST_STALE_MS;
-}
-
-/** Where one connection stands. */
-export function connectionState(c: AdConnection, now = Date.now()): AdState {
-  const code = codeOf(c);
-  if (c.status === "reconnect") return code === "connector_left" ? "authorization_required" : code === "scope_missing" ? "permission_missing" : "reconnect_required";
-  if (syncRunning(c, now)) return "synchronizing";
-  if (c.status === "permission") return "permission_missing";
-  if (c.status === "unavailable") return code === "account_closed" ? "disconnected" : code === "account_disabled" ? "sync_failed" : "verification_pending";
-  if (c.status === "error") return code === "not_approved" ? "verification_pending" : "sync_failed";
-  // Just connected: its first sync is on its way (an older API doesn't send syncRequestedAt for it).
-  if (!c.lastSyncedAt && c.enabled && !firstSyncOverdue(c, now)) return "synchronizing";
-  if (c.accountStatus === "closed") return "disconnected";
-  if (c.accountStatus === "disabled") return "sync_failed";
-  if (c.accountStatus && NOT_READY.has(c.accountStatus)) return "verification_pending";
-  if (firstSyncOverdue(c, now)) return "sync_failed";
-  // Synced, or hidden before its first sync: nothing is fetched for a hidden account, so nothing is under way.
-  return "connected";
-}
-
-/** Most pressing first: a platform's card shows the worst of its accounts' states. */
-const PRECEDENCE: AdState[] = ["reconnect_required", "authorization_required", "permission_missing", "sync_failed", "verification_pending", "synchronizing", "connected", "disconnected"];
-
-export interface PlatformInput {
-  /** The answer, once one arrived (null while loading or after a first load failed). */
-  answer: AdsState | null;
-  /** The first load failed. */
-  failed: boolean;
-  /** This platform's connections (adConnectionsOf). */
-  connections: AdConnection[];
-  /** Leaving for its sign-in, or choosing its accounts after coming back. */
-  connecting?: boolean;
-  /** Its last account was just disconnected on this page. */
-  justDisconnected?: boolean;
-  /** The connection under way, or the one just disconnected, is the demo. */
-  connectingDemo?: boolean;
-  justDisconnectedDemo?: boolean;
-}
-
-/**
- * Where a platform's card stands, and whether every one of its accounts is hidden from the
- * dashboard (the card then says so beside the badge).
- */
-export function platformState(provider: AdProvider, input: PlatformInput, now = Date.now()): { state: AdState; hidden: boolean; demo: boolean } {
-  if (input.connecting) return { state: "connecting", hidden: false, demo: !!input.connectingDemo };
-  if (!input.answer) return { state: input.failed ? "unknown" : "checking", hidden: false, demo: false };
-  const mine = input.connections.filter((c) => c.provider === provider);
-  if (!mine.length) {
-    if (input.justDisconnected) return { state: "disconnected", hidden: false, demo: !!input.justDisconnectedDemo };
-    // Signed in and authorized, its ad accounts not listed yet: connected, and they follow by themselves.
-    if (adLoginOf(input.answer, provider)) return { state: "connected", hidden: false, demo: false };
-    // A platform not set up on this server offers its demo where it has one: never "Coming soon" with a button under it.
-    if (!input.answer.configured[provider]) return { state: input.answer.demo?.[provider] ? "not_connected" : "coming_soon", hidden: false, demo: false };
-    return { state: "not_connected", hidden: false, demo: false };
-  }
-  const shown = mine.filter((c) => c.enabled);
-  const counted = shown.length ? shown : mine;
-  const states = new Set(counted.map((c) => connectionState(c, now)));
-  // The card reads as a demo only when every account it shows is one.
-  return { state: PRECEDENCE.find((s) => states.has(s)) ?? "connected", hidden: !shown.length, demo: counted.every((c) => c.demo) };
-}
 
 // ---------------------------------------------------------------------------
 // Words
