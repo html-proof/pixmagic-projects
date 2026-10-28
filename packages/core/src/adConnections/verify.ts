@@ -14,7 +14,7 @@
  */
 import { systemDb, toNumber, type AdConnection } from "@app/db";
 import { addDays, metaReportMetrics } from "@app/shared";
-import { AdsRateLimitedError, AdsRetryableError, adsenseReport, classifyAdError, metaRangeInsights } from "../ads.js";
+import { AdsApiError, AdsRateLimitedError, AdsRetryableError, adsenseReport, classifyAdError, metaRangeInsights } from "../ads.js";
 import type { Coord } from "../coord.js";
 import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
@@ -151,13 +151,19 @@ async function metaRead(conn: AdConnection, w: { since: string; until: string },
 /**
  * AdSense: every stored site of the account (adsense_daily keeps them all; the store's choice of sites
  * is for what the dashboard shows, not for this) against the totals of one report of the week, every
- * site included.
+ * site included. Asked for by site, as the sync is; an account AdSense won't split that way (a 400,
+ * where the sync stores the account's daily totals instead: adsenseSiteDays) is asked by platform,
+ * whose totals are the account's just the same.
  */
 async function adsenseRead(conn: AdConnection, w: { since: string; until: string }, fetchImpl: FetchLike | undefined, deadline: number): Promise<Read | null> {
   const f = fetchUntil(fetchImpl, deadline, () => new AdsRetryableError("AdSense didn't answer in time"));
   const cfg = adsenseConfig(f);
   if (!cfg) return null;
-  const report = await adsenseReport(cfg, await adAccessToken(conn, f), conn.accountId, "site", w.since, w.until);
+  const token = await adAccessToken(conn, f);
+  const report = await adsenseReport(cfg, token, conn.accountId, "site", w.since, w.until).catch((err: unknown) => {
+    if (!(err instanceof AdsApiError) || err.status !== 400) throw err;
+    return adsenseReport(cfg, token, conn.accountId, "platform", w.since, w.until);
+  });
   const groups = await systemDb.adsenseDaily.groupBy({
     by: ["currency"],
     where: { connectionId: conn.id, day: { gte: w.since, lte: w.until } },

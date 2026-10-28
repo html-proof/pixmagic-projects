@@ -174,8 +174,12 @@ describe("an ad connection that turns to needing the merchant", () => {
       expect(m.acked).toBe(true);
     }
     expect(logged("ad connection needs the merchant")).toEqual([expect.objectContaining({ connectionId: conn.id, provider: "meta", status: "reconnect", errorCode: "auth_expired" })]);
-    // Each sync failed for good: the line the alarm on lasting sync failures counts.
-    expect(logged("sync job failed").map((l) => l.final)).toEqual([true, true]);
+    // Each sync failed for good on its first attempt (no retry helps): the alarm on sync jobs counts
+    // only those whose attempts ran out (attempts >= 6), and leaves this to the line above's alarm.
+    expect(logged("sync job failed").map((l) => [l.final, l.attempts])).toEqual([
+      [true, 1],
+      [true, 1],
+    ]);
   });
 });
 
@@ -226,11 +230,15 @@ describe("the daily check of stored ad figures against the platform", () => {
   it("Meta: purchases and link clicks are compared only when every stored day has them", async () => {
     const conn = await connection("meta");
     await storeMetaWeek(conn);
-    // A day stored before purchases were read.
+    // A day stored before purchases were read: Meta's purchases (40, not the 14 stored) aren't compared.
     await systemDb.adCampaignDaily.updateMany({ where: { connectionId: conn.id, day: weekOf(conn).since }, data: { purchases: null, purchaseValue: null } });
-    fetchImpl = metaWeek({ ...METAS_WEEK, actions: [{ action_type: "omni_purchase", value: "40" }] });
+    fetchImpl = metaWeek({ ...METAS_WEEK, actions: [{ action_type: "omni_purchase", value: "40" }], inline_link_clicks: "300" });
+    expect(await checkAdConnectionFigures(conn, { fetchImpl: deps.fetchImpl })).toMatchObject({ outcome: "differ", differences: [{ field: "linkClicks", stored: 140, platform: 300 }] });
+    // And one stored before link clicks were read: those aren't compared either.
+    await systemDb.adCampaignDaily.updateMany({ where: { connectionId: conn.id, day: addDays(weekOf(conn).since, 1) }, data: { linkClicks: null } });
+    lines = [];
     expect(await checkAdConnectionFigures(conn, { fetchImpl: deps.fetchImpl })).toMatchObject({ outcome: "match" });
-    expect(logged("ad figures match the platform")[0]).toMatchObject({ fields: ["spend", "impressions", "clicks", "linkClicks"] });
+    expect(logged("ad figures match the platform")[0]).toMatchObject({ fields: ["spend", "impressions", "clicks"] });
   });
 
   it("AdSense: every stored site against the report's totals for every site, in the report's currency", async () => {
@@ -266,6 +274,32 @@ describe("the daily check of stored ad figures against the platform", () => {
     earnings = "40.00";
     expect(await checkAdConnectionFigures(conn, { fetchImpl: deps.fetchImpl })).toMatchObject({ outcome: "differ", differences: [{ field: "earnings", stored: 45.5, platform: 40, relative: 0.1375 }] });
     expect(logged("ad figures differ from the platform")).toEqual([expect.objectContaining({ provider: "adsense", connectionId: conn.id, field: "earnings", currency: "AUD" })]);
+  });
+
+  it("AdSense: an account AdSense won't split by site is checked against the totals of a report by platform", async () => {
+    const conn = await connection("adsense");
+    const w = weekOf(conn);
+    // Stored as the sync stores such an account: its daily totals, under no site.
+    const base = { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, accountId: conn.accountId, currency: "AUD" };
+    await systemDb.adsenseDaily.createMany({ data: eachDay(w.since, w.until).map((day) => ({ ...base, site: "", day, earnings: 6.5, pageViews: 400, impressions: 330, clicks: 8 })) });
+    const asked: string[][] = [];
+    fetchImpl = async (input) => {
+      const u = new URL(String(input));
+      if (u.host !== "adsense.googleapis.com" || u.pathname !== "/v2/accounts/pub-1/reports:generate") throw new Error(`unexpected fetch ${String(input)}`);
+      const dimensions = u.searchParams.getAll("dimensions");
+      asked.push(dimensions);
+      if (dimensions.includes("DOMAIN_CODE")) return json({ error: { code: 400, message: "Invalid dimension: DOMAIN_CODE.", status: "INVALID_ARGUMENT" } }, 400);
+      return json({
+        headers: [{ name: "PLATFORM_TYPE_CODE", type: "DIMENSION" }, { name: "PLATFORM_TYPE_NAME", type: "DIMENSION" }, { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" }, { name: "PAGE_VIEWS" }, { name: "IMPRESSIONS" }, { name: "CLICKS" }],
+        rows: [
+          { cells: [{ value: "HighEndMobile" }, { value: "High-end mobile devices" }, { value: "30.00" }, { value: "1800" }, { value: "1500" }, { value: "36" }] },
+          { cells: [{ value: "Desktop" }, { value: "Desktop" }, { value: "15.50" }, { value: "1000" }, { value: "810" }, { value: "20" }] },
+        ],
+        totals: { cells: [{}, {}, { value: "45.50" }, { value: "2800" }, { value: "2310" }, { value: "56" }] },
+      });
+    };
+    expect(await checkAdConnectionFigures(conn, { fetchImpl: deps.fetchImpl })).toEqual({ outcome: "match", ...w, currency: "AUD", differences: [] });
+    expect(asked).toEqual([["DOMAIN_CODE"], ["PLATFORM_TYPE_CODE", "PLATFORM_TYPE_NAME"]]);
   });
 
   it("a platform that asks to wait skips the account until tomorrow, without failing the sweep", async () => {
@@ -318,6 +352,25 @@ describe("the daily check of stored ad figures against the platform", () => {
     await scheduleReconcile(deps);
     expect(logged("ad figures match the platform")).toEqual([]);
     expect(logged("ad figures checked against the platforms")).toEqual([]);
+  });
+
+  it("runs even when a store's reconcile fails, which the reconcile still throws", async () => {
+    const conn = await connection("meta");
+    await storeMetaWeek(conn);
+    fetchImpl = metaWeek(METAS_WEEK);
+    const queueDown: WorkerDeps = {
+      ...deps,
+      queues: {
+        ...queues,
+        sync: {
+          send: async () => {
+            throw new Error("queue unreachable");
+          },
+        },
+      },
+    };
+    await expect(scheduleReconcile(queueDown)).rejects.toThrow("queue unreachable");
+    expect(logged("ad figures match the platform")).toEqual([expect.objectContaining({ connectionId: conn.id })]);
   });
 
   it("starts no account after its time budget", async () => {

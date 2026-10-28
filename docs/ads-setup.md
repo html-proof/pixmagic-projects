@@ -130,7 +130,8 @@ calendar and in its currency. **Meta**: spend, impressions, clicks, link clicks,
 three only when every stored day has them) from `ad_campaign_daily`, against one insights read of the account with
 each ad set's own attribution, as the sync reads it; by the 8th day back the longest attribution an ad set can have (7
 days after the click) has run out for every day of the week. **AdSense**: earnings, page views, impressions and clicks of every stored site (the store's choice of
-sites is for the dashboard, not for this) against the totals of one report of the week. A figure matches within 1%
+sites is for the dashboard, not for this) against the totals of one report of the week (by site, as the sync reads it; by
+platform for an account AdSense won't split by site). A figure matches within 1%
 of the platform's, or within what rounding can make (half a cent per rounded figure; one for counts); the stored
 rows' currency must be the account's. The result goes to the cron's log only: `ad figures match the platform`, or
 one `ad figures differ from the platform` per figure with both sides, which the alarm `ad-figures-differ` counts
