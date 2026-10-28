@@ -40,6 +40,7 @@ import { consentFacts, onDoNotMessageList } from "./contacts.js";
 import { dailyLimitOf, DOWN_GRACE_MS, settingsOf, storeById, WA_MAX_QUEUE_DELAY_S, waDecrypt, waEncrypt, waPhoneHash, waQueue, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
 import { checkConnection, clientFor, instanceToken } from "./connection.js";
 import { EvolutionError, isNotConnected } from "./evolution.js";
+import { zapierWhatsappFailed } from "../zapier/events.js";
 
 export type MessageSource = "automation" | "campaign" | "manual" | "test" | "verification" | "team_alert" | "reply";
 
@@ -324,6 +325,8 @@ export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "stor
   if (m.source === "test" && (next === "sent" || next === "delivered" || next === "read")) {
     await systemDb.wappSettings.updateMany({ where: { storeId: m.storeId, testPassedAt: null, testVerifiedAt: { not: null } }, data: { testPassedAt: report.at } });
   }
+  // Zapier's "WhatsApp message failed" trigger (docs/zapier.md): the number masked. Never throws.
+  if (next === "failed") await zapierWhatsappFailed(m, report.at);
   return next;
 }
 

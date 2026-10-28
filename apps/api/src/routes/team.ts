@@ -31,6 +31,7 @@ import {
   type InviteMail,
   type TeamActor,
 } from "@app/core";
+import { revokeZapierGrants } from "@app/core/zapier";
 import {
   ACCESS_CAPABILITY,
   ACCESS_KEYS,
@@ -100,6 +101,8 @@ export async function removeMemberReleasingAds(c: Ctx, deps: Deps, a: WorkspaceA
   await releaseUserAdGrants(userId, a.workspaceId, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's ad connections weren't released"));
   // A login of theirs still waiting for its ad accounts goes too (the cron's check would let it go within the hour).
   await releaseAdLoginsWhere({ workspaceId: a.workspaceId, connectedByUserId: userId }, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's waiting ad logins weren't released"));
+  // Zapier connections they allowed here stop working, and their Zaps' triggers go (docs/zapier.md).
+  await revokeZapierGrants({ workspaceId: a.workspaceId, userId }, "member_removed").catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's Zapier connections weren't revoked"));
   return removed;
 }
 

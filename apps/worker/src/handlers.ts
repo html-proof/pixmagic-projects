@@ -11,3 +11,4 @@ export { runAggregate, rememberFailedAggregate } from "./handlers/aggregate.js";
 export { RECONCILE_ORDER_DAYS, VERIFY_AFTER_RECONCILE_S, reconcileOrderDays, seedAfterMove, settleAllCustomers, seedSalesRereads, scheduleReconcile, failStaleJobs, refreshExpiringTokens } from "./handlers/sweeps.js";
 export { runEmailJob, runWhatsappJob, runSmsJob, runSmsEvent, runAdsSync, scheduleAdsSync, sweepAdConnectionAlerts, sweepNangoLeftovers, checkWaitingAdLogins, moveDirectAdConnections, ADS_HISTORY_STARTS_PER_TICK } from "./handlers/integrations.js";
 export { runInventoryStep, sweepInventory, pruneInventory } from "./handlers/inventory.js";
+export { runZapierJob, sweepZapierDeliveries } from "./handlers/zapier.js";

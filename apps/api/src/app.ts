@@ -42,21 +42,26 @@ import { inventoryRoutes } from "./routes/inventory.js";
 import { smsRoutes } from "./routes/sms.js";
 import { smsPublicRoutes } from "./routes/smsPublic.js";
 import { automationRoutes } from "./routes/automations.js";
+import { zapierOAuthRoutes } from "./routes/zapierOAuth.js";
+import { zapierRoutes } from "./routes/zapier.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
  * Machine endpoints with their own authentication: webhooks (HMAC), the pixel (ingest key), the
- * event API (event key, no cookie) and one-click unsubscribe (a signed token; mail providers POST
- * it from their own servers, RFC 8058).
+ * event API (event key, no cookie), one-click unsubscribe (a signed token; mail providers POST
+ * it from their own servers, RFC 8058), and Zapier's server (its client secret at /oauth/token, a
+ * bearer token at /zapier/*: neither ever reads a cookie).
  */
-const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//, /^\/v1\/events/, /^\/email\/unsubscribe\//];
+const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//, /^\/v1\/events/, /^\/email\/unsubscribe\//, /^\/oauth\/token$/, /^\/zapier\//];
 /**
  * Not subject to the global per-IP limit. Shopify delivers every store's webhooks from a small
  * pool of addresses, so a per-IP cap meant one busy merchant (or a backfill burst) could get
  * every store's webhooks 429ed into Shopify's retry/disable path; they are HMAC-verified
- * instead. The pixel has its own, more generous per-IP limit that the global one shadowed.
+ * instead. The pixel has its own, more generous per-IP limit that the global one shadowed. Zapier
+ * calls for every merchant from a few addresses too: its routes have their own limits (per
+ * connection, and per IP for tokens that don't verify).
  */
-const GLOBAL_LIMIT_EXEMPT = [/^\/healthz$/, /^\/readyz$/, /^\/webhooks\//, /^\/pixel\//];
+const GLOBAL_LIMIT_EXEMPT = [/^\/healthz$/, /^\/readyz$/, /^\/webhooks\//, /^\/pixel\//, /^\/oauth\/token$/, /^\/zapier\//];
 const MB = 1024 * 1024;
 
 export type App = Hono<AppEnv>;
@@ -244,5 +249,8 @@ export function buildApp(deps: Deps): App {
   smsRoutes(app, deps);
   smsPublicRoutes(app, deps);
   automationRoutes(app, deps);
+  // Zapier (docs/zapier.md): the OAuth provider (consent, token) and Zapier's own API (/zapier/*, bearer tokens only).
+  zapierOAuthRoutes(app, deps);
+  zapierRoutes(app, deps);
   return app;
 }

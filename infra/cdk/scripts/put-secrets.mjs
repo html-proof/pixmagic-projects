@@ -68,6 +68,9 @@ const SHAPES = {
   // Older keys are UUIDs; no prefix is documented, so only their length and characters.
   NANGO_SECRET_KEY: [/^[A-Za-z0-9_-]{32,}$/, "a Nango secret API key (Nango → Environment Settings → API Keys)"],
   NANGO_WEBHOOK_SECRET: [/^[A-Za-z0-9_-]{16,}$/, "a Nango webhook signing key (Nango → Environment Settings → Webhooks)"],
+  // The secret of bizinsights' own OAuth client for its Zapier app (docs/zapier.md): made by the owner
+  // (32 random bytes, base64url) and entered in the Zapier app's environment as CLIENT_SECRET too.
+  ZAPIER_CLIENT_SECRET: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _; docs/zapier.md says how to make one)"],
 };
 
 /** Copied from --from files when present there. */
@@ -87,6 +90,7 @@ const COPY = [
   "TURNSTILE_SECRET",
   "NANGO_SECRET_KEY",
   "NANGO_WEBHOOK_SECRET",
+  "ZAPIER_CLIENT_SECRET",
 ];
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
 /** Values anyone can read in this repository (packages/core/src/env.ts PUBLIC_SECRET_MARKERS). */

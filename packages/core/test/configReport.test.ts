@@ -41,6 +41,10 @@ const KEYS = [
   "COGNITO_DOMAIN",
   "COGNITO_IDENTITY_PROVIDERS",
   "COGNITO_EMAIL_OTP",
+  "ZAPIER_CLIENT_ID",
+  "ZAPIER_CLIENT_SECRET",
+  "ZAPIER_REDIRECT_URI",
+  "ZAPIER_INVITE_URL",
 ];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 
@@ -98,6 +102,9 @@ const EVERYTHING = {
   COGNITO_CLIENT_SECRET: "secret-cognito-2424",
   COGNITO_DOMAIN: "https://auth.example.test",
   COGNITO_IDENTITY_PROVIDERS: "Google",
+  ZAPIER_CLIENT_ID: "public-zapier-client-6767",
+  ZAPIER_CLIENT_SECRET: "secret-zapier-client-8989",
+  ZAPIER_REDIRECT_URI: "https://zapier.com/dashboard/auth/oauth/return/App4242CLIAPI/",
 };
 
 const half = (vars: Record<string, string>) => halfConfigured(vars).map((c) => c.provider);
@@ -137,6 +144,7 @@ describe("which provider has its public id but not its secret", () => {
       "WHATSAPP_CONFIG_ID/META_APP_SECRET",
       "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
       "EMAIL_MICROSOFT_CLIENT_ID/EMAIL_MICROSOFT_CLIENT_SECRET",
+      "ZAPIER_CLIENT_ID/ZAPIER_CLIENT_SECRET",
     ]);
   });
 
@@ -193,6 +201,7 @@ describe("the configuration report", () => {
     expect(r.whatsapp).toEqual({ evolution: true, evolutionNeeds: [], embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
     expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
+    expect(r.zapier).toEqual({ configured: true, inviteUrl: false });
     expect(r.halfConfigured).toEqual([]);
   });
 

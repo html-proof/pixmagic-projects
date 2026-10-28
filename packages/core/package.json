@@ -10,7 +10,8 @@
     "./reports": "./src/reports/index.ts",
     "./mailer": "./src/mailer.ts",
     "./sms": "./src/sms/index.ts",
-    "./automations": "./src/automations/index.ts"
+    "./automations": "./src/automations/index.ts",
+    "./zapier": "./src/zapier/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

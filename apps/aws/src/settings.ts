@@ -156,4 +156,13 @@ export const APP_SETTINGS = {
   "EMAIL_GOOGLE_CLIENT_ID": "",
   "EMAIL_MICROSOFT_CLIENT_ID": "",
   "EMAIL_MICROSOFT_AUTHORITY": "common",
+  // Zapier (docs/zapier.md, "Owner setup"): bizinsights is the OAuth provider of its app on Zapier's
+  // Developer Platform. ZAPIER_CLIENT_ID: the client id the owner chose and entered in the Zapier app's
+  // environment (CLIENT_ID); its secret is in Secrets Manager (put-secrets.mjs --set ZAPIER_CLIENT_SECRET).
+  // ZAPIER_REDIRECT_URI: the redirect URI the Zapier app shows under Authentication (exact match).
+  // ZAPIER_INVITE_URL: the app's invite link (Zapier → Manage team → Invite), what Connect opens.
+  // Empty until the owner registers the app: every Zapier endpoint answers not_configured.
+  "ZAPIER_CLIENT_ID": "",
+  "ZAPIER_REDIRECT_URI": "",
+  "ZAPIER_INVITE_URL": "",
 } as const satisfies Record<string, string>;

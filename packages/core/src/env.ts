@@ -289,6 +289,19 @@ const schema = z.object({
   /** Signing secret (whsec_...) of the Resend webhook endpoint POST /api/webhooks/email/resend. */
   RESEND_WEBHOOK_SECRET: z.string().optional().default(""),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
+  /**
+   * Zapier (docs/zapier.md): bizinsights is the OAuth provider of its app on Zapier's Developer
+   * Platform. The client id and secret are values the owner makes up and enters on both sides (the
+   * secret in Secrets Manager, put-secrets.mjs --set ZAPIER_CLIENT_SECRET, and in the Zapier app's
+   * environment as CLIENT_SECRET); the redirect URI is the one Zapier's app shows (Authentication →
+   * OAuth v2), matched exactly. Until all three are set, every Zapier endpoint answers 503
+   * `not_configured` and Settings → Integrations says Zapier isn't set up yet. The invite URL (the
+   * Zapier app's invite link, or its public page once Zapier lists it) is what Connect opens.
+   */
+  ZAPIER_CLIENT_ID: z.string().optional().default(""),
+  ZAPIER_CLIENT_SECRET: z.string().optional().default(""),
+  ZAPIER_REDIRECT_URI: z.union([z.literal(""), z.string().url()]).default(""),
+  ZAPIER_INVITE_URL: z.union([z.literal(""), z.string().url()]).default(""),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -313,7 +326,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {

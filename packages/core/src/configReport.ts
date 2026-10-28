@@ -13,6 +13,7 @@ import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
 import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
+import { zapierConfig } from "./zapier/config.js";
 
 /** A provider's public id (one of the app's settings) and its secret (Secrets Manager). */
 export interface ProviderCredentials {
@@ -51,6 +52,8 @@ export interface ConfigReport {
   auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
   /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
   sms: { mode: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean };
+  /** Zapier (docs/zapier.md): its OAuth client fully set up (id, secret, redirect URI), and whether Connect has an invite link to open. */
+  zapier: { configured: boolean; inviteUrl: boolean };
   credentials: ProviderCredentials[];
   /** The providers in `credentials` whose public id is set and whose secret is missing. */
   halfConfigured: string[];
@@ -139,6 +142,8 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
     whatsapp,
     pair("Gmail (email sending)", "EMAIL_GOOGLE_CLIENT_ID", "EMAIL_GOOGLE_CLIENT_SECRET", "Connect Gmail says it isn't set up"),
     pair("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", "Connect Outlook says it isn't set up"),
+    // bizinsights' own OAuth client for its Zapier app (docs/zapier.md): the id is public, the secret is the one entered in Zapier too.
+    pair("Zapier", "ZAPIER_CLIENT_ID", "ZAPIER_CLIENT_SECRET", "Zapier can't connect to bizinsights (its endpoints answer not_configured) and Settings says Zapier isn't set up yet"),
   ];
 }
 
@@ -192,6 +197,7 @@ export function configReport(): ConfigReport {
       loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
     },
     sms: { mode: e.SMS_MODE, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim() },
+    zapier: { configured: zapierConfig().configured, inviteUrl: zapierConfig().settings.ZAPIER_INVITE_URL },
     credentials,
     halfConfigured: credentials.filter(isHalf).map((c) => c.provider),
   };
