@@ -45,8 +45,6 @@ const REDACT = new Set(
     "hmac",
     "x-shopify-access-token",
     "x-shopify-hmac-sha256",
-    "x-nango-hmac-sha256",
-    "x-nango-signature",
     "sessionToken",
     // SMTP logins (nodemailer's auth.pass), CloudFront's origin secret, API keys, AWS keys, PKCE
     // verifiers, Google Ads' developer token header and Meta's signed requests.

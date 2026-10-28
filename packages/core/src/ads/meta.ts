@@ -1,8 +1,7 @@
 /**
- * Meta Marketing API, read with a token of bizinsights' own Meta app that Nango holds ("Continue with
- * Meta Ads", ads_read only; docs/nango.md): the ad accounts a person can read, daily numbers per
- * campaign and the report by campaign, ad set, ad or breakdown. Every call goes through the shared
- * Graph API transport (metaGraph.ts).
+ * Meta Marketing API: "Continue with Meta Ads" (Facebook Login for Business, ads_read only), the ad
+ * accounts a person can read, daily numbers per campaign and the report by campaign, ad set, ad or
+ * breakdown. Every call goes through the shared Graph API transport (metaGraph.ts).
  */
 import {
   addDays,
@@ -48,9 +47,11 @@ import {
   AdsRetryableError,
   isMetaPermissionError,
   REQUIRED_AD_SCOPE,
+  tokenExpiry,
   type AdAccount,
   type AdAccountHealth,
   type AdAccountList,
+  type TokenSet,
 } from "./common.js";
 
 export interface MetaConfig {
@@ -65,6 +66,21 @@ export interface MetaConfig {
    */
   configId?: string;
   fetchImpl?: FetchLike;
+}
+
+export const META_SCOPES: string[] = [REQUIRED_AD_SCOPE.meta];
+
+/** Facebook's login dialog for bizinsights' app: the Login for Business configuration when there is one, else `ads_read` asked for again. */
+export function metaAuthorizeUrl(c: MetaConfig, redirectUri: string, state: string): string {
+  const q = new URLSearchParams({ client_id: c.appId, redirect_uri: redirectUri, state, response_type: "code" });
+  if (c.configId) {
+    q.set("config_id", c.configId);
+  } else {
+    q.set("scope", META_SCOPES.join(","));
+    // Ask again for a permission the person declined last time (Meta won't re-show it otherwise).
+    q.set("auth_type", "rerequest");
+  }
+  return `https://www.facebook.com/${c.version}/dialog/oauth?${q}`;
 }
 
 /**
@@ -183,6 +199,23 @@ function metaGet<T>(c: MetaConfig, path: string, query: Record<string, string>, 
 /** POST and DELETE: the parameters go in the form body. */
 function metaSend<T>(c: MetaConfig, method: "POST" | "DELETE", path: string, form: Record<string, string>, token?: string, limit?: CallLimit): Promise<T> {
   return withinLimit(limit, (signal) => graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method, path, form, token, appSecret: proofFor(c, token), signal }, metaAdsError));
+}
+
+/**
+ * The code from the redirect → a token that lasts. A user token is swapped for a long-lived one
+ * (about 60 days). A Facebook Login for Business system-user token comes back without an expiry
+ * (it never expires) and isn't swapped: Meta only documents that swap for expiring tokens.
+ */
+export async function metaExchangeCode(c: MetaConfig, code: string, redirectUri: string): Promise<TokenSet> {
+  const first = await metaGet<{ access_token: string; expires_in?: number }>(c, "oauth/access_token", { client_id: c.appId, client_secret: c.appSecret, redirect_uri: redirectUri, code });
+  if (!first.expires_in) return { accessToken: first.access_token, refreshToken: null, expiresAt: null };
+  const long = await metaGet<{ access_token: string; expires_in?: number }>(c, "oauth/access_token", {
+    grant_type: "fb_exchange_token",
+    client_id: c.appId,
+    client_secret: c.appSecret,
+    fb_exchange_token: first.access_token,
+  });
+  return { accessToken: long.access_token, refreshToken: null, expiresAt: tokenExpiry(long.expires_in) };
 }
 
 /** The permissions the person granted this app (a declined one is listed as "declined"). */

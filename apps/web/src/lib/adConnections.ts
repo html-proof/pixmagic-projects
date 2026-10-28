@@ -33,9 +33,9 @@ export interface AdConnection {
   /** When the last sync started, whatever came of it. */
   lastSyncAttemptAt: string | null;
   /**
-   * How the account was authorized: through Nango, which keeps the token ("nango", every connection made
-   * now), or bizinsights' own older sign-in ("direct"), which moves to Nango by itself (docs/nango.md).
-   * bizinsights reads the platform's API itself either way.
+   * How the account is read: bizinsights' own sign-in with the platform ("direct"), or ("nango") one made
+   * through Nango that bizinsights is still moving off it (a few minutes). bizinsights reads the
+   * platform's API itself either way.
    */
   source: "direct" | "nango";
   /** The account's own last day (YYYY-MM-DD) stored without a gap, and the first. */

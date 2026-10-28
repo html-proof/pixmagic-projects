@@ -126,10 +126,7 @@ describe("cross-account access through the API", () => {
   it("refuses another workspace's store through one's own workspace, on every store route", async () => {
     const { a, wsA, wsB, storeB } = await twoAccounts();
     const before = await rowsOf(wsB);
-    // Cancelling a Nango sign-in uses up only the caller's own session for that exact workspace and
-    // store, and answers the same for any store: nothing of the other store is read or changed.
-    const anyStore = new Set(["POST /workspaces/:ws/stores/:storeId/ads/:provider/nango/cancel"]);
-    const storeRoutes = workspaceRoutes().filter((r) => r.path.includes(":storeId") && !anyStore.has(`${r.method} ${r.path}`));
+    const storeRoutes = workspaceRoutes().filter((r) => r.path.includes(":storeId"));
     expect(await notRefused(storeRoutes, a.headers, { ws: wsA, storeId: storeB.id })).toEqual([]);
     expect(await rowsOf(wsB)).toEqual(before);
   });

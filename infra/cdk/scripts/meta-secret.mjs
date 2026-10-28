@@ -1,5 +1,5 @@
 // Whether Meta takes a value as an app's secret, for the scripts that store or copy it
-// (put-secrets.mjs, nango-setup.mjs). bizinsights signs every Meta call with the secret
+// (put-secrets.mjs). bizinsights signs every Meta call with the secret
 // (appsecret_proof), so a value of the right shape that isn't the app's breaks every Meta call.
 import { URLSearchParams } from "node:url";
 
