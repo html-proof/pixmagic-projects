@@ -37,6 +37,7 @@ const row = (d: string, grossSales: number, extra: Partial<DailyMetricsRow> = {}
   duties: 0,
   additionalFees: 0,
   totalSales: grossSales,
+  totalRefunded: 0,
   orders: grossSales > 0 ? 1 : 0,
   orderValue: grossSales,
   units: 0,

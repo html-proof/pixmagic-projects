@@ -139,7 +139,7 @@ const report = () => ({
   },
   modules: {
     sales_overview: {
-      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
+      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, totalRefunded: 12, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
       previous: { grossSales: 90, netSales: 80, totalSales: 90, tax: 4, shipping: 6, duties: 0, additionalFees: 0, orders: 2, units: 2, averageOrderValue: 40 },
       deltas: { netSales: 0.25, totalSales: 0.24, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
       series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33 }],
@@ -265,6 +265,14 @@ describe("redactOverview", () => {
     expect(redactOverview(withPast(), member(["analytics.sales"])).modules.sales_overview).not.toHaveProperty("year");
   });
 
+  it("keeps what refunds took off total sales only with both View refunds and the breakdown", () => {
+    // It holds the refunds' tax and shipping, so it needs the lines as well as the refunds.
+    const current = (keys: string[]) => (redactOverview(report(), member(["analytics.sales", ...keys])) as ReturnType<typeof report>).modules.sales_overview.current;
+    expect(current(["finance.refunds"])).not.toHaveProperty("totalRefunded");
+    expect(current(["finance.breakdown"])).not.toHaveProperty("totalRefunded");
+    expect(current(["finance.breakdown", "finance.refunds"])).toMatchObject({ totalSales: 115, totalRefunded: 12 });
+  });
+
   it("keeps each month's refunds only with View refunds", () => {
     const reports = redactOverview(report(), member(["analytics.sales", "finance.reports"])) as ReturnType<typeof report>;
     for (const m of reports.modules.sales_overview.year.months) expect(m).not.toHaveProperty("refunds");
@@ -286,7 +294,7 @@ describe("redactOverview", () => {
   it("keeps them once granted", () => {
     const out = redactOverview(report(), member([...LEGACY_GRANTS.viewer, "reports.export"])) as ReturnType<typeof report>;
     expect(out.modules.sales_overview.current.grossSales).toBe(120);
-    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 115, returns: 10, duties: 2, additionalFees: 1 });
+    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 115, totalRefunded: 12, returns: 10, duties: 2, additionalFees: 1 });
     expect(out.modules.sales_overview.previous).toMatchObject({ tax: 4, shipping: 6 });
     expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2 });
     expect(out.modules.sales_overview.calculation.applyToDashboard).toBe(true);

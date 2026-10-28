@@ -38,6 +38,8 @@ describe("the shipped settings", () => {
       "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
       // WhatsApp runs on the Meta Ads app, so that app's secret is WhatsApp's too.
       "WhatsApp (Embedded Signup): META_APP_SECRET",
+      // bizinsights' own OAuth client for its Zapier app (docs/zapier.md).
+      "Zapier: ZAPIER_CLIENT_SECRET",
     ]);
   });
 
@@ -59,7 +61,7 @@ describe('the cron action {"action":"config"}', () => {
     const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
 
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
-    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense"]);
+    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Zapier"]);
     // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed. Evolution API's address
     // and key come from the CDK app and Secrets Manager (not set in this test).
     expect(report.whatsapp).toEqual({

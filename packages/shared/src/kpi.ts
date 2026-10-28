@@ -15,6 +15,9 @@ export interface DailyMetricsRow {
   duties: number; // import duties charged that day, before tax
   additionalFees: number; // Shopify's fees and additional fees (and any sale it gives no type), before tax
   totalSales: number; // net sales + shipping + taxes + duties + additional fees (Shopify's "Total sales")
+  // what refunds, returns and cancellations took off total sales that day: their sales with tax,
+  // shipping, duties and fees in (gift cards and tips aside, as total sales leaves them out)
+  totalRefunded: number;
   // orders placed that day, on the day Shopify processed them (cancelled orders included, test
   // orders never stored, orders of gift cards only left out: Shopify's reports don't count them)
   orders: number;
@@ -38,6 +41,7 @@ export interface KpiSummary {
   duties: number;
   additionalFees: number;
   totalSales: number;
+  totalRefunded: number;
   orders: number;
   units: number;
   averageOrderValue: number | null;
@@ -59,6 +63,7 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
       a.duties += r.duties;
       a.additionalFees += r.additionalFees;
       a.totalSales += r.totalSales;
+      a.totalRefunded += r.totalRefunded;
       a.orders += r.orders;
       a.orderValue += r.orderValue;
       a.units += r.units;
@@ -66,7 +71,7 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
       a.returning += r.returningCustomerOrders;
       return a;
     },
-    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, duties: 0, additionalFees: 0, totalSales: 0, orders: 0, orderValue: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
+    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, duties: 0, additionalFees: 0, totalSales: 0, totalRefunded: 0, orders: 0, orderValue: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
   );
   // Money totals are rounded to cents before deriving ratios, so the result does
   // not depend on float summation order (SQL and JS agree exactly).
@@ -87,6 +92,7 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
     duties: r2(t.duties),
     additionalFees: r2(t.additionalFees),
     totalSales: r2(t.totalSales),
+    totalRefunded: r2(t.totalRefunded),
     orders: t.orders,
     units: t.units,
     averageOrderValue: aov === null ? null : r2(aov),
@@ -170,6 +176,7 @@ export function emptyRow(day: string): DailyMetricsRow {
     duties: 0,
     additionalFees: 0,
     totalSales: 0,
+    totalRefunded: 0,
     orders: 0,
     orderValue: 0,
     units: 0,
@@ -219,6 +226,7 @@ export function aggregateDaily(
     const { value, tax } = saleValue(x);
     r.taxes += tax;
     r.totalSales += value + tax;
+    if (x.actionType === "return") r.totalRefunded -= value + tax;
     if (MERCHANDISE_LINES.has(x.lineType)) {
       if (x.actionType === "order") {
         r.grossSales += value + x.discount;

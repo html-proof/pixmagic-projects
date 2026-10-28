@@ -6,6 +6,7 @@ import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, Normalized
 import { releaseAdLoginsWhere, revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
 import { deleteRetiredNangoToken, purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
+import { purgeZapierStoreOps } from "./zapier/manage.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
 
@@ -739,6 +740,8 @@ export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: 
  *    Shipping lines make shipping, duty lines duties, and fees, additional fees and lines of no
  *    known type additional fees (`chargeLine` in @app/shared): those three and taxes go to total
  *    sales only. Gift cards and tips count nowhere, as in Shopify's reports.
+ *  - Total refunded: a return action's sales (refunds, returns, cancellations) with their tax, all
+ *    lines but gift cards: what they took off total sales that day.
  *  - Every sale keeps the sign Shopify gave it: a refund's adjustment lines come in pairs of both
  *    signs, and only their sum is what it took back (`saleValue` in @app/shared).
  *
@@ -754,9 +757,9 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
     await tx.$executeRaw`
     ${dayTotals(store, days)}
     INSERT INTO daily_store_metrics
-      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, orders, order_value, units,
+      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, total_refunded, orders, order_value, units,
        orders_with_customer, returning_customer_orders, refunded_orders)
-    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, orders, order_value, units,
+    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, total_refunded, orders, order_value, units,
            orders_with_customer, returning_customer_orders, refunded_orders
     FROM t
     ON CONFLICT (store_id, day) DO UPDATE SET
@@ -768,6 +771,7 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
       duties = EXCLUDED.duties,
       additional_fees = EXCLUDED.additional_fees,
       total_sales = EXCLUDED.total_sales,
+      total_refunded = EXCLUDED.total_refunded,
       orders = EXCLUDED.orders,
       order_value = EXCLUDED.order_value,
       units = EXCLUDED.units,
@@ -819,6 +823,7 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
              SUM(tax) FILTER (WHERE line_type <> 'gift_card') AS taxes,
              SUM(value) FILTER (WHERE line_type = 'duty') AS duties,
              SUM(value) FILTER (WHERE line_type NOT IN ('shipping', 'product', 'adjustment', 'gift_card', 'duty')) AS fees,
+             -SUM(value + tax) FILTER (WHERE action_type = 'return' AND line_type <> 'gift_card') AS refunded,
              (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'order'))::int AS units_in,
              (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'return'))::int AS units_out,
              (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return' AND line_type <> 'gift_card'))::int AS ro
@@ -832,6 +837,7 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
              COALESCE(s.duties, 0) AS duties, COALESCE(s.fees, 0) AS additional_fees,
              COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0)
                + COALESCE(s.duties, 0) + COALESCE(s.fees, 0) AS total_sales,
+             COALESCE(s.refunded, 0) AS total_refunded,
              COALESCE(o.orders, 0) AS orders, COALESCE(s.placed, 0) AS order_value,
              COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0) AS units,
              COALESCE(o.owc, 0) AS orders_with_customer, COALESCE(o.ret, 0) AS returning_customer_orders, COALESCE(s.ro, 0) AS refunded_orders
@@ -975,6 +981,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.smsAuditLog.deleteMany({ where: { storeId } }),
     systemDb.smsSenderConfiguration.deleteMany({ where: { storeId } }),
     systemDb.smsSetup.deleteMany({ where: { storeId } }),
+    // Zapier: the store's connections (their tokens stop working), its Zaps' triggers and its outbox.
+    ...purgeZapierStoreOps(storeId),
     // The orders and visits are gone, and where their history started with them: the next import
     // and pixel record their own.
     systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null } }),

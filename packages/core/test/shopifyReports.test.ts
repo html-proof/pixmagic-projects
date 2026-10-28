@@ -67,7 +67,7 @@ describe("windows and staleness", () => {
 
 describe("our sales figures against Shopify's sales report", () => {
   const ours = summarize([
-    { day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 45.5, shipping: 34.54, taxes: 167.91, duties: 0, additionalFees: 0, totalSales: 1801.5, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 },
+    { day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 45.5, shipping: 34.54, taxes: 167.91, duties: 0, additionalFees: 0, totalSales: 1801.5, totalRefunded: 50.05, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 },
   ]);
 
   it("matches to the cent whichever sign Shopify reports discounts and reversals with", () => {
@@ -82,7 +82,7 @@ describe("our sales figures against Shopify's sales report", () => {
 
   it("flags a difference, or a delay while changes are still being counted, and a figure Shopify left out", () => {
     // The returns bug fixed on 2026-10-17 would have shown as this: 136.50 counted, 45.50 in Shopify.
-    const before = summarize([{ ...{ day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 136.5, shipping: 34.54, taxes: 167.91, duties: 0, additionalFees: 0, totalSales: 1710.5, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 } }]);
+    const before = summarize([{ ...{ day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 136.5, shipping: 34.54, taxes: 167.91, duties: 0, additionalFees: 0, totalSales: 1710.5, totalRefunded: 150.15, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 } }]);
     const shopify = { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: null };
     const rows = reconcileSales(before, shopify, { behind: false });
     expect(rows.find((r) => r.metric === "returns")).toMatchObject({ shopify: 45.5, ours: 136.5, difference: 91, state: "differs" });
@@ -95,7 +95,7 @@ describe("our sales figures against Shopify's sales report", () => {
 describe("duties and additional fees against Shopify's sales report", () => {
   // An international order: A$40 of duties and a A$2.50 retail delivery fee, each with its own line
   // in Shopify's total sales breakdown (ShopifyQL `duties`, `additional_fees`).
-  const day = { day: "2026-10-18", grossSales: 500, discounts: 0, refunds: 0, shipping: 20, taxes: 56.25, duties: 40, additionalFees: 2.5, totalSales: 618.75, orders: 1, orderValue: 500, units: 2, ordersWithCustomer: 1, returningCustomerOrders: 0, refundedOrders: 0 };
+  const day = { day: "2026-10-18", grossSales: 500, discounts: 0, refunds: 0, shipping: 20, taxes: 56.25, duties: 40, additionalFees: 2.5, totalSales: 618.75, totalRefunded: 0, orders: 1, orderValue: 500, units: 2, ordersWithCustomer: 1, returningCustomerOrders: 0, refundedOrders: 0 };
   const shopify = { grossSales: 500, discounts: 0, salesReversals: 0, netSales: 500, shipping: 20, duties: 40, additionalFees: 2.5, taxes: 56.25, totalSales: 618.75, orders: 1 };
 
   it("compares each line, and they add up to Shopify's total sales", () => {
