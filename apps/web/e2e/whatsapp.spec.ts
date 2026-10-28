@@ -111,9 +111,10 @@ test("an owner connects WhatsApp Business through Meta's window, configures, ver
   await expect(page.getByRole("heading", { name: "WhatsApp Automation is set up" })).toBeVisible({ timeout: 20_000 });
 
   // The overview shows the connection as Meta reported it.
-  await page.getByRole("link", { name: "Overview", exact: true }).click();
+  await page.goto("/dashboard/whatsapp-automation?tab=overview");
+  await expect(page.getByText("Connection health")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Connected").first()).toBeVisible();
-  await expect(page.getByText(/WhatsApp Business Platform/).first()).toBeVisible();
+  await expect(page.getByText(/· WhatsApp Business Platform$/)).toBeVisible();
 });
 
 test("a store whose phone was linked with a QR code is told plainly that it was retired, and connects Meta instead", async ({ page }) => {
