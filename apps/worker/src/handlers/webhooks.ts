@@ -42,7 +42,7 @@ const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify
  * outlives it (written for the erased workspace, it failed its foreign key and nothing was kept).
  */
 async function eraseStore(store: Store, deps: WorkerDeps): Promise<{ workspaceErased: boolean }> {
-  // The store's WhatsApp instance at Evolution API goes first (best effort), while its row says which.
+  // What was set up at Meta for the store's WhatsApp number is undone first (best effort), while its row says which.
   await dropStoreInstance(store.id, deps);
   await purgeStoreData(store.id, deps.fetchImpl);
   await purgeEmailStoreData(store.id);

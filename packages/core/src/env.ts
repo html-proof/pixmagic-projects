@@ -181,20 +181,6 @@ const schema = z.object({
    */
   NANGO_PROVIDERS: z.string().optional().default("meta,google,adsense"),
   /**
-   * WhatsApp Automation on Evolution API (docs/whatsapp.md): bizinsights' own Evolution API service.
-   * Its internal base URL (in AWS the ECS service's private DNS name, reachable only from the
-   * functions; locally the docker-compose service), its global API key (a secret, used only to
-   * create instances and list them), and the name of that server (shard) new connections go to.
-   * Without the URL or the key, connecting WhatsApp is off and the page says so.
-   */
-  EVOLUTION_API_URL: z.string().optional().default(""),
-  EVOLUTION_API_KEY: z.string().optional().default(""),
-  EVOLUTION_SHARD: z.string().default("a"),
-  /** Where Evolution API posts its webhooks: bizinsights' public API (empty: API_URL). Locally, an address the container can reach. */
-  EVOLUTION_WEBHOOK_URL: z.string().optional().default(""),
-  /** Each call to Evolution API gives up after this long (ms). */
-  EVOLUTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
-  /**
    * WhatsApp's one way to connect, Meta's WhatsApp Business Platform (Embedded Signup; bizinsights
    * then calls Meta's Graph API with the business's token): the Meta app's id and secret (the ad
    * accounts' Meta app when these are empty), the Facebook Login for Business configuration id of

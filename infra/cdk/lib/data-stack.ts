@@ -40,15 +40,11 @@ export class DataStack extends Stack {
   /** The NAT instances (cfg.natGateways of them): every function's way out to the internet. */
   readonly natInstances: ec2.Instance[];
   readonly appSg: ec2.SecurityGroup;
-  /** The database's: other stacks add who else may reach PostgreSQL (the WhatsApp service, whatsapp-stack.ts). */
+  /** The database's: other stacks may add who else reaches PostgreSQL. */
   readonly dbSg: ec2.SecurityGroup;
   readonly db: rds.DatabaseInstance;
   readonly dbSecret: secretsmanager.ISecret;
   readonly appSecret: secretsmanager.Secret;
-  /** WhatsApp's Evolution API service: its global key (EVOLUTION_API_KEY), shared by the functions and its container. */
-  readonly evolutionSecret: secretsmanager.Secret;
-  /** Its database role (EVOLUTION_DB_USER, EVOLUTION_DB_PASSWORD): its container and the cron, which makes the role. */
-  readonly evolutionDbSecret: secretsmanager.Secret;
   readonly coordTable: dynamodb.Table;
   readonly payloads: s3.Bucket;
   readonly artifacts: s3.Bucket;
@@ -164,7 +160,7 @@ export class DataStack extends Stack {
       // (CloudWatch Logs, RDSOSMetrics). Turning it on or off doesn't restart the database.
       monitoringInterval: Duration.seconds(60),
       cloudwatchLogsExports: ["postgresql"],
-      // whatsapp-stack.ts checks the database's certificate against this root alone (DB_CA there).
+      // The functions check the database's certificate against the RDS bundle (NODE_EXTRA_CA_CERTS).
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
     this.dbSecret = this.db.secret!;
@@ -179,23 +175,28 @@ export class DataStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    // WhatsApp Automation's Evolution API service (whatsapp-stack.ts, docs/whatsapp.md): its global API
-    // key and its own database role's password, both generated here once and never seen by anyone.
-    // Letters and digits only: they go into a URL and a header as they are. Never edit
-    // generateSecretString (CloudFormation would generate new values; the instances' keys are their own).
-    this.evolutionSecret = new secretsmanager.Secret(this, "EvolutionSecret", {
-      // The functions read it by this name (app-stack.ts EVOLUTION_SECRET_ARN): keep them the same.
+    // The retired Evolution API service's two secrets (docs/whatsapp.md, "Removing Evolution"), release 2:
+    // nothing reads them any more. They stay this release because the WhatsApp stack's previous version
+    // imports them, and this stack deploys before that one is updated; their removal policy is Delete
+    // now, so release 3, which removes them, deletes them (Secrets Manager's recovery window applies).
+    // Never edit generateSecretString (CloudFormation would generate new values).
+    const evolutionSecret = new secretsmanager.Secret(this, "EvolutionSecret", {
       secretName: `insights/${cfg.name}/evolution-api`,
-      description: "Insights WhatsApp: the Evolution API service's global API key (EVOLUTION_API_KEY)",
+      description: "Insights WhatsApp: the retired Evolution API service's global API key (removed in release 3)",
       generateSecretString: { secretStringTemplate: "{}", generateStringKey: "EVOLUTION_API_KEY", passwordLength: 48, excludePunctuation: true },
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
-    this.evolutionDbSecret = new secretsmanager.Secret(this, "EvolutionDbSecret", {
+    const evolutionDbSecret = new secretsmanager.Secret(this, "EvolutionDbSecret", {
       secretName: `insights/${cfg.name}/evolution-db`,
-      description: "Insights WhatsApp: the Evolution API service's own database role (EVOLUTION_DB_USER, EVOLUTION_DB_PASSWORD)",
+      description: "Insights WhatsApp: the retired Evolution API service's database role (removed in release 3)",
       generateSecretString: { secretStringTemplate: JSON.stringify({ EVOLUTION_DB_USER: "evolution" }), generateStringKey: "EVOLUTION_DB_PASSWORD", passwordLength: 40, excludePunctuation: true },
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
+    // What the WhatsApp stack's previous version imports and no stack references any more: CloudFormation
+    // refuses to delete an export another stack still imports, and this stack is updated before that
+    // one. Exported under the names the automatic references had (exportValue without a name), until
+    // release 3, after this release's deploy, when nothing imports them.
+    for (const value of [this.vpc.vpcId, this.dbSg.securityGroupId, evolutionSecret.secretArn, evolutionDbSecret.secretArn]) this.exportValue(value);
 
     // The coordinator (apps/aws/src/dynamoCoord.ts): rate limits, one-time OAuth state, locks.
     this.coordTable = new dynamodb.Table(this, "Coord", {

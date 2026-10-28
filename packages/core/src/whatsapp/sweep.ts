@@ -7,7 +7,6 @@
  *  - each connection is checked with Meta every few hours (its access may have been removed in
  *    Meta's business settings without a word to bizinsights), and one down past the grace period has
  *    its waiting messages cancelled;
- *  - QR-linked phones' stored webhook events that weren't applied are retried, then set aside;
  *  - retention: message texts after the store's retention, the records themselves after a year,
  *    automation runs after 90 days;
  *  - Meta's tokens renewed before they expire, and Meta's review of submitted templates.
@@ -21,7 +20,6 @@ import { checkConnection } from "./connection.js";
 import { enqueueIfDue } from "./messages.js";
 import { retireQrLinking } from "./retireQr.js";
 import { refreshMetaTemplates } from "./templates.js";
-import { WEBHOOK_MAX_ATTEMPTS } from "./webhook.js";
 import { renewCloudToken } from "./cloud.js";
 
 const LEASE_MS = 14 * 60_000;
@@ -85,7 +83,7 @@ export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | 
 
   await step("qrRetired", async () => {
     const r = await retireQrLinking(deps);
-    if (r) out.qrInstancesLeft = r.left;
+    if (r) out.storedEventsSetAside = r.eventsSetAside;
     return r?.retired ?? 0;
   });
 
@@ -114,20 +112,6 @@ export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | 
       n += (await systemDb.wappMessage.updateMany({ where: { storeId: c.storeId, direction: "out", status: "queued" }, data: { status: "cancelled", reason: "not_connected", finalAt: new Date(), payloadEnc: null } })).count;
       await systemDb.wappCampaign.updateMany({ where: { storeId: c.storeId, status: { in: ["scheduled", "sending"] } }, data: { status: "cancelled", cancelledAt: new Date(), cancelReason: "not_connected" } });
       await raiseAlert({ workspaceId: c.workspaceId, storeId: c.storeId, severity: "warning", code: WA_ALERTS.down, message: "WhatsApp has been disconnected for 2 days; waiting messages were cancelled." }, deps.mailer, deps.fetchImpl);
-    }
-    return n;
-  });
-
-  await step("webhookRetries", async () => {
-    const stale = await systemDb.wappWebhookEvent.findMany({ where: { status: "pending", receivedAt: { lt: new Date(now - 10 * 60_000) } }, select: { id: true, attempts: true }, take: 500 });
-    let n = 0;
-    for (const e of stale) {
-      if (e.attempts >= WEBHOOK_MAX_ATTEMPTS) {
-        await systemDb.wappWebhookEvent.update({ where: { id: e.id }, data: { status: "dead", bodyEnc: null, processedAt: new Date(), lastError: "gave up after retries" } });
-        continue;
-      }
-      await waQueue(deps.queues).send({ kind: "wapp_event", eventId: e.id });
-      n++;
     }
     return n;
   });

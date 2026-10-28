@@ -11,7 +11,7 @@ export const QUEUE = {
   email: "email",
   /** AWS End User Messaging's SMS delivery events (configuration set → SNS → this queue; core/sms/delivery.ts). */
   smsEvents: "smsEvents",
-  /** WhatsApp Automation (core/whatsapp): sends, campaign batches, and a QR-linked phone's stored webhook events while they last. */
+  /** WhatsApp Automation (core/whatsapp): sends and campaign batches. */
   whatsapp: "whatsapp",
 } as const;
 export type QueueName = keyof typeof QUEUE;
@@ -128,9 +128,9 @@ export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "emai
 export type SmsEventMessage = Record<string, unknown>;
 
 /**
- * WhatsApp Automation (core/whatsapp): send one message, apply one stored webhook event from
- * Evolution API (a QR-linked phone's, until release 2), or make the next batch of a campaign's
- * messages. The rows carry the state.
+ * WhatsApp Automation (core/whatsapp): send one message, or make the next batch of a campaign's
+ * messages; `wapp_event` (a stored Evolution API event, before release 2 removed the service) only
+ * sets such an event aside. The rows carry the state.
  */
 export type WhatsappJob = { kind: "wapp_send"; messageId: string } | { kind: "wapp_event"; eventId: string } | { kind: "wapp_campaign"; campaignId: string };
 

@@ -23,17 +23,13 @@ import {
 } from "../src/whatsapp";
 
 describe("message statuses", () => {
-  it("maps Meta's words (and the last QR-linked phones' Baileys words), and says nothing of what it doesn't know", () => {
+  it("maps Meta's words, and says nothing of what it doesn't know (Baileys' words included, since Evolution API went)", () => {
     expect(messageStatusFromProvider("accepted")).toBe("accepted");
     expect(messageStatusFromProvider("held_for_quality_assessment")).toBe("accepted");
     expect(messageStatusFromProvider("sent")).toBe("sent");
     expect(messageStatusFromProvider("read")).toBe("read");
-    expect(messageStatusFromProvider("PENDING")).toBe("accepted");
-    expect(messageStatusFromProvider("SERVER_ACK")).toBe("sent");
-    expect(messageStatusFromProvider("DELIVERY_ACK")).toBe("delivered");
     expect(messageStatusFromProvider("READ")).toBe("read");
-    expect(messageStatusFromProvider("PLAYED")).toBe("read");
-    expect(messageStatusFromProvider("ERROR")).toBe("failed");
+    for (const baileys of ["PENDING", "SERVER_ACK", "DELIVERY_ACK", "PLAYED", "ERROR"]) expect(messageStatusFromProvider(baileys), baileys).toBeNull();
     expect(messageStatusFromProvider("delivered")).toBe("delivered");
     expect(messageStatusFromProvider("failed")).toBe("failed");
     expect(messageStatusFromProvider("DELETED")).toBeNull();

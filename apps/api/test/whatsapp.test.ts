@@ -4,7 +4,6 @@ import { systemDb, type Store } from "@app/db";
 import { dispatchCampaign, processWebhookEvent, queueMessage, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
 import { normalizePhone } from "@app/shared";
 import { cloudApiFake, META_APP_SECRET, META_ENV, META_ENV_OFF, type CloudFake } from "../../../test-support/cloudApiFake.js";
-import { EVOLUTION_ENV, EVOLUTION_KEY, EVOLUTION_URL, evolutionFake, type EvolutionFake } from "../../../test-support/evolutionFake.js";
 import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -16,13 +15,11 @@ import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn
  * attachments, uncertain sends, retries, Meta's limits, an access Meta ended), customers' STOP and
  * START, automations and campaigns with templates Meta approved, tenant isolation, who may do what,
  * disconnecting, and phones linked with a QR code retired without anything lost. Meta's Graph API is
- * test-support/cloudApiFake.ts; Evolution API (only for what is left of QR linking) is
- * test-support/evolutionFake.ts.
+ * test-support/cloudApiFake.ts.
  */
 
 let ctx: TestCtx;
 let meta: CloudFake;
-let evo: EvolutionFake;
 const TEST_PHONE = "+61400111222";
 const CUSTOMER = "+61412345678";
 
@@ -30,15 +27,14 @@ beforeAll(async () => {
   ctx = await setup();
 });
 afterAll(async () => {
-  ctx.setEnv({ ...META_ENV_OFF, EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "" });
+  ctx.setEnv(META_ENV_OFF);
   await teardown(ctx);
 });
 beforeEach(async () => {
   await clean(ctx);
   meta = cloudApiFake();
-  evo = evolutionFake();
-  ctx.setFetch((input, init) => (String(input instanceof Request ? input.url : input).startsWith(EVOLUTION_URL) ? evo.fetch(input, init) : meta.fetch(input, init)));
-  ctx.setEnv({ ...META_ENV, ...EVOLUTION_ENV });
+  ctx.setFetch(meta.fetch);
+  ctx.setEnv(META_ENV);
 });
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
@@ -59,7 +55,7 @@ function ok<T = any>(res: { statusCode: number; body: string; json(): any }, sta
   return res.json();
 }
 
-/** Delivers a webhook (Meta's, or Evolution's for a QR-linked phone) as it is posted. */
+/** Delivers Meta's webhook as Meta posts it. */
 const deliver = (w: { url: string; headers: Record<string, string>; body: string }) => ctx.app.inject({ method: "POST", url: w.url, headers: w.headers, payload: w.body });
 
 /** Steps 1-2: Meta's window finished (the fake's signup), then the page hands its code to bizinsights. */
@@ -781,54 +777,39 @@ describe("disconnecting", () => {
 });
 
 describe("a phone linked with a QR code (retired 2026-10-28)", () => {
-  const INSTANCE = "bi_0123456789abcdef01234567";
+  /** A connection row from before 2026-10-28 that release 1's cleanup didn't reach (its instance went with Evolution API). */
   async function qrLinked(o: Owner) {
-    evo.instances.set(INSTANCE, { name: INSTANCE, id: "i-1", token: "qr-instance-token", integration: "WHATSAPP-BAILEYS", state: "open", qrCount: 0, webhook: { url: "", jwtKey: "qr-webhook-key", events: [] }, ownerJid: "61400000077@s.whatsapp.net", profileName: "Green Leaf", number: null });
     return systemDb.wappConnection.create({
-      data: { workspaceId: o.ws, storeId: o.store.id, provider: "qr", status: "connected", shard: "a", instanceName: INSTANCE, instanceTokenEnc: waEncrypt(o.store.id, "instance_token", "qr-instance-token"), webhookKeyEnc: waEncrypt(o.store.id, "webhook_key", "qr-webhook-key"), phoneMasked: "+61 ••• ••• 077", connectedAt: new Date() },
+      data: { workspaceId: o.ws, storeId: o.store.id, provider: "qr", status: "connected", shard: "a", instanceName: "bi_0123456789abcdef01234567", instanceTokenEnc: waEncrypt(o.store.id, "instance_token", "qr-instance-token"), webhookKeyEnc: waEncrypt(o.store.id, "webhook_key", "qr-webhook-key"), phoneMasked: "+61 ••• ••• 077", connectedAt: new Date() },
     });
   }
   const queueFor = (o: Owner, conn: { id: string; provider: string }, key: string) =>
     queueMessage(ctx.deps, { store: o.store, conn, source: "manual", category: "transactional", phone: normalizePhone(CUSTOMER, null)!, payload: { text: "Your order is ready." }, idempotencyKey: key });
 
-  it("is shown retired at once, sends nothing, still honours a customer's STOP, and is retired for good when the store connects Meta", async () => {
+  it("is shown retired, sends nothing, has no webhook any more, and is retired for good when the store connects Meta", async () => {
     const o = await owner();
     const qr = await qrLinked(o);
     await configure(o);
     const ov = ok(await o.call("GET"));
     expect(ov.connection).toMatchObject({ provider: "qr", status: "disconnected", statusLabel: "Retired", reasonCode: "qr_linking_retired", reason: expect.stringMatching(/no longer links a WhatsApp phone with a QR code/) });
     expect(ov.setup.current).toBe("connect");
-    expect(ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "reply", text: "Hi", idempotencyKey: "qr-00000001" }), 409).error).toBe("not_connected");
+    expect(ok(await o.call("POST", "/connection", { method: "qr" }), 410).error).toBe("qr_linking_retired");
 
-    // A message queued for the phone before this release: cancelled with the reason, never sent.
+    // A message queued for the phone: cancelled with the reason, never sent.
     const { message: queued } = await queueFor(o, qr, "qr-queued-1");
     expect(await drain()).toEqual(["cancelled"]);
     expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: "cancelled", reason: "qr_linking_retired", payloadEnc: null });
-    expect(evo.sends).toEqual([]);
     expect(meta.sends).toEqual([]);
+    // Evolution API's webhook went with the service.
+    expect((await ctx.app.inject({ method: "POST", url: "/webhooks/whatsapp/evolution/bi_0123456789abcdef01234567", headers: { "content-type": "application/json" }, payload: "{}" })).statusCode).toBe(404);
 
-    // Until its instance is gone, a customer's STOP to the phone still goes on the store's list; its connection events change nothing.
-    const stop = evo.webhook(INSTANCE, "messages.upsert", { key: { remoteJid: "61411000000@s.whatsapp.net", fromMe: false, id: "QRSTOP1" }, message: { conversation: "STOP" }, messageType: "conversation", messageTimestamp: Math.floor(Date.now() / 1000) });
-    expect(ok(await deliver(stop))).toEqual({ ok: true, outcome: "stored" });
-    expect(await drain()).toEqual(["stop_unknown"]);
-    expect(await systemDb.wappSuppression.count({ where: { storeId: o.store.id, reason: "stop_reply" } })).toBe(1);
-    expect(ok(await deliver(evo.webhook(INSTANCE, "connection.update", { state: "close", statusReason: 401 })))).toEqual({ ok: true, outcome: "ignored" });
-    expect((await deliver({ ...stop, headers: { "content-type": "application/json" } })).statusCode).toBe(401);
-
-    // Connecting Meta retires the link: waiting messages cancelled with the reason, the phone logged out and its instance deleted.
+    // Connecting Meta retires the link: waiting messages cancelled with the reason, the instance forgotten.
     const { message: waiting } = await queueFor(o, qr, "qr-queued-2");
     ctx.deps.queues.clear();
     await connect(o);
     expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: "cancelled", reason: "qr_linking_retired" });
-    expect(evo.instances.has(INSTANCE)).toBe(false);
-    expect(evo.calls.slice(-2).map((c) => [c.method, c.path, c.apikey === EVOLUTION_KEY])).toEqual([
-      ["DELETE", `/instance/logout/${INSTANCE}`, true],
-      ["DELETE", `/instance/delete/${INSTANCE}`, true],
-    ]);
     expect(await systemDb.auditLog.count({ where: { workspaceId: o.ws, action: "whatsapp.qr_linking_retired" } })).toBe(1);
     expect(await systemDb.alert.findFirstOrThrow({ where: { storeId: o.store.id, code: "whatsapp_qr_retired" } })).toMatchObject({ resolvedAt: expect.any(Date) });
-    expect(ok(await o.call("GET")).connection).toMatchObject({ provider: "cloud_api", status: "connected" });
-    // The old instance's webhooks no longer get in.
-    expect((await deliver(stop)).statusCode).toBe(401);
+    expect(await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } })).toMatchObject({ provider: "cloud_api", status: "connected", instanceName: null, webhookKeyEnc: null });
   });
 });

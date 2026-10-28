@@ -26,7 +26,7 @@ const credential = (provider: string, idSetting: string, secretSetting: string, 
 /** What the shipped settings answer today, without META_APP_SECRET (core configReport.ts's shape). */
 const REPORT = {
   ads: { configured: { meta: false, google: false, adsense: false }, restricted: { meta: false, google: false, adsense: false } },
-  whatsapp: { evolution: true, evolutionNeeds: [], embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false },
+  whatsapp: { embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false },
   email: { google: false, microsoft: false, resend: true },
   auth: { cognito: true, google: false, emailOtp: false, loginCode: true },
   credentials: [
@@ -63,17 +63,13 @@ describe("the configuration check", () => {
         "Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --env production --set META_APP_SECRET, then run Deploy to AWS (Actions, Run workflow, on main) so the functions read it (docs/aws-deployment.md).",
     ]);
     expect(detail).toBe(
-      "ads none (restricted none); WhatsApp service on, Cloud API off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET); email resend; Google sign-in off; emailed sign-in code on; missing a secret: Meta Ads",
+      "ads none (restricted none); WhatsApp off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET); email resend; Google sign-in off; emailed sign-in code on; missing a secret: Meta Ads",
     );
   });
 
-  it("says whether the functions reach the WhatsApp service, and warns when they don't", () => {
-    const reached = { ...REPORT, whatsapp: { ...REPORT.whatsapp, service: { reachable: true, version: "2.3.7" } } };
-    expect(configCheck(answers(ok(reached)).invoke, "production").detail).toContain("WhatsApp service on (Evolution 2.3.7 answers), Cloud API off");
-    const lost = { ...REPORT, whatsapp: { ...REPORT.whatsapp, service: { reachable: false, version: null } } };
-    const { detail, warnings } = configCheck(answers(ok(lost)).invoke, "production");
-    expect(detail).toContain("WhatsApp service on but NOT reachable");
-    expect(warnings.at(-1)).toContain("::warning title=WhatsApp's service doesn't answer::The functions can't reach Evolution API (stack InsightsWhatsapp-production)");
+  it("says WhatsApp is on once Meta's settings are all there", () => {
+    const on = { ...REPORT, whatsapp: { embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true } };
+    expect(configCheck(answers(ok(on)).invoke, "production").detail).toContain("; WhatsApp on;");
   });
 
   it("sends another environment's owner to that environment's secret and deploy, never production's", () => {

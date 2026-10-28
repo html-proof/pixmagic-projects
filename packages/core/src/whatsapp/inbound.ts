@@ -1,6 +1,5 @@
 /**
- * Customers' messages to the store's number (Meta's webhook; until the last QR-linked phone is
- * gone, also Evolution's MESSAGES_UPSERT), never the store's own.
+ * Customers' messages to the store's number (Meta's webhook), never the store's own.
  *
  * Anyone may write to a business number, so bizinsights keeps only what concerns the store's
  * customers:

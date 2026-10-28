@@ -20,30 +20,27 @@ import {
 } from "@app/core";
 import { normalizePhone } from "@app/shared";
 import { cloudApiFake, META_ENV, META_ENV_OFF, type CloudFake } from "../../../test-support/cloudApiFake.js";
-import { EVOLUTION_ENV, EVOLUTION_KEY, EVOLUTION_URL, evolutionFake, type EvolutionFake, type FakeInstance } from "../../../test-support/evolutionFake.js";
 import type { WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
 
 /**
  * WhatsApp Automation inside the worker: the whatsapp queue's jobs through consume (a send never
- * throws for Meta's answer; an event that keeps failing is set aside), the sweep (sends that never
- * finished, connections checked with Meta, tokens renewed, two days down, retention), and the one-off
- * retirement of QR linking (retireQr.ts). Meta's Graph API is test-support/cloudApiFake.ts; Evolution
- * API, only for what is left of QR linking, is test-support/evolutionFake.ts.
+ * throws for Meta's answer), the sweep (sends that never finished, connections checked with Meta,
+ * tokens renewed, two days down, retention), and what is left of QR linking once Evolution API is
+ * gone (retireQr.ts). Meta's Graph API is test-support/cloudApiFake.ts.
  */
 
 const queues = memoryQueues();
 const coord = memoryCoord();
 let meta: CloudFake;
-let evo: EvolutionFake;
 let deps: WorkerDeps;
 
 beforeAll(() => {
-  for (const [k, v] of Object.entries({ ...META_ENV, ...EVOLUTION_ENV })) process.env[k] = v;
+  for (const [k, v] of Object.entries(META_ENV)) process.env[k] = v;
   resetEnvCache();
 });
 afterAll(async () => {
-  for (const [k, v] of Object.entries({ ...META_ENV_OFF, EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "" })) process.env[k] = v;
+  for (const [k, v] of Object.entries(META_ENV_OFF)) process.env[k] = v;
   resetEnvCache();
   await disconnectDb();
 });
@@ -52,9 +49,7 @@ beforeEach(async () => {
   queues.clear();
   coord.clear();
   meta = cloudApiFake();
-  evo = evolutionFake();
-  const fetchImpl = (input: string | URL | Request, init?: RequestInit) => (String(input instanceof Request ? input.url : input).startsWith(EVOLUTION_URL) ? evo.fetch(input, init) : meta.fetch(input, init));
-  deps = { coord, queues, payloads: memoryBlobs(), mailer: memoryMailer(), fetchImpl };
+  deps = { coord, queues, payloads: memoryBlobs(), mailer: memoryMailer(), fetchImpl: meta.fetch };
 });
 
 async function newStore() {
@@ -140,18 +135,6 @@ describe("the whatsapp queue", () => {
     expect(meta.sends).toHaveLength(0);
   });
 
-  it("sets aside a stored webhook event that keeps failing, on its last try", async () => {
-    const o = await connectedStore();
-    const ev = await systemDb.wappWebhookEvent.create({
-      data: { workspaceId: o.store.workspaceId, storeId: o.store.id, connectionId: o.conn.id, event: "MESSAGES_UPDATE", bodyHash: "h1", bodyEnc: "not-a-ciphertext", status: "pending" },
-    });
-    const first = await deliver({ kind: "wapp_event", eventId: ev.id });
-    expect(first.acked).toBe(false);
-    expect(first.retried).not.toBeNull();
-    expect((await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).toBe("pending");
-    await deliver({ kind: "wapp_event", eventId: ev.id }, 6);
-    expect(await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).toMatchObject({ status: "dead", bodyEnc: null });
-  });
 });
 
 describe("the WhatsApp sweep", () => {
@@ -211,28 +194,25 @@ describe("the WhatsApp sweep", () => {
     expect(await systemDb.alert.count({ where: { storeId: o.store.id, code: "whatsapp_disconnected" } })).toBe(1);
   });
 
-  it("drops message texts after the store's retention, and gives up on webhook events after their tries", async () => {
+  it("drops message texts after the store's retention, and stored Evolution events once set aside", async () => {
     const o = await connectedStore();
     const old = await waiting(o, "k-old");
     await systemDb.$executeRaw`UPDATE wapp_messages SET created_at = (now() at time zone 'utc') - interval '40 days', status = 'delivered', final_at = (now() at time zone 'utc') - interval '40 days' WHERE id = ${old.id}`;
     const fresh = await waiting(o, "k-new");
     const ev = await systemDb.wappWebhookEvent.create({
-      data: { workspaceId: o.store.workspaceId, storeId: o.store.id, connectionId: o.conn.id, event: "MESSAGES_UPSERT", bodyHash: "h2", bodyEnc: waEncrypt(o.store.id, "webhook", "{}"), status: "pending", attempts: 5, receivedAt: new Date(Date.now() - 3600_000) },
+      data: { workspaceId: o.store.workspaceId, storeId: o.store.id, connectionId: o.conn.id, event: "MESSAGES_UPSERT", bodyHash: "h2", bodyEnc: waEncrypt(o.store.id, "webhook", "{}"), status: "pending", receivedAt: new Date(Date.now() - 3600_000) },
     });
     await sweepWhatsapp(deps);
     expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({ previewEnc: null, payloadEnc: null });
     expect((await systemDb.wappMessage.findUniqueOrThrow({ where: { id: fresh.id } })).previewEnc).not.toBeNull();
-    expect(await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).toMatchObject({ status: "dead", bodyEnc: null });
+    expect(await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).toMatchObject({ status: "ignored", bodyEnc: null });
   });
 });
 
-describe("retiring QR linking (release 1 of removing Evolution)", () => {
-  const instance = (name: string, integration = "WHATSAPP-BAILEYS", state: FakeInstance["state"] = "open"): FakeInstance => ({ name, id: `id-${name}`, token: `token-${name}`, integration, state, qrCount: 0, webhook: null, ownerJid: null, profileName: null, number: null });
-
-  /** A store whose phone was linked with a QR code before 2026-10-28, with what it had going. */
+describe("what is left of QR linking (release 2 of removing Evolution)", () => {
+  /** A store whose phone was linked with a QR code before 2026-10-28, which release 1's cleanup didn't reach. */
   async function qrStore(name: string) {
     const { store, user } = await newStore();
-    evo.instances.set(name, instance(name));
     const conn = await systemDb.wappConnection.create({
       data: { workspaceId: store.workspaceId, storeId: store.id, provider: "qr", status: "connected", shard: "a", instanceName: name, instanceTokenEnc: waEncrypt(store.id, "instance_token", `token-${name}`), webhookKeyEnc: waEncrypt(store.id, "webhook_key", "k"), connectedAt: new Date() },
     });
@@ -243,63 +223,35 @@ describe("retiring QR linking (release 1 of removing Evolution)", () => {
     return { store, user, conn, message, automation, campaign };
   }
 
-  it("retires each QR-linked phone once: logged out and deleted at Evolution, disconnected with the reason, its queue cancelled; a second run changes nothing", async () => {
+  it("retires a QR-linked phone release 1 didn't reach, forgets every instance, sets stored events aside; a second run changes nothing", async () => {
     const a = await qrStore("bi_aaaaaaaaaaaaaaaaaaaaaaaa");
-    // A Cloud API number connected before 2026-10-28 kept an Evolution instance holding its token.
     const b = await connectedStore();
-    evo.instances.set("bi_bbbbbbbbbbbbbbbbbbbbbbbb", instance("bi_bbbbbbbbbbbbbbbbbbbbbbbb", "WHATSAPP-BUSINESS"));
-    await systemDb.wappConnection.update({ where: { id: b.conn.id }, data: { instanceName: "bi_bbbbbbbbbbbbbbbbbbbbbbbb", instanceId: "id-b", webhookKeyEnc: waEncrypt(b.store.id, "webhook_key", "k"), shard: "a" } });
-    // An instance bizinsights made that no connection holds, and someone else's on the same server.
-    evo.instances.set("bi_cccccccccccccccccccccccc", instance("bi_cccccccccccccccccccccccc", "WHATSAPP-BAILEYS", "close"));
-    evo.instances.set("someone-else", instance("someone-else"));
+    await systemDb.wappConnection.update({ where: { id: b.conn.id }, data: { instanceName: "bi_bbbbbbbbbbbbbbbbbbbbbbbb", instanceId: "id-b", webhookKeyEnc: waEncrypt(b.store.id, "webhook_key", "k") } });
+    const ev = await systemDb.wappWebhookEvent.create({ data: { workspaceId: a.store.workspaceId, storeId: a.store.id, connectionId: a.conn.id, event: "MESSAGES_UPSERT", bodyHash: "h-qr", bodyEnc: waEncrypt(a.store.id, "webhook", "{}"), status: "pending" } });
 
-    expect(await retireQrLinking(deps)).toEqual({ retired: 1, instancesDeleted: 2, orphansDeleted: 1, left: 0 });
-    expect([...evo.instances.keys()]).toEqual(["someone-else"]);
-    expect(evo.calls.filter((c) => c.method === "DELETE").map((c) => [c.path, c.apikey === EVOLUTION_KEY])).toEqual([
-      ["/instance/logout/bi_aaaaaaaaaaaaaaaaaaaaaaaa", true],
-      ["/instance/delete/bi_aaaaaaaaaaaaaaaaaaaaaaaa", true],
-      // A Cloud API instance is only deleted: the number is Meta's, not a linked device.
-      ["/instance/delete/bi_bbbbbbbbbbbbbbbbbbbbbbbb", true],
-      ["/instance/delete/bi_cccccccccccccccccccccccc", true],
-    ]);
-    expect(await systemDb.wappConnection.findUniqueOrThrow({ where: { id: a.conn.id } })).toMatchObject({ provider: "qr", status: "disconnected", statusReason: "qr_linking_retired", instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null });
-    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: a.message.id } })).toMatchObject({ status: "cancelled", reason: "qr_linking_retired", payloadEnc: null, providerMessageId: null });
+    expect(await retireQrLinking(deps)).toEqual({ retired: 1, forgotten: 2, eventsSetAside: 1 });
+    expect(await systemDb.wappConnection.findUniqueOrThrow({ where: { id: a.conn.id } })).toMatchObject({ status: "disconnected", statusReason: "qr_linking_retired", instanceName: null, instanceTokenEnc: null, webhookKeyEnc: null });
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: a.message.id } })).toMatchObject({ status: "cancelled", reason: "qr_linking_retired" });
     expect(await systemDb.wappAutomation.findUniqueOrThrow({ where: { id: a.automation.id } })).toMatchObject({ status: "paused" });
     expect(await systemDb.wappCampaign.findUniqueOrThrow({ where: { id: a.campaign.id } })).toMatchObject({ status: "cancelled", cancelReason: "qr_linking_retired" });
     expect(await systemDb.alert.count({ where: { storeId: a.store.id, code: "whatsapp_qr_retired", resolvedAt: null } })).toBe(1);
-    const audit = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: a.store.workspaceId, action: "whatsapp.qr_linking_retired" } });
-    expect(audit.metadata).toMatchObject({ cancelledMessages: 1, pausedAutomations: 1, cancelledCampaigns: 1 });
-    // The Cloud API number keeps its token and goes on sending, through Meta.
-    const bRow = await systemDb.wappConnection.findUniqueOrThrow({ where: { id: b.conn.id } });
-    expect(bRow).toMatchObject({ status: "connected", instanceName: null, webhookKeyEnc: null, instanceTokenEnc: b.conn.instanceTokenEnc });
-    const m = await waiting(b, "k-after");
-    expect(await sendQueuedMessage(deps, m.id)).toBe("accepted");
+    expect(await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).toMatchObject({ status: "ignored", bodyEnc: null, lastError: expect.stringMatching(/Evolution API was removed/) });
+    // The Cloud API number keeps its token and sends on.
+    expect(await systemDb.wappConnection.findUniqueOrThrow({ where: { id: b.conn.id } })).toMatchObject({ status: "connected", instanceName: null, instanceTokenEnc: b.conn.instanceTokenEnc });
+    expect(await sendQueuedMessage(deps, (await waiting(b, "k-after")).id)).toBe("accepted");
 
-    // Once more: nothing left, nothing changes, Evolution isn't asked again.
-    const calls = evo.calls.length;
-    expect(await retireQrLinking(deps)).toEqual({ retired: 0, instancesDeleted: 0, orphansDeleted: 0, left: 0 });
-    expect(evo.calls.length).toBe(calls);
-    expect(await systemDb.auditLog.count({ where: { action: "whatsapp.qr_linking_retired" } })).toBe(1);
-    expect(await systemDb.alert.count({ where: { code: "whatsapp_qr_retired" } })).toBe(1);
-  });
-
-  it("retires the connection at once when Evolution is down, and deletes its instance on a later tick", async () => {
-    const a = await qrStore("bi_dddddddddddddddddddddddd");
-    evo.down = "refused";
-    expect(await retireQrLinking(deps)).toMatchObject({ retired: 1, instancesDeleted: 0, left: 1 });
-    expect(await systemDb.wappConnection.findUniqueOrThrow({ where: { id: a.conn.id } })).toMatchObject({ status: "disconnected", statusReason: "qr_linking_retired", instanceName: "bi_dddddddddddddddddddddddd" });
-    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: a.message.id } })).toMatchObject({ status: "cancelled", reason: "qr_linking_retired" });
-    evo.down = null;
-    expect(await retireQrLinking(deps)).toEqual({ retired: 0, instancesDeleted: 1, orphansDeleted: 0, left: 0 });
-    expect(evo.instances.has("bi_dddddddddddddddddddddddd")).toBe(false);
+    expect(await retireQrLinking(deps)).toEqual({ retired: 0, forgotten: 0, eventsSetAside: 0 });
     expect(await systemDb.auditLog.count({ where: { action: "whatsapp.qr_linking_retired" } })).toBe(1);
   });
 
-  it("runs from the sweep, under its own lock", async () => {
-    await qrStore("bi_eeeeeeeeeeeeeeeeeeeeeeee");
+  it("sets a stored Evolution event aside when its job comes, and runs from the sweep under its own lock", async () => {
+    const a = await qrStore("bi_cccccccccccccccccccccccc");
+    const ev = await systemDb.wappWebhookEvent.create({ data: { workspaceId: a.store.workspaceId, storeId: a.store.id, connectionId: a.conn.id, event: "MESSAGES_UPDATE", bodyHash: "h-job", bodyEnc: "x", status: "pending" } });
+    expect(await deliver({ kind: "wapp_event", eventId: ev.id })).toEqual({ acked: true, retried: null });
+    expect(await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).toMatchObject({ status: "ignored", bodyEnc: null });
     await coord.acquire("whatsapp:retire-qr", 60_000);
     expect(await retireQrLinking(deps)).toBeNull();
     await coord.release("whatsapp:retire-qr");
-    expect(await sweepWhatsapp(deps)).toMatchObject({ qrRetired: 1, qrInstancesLeft: 0 });
+    expect(await sweepWhatsapp(deps)).toMatchObject({ qrRetired: 1, storedEventsSetAside: 0 });
   });
 });

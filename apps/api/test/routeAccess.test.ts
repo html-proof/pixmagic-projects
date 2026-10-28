@@ -69,8 +69,6 @@ const PUBLIC = new Set([
   "POST /webhooks/meta/data-deletion",
   "GET /webhooks/whatsapp",
   "POST /webhooks/whatsapp",
-  // Evolution API's webhook: a JWT made from that connection's own key (core whatsapp/webhook.ts).
-  "POST /webhooks/whatsapp/evolution/:instance",
   "POST /pixel/:key",
   "OPTIONS /pixel/:key",
   "POST /v1/events",

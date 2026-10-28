@@ -30,7 +30,7 @@ import { businessToken, CloudApiError, cloudFailure, metaApp, metaErrorInfo, typ
 import { markReconnect, reconnectReasonOf } from "./connection.js";
 import { applyInbound } from "./inbound.js";
 import { applyMessageStatus } from "./messages.js";
-import { dropEvolutionInstance, retireQrConnection } from "./retireQr.js";
+import { retireQrConnection } from "./retireQr.js";
 
 /** What the page needs to open Meta's window (all public). */
 export const metaSignupConfig = () => {
@@ -142,11 +142,9 @@ export async function connectCloudApi(deps: Pick<WaDeps, "fetchImpl" | "coord" |
     throw new WhatsappError("Meta refused to set up the number for sending. Check it in WhatsApp Manager, then connect again.", 502, "meta_setup_failed");
   }
 
-  // What the store had before goes first: a phone linked with a QR code is retired (its waiting
-  // messages cancelled with that reason, never sent through the new number); an Evolution API
-  // instance left from an earlier Cloud API connection is deleted.
+  // A phone the store had linked with a QR code is retired first: its waiting messages are cancelled
+  // with that reason, never sent through the new number.
   if (existing?.provider === WA_RETIRED_PROVIDER) await retireQrConnection(deps, existing);
-  else if (existing?.instanceName) await dropEvolutionInstance(existing, deps);
 
   const now = new Date();
   const e164 = normalizePhone(phone.display_phone_number ?? null, null)?.e164 ?? null;

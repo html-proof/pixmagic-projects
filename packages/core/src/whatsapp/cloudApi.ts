@@ -194,7 +194,7 @@ export function cloudFailure(f: GraphFailure, send: boolean): CloudApiError {
 /** Each call gives up after this long (an upload after twice that). */
 const CALL_TIMEOUT_MS = 15_000;
 
-/** The business's Meta token, decrypted (server side only). The column keeps the name it had when Evolution API held the token. */
+/** The business's Meta token, decrypted (server side only). The column keeps the name it had when Evolution API held tokens. */
 export function businessToken(c: Pick<WappConnection, "storeId" | "instanceTokenEnc">): string {
   if (!c.instanceTokenEnc) throw new CloudApiError("auth", 0, null, "bizinsights no longer holds Meta's access for this number. Connect WhatsApp again.");
   return waDecrypt(c.storeId, "instance_token", c.instanceTokenEnc);

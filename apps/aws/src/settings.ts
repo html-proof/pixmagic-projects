@@ -119,8 +119,7 @@ export const APP_SETTINGS = {
   // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it
   // shows. Offered to members who may manage integrations; empty hides the button.
   "GOOGLE_ADS_DEMO_ENABLED": "1",
-  // WhatsApp Automation (docs/whatsapp.md) runs on bizinsights' own Evolution API service (its address
-  // and key come from the CDK app and Secrets Manager, not from here). Its Cloud API option connects
+  // WhatsApp Automation (docs/whatsapp.md) runs on Meta's WhatsApp Business Platform only, connected
   // through Meta's Embedded Signup: the Meta app id (empty: META_APP_ID is used), the Facebook Login
   // for Business configuration id of its WhatsApp Embedded Signup v4 variation (WHATSAPP_CONFIG_ID),
   // and the secrets WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Meta

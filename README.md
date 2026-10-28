@@ -4,7 +4,7 @@ A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merch
 
 Merchants can also connect Google Ads, Google AdSense and Meta Ads, read-only, to see their advertising next to their sales ([docs/ads-setup.md](docs/ads-setup.md)).
 
-Runs on **AWS** at https://bizinsights.io (DNS at Cloudflare; pages asked for on CloudFront's own address or on www redirect there): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB and S3, plus one ECS Fargate service for WhatsApp (Evolution API); email goes through Resend, with SES as the fallback. Every merge to `main` deploys it ([docs/aws-deployment.md](docs/aws-deployment.md)). Locally the same code runs as one Node process.
+Runs on **AWS** at https://bizinsights.io (DNS at Cloudflare; pages asked for on CloudFront's own address or on www redirect there): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB and S3; WhatsApp goes through Meta's WhatsApp Business Platform; email goes through Resend, with SES as the fallback. Every merge to `main` deploys it ([docs/aws-deployment.md](docs/aws-deployment.md)). Locally the same code runs as one Node process.
 
 ```
 apps/aws       The host: Lambda entry, AWS adapters (SQS, DynamoDB, S3, SES), app settings, and the local server

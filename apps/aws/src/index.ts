@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_GEO_HEADER, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
-import { configReport, defaultShard, evolutionStatus, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
+import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { productCheck, shopifyCheckReport } from "@app/core/reports";
 import { systemDb } from "@app/db";
 import { apiDeps, originCheck } from "./app.js";
@@ -13,7 +13,7 @@ import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { costReportDeps, sendCostReport } from "./costReport.js";
 import { dynamoCoord } from "./dynamoCoord.js";
-import { ensureEvolutionDb, evolutionDbUrl, pruneEvolutionData } from "./evolutionDb.js";
+import { dropEvolutionDb } from "./evolutionDb.js";
 import { migrate, tableCounts } from "./migrate.js";
 import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { apiPath } from "./paths.js";
@@ -188,7 +188,7 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "product-check" | "cost-report" | "config" | "evolution-db";
+  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "product-check" | "cost-report" | "config" | "evolution-db-drop";
   /** verify: one store (its myshopify domain) instead of every connected one; shopify-check: the store. */
   shop?: string;
   /** verify: how many finished days back (7 by default). */
@@ -217,11 +217,6 @@ export const handler = async (event: unknown, context: unknown) => {
     return withLogContext({ cron }, async () => {
       try {
         const result = await runScheduled(cron, deps);
-        // Nightly: what the WhatsApp service (Evolution API) keeps of sent messages goes after 7 days.
-        if (cron === "15 3 * * *") {
-          const url = evolutionDbUrl(process.env, "owner");
-          if (url) (result as Record<string, unknown>).evolutionPruned = await pruneEvolutionData(url, 7).catch((err: unknown) => (logger.error({ err }, "evolution data prune failed; the next night tries again"), null));
-        }
         logger.info({ cron, ...result }, "scheduled run finished");
         return result;
       } catch (err) {
@@ -292,19 +287,15 @@ export const handler = async (event: unknown, context: unknown) => {
     // What this deployment has set up (core configReport.ts): booleans and setting names, never a
     // value. The deploy's smoke test warns about each provider whose secret is missing.
     await ensureSecrets();
-    const report = configReport();
-    // The WhatsApp service is private: only from in here can the deploy see that the functions reach it.
-    if (report.whatsapp.evolution) report.whatsapp.service = await evolutionStatus(defaultShard(), fetch);
-    return report;
+    return configReport();
   }
-  if (action === "evolution-db") {
-    // The WhatsApp service's own database and role (evolutionDb.ts): CloudFormation invokes this before
-    // the service starts (infra/cdk/lib/whatsapp-stack.ts). Idempotent; the password comes from its secret.
+  if (action === "evolution-db-drop") {
+    // Removing Evolution API, release 2 (evolutionDb.ts): its database and role go. CloudFormation
+    // invokes this once, during the deploy that removes the service (infra/cdk/lib/whatsapp-stack.ts). Idempotent.
     await ensureSecrets();
-    const e = process.env;
-    if (!e.DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
-    const result = await ensureEvolutionDb({ databaseUrl: e.DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
-    logger.info(result, "evolution database ready");
+    if (!process.env.DATABASE_URL) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
+    const result = await dropEvolutionDb({ databaseUrl: process.env.DATABASE_URL });
+    logger.info(result, "evolution database dropped");
     return result;
   }
   if (action === "migrate" || action === "counts") {

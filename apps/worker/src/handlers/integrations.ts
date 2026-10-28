@@ -37,10 +37,9 @@ export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
 }
 
 /**
- * WhatsApp Automation (the whatsapp queue): send one message, make a campaign's next batch, or apply
- * one of Evolution API's stored webhook events. The rows carry the state: a send never throws for the
- * provider's answer; an event that fails throws, so the queue brings it back (and it is set aside
- * after enough tries, here or by the sweep).
+ * WhatsApp Automation (the whatsapp queue): send one message, or make a campaign's next batch. The
+ * rows carry the state: a send never throws for Meta's answer. A `wapp_event` job (an Evolution API
+ * event stored before release 2 removed the service) only sets that event aside.
  */
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
   if (job.kind === "wapp_send") return { outcome: await sendQueuedMessage(deps, job.messageId) };

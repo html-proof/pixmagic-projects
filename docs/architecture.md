@@ -105,8 +105,7 @@ Where a new piece of code goes:
 - What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, the WhatsApp webhooks)
   is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts` (`parseShopify`,
   `parseShopifyList` for a page), `core/whatsapp/cloud.ts` (Meta's WhatsApp webhook) and
-  `core/whatsapp/cloudApi.ts` (Meta's answers to WhatsApp's calls); until release 2 removes it,
-  `core/whatsapp/webhook.ts` for what a QR-linked phone's Evolution API instance still posts.
+  `core/whatsapp/cloudApi.ts` (Meta's answers to WhatsApp's calls).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
   meet the same payload again. The WhatsApp and email automations read an order or checkout only
   once they are about to act on it, so a store that doesn't use them logs nothing about it. The

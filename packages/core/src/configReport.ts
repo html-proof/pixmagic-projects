@@ -33,18 +33,12 @@ export interface ConfigReport {
   ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean>; nango: Record<AdProvider, boolean> };
   /**
    * WhatsApp Automation: connecting through Meta's WhatsApp Business Platform (Embedded Signup; the
-   * settings it still lacks, empty once it can be offered), the verify token of Meta's webhook, and
-   * bizinsights' Evolution API service, which is only retiring what is left of QR linking until
-   * release 2 removes it (docs/whatsapp.md, "Removing Evolution").
+   * settings it still lacks, empty once it can be offered), and the verify token of Meta's webhook.
    */
   whatsapp: {
-    evolution: boolean;
-    evolutionNeeds: string[];
     embeddedSignup: boolean;
     embeddedSignupNeeds: string[];
     webhookVerifyToken: boolean;
-    /** Whether the functions reach the service (the cron's "config" action asks it; absent elsewhere). */
-    service?: { reachable: boolean; version: string | null };
   };
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
@@ -143,11 +137,6 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
   ];
 }
 
-/** What bizinsights' Evolution API service still lacks here (empty: the QR cleanup can reach it). */
-export function evolutionNeeds(vars: Vars = process.env): string[] {
-  return [!vars.EVOLUTION_API_URL ? "EVOLUTION_API_URL" : null, !vars.EVOLUTION_API_KEY ? "EVOLUTION_API_KEY" : null].filter((n): n is string => n !== null);
-}
-
 /**
  * What connecting through Meta still lacks, by setting name: Meta's app (its own, or the Meta Ads
  * app's), the Embedded Signup configuration, that app's secret and the webhook verify token. Empty
@@ -174,8 +163,6 @@ export function configReport(): ConfigReport {
   return {
     ads: { configured: adsConfigured(), restricted: adsRestricted(), nango: nangoProviders() },
     whatsapp: {
-      evolution: evolutionNeeds().length === 0,
-      evolutionNeeds: evolutionNeeds(),
       embeddedSignup: embeddedSignupNeeds().length === 0,
       embeddedSignupNeeds: embeddedSignupNeeds(),
       webhookVerifyToken: !!e.WHATSAPP_WEBHOOK_VERIFY_TOKEN,

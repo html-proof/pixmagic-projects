@@ -28,8 +28,6 @@ const KEYS = [
   "WHATSAPP_APP_SECRET",
   "WHATSAPP_CONFIG_ID",
   "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
-  "EVOLUTION_API_URL",
-  "EVOLUTION_API_KEY",
   "EMAIL_GOOGLE_CLIENT_ID",
   "EMAIL_GOOGLE_CLIENT_SECRET",
   "EMAIL_MICROSOFT_CLIENT_ID",
@@ -86,8 +84,6 @@ const EVERYTHING = {
   WHATSAPP_APP_SECRET: "secret-whatsapp-8888",
   WHATSAPP_CONFIG_ID: "public-wa-config-9999",
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: "secret-verify-token-0000",
-  EVOLUTION_API_URL: "http://evolution-a.internal-test:8080",
-  EVOLUTION_API_KEY: "secret-evolution-4545454545",
   EMAIL_GOOGLE_CLIENT_ID: "public-gmail-1212.apps.googleusercontent.com",
   EMAIL_GOOGLE_CLIENT_SECRET: "GOCSPX-secret-gmail-3434",
   EMAIL_MICROSOFT_CLIENT_ID: "0f0f0f0f-1111-2222-3333-444444444444",
@@ -190,7 +186,7 @@ describe("the configuration report", () => {
     setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", COGNITO_EMAIL_OTP: "" });
     const r = configReport();
     expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: true, google: true, adsense: true } });
-    expect(r.whatsapp).toEqual({ evolution: true, evolutionNeeds: [], embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
+    expect(r.whatsapp).toEqual({ embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
     expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
     expect(r.halfConfigured).toEqual([]);
@@ -214,19 +210,6 @@ describe("the configuration report", () => {
     expect(r.ads.restricted).toEqual({ meta: false, google: false, adsense: false });
   });
 
-  it("names what linking a phone still lacks: Evolution API's address and key", () => {
-    for (const [vars, needs] of [
-      [{}, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"]],
-      [{ EVOLUTION_API_URL: "u" }, ["EVOLUTION_API_KEY"]],
-      [{ EVOLUTION_API_URL: "u", EVOLUTION_API_KEY: "k" }, []],
-    ] as Array<[Record<string, string>, string[]]>) {
-      setEnv(vars);
-      const r = configReport();
-      expect(r.whatsapp.evolutionNeeds, JSON.stringify(vars)).toEqual(needs);
-      expect(r.whatsapp.evolution).toBe(needs.length === 0);
-    }
-  });
-
   it("names what the Cloud API way still lacks, exactly when it is off", () => {
     const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" };
     const cases: Array<[Record<string, string>, string[]]> = [
@@ -237,8 +220,6 @@ describe("the configuration report", () => {
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m", ...ready }, ["WHATSAPP_APP_SECRET"]],
       [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
-      // Evolution API (only retiring QR linking now) isn't needed to connect.
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "" }, []],
     ];
     for (const [vars, needs] of cases) {
       setEnv(vars);

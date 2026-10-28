@@ -124,27 +124,20 @@ const STATUS_RANK: Partial<Record<WaMessageStatus, number>> = { queued: 0, sendi
 export const isFinalStatus = (s: string) => s === "read" || s === "failed" || s === "cancelled" || s === "skipped" || s === "received";
 
 /**
- * The provider's word for a message's state (Meta's accepted, sent, delivered, read, failed,
- * upper-cased; and, until the last QR-linked phone's reports are in, Baileys' PENDING, SERVER_ACK,
- * DELIVERY_ACK, PLAYED, ERROR) as a status, or null when it isn't one bizinsights knows (it is then
- * recorded but changes nothing).
+ * Meta's word for a message's state (accepted, sent, delivered, read, failed; upper-cased) as a
+ * status, or null when it isn't one bizinsights knows (it is then recorded but changes nothing).
  */
 export function messageStatusFromProvider(status: string | null | undefined): WaMessageStatus | null {
   switch ((status ?? "").toUpperCase()) {
     case "ACCEPTED":
     case "HELD_FOR_QUALITY_ASSESSMENT":
-    case "PENDING":
       return "accepted";
-    case "SERVER_ACK":
     case "SENT":
       return "sent";
-    case "DELIVERY_ACK":
     case "DELIVERED":
       return "delivered";
     case "READ":
-    case "PLAYED":
       return "read";
-    case "ERROR":
     case "FAILED":
       return "failed";
     default:

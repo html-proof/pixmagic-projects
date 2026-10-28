@@ -34,7 +34,7 @@ export const waQueue = (queues: Queues): Producer<WhatsappJob> => queues.whatsap
 
 /**
  * Alerts WhatsApp raises and resolves (worded in @app/shared/alerts). `loggedOut` and `provider` were
- * a QR-linked phone's and bizinsights' Evolution API service's: only ever resolved now.
+ * a QR-linked phone's and bizinsights' former Evolution API service's: only ever resolved now.
  */
 export const WA_ALERTS = {
   reconnect: "whatsapp_reconnect",
@@ -53,8 +53,9 @@ export const WA_MAX_QUEUE_DELAY_S = 900;
 
 /**
  * `instance_token`: the business's Meta token (Evolution API instances' own keys before 2026-10-28,
- * hence the name, which the existing ciphertexts are bound to); `webhook_key`: a QR-linked
- * instance's webhook key, until the instance is deleted.
+ * hence the name, which the existing ciphertexts are bound to); `webhook_key` and `webhook`: a former
+ * QR-linked instance's webhook key and stored event bodies, kept readable for key rotation until the
+ * old columns go.
  */
 export type WaSecretKind = "phone" | "name" | "payload" | "preview" | "instance_token" | "webhook_key" | "linked_phone" | "test_phone" | "webhook";
 

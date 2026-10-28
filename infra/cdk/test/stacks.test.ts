@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -317,8 +316,6 @@ describe("the app stack", () => {
     // Bursts of automated messages refused by SMS, email or WhatsApp providers (the Automations hub).
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-messaging-send-failures", Threshold: 25, EvaluationPeriods: 2 });
     t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '?"sms send refused" ?"email send failed" ?"whatsapp send refused by the provider"' });
-    // The functions can't reach WhatsApp's service.
-    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-whatsapp-service-unreachable" });
   });
 
   it("tells the alarm topic about the database's events", () => {
@@ -1159,9 +1156,11 @@ describe("config", () => {
   });
 });
 
-describe("the WhatsApp stack (Evolution API)", () => {
+describe("the WhatsApp stack (what is left of Evolution API, release 2)", () => {
   let w: Template;
   let a: Template;
+  let d: Template;
+  let wJson: { Resources: Record<string, { Type: string; Properties?: Json }> };
   beforeAll(async () => {
     const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
     const app = new App();
@@ -1170,133 +1169,43 @@ describe("the WhatsApp stack (Evolution API)", () => {
     const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
     const data = new DataStack(app, "D", cfg, { env });
     const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
-    w = Template.fromStack(new WhatsappStack(app, "W", cfg, data, { env }));
+    const stack = new WhatsappStack(app, "W", cfg, { env });
+    w = Template.fromStack(stack);
     a = Template.fromStack(appStack);
+    d = Template.fromStack(data);
+    wJson = w.toJSON() as typeof wJson;
   });
 
-  const container = () => {
-    const [def] = Object.values(w.findResources("AWS::ECS::TaskDefinition"));
-    return { def: def!.Properties, c: def!.Properties.ContainerDefinitions[0] };
-  };
-
-  it("runs one pinned image on Graviton, privately, never two tasks at once", () => {
-    const { def, c } = container();
-    expect(c.Image).toMatch(/^evoapicloud\/evolution-api:v2\.3\.7@sha256:[0-9a-f]{64}$/);
-    expect(def.RuntimePlatform).toEqual({ CpuArchitecture: "ARM64", OperatingSystemFamily: "LINUX" });
-    expect([def.Cpu, def.Memory]).toEqual(["512", "1024"]);
-    w.hasResourceProperties("AWS::ECS::Service", {
-      DesiredCount: 1,
-      LaunchType: "FARGATE",
-      DeploymentConfiguration: { MinimumHealthyPercent: 0, MaximumPercent: 100, DeploymentCircuitBreaker: { Enable: true, Rollback: true } },
-      NetworkConfiguration: { AwsvpcConfiguration: Match.objectLike({ AssignPublicIp: "DISABLED" }) },
-    });
-    w.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 0);
-    w.hasResourceProperties("AWS::ServiceDiscovery::PrivateDnsNamespace", { Name: "whatsapp.production.insights.internal" });
+  it("runs no service any more: no ECS, no Cloud Map, no security group, no alarm", () => {
+    const types = new Set(Object.values(wJson.Resources).map((r) => r.Type));
+    for (const gone of ["AWS::ECS::Cluster", "AWS::ECS::Service", "AWS::ECS::TaskDefinition", "AWS::ServiceDiscovery::PrivateDnsNamespace", "AWS::EC2::SecurityGroup", "AWS::EC2::SecurityGroupIngress", "AWS::CloudWatch::Alarm"]) expect(types.has(gone), gone).toBe(false);
+    // Nothing tied to the Data stack: its exports can go in release 3.
+    expect(JSON.stringify(wJson)).not.toContain("Fn::ImportValue");
   });
 
-  it("takes its keys from Secrets Manager only, keeps no customer data, shows no console and prints no QR codes", () => {
-    const { c } = container();
-    expect(c.Secrets.map((s: { Name: string }) => s.Name).sort()).toEqual(["AUTHENTICATION_API_KEY", "EVO_DB_PASSWORD", "EVO_DB_USER"]);
-    const env = Object.fromEntries((c.Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
-    for (const name of ["AUTHENTICATION_API_KEY", "DATABASE_CONNECTION_URI", "DATABASE_URL", "EVO_DB_PASSWORD"]) expect(env[name], name).toBeUndefined();
-    expect(env).toMatchObject({
-      TZ: "UTC",
-      SERVER_DISABLE_MANAGER: "true",
-      SERVER_DISABLE_DOCS: "true",
-      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false",
-      DATABASE_SAVE_DATA_INSTANCE: "true",
-      DATABASE_SAVE_DATA_NEW_MESSAGE: "false",
-      DATABASE_SAVE_DATA_CONTACTS: "false",
-      DATABASE_SAVE_DATA_CHATS: "false",
-      DATABASE_SAVE_DATA_HISTORIC: "false",
-      LOG_LEVEL: "ERROR,WARN",
-      TELEMETRY_ENABLED: "false",
-      WEBHOOK_GLOBAL_ENABLED: "false",
-      CACHE_REDIS_ENABLED: "false",
-      QRCODE_LIMIT: "6",
-      // A server's call has no Origin, which Evolution refuses unless CORS allows any (src/main.ts).
-      CORS_ORIGIN: "*",
-    });
-    // The database's address is put together inside the container, from the secret.
-    expect(c.Command[0]).toContain("DATABASE_CONNECTION_URI=");
-    expect(c.Command[0]).toContain("unset EVO_DB_PASSWORD");
-    // Only Evolution's own log lines reach CloudWatch: its stray console.log calls print customers' messages.
-    expect(c.Command[0]).toContain("exec node --require /tmp/quiet-console.cjs dist/main");
+  it("drops the service's database once, through the cron's evolution-db-drop action, and fails the deploy if that fails", () => {
+    const [res] = Object.values(w.findResources("AWS::CloudFormation::CustomResource"));
+    expect(res!.Properties).toMatchObject({ Version: "1" });
+    const [drop] = Object.values(w.findResources("AWS::Lambda::Function", { Properties: { FunctionName: "insights-production-evolution-db-drop" } }));
+    expect(drop!.Properties.Code.ZipFile).toContain('action: "evolution-db-drop"');
+    expect(drop!.Properties.Code.ZipFile).toContain("if (r.FunctionError) throw");
   });
 
-  it("lets only Evolution's logger and pino through the console, on every method (libsignal prints private keys)", () => {
-    const { c } = container();
-    const filter = /cat > \/tmp\/quiet-console\.cjs <<'JS'\n([\s\S]*?)\nJS\n/.exec(c.Command[0])?.[1];
-    expect(filter).toBeDefined();
-    const dir = mkdtempSync(join(tmpdir(), "quiet-console-"));
-    writeFileSync(join(dir, "quiet-console.cjs"), `${filter}\n`);
-    // Every function on the console, called with a secret, then what libsignal 1c30d7d (Baileys' fork)
-    // prints in session_record.js, then Evolution's own lines and a pino line, which must stay.
-    const probe = join(dir, "probe.cjs");
-    writeFileSync(
-      probe,
-      `const fs = require("node:fs");
-const key = { privKey: Buffer.from("SECRET-buffer"), rootKey: Buffer.from("SECRET-buffer") };
-for (const m of Object.getOwnPropertyNames(console)) {
-  if (typeof console[m] !== "function" || m === "Console") continue;
-  try { console[m]("SECRET-" + m, key); } catch {}
-  try { console[m](false, "SECRET-" + m, key); } catch {}
-}
-console.time("SECRET-timer"); console.timeLog("SECRET-timer", key); console.timeEnd("SECRET-timer");
-console.table([{ secret: "SECRET-table" }]);
-console.info("Closing session:", { currentRatchet: { ephemeralKeyPair: key } });
-console.info("Opening session:", { currentRatchet: { ephemeralKeyPair: key } });
-console.info("Removing old closed session:", { currentRatchet: { ephemeralKeyPair: key } });
-console.warn("Session already closed", { currentRatchet: { ephemeralKeyPair: key } });
-console.error("Session error:SECRET-error", new Error("SECRET-stack").stack);
-console.log("[Evolution API]", "", "1", "-", "Mon Oct 26 2026 01:48:55  ", "ERROR ", "[ChannelStartupService]", "[string]", "KEPT-error");
-console.log("[Evolution API]", "", "1", "-", "Mon Oct 26 2026 01:48:55  ", "WARN ", "[ChannelStartupService]", "[object]", { kept: "KEPT-warn" });
-fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
-`,
-    );
-    const run = (...flags: string[]) => {
-      const r = spawnSync(process.execPath, [...flags, probe], { encoding: "utf8" });
-      expect(r.status).toBe(0);
-      return r.stdout + r.stderr;
-    };
-    // Without the filter, the probe does print its secrets on every method that prints...
-    const open = run();
-    for (const m of ["log", "info", "debug", "warn", "error", "trace", "dir", "dirxml", "table", "group", "groupCollapsed", "assert", "count", "timer"]) expect(open, m).toContain(`SECRET-${m}`);
-    expect(open).toMatch(/Closing session:[\s\S]*privKey: <Buffer/);
-    // ...and with it, nothing but Evolution's logger and pino.
-    const quiet = run("--require", join(dir, "quiet-console.cjs"));
-    expect(quiet).not.toContain("SECRET");
-    expect(quiet).not.toMatch(/session|Buffer|privKey/i);
-    for (const kept of ["KEPT-error", "KEPT-warn", "KEPT-pino"]) expect(quiet).toContain(kept);
+  it("keeps exporting what the stack's previous version imported, under the same names, until release 3", () => {
+    const exported = Object.values((d.toJSON() as { Outputs: Record<string, { Export?: { Name?: string } }> }).Outputs).map((o) => o.Export?.Name);
+    for (const name of ["D:ExportsOutputRefVpc8378EB38272D6E3A", "D:ExportsOutputFnGetAttDbSg495F8305GroupIdA39418C8", "D:ExportsOutputRefEvolutionSecret6CE02FA4A8DAFD7C", "D:ExportsOutputRefEvolutionDbSecretC6CE461AC2F6B8AC"]) expect(exported, name).toContain(name);
+    // The two secrets go when release 3 removes them (Delete, not Retain).
+    for (const id of Object.keys(d.findResources("AWS::SecretsManager::Secret")).filter((k) => k.startsWith("Evolution"))) expect((d.toJSON() as { Resources: Record<string, { DeletionPolicy?: string }> }).Resources[id]!.DeletionPolicy, id).toBe("Delete");
   });
 
-  it("lets only the functions in (8080), and itself into the database (5432)", () => {
-    const sgs = Object.entries(w.findResources("AWS::EC2::SecurityGroup"));
-    expect(sgs).toHaveLength(1);
-    const [sgId, sg] = sgs[0]!;
-    // Nothing in from an address range, here or as a rule of its own.
-    expect(sg.Properties.SecurityGroupIngress).toBeUndefined();
-    const rules = Object.values(w.findResources("AWS::EC2::SecurityGroupIngress")).map((x) => x.Properties);
-    expect(rules).toHaveLength(2);
-    for (const rule of rules) {
-      expect(rule.CidrIp).toBeUndefined();
-      expect(rule.CidrIpv6).toBeUndefined();
-      expect(rule.SourceSecurityGroupId).toBeDefined();
+  it("tells no function about Evolution API any more", () => {
+    const fns = Object.values(a.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    expect(fns.length).toBeGreaterThan(0);
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      expect(Object.keys(vars).filter((k) => k.startsWith("EVOLUTION"))).toEqual([]);
     }
-    const into = (port: number) => rules.find((x) => x.FromPort === port && x.ToPort === port && x.IpProtocol === "tcp");
-    // Into the service: 8080 from the functions' group. Into the database: 5432 from the service's group.
-    expect(into(8080)!.GroupId).toEqual({ "Fn::GetAtt": [sgId, "GroupId"] });
-    expect(into(5432)!.SourceSecurityGroupId).toEqual({ "Fn::GetAtt": [sgId, "GroupId"] });
-  });
-
-  it("makes its database (the cron's evolution-db action) before the service starts, and fails the deploy if that fails", () => {
-    const [res] = Object.entries(w.findResources("AWS::CloudFormation::CustomResource"));
-    expect(res).toBeDefined();
-    const [svc] = Object.values(w.findResources("AWS::ECS::Service"));
-    expect(svc!.DependsOn).toEqual(expect.arrayContaining([res![0]]));
-    const [init] = Object.values(w.findResources("AWS::Lambda::Function", { Properties: { FunctionName: "insights-production-evolution-db-init" } }));
-    expect(init!.Properties.Code.ZipFile).toContain('action: "evolution-db"');
-    expect(init!.Properties.Code.ZipFile).toContain("if (r.FunctionError) throw");
+    expect(JSON.stringify(a.toJSON())).not.toMatch(/EvolutionSecret|EvolutionDbSecret|whatsapp-service-unreachable/);
   });
 
   it("uses only characters EC2 accepts in every security group's and rule's description, in every stack", () => {
@@ -1313,37 +1222,5 @@ fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
       }
     }
     expect(bad).toEqual([]);
-  });
-
-  it("leaves nothing behind when its first creation rolls back, so the next deploy can create it again", () => {
-    // A plain Retain survives a failed first create, and its fixed name then fails every later create
-    // (the log group did, on the second deploy). RetainExceptOnCreate keeps it only once the stack exists.
-    const resources = Object.entries(w.toJSON().Resources as Record<string, { Type: string; DeletionPolicy?: string }>);
-    expect(resources.filter(([, r]) => r.DeletionPolicy === "Retain").map(([id]) => id)).toEqual([]);
-    const [logs] = Object.values(w.findResources("AWS::Logs::LogGroup", { Properties: { LogGroupName: "/ecs/insights-production-evolution-a" } }));
-    expect(logs!.DeletionPolicy).toBe("RetainExceptOnCreate");
-  });
-
-  it("raises an alarm when no task runs or memory runs short", () => {
-    for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) w.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: name });
-  });
-
-  it("tells every function the service's private address and the key's secret, and only the cron its database's", () => {
-    const fns = Object.values(a.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
-    for (const f of fns) {
-      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
-      expect(vars.EVOLUTION_API_URL).toBe("http://evolution-a.whatsapp.production.insights.internal:8080");
-      expect(vars.EVOLUTION_SECRET_ARN).toBeDefined();
-      expect(vars.EVOLUTION_API_KEY).toBeUndefined();
-      expect(vars.EVOLUTION_DB_SECRET_ARN !== undefined).toBe(String(f.Properties.FunctionName).endsWith("-cron"));
-    }
-  });
-
-  it("checks the database's certificate against the one RDS root that signs it", async () => {
-    const { rdsRootCa } = await import("../lib/whatsapp-stack.js");
-    const { X509Certificate } = await import("node:crypto");
-    const pem = rdsRootCa("ap-southeast-2", join(import.meta.dirname, "fixtures/rds-ap-southeast-2.pem"));
-    expect(new X509Certificate(pem!).subject).toContain("CN=Amazon RDS ap-southeast-2 Root CA RSA2048 G1");
-    expect(rdsRootCa("ap-southeast-2", join(import.meta.dirname, "fixtures/missing.pem"))).toBeNull();
   });
 });

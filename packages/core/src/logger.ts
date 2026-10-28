@@ -69,7 +69,7 @@ const REDACT = new Set(
     "verifyToken",
     "verify_token",
     "hub.verify_token",
-    // Evolution API (what is left of QR linking until release 2): instance keys, webhook signing keys, QR codes, message texts.
+    // Kept from Evolution API's time (QR linking, retired 2026-10-28): instance keys, webhook keys, QR codes, message texts.
     "apikey",
     "token",
     "jwt_key",

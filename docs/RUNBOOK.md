@@ -2,7 +2,7 @@
 
 For on-call. Each entry: **symptom → check → fix**.
 
-Production runs on AWS, see [aws-deployment.md](aws-deployment.md): the Lambda functions `insights-production-api` (UI + API, behind CloudFront and WAF), `-jobs` (the SQS queues) and `-cron` (the schedules and maintenance actions), RDS PostgreSQL, SQS with a dead-letter queue, a DynamoDB coordinator table, and WhatsApp's Evolution API service on ECS Fargate ([whatsapp.md](whatsapp.md)). `aws` commands assume `aws login --region ap-southeast-2`. Logs are in CloudWatch Logs, one group per function: `/aws/lambda/insights-production-api`, `-jobs`, `-cron`; the WhatsApp service's in `/ecs/insights-production-evolution-a`. The schedules are off until cutover (aws-deployment.md), so the `*/15` and nightly sweeps mentioned below don't run on AWS yet.
+Production runs on AWS, see [aws-deployment.md](aws-deployment.md): the Lambda functions `insights-production-api` (UI + API, behind CloudFront and WAF), `-jobs` (the SQS queues) and `-cron` (the schedules and maintenance actions), RDS PostgreSQL, SQS with a dead-letter queue, and a DynamoDB coordinator table; WhatsApp goes through Meta's WhatsApp Business Platform ([whatsapp.md](whatsapp.md)). `aws` commands assume `aws login --region ap-southeast-2`. Logs are in CloudWatch Logs, one group per function: `/aws/lambda/insights-production-api`, `-jobs`, `-cron` (the retired WhatsApp service's `/ecs/insights-production-evolution-a` is kept until its retention ends). The schedules are off until cutover (aws-deployment.md), so the `*/15` and nightly sweeps mentioned below don't run on AWS yet.
 
 Secrets are in Secrets Manager (`insights/production/app`), set with `node infra/cdk/scripts/put-secrets.mjs --set NAME`; the functions read them when an instance starts (aws-deployment.md says how to get fresh instances). SQL runs as the owner role through the admin host (the database is private): start it, `aws ssm start-session --target <instance id>`, credentials from the `insights/production/db-owner` secret; stop it afterwards (aws-deployment.md, "Database").
 
@@ -43,10 +43,9 @@ The check found figures it couldn't match or repair. Read its row (`reconciliati
 2. `Order … not found for refund …`: refund arrived before its order and the order never came. The daily reconcile fixes it; to fix now, re-sync the store.
 3. To replay a single event you need the payload, which isn't stored. Re-sync (orders are re-pulled from Shopify) instead.
 
-### `whatsapp-service-down`, `whatsapp-service-unreachable`, `whatsapp-service-memory` (alarms)
-WhatsApp's Evolution API service: no task running, the sweep couldn't reach it, or its memory is
-nearly full. Messages wait meanwhile. Steps in [whatsapp.md](whatsapp.md), "Runbook" (and
-"Scaling" for memory).
+### WhatsApp
+The Evolution API service and its alarms (`whatsapp-service-*`) are gone (docs/whatsapp.md,
+"Removing Evolution"). A store's WhatsApp problems are in [whatsapp.md](whatsapp.md), "Runbook".
 
 ### Webhooks returning 401 en masse
 `SHOPIFY_API_SECRET` doesn't match the app (secret rotated in the Partner dashboard but not in the app secret, or vice versa). `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET`, then get fresh function instances (it takes effect only there). Shopify retries failed deliveries for 48 h, so nothing is lost if fixed promptly.

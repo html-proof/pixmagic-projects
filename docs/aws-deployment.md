@@ -25,8 +25,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito,evolution-api,evolution-db}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
-| WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}` (and, until release 3, the retired `evolution-api` and `evolution-db` nothing reads); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 | Audit (whole account) | CloudTrail `insights-account` (every Region) → S3 `insights-account-trail-605411278365` (1 year); IAM Access Analyzer `insights-account` in all 18 enabled Regions (StackSet `insights-account-access-analyzer`); GuardDuty (turned on by hand) | `infra/cdk/lib/audit-stack.ts` |
@@ -84,13 +83,10 @@ secret among them:
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
-WhatsApp's Cloud API option is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns
-about WhatsApp's Meta secret: the check's line on the Deploy run names what it still needs instead
-("WhatsApp service on, Cloud API off (needs …)"). The WhatsApp service itself needs
-`EVOLUTION_API_URL` and `EVOLUTION_API_KEY`, which the App stack and the secret
-`insights/<env>/evolution-api` give every function: nothing to set by hand. With the configuration
-id set (2026-10-25) the line should read "WhatsApp service on, Cloud API on"; Meta's own Tech
-Provider steps (docs/whatsapp.md, "Owner's steps (Cloud API)") are not something it can see.
+WhatsApp is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns about WhatsApp's Meta
+secret: the check's line on the Deploy run names what it still needs instead ("WhatsApp off (needs
+…)"). With the configuration id set (2026-10-25) the line reads "WhatsApp on"; Meta's own Tech
+Provider steps (docs/whatsapp.md, "Owner's steps (Meta)") are not something it can see.
 
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary
@@ -106,8 +102,7 @@ aws lambda invoke --function-name insights-production-cron:live --cli-binary-for
 ```
 
 `config.json` then says which ad platforms, email integrations and sign-in options are on, what
-the WhatsApp service and its Cloud API option still need (`whatsapp.evolutionNeeds`,
-`whatsapp.embeddedSignupNeeds`), and lists under
+WhatsApp still needs (`whatsapp.embeddedSignupNeeds`), and lists under
 `halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
 **Deploy to AWS** (Actions → Run workflow, on `main`) so new instances read it. For another
 environment, pass `--env <name>` to `put-secrets.mjs` and use `insights-<name>-cron:live`, then
@@ -573,9 +568,9 @@ job signs in only with the OIDC deploy role and checks that it did.
   and stops the host. `--replace` wipes the AWS copy first (the final copy at cutover).
 - Migrations after a deploy: `aws lambda invoke --function-name insights-production-cron:live
   --cli-binary-format raw-in-base64-out --payload '{"action":"migrate"}' out.json`.
-- The WhatsApp service's own database `evolution` and its role (secret `insights/production/evolution-db`)
-  are made by the cron's `evolution-db` action, which the WhatsApp stack runs when it is first
-  deployed. Again by hand (idempotent): the same command with `{"action":"evolution-db"}`.
+- The retired WhatsApp service's database `evolution` and its role are dropped by the cron's
+  `evolution-db-drop` action, which the WhatsApp stack runs once (release 2 of removing Evolution).
+  Again by hand (idempotent): the same command with `{"action":"evolution-db-drop"}`.
 - psql: start the admin host, then `aws ssm start-session --target <instance id>` (needs the Session
   Manager plugin), credentials from the `insights/production/db-owner` secret. Stop it afterwards.
 - Restore: RDS point-in-time restore (any second in the last 14 days) to a new instance, or a dump
@@ -959,11 +954,10 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
-| WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, on demand, 17.29; Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 |
 | **Total** | **~106.5** (~117 with GST) |
 
-The figures in this paragraph leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
-(on Fargate Spot, `whatsapp.spot` in config.ts, its task would be about 5). With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
+WhatsApp's Evolution API service (~19 a month) is gone since release 2 of removing it
+(docs/whatsapp.md, "Removing Evolution"). With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
 brings it to ~72.8 (~80 with GST): that was the only combination under the US$80 budget before the
 audit stack. The owner chose to keep Advanced RDS (2026-10-18). The admin host adds
 ~3.9 while it runs. Before GuardDuty's trial ends the total is ~76. A paid **support plan** comes on

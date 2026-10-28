@@ -6,21 +6,17 @@ import { defineConfig } from "@playwright/test";
  * against its own Cognito emulator (started here, empty every run), a stand-in for the user pool's
  * managed login (e2e/fake-managed-login.mjs: "Continue with Google"), a stand-in for Meta's Graph API
  * (e2e/meta-graph-stub.mjs: WhatsApp Automation's Cloud API; the local server sends Meta's calls there),
- * a stand-in for Evolution API (e2e/evolution-stub.mjs: only what is left of QR linking, until release 2
- * removes it), Mailpit and a dedicated app_e2e database (docker compose up -d postgres mailpit first).
+ * Mailpit and a dedicated app_e2e database (docker compose up -d postgres mailpit first).
  *
  * Ports default to the docker compose stack. Override them to run e2e beside a local demo, which
  * uses the same server port and Mailpit: global setup wipes every Mailpit message.
- *   E2E_PORT (8789), E2E_COGNITO_PORT (9249), E2E_LOGIN_PORT (9259), E2E_EVOLUTION_PORT (9269),
- *   E2E_GRAPH_PORT (9279), E2E_MAILPIT_URL (http://localhost:8025)
+ *   E2E_PORT (8789), E2E_COGNITO_PORT (9249), E2E_LOGIN_PORT (9259), E2E_GRAPH_PORT (9279),
+ *   E2E_MAILPIT_URL (http://localhost:8025)
  */
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8789);
 export const E2E_BASE_URL = `http://localhost:${E2E_PORT}`;
 export const E2E_COGNITO_PORT = Number(process.env.E2E_COGNITO_PORT ?? 9249);
 export const E2E_LOGIN_PORT = Number(process.env.E2E_LOGIN_PORT ?? 9259);
-/** The Evolution API stand-in; e2e/whatsapp.spec.ts plays the phone and WhatsApp through its /__control. */
-export const E2E_EVOLUTION_PORT = Number(process.env.E2E_EVOLUTION_PORT ?? 9269);
-export const E2E_EVOLUTION_URL = `http://127.0.0.1:${E2E_EVOLUTION_PORT}`;
 /** Meta's Graph API stand-in; e2e/whatsapp.spec.ts plays Meta's window and WhatsApp through its /__control. */
 export const E2E_GRAPH_PORT = Number(process.env.E2E_GRAPH_PORT ?? 9279);
 export const E2E_GRAPH_URL = `http://127.0.0.1:${E2E_GRAPH_PORT}`;
@@ -88,13 +84,6 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      // Evolution API, as far as the app can tell (its key is e2e/server.env's EVOLUTION_API_KEY).
-      command: `node e2e/evolution-stub.mjs ${E2E_EVOLUTION_PORT} e2e-evolution-key`,
-      port: E2E_EVOLUTION_PORT,
-      reuseExistingServer: false,
-      timeout: 30_000,
-    },
-    {
       // Meta's Graph API, as far as the app can tell (its app id and secret are e2e/server.env's WHATSAPP_APP_ID and WHATSAPP_APP_SECRET).
       command: `node e2e/meta-graph-stub.mjs ${E2E_GRAPH_PORT} e2e_meta_app e2e_meta_secret`,
       port: E2E_GRAPH_PORT,
@@ -118,7 +107,6 @@ export default defineConfig({
         COGNITO_ENDPOINT,
         COGNITO_DOMAIN: `http://127.0.0.1:${E2E_LOGIN_PORT}`,
         COGNITO_IDENTITY_PROVIDERS: "Google",
-        EVOLUTION_API_URL: E2E_EVOLUTION_URL,
         LOCAL_GRAPH_URL: E2E_GRAPH_URL,
       },
       reuseExistingServer: false,

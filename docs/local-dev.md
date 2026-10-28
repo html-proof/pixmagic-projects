@@ -17,7 +17,6 @@ docker compose up -d postgres mailpit cognito
 | Postgres 17 | 5434 | owner `app/app`; tenant role `app_rls/app_rls` created by `infra/postgres/init.sql` |
 | Mailpit | 8025 UI | every email (invites, alerts) lands at http://localhost:8025 (the server posts to Mailpit's HTTP API when `MAILPIT_URL` is set) |
 | Cognito emulator | 9229 | the app's user pool, ready to use ([infra/cognito-local](../infra/cognito-local/README.md)); codes it would email are in `docker compose logs cognito`. Without Docker: `node infra/cognito-local/start.mjs` |
-| Evolution API (WhatsApp; optional) | 8081 | only with `docker compose --profile whatsapp up -d evolution`: the release production runs, with a database of its own ([whatsapp.md](whatsapp.md)) |
 
 ## 2. Configure
 

@@ -16,7 +16,7 @@ import { logger } from "../logger.js";
 import { audit, raiseAlert, resolveAlerts } from "../notify.js";
 import { connectionOf, WA_ALERTS, waEncrypt, WhatsappError, type WaDeps } from "./common.js";
 import { CloudApiError, cloudNumberInfo, unsubscribeCloudAccount } from "./cloudApi.js";
-import { dropEvolutionInstance, retireQrConnection } from "./retireQr.js";
+import { retireQrConnection } from "./retireQr.js";
 
 /** A failure talking to Meta, as the merchant reads it (CloudApiError's detail is already in their words). */
 export function providerProblem(e: unknown): WhatsappError {
@@ -124,18 +124,16 @@ async function endConnection(deps: Pick<WaDeps, "fetchImpl" | "mailer">, conn: W
 
 /**
  * What bizinsights set up for the number, undone (best effort, never throws): Meta stops sending the
- * account's webhooks to bizinsights' app once no other store here uses that account, and an Evolution
- * API instance left from before 2026-10-28 is deleted.
+ * account's webhooks to bizinsights' app once no other store here uses that account.
  */
 async function releaseNumber(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnection) {
   if (conn.provider === "cloud_api" && conn.instanceTokenEnc && conn.wabaId) {
     const others = await systemDb.wappConnection.count({ where: { wabaId: conn.wabaId, id: { not: conn.id }, provider: "cloud_api", status: { not: "disconnected" } } });
     if (!others && !(await unsubscribeCloudAccount(deps, conn))) logger.warn({ connectionId: conn.id, storeId: conn.storeId }, "whatsapp business account's webhooks not unsubscribed at Meta");
   }
-  if (conn.instanceName) await dropEvolutionInstance(conn, deps);
 }
 
-/** A store's data being erased: what bizinsights set up at Meta (or Evolution) for its number goes first (best effort). */
+/** A store's data being erased: what bizinsights set up at Meta for its number goes first (best effort). */
 export async function dropStoreInstance(storeId: string, deps: Pick<WaDeps, "fetchImpl">): Promise<void> {
   const conn = await connectionOf(storeId);
   if (conn) await releaseNumber(deps, conn);

@@ -1,6 +1,5 @@
 /** WhatsApp Automation on Meta's WhatsApp Business Platform (docs/whatsapp.md). */
 export * from "./common.js";
-export * from "./evolution.js";
 export * from "./connection.js";
 export * from "./contacts.js";
 export * from "./templates.js";
@@ -9,7 +8,6 @@ export * from "./send.js";
 export * from "./automations.js";
 export * from "./events.js";
 export * from "./inbound.js";
-export * from "./webhook.js";
 export * from "./settings.js";
 export * from "./campaigns.js";
 export * from "./teamAlerts.js";
