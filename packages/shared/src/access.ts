@@ -152,7 +152,8 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
     sensitive: true,
     requires: ["integrations.status"],
     label: "Manage integrations",
-    reveals: "Connect, refresh and disconnect ad accounts, the WhatsApp number and email sending accounts. The Shopify store itself stays with owners and admins.",
+    reveals:
+      "Connect, refresh and disconnect ad accounts, the WhatsApp number and email sending accounts, and connect the store to Zapier (its Zaps then get what this person may see). The Shopify store itself stays with owners and admins.",
   },
   // ---- Staff
   { key: "staff.team", module: "staff", kind: "view", label: "View team information", reveals: "Employees' names, positions, departments and status." },

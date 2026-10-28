@@ -25,6 +25,7 @@ import {
   type EmailJob,
 } from "@app/core";
 import { applySmsEvent, noSmsProvider, sendSmsJob, type SmsJob } from "@app/core/sms";
+import { zapierAfterAdSync } from "@app/core/zapier";
 import { UnrecoverableError, type WorkerDeps } from "./common.js";
 
 /** Email integrations: send one message, or run the automations for one business event. */
@@ -75,6 +76,8 @@ export async function runAdsSync(data: AdsSyncData, deps: WorkerDeps) {
     });
     if (res.skipped) logger.info({ connectionId: data.connectionId, reason: res.reason, trigger: data.trigger ?? "request" }, "ad account sync skipped");
     else logger.info({ connectionId: data.connectionId, since: res.since, until: res.until, rows: res.stored, trigger: data.trigger ?? "request", continued: res.continued }, "ad account synced");
+    // Zapier's thresholds and daily summary for the store, on the figures just stored (docs/zapier.md). Never throws.
+    if (!res.skipped) await zapierAfterAdSync(data.connectionId, deps);
   } catch (err) {
     if (!classifyAdError(err).retryable) throw new UnrecoverableError("ad sync stopped: the connection is marked", { cause: err });
     throw err;

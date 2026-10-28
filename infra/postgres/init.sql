@@ -18,7 +18,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rls;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', 'auth_identities', 'auth_events', 'user_sessions', '_prisma_migrations'] LOOP
+  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', 'auth_identities', 'auth_events', 'user_sessions', 'zapier_tokens', '_prisma_migrations'] LOOP
     IF to_regclass(format('public.%I', t)) IS NOT NULL THEN
       EXECUTE format('REVOKE ALL ON %I FROM app_rls', t);
     END IF;

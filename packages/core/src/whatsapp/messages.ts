@@ -40,6 +40,7 @@ import { consentFacts, onDoNotMessageList } from "./contacts.js";
 import { dailyLimitOf, DOWN_GRACE_MS, settingsOf, storeById, WA_MAX_QUEUE_DELAY_S, waDecrypt, waEncrypt, waPhoneHash, waQueue, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
 import { CloudApiError, metaErrorInfo, sendCloudMessage, type CloudErrorKind } from "./cloudApi.js";
 import { markReconnect, reconnectReasonOf } from "./connection.js";
+import { zapierWhatsappFailed } from "../zapier/events.js";
 
 export type MessageSource = "automation" | "campaign" | "manual" | "test" | "verification" | "team_alert" | "reply";
 
@@ -137,6 +138,8 @@ async function finish(id: string, status: "skipped" | "cancelled" | "failed", re
     data: { status, reason, finalAt: new Date(), ...(status === "failed" ? { failedAt: new Date() } : {}), payloadEnc: null, errorCode: extra.errorCode ?? null, errorDetail: extra.errorDetail ?? null },
   });
   if (m.type !== "text") await dropAttachment(m, deps);
+  // Zapier's "WhatsApp message failed" trigger (docs/zapier.md) for a send Meta refused or that gave up. Never throws.
+  if (status === "failed") await zapierWhatsappFailed(m, m.failedAt ?? new Date());
   return status;
 }
 
@@ -392,6 +395,8 @@ export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "stor
   if (m.source === "test" && (next === "sent" || next === "delivered" || next === "read")) {
     await systemDb.wappSettings.updateMany({ where: { storeId: m.storeId, testPassedAt: null, testVerifiedAt: { not: null } }, data: { testPassedAt: report.at } });
   }
+  // Zapier's "WhatsApp message failed" trigger (docs/zapier.md): the number masked. Never throws.
+  if (next === "failed") await zapierWhatsappFailed(m, report.at);
   return next;
 }
 

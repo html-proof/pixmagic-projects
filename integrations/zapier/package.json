@@ -1,0 +1,23 @@
+{
+  "name": "bizinsights-zapier",
+  "version": "1.0.0",
+  "description": "bizinsights on Zapier: a store's alerts and advertising results as Zap triggers and searches.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --testTimeout 10000"
+  },
+  "engines": {
+    "node": ">=18.20"
+  },
+  "dependencies": {
+    "zapier-platform-core": "19.2.1"
+  },
+  "devDependencies": {
+    "jest": "30.5.2",
+    "nock": "14.0.17"
+  },
+  "overrides": {
+    "form-data": "4.0.6"
+  }
+}
