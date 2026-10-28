@@ -1,5 +1,6 @@
 // The Zapier app against a faked bizinsights (nock): the OAuth flow's requests, the triggers'
-// subscriptions and samples, the searches, and bizinsights' refusals read into Zapier's errors.
+// subscriptions and samples, the searches, the WhatsApp action, and bizinsights' refusals read into
+// Zapier's errors.
 const nock = require("nock");
 const zapier = require("zapier-platform-core");
 // What `zapier validate` checks the definition with (the app compiled, functions cleaned, then Zapier's schema).
@@ -27,12 +28,14 @@ afterEach(() => {
 afterAll(() => nock.enableNetConnect());
 
 describe("the app definition", () => {
-  it("is valid for Zapier's schema, with every trigger and search Zapier will list", () => {
+  it("is valid for Zapier's schema, with every trigger, search and action Zapier will list", () => {
     expect(validateApp(compileApp(App))).toEqual([]);
-    expect(Object.keys(App.triggers)).toEqual(["alert_raised", "ad_spend_threshold", "adsense_earnings_threshold", "ads_daily_summary", "whatsapp_message_failed"]);
+    expect(Object.keys(App.triggers)).toEqual(["alert_raised", "ad_spend_threshold", "adsense_earnings_threshold", "ads_daily_summary", "whatsapp_message_failed", "whatsapp_templates"]);
     expect(Object.keys(App.searches)).toEqual(["find_ad_performance", "find_adsense_earnings"]);
-    expect(App.creates).toEqual({});
-    for (const t of Object.values(App.triggers)) expect(t.operation.type).toBe("hook");
+    expect(Object.keys(App.creates)).toEqual(["send_whatsapp_template"]);
+    // Every listed trigger is instant; the template list only feeds the action's dropdown.
+    for (const t of Object.values(App.triggers)) if (!t.display.hidden) expect(t.operation.type).toBe("hook");
+    expect(App.triggers.whatsapp_templates.display.hidden).toBe(true);
   });
 });
 
@@ -138,5 +141,62 @@ describe("the searches", () => {
   it("find AdSense earnings, empty when no account is connected", async () => {
     nock(BASE).get("/api/zapier/search/adsense-earnings").reply(200, []);
     expect(await appTester(App.searches.find_adsense_earnings.operation.perform, { authData, inputData: {} })).toEqual([]);
+  });
+});
+
+describe("the action: Send WhatsApp Template Message", () => {
+  const TEMPLATES = [
+    { id: "t1", name: "Thanks for your enquiry", category: "transactional", category_label: "Order update", language: "en", body: "Hi {{customer_first_name}}, {{store_name}} here: your quote {{order_number}} is ready.", variables: ["customer_first_name", "order_number"], automatic: ["store_name"] },
+  ];
+
+  it("lists the approved templates for the dropdown", async () => {
+    nock(BASE).get("/api/zapier/whatsapp/templates").matchHeader("authorization", "Bearer zat_access").reply(200, TEMPLATES);
+    expect(await appTester(App.triggers.whatsapp_templates.operation.perform, { authData })).toEqual(TEMPLATES);
+    expect(App.creates.send_whatsapp_template.operation.inputFields[0]).toMatchObject({ key: "template_id", dynamic: "whatsapp_templates.id.name", altersDynamicFields: true });
+  });
+
+  it("asks for the chosen template's own variables (its first name optional), with its text", async () => {
+    const dynamic = App.creates.send_whatsapp_template.operation.inputFields.find((f) => typeof f === "function");
+    expect(await appTester(dynamic, { authData, inputData: {} })).toEqual([]);
+    nock(BASE).get("/api/zapier/whatsapp/templates").reply(200, TEMPLATES);
+    const fieldsFor = await appTester(dynamic, { authData, inputData: { template_id: "t1" } });
+    expect(fieldsFor.map((f) => [f.key, f.required ?? null])).toEqual([
+      ["template_text", null],
+      ["value_customer_first_name", false],
+      ["value_order_number", true],
+    ]);
+    expect(fieldsFor[0].helpText).toContain("your quote {{order_number}} is ready");
+  });
+
+  it("posts the message with the mapped values, the consent and the Zap's id, and answers what was queued", async () => {
+    const queued = { id: "m1", status: "queued", duplicate: false, phone_masked: "+61 4•• ••• 678", template: { id: "t1", name: "Thanks for your enquiry", category: "transactional" }, consent_recorded: true };
+    nock(BASE)
+      .post("/api/zapier/whatsapp/messages", {
+        template_id: "t1",
+        phone: "+61412345678",
+        values: { order_number: "Q-77" },
+        first_name: "Sam",
+        customer_agreed: true,
+        consent_note: "Meta lead form: WhatsApp box",
+        unique_key: "lead-123",
+        zap_id: 99,
+      })
+      .matchHeader("authorization", "Bearer zat_access")
+      .reply(201, queued);
+    const result = await appTester(App.creates.send_whatsapp_template.operation.perform, {
+      authData,
+      meta: { zap: { id: 99 } },
+      inputData: { template_id: "t1", phone: "+61412345678", value_order_number: "Q-77", value_customer_first_name: "", first_name: "Sam", customer_agreed: true, consent_note: "Meta lead form: WhatsApp box", unique_key: "lead-123" },
+    });
+    expect(result).toEqual(queued);
+  });
+
+  it("shows bizinsights' words when the message can't go (no consent), and tries later when told to slow down", async () => {
+    nock(BASE)
+      .post("/api/zapier/whatsapp/messages")
+      .reply(409, { error: "not_allowed", message: "This message can't go to that number: The customer hasn't agreed to WhatsApp updates." });
+    await expect(appTester(App.creates.send_whatsapp_template.operation.perform, { authData, inputData: { template_id: "t1", phone: "+61412345678" } })).rejects.toThrow(/hasn't agreed/);
+    nock(BASE).post("/api/zapier/whatsapp/messages").reply(429, { error: "rate_limited", message: "Too quickly." }, { "retry-after": "30" });
+    await expect(appTester(App.creates.send_whatsapp_template.operation.perform, { authData, inputData: { template_id: "t1", phone: "+61412345678" } })).rejects.toMatchObject({ name: "ThrottledError" });
   });
 });

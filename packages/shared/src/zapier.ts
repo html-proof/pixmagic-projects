@@ -1,11 +1,14 @@
 // Zapier (docs/zapier.md): the "bizinsights" app on Zapier's Developer Platform. A merchant connects
 // their bizinsights store inside their own Zapier account (OAuth: bizinsights is the provider) and
-// uses its triggers and searches in their Zaps. What each trigger is, what it needs, how a threshold
-// is crossed, and how a delivery's outcome is worded: shared by the API, the worker and the UI.
+// uses its triggers, searches and its one action in their Zaps. What each trigger is, what it needs,
+// how a threshold is crossed, what the WhatsApp action takes, and how a delivery's outcome is worded:
+// shared by the API, the worker and the UI.
 //
 // Imported by the UI through `@app/shared/zapier`: no I/O, relative imports stay extensionless.
 
-import type { AccessKey } from "./access";
+import type { AccessKey, AccessNeed } from "./access";
+import { WA_VARIABLES } from "./whatsapp";
+import { z } from "./zod";
 
 // ---------------------------------------------------------------------------
 // Tokens and codes
@@ -82,13 +85,88 @@ export const ZAPIER_SEARCHES = [
   { key: "find_adsense_earnings", label: "Find AdSense earnings", description: "The store's estimated AdSense earnings for chosen dates." },
 ] as const;
 
-/** What the consent page says Zapier can and can't do once allowed. */
-export const ZAPIER_CANNOT = [
-  "Change anything in bizinsights, Shopify or your ad accounts",
-  "Send messages to your customers",
-  "See customers' names, emails or full phone numbers",
-  "Reach your other stores or workspaces",
-] as const;
+// ---------------------------------------------------------------------------
+// What a connection may do beyond triggers and searches (scopes)
+// ---------------------------------------------------------------------------
+
+/**
+ * Each one ticked by itself on the consent page, by someone who may do it in bizinsights, and kept on
+ * the grant (zapier_grants.scopes). A connection made without it can never do it: connect again.
+ */
+export const ZAPIER_SCOPES = ["whatsapp_send"] as const;
+export type ZapierScope = (typeof ZAPIER_SCOPES)[number];
+export const isZapierScope = (s: string): s is ZapierScope => (ZAPIER_SCOPES as readonly string[]).includes(s);
+
+export const ZAPIER_SCOPE_INFO: Record<ZapierScope, { label: string; description: string; needs: AccessNeed; needsLabel: string }> = {
+  whatsapp_send: {
+    label: "Send WhatsApp template messages to your customers",
+    description:
+      "From your Zaps (a new Meta or Google Ads lead, an order, a form), with templates Meta approved only, to customers who agreed, within your WhatsApp settings' sending hours and limits. A customer who replied STOP never gets one.",
+    // The same people who may send from the WhatsApp page (docs/whatsapp.md, "Who may do what").
+    needs: "stores:manage",
+    needsLabel: "the store's owners and admins",
+  },
+};
+
+/** The actions Zapier may run, for the consent page; each needs its scope. */
+export const ZAPIER_ACTIONS = [
+  { key: "send_whatsapp_template", label: "Send WhatsApp Template Message", description: "Sends one customer a WhatsApp template Meta approved, with the values your Zap maps in.", scope: "whatsapp_send" },
+] as const satisfies ReadonlyArray<{ key: string; label: string; description: string; scope: ZapierScope }>;
+
+/** What the consent page says Zapier can't do once allowed, given what was ticked. */
+export function zapierCannot(scopes: readonly string[]): string[] {
+  return [
+    "Change anything in bizinsights, Shopify or your ad accounts",
+    scopes.includes("whatsapp_send") ? "Send customers anything but a WhatsApp template Meta approved, or message anyone who replied STOP" : "Send messages to your customers",
+    "See customers' names, emails or full phone numbers",
+    "Reach your other stores or workspaces",
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// The action "Send WhatsApp Template Message"
+// ---------------------------------------------------------------------------
+
+/** Messages one store may hand bizinsights from Zapier a minute (a burst of leads); more are answered 429 and Zapier tries again. */
+export const ZAPIER_WA_SENDS_PER_MINUTE = 60;
+/** The longest value a Zap may put in a template's variable. */
+export const ZAPIER_WA_VALUE_MAX = 200;
+/** Variables a Zap fills in: every template variable but the business's name, which is the store's own. */
+export const ZAPIER_WA_VARIABLES = WA_VARIABLES.filter((v) => v !== "store_name");
+
+/** Zapier sends an unfilled optional field as "", and booleans mapped from another app as words. */
+const blankToUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
+const yes = (v: unknown) => (typeof v === "string" ? ["true", "yes", "1", "y"].includes(v.trim().toLowerCase()) : v === true || v === 1);
+
+/**
+ * A template's value as Meta takes it: one line (Meta refuses a parameter with a new line, a tab or
+ * more than four spaces in a row), trimmed.
+ */
+export const zapierWaValue = (v: string) => v.replace(/\s+/g, " ").trim();
+
+export const zapierWhatsappSendSchema = z.object({
+  phone: z.string().trim().min(6).max(32),
+  /** The country to read a number written without "+" in (ISO 3166-1 alpha-2). */
+  country: z.preprocess(blankToUndefined, z.string().trim().length(2).toUpperCase().optional()),
+  template_id: z.string().trim().min(1).max(40),
+  /** The template's variables, by name ({{order_number}} → "order_number"). */
+  values: z.preprocess(
+    (v) => (v && typeof v === "object" ? v : {}),
+    z.record(z.string().max(40), z.preprocess((x) => (x == null ? "" : typeof x === "number" ? String(x) : x), z.string().max(ZAPIER_WA_VALUE_MAX * 2))),
+  ),
+  /** The customer's first name, kept on their WhatsApp contact (and {{customer_first_name}} when the Zap gives none). */
+  first_name: z.preprocess(blankToUndefined, z.string().trim().max(60).optional()),
+  /** The store says this customer agreed to WhatsApp messages from it: recorded as their consent, with the note. */
+  customer_agreed: z.preprocess((v) => yes(v), z.boolean()),
+  consent_note: z.preprocess(blankToUndefined, z.string().trim().max(200).optional()),
+  /** Messages with the same key go once (a lead's id). Without one: the same Zap, number, template and values on the same day go once. */
+  unique_key: z.preprocess(blankToUndefined, z.string().trim().max(200).optional()),
+  zap_id: z.preprocess((v) => (typeof v === "number" ? String(v) : blankToUndefined(v)), z.string().max(40).optional()),
+});
+export type ZapierWhatsappSendInput = z.infer<typeof zapierWhatsappSendSchema>;
+
+/** The variables a Zap may fill in, in a template's text. */
+export const zapierFillable = (variables: readonly string[]) => variables.filter((v) => (ZAPIER_WA_VARIABLES as readonly string[]).includes(v));
 
 /** Threshold triggers' inputs. */
 export const ZAPIER_SPEND_PLATFORMS = ["meta", "google", "any"] as const;

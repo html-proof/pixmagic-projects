@@ -494,7 +494,7 @@ export const waIsStop = (text: string | null | undefined) => !!text && STOP_WORD
 export const waIsStart = (text: string | null | undefined) => !!text && START_WORDS.has(keyword(text));
 
 /** Where a consent change came from. */
-export const WA_CONSENT_SOURCES = ["whatsapp_stop", "whatsapp_start", "shopify_sms", "merchant", "customer_redact"] as const;
+export const WA_CONSENT_SOURCES = ["whatsapp_stop", "whatsapp_start", "shopify_sms", "merchant", "zapier", "customer_redact"] as const;
 export type WaConsentSource = (typeof WA_CONSENT_SOURCES)[number];
 
 export const WA_CONSENT_SOURCE_LABEL: Record<WaConsentSource, string> = {
@@ -502,6 +502,7 @@ export const WA_CONSENT_SOURCE_LABEL: Record<WaConsentSource, string> = {
   whatsapp_start: "Replied START on WhatsApp",
   shopify_sms: "Shopify's text-message consent (the store says it covers WhatsApp)",
   merchant: "Recorded by the store",
+  zapier: "Recorded by the store's Zap in Zapier (the Zap said the customer agreed)",
   customer_redact: "Erased at the customer's request",
 };
 

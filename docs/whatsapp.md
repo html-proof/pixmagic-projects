@@ -296,6 +296,11 @@ may have replied STOP in between):
   24 hours may be answered.
 - **Marketing**: marketing switched on in Settings **and** the customer's own marketing yes. Every
   marketing template must say how to stop.
+- **From a Zap** (Zapier's "Send WhatsApp Template Message", [zapier.md](zapier.md#the-action-send-whatsapp-template-message)):
+  approved templates only, source `zapier` (counted, kept to the sending hours, held by Pause all
+  automation). A Zap that says the customer agreed records it (consent source `zapier`, with where they
+  agreed); a number bizinsights knows only from a Zap needs that agreement even under "Customers told
+  at checkout".
 
 STOP (and "unsubscribe", "opt out"…) from **anyone** puts the number on the store's do-not-message
 list by its keyed hash, and one confirmation is sent; START undoes it. The list is checked for

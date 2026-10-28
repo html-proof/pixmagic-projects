@@ -13,10 +13,14 @@ provider, no keys or addresses to copy) and uses these in their Zaps:
 | Trigger | `whatsapp_message_failed` | WhatsApp Message Failed (number masked) |
 | Search | `find_ad_performance` | Find Ad Performance (stored Meta and Google Ads figures for dates) |
 | Search | `find_adsense_earnings` | Find AdSense Earnings (stored estimates for dates) |
+| Action | `send_whatsapp_template` | Send WhatsApp Template Message (since 1.1.0): a template Meta approved to one customer, e.g. a new Facebook Lead Ads or Google Ads lead |
+| Trigger (hidden) | `whatsapp_templates` | The action's template dropdown |
 
-Every trigger is a REST hook (instant). There is no action: nothing in bizinsights changes from
-Zapier and nothing is sent to customers. How it works on bizinsights' side, the payloads and the
-security model: [docs/zapier.md](../../docs/zapier.md).
+Every listed trigger is a REST hook (instant). The one action sends only for a connection an owner or
+admin allowed to send ("Send WhatsApp template messages to your customers", ticked on bizinsights'
+page when connecting), through the store's WhatsApp rules; nothing else in bizinsights changes from
+Zapier. How it works on bizinsights' side, the payloads and the security model:
+[docs/zapier.md](../../docs/zapier.md).
 
 This folder is **not** part of the pnpm workspace: it has its own `npm install`, its own
 `package-lock.json`, and CI neither installs nor type-checks it (`pnpm lint` does lint it).
@@ -98,7 +102,9 @@ You need a Zapier account (the owner's) and Node 18.20 or later. PowerShell, one
 
 Later versions: bump `version` in `package.json`, `npx zapier-platform-cli push`, check the new
 version has the three values (`npx zapier-platform-cli env:get <version>`; set them with `env:set`
-if not), then `npx zapier-platform-cli promote <version>` to move users onto it.
+if not), then `npx zapier-platform-cli promote <version>` to move users onto it. Push a version only
+after bizinsights' side of it is live (Deploy to AWS green): 1.1.0's action calls
+`/api/zapier/whatsapp/*`, which earlier releases answer 404.
 
 Listing the app publicly in Zapier's directory (and Zapier's embedding, the Workflow API) needs
 Zapier's review: until then merchants join through the invite link.

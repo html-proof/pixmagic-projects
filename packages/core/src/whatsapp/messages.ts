@@ -42,7 +42,7 @@ import { CloudApiError, metaErrorInfo, sendCloudMessage, type CloudErrorKind } f
 import { markReconnect, reconnectReasonOf } from "./connection.js";
 import { zapierWhatsappFailed } from "../zapier/events.js";
 
-export type MessageSource = "automation" | "campaign" | "manual" | "test" | "verification" | "team_alert" | "reply";
+export type MessageSource = "automation" | "campaign" | "manual" | "zapier" | "test" | "verification" | "team_alert" | "reply";
 
 /** What a send needs, encrypted on the row until the message is final. */
 export interface MessagePayload {
@@ -156,16 +156,16 @@ async function dropAttachment(m: Pick<WappMessage, "id">, deps?: Pick<WaDeps, "p
 }
 
 /** Business-started messages (counted against the daily limits); a test, a verification code or a reply to a customer's message aren't. */
-const counted = (source: string) => source === "automation" || source === "campaign" || source === "manual" || source === "team_alert";
-/** Messages that keep to the sending hours: the ones nobody is waiting for at that moment. */
-const timed = (source: string) => source === "automation" || source === "campaign" || source === "team_alert";
+const counted = (source: string) => source === "automation" || source === "campaign" || source === "manual" || source === "zapier" || source === "team_alert";
+/** Messages that keep to the sending hours: the ones nobody is waiting for at that moment (a Zap's included: docs/zapier.md). */
+const timed = (source: string) => source === "automation" || source === "campaign" || source === "zapier" || source === "team_alert";
 /** Messages to a customer, whose consent is checked again at the moment of sending. */
-const toCustomer = (source: string) => source === "automation" || source === "campaign" || source === "manual" || source === "reply";
+const toCustomer = (source: string) => source === "automation" || source === "campaign" || source === "manual" || source === "zapier" || source === "reply";
 
 /** How many business-started messages the store sent today (its own day). */
 export async function sentToday(storeId: string, timeZone: string, now = new Date()): Promise<number> {
   const since = startOfLocalDay(localDay(now, timeZone), timeZone);
-  return systemDb.wappMessage.count({ where: { storeId, direction: "out", source: { in: ["automation", "campaign", "manual", "team_alert"] }, acceptedAt: { gte: since } } });
+  return systemDb.wappMessage.count({ where: { storeId, direction: "out", source: { in: ["automation", "campaign", "manual", "zapier", "team_alert"] }, acceptedAt: { gte: since } } });
 }
 
 /** The reason consent stops this message now, if any. A customer who wrote in the last 24 hours may be answered. */
@@ -206,7 +206,7 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
     const c = await systemDb.wappCampaign.findUnique({ where: { id: m.campaignId }, select: { status: true } });
     if (!c || c.status !== "sending") return end("cancelled", "campaign_cancelled");
   }
-  if ((m.source === "automation" || m.source === "campaign" || m.source === "team_alert") && settings.automationPausedAt) {
+  if ((m.source === "automation" || m.source === "campaign" || m.source === "zapier" || m.source === "team_alert") && settings.automationPausedAt) {
     if (now.getTime() - settings.automationPausedAt.getTime() > DOWN_GRACE_MS) return end("cancelled", "automation_paused");
     return hold(deps, m.id, new Date(now.getTime() + 3600_000), "automation_paused");
   }
@@ -228,11 +228,11 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
   }
   if (counted(m.source) && (await sentToday(m.storeId, settings.timeZone, now)) >= dailyLimitOf(settings)) {
     const tomorrow = startOfLocalDay(localDay(new Date(now.getTime() + 86_400_000), settings.timeZone), settings.timeZone);
-    if (m.source === "campaign" || m.source === "automation") return hold(deps, m.id, timed(m.source) ? nextSendTime(tomorrow, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end) : tomorrow, "daily_limit");
+    if (m.source === "campaign" || m.source === "automation" || m.source === "zapier") return hold(deps, m.id, timed(m.source) ? nextSendTime(tomorrow, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end) : tomorrow, "daily_limit");
     return end("skipped", "daily_limit");
   }
-  if ((m.source === "automation" || m.source === "campaign") && m.phoneHash) {
-    const lastDay = await systemDb.wappMessage.count({ where: { storeId: m.storeId, phoneHash: m.phoneHash, direction: "out", source: { in: ["automation", "campaign"] }, acceptedAt: { gte: new Date(now.getTime() - 86_400_000) } } });
+  if ((m.source === "automation" || m.source === "campaign" || m.source === "zapier") && m.phoneHash) {
+    const lastDay = await systemDb.wappMessage.count({ where: { storeId: m.storeId, phoneHash: m.phoneHash, direction: "out", source: { in: ["automation", "campaign", "zapier"] }, acceptedAt: { gte: new Date(now.getTime() - 86_400_000) } } });
     if (lastDay >= settings.perCustomerDailyLimit) return end("skipped", "customer_limit");
   }
   if (!m.payloadEnc || !m.phoneEnc) return end("failed", "gave_up", { errorCode: "no_payload" });
