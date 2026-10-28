@@ -222,7 +222,9 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   for (const [method, path] of [["POST", `${base}/connection`], ["GET", `${base}/connection/pairing`], ["POST", `${base}/connection/reconnect`]] as const) {
     app.on(method, path, async (c) => {
-      await requireConnect(c, deps, c.req.param("ws"));
+      const { ws, storeId } = c.req.param();
+      await requireConnect(c, deps, ws);
+      await waStore(ws, storeId);
       throw new WhatsappError("bizinsights no longer links a WhatsApp phone with a QR code. Reload the page and connect WhatsApp Business with Meta instead.", 410, "qr_linking_retired");
     });
   }

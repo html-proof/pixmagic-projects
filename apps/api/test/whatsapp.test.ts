@@ -261,8 +261,9 @@ describe("Meta's webhook", () => {
     expect(sent).toMatchObject({ to: "61412345678", type: "text", text: "Hi Pat!", reference: m.id });
     // Meta took it: accepted, nothing more, until its reports say so.
     expect(ok(await o.call("GET", `/messages/${m.id}`)).message).toMatchObject({ status: "accepted", providerMessageId: sent.id });
-    for (const st of ["sent", "delivered", "read"]) {
-      const w = meta.status(sent, st);
+    // Meta's reports carry whole seconds: each a few seconds on, as they come.
+    for (const [i, st] of ["sent", "delivered", "read"].entries()) {
+      const w = meta.status(sent, st, { at: new Date(Date.now() + 2000 * (i + 1)) });
       ok(await deliver(w));
       // Meta delivers again what it didn't get a 200 for: the same report changes nothing.
       ok(await deliver(w));
