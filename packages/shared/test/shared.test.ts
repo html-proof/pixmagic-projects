@@ -515,6 +515,8 @@ describe("KPIs", () => {
     expect(d1.taxes).toBeCloseTo(11.5, 6);
     // Net 140 + shipping 5 + taxes 11.50; the gift card and the tip are in neither.
     expect(d1.totalSales).toBeCloseTo(156.5, 6);
+    // Total sales is already after the cancellation, which took 999 off it.
+    expect(d1.totalRefunded).toBe(999);
     // The gift card is an item sold (Shopify's net items sold), though no sale; the tip isn't.
     expect(d1.units).toBe(6 - 1);
     expect(d1.refundedOrders).toBe(1);
@@ -524,6 +526,8 @@ describe("KPIs", () => {
     expect(d3.refunds).toBe(45);
     expect(d3.taxes).toBe(-4.5);
     expect(d3.totalSales).toBe(-49.5);
+    // A refund lowers the day it was made, tax in, whenever the order was placed.
+    expect(d3.totalRefunded).toBe(49.5);
     expect(d3.units).toBe(-1);
     expect(d3.refundedOrders).toBe(1);
   });
@@ -574,6 +578,8 @@ describe("KPIs", () => {
     expect(s.shipping).toBe(5);
     expect(s.taxes).toBe(7);
     expect(s.totalSales).toBe(95 + 5 + 7);
+    // The cancellation (999) and the refund (49.50, tax in): total sales is already after both.
+    expect(s.totalRefunded).toBe(1048.5);
     // (gross − discounts) ÷ orders, before returns, as Shopify's average order value.
     expect(s.averageOrderValue).toBe(284.75);
     expect(s.refundRate).toBeCloseTo(1044 / 1139);
@@ -611,8 +617,38 @@ describe("KPIs", () => {
     expect(d.shipping).toBeCloseTo(-17.27, 6);
     expect(d.taxes).toBeCloseTo(-20.47, 6);
     expect(d.totalSales).toBeCloseTo(-(206.1 + 19 + 45.5), 6);
+    // The money given back: 225.10 on #2727S and 45.50 on #2804S.
+    expect(d.totalRefunded).toBeCloseTo(206.1 + 19 + 45.5, 6);
     expect(d.units).toBe(-1);
     expect(d.refundedOrders).toBe(2);
+  });
+
+  // PixMagic's sales records of 2026-10-19 and 2026-10-23, as Shopify gave them.
+  it("takes a refund off total sales by the money given back, and a return with none by nothing", () => {
+    const refunded = new Date("2026-10-19T04:20:14Z");
+    const kept = new Date("2026-10-23T04:23:10Z");
+    const records: SaleInput[] = [
+      // #2904S: the item (43 with 3.91 GST) and its shipping (19 with 1.73) refunded in full, 62 back.
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", quantity: -1, amount: -43, tax: -3.91 }),
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", lineType: "shipping", quantity: null, amount: -19, tax: -1.73 }),
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", lineType: "adjustment", quantity: null, amount: 62 }),
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", lineType: "adjustment", quantity: null, amount: -62 }),
+      // #2821S: the item and shipping returned, but nothing given back (the order stays paid): a
+      // refund discrepancy of +186 evens them out.
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", quantity: -1, amount: -167, tax: -15.18 }),
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", lineType: "shipping", quantity: null, amount: -19, tax: -1.73 }),
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", lineType: "adjustment", quantity: null, amount: 186 }),
+      // A gift card refunded the same day isn't in total sales, so it takes nothing off it either.
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", lineType: "gift_card", quantity: -1, amount: -50 }),
+    ];
+    const daily = aggregateDaily([], records, "Australia/Melbourne", localDay);
+    const d19 = daily.get("2026-10-19")!;
+    expect(d19.totalRefunded).toBeCloseTo(62, 6);
+    expect(d19.totalSales).toBeCloseTo(-62, 6);
+    const d23 = daily.get("2026-10-23")!;
+    expect(d23.totalRefunded).toBeCloseTo(0, 6);
+    expect(d23.totalSales).toBeCloseTo(0, 6);
+    expect(summarize([...daily.values()]).totalRefunded).toBe(62);
   });
 
   it("returns null ratios for empty data instead of fake zeros", () => {

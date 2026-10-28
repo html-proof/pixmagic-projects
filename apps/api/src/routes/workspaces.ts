@@ -21,8 +21,8 @@ import {
   syncBillingFromShopify,
   updateMemberAccess,
 } from "@app/core";
-import { allows, describeAlert, hasFullAccess, LEGACY_GRANTS, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
-import { STAFF_ROLES, staffAccess, staffCan } from "@app/shared/staff";
+import { describeAlert, hasFullAccess, LEGACY_GRANTS, mayFixAlert, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
+import { STAFF_ROLES } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
 import { inviteLimits, removeMemberReleasingAds, teamActor } from "./team.js";
 import type { App } from "../app.js";
@@ -337,7 +337,6 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/alerts", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "dashboard:read");
-    const staff = staffAccess(a.role, a.staffRole, a.access.permissions);
     const { problems, notes, stores } = await withTenant(ws, async (tx) => ({
       // Problems stay until whatever fixes them resolves them. Notes (info) are never resolved, so
       // only the last week's are listed, and apart, so a busy automation can't push problems out.
@@ -350,21 +349,8 @@ export function workspaceRoutes(app: App, deps: Deps) {
       stores: await tx.store.findMany({ where: { workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true, name: true, shopDomain: true } }),
     }));
     const storeById = new Map(stores.map((s) => [s.id, { id: s.id, name: s.name ?? s.shopDomain }]));
-    // Only what this person can open and fix. Settings → Privacy requests needs audit:read
-    // (routes/privacy.ts); Settings → Advertising, integrations.manage (routes/ads.ts); the Shopify
-    // connection and the help page's alerts go to owners and admins.
-    const mayFix = (area: AlertArea) =>
-      area === "staff"
-        ? staffCan(staff, "attendance:view")
-        : area === "email"
-          ? allows(a.access, "email:read")
-          : area === "privacy"
-            ? allows(a.access, "audit:read")
-            : area === "whatsapp"
-              ? allows(a.access, "marketing.campaigns")
-              : area === "ads"
-                ? allows(a.access, "integrations.manage")
-                : hasFullAccess(a.access.role);
+    // Only what this person can open and fix (mayFixAlert: the same rule Zapier's "New alert" follows).
+    const mayFix = (area: AlertArea) => mayFixAlert(area, a.access, a.staffRole);
     const alerts: AlertView[] = [];
     for (const row of [...problems, ...notes].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())) {
       // A store that has since been uninstalled or removed has nothing left to fix.

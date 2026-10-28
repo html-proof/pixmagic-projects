@@ -6,6 +6,8 @@ import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
 import { fromHeader, type EmailPurpose } from "./mail/senders.js";
 import type { MailReceipt } from "./mail/types.js";
+import type { Queues } from "./queues.js";
+import { zapierAlertRaised } from "./zapier/events.js";
 
 export interface MailOptions {
   /**
@@ -134,6 +136,8 @@ export async function raiseAlert(
   input: { workspaceId: string; storeId?: string | null; severity: "info" | "warning" | "critical"; code: string; message: string },
   mailer: Mailer,
   fetchImpl: FetchLike = fetch,
+  /** Queues Zapier's "New alert" deliveries at once; without it the cron sweep sends them (within 15 minutes). */
+  queues?: Pick<Queues, "sync">,
 ) {
   const open = await systemDb.alert.findFirst({
     where: { workspaceId: input.workspaceId, storeId: input.storeId ?? null, code: input.code, resolvedAt: null },
@@ -142,6 +146,8 @@ export async function raiseAlert(
   const alert = await systemDb.alert.create({ data: { ...input, storeId: input.storeId ?? null } });
   // The logger drops any `code` key (it can be an OAuth code), so the alert's goes in as alertCode.
   logger.warn({ alertId: alert.id, alertCode: alert.code, alert }, "alert raised");
+  // Zapier's "New alert" trigger (docs/zapier.md): worded as the bell words it. Never throws.
+  await zapierAlertRaised(alert, queues);
 
   // Names for the email and Slack. Best effort: without them both still go out.
   const [workspace, store] = await Promise.all([

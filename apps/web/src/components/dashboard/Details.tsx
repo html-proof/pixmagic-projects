@@ -84,7 +84,9 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
           {total !== null ? (
             <>
               Your total sales were <B>{money(total)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}. Before shipping and taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
+              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
+              {c.totalRefunded !== undefined && c.totalRefunded > 0 ? <> That&apos;s after refunds took <B>{money(c.totalRefunded)}</B> off it.</> : null} Before shipping and
+              taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
             </>
           ) : (
             <>
