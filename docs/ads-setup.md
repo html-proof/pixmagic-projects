@@ -35,7 +35,7 @@ owner's steps after that are in "Leaving Nango".
    **Synchronizing** meanwhile.
 
 **Google AdSense** runs the other way: it is what the store's *site* earns from Google ads shown on it. Its
-estimated earnings, page views, ads shown and clicks go on a separate **Ad earnings** card and are never added
+estimated earnings, page views, ad impressions and clicks go on a separate **Ad earnings** card and are never added
 to ad spend. On Settings → Advertising the AdSense card lets the merchant pick which **sites** (AdSense domains)
 belong to this store; none picked means every site. Accounts that can't be split by site are read as daily
 totals for the whole account ("All sites").
@@ -574,9 +574,25 @@ is no access level to request. A Google login with no AdSense account gets "That
 `account_not_ready` ("…AdSense account is closed"). Each case logs "ads: nothing to connect for this login"; the
 answers with a list add `diagnosis: {listed, closed}`.
 
-**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform&from=&to=`): estimated
-earnings, page views, ads shown and clicks by site, country or device type, limited to the store's chosen sites.
-Earnings are estimated until AdSense finalizes them after the month ends.
+**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform|ad_unit&from=&to=`):
+estimated earnings, page views, ad impressions (`IMPRESSIONS`: one for each ad request that got at least one ad, not
+each ad shown, which is `INDIVIDUAL_AD_IMPRESSIONS` and isn't read) and clicks, plus `AD_REQUESTS`,
+`AD_REQUESTS_COVERAGE` and `ACTIVE_VIEW_VIEWABILITY` (`ADSENSE_REPORT_METRICS` in `packages/shared/src/ads.ts`), by site,
+country, device type or ad unit (`AD_UNIT_ID` with `AD_UNIT_NAME`), limited to the store's chosen sites (an ad unit's
+row is its earnings on those sites). Asked of AdSense when the page opens and cached 10 minutes (ranges including
+today) or an hour; the three extra metrics and the ad units are never stored (`adsense_daily` keeps site, day,
+earnings, page views, impressions and clicks only). Several rows of one id added up: ad requests add, coverage is
+worked back through the requests, viewability stays unknown (the impressions Active View measured aren't read).
+
+**Estimated or final**: AdSense finalizes a month's earnings in the first days of the next, and the daily re-check
+reads the whole month before again during days 1-10. `adsenseFigures` (`packages/core/src/reports/ads.ts`) gives
+each account `finalThrough` from its last sync that worked (`adsenseFinalThrough` in `@app/shared/ads`): every month
+that ended before the month before that sync's day, and that month too once the sync was after the 10th (the
+account's own days). The module's `finalThrough` is the earliest of the counted accounts', and `final` says whether
+every day of the figures given is on or before it; the pages say **Final** or **Estimated** from it. An account whose
+syncs stopped stays final only as far as it was when it last synced. The live report is final when its last day is on
+or before `adsenseFinalThrough` of the day it was read. No payment is read: Final means AdSense's finalized earnings,
+not money paid.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 

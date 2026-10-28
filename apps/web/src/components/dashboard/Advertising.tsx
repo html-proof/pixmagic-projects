@@ -11,6 +11,7 @@ import {
   ChangeNote,
   ComparedLine,
   Definitions,
+  earningsLabel,
   SoFarNote,
   timeZoneNote,
   UNAVAILABLE,
@@ -54,7 +55,7 @@ const PLATFORM: Record<Provider, { name: string; short: string; Icon: (p: { size
     short: "AdSense",
     Icon: GoogleIcon,
     color: "var(--viz-cat-3)",
-    explain: "What AdSense estimates the ads shown on your site earned you. It finalizes each month after it ends.",
+    explain: "What AdSense estimates the ads shown on your site earned you. It finalizes each month in the first days of the next.",
   },
 };
 
@@ -343,7 +344,7 @@ function EarningsCard({ a, ov }: { a: AdsenseModule; ov: Overview }) {
       note={[timeZoneNote(accounts), historyNote(a, "adsense"), leftOut].filter(Boolean).join(" ") || null}
       testid="ads-earnings"
     >
-      <Headline label="Estimated earnings" fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
+      <Headline label={earningsLabel(a.final)} fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
       {c && (
         <Facts
           items={[

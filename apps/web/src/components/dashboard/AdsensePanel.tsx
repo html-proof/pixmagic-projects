@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import type { AdsenseReportLevel, AdsenseTotals } from "@app/shared/ads";
+import { adsenseFinalThrough, type AdsenseReportLevel, type AdsenseTotals } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon } from "@/components/BrandIcons";
 import { LoadError } from "@/components/LoadError";
@@ -10,11 +10,14 @@ import {
   AccountStatus,
   accountGroups,
   ADSENSE_DEFINITIONS,
+  ADSENSE_REPORT_DEFINITIONS,
   AdStatusNotes,
   ChangeNote,
   ComparedLine,
   dailyMoneyColumns,
   Definitions,
+  earningsLabel,
+  EarningsState,
   missingReasons,
   runningWords,
   throughLabel,
@@ -42,6 +45,8 @@ const siteName = (s: string) => s || "All sites";
 function EarningsChart({ a, ov }: { a: AdsenseModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const columns = dailyMoneyColumns(a.series, (d) => d.earnings, ov.today, a.currency);
+  // A day on or before the one every account's figures are final up to is AdSense's final figure.
+  const kind = (day: string) => (a.finalThrough && day <= a.finalThrough ? "final" : "estimated");
   return (
     <ColumnsWithTotal
       columns={columns}
@@ -58,7 +63,9 @@ function EarningsChart({ a, ov }: { a: AdsenseModule; ov: Overview }) {
               <div className="mt-0.5 text-sm font-semibold">No figures for this day yet</div>
             ) : (
               <>
-                <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(d.earnings)} estimated</div>
+                <div className="mt-0.5 text-sm font-semibold tabular-nums">
+                  {money(d.earnings)} {kind(d.day)}
+                </div>
                 <div className="text-muted">{plural(d.pageViews ?? 0, "page view")} · {plural(d.clicks ?? 0, "ad click")}</div>
               </>
             )}
@@ -68,7 +75,7 @@ function EarningsChart({ a, ov }: { a: AdsenseModule; ov: Overview }) {
       describe={(i) => {
         const d = a.series[i]!;
         if (d.earnings === null) return `${fmtLongDay(d.day)}: no figures for this day yet.`;
-        return `${fmtLongDay(d.day)}: ${money(d.earnings)} estimated from ${fmtNum(d.pageViews)} page views and ${fmtNum(d.clicks)} ad clicks.`;
+        return `${fmtLongDay(d.day)}: ${money(d.earnings)} ${kind(d.day)} from ${fmtNum(d.pageViews)} page views and ${fmtNum(d.clicks)} ad clicks.`;
       }}
       missingLabel="No data"
     />
@@ -81,7 +88,7 @@ function Glance({ a, t, ov, partial }: { a: AdsenseModule; t: AdsenseTotals; ov:
   const rpm = t.impressions > 0 ? (t.earnings * 1000) / t.impressions : null;
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Stat label="Estimated earnings" value={money(t.earnings)} note={change(a.deltas.earnings)} />
+      <Stat label={earningsLabel(a.final)} value={money(t.earnings)} note={change(a.deltas.earnings)} />
       <Stat label="Page views" value={fmtNum(t.pageViews)} note={change(a.deltas.pageViews)} />
       <Stat label="Page RPM" value={t.pageRpm !== null ? money(t.pageRpm) : "—"} note={partial ? "Earnings per 1,000 page views" : change(a.deltas.pageRpm)} />
       <Stat label="Clicks" value={fmtNum(t.clicks)} note={change(a.deltas.clicks)} />
@@ -95,15 +102,17 @@ function Glance({ a, t, ov, partial }: { a: AdsenseModule; t: AdsenseTotals; ov:
   );
 }
 
-const REPORT_LEVELS: Array<{ id: Extract<AdsenseReportLevel, "country" | "platform">; label: string; one: string }> = [
-  { id: "country", label: "By country", one: "Country" },
-  { id: "platform", label: "By device type", one: "Device type" },
+const REPORT_LEVELS: Array<{ id: Extract<AdsenseReportLevel, "country" | "platform" | "ad_unit">; label: string; one: string; note: string }> = [
+  { id: "country", label: "By country", one: "Country", note: "Countries are where the visitors who saw the ads were." },
+  { id: "platform", label: "By device type", one: "Device type", note: "Device types are AdSense's own: computers, high-end phones, tablets and others." },
+  { id: "ad_unit", label: "By ad unit", one: "Ad unit", note: "Ad units are named as in your AdSense account." },
 ];
 
 /**
- * One AdSense account split by country or device type, asked of AdSense for exactly the dates
- * picked (GET .../ads/adsense/report). Read-only, and only for members who may see the other
- * live reports ("View campaigns" in Team & Access).
+ * One AdSense account split by country, device type or ad unit, asked of AdSense for exactly the
+ * dates picked (GET .../ads/adsense/report), with AdSense's ad requests, coverage and Active View
+ * viewability beside the earnings (read for this report only, never stored). Read-only, and only for
+ * members who may see the other live reports ("View campaigns" in Team & Access).
  */
 function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; accounts: AdAccount[]; currency: string }) {
   const { workspace } = useApp();
@@ -116,14 +125,18 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
   const r = report.data?.report;
   const money = (n: number | null) => (n === null ? "—" : fmtMoney(n, r?.currency ?? chosen.currency ?? currency));
   const notThere = report.error instanceof ApiError && report.error.status === 404;
-  const one = REPORT_LEVELS.find((l) => l.id === (r?.level ?? level))?.one ?? "Split";
+  const shownLevel = REPORT_LEVELS.find((l) => l.id === (r?.level ?? level));
+  const one = shownLevel?.one ?? "Split";
   // The report is limited to the store's chosen sites, as every other AdSense figure here (empty: every site).
   const sites = r?.sites ?? chosen.sites ?? [];
+  // Read from AdSense on the account's `today`: final for the months AdSense had finalized by then.
+  const finalThrough = report.data ? adsenseFinalThrough(report.data.today) : null;
+  const final = r ? finalThrough !== null && r.until <= finalThrough : undefined;
   return (
     <Panel
       id="d-adsense-report"
       title="Where the earnings came from"
-      help={`${fmtRange(ov.range.from, ov.range.to)}, straight from AdSense (days in the account's time zone). Estimated earnings. Read-only.`}
+      help={`${fmtRange(ov.range.from, ov.range.to)}, straight from AdSense (days in the account's time zone). ${final ? "Final earnings." : "Estimated earnings."} Read-only.`}
       aside={
         accounts.length > 1 ? (
           <label className="flex items-center gap-2 text-xs text-muted">
@@ -141,20 +154,23 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
         )
       }
     >
-      <div role="tablist" aria-label="Split by" className="mb-3 inline-flex flex-wrap rounded-lg border border-border p-0.5">
-        {REPORT_LEVELS.map((l) => (
-          <button
-            key={l.id}
-            type="button"
-            role="tab"
-            aria-selected={level === l.id}
-            className={`rounded-md px-3 py-1 text-sm ${level === l.id ? "bg-surface font-semibold shadow-sm" : "text-muted"}`}
-            onClick={() => setLevel(l.id)}
-            data-testid={`adsense-report-${l.id}`}
-          >
-            {l.label}
-          </button>
-        ))}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div role="tablist" aria-label="Split by" className="inline-flex flex-wrap rounded-lg border border-border p-0.5">
+          {REPORT_LEVELS.map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              role="tab"
+              aria-selected={level === l.id}
+              className={`rounded-md px-3 py-1 text-sm ${level === l.id ? "bg-surface font-semibold shadow-sm" : "text-muted"}`}
+              onClick={() => setLevel(l.id)}
+              data-testid={`adsense-report-${l.id}`}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
+        <EarningsState final={final} />
       </div>
       {notThere ? (
         <p className="text-sm text-muted">This split isn&apos;t available for this account yet.</p>
@@ -165,14 +181,17 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
       ) : (
         <>
           <div className={`-mx-1 overflow-x-auto ${report.loading ? "opacity-60" : ""}`} aria-busy={report.loading}>
-            <table className="w-full min-w-[40rem] text-sm" data-testid="adsense-report-table">
+            <table className="w-full min-w-[58rem] text-sm" data-testid="adsense-report-table">
               <thead className="text-left text-xs text-muted">
                 <tr>
                   <th className="px-2 pb-2 font-normal">{one}</th>
-                  <th className="px-2 pb-2 text-right font-normal">Estimated earnings</th>
+                  <th className="px-2 pb-2 text-right font-normal">{earningsLabel(final)}</th>
                   <th className="px-2 pb-2 text-right font-normal">Page views</th>
                   <th className="px-2 pb-2 text-right font-normal">Page RPM</th>
+                  <th className="px-2 pb-2 text-right font-normal">Ad requests</th>
+                  <th className="px-2 pb-2 text-right font-normal">Coverage</th>
                   <th className="px-2 pb-2 text-right font-normal">Impressions</th>
+                  <th className="px-2 pb-2 text-right font-normal">Active View viewable</th>
                   <th className="px-2 pb-2 text-right font-normal">Clicks</th>
                   <th className="px-2 pb-2 text-right font-normal">Click-through rate</th>
                 </tr>
@@ -186,7 +205,11 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
                     <td className="px-2 py-2 text-right tabular-nums">{money(row.earnings)}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{fmtNum(row.pageViews)}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{money(row.pageRpm)}</td>
+                    {/* Ad requests, coverage and viewability: "—" when AdSense didn't send them (or an older answer). */}
+                    <td className="px-2 py-2 text-right tabular-nums">{fmtNum(row.adRequests)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{fmtPct(row.coverage)}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{fmtNum(row.impressions)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{fmtPct(row.viewability)}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{fmtNum(row.clicks)}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{row.ctr === null ? "—" : fmtPct(row.ctr)}</td>
                   </tr>
@@ -197,9 +220,10 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
           {r.rows.length === 0 && <p className="mt-2 text-sm text-muted">AdSense has no earnings to split for these dates.</p>}
           {r.truncated && <p className="mt-2 text-xs text-muted">Showing the {r.rows.length} that earned most.</p>}
           <p className="mt-2 text-xs text-muted">
-            {level === "country" ? "Countries are where the visitors who saw the ads were. " : "Device types are AdSense's own: computers, high-end phones, tablets and others. "}
+            {shownLevel ? `${shownLevel.note} ` : ""}
             {sites.length ? `Only the sites chosen as this store's: ${sites.join(", ")}.` : "Every site on the account counts as this store's."}
           </p>
+          <Definitions items={ADSENSE_REPORT_DEFINITIONS} title="What the report's other figures mean" />
         </>
       )}
     </Panel>
@@ -248,7 +272,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
               {a.partial ? (
                 <>
                   {" "}
-                  For {fmtSpan(a.partial.from, a.partial.to)}, AdSense estimates <B>{money(a.partial.totals.earnings)}</B>.
+                  For {fmtSpan(a.partial.from, a.partial.to)}, {a.final ? "AdSense's final figure is" : "AdSense estimates"} <B>{money(a.partial.totals.earnings)}</B>.
                 </>
               ) : null}{" "}
               <Link className="text-accent underline" href="/settings/ads">
@@ -259,9 +283,9 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                AdSense estimates the ads on your site earned <B>{money(c.earnings)}</B>
+                {a.final ? "The ads on your site earned" : "AdSense estimates the ads on your site earned"} <B>{money(c.earnings)}</B>
                 {upTo ? <> up to {fmtDay(upTo, { year: false })}</> : null}
-                {change}.
+                {change}.{a.final ? " AdSense has finalized these figures." : ""}
               </p>
               {upTo && reasons.length > 0 && <p className="text-muted">{reasons.join(" ")}</p>}
               <p>
@@ -298,6 +322,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
       <Panel
         id="d-adsense-glance"
         title="At a glance"
+        aside={shown ? <EarningsState final={a.final} /> : undefined}
         help={
           <>
             {upTo
@@ -330,9 +355,14 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
 
       {a.series.length > 1 && (
         <section className="card animate-rise min-w-0" data-testid="adsense-daily">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">{fmtSpan(ov.range.from, ov.range.to)} · Estimated earnings per day</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">
+            {fmtSpan(ov.range.from, ov.range.to)} · {a.final ? "Earnings per day" : "Estimated earnings per day"}
+          </p>
           <p className="mt-1 text-3xl font-semibold">{c ? money(c.earnings) : UNAVAILABLE}</p>
           {upTo && <p className="text-xs text-muted">Estimated {upToWords(upTo)}. Days with no figures yet are marked, not drawn as $0.</p>}
+          {c && !upTo && a.finalThrough && a.finalThrough >= ov.range.from && !a.final && (
+            <p className="text-xs text-muted">Final up to {fmtDay(a.finalThrough, { year: false })}; the days after are AdSense&apos;s estimate.</p>
+          )}
           {!c && <p className="text-xs text-muted">Days with no figures yet are marked, not drawn as $0.</p>}
           <EarningsChart a={a} ov={ov} />
         </section>
@@ -345,7 +375,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
               <thead className="text-left text-xs text-muted">
                 <tr>
                   <th className="px-1 pb-2 font-normal">Site</th>
-                  <th className="px-1 pb-2 text-right font-normal">Estimated earnings</th>
+                  <th className="px-1 pb-2 text-right font-normal">{earningsLabel(a.final)}</th>
                   <th className="px-1 pb-2 text-right font-normal">Page views</th>
                   <th className="px-1 pb-2 text-right font-normal">Page RPM</th>
                   <th className="px-1 pb-2 text-right font-normal">Clicks</th>
@@ -382,6 +412,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
                   {acc.accountId}
                   {acc.currency ? ` · ${acc.currency}` : ""}
                   {acc.sites?.length ? ` · ${acc.sites.join(", ")}` : " · every site"}
+                  {acc.finalThrough ? ` · final up to ${fmtDay(acc.finalThrough)}` : ""}
                 </span>
               </span>
               <AccountStatus acc={acc} />
@@ -389,8 +420,9 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
           ))}
         </ul>
         <p className="mt-3 text-xs text-muted">
-          These are AdSense&apos;s estimated earnings: it finalizes each month&apos;s total after the month ends, so recent days can still change, and they aren&apos;t
-          money paid out yet. They&apos;re what AdSense expects to pay you, kept apart from what you spend on ads.
+          AdSense estimates earnings as they come in and finalizes each month&apos;s in the first days of the next. bizinsights reads the whole month before again
+          during the first ten days of every month, so a month&apos;s figures show as final once that&apos;s done; anything later is AdSense&apos;s estimate and can still
+          change. Earnings are kept apart from what you spend on ads.
         </p>
       </Panel>
     </>

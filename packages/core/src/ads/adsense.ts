@@ -14,7 +14,7 @@ import {
   type AdsenseReport,
   type AdsenseReportLevel,
   type AdsenseReportRow,
-  type AdsenseTotals,
+  type AdsenseReportTotals,
 } from "@app/shared";
 import { AdsApiError, AdsNoAccountsError, AdsPermissionError, googleCommonError, readGoogleError, REQUIRED_AD_SCOPE, type AdAccount, type AdAccountHealth } from "./common.js";
 import { googleConsentUrl, type GoogleConsentOptions, type GoogleOAuthClient } from "./googleOAuth.js";
@@ -173,10 +173,13 @@ export async function adsenseAccountHealth(c: AdsenseConfig, accessToken: string
 export const ADSENSE_REPORT_MAX_ROWS = 1000;
 
 /**
- * The AdSense report for one account and range, by site, country or device type, on the account's own
- * calendar. `sites` (DOMAIN_CODE values) limits it to the store's sites; empty means every site.
- * `truncated`: AdSense matched more rows than were read (only the biggest earners are listed).
- * `totals`: the whole report's, the rows left out of a cut-off one included (AdSense's totals row).
+ * The AdSense report for one account and range, by site, country, device type or ad unit, on the
+ * account's own calendar, with ad requests, their coverage and Active View viewability besides the
+ * stored days' measures (ADSENSE_REPORT_METRICS; read here only, never stored). `sites` (DOMAIN_CODE
+ * values) limits it to the store's sites, an ad unit's row included: its earnings on those sites only;
+ * empty means every site. `truncated`: AdSense matched more rows than were read (only the biggest
+ * earners are listed). `totals`: the whole report's, the rows left out of a cut-off one included
+ * (AdSense's totals row).
  */
 export async function adsenseReport(
   c: AdsenseConfig,
@@ -186,7 +189,7 @@ export async function adsenseReport(
   since: string,
   until: string,
   sites: readonly string[] = [],
-): Promise<{ rows: AdsenseReportRow[]; currency: string | null; truncated: boolean; totals: AdsenseTotals }> {
+): Promise<{ rows: AdsenseReportRow[]; currency: string | null; truncated: boolean; totals: AdsenseReportTotals }> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const pub = publisherId(accountId);
   // AdSense filters (https://developers.google.com/adsense/management/reporting/filtering):

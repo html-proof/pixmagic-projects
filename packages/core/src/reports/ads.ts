@@ -3,6 +3,7 @@ import {
   accountCoverage,
   adComparisonWindows,
   adSeries,
+  adsenseFinalThrough,
   adsenseSeries,
   adsenseSiteChosen,
   adsenseTotals,
@@ -58,6 +59,10 @@ export interface AdConn {
   errorCode: string | null;
   accountStatus: string | null;
   lastSyncedAt: Date | null;
+  /** A sync someone asked for (connect, Refresh, re-enable) that hasn't finished yet. */
+  syncRequestedAt?: Date | null;
+  /** When the last sync started, whatever came of it. */
+  lastSyncAttemptAt?: Date | null;
   historyFrom: string | null;
   syncedThrough: string | null;
   /** AdSense: the sites (DOMAIN_CODE) whose earnings belong to the store; empty = every site. */
@@ -111,6 +116,8 @@ const SELECT = {
   errorCode: true,
   accountStatus: true,
   lastSyncedAt: true,
+  syncRequestedAt: true,
+  lastSyncAttemptAt: true,
   historyFrom: true,
   syncedThrough: true,
   isDemo: true,
@@ -139,7 +146,16 @@ function accountView(c: AdConn, counted: boolean, ask: AdsAsk) {
     errorCode: c.errorCode,
     /** The account's own health at the platform (AD_ACCOUNT_STATUSES); null until read. */
     accountStatus: c.accountStatus,
+    /** The last sync that worked: what its figures are as of. */
     lastSyncedAt: c.lastSyncedAt,
+    /**
+     * A sync someone asked for after connecting (Refresh, Sync all now, turning it back on) is on its
+     * way while this is set and recent (the worker clears it when the last window asked for lands, or
+     * fails): the page says it is refreshing, with lastSyncedAt's figures meanwhile.
+     */
+    syncRequestedAt: c.syncRequestedAt ?? null,
+    /** When the last sync started, whatever came of it: for an account that fails, when it was last tried. */
+    lastSyncAttemptAt: c.lastSyncAttemptAt ?? null,
     counted,
     /** Its figures are simulated (the Google Ads demo): shown as such, and never set against the store's own sales. */
     demo: !!c.isDemo,
@@ -418,6 +434,12 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
  * can tell which part of it was the store's, so it is neither counted nor listed as another site's:
  * the account's figures start after the last such day read (`unsplitThrough`), and the days up to it
  * are missing, never $0.
+ *
+ * Earnings are AdSense's estimate until it finalizes the month, in the first days of the next; the
+ * daily re-check reads the whole month before again during days 1–10 (recheckDays in
+ * adConnections/sync.ts). So each account's figures are final up to `finalThrough`, worked out from
+ * its last sync that worked (adsenseFinalThrough), and `final` says whether every day of the figures
+ * given (`current`, else `partial`) is.
  */
 export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { connectionId: string }>, ask: AdsAsk) {
   if (!conns.length) return null;
@@ -442,6 +464,8 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
       unsplitThrough,
       coverage,
       coversRange: coversDays(coverage, ask.range),
+      /** Its figures are final, not AdSense's estimate, up to this day (its own); null: none is yet. */
+      finalThrough: adsenseFinalThrough(c.lastSyncedAt ? adToday(c, c.lastSyncedAt) : null),
     };
   });
   const counted = accounts.filter((a) => a.counted);
@@ -454,10 +478,18 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
   const now = f.compared?.current.totals ?? null;
   const before = f.compared?.previous.totals ?? null;
   const change = (k: "earnings" | "pageViews" | "clicks" | "pageRpm") => (now && before ? delta(now[k], before[k]) : null);
+  const finals = counted.map((a) => a.finalThrough);
+  const finalThrough = finals.length && finals.every((x): x is string => x !== null) ? finals.reduce((a, b) => (a < b ? a : b)) : null;
+  // The last day of the figures given: the range's, else the part every account covers.
+  const givenTo = f.current ? ask.range.to : (f.partial?.to ?? null);
   return {
     currency,
     accounts,
     ...f,
+    /** The day every counted account's figures are final up to (null: one has none final yet). */
+    finalThrough,
+    /** Every day of the figures given (`current`, else `partial`, which `soFar` is) is final: "Final", else "Estimated". */
+    final: givenTo !== null && finalThrough !== null && givenTo <= finalThrough,
     previous: {
       from: f.compared?.previous.from ?? null,
       to: f.compared?.previous.to ?? null,

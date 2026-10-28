@@ -156,7 +156,12 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/adsense/report?*`, (route) => {
     const level = new URL(route.request().url()).searchParams.get("level") ?? "country";
     asked.push(level);
-    const rows = level === "country" ? [{ id: "AU", name: "Australia", ...totals(10, 5000) }, { id: "NZ", name: "New Zealand", ...totals(4, 2000) }] : [{ id: "HighEndMobile", name: "High-end mobile devices", ...totals(14, 7000) }];
+    const rows =
+      level === "country"
+        ? [{ id: "AU", name: "Australia", ...totals(10, 5000) }, { id: "NZ", name: "New Zealand", ...totals(4, 2000) }]
+        : level === "ad_unit"
+          ? [{ id: "ca-pub-77:1001", name: "Article footer", ...totals(14, 7000), adRequests: 8000, coverage: 0.9, viewability: 0.6 }]
+          : [{ id: "HighEndMobile", name: "High-end mobile devices", ...totals(14, 7000) }];
     return route.fulfill({
       json: {
         account: { id: conn, accountId: "pub-77", name: "Shop site" },
@@ -176,5 +181,11 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   await page.getByTestId("adsense-report-platform").click();
   await expect(table).toContainText("High-end mobile devices");
   await expect(table).not.toContainText("Australia");
-  expect(asked).toEqual(expect.arrayContaining(["country", "platform"]));
+  // By ad unit, with AdSense's ad requests, coverage and viewability beside the earnings.
+  await page.getByTestId("adsense-report-ad_unit").click();
+  await expect(table).toContainText("Article footer");
+  await expect(table).toContainText("8,000");
+  await expect(table).toContainText("90%");
+  await expect(table).toContainText("60%");
+  expect(asked).toEqual(expect.arrayContaining(["country", "platform", "ad_unit"]));
 });
