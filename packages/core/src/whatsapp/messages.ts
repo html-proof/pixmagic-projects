@@ -165,6 +165,13 @@ export async function sentToday(storeId: string, timeZone: string, now = new Dat
   return systemDb.wappMessage.count({ where: { storeId, direction: "out", source: { in: ["automation", "campaign", "manual", "team_alert"] }, acceptedAt: { gte: since } } });
 }
 
+/**
+ * Whether Meta lets free text reach this customer now on a Cloud API number: they wrote in the last
+ * 24 hours (Meta's customer-service window). Outside it Meta delivers only a template it approved, and
+ * refuses anything else (131047). A phone linked with a QR code has no such window.
+ */
+export const inServiceWindow = (c: Pick<WappContact, "lastInboundAt">, now = new Date()): boolean => !!c.lastInboundAt && now.getTime() - c.lastInboundAt.getTime() < 24 * 3600_000;
+
 /** The reason consent stops this message now, if any. A customer who wrote in the last 24 hours may be answered. */
 export async function consentBlock(contact: WappContact | null, category: WaTemplateCategory, settings: WaSettingsView, opts: { reply?: boolean } = {}): Promise<WaSkipReason | null> {
   if (!contact) return "unknown_contact";
@@ -239,6 +246,7 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
 
   if (!m.payloadEnc || !m.phoneEnc) return end("failed", "gave_up", { errorCode: "no_payload" });
   const payload = JSON.parse(waDecrypt(m.storeId, "payload", m.payloadEnc)) as MessagePayload;
+  if (conn.provider === "cloud_api" && !payload.meta && contact && toCustomer(m.source) && !inServiceWindow(contact, now)) return end("skipped", "outside_window");
   const number = waDecrypt(m.storeId, "phone", m.phoneEnc).replace(/^\+/, "");
   const client = clientFor(conn, deps);
   const token = instanceToken(conn);

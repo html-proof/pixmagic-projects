@@ -17,12 +17,13 @@ import {
   WA_ATTACHMENT_MAX_BYTES,
   WA_ATTACHMENT_TYPES,
   WA_SEND_REASON_INFO,
+  variablesIn,
   waSkipLabel,
 } from "@app/shared";
 import { audit } from "../notify.js";
 import { businessNameOf, liveConnection, settingsOf, WhatsappError, type WaDeps } from "./common.js";
 import { contactFirstName, recordConsent, upsertContact } from "./contacts.js";
-import { consentBlock, enqueueIfDue, queueMessage, type MessagePayload } from "./messages.js";
+import { consentBlock, enqueueIfDue, inServiceWindow, queueMessage, type MessagePayload } from "./messages.js";
 import { templateUsable } from "./templates.js";
 
 /** Messages one store may send from the dashboard a minute. */
@@ -73,19 +74,26 @@ export async function sendManualMessage(deps: Pick<WaDeps, "queues" | "coord" | 
 
   let text = d.text;
   let templateId: string | null = null;
+  let meta: MessagePayload["meta"] = null;
   if (d.templateId) {
     const t = await systemDb.wappTemplate.findFirst({ where: { id: d.templateId, storeId: input.store.id } });
     if (!t) throw new WhatsappError("Pick one of this store's templates.", 400, "template_not_found");
     const usable = templateUsable(t, conn);
     if (!usable.ok) throw new WhatsappError(`That template can't be sent: ${usable.reason}`, 409, "template_unavailable");
     if (t.category === "marketing" && info.category !== "marketing") throw new WhatsappError("That's a marketing template: choose \"Marketing\" as the reason.", 400, "category_mismatch");
+    const values: Record<string, string | undefined> = { store_name: businessNameOf(input.store, settings), customer_first_name: contactFirstName(contact) ?? undefined };
     try {
-      text = renderWaText(t.body, { store_name: businessNameOf(input.store, settings), customer_first_name: contactFirstName(contact) ?? undefined });
+      text = renderWaText(t.body, values);
     } catch (e) {
       if (e instanceof WaMissingValueError) throw new WhatsappError(`This template needs ${e.missing.map((v) => `{{${v}}}`).join(", ")}, which bizinsights doesn't have here. Write the message yourself instead.`, 400, "missing_values");
       throw e;
     }
     templateId = t.id;
+    // A Cloud API number sends the template Meta approved, by its name; a linked phone sends its text.
+    if (conn.provider === "cloud_api" && t.metaName) meta = { name: t.metaName, language: t.metaLanguage ?? "en", params: variablesIn(t.body).map((v) => values[v] ?? "") };
+  }
+  if (conn.provider === "cloud_api" && !meta && !inServiceWindow(contact)) {
+    throw new WhatsappError("This customer hasn't written to you in the last 24 hours, so Meta only delivers a message template it approved. Pick an approved template instead.", 409, "outside_window");
   }
 
   let attachment: MessagePayload["attachment"] = null;
@@ -105,7 +113,7 @@ export async function sendManualMessage(deps: Pick<WaDeps, "queues" | "coord" | 
     category: info.category,
     phone,
     contactId: contact.id,
-    payload: { text, attachment },
+    payload: { text, attachment, meta },
     templateId,
     idempotencyKey: `manual:${d.idempotencyKey}`,
     createdByUserId: input.userId,

@@ -37,6 +37,10 @@ connection shows as disconnected and is linked again with a new QR code; its can
 why; its `whatsapp_qr_retired` alert tells the merchant to link the phone again and turn their
 automations back on, and is resolved when WhatsApp connects again. Paused automations stay paused
 until the merchant turns them on: resuming them by itself could send messages nobody expects.
+Kept from release 128 for a Cloud API number: free text only within Meta's 24-hour
+customer-service window (refused from the dashboard, `outside_window`; skipped at sending if the
+window closed meanwhile), and a template picked in the dashboard goes as Meta's template by its
+name. A linked phone has no such window.
 
 ## What was verified first (2026-10-25)
 

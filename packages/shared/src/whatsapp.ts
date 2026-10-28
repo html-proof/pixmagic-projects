@@ -264,6 +264,7 @@ export const WA_SKIP_REASONS = [
   "unknown_contact",
   "manual_cancel",
   "qr_linking_retired",
+  "outside_window",
 ] as const;
 export type WaSkipReason = (typeof WA_SKIP_REASONS)[number];
 
@@ -297,6 +298,7 @@ export const WA_SKIP_LABEL: Record<WaSkipReason, string> = {
   unknown_contact: "The number isn't one of the store's customers",
   manual_cancel: "Cancelled by the store",
   qr_linking_retired: "Cancelled on 28 October, while QR-code linking was switched off (it wasn't sent)",
+  outside_window: "The customer last wrote more than 24 hours ago: only a template Meta approved can be sent",
 };
 
 export const waSkipLabel = (reason: string | null | undefined): string | null =>

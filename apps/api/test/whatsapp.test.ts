@@ -449,6 +449,36 @@ describe("sending from the dashboard", () => {
     expect(await drain()).toEqual(["accepted"]);
   });
 
+  it("on a Cloud API number, sends free text only within Meta's 24 hours and a template by its Meta name", async () => {
+    const o = await owner();
+    const name = await connect(o);
+    await configure(o);
+    // The same instance stands in for one of Evolution's WHATSAPP-BUSINESS ones: only the provider decides here.
+    await systemDb.wappConnection.update({ where: { storeId: o.store.id }, data: { provider: "cloud_api", phoneNumberId: "1098765432101", wabaId: "2098765432101" } });
+    const t = await systemDb.wappTemplate.create({
+      data: { workspaceId: o.ws, storeId: o.store.id, name: "Order ready", category: "transactional", body: "Your order from {{store_name}} is ready.", metaName: "order_ready", metaLanguage: "en", metaStatus: "APPROVED" },
+    });
+    const base = { phone: CUSTOMER, reason: "order_update", customerAsked: true };
+
+    // The customer hasn't written: Meta would refuse free text, so it isn't queued.
+    expect(ok(await o.call("POST", "/messages", { ...base, text: "Hi", idempotencyKey: "window-00001" }), 409).error).toBe("outside_window");
+    // An approved template goes as Meta's template, with its values.
+    ok(await o.call("POST", "/messages", { ...base, templateId: t.id, idempotencyKey: "window-00002" }), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)).toMatchObject({ instance: name, path: "sendTemplate", body: { name: "order_ready", language: "en", components: [{ type: "body", parameters: [{ type: "text", text: "Green Leaf" }] }] } });
+
+    // Once they wrote, free text goes; if the 24 hours end before it is sent, it is skipped, not refused by Meta.
+    const contact = await systemDb.wappContact.findFirstOrThrow({ where: { storeId: o.store.id } });
+    await systemDb.wappContact.update({ where: { id: contact.id }, data: { lastInboundAt: new Date() } });
+    ok(await o.call("POST", "/messages", { ...base, text: "Hi", idempotencyKey: "window-00003" }), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)).toMatchObject({ path: "sendText", body: { text: "Hi" } });
+    const late = ok(await o.call("POST", "/messages", { ...base, text: "Still there?", idempotencyKey: "window-00004" }), 201).message;
+    await systemDb.wappContact.update({ where: { id: contact.id }, data: { lastInboundAt: new Date(Date.now() - 25 * 3600_000) } });
+    expect(await drain()).toEqual(["skipped"]);
+    expect(ok(await o.call("GET", `/messages/${late.id}`)).message).toMatchObject({ status: "skipped", reason: "outside_window" });
+  });
+
   it("retries a send that never reached the service, and never one that may have gone", async () => {
     const o = await owner();
     await connect(o);
