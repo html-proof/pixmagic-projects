@@ -14,8 +14,8 @@ There is no other way in any more: bizinsights' own OAuth (consent URLs, code ex
 routes) was removed on 2026-10-24. Connections made by it before then are moved to Nango by themselves
 (below, "Connections made before Nango").
 
-WhatsApp doesn't use Nango. It runs on bizinsights' own Evolution API service, and a Cloud API
-number's token, from Meta's Embedded Signup, is kept encrypted by bizinsights
+WhatsApp doesn't use Nango. It runs on Meta's WhatsApp Business Platform, and the business's
+token, from Meta's Embedded Signup, is kept encrypted by bizinsights
 ([whatsapp.md](whatsapp.md)). The design of 2026-10-25 kept that token at Nango; it was replaced
 before any store connected through it.
 

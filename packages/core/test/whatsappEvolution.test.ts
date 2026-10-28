@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
-import { eventName, evolutionClient, EvolutionError, evolutionStatus, isNotConnected, jidNumber, resetEnvCache, verifyEvolutionJwt } from "../src/index.js";
-import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, evolutionJwt, QR_PNG } from "../../../test-support/evolutionFake.js";
+import { eventName, evolutionClient, EvolutionError, evolutionStatus, jidNumber, resetEnvCache, verifyEvolutionJwt } from "../src/index.js";
+import { EVOLUTION_ENV, EVOLUTION_KEY, evolutionFake, evolutionJwt } from "../../../test-support/evolutionFake.js";
 
 /**
- * The Evolution API client and the webhooks' authentication, without a database: every path,
- * header and answer the client reads, against a stand-in that answers as Evolution API 2.3.7 does.
+ * What is left of Evolution API until release 2 removes it (docs/whatsapp.md, "Removing Evolution"):
+ * the client the QR cleanup uses and the webhooks' authentication, without a database, against a
+ * stand-in that answers as Evolution API 2.3.7 does.
  */
 
 const BASE_ENV = { SESSION_SECRET: "0123456789abcdef", TOKEN_ENCRYPTION_KEYS: "1:" + "a".repeat(44), OTP_PEPPER: "pepper-value", ...EVOLUTION_ENV, EVOLUTION_TIMEOUT_MS: "1000" };
@@ -52,88 +53,45 @@ describe("the webhook's JWT", () => {
   });
 });
 
-describe("the Evolution API client", () => {
-  it("creates with the global key, then uses the instance's own key; the QR code comes from the provider", async () => {
+describe("the Evolution API client (kept only to retire QR linking)", () => {
+  /** An instance as Evolution holds it (nothing creates one any more). */
+  const seed = (f: ReturnType<typeof evolutionFake>, name: string, state: "open" | "close" = "open") =>
+    f.instances.set(name, { name, id: `id-${name}`, token: `token-${name}`, integration: "WHATSAPP-BAILEYS", state, qrCount: 0, webhook: null, ownerJid: null, profileName: null, number: null });
+
+  it("logs an instance out, deletes it and lists them, all with the global key", async () => {
     const f = evolutionFake();
+    seed(f, "bi_000000000000000000000001");
     const c = evolutionClient("a", f.fetch);
-    const created = await c.createInstance({ instanceName: "bi_000000000000000000000001", token: "instance-token", integration: "WHATSAPP-BAILEYS" });
-    expect(created.instanceId).toMatch(/^[0-9a-f-]{36}$/);
-    await c.setWebhook("bi_000000000000000000000001", "instance-token", { url: "https://example.test/api/webhooks/whatsapp/evolution/bi_000000000000000000000001", jwtKey: "k" });
-    const r = await c.connect("bi_000000000000000000000001", "instance-token");
-    expect(r).toEqual({ state: "connecting", qr: { base64: QR_PNG, pairingCode: null, count: 1 } });
+    expect((await c.fetchInstances()).map((i) => [i.name, i.connectionStatus])).toEqual([["bi_000000000000000000000001", "open"]]);
+    await c.logout("bi_000000000000000000000001", EVOLUTION_KEY);
+    expect(f.instances.get("bi_000000000000000000000001")!.state).toBe("close");
+    await c.deleteInstance("bi_000000000000000000000001", EVOLUTION_KEY);
+    expect(f.instances.size).toBe(0);
     expect(f.calls.map((x) => [x.method, x.path, x.apikey === EVOLUTION_KEY ? "global" : x.apikey])).toEqual([
-      ["POST", "/instance/create", "global"],
-      ["POST", "/webhook/set/bi_000000000000000000000001", "instance-token"],
-      ["GET", "/instance/connect/bi_000000000000000000000001", "instance-token"],
+      ["GET", "/instance/fetchInstances", "global"],
+      ["DELETE", "/instance/logout/bi_000000000000000000000001", "global"],
+      ["DELETE", "/instance/delete/bi_000000000000000000000001", "global"],
     ]);
-    expect(f.instances.get("bi_000000000000000000000001")!.webhook).toMatchObject({ jwtKey: "k", events: expect.arrayContaining(["CONNECTION_UPDATE", "MESSAGES_UPDATE", "MESSAGES_UPSERT", "QRCODE_UPDATED"]) });
-    // A pairing code for a number.
-    const r2 = await c.connect("bi_000000000000000000000001", "instance-token", "61412345678");
-    expect(r2.qr?.pairingCode).toBe("WZYEH1YY");
-    f.open("bi_000000000000000000000001");
-    expect(await c.connectionState("bi_000000000000000000000001", "instance-token")).toBe("open");
-    expect(await c.connect("bi_000000000000000000000001", "instance-token")).toEqual({ state: "open", qr: null });
   });
 
-  it("only ever passes on a PNG data URL as the QR code", async () => {
-    const fetchImpl = async () => new Response(JSON.stringify({ pairingCode: null, code: "x", base64: "javascript:alert(1)", count: 1 }), { status: 200 });
-    const r = await evolutionClient("a", fetchImpl).connect("bi_x", "t");
-    expect(r.qr).toBeNull();
-  });
-
-  it("sends text and reads the message's id; a number not on WhatsApp and a closed connection are told apart", async () => {
+  it("reads Evolution's error envelope, and a wrong key is unauthorized; gone already, or not connected, is fine", async () => {
     const f = evolutionFake();
+    seed(f, "bi_1", "close");
     const c = evolutionClient("a", f.fetch);
-    await c.createInstance({ instanceName: "bi_1", token: "t", integration: "WHATSAPP-BAILEYS" });
-    await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toSatisfy((e: unknown) => isNotConnected(e));
-    f.open("bi_1");
-    const sent = await c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" });
-    expect(sent).toMatchObject({ id: expect.stringMatching(/^3EB0/), status: "PENDING" });
-    f.notOnWhatsapp.add("61400000000");
-    await expect(c.sendText("bi_1", "t", { number: "61400000000", text: "Hi" })).rejects.toMatchObject({ kind: "bad_request", notOnWhatsapp: true });
+    await expect(c.deleteInstance("bi_1", "wrong")).rejects.toMatchObject({ kind: "unauthorized", status: 401 });
+    await c.logout("bi_1", EVOLUTION_KEY);
+    await c.deleteInstance("bi_1", EVOLUTION_KEY);
+    await c.deleteInstance("bi_1", EVOLUTION_KEY);
   });
 
-  it("never retries a send that timed out (it may have gone out), but retries reads", async () => {
+  it("retries a read that met no answer, and says what happened", async () => {
     const f = evolutionFake();
-    const c = evolutionClient("a", f.fetch);
-    await c.createInstance({ instanceName: "bi_1", token: "t", integration: "WHATSAPP-BAILEYS" });
-    f.open("bi_1");
-    f.sendFails = "timeout";
-    const before = f.calls.length;
-    await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toMatchObject({ kind: "timeout", uncertain: true });
-    expect(f.calls.length - before).toBe(1);
-    // A connection dropped mid-send, or the server failing on it, may have sent it too.
-    for (const fail of ["reset", 500] as const) {
-      f.sendFails = fail;
-      const m = f.calls.length;
-      await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toMatchObject({ uncertain: true });
-      expect(f.calls.length - m, String(fail)).toBe(1);
-    }
-    // A connection that never opened sent nothing: the sender may try again.
-    f.sendFails = "refused";
-    await expect(c.sendText("bi_1", "t", { number: "61412345678", text: "Hi" })).rejects.toMatchObject({ kind: "unreachable", uncertain: false });
-    f.sendFails = null;
     f.down = "unreachable";
-    const n = f.calls.length;
-    await expect(c.connectionState("bi_1", "t")).rejects.toMatchObject({ kind: "unreachable" });
-    expect(f.calls.length - n).toBe(3);
-  });
-
-  it("reads Evolution's error envelope, and a wrong key is unauthorized, a missing instance not found", async () => {
-    const f = evolutionFake();
     const c = evolutionClient("a", f.fetch);
-    await c.createInstance({ instanceName: "bi_1", token: "t", integration: "WHATSAPP-BAILEYS" });
-    await expect(c.connectionState("bi_1", "wrong")).rejects.toMatchObject({ kind: "unauthorized", status: 401 });
-    await expect(c.connectionState("bi_2", "t")).rejects.toMatchObject({ kind: "not_found" });
-    // Deleting an instance that is already gone is fine; logging out one that isn't connected too.
-    await c.logout("bi_1", "t");
-    await c.deleteInstance("bi_1", "t");
-    await c.deleteInstance("bi_1", "t");
-  });
-
-  it("turns Evolution's Cloud API answer with Meta's error (a 201 without a message) into a refusal", async () => {
-    const fetchImpl = async () => new Response(JSON.stringify({ message: "(#131030) Recipient phone number not in allowed list", type: "OAuthException", code: 131030, error_data: { details: "Recipient not allowed" } }), { status: 201 });
-    await expect(evolutionClient("a", fetchImpl).sendText("bi_1", "t", { number: "1", text: "x" })).rejects.toSatisfy((e: unknown) => e instanceof EvolutionError && e.kind === "bad_request" && /not in allowed list/.test(e.detail));
+    await expect(c.fetchInstances()).rejects.toMatchObject({ kind: "unreachable" });
+    expect(f.calls).toHaveLength(3);
+    f.down = "timeout";
+    await expect(c.deleteInstance("bi_1", EVOLUTION_KEY)).rejects.toSatisfy((e: unknown) => e instanceof EvolutionError && e.kind === "timeout");
   });
 
   it("says whether the service answers, and its version, without ever throwing", async () => {

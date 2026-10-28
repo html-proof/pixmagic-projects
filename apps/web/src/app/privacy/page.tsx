@@ -21,9 +21,9 @@ export const metadata: Metadata = {
  *     names of customers it messages, who write in, or who agree to marketing, encrypted, with their
  *     consent history and message texts, the retention in packages/core/src/whatsapp/sweep.ts
  *     (KEEP_RECORDS_MS, KEEP_RUNS_MS, the store's retentionDays) and redaction in
- *     packages/core/src/whatsapp/privacy.ts (redactWhatsappCustomer); a linked phone's WhatsApp
- *     session and a Cloud API number's access token are kept by bizinsights' own WhatsApp service
- *     (Evolution API on AWS, docs/whatsapp.md), the token also encrypted in wapp_connections;
+ *     packages/core/src/whatsapp/privacy.ts (redactWhatsappCustomer); messages go through Meta's
+ *     WhatsApp Business Platform only (docs/whatsapp.md), with the business's access token encrypted
+ *     in wapp_connections;
  *   - Customer Messaging (SMS), only once a merchant sets up a sender, stores customers' mobile numbers
  *     and first names encrypted, their SMS consent history and opt-outs, with the retention in
  *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-25";
+const UPDATED = "2026-10-28";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -108,7 +108,7 @@ const PROVIDERS = [
     purpose: "Sends bizinsights' own emails: sign-in and verification codes, team invitations and alerts, to the address each one is for.",
   },
   { name: "Shopify", purpose: "The source of your store data." },
-  { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages and reports whether each was delivered and read, only for stores that connect WhatsApp (a linked phone, or Meta's WhatsApp Business Platform)." },
+  { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages through Meta's WhatsApp Business Platform and reports whether each was delivered and read, only for stores that connect WhatsApp." },
   {
     name: "Nango",
     purpose: "Keeps, encrypted, the access tokens for the advertising accounts you connect, and renews them, so bizinsights can read your ad reports.",
@@ -240,10 +240,9 @@ export default function PrivacyPage() {
           the customers an automation messages, who write to your business, or who agree to receive your marketing on WhatsApp. Both are
           encrypted with AES-256-GCM, together with a one-way keyed hash of the number used to recognise replies; the dashboard shows
           numbers masked. We keep a record of every consent and opt-out (when, how, and who recorded it), so that nobody who replied STOP
-          is messaged again, and the text of each message sent and received, encrypted, with its delivery reports. Messages leave through
-          bizinsights&apos; own WhatsApp service, which runs on our AWS infrastructure: either from a phone you link with a QR code (the
-          service keeps that phone&apos;s WhatsApp session, as WhatsApp Web does, until you disconnect) or through Meta&apos;s WhatsApp
-          Business Platform (the service keeps your WhatsApp Business account&apos;s access token, encrypted). Messages from people who
+          is messaged again, and the text of each message sent and received, encrypted, with its delivery reports. Messages are sent through
+          Meta&apos;s WhatsApp Business Platform, from the WhatsApp Business account you connect; bizinsights keeps that account&apos;s access
+          token, encrypted, until you disconnect. Messages from people who
           aren&apos;t already your customers in bizinsights are not kept, except a STOP, which is recorded only as a keyed hash of the
           number.
         </p>

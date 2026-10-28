@@ -69,7 +69,7 @@ const REDACT = new Set(
     "verifyToken",
     "verify_token",
     "hub.verify_token",
-    // Evolution API: instance keys, webhook signing keys, pairing QR codes and codes, message texts.
+    // Evolution API (what is left of QR linking until release 2): instance keys, webhook signing keys, QR codes, message texts.
     "apikey",
     "token",
     "jwt_key",

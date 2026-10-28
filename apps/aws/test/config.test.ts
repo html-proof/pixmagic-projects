@@ -63,12 +63,12 @@ describe('the cron action {"action":"config"}', () => {
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: false, google: false, adsense: false } });
     expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
     // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed. Evolution API's address
-    // and key come from the CDK app and Secrets Manager (not set in this test).
+    // and key come from the CDK app and Secrets Manager (not set in this test); connecting doesn't need them.
     expect(report.whatsapp).toEqual({
       evolution: false,
       evolutionNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"],
       embeddedSignup: false,
-      embeddedSignupNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"],
+      embeddedSignupNeeds: ["WHATSAPP_WEBHOOK_VERIFY_TOKEN"],
       webhookVerifyToken: false,
     });
     const text = JSON.stringify(report);

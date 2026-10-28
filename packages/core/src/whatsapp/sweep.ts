@@ -3,21 +3,23 @@
  *  - messages due within the next tick go to the queue (SQS can't delay past 15 minutes), and a
  *    send that never finished (the worker died mid-call) is marked uncertain rather than repeated;
  *  - campaigns start when due, and finish once every message is final;
- *  - every connection is checked against Evolution API (a missed webhook, a pairing left behind,
- *    instances nobody owns), and one down past the grace period has its waiting messages cancelled;
- *  - webhook events that weren't applied are retried, then set aside;
+ *  - what is left of QR linking is retired (retireQr.ts), until nothing is;
+ *  - each connection is checked with Meta every few hours (its access may have been removed in
+ *    Meta's business settings without a word to bizinsights), and one down past the grace period has
+ *    its waiting messages cancelled;
+ *  - QR-linked phones' stored webhook events that weren't applied are retried, then set aside;
  *  - retention: message texts after the store's retention, the records themselves after a year,
  *    automation runs after 90 days;
- *  - Cloud API connections: Meta's review of submitted templates.
+ *  - Meta's tokens renewed before they expire, and Meta's review of submitted templates.
  */
 import { systemDb } from "@app/db";
 import { WA_DEFAULT_RETENTION_DAYS } from "@app/shared";
 import { logger } from "../logger.js";
-import { raiseAlert, resolveAlerts } from "../notify.js";
-import { DOWN_GRACE_MS, waQueue, type WaDeps } from "./common.js";
-import { reconcileConnections, WA_ALERTS } from "./connection.js";
-import { defaultShard, evolutionConfigured } from "./evolution.js";
+import { raiseAlert } from "../notify.js";
+import { DOWN_GRACE_MS, WA_ALERTS, waQueue, type WaDeps } from "./common.js";
+import { checkConnection } from "./connection.js";
 import { enqueueIfDue } from "./messages.js";
+import { retireQrLinking } from "./retireQr.js";
 import { refreshMetaTemplates } from "./templates.js";
 import { WEBHOOK_MAX_ATTEMPTS } from "./webhook.js";
 import { renewCloudToken } from "./cloud.js";
@@ -26,6 +28,8 @@ const LEASE_MS = 14 * 60_000;
 /** What the privacy policy promises (apps/web/src/app/privacy/page.tsx): message records a year, automation runs 90 days. */
 const KEEP_RECORDS_MS = 365 * 86_400_000;
 const KEEP_RUNS_MS = 90 * 86_400_000;
+/** How often a connection is asked about with Meta when nothing else told bizinsights about it. */
+const CHECK_EVERY_MS = 6 * 3600_000;
 
 export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | "mailer" | "coord">): Promise<Record<string, number | boolean> | null> {
   if (!(await deps.coord.acquire("sweep:whatsapp", LEASE_MS))) return null;
@@ -79,20 +83,29 @@ export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | 
     return n;
   });
 
-  if (evolutionConfigured()) {
-    await step("connections", async () => {
-      const r = await reconcileConnections(deps, defaultShard());
-      out.evolutionUnreachable = r.unreachable;
-      out.instancesRemoved = r.removed;
-      // The service itself down: every store with a live connection is told once, until it answers again.
-      const live = await systemDb.wappConnection.findMany({ where: { status: { in: ["connected", "reconnecting"] }, instanceName: { not: null } }, select: { workspaceId: true, storeId: true } });
-      for (const c of live) {
-        if (r.unreachable) await raiseAlert({ workspaceId: c.workspaceId, storeId: c.storeId, severity: "warning", code: WA_ALERTS.provider, message: "bizinsights' WhatsApp service isn't answering; messages wait until it is back." }, deps.mailer, deps.fetchImpl);
-        else await resolveAlerts(c.storeId, [WA_ALERTS.provider]);
-      }
-      return r.changed;
+  await step("qrRetired", async () => {
+    const r = await retireQrLinking(deps);
+    if (r) out.qrInstancesLeft = r.left;
+    return r?.retired ?? 0;
+  });
+
+  await step("connections", async () => {
+    const due = await systemDb.wappConnection.findMany({
+      where: { provider: "cloud_api", status: "connected", instanceTokenEnc: { not: null }, OR: [{ lastCheckedAt: null }, { lastCheckedAt: { lt: new Date(now - CHECK_EVERY_MS) } }] },
+      orderBy: { lastCheckedAt: "asc" },
+      take: 200,
     });
-  }
+    let changed = 0;
+    for (const c of due) {
+      try {
+        if ((await checkConnection(deps, c)).status !== c.status) changed++;
+      } catch (err) {
+        // Meta not answering now isn't a disconnection: the next sweep asks again.
+        logger.warn({ err, connectionId: c.id }, "whatsapp connection not checked with Meta; the next sweep tries again");
+      }
+    }
+    return changed;
+  });
 
   await step("downTooLong", async () => {
     const down = await systemDb.wappConnection.findMany({ where: { downSince: { lt: new Date(now - DOWN_GRACE_MS) }, status: { in: ["reconnecting", "logged_out", "failed"] } }, select: { storeId: true, workspaceId: true } });
@@ -145,14 +158,14 @@ export async function sweepWhatsapp(deps: Pick<WaDeps, "queues" | "fetchImpl" | 
   });
 
   await step("cloudTokens", async () => {
-    const soon = await systemDb.wappConnection.findMany({ where: { provider: "cloud_api", status: "connected", instanceName: { not: null }, tokenExpiresAt: { lt: new Date(now + 30 * 86_400_000) } } });
+    const soon = await systemDb.wappConnection.findMany({ where: { provider: "cloud_api", status: "connected", instanceTokenEnc: { not: null }, tokenExpiresAt: { lt: new Date(now + 30 * 86_400_000) } } });
     let n = 0;
     for (const c of soon) if (await renewCloudToken(deps, c).catch((err: unknown) => (logger.warn({ err, connectionId: c.id }, "whatsapp cloud api token not renewed; the next sweep tries again"), false))) n++;
     return n;
   });
 
   await step("metaTemplates", async () => {
-    const conns = await systemDb.wappConnection.findMany({ where: { provider: "cloud_api", status: "connected", instanceName: { not: null } } });
+    const conns = await systemDb.wappConnection.findMany({ where: { provider: "cloud_api", status: "connected", instanceTokenEnc: { not: null } } });
     let n = 0;
     for (const c of conns) {
       const pending = await systemDb.wappTemplate.count({ where: { storeId: c.storeId, metaName: { not: null }, metaStatus: { in: ["PENDING", "IN_APPEAL"] } } });

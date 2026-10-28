@@ -1,21 +1,10 @@
 /**
  * What every part of WhatsApp Automation shares (docs/whatsapp.md): its dependencies and errors,
- * encryption of customers' numbers, message texts and the instances' keys, the store's connection
- * and settings, and the queue it runs on.
+ * encryption of customers' numbers, message texts and the business's Meta token, the store's
+ * connection and settings, and the queue it runs on.
  */
 import { systemDb, type Store, type WappConnection, type WappSettings } from "@app/db";
-import {
-  decrypt,
-  encrypt,
-  hmacSha256Hex,
-  keyVersionOf,
-  WA_DAILY_LIMIT,
-  WA_DEFAULT_RETENTION_DAYS,
-  type WaConnectionStatus,
-  type WaOrderUpdateBasis,
-  type WaProvider,
-  type WaSendWindow,
-} from "@app/shared";
+import { decrypt, encrypt, hmacSha256Hex, keyVersionOf, WA_DAILY_LIMIT, WA_DEFAULT_RETENTION_DAYS, type WaOrderUpdateBasis, type WaSendWindow } from "@app/shared";
 import type { Coord } from "../coord.js";
 import { env } from "../env.js";
 import { AppError } from "../errors.js";
@@ -35,13 +24,25 @@ export interface WaDeps {
 
 /** A WhatsApp rule the merchant broke, or a step they must take first (the message is written for them). */
 export class WhatsappError extends AppError {
-  constructor(message: string, status: 400 | 403 | 404 | 409 | 422 | 429 | 502 | 503, code: string, detail?: unknown) {
+  constructor(message: string, status: 400 | 403 | 404 | 409 | 410 | 422 | 429 | 502 | 503, code: string, detail?: unknown) {
     super(message, status, code, detail);
     this.name = "WhatsappError";
   }
 }
 
 export const waQueue = (queues: Queues): Producer<WhatsappJob> => queues.whatsapp;
+
+/**
+ * Alerts WhatsApp raises and resolves (worded in @app/shared/alerts). `loggedOut` and `provider` were
+ * a QR-linked phone's and bizinsights' Evolution API service's: only ever resolved now.
+ */
+export const WA_ALERTS = {
+  reconnect: "whatsapp_reconnect",
+  down: "whatsapp_disconnected",
+  qrRetired: "whatsapp_qr_retired",
+  loggedOut: "whatsapp_logged_out",
+  provider: "whatsapp_provider_down",
+} as const;
 
 /** SQS delays a message by at most 15 minutes; sends due later are queued by the sweep. */
 export const WA_MAX_QUEUE_DELAY_S = 900;
@@ -50,6 +51,11 @@ export const WA_MAX_QUEUE_DELAY_S = 900;
 // Encryption. The AAD binds each ciphertext to its store and purpose.
 // ---------------------------------------------------------------------------
 
+/**
+ * `instance_token`: the business's Meta token (Evolution API instances' own keys before 2026-10-28,
+ * hence the name, which the existing ciphertexts are bound to); `webhook_key`: a QR-linked
+ * instance's webhook key, until the instance is deleted.
+ */
 export type WaSecretKind = "phone" | "name" | "payload" | "preview" | "instance_token" | "webhook_key" | "linked_phone" | "test_phone" | "webhook";
 
 const aad = (scope: string, kind: WaSecretKind) => `wapp:${scope}:${kind}`;
@@ -83,18 +89,21 @@ export async function connectionOf(storeId: string): Promise<WappConnection | nu
   return systemDb.wappConnection.findUnique({ where: { storeId } });
 }
 
-/** The store's connection unless the merchant disconnected it (it may be pairing, connected, down). */
+/** A connection through Meta that still holds the business's token (a retired QR link never is one). */
+const holdsToken = (c: Pick<WappConnection, "provider" | "instanceTokenEnc">) => c.provider === "cloud_api" && !!c.instanceTokenEnc;
+
+/** The store's connection unless it was disconnected (it may be connected, or waiting to be reconnected). */
 export async function liveConnection(storeId: string): Promise<WappConnection | null> {
   const c = await connectionOf(storeId);
-  return c && c.status !== "disconnected" && c.instanceName ? c : null;
+  return c && c.status !== "disconnected" && holdsToken(c) ? c : null;
 }
 
-/** Whether a connection can be sent through now (the provider last said it is open). */
-export const connectionCanSend = (c: Pick<WappConnection, "status" | "instanceName"> | null): boolean => !!c && c.status === "connected" && !!c.instanceName;
+/** Whether a connection can be sent through now (Meta last accepted bizinsights' access for it). */
+export const connectionCanSend = (c: Pick<WappConnection, "status" | "provider" | "instanceTokenEnc"> | null): boolean => !!c && c.status === "connected" && holdsToken(c);
 
-/** Whether the store's automations listen at all: a connection that is up, or down for less than its grace period. */
-export const connectionListens = (c: Pick<WappConnection, "status" | "instanceName"> | null): boolean =>
-  !!c && !!c.instanceName && (c.status === "connected" || c.status === "reconnecting" || c.status === "logged_out");
+/** Whether the store's automations listen at all: a connection that is up, or waiting to be reconnected for less than its grace period. */
+export const connectionListens = (c: Pick<WappConnection, "status" | "provider" | "instanceTokenEnc"> | null): boolean =>
+  !!c && holdsToken(c) && (c.status === "connected" || c.status === "reconnecting" || c.status === "logged_out");
 
 export interface WaSettingsView {
   businessName: string | null;
@@ -149,8 +158,8 @@ export async function settingsOf(store: Pick<Store, "id" | "timezone">): Promise
   return waSettingsView(await systemDb.wappSettings.findUnique({ where: { storeId: store.id } }), store);
 }
 
-/** The most business-started messages the store sends a day on this provider. */
-export const dailyLimitOf = (s: Pick<WaSettingsView, "dailyLimit">, provider: WaProvider) => Math.min(s.dailyLimit ?? WA_DAILY_LIMIT[provider].default, WA_DAILY_LIMIT[provider].max);
+/** The most business-started messages the store sends a day. */
+export const dailyLimitOf = (s: Pick<WaSettingsView, "dailyLimit">) => Math.min(s.dailyLimit ?? WA_DAILY_LIMIT.default, WA_DAILY_LIMIT.max);
 
 /** The store's verified test number (E.164), or null. */
 export async function verifiedTestPhone(storeId: string): Promise<string | null> {
@@ -163,6 +172,3 @@ export const businessNameOf = (store: Pick<Store, "name" | "shopDomain">, s: Pic
 
 /** Days down after which waiting messages are cancelled rather than held. */
 export const DOWN_GRACE_MS = 48 * 3600_000;
-
-/** Statuses in which the store's connection holds a live instance at the provider. */
-export const INSTANCE_STATUSES: WaConnectionStatus[] = ["pairing", "connected", "reconnecting", "logged_out", "failed"];
