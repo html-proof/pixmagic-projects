@@ -66,19 +66,23 @@ export async function recordZapierEvent(input: ZapierEventInput, queues?: Pick<Q
     };
     let eventId: string;
     try {
-      const row = await systemDb.zapierEvent.create({
-        data: { workspaceId: input.workspaceId, storeId: input.storeId, event: input.event, hookId: input.hookId ?? null, dedupeKey: input.dedupeKey, payload: envelope as unknown as Prisma.InputJsonValue },
+      // The event and its deliveries together: an event row left without them would hold its dedupe key
+      // and turn every later report of the same happening away, so it would never be sent.
+      eventId = await systemDb.$transaction(async (tx) => {
+        const row = await tx.zapierEvent.create({
+          data: { workspaceId: input.workspaceId, storeId: input.storeId, event: input.event, hookId: input.hookId ?? null, dedupeKey: input.dedupeKey, payload: envelope as unknown as Prisma.InputJsonValue },
+        });
+        await tx.zapierDelivery.createMany({
+          data: allowed.map((h) => ({ workspaceId: input.workspaceId, storeId: input.storeId, eventId: row.id, hookId: h.id, event: input.event, nextAttemptAt: now })),
+          skipDuplicates: true,
+        });
+        return row.id;
       });
-      eventId = row.id;
     } catch (err) {
       // Written already (the same happening reported again): nothing more to send.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return 0;
       throw err;
     }
-    await systemDb.zapierDelivery.createMany({
-      data: allowed.map((h) => ({ workspaceId: input.workspaceId, storeId: input.storeId, eventId, hookId: h.id, event: input.event, nextAttemptAt: now })),
-      skipDuplicates: true,
-    });
     if (queues) await enqueueEventDeliveries(eventId, queues, now);
     return allowed.length;
   } catch (err) {

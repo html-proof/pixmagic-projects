@@ -13,7 +13,7 @@
  *   own days. Demo connections (the Google Ads demo) are left out: their figures are generated.
  */
 import { systemDb, toNumber } from "@app/db";
-import { addDays, localDay, localTime } from "@app/shared";
+import { addDays, adsenseSiteChosen, localDay, localTime } from "@app/shared";
 import { periodKey, periodRange, singleCurrencyTotal, thresholdReached, type ZapierPeriod, type ZapierSpendPlatform } from "@app/shared/zapier";
 import { logger } from "../logger.js";
 import type { Queues } from "../queues.js";
@@ -92,27 +92,60 @@ export interface AccountEarnings {
   clicks: number;
   last_synced_at: string | null;
   data_through: string | null;
+  /** The sites counted for the store (Settings → Advertising); empty: every site. */
+  sites: string[];
+  /**
+   * Sites are chosen, and AdSense didn't split the account's earnings by site on some of the days (one
+   * row with site ""): those days are left out, as the dashboard leaves them, so the store's share is
+   * missing for them rather than counted wrong. The last such day, or null.
+   */
+  unsplit_through: string | null;
 }
 
-/** Each connected AdSense account's estimated earnings for the days. */
+/**
+ * Each connected AdSense account's estimated earnings for the days, counting only the sites chosen for
+ * the store, as the dashboard does (reports/ads.ts adsenseFigures): every site when none are chosen; with
+ * sites chosen, a day AdSense didn't split by site is left out (`unsplit_through`).
+ */
 export async function adsenseByAccount(storeId: string, since: string, until: string): Promise<AccountEarnings[]> {
   const conns = await systemDb.adConnection.findMany({
     where: { storeId, provider: "adsense", enabled: true, isDemo: false },
-    select: { id: true, accountId: true, accountName: true, currency: true, lastSyncedAt: true, syncedThrough: true },
+    select: { id: true, accountId: true, accountName: true, currency: true, lastSyncedAt: true, syncedThrough: true, sites: true },
   });
   if (!conns.length) return [];
-  const sums = await systemDb.adsenseDaily.groupBy({
-    by: ["connectionId", "currency"],
+  const rows = await systemDb.adsenseDaily.findMany({
     where: { connectionId: { in: conns.map((c) => c.id) }, day: { gte: since, lte: until } },
-    _sum: { earnings: true, pageViews: true, impressions: true, clicks: true },
+    select: { connectionId: true, site: true, day: true, currency: true, earnings: true, pageViews: true, impressions: true, clicks: true },
   });
   const out: AccountEarnings[] = [];
   for (const c of conns) {
-    const rows = sums.filter((s) => s.connectionId === c.id);
-    const base = { account_id: c.accountId, account_name: c.accountName, last_synced_at: c.lastSyncedAt?.toISOString() ?? null, data_through: c.syncedThrough };
-    if (!rows.length) out.push({ ...base, currency: c.currency, earnings_estimated: 0, page_views: 0, impressions: 0, clicks: 0 });
-    for (const s of rows) {
-      out.push({ ...base, currency: s.currency ?? c.currency, earnings_estimated: r2(toNumber(s._sum.earnings)), page_views: s._sum.pageViews ?? 0, impressions: s._sum.impressions ?? 0, clicks: s._sum.clicks ?? 0 });
+    const sites = c.sites ?? [];
+    const mine = rows.filter((r) => r.connectionId === c.id);
+    const unsplit = mine.filter((r) => r.site === "" && !adsenseSiteChosen(sites, ""));
+    const counted = mine.filter((r) => adsenseSiteChosen(sites, r.site));
+    const base = {
+      account_id: c.accountId,
+      account_name: c.accountName,
+      last_synced_at: c.lastSyncedAt?.toISOString() ?? null,
+      data_through: c.syncedThrough,
+      sites,
+      unsplit_through: unsplit.map((r) => r.day).sort().at(-1) ?? null,
+    };
+    const byCurrency = new Map<string | null, typeof counted>();
+    for (const r of counted) {
+      const cur = r.currency ?? c.currency;
+      byCurrency.set(cur, [...(byCurrency.get(cur) ?? []), r]);
+    }
+    if (!byCurrency.size) out.push({ ...base, currency: c.currency, earnings_estimated: 0, page_views: 0, impressions: 0, clicks: 0 });
+    for (const [currency, list] of byCurrency) {
+      out.push({
+        ...base,
+        currency,
+        earnings_estimated: r2(list.reduce((s, r) => s + toNumber(r.earnings), 0)),
+        page_views: list.reduce((s, r) => s + (r.pageViews ?? 0), 0),
+        impressions: list.reduce((s, r) => s + (r.impressions ?? 0), 0),
+        clicks: list.reduce((s, r) => s + (r.clicks ?? 0), 0),
+      });
     }
   }
   return out;
