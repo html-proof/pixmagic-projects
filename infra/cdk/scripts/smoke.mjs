@@ -90,12 +90,13 @@ export function configCheck(invoke, envName) {
         `Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --env ${envName} --set ${c.secretSetting}, then ${restart} so the functions read it (docs/aws-deployment.md).`,
     ),
   );
-  // The WhatsApp service is private: the cron function says whether it reaches it.
+  // The Evolution API service is private: the cron function says whether it reaches it. Nothing sends
+  // through it any more; it is only there to retire what is left of QR linking (until release 2).
   if (report.whatsapp.service && !report.whatsapp.service.reachable) {
     warnings.push(
       warning(
         "WhatsApp's service doesn't answer",
-        `The functions can't reach Evolution API (stack InsightsWhatsapp-${envName}), so no store can connect WhatsApp or send. Check its ECS service and logs (docs/whatsapp.md, Runbook).`,
+        `The functions can't reach Evolution API (stack InsightsWhatsapp-${envName}), so the cron can't finish retiring phones linked with a QR code (their instances wait to be logged out and deleted). Sending through Meta isn't affected. Check its ECS service and logs (docs/whatsapp.md, "Removing Evolution").`,
       ),
     );
   }

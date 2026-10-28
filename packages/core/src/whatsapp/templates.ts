@@ -1,22 +1,23 @@
 /**
  * Message templates written in bizinsights (docs/whatsapp.md, "Templates"): a name, a category, a
- * text with {{variables}} and an on/off switch. On a linked phone a template is the store's own
- * wording: nobody reviews it. On the Cloud API, a business-started message must use a template
- * Meta approved, so each one is also submitted to Meta (through Evolution API) and can be used
- * there only once Meta's status is APPROVED.
+ * text with {{variables}} and an on/off switch. A business-started message must use a template Meta
+ * approved, so each one is also submitted to Meta (POST /{waba-id}/message_templates) and is used
+ * only once Meta's status is APPROVED; Meta's review comes back in its webhook
+ * (message_template_status_update), and the sweep asks again for those still pending.
  */
 import { systemDb, type Store, type WappConnection, type WappTemplate } from "@app/db";
 import { variablesIn, waHasErrors, waTemplateIssues, waTemplateSchema, type WaTemplateCategory, type WaTemplateInput } from "@app/shared";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import { WhatsappError, type WaDeps } from "./common.js";
-import { clientFor, instanceToken, providerProblem } from "./connection.js";
+import { createCloudTemplate, listCloudTemplates } from "./cloudApi.js";
+import { providerProblem } from "./connection.js";
 
 /** Whether a template can be sent through this connection now, and why not. */
 export function templateUsable(t: Pick<WappTemplate, "active" | "metaStatus">, conn: Pick<WappConnection, "provider"> | null): { ok: boolean; reason: string | null } {
   if (!t.active) return { ok: false, reason: "The template is switched off." };
-  if (conn?.provider === "cloud_api" && t.metaStatus !== "APPROVED") {
-    return { ok: false, reason: t.metaStatus ? `Meta hasn't approved it (${t.metaStatus.toLowerCase()}).` : "It hasn't been submitted to Meta yet." };
+  if (t.metaStatus !== "APPROVED") {
+    return { ok: false, reason: t.metaStatus ? `Meta hasn't approved it (${t.metaStatus.toLowerCase()}).` : conn?.provider === "cloud_api" ? "It hasn't been submitted to Meta yet." : "Connect WhatsApp, then submit it to Meta for approval." };
   }
   return { ok: true, reason: null };
 }
@@ -122,13 +123,13 @@ export function toMetaBody(body: string, samples: Record<string, string>): { tex
 
 const META_CATEGORY: Record<WaTemplateCategory, "UTILITY" | "MARKETING"> = { transactional: "UTILITY", marketing: "MARKETING" };
 
-/** Submits a template to Meta for review (Cloud API). Meta's answer is recorded as it comes. */
+/** Submits a template to Meta for review. Meta's answer is recorded as it comes. */
 export async function submitTemplateToMeta(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnection, t: WappTemplate, samples: Record<string, string>, language = "en"): Promise<WappTemplate> {
-  if (conn.provider !== "cloud_api" || !conn.instanceName) throw new WhatsappError("Only a Cloud API connection submits templates to Meta.", 409, "not_cloud_api");
+  if (conn.provider !== "cloud_api" || !conn.instanceTokenEnc || !conn.wabaId) throw new WhatsappError("Connect WhatsApp first: templates are submitted to Meta through your WhatsApp Business account.", 409, "not_cloud_api");
   const name = metaTemplateName(t);
   const body = toMetaBody(t.body, samples);
   try {
-    const r = await clientFor(conn, deps).createWaTemplate(conn.instanceName, instanceToken(conn), {
+    const r = await createCloudTemplate(deps, conn, {
       name,
       category: META_CATEGORY[t.category as WaTemplateCategory],
       language,
@@ -140,10 +141,10 @@ export async function submitTemplateToMeta(deps: Pick<WaDeps, "fetchImpl">, conn
   }
 }
 
-/** Meta's current review of every submitted template (Cloud API). */
+/** Meta's current review of every submitted template. */
 export async function refreshMetaTemplates(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnection): Promise<number> {
-  if (conn.provider !== "cloud_api" || !conn.instanceName) return 0;
-  const list = await clientFor(conn, deps).findTemplates(conn.instanceName, instanceToken(conn));
+  if (conn.provider !== "cloud_api" || !conn.instanceTokenEnc || !conn.wabaId) return 0;
+  const list = await listCloudTemplates(deps, conn);
   const byName = new Map(list.map((t) => [`${t.name}:${t.language}`, t]));
   const mine = await systemDb.wappTemplate.findMany({ where: { storeId: conn.storeId, metaName: { not: null } } });
   let changed = 0;

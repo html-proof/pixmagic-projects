@@ -149,7 +149,7 @@ export function whatsappFailedData(m: Pick<WappMessage, "id" | "source" | "type"
   };
 }
 
-/** Called once a WhatsApp message to a customer has failed (whatsapp/messages.ts applyMessageStatus). */
+/** Called once a WhatsApp message to a customer has failed: a send Meta refused or that gave up, or Meta reporting it failed (whatsapp/messages.ts). */
 export async function zapierWhatsappFailed(m: Pick<WappMessage, "id" | "workspaceId" | "storeId" | "direction" | "source" | "type" | "category" | "phoneMasked" | "campaignId" | "automationId">, at: Date, queues?: Pick<Queues, "sync">): Promise<void> {
   // The team's own messages (tests, codes, alerts to the team) aren't about a customer.
   if (m.direction !== "out" || ["test", "verification", "team_alert"].includes(m.source)) return;

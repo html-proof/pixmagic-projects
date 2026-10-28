@@ -134,7 +134,24 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   // Composed from the app's wording and the store's own counts (core's inventory alerts).
   if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
-  // WhatsApp Automation (core whatsapp/connection.ts and sweep.ts): worded here from the code alone.
+  // WhatsApp Automation (core whatsapp/connection.ts, retireQr.ts and sweep.ts): worded here from the code alone.
+  if (code === "whatsapp_reconnect") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Reconnect WhatsApp Business",
+      body: "Meta's access for bizinsights to your WhatsApp Business number ended (it expired, or it was removed in Meta's business settings), so nothing is being sent. Open WhatsApp Automation and connect it again: messages waiting are sent if you do within 48 hours.",
+    };
+  }
+  if (code === "whatsapp_qr_retired") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Connect WhatsApp Business to keep sending",
+      body: "bizinsights no longer links a WhatsApp phone with a QR code, so your linked phone was disconnected and messages that were waiting were cancelled (none was sent). Open WhatsApp Automation and connect your number through Meta's WhatsApp Business Platform.",
+    };
+  }
+  // A phone linked with a QR code (retired 2026-10-28): old alerts keep their wording until they are resolved.
   if (code === "whatsapp_logged_out") {
     return {
       severity,
@@ -147,7 +164,7 @@ export function describeAlert(alert: { code: string; severity: string; message: 
     return { severity, area: "whatsapp", title: "WhatsApp has been disconnected for 2 days", body: "The messages that were waiting to go were cancelled. Open WhatsApp Automation to connect it again." };
   }
   if (code === "whatsapp_provider_down") {
-    return { severity, area: "whatsapp", title: "WhatsApp messages are waiting", body: "bizinsights' WhatsApp service isn't answering, so messages wait and are sent once it is back. Nothing needs doing; contact bizinsights support if this lasts." };
+    return { severity, area: "whatsapp", title: "WhatsApp messages are waiting", body: "WhatsApp's service isn't answering, so messages wait and are sent once it is back. Nothing needs doing; contact bizinsights support if this lasts." };
   }
   // Customer Messaging (core/sms): worded here from the code alone.
   const budget = /^sms_budget_(50|80|100)$/.exec(code);
