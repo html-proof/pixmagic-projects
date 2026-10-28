@@ -428,7 +428,7 @@ describe("sending from the dashboard", () => {
     meta.sendFails.push("refused");
     ok(await o.call("POST", "/messages", { phone: CUSTOMER, reason: "reply", text: "Hi", idempotencyKey: "retry-0000001" }), 201);
     expect(await drain()).toEqual(["retry"]);
-    const m = await systemDb.wappMessage.findFirstOrThrow({ where: { storeId: o.store.id } });
+    const m = await systemDb.wappMessage.findFirstOrThrow({ where: { storeId: o.store.id, direction: "out" } });
     expect(m).toMatchObject({ status: "queued", attempts: 1, errorCode: "unreachable" });
     expect(m.sendAfter.getTime()).toBeGreaterThan(Date.now() + 20_000);
     expect(meta.sends).toHaveLength(0);

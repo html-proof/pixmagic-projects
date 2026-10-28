@@ -195,11 +195,11 @@ const schema = z.object({
   /** Each call to Evolution API gives up after this long (ms). */
   EVOLUTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
   /**
-   * The Cloud API way to connect (Meta's Embedded Signup, then Evolution API's WHATSAPP-BUSINESS
-   * integration sends through it): the Meta app's id and secret (the ad accounts' Meta app when
-   * these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
-   * Signup variation, and the verify token of Meta's webhook. Without them the page offers only the
-   * linked phone, and says why.
+   * WhatsApp's one way to connect, Meta's WhatsApp Business Platform (Embedded Signup; bizinsights
+   * then calls Meta's Graph API with the business's token): the Meta app's id and secret (the ad
+   * accounts' Meta app when these are empty), the Facebook Login for Business configuration id of
+   * its WhatsApp Embedded Signup variation, and the verify token of Meta's webhook. Without them the
+   * page offers nothing to connect, and says why.
    */
   WHATSAPP_APP_ID: z.string().optional().default(""),
   WHATSAPP_APP_SECRET: z.string().optional().default(""),

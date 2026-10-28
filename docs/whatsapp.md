@@ -383,30 +383,43 @@ tick reaches it), and a message queued for it is cancelled with the reason when 
 an instance is deleted, a customer's STOP to that phone is still applied (the Evolution webhook route
 stays, receive-only). Infrastructure is unchanged.
 
-**Release 2 (`claude/whatsapp-remove-evolution`, stacked on release 1; merge only after release 1's
-Deploy succeeded and the cron logged nothing left, `whatsapp qr linking: what was left of it retired`
-with `left: 0`, or `whatsapp:retire-qr:done` set):**
+**Release 2 (`claude/whatsapp-remove-evolution`, stacked on release 1).** Merge it only after release
+1's Deploy succeeded and the cron logged its cleanup done (`whatsapp qr linking: what was left of it
+retired` no longer appears and the last one said `left: 0`, or `whatsapp:retire-qr:done` is set in
+the coordinator table). It removes the service:
 
-1. The code: `whatsapp/evolution.ts`, `retireQr.ts`, Evolution's webhook (`webhook.ts`, the route
-   `/api/webhooks/whatsapp/evolution/:instance`, its JWT verification, its smoke check), the
-   `wapp_event` job (stored events are set aside), the `EVOLUTION_*` settings, `evolutionDb.ts` and the
-   cron's nightly prune, `docker-compose.yml`'s `whatsapp` profile, `e2e/evolution-stub.mjs`,
-   `test-support/evolutionFake.ts`.
-2. The cron's `evolution-db` action becomes **`evolution-db-drop`**: it drops the `evolution` database
-   and role (idempotent: absent is fine).
-3. `whatsapp-stack.ts` keeps only what CloudFormation needs to delete the rest cleanly: the stack
-   stays in the app with **one** custom resource that invokes `evolution-db-drop` on create/update (so
-   the deploy drops the database once). The ECS cluster and service, task definition, Cloud Map
-   namespace, security group, log group, alarms and the DB-init custom resource leave the template, so
-   **CloudFormation deletes them** on that deploy. `app-stack.ts` stops wiring the Evolution URL, key
-   secret and its alarm; `data-stack.ts` keeps the two secrets and their exports for now (the
-   WhatsApp stack still imports `evolution-db` until step 4) but nothing reads `evolution-api`.
-4. **Release 3** (after release 2's Deploy succeeded): the WhatsApp stack's last resource no longer
-   imports anything, so `data-stack.ts` drops the `evolution-api` and `evolution-db` secrets and their
-   exports, and `bin/insights.ts` drops `InsightsWhatsapp-<env>` from the app. `cdk deploy --all` never
-   destroys a stack that left the app: the owner deletes the empty stack once
-   (`aws cloudformation delete-stack --stack-name InsightsWhatsapp-production`, nothing in it). A Data
-   stack export can only go once no stack imports it, which is why this is a release of its own.
+1. **Code**: Evolution's client (`whatsapp/evolution.ts`), its webhook route
+   `/api/webhooks/whatsapp/evolution/:instance` with its JWT verification (`whatsapp/webhook.ts`) and
+   its smoke check, the `EVOLUTION_*` settings, the deploy check's reachability of the service, the
+   nightly prune of its database, `docker-compose.yml`'s `whatsapp` profile, `e2e/evolution-stub.mjs`
+   and `test-support/evolutionFake.ts`. `retireQr.ts` stays without Evolution: it retires any QR row
+   release 1 didn't reach (same reason, cancellations, alert, audit) and sets Evolution's stored
+   webhook events aside; the queue's `wapp_event` job only sets its event aside.
+2. **The database**: the cron's `evolution-db` action becomes **`evolution-db-drop`** (`apps/aws/src/
+   evolutionDb.ts`): `DROP DATABASE evolution WITH (FORCE)` and `DROP ROLE evolution`, idempotent.
+3. **The WhatsApp stack** keeps only what CloudFormation needs: it stays in the app (the deploy never
+   destroys a stack that leaves it) with **one** custom resource that runs `evolution-db-drop` once.
+   The ECS cluster and service, the task definition, the Cloud Map namespace, the security group and
+   its rule on the database, the alarms and the DB-init custom resource leave the template, so
+   **CloudFormation deletes them** in that deploy's cleanup (the log group
+   `/ecs/insights-production-evolution-a` is kept until its retention ends). The drop runs before the
+   cleanup stops the task, hence `FORCE`.
+4. **The App stack** stops wiring Evolution: `EVOLUTION_API_URL`, `EVOLUTION_SECRET_ARN`,
+   `EVOLUTION_DB_SECRET_ARN`, the two secrets' grants, and the `whatsapp-service-unreachable` alarm.
+5. **The Data stack** deploys first, while the WhatsApp stack's previous version still imports four of
+   its exports (the VPC, the database's security group, the two Evolution secrets) and CloudFormation
+   refuses to delete an export in use. So it keeps exporting them under the same names
+   (`exportValue`), and keeps the two secrets, their removal policy now Delete.
+
+**Release 3** (after release 2's Deploy succeeded, so nothing imports those exports any more): the Data
+stack drops the four `exportValue`s and the two secrets (Delete: Secrets Manager schedules their
+deletion); the WhatsApp stack's custom resource gives way to a placeholder
+(`AWS::CloudFormation::WaitConditionHandle`: a stack needs one resource), and the cron's
+`evolution-db-drop` action, `evolutionDb.ts`, `retireQr.ts` and the `wapp_event` job go; then a later
+pull request may drop the `instance_name`, `instance_id`, `webhook_key_enc` columns and the
+`wapp_webhook_events` table with the other old tables. Deleting the empty stack is optional and by
+hand (`aws cloudformation delete-stack --stack-name InsightsWhatsapp-production`, after removing it
+from `bin/insights.ts`).
 
 Each release ships through `main` → CI → Deploy like any other; none needs a hand deploy.
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cloudApiMissing, CloudApiError, cloudFailure, createCloudTemplate, listCloudTemplates, metaApp, metaErrorInfo, resetEnvCache, sendCloudMessage, waEncrypt, type GraphFailure } from "../src/index.js";
+import { cloudApiMissing, CloudApiError, cloudFailure, createCloudTemplate, listCloudTemplates, metaApp, metaErrorInfo, resetEnvCache, sendCloudMessage, waEncrypt } from "../src/index.js";
+import type { GraphFailure } from "../src/metaGraph.js";
 import { cloudApiFake, META_APP_SECRET, META_ENV } from "../../../test-support/cloudApiFake.js";
 
 /**
