@@ -31,8 +31,18 @@ export const API_KEYS_ENABLED: boolean = false;
  */
 export const AUTOMATIONS_HUB: boolean = true;
 
+/**
+ * The Zapier card on Settings → Integrations (docs/zapier.md): connect the store to the merchant's own
+ * Zapier account through bizinsights' Zapier app. Off in production until the owner has registered
+ * and pushed that app and set its ZAPIER_* settings (docs/zapier.md, "Owner setup"); on in
+ * development (`next dev`) so it can be tried. The consent page Zapier opens (/connect/zapier) and the
+ * API don't depend on it: they answer `not_configured` until the settings are there.
+ */
+export const ZAPIER_ENABLED: boolean = false;
+export const ZAPIER_CARD: boolean = ZAPIER_ENABLED || process.env.NODE_ENV !== "production";
+
 /** The parts of the app beyond the Shopify dashboard, each built on another company's accounts. */
-export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "sms";
+export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "sms" | "zapier";
 
 /**
  * What a workspace whose stores came in through the App Store app offers (`MeWorkspace.appStore`,
@@ -51,8 +61,8 @@ export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "
 // --config appstore) and the listing says so (docs/inventory.md, "Turning it on").
 //
 // Customer Messaging (SMS through AWS) isn't offered to App Store workspaces until the listing
-// describes it.
-export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, email: false, inventory: false, sms: false };
+// describes it. Nor is Zapier, which needs the merchant's own Zapier account.
+export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, email: false, inventory: false, sms: false, zapier: false };
 
 /** Whether a workspace offers `part` of the app (`appStore`: it came in through the App Store app). */
 export const offersModule = (appStore: boolean | undefined, part: AppModule): boolean => !appStore || APP_STORE_MODULES[part];
