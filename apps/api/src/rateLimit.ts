@@ -201,7 +201,7 @@ export const LIMITS = {
   zapierTokenIp: { max: 600, windowSec: 60 },
   /** Zapier's API calls (subscribing triggers, samples, searches), per connection. */
   zapierApi: { max: 300, windowSec: 60 },
-  /** Requests with a bearer token that isn't valid, per IP: past it they're answered 429. */
+  /** Requests with a zat_ token bizinsights never issued (not merely expired), per IP: past it they're answered 429. */
   zapierBadTokenIp: { max: 120, windowSec: 600 },
   /** Disconnecting Zapier from Settings, per workspace. */
   zapierManage: { max: 30, windowSec: 600 },

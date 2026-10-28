@@ -280,6 +280,20 @@ describe("who Zapier's tokens act as", () => {
     expect((await zget(t.refresh_token, "/zapier/me")).statusCode).toBe(401);
   });
 
+  it("an expired access token is a 401 however often Zapier sends one; only made-up tokens are rate-limited", async () => {
+    const { owner, ws, store } = await business("owner-t", "owner@expiry.test", "Expiry", "expiry.myshopify.com");
+    const t = await connect(owner.headers, ws, store.id);
+    await systemDb.zapierToken.updateMany({ where: { tokenHash: sha256Hex(t.access_token) }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const statuses = new Set<number>();
+    for (let i = 0; i < 130; i++) statuses.add((await zget(t.access_token, "/zapier/me")).statusCode);
+    expect([...statuses]).toEqual([401]);
+    const madeUp = new Set<number>();
+    for (let i = 0; i < 130; i++) madeUp.add((await zget(`zat_${randomBytes(32).toString("base64url")}`, "/zapier/me")).statusCode);
+    expect([...madeUp].sort()).toEqual([401, 429]);
+    // The refresh still works for the expired one's connection.
+    expect((await token({ grant_type: "refresh_token", refresh_token: t.refresh_token })).statusCode).toBe(200);
+  });
+
   it("one business's connection never sees or changes another's (404)", async () => {
     const a = await business("owner-a", "owner@a.test", "Alpha", "alpha.myshopify.com");
     const b = await business("owner-bb", "owner@b.test", "Beta", "beta.myshopify.com");

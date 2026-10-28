@@ -50,7 +50,9 @@ async function requireZapier(c: Ctx, deps: Deps): Promise<ZapierCtx> {
   }
   const check = await authenticateZapierToken(token);
   if (!check.ok) {
-    await limit(deps.coord, `rl:zapier:bad-token:${clientIp(c)}`, LIMITS.zapierBadTokenIp);
+    // Only tokens bizinsights never issued count: an expired one is Zapier's every-hour refresh, from
+    // the few addresses it calls every merchant's connections from.
+    if (check.reason === "unknown_token") await limit(deps.coord, `rl:zapier:bad-token:${clientIp(c)}`, LIMITS.zapierBadTokenIp);
     c.header("www-authenticate", 'Bearer realm="bizinsights", error="invalid_token"');
     throw new HttpError(401, check.reason === "no_access" ? NO_ACCESS : UNAUTHORIZED, "invalid_token");
   }

@@ -185,16 +185,21 @@ export async function exchangeRefreshToken(input: { refreshToken: string; client
   });
 }
 
-export type TokenCheck = { ok: true; grant: ZapierGrant; who: AuthorizerAccess } | { ok: false; reason: "invalid_token" | "no_access" };
+/**
+ * `unknown_token`: no such token at all (made up, or pruned a day after it expired). `invalid_token`:
+ * one bizinsights issued that has expired (every hour, before Zapier refreshes it) or was revoked.
+ */
+export type TokenCheck = { ok: true; grant: ZapierGrant; who: AuthorizerAccess } | { ok: false; reason: "unknown_token" | "invalid_token" | "no_access" };
 
 /**
  * A request's bearer token: an unexpired access token of a grant that stands, whose member still may.
  * Notes the grant's last use (at most once a minute).
  */
 export async function authenticateZapierToken(bearer: string, now = new Date()): Promise<TokenCheck> {
-  if (!bearer.startsWith(ZAPIER_ACCESS_PREFIX) || bearer.length > 200) return { ok: false, reason: "invalid_token" };
+  if (!bearer.startsWith(ZAPIER_ACCESS_PREFIX) || bearer.length > 200) return { ok: false, reason: "unknown_token" };
   const token = await systemDb.zapierToken.findUnique({ where: { tokenHash: sha256Hex(bearer) }, include: { grant: true } });
-  if (!token || token.kind !== "access" || token.expiresAt <= now || token.grant.revokedAt) return { ok: false, reason: "invalid_token" };
+  if (!token) return { ok: false, reason: "unknown_token" };
+  if (token.kind !== "access" || token.expiresAt <= now || token.grant.revokedAt) return { ok: false, reason: "invalid_token" };
   const who = await authorizerAccess(token.grant, now);
   if (!who) return { ok: false, reason: "no_access" };
   if (!token.grant.lastUsedAt || now.getTime() - token.grant.lastUsedAt.getTime() > 60_000) {
