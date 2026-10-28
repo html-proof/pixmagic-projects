@@ -1,6 +1,7 @@
 /** The cron sweeps: nightly reconcile, sales re-reads, stuck jobs, expiring tokens, and the one-off seeds after a move. */
 import { systemDb } from "@app/db";
 import {
+  checkAdFiguresDaily,
   failHistoryWindows,
   getAccessToken,
   logger,
@@ -187,7 +188,8 @@ export async function seedSalesRereads(deps: Pick<WorkerDeps, "queues" | "coord"
  * Daily safety net for missed webhooks and lost aggregates: re-pull recently updated orders
  * (see reconcileOrderDays) and, with read_products, the whole catalog and stock levels
  * (inventory changes don't always reach us as products/update webhooks); and recompute any day
- * in the backfill window whose daily totals are missing (see unaggregatedDays).
+ * in the backfill window whose daily totals are missing (see unaggregatedDays). Then the ad
+ * accounts' stored figures are checked against their platforms (core's checkAdFiguresDaily).
  *
  * Each store is gated by its own lease (RECONCILE_LEASE_MS), taken before anything is enqueued
  * and given back if enqueueing fails, so a run that stops part-way - the database dropping
@@ -242,6 +244,10 @@ export async function scheduleReconcile(deps: WorkerDeps) {
     }
     reconciled++;
   }
+  // Each ad account's settled week against what its platform reports, once a day per account on its
+  // own lease, a few at a time and within a time budget (docs/ads-setup.md, "Checked against the
+  // platform"). For the operator's logs only, and best effort: it never fails the reconcile.
+  await checkAdFiguresDaily(deps).catch((err: unknown) => logger.warn({ err }, "the daily check of stored ad figures failed; the next tick tries again"));
   return reconciled;
 }
 

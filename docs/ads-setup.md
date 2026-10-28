@@ -121,6 +121,24 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
 - **Meta report jobs**: when Meta answers a big account's long range with "reduce the amount of data", the sync runs
   it as an asynchronous Insights report job.
 
+### Checked against the platform
+
+Once a day per account, the cron's reconcile sweep compares what is stored with what the platform reports
+(`packages/core/src/adConnections/verify.ts`): the totals of a settled week (the 7 days ending 8 days before the
+account's today, inside the days stored) against one account-level read of the same days, on the account's own
+calendar and in its currency. **Meta**: spend, impressions, clicks, link clicks, purchases and purchase value (the last
+three only when every stored day has them) from `ad_campaign_daily`, against one insights read of the account with
+each ad set's own attribution, as the sync reads it; by the 8th day back the longest attribution an ad set can have (7
+days after the click) has run out for every day of the week. **AdSense**: earnings, page views, impressions and clicks of every stored site (the store's choice of
+sites is for the dashboard, not for this) against the totals of one report of the week. A figure matches within 1%
+of the platform's, or within what rounding can make (half a cent per rounded figure; one for counts); the stored
+rows' currency must be the account's. The result goes to the cron's log only: `ad figures match the platform`, or
+one `ad figures differ from the platform` per figure with both sides, which the alarm `ad-figures-differ` counts
+(RUNBOOK.md). Merchants are never told and nothing on the connection changes. Only accounts whose syncs work are
+checked; a platform that asks to wait skips the account until the next day, and each cron tick starts checks for a
+minute at most, three accounts at a time, each read given 30 seconds (accounts not reached wait for the next tick). **Google Ads isn't checked**: every read spends operations from the one daily
+allowance all merchants share.
+
 ## Alerts
 
 The 15-minute sweep raises one alert per connection in the bell feed (and email, by the notification settings) to
@@ -131,6 +149,10 @@ the people who manage integrations, and closes it when the connection works agai
 - `ads_failing`: status `error` for 6 syncs in a row or more than 24 hours (never for codes that are bizinsights' to
   fix: those go to the operator's logs);
 - `ads_expiring`: a Meta sign-in that ends within 7 days.
+
+For the operator, a connection turning to `reconnect` or `permission` also logs `ad connection needs the merchant`
+once, when it turns (provider, code and ids, nothing it holds); ten in an hour across stores raise the alarm
+`ad-connections-need-merchants` (RUNBOOK.md).
 
 ## Disconnecting, and when access is given back
 
