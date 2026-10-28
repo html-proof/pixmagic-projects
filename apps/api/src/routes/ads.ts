@@ -884,7 +884,7 @@ export function adsRoutes(app: App, deps: Deps) {
       rangesOf(q),
       today,
       (r) => `ads-report:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
-      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline, ...(r.compare ? { statuses: false } : {}) }),
+      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, ...(r.compare ? { statuses: false } : {}) }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "meta", conn.id);
@@ -965,7 +965,10 @@ export function adsRoutes(app: App, deps: Deps) {
    * "Sync now" / "Refresh": bring every shown account up to date (or one platform's). An account this
    * login can't read now, or that the platform won't report on, is asked whether it is back (and
    * catches up if so). One waiting for a reconnect is left alone: only connecting again helps it.
-   * `queued`: the accounts sent off; one already on its way isn't sent again.
+   * `queued`: the accounts sent off; one already on its way isn't sent again. While a platform is paused
+   * for bizinsights' own limit there (Google's daily allowance, Meta's hourly app limit), its accounts
+   * are sent all the same: the job reads nothing and marks the card with why (quota_exhausted,
+   * rate_limited), so the answer and its "Synchronizing" mean what they always do.
    */
   app.post("/workspaces/:ws/stores/:storeId/ads/sync", async (c) => {
     const { ws, storeId } = c.req.param();

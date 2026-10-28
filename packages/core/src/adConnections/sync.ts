@@ -32,7 +32,17 @@ import { logger } from "../logger.js";
 import type { Producer, Queues } from "../queues.js";
 import type { FetchLike } from "../shopify.js";
 import { resolveAdAlerts } from "./alerts.js";
-import { countGoogleAdsOperations, countingGoogleAdsFetch, googleAdsBudget, googleAdsBudgetAllows, googleAdsPaused, pauseGoogleAds } from "./budget.js";
+import {
+  countGoogleAdsOperations,
+  countingGoogleAdsFetch,
+  googleAdsBudget,
+  googleAdsBudgetAllows,
+  googleAdsPaused,
+  isMetaAppLimit,
+  metaAdsPaused,
+  pauseGoogleAds,
+  pauseMetaAds,
+} from "./budget.js";
 import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig } from "./config.js";
 import { accessTokenAndPerson, adAccessToken, learnAdPerson } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
@@ -60,6 +70,14 @@ export const ADS_REQUEST_STALE_MS = 30 * 60_000;
 const ADS_HISTORY_SPACING_S = 120;
 /** While a history window is on its way nobody else queues one; past this the chain is taken as broken. */
 export const ADS_HISTORY_LEASE_MS = 30 * 60_000;
+/**
+ * One sync of a connection at a time: a Refresh, the schedule's recent days or re-check, a history
+ * window and a long window's rest would otherwise each call the platform for the same account at once.
+ * The lock outlives the jobs function's 15 minutes (infra/cdk/lib/app-stack.ts), as the queue's
+ * visibility timeout does, so a sync cut off there frees its account a minute later.
+ */
+export const ADS_SYNC_LOCK_MS = 16 * 60_000;
+const syncLock = (connectionId: string) => `ads-sync:${connectionId}`;
 
 const maxLookback = (provider: string) => ADS_MAX_LOOKBACK_DAYS[provider as AdProvider] ?? ADS_MAX_LOOKBACK_DAYS.google;
 const later = (a: string, b: string) => (a > b ? a : b);
@@ -123,13 +141,14 @@ const META_STATUS_BUDGET_MS = 20_000;
  * (metaStatuses: stops once every campaign is found). Best effort: without it the days are stored all
  * the same and the statuses stay as last read.
  */
-async function withMetaStatuses(cfg: MetaConfig, token: string, accountId: string, rows: AdDayRow[]): Promise<AdDayRow[]> {
+async function withMetaStatuses(cfg: MetaConfig, token: string, accountId: string, rows: AdDayRow[], coord?: Coord): Promise<AdDayRow[]> {
   const ids = [...new Set(rows.map((r) => r.campaignId))];
   if (!ids.length) return rows;
   try {
     const statuses = await metaStatuses(cfg, token, accountId, "campaign", ids, { deadline: Date.now() + META_STATUS_BUDGET_MS });
     return rows.map((r) => (statuses.has(r.campaignId) ? { ...r, campaignStatus: statuses.get(r.campaignId)! } : r));
   } catch (err) {
+    if (coord && isMetaAppLimit(err)) await pauseMetaAds(coord, err.retryAfterS);
     logger.info({ err, accountId }, "meta: campaign statuses not read this sync");
     return rows;
   }
@@ -314,8 +333,16 @@ async function metaPermissionProblem(cfg: MetaConfig, token: string, err: unknow
 
 const notSetUp = (provider: string) => new AdsApiError(`${AD_PROVIDER_NAME[provider as AdProvider] ?? provider} isn't set up on this server`, 503, undefined, "not_configured");
 
+/**
+ * A Meta Ads call that met Meta's limit for bizinsights' app (isMetaAppLimit), in a step that goes on
+ * without its answer: the pause is kept all the same, so the next account's job doesn't ask.
+ */
+async function noteMetaAppLimit(conn: Pick<AdConnection, "provider">, err: unknown, coord: Coord | undefined) {
+  if (conn.provider === "meta" && coord && isMetaAppLimit(err)) await pauseMetaAds(coord, err.retryAfterS);
+}
+
 /** Fetch [since, until] and store it. Null when the connection was deleted meanwhile. */
-async function fetchAndStore(conn: AdConnection, token: string, since: string, until: string, fetchImpl?: FetchLike): Promise<number | null> {
+async function fetchAndStore(conn: AdConnection, token: string, since: string, until: string, fetchImpl?: FetchLike, coord?: Coord): Promise<number | null> {
   if (conn.provider === "meta") {
     const cfg = metaConfig(fetchImpl);
     if (!cfg) throw notSetUp("meta");
@@ -325,7 +352,7 @@ async function fetchAndStore(conn: AdConnection, token: string, since: string, u
     } catch (err) {
       throw await metaPermissionProblem(cfg, token, err);
     }
-    return storeAdDays(conn, since, until, rows, (stored) => withMetaStatuses(cfg, token, conn.accountId, stored));
+    return storeAdDays(conn, since, until, rows, (stored) => withMetaStatuses(cfg, token, conn.accountId, stored, coord));
   }
   if (conn.provider === "google") {
     // A demo connection reads bizinsights' generator; a real one Google, through the OAuth client (ads/googleAdsSource.ts).
@@ -392,22 +419,44 @@ export interface AdSyncOptions {
   healthOnly?: boolean;
   /** For the follow-ups: the rest of a long window, the next window of history, a catch-up once an account is back. */
   queues?: Queues;
-  /** For Google's daily allowance (counting, holding background syncs back) and the history walk's lease. */
+  /**
+   * For Google's daily allowance (counting, holding background syncs back), Meta's pause, the history
+   * walk's lease, and the connection's lock (one sync at a time). Without it (tests, ops scripts) none
+   * of these apply.
+   */
   coord?: Coord;
 }
 
 export type AdSyncResult =
-  | { skipped: true; reason: "gone" | "hidden" | "no_token" | "nothing" | "budget" | "paused" | "health_failed" }
+  | { skipped: true; reason: "gone" | "hidden" | "no_token" | "nothing" | "budget" | "paused" | "busy" | "health_failed" }
   | { skipped: false; stored: number; since: string; until: string; continued: boolean; health: AdAccountHealth | null };
 
 /** Google's allowance ran out: nothing was read, and it's bizinsights' limit, not the account's. */
 const QUOTA_FAILURE: AdFailure = { status: "error", code: "quota_exhausted", detail: null, retryable: false, retryAfterS: null };
+/** Meta Ads is paused for Meta's limit on bizinsights' app: nothing was read. Meta asked bizinsights to slow down. */
+const META_PAUSED_FAILURE: AdFailure = { status: "error", code: "rate_limited", detail: null, retryable: true, retryAfterS: null };
+
+/**
+ * Take the connection's lock: "held" (release it after), "busy" (another sync of it is running), or
+ * null when the coordinator didn't answer, and the sync runs without it, as it did before there was one.
+ */
+async function takeSyncLock(coord: Coord, connectionId: string): Promise<"held" | "busy" | null> {
+  try {
+    return (await coord.acquire(syncLock(connectionId), ADS_SYNC_LOCK_MS)) ? "held" : "busy";
+  } catch (err) {
+    logger.warn({ err, connectionId }, "ad sync lock not taken; syncing without it");
+    return null;
+  }
+}
 
 /**
  * Fetch and store one ad account's days, and mark the connection with what happened. A lasting failure
  * (access ended or lost, the account gone, a refusal) is recorded at once and thrown; the queue retries
  * the others (outages, rate limits) and the last attempt's is recorded then (recordAdSyncFailure).
  * Whatever the platform's text, the connection keeps only the code and the cleaned detail.
+ *
+ * With `opts.coord`, one sync of a connection runs at a time: one that finds another running reads
+ * nothing and answers "busy" (the worker sends its job again shortly).
  */
 export async function syncAdConnection(connectionId: string, since: string, until: string, fetchImpl?: FetchLike, opts: AdSyncOptions = {}): Promise<AdSyncResult> {
   const conn = await systemDb.adConnection.findUnique({ where: { id: connectionId } });
@@ -429,9 +478,34 @@ export async function syncAdConnection(connectionId: string, since: string, unti
     }
     if (trigger !== "request" && !googleAdsBudgetAllows(await googleAdsBudget(opts.coord), trigger)) return { skipped: true, reason: "budget" };
   }
+  // Meta has said bizinsights' app is over its limit for the hour: every account's call would be refused.
+  if (conn.provider === "meta" && opts.coord && (await metaAdsPaused(opts.coord))) {
+    // Someone asked: say why nothing changed ("Meta asked bizinsights to slow down"). The schedule comes back once the pause ends.
+    if (trigger === "request") await recordAdFailure(conn.id, META_PAUSED_FAILURE, "sync");
+    return { skipped: true, reason: "paused" };
+  }
+  // The daily look at an account with nothing new to read (healthOnly) takes no lock: it is one cheap
+  // read of the account, with no days fetched or stored, so one beside a sync costs a call at most, and
+  // held back it would wait out a long history window for nothing. The catch-up it queues when the
+  // account is back takes the lock like any sync.
+  const lock = opts.coord && !opts.healthOnly ? await takeSyncLock(opts.coord, conn.id) : null;
+  if (lock === "busy") {
+    // Someone is waiting: a newer mark keeps the card saying "Synchronizing" past the end of the sync
+    // that runs now (which ends only a wait it saw when it started), until this one has landed.
+    if (trigger === "request") await systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: { not: null } }, data: { syncRequestedAt: new Date() } });
+    return { skipped: true, reason: "busy" };
+  }
+  try {
+    return await attemptSync(conn, since, until, trigger, google, fetchImpl, opts);
+  } finally {
+    if (lock === "held") await opts.coord!.release(syncLock(conn.id)).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad sync lock not released; it runs out by itself"));
+  }
+}
+
+/** One attempt at a connection's sync, from its start (the card's "Last attempted") to its record (ad_sync_runs). */
+async function attemptSync(conn: AdConnection, since: string, until: string, trigger: AdsSyncTrigger, google: boolean, fetchImpl: FetchLike | undefined, opts: AdSyncOptions): Promise<AdSyncResult> {
   const counter = google ? countingGoogleAdsFetch(fetchImpl) : null;
   const f = counter?.fetchImpl ?? fetchImpl;
-  // An attempt starts here (the card's "Last attempted"), and ends in one record of how it went (ad_sync_runs).
   const startedAt = new Date();
   await systemDb.adConnection.updateMany({ where: { id: conn.id }, data: { lastSyncAttemptAt: startedAt } });
   try {
@@ -445,6 +519,13 @@ export async function syncAdConnection(connectionId: string, since: string, unti
       if (opts.coord) await pauseGoogleAds(opts.coord, failure.retryAfterS);
       if (trigger !== "history") await recordAdFailure(conn.id, failure, "sync");
       return { skipped: true, reason: "paused" };
+    }
+    if (conn.provider === "meta" && opts.coord && isMetaAppLimit(err)) {
+      // bizinsights' app, not this account, is over Meta's limit: every Meta Ads sync and report holds
+      // back, and this one waits as long (the worker sends it again without spending a retry), so it
+      // comes back once the pause has ended rather than into it.
+      const paused = await pauseMetaAds(opts.coord, err.retryAfterS);
+      if (paused) err.retryAfterS = Math.max(err.retryAfterS ?? 0, paused + 5);
     }
     // An older window that didn't come says nothing about the account now: only lasting news is kept from it.
     if (!failure.retryable && !(trigger === "history" && failure.status === "error")) await recordAdFailure(conn.id, failure, "sync");
@@ -500,7 +581,7 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
   if (!w) return { skipped: true, reason: "nothing" };
   // A demo holds no token and no person: nothing to refresh, nobody to look up.
   const { token, person } = isDemoConnection(conn) ? { token: "", person: null } : await accessTokenAndPerson(conn, fetchImpl);
-  const stored = await fetchAndStore(conn, token, w.since, w.until, fetchImpl);
+  const stored = await fetchAndStore(conn, token, w.since, w.until, fetchImpl, opts.coord);
   if (stored === null) return { skipped: true, reason: "gone" };
 
   // Afterwards and best effort: who granted access (so a disconnect knows whether the grant is shared;
@@ -508,11 +589,15 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
   // re-check, so a platform that won't say isn't asked every hour; and with the daily re-check the
   // account's health at the platform. Neither fails the sync.
   if (!conn.externalUserId && person === undefined && (trigger === "request" || opts.health || !conn.lastSyncedAt)) {
-    await learnAdPerson(conn, token, fetchImpl).catch((err: unknown) => logger.info({ err, connectionId: conn.id }, "ad connection: who granted access not learned"));
+    await learnAdPerson(conn, token, fetchImpl).catch(async (err: unknown) => {
+      await noteMetaAppLimit(conn, err, opts.coord);
+      logger.info({ err, connectionId: conn.id }, "ad connection: who granted access not learned");
+    });
   }
   let health: AdAccountHealth | null = null;
   if (opts.health) {
-    health = await readAccountHealth(conn, token, fetchImpl).catch((err: unknown) => {
+    health = await readAccountHealth(conn, token, fetchImpl).catch(async (err: unknown) => {
+      await noteMetaAppLimit(conn, err, opts.coord);
       logger.info({ err, connectionId: conn.id, errorCode: classifyAdError(err).code }, "ad account health not read");
       return null;
     });
@@ -534,19 +619,17 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
       // that row waits for a reconnect, and marking it working would hide that. Not over the token read
       // either: a refresh in this sync changed it.
       where: { id: conn.id, ...(isDemoConnection(conn) ? {} : { accessTokenEnc: { not: "" } }), OR: [{ errorCode: null }, { errorCode: { not: "connector_left" } }] },
-      data: {
-        status: "active",
-        errorCode: null,
-        lastError: null,
-        consecutiveFailures: 0,
-        lastSyncedAt: new Date(),
-        // "Synchronizing" lasts until the last window someone asked for has landed.
-        ...(continued && trigger === "request" ? {} : { syncRequestedAt: null }),
-      },
+      data: { status: "active", errorCode: null, lastError: null, consecutiveFailures: 0, lastSyncedAt: new Date() },
     });
     if (!done.count) {
       const still = await systemDb.adConnection.count({ where: { id: conn.id } });
       return { skipped: true, reason: still ? "no_token" : "gone" };
+    }
+    // "Synchronizing" lasts until the last window someone asked for has landed. This sync ends the wait
+    // it saw when it started, not one asked for since (a Refresh while it ran, or one waiting for it to
+    // end, which leaves a newer mark): that one's own sync ends it.
+    if (conn.syncRequestedAt && !(continued && trigger === "request")) {
+      await systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: conn.syncRequestedAt }, data: { syncRequestedAt: null } });
     }
     if (conn.status !== "active" || conn.consecutiveFailures > 0) {
       await resolveAdAlerts(conn, ["ads_reconnect", "ads_failing", "ads_unavailable"]).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
@@ -581,6 +664,7 @@ async function healthCheck(conn: AdConnection, fetchImpl: FetchLike | undefined,
     health = await readAccountHealth(conn, isDemoConnection(conn) ? "" : await adAccessToken(conn, fetchImpl), fetchImpl);
   } catch (err) {
     const failure = classifyAdError(err);
+    await noteMetaAppLimit(conn, err, opts.coord);
     // Only access that ended is news here; anything else waits for tomorrow's look.
     if (failure.status === "reconnect") await recordAdFailure(conn.id, failure, "sync");
     else await endRequest();
