@@ -280,7 +280,12 @@ export default function PrivacyPage() {
             spend, impressions, reach and clicks, and the conversions and purchases the platform attributes to its ads, per day, by
             device and by country;
           </li>
-          <li>for AdSense, your site&apos;s estimated earnings, page views and clicks.</li>
+          <li>
+            for AdSense, your site&apos;s estimated earnings, page views, ad impressions and clicks per site and day; and, when you open its
+            report, the same by country, device type or ad unit (with the ad unit&apos;s name), with ad requests, coverage and Active View
+            viewability. The report is read from AdSense when you open it; a copy is cached briefly (up to an hour) so reopening it is quick,
+            and it isn&apos;t kept with the figures below.
+          </li>
         </ul>
         <p>
           We keep these figures so the dashboard can compare periods. With each connection we also keep the platform&apos;s ID for the

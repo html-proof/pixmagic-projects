@@ -1266,8 +1266,9 @@ describe("the AdSense report", () => {
     // Other sites chosen: another report, asked of AdSense again.
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { sites: ["shop.example.com", "blog.example.com"] } });
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers })).json()).toMatchObject({ cached: false, report: { sites: ["shop.example.com", "blog.example.com"] } });
-    // Country and device type are levels too; anything else isn't.
-    for (const level of ["country", "platform"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    // Country, device type and ad unit are levels too; anything else isn't.
+    for (const level of ["country", "platform", "ad_unit"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    expect(seen.at(-1)!.searchParams.getAll("dimensions")).toEqual(["AD_UNIT_ID", "AD_UNIT_NAME"]);
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).statusCode).toBe(400);
   });
 
