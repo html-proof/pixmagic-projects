@@ -9,10 +9,9 @@ import {
   enqueueAdSync,
   googleAdsBudget,
   googleAdsBudgetAllows,
-  moveDirectAdConnectionsToNango,
+  leaveNango,
   nextHistoryWindow,
   recheckDays,
-  sweepNangoOrphans,
   sweepAdAlerts,
   syncAdConnection,
   type AdsSyncData,
@@ -192,14 +191,6 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
 }
 
 /**
- * Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a
- * grace period.
- */
-export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
-  return sweepNangoOrphans(deps.coord, deps.fetchImpl);
-}
-
-/**
  * Sign-ins connected with no ad account yet (core's logins.ts): asked again once an hour, and their ad
  * accounts connected as soon as the platform lists some.
  */
@@ -207,7 +198,7 @@ export async function checkWaitingAdLogins(deps: Pick<WorkerDeps, "coord" | "que
   return checkAdLogins(deps);
 }
 
-/** Ad connections made before every platform went through Nango: moved there, a few sign-ins a tick (docs/nango.md). */
-export async function moveDirectAdConnections(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
-  return moveDirectAdConnectionsToNango(deps.coord, { fetchImpl: deps.fetchImpl });
+/** Ad connections made through Nango (2026-10-22 to 2026-10-28): moved off it, a few a tick (core's leaveNango.ts). */
+export async function moveAdConnectionsOffNango(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
+  return leaveNango(deps.coord, { fetchImpl: deps.fetchImpl });
 }

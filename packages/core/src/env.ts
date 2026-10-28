@@ -160,26 +160,14 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * Nango (docs/nango.md): the secret API key of bizinsights' Nango environment (its prod environment in
-   * production), a secret (Secrets Manager, put-secrets.mjs --set NANGO_SECRET_KEY). Every ad platform is
-   * connected through it: "Continue with Meta Ads / Google Ads / Google AdSense" open Nango's Connect UI,
-   * the merchant authorizes bizinsights' own Meta app or Google client there, Nango keeps and renews the
-   * tokens, and bizinsights reads the platform with them. Empty: no ad platform can be connected (the
-   * cards say so), and connections made before Nango keep working until they can be moved there.
+   * The secret API key of bizinsights' old Nango environment, a secret (Secrets Manager), kept only
+   * while the connections made through Nango (2026-10-22 to 2026-10-28) are moved off it
+   * (adConnections/leaveNango.ts; docs/ads-setup.md, "Leaving Nango"). Nothing connects through Nango
+   * any more; once the move logs `left: 0` the secret is deleted and this setting goes.
    */
   NANGO_SECRET_KEY: z.string().optional().default(""),
-  /** The webhook signing key of the same environment (Environment Settings → Webhooks), a secret. Empty: Nango's webhooks are refused. */
-  NANGO_WEBHOOK_SECRET: z.string().optional().default(""),
   /** Nango's API. */
   NANGO_API_URL: z.string().default("https://api.nango.dev"),
-  /**
-   * The platforms connected through Nango once the key is set, comma-separated (meta, google, adsense):
-   * one left out can't be connected (its card says so). Each also needs its own app's keys here
-   * (META_APP_ID/SECRET, GOOGLE_ADS_CLIENT_*), which Nango's integration must carry too: bizinsights
-   * checks every token was issued to them. And each one's integration must exist in Nango, which is
-   * asked (nango-setup.mjs makes them).
-   */
-  NANGO_PROVIDERS: z.string().optional().default("meta,google,adsense"),
   /**
    * WhatsApp's one way to connect, Meta's WhatsApp Business Platform (Embedded Signup; bizinsights
    * then calls Meta's Graph API with the business's token): the Meta app's id and secret (the ad

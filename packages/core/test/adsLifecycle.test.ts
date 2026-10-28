@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
+import { pkceChallenge, pkcePair } from "@app/shared";
 import {
+  adsenseAuthorizeUrl,
   AdsAuthError,
   AdsNoAccountsError,
   AdsNotApprovedError,
   googleAdAccounts,
   AdsRetryableError,
+  googleAuthorizeUrl,
+  googleExchangeCode,
   googleRefresh,
   googleReport,
   googleRevoke,
   googleUserId,
   metaAdAccounts,
   metaCampaignDays,
+  metaExchangeCode,
   metaReport,
   metaRevokeAdsRead,
   metaUserId,
@@ -40,6 +45,23 @@ const google = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec
 const queryOf = (init: RequestInit | undefined) => (JSON.parse(String(init?.body)) as { query: string }).query;
 
 describe("sign-in security and lifecycle", () => {
+  it("Google: the PKCE challenge goes in the URL, the verifier only in the code exchange", async () => {
+    const { verifier, challenge } = pkcePair();
+    expect(pkceChallenge(verifier)).toBe(challenge);
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+    const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st", challenge));
+    expect(url.searchParams.get("code_challenge")).toBe(challenge);
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(url.toString()).not.toContain(verifier);
+    expect(new URL(adsenseAuthorizeUrl({ clientId: "cid", clientSecret: "csec" }, "https://app/cb", "st", challenge)).searchParams.get("code_challenge")).toBe(challenge);
+
+    const f = fake(async () => json({ access_token: "AT", refresh_token: "RT", expires_in: 3599, scope: "https://www.googleapis.com/auth/adwords" }));
+    await googleExchangeCode(google(f.fetchImpl), "CODE", "https://app/cb", verifier);
+    const form = new URLSearchParams(String(f.calls[0]!.init?.body));
+    expect(form.get("code_verifier")).toBe(verifier);
+    expect(form.get("client_secret")).toBe("csec");
+  });
+
   it("Google: a refresh token Google replaces comes back marked as rotated", async () => {
     const f = fake(async () => json({ access_token: "AT2", refresh_token: "RT2", expires_in: 3599 }));
     expect(await googleRefresh(google(f.fetchImpl), "RT")).toMatchObject({ accessToken: "AT2", refreshToken: "RT2", rotated: true });
@@ -67,7 +89,11 @@ describe("sign-in security and lifecycle", () => {
     await expect(googleRevoke({ fetchImpl: down.fetchImpl }, "RT")).rejects.toBeInstanceOf(AdsRetryableError);
   });
 
-  it("Meta: who signed in; revoking drops ads_read only, with the token in the header", async () => {
+  it("Meta: a system-user token (no expiry) is kept as it is; revoking drops ads_read only, with the token in the header", async () => {
+    const f = fake(() => json({ access_token: "SYSTEM_USER" }));
+    expect(await metaExchangeCode(meta(f.fetchImpl), "CODE", "https://app/cb")).toEqual({ accessToken: "SYSTEM_USER", refreshToken: null, expiresAt: null });
+    expect(f.calls).toHaveLength(1);
+
     const me = fake(() => json({ id: "1234567890" }));
     expect(await metaUserId(meta(me.fetchImpl), "T")).toBe("1234567890");
 
@@ -219,6 +245,11 @@ describe("a Google login with nothing to connect says why", () => {
       return json([{ results: [] }]);
     });
     await expect(googleAdAccounts(google(f.fetchImpl), "AT")).rejects.toMatchObject({ reason: "manager_only" });
+  });
+
+  it("Google's account chooser is shown every time, so another login can be picked", () => {
+    const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
+    expect(url.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "select_account"]);
   });
 });
 

@@ -1,17 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { disconnectDb, systemDb } from "@app/db";
 import { resetDb } from "@app/db/testing";
-import { adConnectionHealth, encryptAdTokens, memoryCoord, resetEnvCache, type FetchLike } from "@app/core";
+import { adConnectionHealth, encryptAdTokens, encryptLoginToken, resetEnvCache } from "@app/core";
 
 /**
  * The operator's report on the ad connections (ops:ad-health, packages/core/src/adConnections/health.ts):
- * how many per platform, source and status, what is left to move to Nango, which stopped syncing or keep
- * failing, the last day's syncs, Nango's set-up, and nothing a customer would mind being pasted into a ticket.
+ * how many per platform, source and status, what is still to be moved off Nango (leaveNango.ts), which
+ * stopped syncing or keep failing, the last day's syncs, which platforms can be connected, whether the
+ * Nango key is still set, and nothing a customer would mind being pasted into a ticket.
  */
 
 const NANGO_KEY = "nango-secret-0123456789abcdef0123456789";
-const ENV = { META_APP_ID: "a", META_APP_SECRET: "s", GOOGLE_ADS_CLIENT_ID: "c", GOOGLE_ADS_CLIENT_SECRET: "cs", GOOGLE_ADS_ENABLED: "1", NANGO_SECRET_KEY: NANGO_KEY, NANGO_PROVIDERS: "meta,google,adsense" };
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const ENV = { META_APP_ID: "a", META_APP_SECRET: "s", GOOGLE_ADS_CLIENT_ID: "c", GOOGLE_ADS_CLIENT_SECRET: "cs", GOOGLE_ADS_ENABLED: "1", NANGO_SECRET_KEY: NANGO_KEY };
 const HOUR = 3600_000;
 const NOW = new Date("2026-10-24T12:00:00Z");
 const ago = (h: number) => new Date(NOW.getTime() - h * HOUR);
@@ -46,17 +46,22 @@ async function run(connectionId: string, s: { id: string; workspaceId: string },
   await systemDb.adSyncRun.create({ data: { workspaceId: s.workspaceId, storeId: s.id, connectionId, provider, source: "nango", trigger: "schedule", outcome, reason, rows: 3, startedAt, finishedAt: startedAt } });
 }
 
-/** Nango holding the Meta and AdSense integrations only. */
-const nangoFetch: FetchLike = async (input) => {
-  const u = new URL(String(input));
-  if (u.host === "api.nango.dev" && u.pathname === "/integrations") {
-    return json({ data: [{ unique_key: "bizinsights-meta-ads", provider: "facebook" }, { unique_key: "bizinsights-google-adsense", provider: "google" }] });
-  }
-  return json({ error: { code: "not_found" } }, 404);
-};
+/** A Meta login waiting for its ad accounts: one made through Nango names its connection and holds no token; one of bizinsights' own holds it. */
+async function waitingLogin(s: { id: string; workspaceId: string; userId: string }, through: "nango" | "direct") {
+  return systemDb.adLogin.create({
+    data: {
+      workspaceId: s.workspaceId,
+      storeId: s.id,
+      provider: "meta",
+      reason: "no_ads_account",
+      connectedByUserId: s.userId,
+      ...(through === "nango" ? { sourceLoginId: "NANGO-LOGIN-SECRET-ID", nangoIntegrationKey: "bizinsights-meta-ads" } : encryptLoginToken(s.id, "meta", "LOGIN_TOKEN")),
+    },
+  });
+}
 
 describe("the ad connections' health report", () => {
-  it("counts, lists what stopped syncing or keeps failing, sums up the last day's syncs, and says how Nango stands", async () => {
+  it("counts, lists what stopped syncing or keeps failing, sums up the last day's syncs, and says what is left to move off Nango", async () => {
     const s = await store();
     const ok = await connection("meta", s, "act_1", { source: "nango", sourceLoginId: "NANGO-CONN-SECRET-ID", lastSyncedAt: ago(1), lastSyncAttemptAt: ago(1) });
     const stale = await connection("google", s, "111", { lastSyncedAt: ago(30), lastSyncAttemptAt: ago(2), consecutiveFailures: 1 });
@@ -73,8 +78,11 @@ describe("the ad connections' health report", () => {
     await run(failing.id, s, "google", "failed", ago(3), "temporarily_unavailable");
     await run(failing.id, s, "google", "failed", ago(4), "temporarily_unavailable");
     await run(ok.id, s, "meta", "synced", ago(30));
+    // A login still waiting through Nango counts as left to move; one holding its own token doesn't.
+    await waitingLogin(s, "nango");
+    await waitingLogin(await store(), "direct");
 
-    const r = await adConnectionHealth({ coord: memoryCoord(), fetchImpl: nangoFetch, now: NOW });
+    const r = await adConnectionHealth({ now: NOW });
 
     expect(r.connections).toEqual([
       { provider: "adsense", source: "direct", status: "active", count: 2 },
@@ -88,8 +96,8 @@ describe("the ad connections' health report", () => {
       { errorCode: "connector_left", count: 1 },
       { errorCode: "temporarily_unavailable", count: 1 },
     ]);
-    // Every direct row with a token: the two Google and two AdSense ones, the hidden one, and act_9 (its token is still held).
-    expect(r.directLeft).toBe(6);
+    // The Nango row and the waiting login made through Nango: 0 once leaveNango.ts has moved them.
+    expect(r.nangoLeft).toBe(2);
     expect(r.waitingForReconnect).toBe(2);
     expect(r.stale.map((c) => c.id)).toEqual([neverSynced.id, stale.id]);
     expect(r.stale[1]).toEqual({
@@ -120,35 +128,50 @@ describe("the ad connections' health report", () => {
         { reason: "rate_limited", count: 1 },
       ],
     });
-    expect(r.nango).toEqual({ keySet: true, providers: { meta: true, google: true, adsense: true }, connectable: { meta: true, google: false, adsense: true } });
+    // What a card offers Connect for: each platform's own app is set up here. The Nango key is still set.
+    expect(r.configured).toEqual({ meta: true, google: true, adsense: true });
+    expect(r.nangoKeySet).toBe(true);
   });
 
   it("carries no token, ciphertext, Nango connection id, email or account name", async () => {
     const s = await store();
     const direct = await connection("google", s, "111", { lastSyncedAt: ago(30) });
     const nango = await connection("meta", s, "act_1", { source: "nango", sourceLoginId: "NANGO-CONN-SECRET-ID", consecutiveFailures: 5 });
-    const text = JSON.stringify(await adConnectionHealth({ coord: memoryCoord(), fetchImpl: nangoFetch, now: NOW }));
-    for (const secret of ["TOKEN_111", "REFRESH_111", "TOKEN_act_1", direct.accessTokenEnc, direct.refreshTokenEnc!, nango.accessTokenEnc, "NANGO-CONN-SECRET-ID", "owner-health", "@example.com", "Secret name", NANGO_KEY]) {
+    const login = await waitingLogin(s, "nango");
+    const own = await waitingLogin(await store(), "direct");
+    const text = JSON.stringify(await adConnectionHealth({ now: NOW }));
+    for (const secret of [
+      "TOKEN_111",
+      "REFRESH_111",
+      "TOKEN_act_1",
+      "LOGIN_TOKEN",
+      direct.accessTokenEnc,
+      direct.refreshTokenEnc!,
+      nango.accessTokenEnc,
+      own.accessTokenEnc,
+      "NANGO-CONN-SECRET-ID",
+      "NANGO-LOGIN-SECRET-ID",
+      "owner-health",
+      "@example.com",
+      "Secret name",
+      NANGO_KEY,
+    ]) {
       expect(text, secret).not.toContain(secret);
     }
     // What it is for is there.
     expect(text).toContain(direct.id);
     expect(text).toContain(nango.id);
+    expect(text).not.toContain(login.id);
   });
 
-  it("asks Nango only with a coordinator, and says what a card would offer when Nango doesn't answer or the key is missing", async () => {
-    expect((await adConnectionHealth({ now: NOW })).nango.connectable).toBeNull();
-    const down: FetchLike = async () => {
-      throw new TypeError("fetch failed");
-    };
-    // Nango not answering offers the listed platforms (connectableAdProviders' own rule); a refused key offers none.
-    expect((await adConnectionHealth({ coord: memoryCoord(), fetchImpl: down, now: NOW })).nango.connectable).toEqual({ meta: true, google: true, adsense: true });
-    Object.assign(process.env, { NANGO_SECRET_KEY: "" });
+  it("says which platforms can be connected here, nothing left once every connection is off Nango, and whether its key can go", async () => {
+    Object.assign(process.env, { GOOGLE_ADS_ENABLED: "", META_APP_SECRET: "", NANGO_SECRET_KEY: "" });
     resetEnvCache();
-    expect((await adConnectionHealth({ coord: memoryCoord(), fetchImpl: nangoFetch, now: NOW })).nango).toEqual({
-      keySet: false,
-      providers: { meta: false, google: false, adsense: false },
-      connectable: { meta: false, google: false, adsense: false },
-    });
+    await connection("adsense", await store(), "pub-1");
+    const r = await adConnectionHealth({ now: NOW });
+    // Google Ads waits for its switch, Meta for its secret; AdSense needs only the Google client.
+    expect(r.configured).toEqual({ meta: false, google: false, adsense: true });
+    expect(r.nangoLeft).toBe(0);
+    expect(r.nangoKeySet).toBe(false);
   });
 });

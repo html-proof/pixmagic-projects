@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AD_ACCOUNT_LIST_MAX_BYTES,
+  adsenseAuthorizeUrl,
   AdsApiError,
   AdsAuthError,
   AdsNoAccountsError,
@@ -12,6 +13,7 @@ import {
   classifyAdError,
   GOOGLE_DISCOVERY_MAX_CUSTOMERS,
   googleAdAccounts,
+  googleAuthorizeUrl,
   googleCampaignDays,
   googleRefresh,
   googleUserId,
@@ -365,7 +367,18 @@ describe("the accounts a Google login reaches", () => {
   });
 });
 
-describe("Google tokens", () => {
+describe("Google sign-in", () => {
+  it("asks for consent again by default; can send someone through with the account chooser only", () => {
+    const def = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
+    expect(def.searchParams.get("prompt")).toBe("select_account consent");
+    const chooser = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st", "challenge", { forceConsent: false }));
+    expect(chooser.searchParams.get("prompt")).toBe("select_account");
+    expect(chooser.searchParams.get("access_type")).toBe("offline");
+    expect(chooser.searchParams.get("code_challenge")).toBe("challenge");
+    expect(new URL(adsenseAuthorizeUrl({ clientId: "cid", clientSecret: "csec" }, "https://app/cb", "st", undefined, { forceConsent: false })).searchParams.get("prompt")).toBe("select_account");
+    expect(new URL(adsenseAuthorizeUrl({ clientId: "cid", clientSecret: "csec" }, "https://app/cb", "st", undefined, { forceConsent: true })).searchParams.get("prompt")).toBe("select_account consent");
+  });
+
   it("a refresh: ended grant, a grant without the reporting permission, and bizinsights' own client refused are told apart", async () => {
     const answering = (body: unknown, status: number) => fake(() => json(body, status)).fetchImpl;
     const ended = await googleRefresh(google(answering({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400)), "RT").catch((e: unknown) => e);

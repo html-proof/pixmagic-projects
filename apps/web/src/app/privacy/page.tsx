@@ -109,10 +109,6 @@ const PROVIDERS = [
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages through Meta's WhatsApp Business Platform and reports whether each was delivered and read, only for stores that connect WhatsApp." },
-  {
-    name: "Nango",
-    purpose: "Keeps, encrypted, the access tokens for the advertising accounts you connect, and renews them, so bizinsights can read your ad reports.",
-  },
   { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",

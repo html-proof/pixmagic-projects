@@ -452,7 +452,8 @@ Each release ships through `main` → CI → Deploy like any other; none needs a
 
 Two earlier designs, both erase-only now (`whatsapp/legacy.ts`): customers/redact and shop/redact
 erase there, a data request counts what they hold, and a store's retired Nango token is deleted when
-the store is erased.
+the store is erased (while `NANGO_SECRET_KEY` is set; it goes once the ad connections have left Nango,
+[ads-setup.md](ads-setup.md#leaving-nango)).
 
 - 2026-10-10 to 2026-10-24: `whatsapp_*`, `order_trackings`, `order_tracking_events`,
   `abandoned_checkouts`, `customer_reviews`.
