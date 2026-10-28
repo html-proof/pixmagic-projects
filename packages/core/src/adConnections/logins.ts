@@ -7,24 +7,26 @@
  * an error. The cron tick asks the platform again (checkAdLogins), and as soon as it lists ad accounts
  * they are connected (a few at once; more wait for the person to choose), after which the row goes.
  *
- * The login holds a Nango connection and the person's grant to bizinsights' own app, like a connection
- * does: grantStillUsed and nangoConnectionUsers (connect.ts) count it, the orphan sweep leaves it, and
- * whatever ends a connection ends it too (its disconnect, the person removing bizinsights on Facebook or
- * asking for their data to be deleted, Nango deleting the connection, the store going, its connector
- * leaving), giving the grant back unless something else relies on it.
+ * The login holds the person's token to bizinsights' own app, sealed like a connection's (same AAD), and
+ * the grant behind it: grantStillUsed (connect.ts) counts it, and whatever ends a connection ends it too
+ * (its disconnect, the person removing bizinsights on Facebook or asking for their data to be deleted,
+ * the store going, its connector leaving), giving the grant back unless something else relies on it.
+ * A login made through Nango (2026-10-26 to 2026-10-28) names its Nango connection instead until
+ * leaveNango.ts moves its token here.
  */
 import { systemDb, type AdLogin, type Prisma } from "@app/db";
-import { AD_LOGIN_AUTO_CONNECT_MAX, allows, type AdLoginReason, type AdProvider, type Role } from "@app/shared";
-import { AdsAuthError, AdsNoAccountsError, metaAdAccounts, type AdAccountList } from "../ads.js";
+import { AD_LOGIN_AUTO_CONNECT_MAX, allows, decrypt, encrypt, keyVersionOf, type AdLoginReason, type AdProvider, type Role } from "@app/shared";
+import { AdsAuthError, AdsNoAccountsError, metaAdAccounts, type AdAccountList, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import type { Queues } from "../queues.js";
 import type { FetchLike } from "../shopify.js";
 import { memberState } from "../team/common.js";
+import { keyring } from "../tokens.js";
 import { metaConfig } from "./config.js";
-import { releaseNangoConnectionIfUnused, saveAdConnections, type RevokeOutcome } from "./connect.js";
-import { forgetNangoToken, nangoTokenFor, platformPerson } from "./credentials.js";
+import { dropUnusedGrant, releaseNangoConnectionIfUnused, saveAdConnections, type RevokeOutcome } from "./connect.js";
+import { aad, AdsMovingOffNangoError, platformPerson } from "./credentials.js";
 import { enqueueAdCatchUp } from "./sync.js";
 
 /** How often a waiting login is asked again; one whose platform didn't answer, sooner. */
@@ -41,76 +43,129 @@ export interface HoldAdLoginInput {
   workspaceId: string;
   storeId: string;
   provider: AdProvider;
-  /** The Nango connection that holds the token, and its integration. */
-  connectionId: string;
-  integrationKey: string;
+  /** The sign-in's token (Meta's long-lived user token, and when it ends) and the permissions granted. */
+  tokens: TokenSet;
   externalUserId: string | null;
   loginName: string | null;
-  grantedScopes?: string[];
-  expiresAt: Date | null;
   /** Who connected it (a member allowed to manage integrations, checked by the caller). */
   userId: string;
   reason: AdLoginReason;
 }
 
+/** The token a login holds, sealed with the active key (the same AAD as a connection's, so it can't move to another store). */
+export function encryptLoginToken(storeId: string, provider: AdProvider, accessToken: string) {
+  const accessTokenEnc = encrypt(accessToken, keyring(), aad(storeId, provider, "access"));
+  return { accessTokenEnc, tokenKeyVersion: keyVersionOf(accessTokenEnc) };
+}
+
+/** A login still read through Nango (not moved yet by leaveNango.ts): it names its connection and holds no token. */
+export const isNangoLogin = (row: Pick<AdLogin, "accessTokenEnc" | "sourceLoginId">): boolean => !row.accessTokenEnc && !!row.sourceLoginId;
+
+/** The token a login holds. One that ended (Meta's long-lived token, about 60 days), or can't be read, is an AdsAuthError: the login ends. */
+function loginToken(row: AdLogin): TokenSet {
+  if (isNangoLogin(row)) throw new AdsMovingOffNangoError();
+  if (!row.accessTokenEnc) throw new AdsAuthError("The waiting login holds no token");
+  if (row.accessTokenExpiresAt && row.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("The waiting login's access has expired");
+  let accessToken: string;
+  try {
+    accessToken = decrypt(row.accessTokenEnc, keyring(), aad(row.storeId, row.provider, "access"));
+  } catch (err) {
+    logger.warn({ err, provider: row.provider, storeId: row.storeId }, "ads: a waiting login's token can't be read");
+    throw new AdsAuthError("The waiting login's token can't be read");
+  }
+  return { accessToken, refreshToken: null, expiresAt: row.accessTokenExpiresAt, grantedScopes: row.grantedScopes };
+}
+
 /**
  * Keep a sign-in connected while it reaches no ad account: the store's one waiting login for the
- * platform, replacing an older one (whose Nango connection and grant go back unless something else
- * relies on them). Returns the row.
+ * platform, replacing an older one (whose grant goes back unless something else relies on it, the new
+ * login of the same person included). Returns the row.
  */
 export async function holdAdLogin(input: HoldAdLoginInput, fetchImpl?: FetchLike): Promise<AdLogin> {
   const where = { storeId_provider: { storeId: input.storeId, provider: input.provider } };
   const before = await systemDb.adLogin.findUnique({ where });
   const fields = {
-    sourceLoginId: input.connectionId,
-    nangoIntegrationKey: input.integrationKey,
+    ...encryptLoginToken(input.storeId, input.provider, input.tokens.accessToken),
+    sourceLoginId: null,
+    nangoIntegrationKey: null,
     externalUserId: input.externalUserId,
     loginName: input.loginName?.trim().slice(0, 120) || null,
-    grantedScopes: (input.grantedScopes ?? []).slice(0, 50),
-    accessTokenExpiresAt: input.expiresAt,
+    grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
+    accessTokenExpiresAt: input.tokens.expiresAt,
     connectedByUserId: input.userId,
     reason: input.reason,
     checkedAt: new Date(),
   };
   const row = await systemDb.adLogin.upsert({ where, create: { workspaceId: input.workspaceId, storeId: input.storeId, provider: input.provider, ...fields }, update: fields });
-  if (before && before.sourceLoginId !== input.connectionId) await releaseLoginGrant(before, fetchImpl);
+  if (before) await releaseLoginGrant(before, fetchImpl);
   logger.info({ provider: input.provider, storeId: input.storeId, reason: input.reason, replaced: !!before }, "ads: a login with no ad account yet stays connected");
   return row;
 }
 
 /**
- * The Nango connection and grant a waiting login held, once its row is gone: deleted at Nango, the grant
- * taken back, each unless a connection (or another waiting login) still relies on it. Never throws.
+ * The grant a waiting login held, once its row is gone (or holds another sign-in now): taken back unless
+ * a connection or another waiting login still relies on it. A login not moved off Nango yet: its Nango
+ * connection goes too. Never throws.
  */
 async function releaseLoginGrant(row: AdLogin, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
-  return releaseNangoConnectionIfUnused({ provider: row.provider as AdProvider, connectionId: row.sourceLoginId, integrationKey: row.nangoIntegrationKey, externalUserId: row.externalUserId }, fetchImpl);
+  const provider = row.provider as AdProvider;
+  if (isNangoLogin(row)) {
+    return releaseNangoConnectionIfUnused({ provider, connectionId: row.sourceLoginId!, integrationKey: row.nangoIntegrationKey ?? "", externalUserId: row.externalUserId }, fetchImpl);
+  }
+  try {
+    const tokens = loginToken({ ...row, accessTokenExpiresAt: null });
+    const person = row.externalUserId ?? (await platformPerson(provider, tokens.accessToken, fetchImpl).catch(() => null));
+    return await dropUnusedGrant(provider, tokens, person, fetchImpl);
+  } catch (err) {
+    logger.info({ err, provider }, "ads: a waiting login's grant couldn't be given back");
+    return "unknown_person";
+  }
 }
 
 /**
- * Let go of waiting logins: rows first, then each one's Nango connection and grant (`release` false:
- * the connection is gone at Nango already, so there is nothing to give back). Returns how many went.
+ * Let go of waiting logins: rows first, then each one's grant (`release` false: the access ended
+ * already, so there is nothing to give back). Returns how many went.
  */
 export async function releaseAdLoginsWhere(where: Prisma.AdLoginWhereInput, fetchImpl?: FetchLike, opts: { release?: boolean } = {}): Promise<number> {
   const rows = await systemDb.adLogin.findMany({ where });
   if (!rows.length) return 0;
   await systemDb.adLogin.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
   if (opts.release !== false) for (const r of rows) await releaseLoginGrant(r, fetchImpl);
-  for (const r of rows) forgetNangoToken(r.sourceLoginId);
   return rows.length;
 }
 
-/** Disconnect a waiting login: the row, then its Nango connection and grant (unless something else relies on them). */
+/** Disconnect a waiting login: the row, then its grant (unless something else relies on it). */
 export async function releaseAdLogin(row: AdLogin, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   const { count } = await systemDb.adLogin.deleteMany({ where: { id: row.id } });
   if (!count) return "still_used";
-  forgetNangoToken(row.sourceLoginId);
   return releaseLoginGrant(row, fetchImpl);
 }
 
 /**
- * Accounts of the platform were just connected to the store: its waiting login is no longer needed. Its
- * Nango connection goes unless the new accounts read through it (connected from this very login).
+ * Re-encrypt waiting logins' tokens with the active key (part of key rotation, see reencryptAllTokens),
+ * each only over the ciphertext read (compare-and-swap). A token sealed with a removed key can't be read
+ * by anyone again: that login is let go (its person signs in again). Returns the rows rewritten.
  */
+export async function reencryptAdLoginTokens(): Promise<number> {
+  const k = keyring();
+  const rows = await systemDb.adLogin.findMany({ where: { accessTokenEnc: { not: "" }, NOT: { accessTokenEnc: { startsWith: `v${k.active}.` } } } });
+  let rewritten = 0;
+  for (const r of rows) {
+    try {
+      const token = decrypt(r.accessTokenEnc, k, aad(r.storeId, r.provider, "access"));
+      const { count } = await systemDb.adLogin.updateMany({ where: { id: r.id, accessTokenEnc: r.accessTokenEnc }, data: encryptLoginToken(r.storeId, r.provider as AdProvider, token) });
+      rewritten += count;
+    } catch (err) {
+      logger.error({ err, provider: r.provider, storeId: r.storeId }, "a waiting login's token couldn't be re-encrypted; the login is let go");
+      await systemDb.adLogin.deleteMany({ where: { id: r.id, accessTokenEnc: r.accessTokenEnc } });
+      rewritten++;
+    }
+  }
+  if (rewritten) logger.info({ count: rewritten }, "waiting ad logins' tokens re-encrypted");
+  return rewritten;
+}
+
+/** Accounts of the platform were just connected to the store: its waiting login is no longer needed, nor its grant unless the new accounts use it. */
 export async function dropAdLoginOf(storeId: string, provider: AdProvider, fetchImpl?: FetchLike): Promise<void> {
   await releaseAdLoginsWhere({ storeId, provider }, fetchImpl).catch((err: unknown) => logger.warn({ err, provider, storeId }, "ads: a waiting login wasn't let go after its store connected accounts"));
 }
@@ -145,7 +200,7 @@ export interface AdLoginDeps {
  * connected (each one's catch-up queued) and the login goes. More, or a list cut short: it waits for the
  * person to choose ("choose"; the card's button signs in again for the picker). None: it keeps waiting,
  * with what Meta says now. A token that no longer works, or a connector who can't connect any more: let go.
- * Anything else (Meta busy, Nango not answering): asked again later. Never throws.
+ * Anything else (Meta busy, a login not moved off Nango yet): asked again later. Never throws.
  */
 export async function checkAdLogin(row: AdLogin, deps: AdLoginDeps, opts: { interactive?: boolean } = {}): Promise<AdLoginCheck> {
   const lock = `ad-login-check:${row.id}`;
@@ -176,16 +231,16 @@ async function checkOnce(row: AdLogin, deps: AdLoginDeps, opts: { interactive?: 
     return { outcome: "ended" };
   }
   let accounts: AdAccountList;
+  let tokens: TokenSet;
   try {
-    const { token, expiresAt } = await nangoTokenFor({ connectionId: row.sourceLoginId, integrationKey: row.nangoIntegrationKey }, deps.fetchImpl);
+    tokens = loginToken(row);
     // Who signed in, when it wasn't learned at the sign-in: their grant is then known to be relied on.
     if (!row.externalUserId) {
-      const person = await platformPerson(provider, token, deps.fetchImpl).catch(() => null);
+      const person = await platformPerson(provider, tokens.accessToken, deps.fetchImpl).catch(() => null);
       if (person) await systemDb.adLogin.updateMany({ where: { id: row.id }, data: { externalUserId: person } });
       row = { ...row, externalUserId: person ?? null };
     }
-    if (expiresAt) row = { ...row, accessTokenExpiresAt: expiresAt };
-    accounts = await metaAdAccounts(cfg, token);
+    accounts = await metaAdAccounts(cfg, tokens.accessToken);
   } catch (err) {
     if (err instanceof AdsNoAccountsError) {
       const reason = loginReasonOf(err);
@@ -208,15 +263,12 @@ async function checkOnce(row: AdLogin, deps: AdLoginDeps, opts: { interactive?: 
     storeId: row.storeId,
     provider,
     accounts,
-    tokens: { accessToken: row.sourceLoginId, refreshToken: null, expiresAt: row.accessTokenExpiresAt, grantedScopes: row.grantedScopes },
+    tokens,
     userId: row.connectedByUserId,
     externalUserId: row.externalUserId,
-    sourceLoginId: row.sourceLoginId,
-    source: "nango",
-    nangoIntegrationKey: row.nangoIntegrationKey,
     fetchImpl: deps.fetchImpl,
   });
-  // The accounts read through the login's own connection now: the row goes, the connection and grant stay.
+  // The accounts read with the login's own token now: the row goes, the grant stays.
   await systemDb.adLogin.deleteMany({ where: { id: row.id } });
   for (const conn of saved) if (conn.enabled) await enqueueAdCatchUp(deps.queues, conn, { interactive: !!opts.interactive });
   await audit({
@@ -225,7 +277,7 @@ async function checkOnce(row: AdLogin, deps: AdLoginDeps, opts: { interactive?: 
     action: "ads.connected",
     targetType: "store",
     targetId: row.storeId,
-    metadata: { provider, accounts: saved.length, source: "nango", via: "waiting_login" },
+    metadata: { provider, accounts: saved.length, via: "waiting_login" },
   }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
   logger.info({ provider, storeId: row.storeId, accounts: saved.length }, "ads: a waiting login's ad accounts appeared and were connected");
   return { outcome: "connected", connected: saved.length };

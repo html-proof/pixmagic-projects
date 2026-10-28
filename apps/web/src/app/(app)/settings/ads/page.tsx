@@ -13,7 +13,10 @@ import { AdsenseSites } from "@/components/settings/ads/AdsenseSites";
 import { AdvertisingHero } from "@/components/settings/ads/AdvertisingHero";
 import { ChooseAccounts } from "@/components/settings/ads/ChooseAccounts";
 import { callbackErrorMessage, isAdProvider, WRONG_LOGIN } from "@/components/settings/ads/callbackErrors";
+import { loginConnectedNote } from "@/components/settings/ads/LoginPanel";
 import { AD_STATE, type AdProvider } from "@/lib/adConnections";
+import { signInFinished } from "@/lib/adSignIn";
+import { AD_LOGIN_REASONS, type AdLoginReason } from "@app/shared/ads";
 
 // ---------------------------------------------------------------------------
 // Advertising integrations: connect and manage. The numbers themselves live on the dashboard's
@@ -29,13 +32,14 @@ export default function AdAccountsPage() {
   const manage = allowed("integrations.manage");
   const base = store ? `/workspaces/${workspace.id}/stores/${store.id}` : null;
   const ads = useAdConnections(base);
-  const { setChoosing } = ads;
+  const { setChoosing, setNote } = ads;
   const [error, setError] = useState<string | null>(null);
   const [pick, setPick] = useState<string | null>(null);
   // A sign-in came back with a login that reaches nothing: offer the platform's screen again.
   const [retry, setRetry] = useState<AdProvider | null>(null);
 
-  // Coming back from Meta or Google: a problem to explain, or accounts to choose, for the store that was connected.
+  // Coming back from Meta or Google: a problem to explain, accounts to choose, or a login connected with no
+  // ad account yet, for the store that was connected.
   useEffect(() => {
     // Not before the store list is known: ?store= has to pick the store the sign-in was for.
     if (storesStatus !== "ready") return;
@@ -44,12 +48,18 @@ export default function AdAccountsPage() {
     if (target && stores.some((s) => s.id === target)) setStoreId(target);
     const code = q.get("error");
     const choose = q.get("choose");
+    const waiting = q.get("waiting");
     const provider = q.get("provider");
     if (code) setError(callbackErrorMessage(code, provider));
     if (code && WRONG_LOGIN.has(code) && isAdProvider(provider)) setRetry(provider);
     // It becomes part of an API path: only ever the nonce the callback put there.
     if (choose && /^[A-Za-z0-9_-]{16,64}$/.test(choose)) setPick(choose);
-    if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
+    // Signed in and connected, with no ad account to read yet: the card says who, and the accounts follow by themselves.
+    if (waiting && isAdProvider(provider) && (AD_LOGIN_REASONS as readonly string[]).includes(waiting)) {
+      setNote({ kind: "success", text: loginConnectedNote(AD_PLATFORMS[provider].name, { provider, reason: waiting as AdLoginReason }) });
+    }
+    if (code || choose || waiting) signInFinished();
+    if (code || choose || waiting || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storesStatus]);

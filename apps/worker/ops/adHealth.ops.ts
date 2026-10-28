@@ -1,5 +1,5 @@
 import { afterAll, it } from "vitest";
-import { AD_HEALTH_FAILING_FROM, adConnectionHealth, memoryCoord, type AdHealthConnection } from "@app/core";
+import { AD_HEALTH_FAILING_FROM, adConnectionHealth, type AdHealthConnection } from "@app/core";
 import { disconnectDb } from "@app/db";
 
 /**
@@ -19,12 +19,12 @@ const line = (c: AdHealthConnection) =>
 const flags = (r: Record<string, boolean> | null) => (r ? Object.entries(r).map(([k, v]) => `${k} ${v ? "yes" : "no"}`).join(", ") : "not asked");
 
 it("says how the ad connections stand", async () => {
-  const r = await adConnectionHealth({ coord: memoryCoord() });
+  const r = await adConnectionHealth();
   console.log(`Ad connections at ${r.at.toISOString()}`);
   for (const g of r.connections) console.log(`  ${g.provider} · ${g.source} · ${g.status}: ${g.count}`);
   if (!r.connections.length) console.log("  none");
   console.log(`Error codes: ${r.errorCodes.length ? r.errorCodes.map((g) => `${g.errorCode} ${g.count}`).join(", ") : "none"}`);
-  console.log(`Still on the direct sign-in (to move to Nango): ${r.directLeft}; waiting for a reconnect: ${r.waitingForReconnect}`);
+  console.log(`Still to move off Nango: ${r.nangoLeft}; waiting for a reconnect: ${r.waitingForReconnect}`);
   console.log(`No successful sync for a day (${r.stale.length}${r.stale.length === 50 ? "+" : ""}):`);
   for (const c of r.stale) console.log(line(c));
   console.log(`Failing ${AD_HEALTH_FAILING_FROM}+ syncs in a row (${r.failing.length}${r.failing.length === 50 ? "+" : ""}):`);
@@ -32,5 +32,5 @@ it("says how the ad connections stand", async () => {
   console.log(`Syncs in the last 24 hours: ${r.syncs.byOutcome.map((g) => `${g.outcome} ${g.count}`).join(", ") || "none"}`);
   for (const g of r.syncs.byProvider) console.log(`  ${g.provider} ${g.outcome}: ${g.count}`);
   if (r.syncs.failureReasons.length) console.log(`  why they failed: ${r.syncs.failureReasons.map((g) => `${g.reason} ${g.count}`).join(", ")}`);
-  console.log(`Nango: key ${r.nango.keySet ? "set" : "NOT set"}; offered here: ${flags(r.nango.providers)}; integration held by Nango: ${flags(r.nango.connectable)}`);
+  console.log(`Offered here: ${flags(r.configured)}; Nango key ${r.nangoKeySet ? "still set" : "gone"}`);
 });

@@ -49,7 +49,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-25";
+const UPDATED = "2026-10-28";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -109,10 +109,6 @@ const PROVIDERS = [
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages and reports whether each was delivered and read, only for stores that connect WhatsApp (a linked phone, or Meta's WhatsApp Business Platform)." },
-  {
-    name: "Nango",
-    purpose: "Keeps, encrypted, the access tokens for the advertising accounts you connect, and renews them, so bizinsights can read your ad reports.",
-  },
   { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
