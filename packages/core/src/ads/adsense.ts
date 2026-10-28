@@ -180,7 +180,9 @@ export const ADSENSE_REPORT_MAX_ROWS = 1000;
  * won't give them with the level). `sites` (DOMAIN_CODE values) limits it to the store's sites, an ad
  * unit's row included: its earnings on those sites only; empty means every site. `truncated`: AdSense
  * matched more rows than were read (only the biggest earners are listed). `totals`: the whole
- * report's, the rows left out of a cut-off one included (AdSense's totals row).
+ * report's, the rows left out of a cut-off one included (AdSense's totals row). `extras: false` asks
+ * for the stored days' measures only (the daily check of stored figures needs no more), so a refusal
+ * is the level's own, never the extra measures'.
  */
 export async function adsenseReport(
   c: AdsenseConfig,
@@ -190,6 +192,7 @@ export async function adsenseReport(
   since: string,
   until: string,
   sites: readonly string[] = [],
+  { extras = true }: { extras?: boolean } = {},
 ): Promise<{ rows: AdsenseReportRow[]; currency: string | null; truncated: boolean; totals: AdsenseReportTotals }> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const pub = publisherId(accountId);
@@ -218,12 +221,12 @@ export async function adsenseReport(
   const read = (metrics: readonly string[]) => adsenseGet<AdsenseReport & { totalMatchedRows?: string }>(c, accessToken, `accounts/${pub}/reports:generate`, query(metrics));
   let report: Awaited<ReturnType<typeof read>>;
   try {
-    report = await read(ADSENSE_REPORT_METRICS);
+    report = await read(extras ? ADSENSE_REPORT_METRICS : ADSENSE_REPORT_DAY_METRICS);
   } catch (err) {
     // Google's reference doesn't say which dimensions ad requests, coverage and viewability go with: if
     // AdSense refuses them with this level, the report is read without them, and they are unknown
     // ("—"), never 0.
-    if (!(err instanceof AdsApiError) || err.status !== 400) throw err;
+    if (!extras || !(err instanceof AdsApiError) || err.status !== 400) throw err;
     report = await read(ADSENSE_REPORT_DAY_METRICS);
   }
   // "Reports producing more rows than the requested limit will be truncated", told by totalMatchedRows.

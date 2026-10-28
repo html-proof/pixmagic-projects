@@ -19,6 +19,7 @@ import type { Coord } from "../coord.js";
 import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
+import { isMetaAppLimit, metaAdsPaused, pauseMetaAds } from "./budget.js";
 import { adsenseConfig, metaConfig } from "./config.js";
 import { adAccessToken, isNangoConnection } from "./credentials.js";
 import { adToday } from "./sync.js";
@@ -160,9 +161,9 @@ async function adsenseRead(conn: AdConnection, w: { since: string; until: string
   const cfg = adsenseConfig(f);
   if (!cfg) return null;
   const token = await adAccessToken(conn, f);
-  const report = await adsenseReport(cfg, token, conn.accountId, "site", w.since, w.until).catch((err: unknown) => {
+  const report = await adsenseReport(cfg, token, conn.accountId, "site", w.since, w.until, [], { extras: false }).catch((err: unknown) => {
     if (!(err instanceof AdsApiError) || err.status !== 400) throw err;
-    return adsenseReport(cfg, token, conn.accountId, "platform", w.since, w.until);
+    return adsenseReport(cfg, token, conn.accountId, "platform", w.since, w.until, [], { extras: false });
   });
   const groups = await systemDb.adsenseDaily.groupBy({
     by: ["currency"],
@@ -192,7 +193,7 @@ const currenciesOf = (groups: Array<{ currency: string | null }>) => [...new Set
  * asks to wait skips it ("rate_limited"); any other failure is thrown for the caller to log. `deadline`
  * (epoch ms): when the platform's reads must be done, by default AD_CHECK_CALL_MS from now.
  */
-export async function checkAdConnectionFigures(conn: AdConnection, opts: { fetchImpl?: FetchLike; now?: Date; deadline?: number } = {}): Promise<AdFiguresCheck> {
+export async function checkAdConnectionFigures(conn: AdConnection, opts: { fetchImpl?: FetchLike; now?: Date; deadline?: number; coord?: Coord } = {}): Promise<AdFiguresCheck> {
   if (conn.isDemo) return { outcome: "skipped", reason: "demo" };
   if (conn.provider === "google") return { outcome: "skipped", reason: "google" };
   // Only an account whose syncs work: one that waits for someone, fails, is hidden, closed or still
@@ -206,6 +207,8 @@ export async function checkAdConnectionFigures(conn: AdConnection, opts: { fetch
     read = conn.provider === "meta" ? await metaRead(conn, w, opts.fetchImpl, deadline) : conn.provider === "adsense" ? await adsenseRead(conn, w, opts.fetchImpl, deadline) : null;
   } catch (err) {
     if (!(err instanceof AdsRateLimitedError)) throw err;
+    // Meta's limit on bizinsights' app holds every Meta account back, the syncs too (pauseMetaAds).
+    if (conn.provider === "meta" && opts.coord && isMetaAppLimit(err)) await pauseMetaAds(opts.coord, err.retryAfterS);
     logger.info({ connectionId: conn.id, provider: conn.provider, errorCode: err.errorCode }, "ad figures not checked: the platform asked to wait");
     return { outcome: "skipped", reason: "rate_limited" };
   }
@@ -242,7 +245,7 @@ export async function checkAdFiguresDaily(deps: { coord: Coord; fetchImpl?: Fetc
   const deadline = Date.now() + (opts.budgetMs ?? AD_CHECK_BUDGET_MS);
   const listed = await systemDb.adConnection.findMany({
     where: { provider: { in: ["meta", "adsense"] }, enabled: true, status: "active", isDemo: false, source: "direct", accessTokenEnc: { not: "" } },
-    select: { id: true, storeId: true, timezone: true, historyFrom: true, syncedThrough: true, accountStatus: true },
+    select: { id: true, storeId: true, provider: true, timezone: true, historyFrom: true, syncedThrough: true, accountStatus: true },
     orderBy: { id: "asc" },
   });
   // A store that uninstalled the app isn't read with the tokens it left behind (as scheduleAdsSync).
@@ -254,12 +257,18 @@ export async function checkAdFiguresDaily(deps: { coord: Coord; fetchImpl?: Fetc
   let next = 0;
   const worker = async () => {
     while (next < due.length && Date.now() < deadline) {
-      const id = due[next++]!.id;
+      const { id, provider } = due[next++]!;
+      // While Meta Ads is paused (Meta's limit on bizinsights' app) its accounts wait, their day's lease
+      // untaken, for a tick after the pause.
+      if (provider === "meta" && (await metaAdsPaused(deps.coord))) {
+        sweep.skipped++;
+        continue;
+      }
       // A coordinator that doesn't answer leaves the account for a later tick.
       if (!(await deps.coord.acquire(lease(id), AD_CHECK_LEASE_MS).catch(() => false))) continue;
       try {
         const conn = await systemDb.adConnection.findUnique({ where: { id } });
-        const res = conn ? await checkAdConnectionFigures(conn, { fetchImpl: deps.fetchImpl, now, deadline: Date.now() + AD_CHECK_CALL_MS }) : null;
+        const res = conn ? await checkAdConnectionFigures(conn, { fetchImpl: deps.fetchImpl, now, deadline: Date.now() + AD_CHECK_CALL_MS, coord: deps.coord }) : null;
         if (res && res.outcome !== "skipped") {
           sweep.checked++;
           if (res.outcome === "differ") sweep.differed++;

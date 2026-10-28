@@ -10,6 +10,7 @@ import {
   memoryCoord,
   memoryMailer,
   memoryQueues,
+  metaAdsPaused,
   recordAdFailure,
   resetEnvCache,
   type AdFailure,
@@ -318,6 +319,28 @@ describe("the daily check of stored ad figures against the platform", () => {
     expect(calls).toBe(1);
     // And the connection is as it was.
     expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "active", errorCode: null });
+  });
+
+  it("Meta's limit on bizinsights' app pauses Meta Ads, and Meta's accounts wait out a pause with their day's check untaken", async () => {
+    const conn = await connection("meta");
+    await storeMetaWeek(conn);
+    const asked: URL[] = [];
+    fetchImpl = async (input) => {
+      asked.push(new URL(String(input)));
+      return json({ error: { message: "Application request limit reached", code: 4 } }, 400);
+    };
+    expect(await checkAdFiguresDaily(deps)).toEqual({ checked: 0, differed: 0, skipped: 1, failed: 0 });
+    expect(asked).toHaveLength(1);
+    expect(await metaAdsPaused(coord)).toBe(true);
+
+    // A paused tick reads nothing from Meta and leaves the day's check to a tick after the pause.
+    const second = await connection("meta");
+    await storeMetaWeek(second);
+    expect(await checkAdFiguresDaily(deps)).toEqual({ checked: 0, differed: 0, skipped: 2, failed: 0 });
+    expect(asked).toHaveLength(1);
+    coord.clear();
+    fetchImpl = metaWeek(METAS_WEEK);
+    expect(await checkAdFiguresDaily(deps)).toMatchObject({ checked: 2, differed: 0 });
   });
 
   it("leaves out Google Ads (its daily allowance is shared), demos, and accounts it can't compare", async () => {
