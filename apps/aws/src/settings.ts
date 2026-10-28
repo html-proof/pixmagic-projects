@@ -161,8 +161,9 @@ export const APP_SETTINGS = {
   // environment (CLIENT_ID); its secret is in Secrets Manager (put-secrets.mjs --set ZAPIER_CLIENT_SECRET).
   // ZAPIER_REDIRECT_URI: the redirect URI the Zapier app shows under Authentication (exact match).
   // ZAPIER_INVITE_URL: the app's invite link (Zapier → Manage team → Invite), what Connect opens.
-  // Empty until the owner registers the app: every Zapier endpoint answers not_configured.
-  "ZAPIER_CLIENT_ID": "",
-  "ZAPIER_REDIRECT_URI": "",
-  "ZAPIER_INVITE_URL": "",
+  // The app is "bizinsights", Zapier app 248720 (integrations/zapier/.zapierapprc), registered and
+  // pushed 2026-10-28, private. Without ZAPIER_CLIENT_SECRET every Zapier endpoint answers not_configured.
+  "ZAPIER_CLIENT_ID": "bizinsights-zapier",
+  "ZAPIER_REDIRECT_URI": "https://zapier.com/dashboard/auth/oauth/return/App248720CLIAPI/",
+  "ZAPIER_INVITE_URL": "https://zapier.com/developer/public-invite/248720/2c93102b9c4308838f92f4a1caf4e20f/",
 } as const satisfies Record<string, string>;
