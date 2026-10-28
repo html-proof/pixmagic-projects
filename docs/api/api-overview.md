@@ -55,6 +55,78 @@ the permission in the table below (`@app/shared/roles`):
 | `GET /healthz` | `{ "ok": true }` while the API runs (liveness). |
 | `GET /readyz` | `{ "ok", "checks": { "db", "coord", "tenantDb" } }`, 503 when any is false; each probe is bounded (3 s) and a failure is logged with its reason. |
 
+## Integration status
+
+`GET /workspaces/:ws/stores/:storeId/integrations` answers every connection of a store at once, its
+status worked out on the server (`routes/integrations.ts`, core's `integrations/status.ts`,
+`@app/shared/integrations`), so every page says the same thing and a new provider needs no logic of
+a page's own. It needs **View integration connection status** (`integrations.status`): a member
+without it gets 403, and another workspace's store, or a disconnected one, 404. It is read-only and
+calls no provider: it composes what each module already says about itself.
+
+```json
+{ "modules": [{
+  "id": "meta_ads", "title": "Meta Ads", "status": "reauthorization_required", "code": "auth_expired", "demo": false,
+  "accounts": [{ "id": "…", "name": "Shop ads", "status": "reauthorization_required", "lastSyncedAt": "…", "lastAttemptAt": "…", "code": "auth_expired", "demo": false }],
+  "lastSyncedAt": "2026-10-29T09:00:00.000Z",
+  "capabilities": ["spend", "impressions", "reach", "frequency", "clicks", "linkClicks", "…"],
+  "actions": ["connect", "reconnect", "refresh", "disconnect"],
+  "href": "/settings/ads"
+}] }
+```
+
+Modules, always all of them and in this order: `shopify`, `meta_ads`, `google_ads`, `adsense`,
+`whatsapp`, `sms`, `email`. The Zapier app (PR #275) adds its module once it merges. The answer
+doesn't leave out what an App Store workspace doesn't offer: the UI does (`lib/features.ts`).
+
+| Status | Means |
+| --- | --- |
+| `connected` | It works: the numbers come in, or messages can go. |
+| `pending` | Set up, and waiting for a step: the platform's approval or review, a first check, the store's first import, the rest of a channel's setup. |
+| `reauthorization_required` | Someone must sign in again: the access ended, a permission was taken back, or the person whose login powered it left. |
+| `syncing` | bizinsights is bringing it up to date, or checking it, now; it settles by itself. |
+| `error` | Connected, and not working: the last attempt failed, or the platform stopped the account. |
+| `disconnected` | Nothing connected (or disconnected, closed), or the provider isn't set up on this server (`code` `not_configured`). |
+
+Where each provider's own states land:
+
+- **Shopify** (`stores.status`): active → connected (without a token: reauthorization_required),
+  pending → pending, syncing → syncing. A store in error by the dashboard's reason (`syncProblem`,
+  the `code`): lost access (`access`) → reauthorization_required, Shopify's approval of protected
+  customer data (`not_approved`) → pending, the rest (a frozen, closed or locked shop) → error.
+- **Meta Ads, Google Ads, AdSense**: each account by the cards' own state (`connectionState`):
+  synchronizing → syncing; reconnect required, authorization required, permission missing →
+  reauthorization_required; verification pending → pending; sync failed → error; closed →
+  disconnected. The module is the worst of the accounts shown on the dashboard (`platformState`). A
+  sign-in still waiting for its ad accounts is connected, as its card says, with its reason as its
+  `code`. The Google Ads demo is an account with `demo: true`, and the module says `demo` when every
+  account it counts is the demo.
+- **WhatsApp** (the connection as its page shows it, `waConnectionView`): connected; pairing →
+  pending; reconnecting → syncing; logged out → reauthorization_required; failed → error;
+  disconnected → disconnected, as is a phone once linked with a QR code (`qr_linking_retired`).
+- **SMS** (the Automations hub's card): connected; needing attention → error when the check at AWS
+  failed (`connection_failed`), pending while the store's setup is left (the first step as `code`);
+  not connected → disconnected.
+- **Email** (each mailbox's status): connected; pending (not tested yet) → pending; testing →
+  syncing; degraded, failed → error; reauthorization_required; disabled, revoked → disconnected. The
+  module: the hub's card when connected, else the worst mailbox still in use; with every mailbox
+  working, pending (no verified sender yet, sending paused) or error (suspended by bizinsights).
+
+`actions` are what this caller may press, by their permissions and the module's state; each is done
+on the provider's own routes. A shared dashboard link and an API key get none.
+
+| Module | Who | Actions |
+| --- | --- | --- |
+| Shopify | owners and admins (`stores:manage`) | `refresh` (active or in error), `reconnect` (lost access), `disconnect` |
+| Ad platforms | Manage integrations | `connect` (set up on this server), `reconnect` (an account needs signing in again), `refresh` (a shown account with a working grant, the demo, or a waiting sign-in), `disconnect` |
+| WhatsApp | Manage integrations; `refresh` ("Check now") View campaigns | `connect` (set up on this server, nothing connected), `reconnect` (logged out or failed), `refresh`, `disconnect` |
+| SMS, email | the hub's own (`hubPermissions`: SMS owners and admins, email Manage integrations) | the hub card's, its test as `refresh` |
+
+`capabilities` are fixed per module: the store's data modules (`CAPABILITIES`), each ad platform's
+report figures, and the messaging channels' counts (WhatsApp sent, delivered, read, failed). Nothing
+secret is in the answer: no token, no password, no full phone number (a number is masked, and the
+SMS sender is never named by its AWS resource name).
+
 ## Endpoints
 
 Generated from the route files (`apps/api/src/routes/*.ts`); "Access" is the permission each
@@ -88,6 +160,7 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores/:storeId/overview` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
+| GET | `/workspaces/:ws/stores/:storeId/integrations` | integrations.status | integrations.ts |
 | POST | `/pixel/:key` | per-store ingest key, rate-limited | pixel.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/request` | stores:manage | scopes.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/refresh` | stores:manage | scopes.ts |

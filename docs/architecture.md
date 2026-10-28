@@ -96,6 +96,21 @@ Where a new piece of code goes:
   a new code needs its wording there. The Slack post carries the code and the alert's id, which
   finds the "alert raised" log line with the message.
 
+## Integration status
+
+Where every connection of a store stands is worked out once, on the server:
+`GET /workspaces/:ws/stores/:storeId/integrations` (`routes/integrations.ts`) answers each module
+(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, email) on one scale of six statuses:
+connected, pending, reauthorization_required, syncing, error, disconnected. The scale, each
+provider's states mapped onto it, and the ad cards' own states (`connectionState`, `platformState`,
+which `apps/web/src/lib/adConnections.ts` re-exports) are pure functions in
+`@app/shared/integrations`; core's `integrations/status.ts` composes what each module already says
+about itself (the store's status and `syncProblem`, the ad rows and waiting sign-ins,
+`waConnectionView`, the Automations hub's SMS and email cards) and decides nothing again. A new
+provider adds its mapping in shared and its module in core, and no page needs logic of its own; the
+Zapier app (PR #275) adds its module once it merges. The answer's shape, the mappings and who is
+offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
+
 ## Worker conventions (`apps/worker`)
 
 - A queue message is processed by `consume()`; a job that throws is retried with backoff up to

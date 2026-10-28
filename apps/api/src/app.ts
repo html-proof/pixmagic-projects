@@ -22,6 +22,7 @@ import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
+import { integrationsRoutes } from "./routes/integrations.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappWebhookRoutes } from "./routes/whatsappWebhook.js";
@@ -220,6 +221,7 @@ export function buildApp(deps: Deps): App {
   contactRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
+  integrationsRoutes(app, deps);
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.
   metaWebhookRoutes(app, deps);
   whatsappRoutes(app, deps);
