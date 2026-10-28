@@ -7,7 +7,7 @@ import type { WaConnection } from "./types";
 import { waError, WhatsappIcon } from "./WaUi";
 
 // ---------------------------------------------------------------------------
-// The Cloud API way to connect: Meta's Embedded Signup (Facebook Login for Business, its WhatsApp
+// The way to connect: Meta's Embedded Signup (Facebook Login for Business, its WhatsApp
 // variation, v4). Meta's window does the sign-in, the business, the WhatsApp Business account and
 // the number; Meta posts what was chosen to this window and gives back a code that lives 30
 // seconds, which the server exchanges at once and checks against what Meta says was granted
@@ -98,7 +98,7 @@ export function CloudSignup({ base, signup, onConnected }: { base: string; signu
     try {
       const r = await api<{ connection: WaConnection }>(`${base}/connection/cloud`, { method: "POST", body: { code: code.current, wabaId: f.wabaId, phoneNumberId: f.phoneNumberId, businessId: f.businessId } });
       setPhase({ kind: "idle" });
-      toast("success", `WhatsApp is connected through Meta's Cloud API${r.connection.phone ? `: ${r.connection.phone}` : ""}.`);
+      toast("success", `WhatsApp Business is connected${r.connection.phone ? `: ${r.connection.phone}` : ""}.`);
       onConnected(r.connection);
     } catch (e) {
       setPhase({ kind: "stopped", text: waError(e, "finish connecting WhatsApp"), tone: "error" });
@@ -131,7 +131,7 @@ export function CloudSignup({ base, signup, onConnected }: { base: string; signu
   useEffect(() => {
     void loadFacebookSdk(signup.appId, signup.version).catch(() => undefined);
   }, [signup.appId, signup.version]);
-  // Meta's window can stop on its own page (before bizinsights is approved as a Tech Provider): say so after a while.
+  // Meta's window can stop on its own page (before Meta approves bizinsights as a Tech Provider): say so after a while.
   useEffect(() => {
     if (phase.kind !== "authorizing") return setSlow(false);
     const t = window.setTimeout(() => setSlow(true), 15_000);
@@ -183,7 +183,7 @@ export function CloudSignup({ base, signup, onConnected }: { base: string; signu
           disabled={busy}
           data-testid="wa-cloud-connect"
         >
-          <WhatsappIcon size={20} /> {busy ? "Waiting for Meta…" : phase.kind === "stopped" ? "Try again" : "Continue with Meta"}
+          <WhatsappIcon size={20} /> {busy ? "Waiting for Meta…" : phase.kind === "stopped" ? "Try again" : "Connect WhatsApp Business"}
         </button>
         {phase.kind === "authorizing" && (
           <button type="button" className="btn-secondary h-11" onClick={() => stop("You stopped waiting for Meta's window. Nothing was connected.", "info")}>
@@ -193,7 +193,10 @@ export function CloudSignup({ base, signup, onConnected }: { base: string; signu
       </div>
       {phase.kind !== "idle" && (
         <p role={phase.kind === "stopped" && phase.tone === "error" ? "alert" : "status"} aria-live="polite" className={`max-w-xl text-sm ${phase.kind === "stopped" && phase.tone === "error" ? "text-danger" : "text-muted"}`}>
-          {phase.kind === "authorizing" && (slow ? "Still in Meta's window. If it stopped on \"can't onboard customers right now\", Meta hasn't approved bizinsights for the Cloud API yet: use the QR code instead for now." : "Finish the steps in Meta's window.")}
+          {phase.kind === "authorizing" &&
+            (slow
+              ? "Still in Meta's window. If it stopped on \"can't onboard customers right now\", Meta hasn't yet approved bizinsights as a Tech Provider, which bizinsights' administrator is completing with Meta. Nothing was connected; try again once it is."
+              : "Finish the steps in Meta's window.")}
           {phase.kind === "configuring" && "Checking with Meta and setting up your number…"}
           {phase.kind === "stopped" && phase.text}
         </p>

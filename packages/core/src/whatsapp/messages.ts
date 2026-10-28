@@ -9,9 +9,10 @@
  * sendQueuedMessage (the whatsapp queue's wapp_send job) claims the row, then checks, in order:
  * the connection is up, automation isn't paused, the automation or campaign still runs, consent
  * (again: a customer may have replied STOP since), the sending hours, the store's daily limit, the
- * customer's daily limit, the pace of the linked phone. Then one call to Evolution API. Its answer
- * is recorded as "accepted": sent, delivered and read come only from WhatsApp's reports
- * (applyMessageStatus), never from the HTTP answer.
+ * customer's daily limit, the 24-hour window for free text, the number's pace and its circuit
+ * breaker. Then one call to Meta's Cloud API (cloudApi.ts). Its answer is recorded as "accepted":
+ * sent, delivered and read come only from WhatsApp's reports (applyMessageStatus), never from the
+ * HTTP answer. A send that may have reached the customer is never repeated by itself.
  */
 import { systemDb, type Store, type WappConnection, type WappContact, type WappMessage } from "@app/db";
 import {
@@ -21,25 +22,24 @@ import {
   maskPhone,
   messageStatusFromProvider,
   nextSendTime,
-  QR_GAP_JITTER_MS,
-  QR_MIN_GAP_MS,
   CLOUD_SENDS_PER_SECOND,
   startOfLocalDay,
   statusAfterReport,
   waConsentProblem,
   WA_MAX_SEND_ATTEMPTS,
+  WA_QR_RETIRED,
+  WA_RETIRED_PROVIDER,
   WA_RETRY_DELAYS_S,
   type NormalizedPhone,
   type WaMessageStatus,
   type WaSkipReason,
   type WaTemplateCategory,
 } from "@app/shared";
-import { providerDetail } from "../errors.js";
 import { logger } from "../logger.js";
 import { consentFacts, onDoNotMessageList } from "./contacts.js";
 import { dailyLimitOf, DOWN_GRACE_MS, settingsOf, storeById, WA_MAX_QUEUE_DELAY_S, waDecrypt, waEncrypt, waPhoneHash, waQueue, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
-import { checkConnection, clientFor, instanceToken } from "./connection.js";
-import { EvolutionError, isNotConnected } from "./evolution.js";
+import { CloudApiError, metaErrorInfo, sendCloudMessage, type CloudErrorKind } from "./cloudApi.js";
+import { markReconnect, reconnectReasonOf } from "./connection.js";
 
 export type MessageSource = "automation" | "campaign" | "manual" | "test" | "verification" | "team_alert" | "reply";
 
@@ -185,7 +185,9 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
   const end = (status: "skipped" | "cancelled" | "failed", reason: WaSkipReason, extra: { errorCode?: string | null; errorDetail?: string | null } = {}) => finish(m.id, status, reason, extra, deps);
   const store = await storeById(m.storeId);
   const conn = await systemDb.wappConnection.findUnique({ where: { storeId: m.storeId } });
-  if (!store || store.status === "uninstalled" || !conn || conn.status === "disconnected" || !conn.instanceName) return end("cancelled", "not_connected");
+  // Queued for a phone linked with a QR code: QR linking was retired, so it never goes (not even through a number connected since).
+  if (m.provider === WA_RETIRED_PROVIDER || conn?.provider === WA_RETIRED_PROVIDER) return end("cancelled", WA_QR_RETIRED);
+  if (!store || store.status === "uninstalled" || !conn || conn.status === "disconnected" || !conn.instanceTokenEnc || !conn.phoneNumberId) return end("cancelled", "not_connected");
   if (m.connectionId && m.connectionId !== conn.id) return end("cancelled", "connection_changed");
   if (conn.status !== "connected") {
     if (conn.downSince && now.getTime() - conn.downSince.getTime() > DOWN_GRACE_MS) return end("cancelled", "not_connected");
@@ -213,7 +215,6 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
   if (toCustomer(m.source) && !(m.source === "automation" && !m.contactId) && !confirmsStop) {
     const block = await consentBlock(contact, (m.category ?? "transactional") as WaTemplateCategory, settings, { reply: m.source === "reply" });
     if (block) return end("skipped", block);
-    if (contact?.notOnWhatsappAt && now.getTime() - contact.notOnWhatsappAt.getTime() < 30 * 86_400_000) return end("skipped", "not_on_whatsapp");
   } else if (!confirmsStop && m.phoneHash && (await onDoNotMessageList(m.storeId, m.phoneHash, (m.category ?? "transactional") as WaTemplateCategory))) {
     // The store's own numbers (a test, a code, a team alert, an automation in test mode) still never
     // get a message once that number asked not to (it replied STOP, or is on the do-not-message list).
@@ -222,7 +223,7 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
   if (timed(m.source) && !inSendWindow(now, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end)) {
     return hold(deps, m.id, nextSendTime(now, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end), null);
   }
-  if (counted(m.source) && (await sentToday(m.storeId, settings.timeZone, now)) >= dailyLimitOf(settings, conn.provider as "qr" | "cloud_api")) {
+  if (counted(m.source) && (await sentToday(m.storeId, settings.timeZone, now)) >= dailyLimitOf(settings)) {
     const tomorrow = startOfLocalDay(localDay(new Date(now.getTime() + 86_400_000), settings.timeZone), settings.timeZone);
     if (m.source === "campaign" || m.source === "automation") return hold(deps, m.id, timed(m.source) ? nextSendTime(tomorrow, settings.timeZone, settings.sendWindow.start, settings.sendWindow.end) : tomorrow, "daily_limit");
     return end("skipped", "daily_limit");
@@ -231,79 +232,134 @@ export async function sendQueuedMessage(deps: Pick<WaDeps, "queues" | "fetchImpl
     const lastDay = await systemDb.wappMessage.count({ where: { storeId: m.storeId, phoneHash: m.phoneHash, direction: "out", source: { in: ["automation", "campaign"] }, acceptedAt: { gte: new Date(now.getTime() - 86_400_000) } } });
     if (lastDay >= settings.perCustomerDailyLimit) return end("skipped", "customer_limit");
   }
-  // The pace: one message at a time per linked phone, with a pause between; the Cloud API per second.
-  const gap = conn.provider === "qr" ? QR_MIN_GAP_MS + Math.floor(Math.random() * QR_GAP_JITTER_MS) : Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
+  if (!m.payloadEnc || !m.phoneEnc) return end("failed", "gave_up", { errorCode: "no_payload" });
+  const payload = JSON.parse(waDecrypt(m.storeId, "payload", m.payloadEnc)) as MessagePayload;
+  // Meta delivers free text (and attachments) only to a customer who wrote in the last 24 hours;
+  // anything else must be a template it approved. Known here for a customer, so nothing goes that
+  // Meta would only refuse. (The store's own numbers aren't customers: Meta answers for those, 131047.)
+  if (!payload.meta && contact && toCustomer(m.source) && !inServiceWindow(contact, now)) return end("skipped", "outside_window");
+  // This number's circuit is open (Meta kept failing, or asked to slow down): wait, without spending a try.
+  if (await deps.coord.peek(circuitKey(conn.phoneNumberId))) return hold(deps, m.id, new Date(now.getTime() + CIRCUIT_OPEN_S * 1000 + Math.floor(Math.random() * 5000)), "provider_unavailable");
+  // The pace: at most CLOUD_SENDS_PER_SECOND a second per number.
+  const gap = Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
   if (!(await deps.coord.acquire(`wapp:pace:${conn.id}`, gap))) {
     return hold(deps, m.id, new Date(now.getTime() + gap + Math.floor(Math.random() * 2000)), null);
   }
 
-  if (!m.payloadEnc || !m.phoneEnc) return end("failed", "gave_up", { errorCode: "no_payload" });
-  const payload = JSON.parse(waDecrypt(m.storeId, "payload", m.payloadEnc)) as MessagePayload;
   const number = waDecrypt(m.storeId, "phone", m.phoneEnc).replace(/^\+/, "");
-  const client = clientFor(conn, deps);
-  const token = instanceToken(conn);
   try {
-    let sent;
+    let media: { kind: "image" | "document"; mime: string; name: string; base64: string } | null = null;
     if (payload.attachment) {
-      const media = await deps.payloads.get(`wapp-media/${m.id}`);
-      if (!media) return end("failed", "gave_up", { errorCode: "attachment_missing", errorDetail: "The attachment was no longer there to send." });
-      sent = await client.sendMedia(conn.instanceName, token, { number, mediatype: payload.attachment.kind, mimetype: payload.attachment.mime, media, fileName: payload.attachment.name, caption: payload.text || undefined });
-    } else if (conn.provider === "cloud_api" && payload.meta) {
-      sent = await client.sendTemplate(conn.instanceName, token, { number, name: payload.meta.name, language: payload.meta.language, bodyParams: payload.meta.params });
-    } else {
-      sent = await client.sendText(conn.instanceName, token, { number, text: payload.text });
+      const base64 = await deps.payloads.get(`wapp-media/${m.id}`);
+      if (!base64) return end("failed", "gave_up", { errorCode: "attachment_missing", errorDetail: "The attachment was no longer there to send." });
+      media = { kind: payload.attachment.kind, mime: payload.attachment.mime, name: payload.attachment.name, base64 };
     }
-    const status: WaMessageStatus = messageStatusFromProvider(sent.status) === "sent" ? "sent" : "accepted";
+    const sent = await sendCloudMessage(deps, conn, { to: number, text: payload.text, template: media ? null : (payload.meta ?? null), media, reference: m.id });
     const at = new Date();
-    await systemDb.wappMessage.update({
-      where: { id: m.id },
-      data: { status, reason: null, providerMessageId: sent.id, acceptedAt: at, ...(status === "sent" ? { sentAt: at } : {}), payloadEnc: null, errorCode: null, errorDetail: null },
-    });
-    await systemDb.wappMessageEvent.createMany({ data: [{ workspaceId: m.workspaceId, storeId: m.storeId, messageId: m.id, status: "accepted", providerStatus: sent.status, occurredAt: at }], skipDuplicates: true });
+    const status: WaMessageStatus = messageStatusFromProvider(sent.status) === "sent" ? "sent" : "accepted";
+    const fields = { reason: null, providerMessageId: sent.id, acceptedAt: at, payloadEnc: null, errorCode: null, errorDetail: null };
+    // Meta's first report can come before its answer is recorded here (applyMessageStatus found the
+    // message by its reference): the message then keeps the status that report gave it.
+    const moved = await systemDb.wappMessage.updateMany({ where: { id: m.id, status: "sending" }, data: { ...fields, status, ...(status === "sent" ? { sentAt: at } : {}) } });
+    if (!moved.count) await systemDb.wappMessage.update({ where: { id: m.id }, data: fields });
+    await systemDb.wappMessageEvent.createMany({ data: [{ workspaceId: m.workspaceId, storeId: m.storeId, messageId: m.id, status: "accepted", providerStatus: sent.status ?? "accepted", occurredAt: at }], skipDuplicates: true });
     if (contact) await systemDb.wappContact.update({ where: { id: contact.id }, data: { lastOutboundAt: at } });
     if (payload.attachment) await dropAttachment(m, deps);
     return status;
   } catch (e) {
-    if (!(e instanceof EvolutionError)) throw e;
-    const detail = providerDetail(e.detail);
-    if (e.notOnWhatsapp) {
-      if (contact) await systemDb.wappContact.update({ where: { id: contact.id }, data: { notOnWhatsappAt: new Date() } });
-      return end("skipped", "not_on_whatsapp", { errorCode: "not_on_whatsapp" });
-    }
+    if (!(e instanceof CloudApiError)) throw e;
+    const errorCode = e.metaCode !== null ? `meta_${e.metaCode}` : e.kind;
     if (e.uncertain) {
-      logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status }, "whatsapp send unconfirmed: it may have been sent, not retried");
-      return end("failed", "gave_up", { errorCode: "uncertain", errorDetail: "WhatsApp's service didn't confirm the send. The message may have reached the customer: check the chat on your phone before sending it again." });
+      await tripCircuit(conn.phoneNumberId, deps);
+      logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status, metaCode: e.metaCode }, "whatsapp send unconfirmed: it may have been sent, not retried");
+      return end("failed", "gave_up", { errorCode: "uncertain", errorDetail: "Meta didn't confirm the send. The message may have reached the customer: check the chat before sending it again." });
     }
-    if (isNotConnected(e)) {
-      // The provider lost the phone: hold, and ask it for the state so the page shows it.
-      await checkConnection(deps, conn).catch(() => {});
-      return hold(deps, m.id, new Date(Date.now() + 5 * 60_000), "not_connected");
+    if (e.kind === "auth") {
+      // Meta's access for bizinsights ended: the merchant connects again (the alert says so). The message waits.
+      await markReconnect(deps, conn, reconnectReasonOf(e), e.metaCode);
+      return hold(deps, m.id, new Date(Date.now() + 10 * 60_000), "not_connected");
     }
-    if (e.kind === "unreachable" || e.kind === "server" || e.kind === "timeout") {
-      if (m.attempts >= WA_MAX_SEND_ATTEMPTS) return end("failed", "gave_up", { errorCode: e.kind, errorDetail: "bizinsights' WhatsApp service couldn't be reached after several tries." });
-      const delay = WA_RETRY_DELAYS_S[Math.min(m.attempts - 1, WA_RETRY_DELAYS_S.length - 1)]!;
-      const r = await systemDb.wappMessage.update({ where: { id: m.id }, data: { status: "queued", sendAfter: new Date(Date.now() + delay * 1000), errorCode: e.kind, enqueuedAt: null } });
+    if (e.kind === "unreachable" || e.kind === "timeout" || e.kind === "server" || e.kind === "rate_limited" || e.kind === "pair_rate_limited") {
+      // Meta certainly didn't take it: it goes again later, a try spent. Meta's throughput limits open the number's circuit at once.
+      const limited = e.kind === "rate_limited" || e.kind === "pair_rate_limited";
+      if (e.kind === "rate_limited") await openCircuit(conn.phoneNumberId, deps, "rate_limited");
+      else if (!limited) await tripCircuit(conn.phoneNumberId, deps);
+      if (m.attempts >= WA_MAX_SEND_ATTEMPTS) return end("failed", limited ? "rate_limited" : "gave_up", { errorCode, errorDetail: limited ? e.detail : "Meta's WhatsApp service couldn't be reached after several tries." });
+      const delay = Math.max(WA_RETRY_DELAYS_S[Math.min(m.attempts - 1, WA_RETRY_DELAYS_S.length - 1)]!, limited ? CIRCUIT_OPEN_S : 0);
+      const r = await systemDb.wappMessage.update({ where: { id: m.id }, data: { status: "queued", sendAfter: new Date(Date.now() + delay * 1000), reason: limited ? "rate_limited" : null, errorCode, enqueuedAt: null } });
       await enqueueIfDue(deps, r);
-      logger.warn({ messageId: m.id, attempts: m.attempts, kind: e.kind }, "whatsapp send will be retried");
+      logger.warn({ messageId: m.id, attempts: m.attempts, kind: e.kind, metaCode: e.metaCode }, "whatsapp send will be retried");
       return "retry";
     }
-    if (e.kind === "unauthorized" || e.kind === "not_found") await checkConnection(deps, conn).catch(() => {});
-    logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status }, "whatsapp send refused by the provider");
-    return end("failed", "provider_rejected", { errorCode: `${e.kind}_${e.status}`, errorDetail: detail || null });
+    logger.warn({ messageId: m.id, storeId: m.storeId, kind: e.kind, status: e.status, metaCode: e.metaCode }, "whatsapp send refused by the provider");
+    return end("failed", refusalReason(e.kind, e.metaCode), { errorCode, errorDetail: e.detail || null });
   }
 }
 
+/** Whether Meta lets free text reach this customer now: they wrote in the last 24 hours. */
+const inServiceWindow = (c: Pick<WappContact, "lastInboundAt">, now: Date) => !!c.lastInboundAt && now.getTime() - c.lastInboundAt.getTime() < 24 * 3600_000;
+
+/** Why a message Meta refused (when it was sent, or in a failed report) didn't go, from Meta's code. */
+function refusalReason(kind: CloudErrorKind, metaCode: number | null): WaSkipReason {
+  if (kind === "outside_window") return "outside_window";
+  if (kind === "undeliverable") return "undeliverable";
+  if (kind === "template") return "template_unavailable";
+  if (kind === "rate_limited" || kind === "pair_rate_limited") return "rate_limited";
+  if (metaCode === 131050) return "no_marketing_consent";
+  return "provider_rejected";
+}
+
 /**
- * A status report from WhatsApp (Evolution's MESSAGES_UPDATE). A message only moves forward;
- * every report is recorded once. A test message reaching WhatsApp completes Step 4.
+ * The circuit breaker, per number: Meta failing five times in five minutes (unreachable, timing out,
+ * 5xx), or one of its throughput limits, holds that number's messages for CIRCUIT_OPEN_S without
+ * spending their tries, rather than every queued message meeting the same failure in turn.
  */
-export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "storeId" | "workspaceId">, report: { providerMessageId: string; status: string; at: Date }): Promise<"unknown" | "unchanged" | WaMessageStatus> {
-  const m = await systemDb.wappMessage.findUnique({ where: { connectionId_providerMessageId: { connectionId: conn.id, providerMessageId: report.providerMessageId } } });
+const CIRCUIT_OPEN_S = 60;
+const CIRCUIT_FAILURES = 5;
+const circuitKey = (phoneNumberId: string | null) => `wapp:circuit:${phoneNumberId ?? "none"}`;
+
+async function openCircuit(phoneNumberId: string | null, deps: Pick<WaDeps, "coord">, why: string) {
+  await deps.coord.put(circuitKey(phoneNumberId), why, CIRCUIT_OPEN_S);
+  logger.warn({ phoneNumberId, why }, "whatsapp circuit opened for a number: its messages wait a minute");
+}
+
+async function tripCircuit(phoneNumberId: string | null, deps: Pick<WaDeps, "coord">) {
+  const n = await deps.coord.hit(`wapp:failures:${phoneNumberId ?? "none"}`, 300);
+  if (n >= CIRCUIT_FAILURES) await openCircuit(phoneNumberId, deps, "failures");
+}
+
+/** One status report about a message, as Meta's webhook carries it (or a QR-linked phone's, until the last of them is in). */
+export interface StatusReport {
+  providerMessageId: string;
+  status: string;
+  at: Date;
+  /** What bizinsights sent along (biz_opaque_callback_data): its message id. */
+  reference?: string | null;
+  /** A failed report's first error: Meta's code and its meaning in the merchant's words. */
+  error?: { code: number | null; detail: string } | null;
+}
+
+/**
+ * A status report from WhatsApp. A message only moves forward; every report is recorded once. A
+ * test message reaching WhatsApp completes Step 4.
+ *
+ * A report can name a message whose send isn't recorded yet (it came before Meta's answer was
+ * saved), or one whose send failed as uncertain (Meta did take it): its reference finds it, and the
+ * report settles it.
+ */
+export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "storeId" | "workspaceId">, report: StatusReport): Promise<"unknown" | "unchanged" | WaMessageStatus> {
+  let m = await systemDb.wappMessage.findUnique({ where: { connectionId_providerMessageId: { connectionId: conn.id, providerMessageId: report.providerMessageId } } });
+  if (!m && report.reference) {
+    const byRef = await systemDb.wappMessage.findFirst({ where: { id: report.reference, connectionId: conn.id, storeId: conn.storeId, direction: "out", providerMessageId: null } });
+    if (byRef) m = await systemDb.wappMessage.update({ where: { id: byRef.id }, data: { providerMessageId: report.providerMessageId, acceptedAt: byRef.acceptedAt ?? report.at } });
+  }
   if (!m || m.storeId !== conn.storeId) return "unknown";
   const status = messageStatusFromProvider(report.status);
   if (!status) return "unchanged";
   await systemDb.wappMessageEvent.createMany({ data: [{ workspaceId: m.workspaceId, storeId: m.storeId, messageId: m.id, status, providerStatus: report.status.slice(0, 40), occurredAt: report.at }], skipDuplicates: true });
-  const next = statusAfterReport(m.status, status);
+  // A send marked uncertain that Meta reports as gone: it went.
+  const settled = m.status === "failed" && m.errorCode === "uncertain" && (status === "sent" || status === "delivered" || status === "read");
+  const next = settled ? status : statusAfterReport(m.status, status);
   if (!next) return "unchanged";
   const stamp: Record<string, Date> = {};
   if (next === "sent") stamp.sentAt = report.at;
@@ -319,7 +375,19 @@ export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "stor
   if (next === "failed") stamp.failedAt = report.at;
   await systemDb.wappMessage.update({
     where: { id: m.id },
-    data: { status: next, ...stamp, ...(isFinalStatus(next) ? { finalAt: report.at, payloadEnc: null } : {}), ...(next === "failed" ? { reason: "provider_rejected", errorCode: "whatsapp_error" } : {}) },
+    data: {
+      status: next,
+      ...stamp,
+      ...(isFinalStatus(next) ? { finalAt: report.at, payloadEnc: null } : {}),
+      ...(settled ? { reason: null, errorCode: null, errorDetail: null, failedAt: null, ...(isFinalStatus(next) ? {} : { finalAt: null }) } : {}),
+      ...(next === "failed"
+        ? {
+            reason: refusalReason(report.error ? metaErrorInfo(report.error.code).kind : "refused", report.error?.code ?? null),
+            errorCode: report.error?.code != null ? `meta_${report.error.code}` : "whatsapp_error",
+            errorDetail: report.error?.detail ?? null,
+          }
+        : {}),
+    },
   });
   if (m.source === "test" && (next === "sent" || next === "delivered" || next === "read")) {
     await systemDb.wappSettings.updateMany({ where: { storeId: m.storeId, testPassedAt: null, testVerifiedAt: { not: null } }, data: { testPassedAt: report.at } });

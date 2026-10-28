@@ -334,12 +334,14 @@ addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404
   page, and reload to check), and from Google Cloud insights-511119 → Google Auth Platform → Clients → "Insights web" →
   **Authorized redirect URIs** (Save). Keep `https://bizinsights.io/api/ads/meta/callback`,
   `https://bizinsights.io/api/ads/google/callback` and `https://bizinsights.io/api/ads/adsense/callback`.
-- [ ] **(e) Now: confirm Meta's redirect URI.** `https://bizinsights.io/api/ads/meta/callback` was in Valid OAuth
-  Redirect URIs next to the Nango callback on 2026-10-22 ([integrations-readiness.md](integrations-readiness.md)), and
-  Continue with Meta Ads needs it again. Meta can't be checked signed out, so look: Meta app 971575545351940 →
-  Facebook Login for Business → Settings. If it is missing, type it, click the suggestion that appears under the field,
-  press **Save Changes** at the bottom of the page and reload: the "Changes saved" toast alone doesn't keep it. The
-  Redirect URI Validator at the top of that page checks it. (Google's "Insights web" already accepts
+- [x] **(e) Meta's redirect URI: confirmed working 2026-10-28.** `https://bizinsights.io/api/ads/meta/callback` was in
+  Valid OAuth Redirect URIs next to the Nango callback on 2026-10-22
+  ([integrations-readiness.md](integrations-readiness.md)), and Continue with Meta Ads needs it again. On 2026-10-28
+  (release 128) a Meta connect came back to it and connected, at 17:13Z and 18:17Z (audit log `ads.connected`), so it
+  is still there. Should it ever go missing (Facebook's dialog then says "Can't load URL"): Meta app 971575545351940 →
+  Facebook Login for Business → Settings, type it, click the suggestion that appears under the field, press **Save
+  Changes** at the bottom of the page and reload: the "Changes saved" toast alone doesn't keep it. The Redirect URI
+  Validator at the top of that page checks it. (Google's "Insights web" already accepts
   `/api/ads/google/callback` and `/api/ads/adsense/callback`: on 2026-10-28 Google's consent screen loaded for both,
   while a made-up path got `redirect_uri_mismatch`.)
 
@@ -378,7 +380,7 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 | Where | Address |
 | --- | --- |
 | Google client "Insights web" → Authorized redirect URIs | `https://bizinsights.io/api/ads/google/callback` and `https://bizinsights.io/api/ads/adsense/callback` (both accepted: on 2026-10-28 Google's consent screen loaded for them, while a made-up path got `redirect_uri_mismatch`) |
-| Meta app → Facebook Login for Business → Settings → Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/meta/callback` (listed on 2026-10-22; confirm it is still there: "Leaving Nango", step (e)) |
+| Meta app → Facebook Login for Business → Settings → Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/meta/callback` (listed on 2026-10-22; a Meta connect came back to it on 2026-10-28: "Leaving Nango", step (e)) |
 | Meta app → Facebook Login for Business → Settings → Deauthorize callback URL | `https://bizinsights.io/api/webhooks/meta/deauthorize` |
 | Meta app → App settings → Basic → User data deletion → Data deletion callback URL | `https://bizinsights.io/api/webhooks/meta/data-deletion` |
 

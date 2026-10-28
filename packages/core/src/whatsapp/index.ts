@@ -1,4 +1,4 @@
-/** WhatsApp Automation on Evolution API (docs/whatsapp.md). */
+/** WhatsApp Automation on Meta's WhatsApp Business Platform (docs/whatsapp.md). */
 export * from "./common.js";
 export * from "./evolution.js";
 export * from "./connection.js";
@@ -19,3 +19,5 @@ export * from "./privacy.js";
 export * from "./legacy.js";
 export * from "./purge.js";
 export * from "./cloud.js";
+export * from "./cloudApi.js";
+export * from "./retireQr.js";

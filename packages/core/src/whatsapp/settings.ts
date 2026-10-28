@@ -1,11 +1,11 @@
 /**
  * The store's WhatsApp settings (Step 3, Configure), its test number (Step 4: verified by a code
- * sent to it over the connected WhatsApp, then a test message the provider must report as sent),
- * and "Pause all automation".
+ * sent to it from the connected number, then a test message Meta must report as sent), and "Pause
+ * all automation".
  */
 import { createHash, randomInt } from "node:crypto";
-import { systemDb, type Store, type WappConnection, type WappSettings } from "@app/db";
-import { isTimeZone, maskPhone, normalizePhone, renderWaText, waSampleValues, waSettingsSchema, WA_DAILY_LIMIT, type WaProvider } from "@app/shared";
+import { systemDb, type Store, type WappSettings } from "@app/db";
+import { isTimeZone, maskPhone, normalizePhone, renderWaText, variablesIn, waSampleValues, waSettingsSchema, WA_DAILY_LIMIT } from "@app/shared";
 import { audit } from "../notify.js";
 import { businessNameOf, liveConnection, settingsOf, waDecrypt, waEncrypt, waPhoneHash, WhatsappError, type WaDeps } from "./common.js";
 import { onDoNotMessageList } from "./contacts.js";
@@ -23,9 +23,7 @@ const codeHash = (storeId: string, phoneHash: string, code: string) => createHas
 export async function saveWaSettings(input: { store: Store; userId: string; data: unknown; ip?: string }): Promise<WappSettings> {
   const s = waSettingsSchema.parse(input.data);
   if (s.timeZone && !isTimeZone(s.timeZone)) throw new WhatsappError("Pick a time zone from the list.", 400, "invalid_time_zone");
-  const conn = await liveConnection(input.store.id);
-  const provider = (conn?.provider ?? "qr") as WaProvider;
-  if (s.dailyLimit > WA_DAILY_LIMIT[provider].max) throw new WhatsappError(`At most ${WA_DAILY_LIMIT[provider].max} messages a day on this connection.`, 400, "daily_limit_too_high");
+  if (s.dailyLimit > WA_DAILY_LIMIT.max) throw new WhatsappError(`At most ${WA_DAILY_LIMIT.max} messages a day.`, 400, "daily_limit_too_high");
   const before = await systemDb.wappSettings.findUnique({ where: { storeId: input.store.id } });
   const now = new Date();
   const basisChanged = (before?.orderUpdates ?? "unset") !== s.orderUpdates;
@@ -57,41 +55,16 @@ export async function saveWaSettings(input: { store: Store; userId: string; data
   return row;
 }
 
-/** The number a linked phone (QR) is WhatsApp for: WhatsApp itself said so when the phone was linked. */
-function isLinkedNumber(storeId: string, conn: Pick<WappConnection, "provider" | "phoneEnc"> | null, e164: string): boolean {
-  if (conn?.provider !== "qr" || !conn.phoneEnc) return false;
-  try {
-    return waDecrypt(storeId, "linked_phone", conn.phoneEnc) === e164;
-  } catch {
-    return false;
-  }
-}
-
-/** The verified test number is the linked phone's own (its tests land in that phone's chat with itself). */
-export async function testIsLinkedNumber(store: Pick<Store, "id">, conn: Pick<WappConnection, "provider" | "phoneEnc"> | null): Promise<boolean> {
-  if (conn?.provider !== "qr" || !conn.phoneEnc) return false;
-  const s = await systemDb.wappSettings.findUnique({ where: { storeId: store.id }, select: { testVerifiedAt: true, testPhoneEnc: true } });
-  if (!s?.testVerifiedAt || !s.testPhoneEnc) return false;
-  try {
-    return isLinkedNumber(store.id, conn, waDecrypt(store.id, "test_phone", s.testPhoneEnc));
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Step 4, first half: a 6-digit code to the merchant's own number, over the connected WhatsApp. Only
- * a number whose code comes back is used for tests (the person entering it has that phone).
- *
- * The linked phone's own number gets no code: a code sent from a number to itself arrives as no new
- * message (WhatsApp files it in that phone's chat with itself, without a notification; in production
- * it was reported sent and never delivered). That number is the store's by WhatsApp's own word (the
- * phone was linked with it), and a test to it reaches no one else, so it is verified as it is entered.
+ * Step 4, first half: a 6-digit code to the merchant's own number, from the connected number. Only a
+ * number whose code comes back is used for tests (the person entering it has that phone). The code
+ * is free text, which Meta delivers only to a number that wrote to the business in the last 24 hours
+ * (131047): the page asks the merchant to send their business number a message first.
  */
 export async function startTestVerification(
   deps: Pick<WaDeps, "queues" | "coord">,
   input: { store: Store; userId: string; phone: string; country?: string | null; ip?: string },
-): Promise<{ expiresAt: Date | null; phone: string; linkedNumber: boolean }> {
+): Promise<{ expiresAt: Date | null; phone: string }> {
   const conn = await liveConnection(input.store.id);
   if (!conn || conn.status !== "connected") throw new WhatsappError("Connect WhatsApp first: the code is sent from your connected number.", 409, "not_connected");
   const phone = normalizePhone(input.phone, input.country ?? null);
@@ -99,22 +72,6 @@ export async function startTestVerification(
   const phoneHash = waPhoneHash(input.store.id, phone.waId);
   if (await onDoNotMessageList(input.store.id, phoneHash, "transactional")) {
     throw new WhatsappError("That number asked not to get WhatsApp messages from this store (it replied STOP). Use another number, or reply START from it first.", 409, "suppressed");
-  }
-  if (isLinkedNumber(input.store.id, conn, phone.e164)) {
-    const fields = {
-      testPhoneHash: phoneHash,
-      testPhoneEnc: waEncrypt(input.store.id, "test_phone", phone.e164),
-      testPhoneMasked: maskPhone(phone.e164),
-      testCodeHash: null,
-      testCodeExpiresAt: null,
-      testCodeAttempts: 0,
-      testVerifiedAt: new Date(),
-      testPassedAt: null,
-      updatedByUserId: input.userId,
-    };
-    await systemDb.wappSettings.upsert({ where: { storeId: input.store.id }, create: { storeId: input.store.id, workspaceId: input.store.workspaceId, ...fields }, update: fields });
-    await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.test_number_verified", targetType: "store", targetId: input.store.id, metadata: { linkedNumber: true }, ip: input.ip });
-    return { expiresAt: null, phone: maskPhone(phone.e164), linkedNumber: true };
   }
   if ((await deps.coord.hit(`wapp:verify:${input.store.id}`, 3600)) > CODES_PER_HOUR) throw new WhatsappError("Too many codes sent in the last hour. Try again later.", 429, "rate_limited");
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
@@ -145,7 +102,7 @@ export async function startTestVerification(
     createdByUserId: input.userId,
   });
   await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.test_number_code_sent", targetType: "store", targetId: input.store.id, ip: input.ip });
-  return { expiresAt, phone: maskPhone(phone.e164), linkedNumber: false };
+  return { expiresAt, phone: maskPhone(phone.e164) };
 }
 
 /** Step 4, second half: the code the merchant read on their phone. */
@@ -177,14 +134,18 @@ export async function sendTestMessage(deps: Pick<WaDeps, "queues">, input: { sto
   let text = (input.text ?? "").trim();
   let templateId: string | null = null;
   let category: "transactional" | "marketing" = "transactional";
+  let meta: { name: string; language: string; params: string[] } | null = null;
   if (input.templateId) {
     const t = await systemDb.wappTemplate.findFirst({ where: { id: input.templateId, storeId: input.store.id } });
     if (!t) throw new WhatsappError("Pick one of this store's templates.", 400, "template_not_found");
     const usable = templateUsable(t, conn);
     if (!usable.ok) throw new WhatsappError(`That template can't be sent: ${usable.reason}`, 409, "template_unavailable");
-    text = renderWaText(t.body, waSampleValues(name), { lenient: true });
+    const samples = waSampleValues(name);
+    text = renderWaText(t.body, samples, { lenient: true });
     templateId = t.id;
     category = t.category as typeof category;
+    // As Meta approved it, with the sample values: a template starts a conversation, free text can't.
+    if (t.metaName) meta = { name: t.metaName, language: t.metaLanguage ?? "en", params: variablesIn(t.body).map((v) => (samples as Record<string, string | undefined>)[v] ?? "") };
   }
   if (!text) text = `This is a test message from ${name} on bizinsights. WhatsApp is connected and working.`;
   const { message } = await queueMessage(deps, {
@@ -193,7 +154,7 @@ export async function sendTestMessage(deps: Pick<WaDeps, "queues">, input: { sto
     source: "test",
     category,
     phone,
-    payload: { text: text.slice(0, 1024) },
+    payload: { text: text.slice(0, 1024), meta },
     templateId,
     idempotencyKey: `test:${Date.now()}:${input.userId.slice(-6)}`,
     createdByUserId: input.userId,

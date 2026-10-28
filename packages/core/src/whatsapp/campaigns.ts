@@ -5,15 +5,12 @@
  * the audience changed since the merchant saw its count.
  *
  * A campaign's recipients are its messages ("campaign:<id>:<contact>", unique per store), so a
- * batch made twice messages nobody twice. Messages are spread out as they are made (a linked phone
- * gets one every few seconds), go through the same sender and its checks (consent again, sending
- * hours, daily limits), and a cancelled campaign's waiting messages are cancelled with it. A linked
- * phone takes at most WA_CAMPAIGN_MAX.qr recipients: it isn't made for broadcasts.
+ * batch made twice messages nobody twice. Messages are spread out as they are made (at the number's
+ * pace), go through the same sender and its checks (consent again, sending hours, daily limits,
+ * Meta's limits), and a cancelled campaign's waiting messages are cancelled with it.
  */
 import { Prisma, systemDb, type Store, type WappCampaign, type WappTemplate } from "@app/db";
 import {
-  QR_GAP_JITTER_MS,
-  QR_MIN_GAP_MS,
   CLOUD_SENDS_PER_SECOND,
   normalizePhone,
   renderWaText,
@@ -129,8 +126,8 @@ export async function launchCampaign(deps: Pick<WaDeps, "queues">, input: { stor
   const count = await estimateWaAudience(input.store.id, c.audience, template);
   if (count !== l.confirmRecipients) throw new WhatsappError(`The audience now has ${count} recipients, not ${l.confirmRecipients}. Check it and confirm again.`, 409, "count_changed", { count });
   if (count < 1) throw new WhatsappError("Nobody in this audience can receive marketing messages.", 409, "empty_audience");
-  const max = WA_CAMPAIGN_MAX[conn!.provider as WaProvider];
-  if (count > max) throw new WhatsappError(`A ${conn!.provider === "qr" ? "linked phone" : "connection"} can send a campaign to at most ${max} people. Narrow the audience.`, 409, "too_many_recipients", { count, max });
+  const max = WA_CAMPAIGN_MAX;
+  if (count > max) throw new WhatsappError(`A campaign goes to at most ${max} people. Narrow the audience.`, 409, "too_many_recipients", { count, max });
   const at = l.scheduledAt && l.scheduledAt.getTime() > Date.now() ? l.scheduledAt : new Date();
   const row = await systemDb.wappCampaign.update({ where: { id: c.id }, data: { status: "scheduled", scheduledAt: at, confirmedRecipients: count, launchedByUserId: input.userId, cursor: null, recipients: 0 } });
   const delay = Math.max(0, Math.ceil((at.getTime() - Date.now()) / 1000));
@@ -174,12 +171,12 @@ export async function dispatchCampaign(deps: Pick<WaDeps, "queues">, campaignId:
   const audience = waAudienceSchema.parse(c.audience);
   const rows = await systemDb.$queryRaw<Array<{ id: string }>>(audienceSql(c.storeId, audience, { after: c.cursor, limit: BATCH, firstName: greetsByName(template) }));
   const contacts = rows.length ? await systemDb.wappContact.findMany({ where: { id: { in: rows.map((r) => r.id) } }, orderBy: { id: "asc" } }) : [];
-  const step = conn.provider === "qr" ? QR_MIN_GAP_MS + QR_GAP_JITTER_MS / 2 : Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
+  const step = Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
   // After the messages already made: a batch carries on where the last one's timing ended.
   const last = await systemDb.wappMessage.findFirst({ where: { campaignId: c.id }, orderBy: { sendAfter: "desc" }, select: { sendAfter: true } });
   let t = Math.max(Date.now(), (last?.sendAfter.getTime() ?? 0) + step);
   let made = 0;
-  const cap = c.confirmedRecipients ?? WA_CAMPAIGN_MAX[conn.provider as WaProvider];
+  const cap = c.confirmedRecipients ?? WA_CAMPAIGN_MAX;
   for (const contact of contacts) {
     if (c.recipients + made >= cap) break;
     const phone = normalizePhone(waDecrypt(contact.storeId, "phone", contact.phoneEnc), null);

@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { PROVIDER_INFO } from "@app/shared/whatsapp";
+import { providerLabel } from "@app/shared/whatsapp";
 import { ConfirmDialog } from "@/components/AppUi";
 import { Badge, Panel } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
@@ -10,8 +10,8 @@ import { SettingsForm } from "./SettingsForm";
 import type { WaOverview } from "./types";
 import { CONNECTION_TONE, fmtAgo, useWaAction, waHref } from "./WaUi";
 
-// Settings: the connection (check, reconnect, disconnect), pausing all automation, the store's
-// WhatsApp settings, and Evolution API's notice (its licence asks for one).
+// Settings: the connection (check, connect again, disconnect), pausing all automation, and the
+// store's WhatsApp settings.
 
 export function Settings({ base, overview, reload }: { base: string; overview: WaOverview; reload: () => void }) {
   const conn = overview.connection && overview.connection.status !== "disconnected" ? overview.connection : null;
@@ -32,16 +32,22 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
       <Panel id="wa-connection" title="Connection">
         {!conn ? (
           <div className="space-y-2 text-sm">
-            <p className="text-muted">{overview.connection?.status === "disconnected" ? `Disconnected ${fmtAgo(overview.connection.disconnectedAt)}. The message history stays.` : "WhatsApp isn't connected."}</p>
+            <p className="text-muted">
+              {overview.connection?.reasonCode === "qr_linking_retired"
+                ? overview.connection.reason
+                : overview.connection?.status === "disconnected"
+                  ? `Disconnected ${fmtAgo(overview.connection.disconnectedAt)}. The message history stays.`
+                  : "WhatsApp isn't connected."}
+            </p>
             <Link href={waHref("setup")} className="btn-primary inline-flex">
-              Connect WhatsApp
+              Connect WhatsApp Business
             </Link>
           </div>
         ) : (
           <div className="space-y-3 text-sm">
             <p className="flex flex-wrap items-center gap-2">
               <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>
-              <span>{PROVIDER_INFO[conn.provider].label}</span>
+              <span>{providerLabel(conn.provider)}</span>
             </p>
             <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
               <div>
@@ -66,17 +72,12 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
             {conn.reason && <Alert kind="info">{conn.reason}</Alert>}
             {overview.can.connect ? (
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => void act("check", "check the connection", "/connection/check", "POST", "Checked with WhatsApp.")}>
+                <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => void act("check", "check the connection", "/connection/check", "POST", "Checked with Meta.")}>
                   {busy === "check" ? "Checking…" : "Check again"}
                 </button>
-                {conn.provider === "qr" && (conn.status === "connected" || conn.status === "reconnecting") && (
-                  <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => void act("reconnect", "reconnect", "/connection/reconnect", "POST", "Reconnecting with the saved session.")}>
-                    {busy === "reconnect" ? "Reconnecting…" : "Reconnect"}
-                  </button>
-                )}
                 {(conn.status === "logged_out" || conn.status === "failed") && (
                   <Link href={waHref("setup")} className="btn-primary">
-                    Link again
+                    Connect again
                   </Link>
                 )}
                 <button type="button" className="btn-danger" disabled={!!busy} onClick={() => setConfirmDisconnect(true)}>
@@ -111,9 +112,9 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
       </Panel>
 
       <Panel id="wa-about" title="About this service">
-        <p className="text-sm text-muted">{overview.notice}</p>
-        <p className="mt-2 text-sm text-muted">
-          Instance keys and session data stay on bizinsights&apos; servers, encrypted; this page never receives them. Message texts are kept for {overview.settings.retentionDays} days.
+        <p className="text-sm text-muted">
+          Messages go through Meta&apos;s WhatsApp Business Platform with your WhatsApp Business account&apos;s access, which stays on bizinsights&apos; servers, encrypted; this page never receives it. Message texts are
+          kept for {overview.settings.retentionDays} days.
         </p>
       </Panel>
 
@@ -128,7 +129,7 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
           void act("disconnect", "disconnect WhatsApp", "/connection", "DELETE", "WhatsApp disconnected.").then(() => setConfirmDisconnect(false))
         }
       >
-        <p>{conn?.provider === "qr" ? "Your phone's link to bizinsights is removed (it disappears from Linked devices)." : "bizinsights stops sending through your Cloud API number."} Messages waiting to send are cancelled, automations are paused and running campaigns stop.</p>
+        <p>bizinsights stops sending through your WhatsApp Business number and forgets Meta&apos;s access for it. Messages waiting to send are cancelled, automations are paused and running campaigns stop.</p>
         <p>The message history stays. You can connect again at any time.</p>
       </ConfirmDialog>
       <ConfirmDialog

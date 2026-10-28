@@ -146,7 +146,7 @@ AWS with CDK (no second infrastructure framework was added).
 | DynamoDB | The coordinator table: rate limits, locks, OAuth state, holds and circuits | Tenant settings, automations, idempotency records and message metadata stay in PostgreSQL with row-level security: one tenant-isolated store, joins with orders and customers, and idempotency by unique keys (`sms_message_jobs (store_id, dedupe_key)`, `email_messages (workspace_id, idempotency_key)`, one execution per rule and event) plus conditional updates (`scheduled → sending`, `queued → processing`). A second store of the same facts would need its own tenancy and could disagree with the first. |
 | Secrets Manager / KMS | `insights/<env>/app` secret; tokens AES-256-GCM (`TOKEN_ENCRYPTION_KEYS`, rotatable); email credentials envelope-encrypted (`EMAIL_CREDENTIAL_KEYS`); RDS and SQS encrypted at rest | Existing ([security.md](security.md)). |
 | Amazon SES | Merchant email goes through the merchant's own mailbox (Gmail API, Microsoft Graph, SMTP). Platform mail (sign-in codes, invitations) goes through Resend. | Mail from the merchant's own address and domain reputation, with no per-merchant domain setup at AWS. bizinsights' SES production access was denied on 2026-10-16, so SES can only reach verified addresses today. An SES adapter for merchants would need production access and a verified identity per merchant domain. |
-| AWS End User Messaging Social (WhatsApp) | Not used: WhatsApp runs on Evolution API, which bizinsights hosts on ECS Fargate: a phone linked with a QR code, or Meta's WhatsApp Cloud API through Embedded Signup ([whatsapp.md](whatsapp.md)). | Linking a merchant's WhatsApp Business account to End User Messaging Social puts it inside bizinsights' AWS account (and Meta's conversation charges on bizinsights' AWS bill), which needs a per-merchant linking and billing story. To decide if WhatsApp joins the hub. |
+| AWS End User Messaging Social (WhatsApp) | Not used: WhatsApp runs on Meta's WhatsApp Business Platform (Cloud API) directly, the store connecting through Meta's Embedded Signup and bizinsights calling Meta's Graph API with that business's token ([whatsapp.md](whatsapp.md)). The QR-linked phones on bizinsights' Evolution API service were retired on 2026-10-28. | Linking a merchant's WhatsApp Business account to End User Messaging Social puts it inside bizinsights' AWS account (and Meta's conversation charges on bizinsights' AWS bill), which needs a per-merchant linking and billing story. To decide if WhatsApp joins the hub. |
 | AWS End User Messaging SMS | Used: the platform's account, `SendTextMessage` with a configuration set, events → SNS → SQS | [sms.md](sms.md). Sandbox until the owner's steps in "Going live". |
 | CloudWatch | Logs (redacted), queue-age and DLQ alarms, error lines, SMS holds, and the new `messaging-send-failures` alarm | Alarms email the alarm topic's subscribers. |
 | Nango | Not used any more. It brokered the Meta Ads, AdSense and Google Ads sign-ins from 2026-10-22 to 2026-10-28; bizinsights signs in with them itself again, the connections made then were moved off it that day, and its code is gone ([ads-setup.md](ads-setup.md#leaving-nango)) | Every merchant credential stays with bizinsights, encrypted under its own keys: email sign-in is direct OAuth (Google, Microsoft), the ad platforms likewise, and SMS has no merchant credentials at all. |
@@ -343,8 +343,8 @@ event data 35 days, events and executions 90, messages 180 ([sms.md](sms.md), [e
 alarm (~US$0.40 a month). Per message, unchanged: SMS is AWS's price per part for the country plus
 carrier fees (shown from AWS's events, billed to bizinsights' AWS account, counted against each
 store's budget); email costs nothing per message through the merchant's own mailbox; WhatsApp
-on a linked phone costs nothing per message, and Cloud API conversations are Meta's, billed on the
-merchant's Meta account.
+conversations are Meta's, billed on the merchant's WhatsApp Business account (nothing to
+bizinsights).
 
 ## Setting up the providers
 
@@ -355,8 +355,9 @@ merchant's Meta account.
 - **Email:** [email.md](email.md) sections 5–7: Google (Gmail API, `gmail.send`, verification) and
   Microsoft (Entra app, `Mail.Send`) OAuth clients (`EMAIL_GOOGLE_CLIENT_ID`/`SECRET`,
   `EMAIL_MICROSOFT_CLIENT_ID`/`SECRET`); SMTP needs nothing from the platform.
-- **WhatsApp:** [whatsapp.md](whatsapp.md): the QR way needs nothing; the Cloud API needs the
-  owner's Meta steps ("Owner's steps (Cloud API)").
+- **WhatsApp:** [whatsapp.md](whatsapp.md): Meta must approve bizinsights as a Tech Provider (App
+  Review for the two `whatsapp_*` permissions) before merchants can connect: the owner's Meta steps
+  ("Owner's steps (Meta)").
 - **Event API (external apps):** Settings → Email → Settings → event API keys; the sender's system
   posts to `/api/v1/events` ([email.md](email.md), "API").
 
@@ -380,7 +381,7 @@ The hub adds no environment variables.
 
 - **Alarm `messaging-send-failures`** (25+ refusals in 5 minutes, twice): open the jobs log group,
   search `sms send refused` (its `type` and `reason` are AWS's), `email send failed`
-  (`errorCode`) or `whatsapp send refused by the provider`; the hub's history filtered by *Failed*
+  (`errorCode`) or `whatsapp send refused by the provider` (its `metaCode` is Meta's); the hub's history filtered by *Failed*
   shows which store and automation (WhatsApp's: the WhatsApp Automation page's Messages tab). Common
   causes: an SMS sender not found or not allowed (the store's sender is held, the merchant is
   alerted), AWS throttling (retries absorb it), a mailbox needing sign-in (alert
@@ -438,13 +439,16 @@ signatures, OAuth, SMTP): [sms.md](sms.md#testing), [email.md](email.md#13-tests
 
 ## WhatsApp
 
-WhatsApp Automation runs on Evolution API, with its own automations, templates, campaigns and
-message history on its page (`/dashboard/whatsapp-automation`, [whatsapp.md](whatsapp.md)); the hub
-shows it as a card. To join the hub, `packages/core/src/automations/whatsapp.ts` would become an
-adapter like the other two over its public functions (connection, automations, message history),
-and its triggers and statuses would get their columns in `@app/shared/automations`. On the Cloud
-API, Meta's rules then apply in step 3: only approved templates outside the 24-hour customer
-service window.
+WhatsApp Automation runs on Meta's WhatsApp Business Platform only (since 2026-10-28), with its own
+automations, templates, campaigns and message history on its page (`/dashboard/whatsapp-automation`,
+[whatsapp.md](whatsapp.md)); the hub shows it as a card. Its leg sends through Meta's Graph API
+(`POST /{phone-number-id}/messages`) with the business's token: a template Meta approved to start a
+conversation, free text only inside the 24-hour customer service window, every message's status
+from Meta's signed webhook. While no merchant can connect (Meta hasn't approved bizinsights as a
+Tech Provider yet), automations have no WhatsApp leg to send on. To join the hub,
+`packages/core/src/automations/whatsapp.ts` would become an adapter like the other two over its
+public functions (connection, automations, message history), and its triggers and statuses would
+get their columns in `@app/shared/automations`; Meta's rules then apply in step 3.
 
 ## Limits and what isn't done
 
