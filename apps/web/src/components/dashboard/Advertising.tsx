@@ -416,7 +416,7 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
       {sameMoney ? (
         <ChartCard
           title={ads && sense ? "Ad spend and estimated ad earnings per day" : ads ? "Ad spend per day" : "Estimated ad earnings per day"}
-          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; estimated earnings are what AdSense expects to pay you, not money paid out yet." : ""}${gaps}`}
+          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; earnings are AdSense's estimate until it finalizes each month, in the first days of the next." : ""}${gaps}`}
           testid="ads-money-chart"
         >
           {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `Ad spend and earnings per day, ${span}`)}
@@ -497,7 +497,7 @@ function Comparison({ ov }: { ov: Overview }) {
     <div className="card mt-4 min-w-0" data-testid="ads-comparison">
       <h3 className="font-semibold">By platform</h3>
       <p className="text-xs text-muted">
-        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is AdSense&apos;s estimate of what it will pay you, not money paid out yet.
+        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is what AdSense says the ads on your site earned, its estimate until it finalizes the month.
       </p>
       <div className="-mx-1 mt-3 overflow-x-auto">
         <table className="w-full min-w-[46rem] text-sm">

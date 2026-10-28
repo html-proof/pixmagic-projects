@@ -439,7 +439,8 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
  * daily re-check reads the whole month before again during days 1–10 (recheckDays in
  * adConnections/sync.ts). So each account's figures are final up to `finalThrough`, worked out from
  * its last sync that worked (adsenseFinalThrough), and `final` says whether every day of the figures
- * given (`current`, else `partial`) is.
+ * given (`current`, else `partial`) is. A closed account is never read again, so its stored days stay
+ * as final as they were then; its days since are zeros, final, and never hold the others' figures back.
  */
 export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { connectionId: string }>, ask: AdsAsk) {
   if (!conns.length) return null;
@@ -452,10 +453,15 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
     const last = lastUnsplit.get(r.connectionId);
     if (!last || r.day > last) lastUnsplit.set(r.connectionId, r.day);
   }
+  // A closed account isn't read again, and earns nothing after the days it stored (accountCoverage
+  // counts the days since as the zeros they are): only those stored days can be AdSense's estimate.
+  const closedThrough = new Map(conns.filter((c) => isClosedAdAccount(c) && c.syncedThrough).map((c) => [c.id, c.syncedThrough!]));
   const accounts = conns.map((c) => {
     const view = accountView(c, (c.currency ?? currency) === currency, ask);
     const unsplitThrough = lastUnsplit.get(c.id) ?? null;
     const coverage = unsplitThrough ? coverageAfter(view.coverage, unsplitThrough) : view.coverage;
+    const read = adsenseFinalThrough(c.lastSyncedAt ? adToday(c, c.lastSyncedAt) : null);
+    const stopped = closedThrough.get(c.id);
     return {
       ...view,
       provider: "adsense" as const,
@@ -464,8 +470,11 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
       unsplitThrough,
       coverage,
       coversRange: coversDays(coverage, ask.range),
-      /** Its figures are final, not AdSense's estimate, up to this day (its own); null: none is yet. */
-      finalThrough: adsenseFinalThrough(c.lastSyncedAt ? adToday(c, c.lastSyncedAt) : null),
+      /**
+       * Its figures are final, not AdSense's estimate, up to this day (its own); null: none is yet. A
+       * closed account whose stored days were all final by its last sync is final through its today.
+       */
+      finalThrough: read && stopped && read >= stopped ? view.today : read,
     };
   });
   const counted = accounts.filter((a) => a.counted);
@@ -478,15 +487,20 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
   const now = f.compared?.current.totals ?? null;
   const before = f.compared?.previous.totals ?? null;
   const change = (k: "earnings" | "pageViews" | "clicks" | "pageRpm") => (now && before ? delta(now[k], before[k]) : null);
-  const finals = counted.map((a) => a.finalThrough);
-  const finalThrough = finals.length && finals.every((x): x is string => x !== null) ? finals.reduce((a, b) => (a < b ? a : b)) : null;
-  // The last day of the figures given: the range's, else the part every account covers.
+  // The days of the figures given: the range's, else the part every account covers.
+  const givenFrom = f.current ? ask.range.from : (f.partial?.from ?? null);
   const givenTo = f.current ? ask.range.to : (f.partial?.to ?? null);
+  // For figures that start after a closed account's stored days, its part is all zeros: final through its today.
+  const finals = counted.map((a) => {
+    const stopped = closedThrough.get(a.id);
+    return stopped && givenFrom && stopped < givenFrom ? a.today : a.finalThrough;
+  });
+  const finalThrough = finals.length && finals.every((x): x is string => x !== null) ? finals.reduce((a, b) => (a < b ? a : b)) : null;
   return {
     currency,
     accounts,
     ...f,
-    /** The day every counted account's figures are final up to (null: one has none final yet). */
+    /** The day every counted account's figures for these dates are final up to (null: one has none final yet). */
     finalThrough,
     /** Every day of the figures given (`current`, else `partial`, which `soFar` is) is final: "Final", else "Estimated". */
     final: givenTo !== null && finalThrough !== null && givenTo <= finalThrough,

@@ -401,6 +401,25 @@ describe("AdSense figures", () => {
       expect(adsenseFigures([fresh], [], september())!.accounts[0]!.finalThrough).toBeNull();
     });
 
+    it("never lets a closed account, which isn't read again, hold later months back: its days since it closed are final zeros", () => {
+      const live = sense({ id: "live", historyFrom: "2026-07-01" });
+      // Closed on 20 Aug, last read that day: its August days stay AdSense's estimate, July's are final.
+      const closed = sense({ id: "old", accountId: "pub-2", status: "unavailable", errorCode: "account_closed", accountStatus: "closed", lastSyncedAt: new Date("2026-08-20T11:00:00Z"), historyFrom: "2026-07-01", syncedThrough: "2026-08-20" });
+      const rows = [...eachDay("2026-07-01", TODAY).map((x) => day(live, "", x, 1)), ...eachDay("2026-07-01", "2026-08-20").map((x) => day(closed, "", x, 1))];
+      // September: the closed account's part is zeros, so the live account's finalized September is final.
+      const sept = adsenseFigures([live, closed], rows, september())!;
+      expect(sept).toMatchObject({ current: { earnings: 30 }, finalThrough: "2026-09-30", final: true });
+      expect(sept.accounts.map((a) => a.finalThrough)).toEqual(["2026-09-30", "2026-07-31"]);
+      // August holds its estimated days: estimated.
+      const august = week({ range: { from: "2026-08-01", to: "2026-08-31" }, previous: { from: "2026-07-01", to: "2026-07-31", until: "23:59:59" } });
+      expect(adsenseFigures([live, closed], rows, august)!).toMatchObject({ current: { earnings: 51 }, finalThrough: "2026-07-31", final: false });
+      // Closed once every day it stored was final (read again on 15 Sep, after August was finalized): final through its today.
+      const settled = sense({ id: "old", accountId: "pub-2", status: "unavailable", errorCode: "account_closed", accountStatus: "closed", lastSyncedAt: new Date("2026-09-15T11:00:00Z"), historyFrom: "2026-07-01", syncedThrough: "2026-08-31" });
+      const alone = adsenseFigures([settled], eachDay("2026-07-01", "2026-08-31").map((x) => day(settled, "", x, 1)), august)!;
+      expect(alone).toMatchObject({ current: { earnings: 31 }, finalThrough: TODAY, final: true });
+      expect(alone.accounts[0]!.finalThrough).toBe(TODAY);
+    });
+
     it("calls the month before final only once the daily re-check has read it all again (recheckDays)", () => {
       const s = { provider: "adsense", timezone: "UTC" };
       // Through the 10th the re-check reaches back to the first of the month before, which isn't final yet...

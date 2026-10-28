@@ -2,6 +2,7 @@
  * AdSense Management API: what the site earns from Google ads shown on it, per site per day.
  */
 import {
+  ADSENSE_REPORT_DAY_METRICS,
   ADSENSE_REPORT_DIMENSIONS,
   ADSENSE_REPORT_METRICS,
   adsenseAccountId,
@@ -175,11 +176,11 @@ export const ADSENSE_REPORT_MAX_ROWS = 1000;
 /**
  * The AdSense report for one account and range, by site, country, device type or ad unit, on the
  * account's own calendar, with ad requests, their coverage and Active View viewability besides the
- * stored days' measures (ADSENSE_REPORT_METRICS; read here only, never stored). `sites` (DOMAIN_CODE
- * values) limits it to the store's sites, an ad unit's row included: its earnings on those sites only;
- * empty means every site. `truncated`: AdSense matched more rows than were read (only the biggest
- * earners are listed). `totals`: the whole report's, the rows left out of a cut-off one included
- * (AdSense's totals row).
+ * stored days' measures (ADSENSE_REPORT_METRICS; read here only, never stored, and null when AdSense
+ * won't give them with the level). `sites` (DOMAIN_CODE values) limits it to the store's sites, an ad
+ * unit's row included: its earnings on those sites only; empty means every site. `truncated`: AdSense
+ * matched more rows than were read (only the biggest earners are listed). `totals`: the whole
+ * report's, the rows left out of a cut-off one included (AdSense's totals row).
  */
 export async function adsenseReport(
   c: AdsenseConfig,
@@ -199,19 +200,32 @@ export async function adsenseReport(
   // The store has sites, none of them a host AdSense could match: nothing of the account's is theirs.
   // Never every site instead, which would show other sites' earnings as the store's.
   if (sites.length && !hosts.length) return { rows: [], currency: null, truncated: false, totals: adsenseReportTotals({}, []) };
-  const q = new URLSearchParams([
-    ["dateRange", "CUSTOM"],
-    ...dateParams("startDate", since),
-    ...dateParams("endDate", until),
-    ...ADSENSE_REPORT_DIMENSIONS[level].map((d): [string, string] => ["dimensions", d]),
-    ...ADSENSE_REPORT_METRICS.map((m): [string, string] => ["metrics", m]),
-    // Biggest earners first, so a cut-off report keeps the rows that matter.
-    ["orderBy", "-ESTIMATED_EARNINGS"],
-    ["reportingTimeZone", "ACCOUNT_TIME_ZONE"],
-    ["limit", String(ADSENSE_REPORT_MAX_ROWS)],
-  ]);
-  if (hosts.length) q.append("filters", hosts.map((h) => `DOMAIN_CODE==${h}`).join(","));
-  const report = await adsenseGet<AdsenseReport & { totalMatchedRows?: string }>(c, accessToken, `accounts/${pub}/reports:generate`, q);
+  const query = (metrics: readonly string[]) => {
+    const q = new URLSearchParams([
+      ["dateRange", "CUSTOM"],
+      ...dateParams("startDate", since),
+      ...dateParams("endDate", until),
+      ...ADSENSE_REPORT_DIMENSIONS[level].map((d): [string, string] => ["dimensions", d]),
+      ...metrics.map((m): [string, string] => ["metrics", m]),
+      // Biggest earners first, so a cut-off report keeps the rows that matter.
+      ["orderBy", "-ESTIMATED_EARNINGS"],
+      ["reportingTimeZone", "ACCOUNT_TIME_ZONE"],
+      ["limit", String(ADSENSE_REPORT_MAX_ROWS)],
+    ]);
+    if (hosts.length) q.append("filters", hosts.map((h) => `DOMAIN_CODE==${h}`).join(","));
+    return q;
+  };
+  const read = (metrics: readonly string[]) => adsenseGet<AdsenseReport & { totalMatchedRows?: string }>(c, accessToken, `accounts/${pub}/reports:generate`, query(metrics));
+  let report: Awaited<ReturnType<typeof read>>;
+  try {
+    report = await read(ADSENSE_REPORT_METRICS);
+  } catch (err) {
+    // Google's reference doesn't say which dimensions ad requests, coverage and viewability go with: if
+    // AdSense refuses them with this level, the report is read without them, and they are unknown
+    // ("—"), never 0.
+    if (!(err instanceof AdsApiError) || err.status !== 400) throw err;
+    report = await read(ADSENSE_REPORT_DAY_METRICS);
+  }
   // "Reports producing more rows than the requested limit will be truncated", told by totalMatchedRows.
   const matched = Number(report.totalMatchedRows ?? 0);
   const { rows, currency } = adsenseReportRows(level, report);

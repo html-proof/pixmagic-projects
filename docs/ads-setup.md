@@ -579,10 +579,14 @@ estimated earnings, page views, ad impressions (`IMPRESSIONS`: one for each ad r
 each ad shown, which is `INDIVIDUAL_AD_IMPRESSIONS` and isn't read) and clicks, plus `AD_REQUESTS`,
 `AD_REQUESTS_COVERAGE` and `ACTIVE_VIEW_VIEWABILITY` (`ADSENSE_REPORT_METRICS` in `packages/shared/src/ads.ts`), by site,
 country, device type or ad unit (`AD_UNIT_ID` with `AD_UNIT_NAME`), limited to the store's chosen sites (an ad unit's
-row is its earnings on those sites). Asked of AdSense when the page opens and cached 10 minutes (ranges including
-today) or an hour; the three extra metrics and the ad units are never stored (`adsense_daily` keeps site, day,
-earnings, page views, impressions and clicks only). Several rows of one id added up: ad requests add, coverage is
-worked back through the requests, viewability stays unknown (the impressions Active View measured aren't read).
+row is its earnings on those sites). Asked of AdSense when the page opens and cached in the coordinator for 10 minutes
+(ranges including today) or an hour (`ads-sreport:<connection>:…`; DynamoDB deletes an expired item lazily, within a
+few days, and reads refuse it once expired; disconnecting doesn't delete these keys); the three extra metrics and the
+ad units are never stored with the days (`adsense_daily` keeps site, day, earnings, page views, impressions and clicks
+only). Google's reference doesn't say which dimensions the three extra metrics combine with, so when AdSense answers a
+level with them with a 400, `adsenseReport` asks again without them (`ADSENSE_REPORT_DAY_METRICS`) and they show as
+"—". Several rows of one id added up: ad requests add, coverage is worked back through the requests, viewability stays
+unknown (the impressions Active View measured aren't read).
 
 **Estimated or final**: AdSense finalizes a month's earnings in the first days of the next, and the daily re-check
 reads the whole month before again during days 1-10. `adsenseFigures` (`packages/core/src/reports/ads.ts`) gives
@@ -590,7 +594,10 @@ each account `finalThrough` from its last sync that worked (`adsenseFinalThrough
 that ended before the month before that sync's day, and that month too once the sync was after the 10th (the
 account's own days). The module's `finalThrough` is the earliest of the counted accounts', and `final` says whether
 every day of the figures given is on or before it; the pages say **Final** or **Estimated** from it. An account whose
-syncs stopped stays final only as far as it was when it last synced. The live report is final when its last day is on
+syncs stopped stays final only as far as it was when it last synced. A closed account is never read again, but its
+days after the ones it stored are zeros (`accountCoverage`): it is final through its today once every stored day was
+final by its last sync, and for figures that start after its stored days it never holds the others back. The live
+report is final when its last day is on
 or before `adsenseFinalThrough` of the day it was read. No payment is read: Final means AdSense's finalized earnings,
 not money paid.
 

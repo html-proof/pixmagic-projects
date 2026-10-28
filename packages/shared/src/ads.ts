@@ -1432,13 +1432,25 @@ export const ADSENSE_REPORT_DIMENSIONS: Record<AdsenseReportLevel, string[]> = {
 };
 
 /**
- * The metrics the report asks for (https://developers.google.com/adsense/management/reference/rest/v2/Metric).
- * Earnings are estimated until AdSense finalizes the month (adsenseFinalThrough). AD_REQUESTS: ad
- * units that asked for ads (one request can show none, one or several); AD_REQUESTS_COVERAGE: the
- * share of them that got an ad back; ACTIVE_VIEW_VIEWABILITY: the share of the impressions Active View
- * could measure that were viewable. The last two are ratios (0 to 1).
+ * The stored days' measures (the sync reads the same), which every report has. Earnings are estimated
+ * until AdSense finalizes the month (adsenseFinalThrough).
  */
-export const ADSENSE_REPORT_METRICS = ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS", "AD_REQUESTS", "AD_REQUESTS_COVERAGE", "ACTIVE_VIEW_VIEWABILITY"] as const;
+export const ADSENSE_REPORT_DAY_METRICS = ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"] as const;
+
+/**
+ * The three metrics only the report reads, never stored. AD_REQUESTS: ad units that asked for ads (one
+ * request can show none, one or several); AD_REQUESTS_COVERAGE: the share of them that got an ad back;
+ * ACTIVE_VIEW_VIEWABILITY: the share of the impressions Active View could measure that were viewable.
+ * The last two are ratios (0 to 1). Google's reference doesn't say which dimensions they go with, so a
+ * report AdSense refuses with them is read again without them (adsenseReport in packages/core).
+ */
+export const ADSENSE_REPORT_EXTRA_METRICS = ["AD_REQUESTS", "AD_REQUESTS_COVERAGE", "ACTIVE_VIEW_VIEWABILITY"] as const;
+
+/**
+ * The metrics the report asks for (https://developers.google.com/adsense/management/reference/rest/v2/Metric):
+ * the stored days' measures, then the three only it reads.
+ */
+export const ADSENSE_REPORT_METRICS = [...ADSENSE_REPORT_DAY_METRICS, ...ADSENSE_REPORT_EXTRA_METRICS] as const;
 
 /** A report's figures: the stored days' measures and the three only the live report gives (null: AdSense didn't send that column, or there is nothing to work it out on). */
 export interface AdsenseReportTotals extends AdsenseTotals {

@@ -176,6 +176,29 @@ describe("the AdSense report", () => {
     expect(f.calls[1]!.url.searchParams.getAll("metrics")).toEqual(q.getAll("metrics"));
   });
 
+  it("a level AdSense won't give ad requests, coverage or viewability for is read again without them: those unknown, never 0", async () => {
+    const f = fake((u) => {
+      if (u.searchParams.getAll("metrics").includes("AD_REQUESTS")) return json({ error: { code: 400, message: "Invalid metric/dimension combination.", status: "INVALID_ARGUMENT" } }, 400);
+      // As AdSense answers the stored days' measures alone: their columns only.
+      const r = report("country");
+      return json({ ...r, headers: r.headers.slice(0, 6), rows: r.rows.map((x) => ({ cells: x.cells.slice(0, 6) })) });
+    });
+    const r = await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "country", "2026-10-01", "2026-10-07", ["shop.example.com"]);
+    expect(r.rows).toEqual([{ id: "AU", name: "Australia", earnings: 2, pageViews: 100, impressions: 150, clicks: 1, pageRpm: 20, perClick: 2, ctr: 1 / 150, adRequests: null, coverage: null, viewability: null }]);
+    expect(r.totals).toMatchObject({ earnings: 2, adRequests: null, coverage: null, viewability: null });
+    expect(f.calls.map((x) => x.url.searchParams.getAll("metrics"))).toEqual([
+      ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS", "AD_REQUESTS", "AD_REQUESTS_COVERAGE", "ACTIVE_VIEW_VIEWABILITY"],
+      ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"],
+    ]);
+    // The second asks the same of AdSense otherwise: the level, the dates, the store's sites.
+    expect(f.calls[1]!.url.searchParams.getAll("dimensions")).toEqual(["COUNTRY_CODE", "COUNTRY_NAME"]);
+    expect(f.calls[1]!.url.searchParams.getAll("filters")).toEqual(["DOMAIN_CODE==shop.example.com"]);
+    // Anything else AdSense refuses isn't asked twice.
+    const lost = fake(() => json({ error: { code: 403, message: "The caller does not have permission", status: "PERMISSION_DENIED" } }, 403));
+    await expect(adsenseReport(adsense(lost.fetchImpl), "AT", "pub-1", "country", "2026-10-01", "2026-10-07")).rejects.toBeInstanceOf(AdsPermissionError);
+    expect(lost.calls).toHaveLength(1);
+  });
+
   it("a store whose sites AdSense can't match gets nothing, never every site's earnings; a cut-off report says so", async () => {
     const f = fake(() => json(report("site", "1500")));
     expect(await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["bad,host", "a\\b"])).toEqual({

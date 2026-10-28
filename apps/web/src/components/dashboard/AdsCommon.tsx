@@ -73,12 +73,18 @@ const neverRead = (acc: Pick<AccountState, "coverage" | "unsplitThrough" | "last
  * A sync someone asked for after the first one (Refresh, Sync all now, turning the account back on) is
  * on its way: what Settings shows as "Synchronizing" (connectionState in lib/adConnections), told the
  * same way (syncRunning: asked for, not finished, and not so long ago that it was lost). Never for an
- * account waiting for a reconnect, for which nothing is queued. Every account listed here is shown on
- * the dashboard (the ones hidden from it aren't read), so it counts as enabled.
+ * account waiting for a reconnect, for which nothing is queued, nor for a working one's first sync
+ * (still "Fetching history"); for one whose syncs fail, whether or not one ever worked. Every account
+ * listed here is shown on the dashboard (the ones hidden from it aren't read), so it counts as enabled.
  */
 export function refreshing(acc: Pick<AdAccount, "status" | "lastSyncedAt" | "syncRequestedAt">, now = Date.now()): boolean {
-  return acc.status !== "reconnect" && !!acc.lastSyncedAt && syncRunning({ enabled: true, syncRequestedAt: acc.syncRequestedAt ?? null }, now);
+  if (acc.status === "reconnect" || (acc.status === "active" && !acc.lastSyncedAt)) return false;
+  return syncRunning({ enabled: true, syncRequestedAt: acc.syncRequestedAt ?? null }, now);
 }
+
+/** "Synchronizing", with when the figures shown were last synced when one ever was. */
+const synchronizingWords = (acc: Pick<AdAccount, "lastSyncedAt">) =>
+  acc.lastSyncedAt ? `${AD_STATE.synchronizing.label} · last synced ${fmtRelative(acc.lastSyncedAt)}` : AD_STATE.synchronizing.label;
 
 /**
  * Accounts left out of the totals (another currency), those still being read for the first time,
@@ -179,7 +185,7 @@ export function AccountStatus({
     acc.status === "reconnect"
       ? ["Needs reconnecting", "text-danger"]
       : refreshing(acc)
-        ? [`${AD_STATE.synchronizing.label} · last synced ${fmtRelative(acc.lastSyncedAt!)}`, "text-muted"]
+        ? [synchronizingWords(acc), "text-muted"]
         : acc.status === "permission"
           ? ["No access to this account", "text-danger"]
           : acc.status === "unavailable"
@@ -224,7 +230,7 @@ export function AdStatusNotes({ accounts, manage }: { accounts: AdAccount[]; man
           <span className="inline-flex items-center gap-2" data-testid="ads-refreshing">
             <Spinner />
             <span>
-              {AD_STATE.synchronizing.label} {updating.map((a) => `${nameOf(a)}, last synced ${fmtRelative(a.lastSyncedAt!)}`).join("; ")}. Until the new figures land, the
+              {AD_STATE.synchronizing.label} {updating.map((a) => (a.lastSyncedAt ? `${nameOf(a)}, last synced ${fmtRelative(a.lastSyncedAt)}` : nameOf(a))).join("; ")}. Until the new figures land, the
               ones here are from that sync; this page updates by itself.
             </span>
           </span>

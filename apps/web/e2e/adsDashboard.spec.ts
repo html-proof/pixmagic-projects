@@ -173,6 +173,10 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   });
 
   await page.goto(`/advertising/adsense?preset=custom&from=${day(-7)}&to=${day(-1)}`);
+  // The last seven days always reach past the last month AdSense has finalized: estimated.
+  const glance = page.getByTestId("module-d-adsense-glance").getByTestId("adsense-final");
+  await expect(glance).toHaveAttribute("data-final", "false");
+  await expect(glance).toHaveText("Estimated");
   const table = page.getByTestId("adsense-report-table");
   await expect(table).toContainText("Whole account");
   await expect(table).toContainText("Australia");
@@ -188,4 +192,33 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   await expect(table).toContainText("90%");
   await expect(table).toContainText("60%");
   expect(asked).toEqual(expect.arrayContaining(["country", "platform", "ad_unit"]));
+});
+
+test("the AdSense page says a refresh someone asked for is on its way, and offers to try again an account whose syncs fail", async ({ page }) => {
+  const email = uniqueEmail("ads-refresh");
+  await signUp(page, email);
+  const ws = await createWorkspace(page, "AdSense Refresh Co");
+  const storeId = await insertStore(db, ws, `ads-refresh-${Date.now()}.myshopify.com`);
+  const at = { workspaceId: ws, storeId, provider: "adsense" as const };
+  // Synced an hour ago, and someone just pressed Sync data now: its figures are that sync's meanwhile.
+  await insertAdConnection(db, { ...at, accountId: "pub-81", accountName: "Shop site", historyFrom: day(-89), syncedThrough: day(0), lastSyncedAt: new Date(Date.now() - 60 * 60_000), syncRequestedAt: new Date() });
+  // Its syncs fail, none ever worked, and the last one was tried an hour ago.
+  const failing = await insertAdConnection(db, { ...at, accountId: "pub-82", accountName: "Blog site", status: "error", errorCode: "temporary" });
+  await db.query(`UPDATE ad_connections SET last_sync_attempt_at = (now() at time zone 'utc') - interval '1 hour' WHERE id = $1`, [failing]);
+  // AdSense itself can't run in e2e, and its live report isn't what this is about.
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/adsense/report?*`, (route) => route.fulfill({ status: 404, json: { error: "Not found" } }));
+
+  await page.goto(`/advertising/adsense?preset=custom&from=${day(-7)}&to=${day(-1)}`);
+  await expect(page.getByTestId("ads-refreshing")).toContainText("Synchronizing Shop site (Google AdSense), last synced 1 hour ago");
+  const status = (name: string) => page.getByTestId("module-d-adsense-accounts").locator("li").filter({ hasText: name }).getByTestId("ad-account-status");
+  await expect(status("Shop site")).toHaveText("Synchronizing · last synced 1 hour ago");
+  await expect(status("Blog site")).toHaveText("Sync problem · last tried 1 hour ago");
+  // The owner may manage integrations: Sync data now in Settings tries it again.
+  await expect(page.getByTestId("ads-try-again").getByRole("link", { name: "Try again in Settings" })).toHaveAttribute("href", "/settings/ads");
+
+  // Someone pressed Sync data now for it too: the page, looking again every 5 s while a refresh runs, says so by itself.
+  await db.query(`UPDATE ad_connections SET sync_requested_at = now() at time zone 'utc' WHERE id = $1`, [failing]);
+  await expect(status("Blog site")).toHaveText("Synchronizing", { timeout: 15_000 });
+  await expect(page.getByTestId("ads-status-notes")).toContainText("Nothing could be read from it yet. Trying again now.");
+  await expect(page.getByTestId("ads-try-again")).toHaveCount(0);
 });

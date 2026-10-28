@@ -111,8 +111,9 @@ const REPORT_LEVELS: Array<{ id: Extract<AdsenseReportLevel, "country" | "platfo
 /**
  * One AdSense account split by country, device type or ad unit, asked of AdSense for exactly the
  * dates picked (GET .../ads/adsense/report), with AdSense's ad requests, coverage and Active View
- * viewability beside the earnings (read for this report only, never stored). Read-only, and only for
- * members who may see the other live reports ("View campaigns" in Team & Access).
+ * viewability beside the earnings (read for this report only and cached briefly, never stored with the
+ * days; "—" when AdSense won't give them for the split). Read-only, and only for members who may see
+ * the other live reports ("View campaigns" in Team & Access).
  */
 function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; accounts: AdAccount[]; currency: string }) {
   const { workspace } = useApp();
