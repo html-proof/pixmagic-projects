@@ -6,12 +6,12 @@ import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * WhatsApp Automation's machine endpoints (docs/whatsapp.md, "Webhooks and security"):
- *  - Meta's webhook, the one source of statuses, customers' messages and template reviews (GET: the
- *    subscription handshake with bizinsights' verify token; POST: deliveries signed with
- *    bizinsights' Meta app secret, X-Hub-Signature-256, checked before anything is read).
- *  - Evolution API's webhook (POST /webhooks/whatsapp/evolution/:instance), until release 2 removes
- *    it: only what a QR-linked phone's instance not yet deleted still posts, customers' replies and
- *    delivery reports, each with an HS256 JWT made from the instance's own key (core whatsapp/webhook.ts).
+ *  - Evolution API's webhook, one address per instance (POST /webhooks/whatsapp/evolution/:instance):
+ *    each delivery carries an HS256 JWT made from the instance's own key (core whatsapp/webhook.ts
+ *    checks it, the body and the instance). Connection events apply at once; message events are
+ *    stored and applied by the worker.
+ *  - Meta's webhook for Cloud API numbers (GET: the subscription handshake with bizinsights' verify
+ *    token; POST: deliveries signed with bizinsights' Meta app secret, X-Hub-Signature-256).
  * Machine endpoints answer `{ "error": code }` only. Both are outside the CSRF check and the global
  * per-IP limit (/webhooks/*): they have their own checks and limits.
  */

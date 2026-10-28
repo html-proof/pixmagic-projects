@@ -69,18 +69,6 @@ function localDelivery(sent: FakeSent) {
   };
 }
 
-/**
- * Meta's Graph API at another address when LOCAL_GRAPH_URL says so: the e2e runs' stand-in
- * (apps/web/e2e/meta-graph-stub.mjs), so the local server never reaches Meta while a test connects
- * WhatsApp. Only this local entry reads it; the AWS entry has nothing like it.
- */
-function toGraphStub(input: Parameters<typeof fetch>[0]): Parameters<typeof fetch>[0] {
-  const stub = process.env.LOCAL_GRAPH_URL?.replace(/\/+$/, "");
-  if (!stub || (typeof input !== "string" && !(input instanceof URL))) return input;
-  const url = new URL(String(input));
-  return url.hostname === "graph.facebook.com" ? `${stub}${url.pathname}${url.search}` : input;
-}
-
 export function localDeps(): { jobs: WorkerDeps; queues: LocalQueues } {
   const mailpit = process.env.MAILPIT_URL;
   const queues = localQueues((queue, msg) => consume(queue, msg, jobs));
@@ -99,7 +87,7 @@ export function localDeps(): { jobs: WorkerDeps; queues: LocalQueues } {
     payloads: memoryBlobs(),
     mailer: mailpit ? mailpitMailer(mailpit) : logMailer,
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
-    fetchImpl: withTimeout((input, init) => fetch(toGraphStub(input), init)),
+    fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,
     sms,
   };

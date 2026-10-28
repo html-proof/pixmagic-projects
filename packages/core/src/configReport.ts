@@ -32,10 +32,9 @@ export interface ConfigReport {
   /** `configured`: the platform's own app is set up here, so its Connect button signs in. */
   ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean> };
   /**
-   * WhatsApp Automation: connecting through Meta's WhatsApp Business Platform (Embedded Signup; the
-   * settings it still lacks, empty once it can be offered), the verify token of Meta's webhook, and
-   * bizinsights' Evolution API service, which is only retiring what is left of QR linking until
-   * release 2 removes it (docs/whatsapp.md, "Removing Evolution").
+   * WhatsApp Automation: linking a phone through bizinsights' Evolution API service (on once its
+   * URL and key are set), connecting through Meta's Cloud API (Embedded Signup; the settings it still
+   * lacks, empty once it can be offered), and the verify token of Meta's webhook.
    */
   whatsapp: {
     evolution: boolean;
@@ -133,18 +132,20 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
   ];
 }
 
-/** What bizinsights' Evolution API service still lacks here (empty: the QR cleanup can reach it). */
+/** What bizinsights' Evolution API service still lacks here (empty: phones can be linked). */
 export function evolutionNeeds(vars: Vars = process.env): string[] {
   return [!vars.EVOLUTION_API_URL ? "EVOLUTION_API_URL" : null, !vars.EVOLUTION_API_KEY ? "EVOLUTION_API_KEY" : null].filter((n): n is string => n !== null);
 }
 
 /**
- * What connecting through Meta still lacks, by setting name: Meta's app (its own, or the Meta Ads
- * app's), the Embedded Signup configuration, that app's secret and the webhook verify token. Empty
- * when it can be offered (whatsapp/cloudApi.ts cloudApiMissing asks for the same).
+ * What connecting through Meta's Cloud API still lacks, by setting name: the Evolution API service it
+ * sends through, Meta's app (its own, or the Meta Ads app's), the Embedded Signup configuration,
+ * that app's secret and the webhook verify token. Empty when it can be offered (whatsapp/overview.ts
+ * cloudApiMissing asks for the same).
  */
 export function embeddedSignupNeeds(vars: Vars = process.env): string[] {
   return [
+    ...evolutionNeeds(vars),
     !vars.WHATSAPP_APP_ID && !vars.META_APP_ID ? "WHATSAPP_APP_ID" : null,
     !vars.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
     !waSecretSet(vars) ? "WHATSAPP_APP_SECRET" : null,

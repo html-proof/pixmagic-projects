@@ -1,9 +1,9 @@
 /**
  * WhatsApp Automation's rules (docs/whatsapp.md), shared by the API, the worker and the dashboard
- * (`@app/shared/whatsapp`): how a store connects (Meta's official WhatsApp Business Platform, the
- * Cloud API, through Embedded Signup: the only way since 2026-10-28), the states a connection and a
- * message go through, message templates and their variables, who may receive what (consent),
- * automation triggers and conditions, campaigns, and the four-step setup.
+ * (`@app/shared/whatsapp`): how a store connects (a WhatsApp phone linked by QR code or pairing
+ * code, through bizinsights' Evolution API service; or Meta's official Cloud API), the states a
+ * connection and a message go through, message templates and their variables, who may receive
+ * what (consent), automation triggers and conditions, campaigns, and the four-step setup.
  *
  * Pure: no I/O, no node: imports, safe in the browser. Phone numbers and sending hours, shared
  * with SMS, are in ./messaging.
@@ -15,66 +15,71 @@ import { z } from "./zod";
 // ---------------------------------------------------------------------------
 
 /**
- * `cloud_api`: Meta's WhatsApp Business Platform, connected with Meta's Embedded Signup; bizinsights
- * sends through Meta's Graph API with the business's own token. The only way to connect.
+ * `qr`: a WhatsApp or WhatsApp Business app on the merchant's phone, linked as a device (WhatsApp
+ * Web's protocol, through Evolution API's Baileys integration). `cloud_api`: Meta's WhatsApp
+ * Business Platform, connected with Meta's Embedded Signup (Evolution API's WHATSAPP-BUSINESS
+ * integration sends through it).
  */
-export const WA_PROVIDERS = ["cloud_api"] as const;
+export const WA_PROVIDERS = ["qr", "cloud_api"] as const;
 export type WaProvider = (typeof WA_PROVIDERS)[number];
-
-/**
- * A phone linked with a QR code (WhatsApp Web's protocol, through bizinsights' Evolution API service)
- * until 2026-10-28, when the owner retired it. Such a connection row is kept for its history only:
- * nothing sends through it, and it is shown as retired with WA_QR_RETIRED as its reason.
- */
-export const WA_RETIRED_PROVIDER = "qr";
-/** The provider a connection row may still name (WaProvider, or the retired QR link). */
-export type WaConnectionProvider = WaProvider | typeof WA_RETIRED_PROVIDER;
-/** The reason (wapp_connections.status_reason, wapp_messages.reason) of everything ended when QR linking was retired. */
-export const WA_QR_RETIRED = "qr_linking_retired";
 
 export interface ProviderInfo {
   label: string;
-  /** One line for the setup. */
+  /** One line for a picker. */
   short: string;
+  /** Meta's official business messaging (true), or WhatsApp Web's linked-device protocol (false). */
+  official: boolean;
   /** What the merchant gets, in plain words. */
   good: string[];
-  /** What the merchant must know before connecting. Shown in full before Meta's window opens. */
+  /** What the merchant must know before choosing it. Shown in full before anything is created. */
   limits: string[];
 }
 
 export const PROVIDER_INFO: Record<WaProvider, ProviderInfo> = {
   cloud_api: {
-    label: "WhatsApp Business Platform (Meta)",
-    short: "Meta's official way for businesses to message customers on WhatsApp.",
+    label: "Official WhatsApp Business Platform (Cloud API)",
+    short: "Meta's official API for business messaging: approved templates, a verified business, higher volumes.",
+    official: true,
     good: [
       "Meta's official way for businesses to message customers, with message templates Meta reviews",
-      "Delivery and read reports come from Meta itself",
-      "Your number lives on Meta's servers: no phone has to stay online",
+      "Built for higher volumes, with delivery reports from Meta",
+      "Your number stays on Meta's servers: no phone needs to stay online",
     ],
     limits: [
-      "You sign in with Facebook and pick or create your business portfolio and WhatsApp Business account; Meta may ask to verify your business",
-      "A message that starts a conversation must use a template Meta approved; free text only answers a customer who wrote in the last 24 hours",
-      "Meta charges for some conversations, billed to your WhatsApp Business account",
-      "A number used here can't also be used in the WhatsApp app on a phone at the same time",
+      "You sign in with Meta and pick or create a WhatsApp Business account; Meta may ask to verify your business",
+      "Messages that start a conversation must use a template Meta approved; Meta charges per conversation",
+      "A number used here can't also be used in the WhatsApp app on a phone",
+    ],
+  },
+  qr: {
+    label: "Link a WhatsApp phone with a QR code",
+    short: "Link the WhatsApp or WhatsApp Business app on your phone, like WhatsApp Web. Quick to set up.",
+    official: false,
+    good: [
+      "Ready in a minute: scan a code with the phone that has your business's WhatsApp",
+      "Messages come from your existing number and appear in the app on your phone",
+      "No Meta business verification or template review",
+    ],
+    limits: [
+      "This uses WhatsApp Web's linked-device connection, not Meta's official business API. WhatsApp's terms limit automated and bulk messages from the app, and WhatsApp may restrict or ban a number it sees sending unwanted messages",
+      "Keep the phone connected to the internet at least every 14 days, or WhatsApp logs the link out",
+      "bizinsights paces messages and caps how many go out a day to protect your number; it is not built for large broadcasts",
+      "Delivery and read reports depend on WhatsApp sending them: some messages may only ever show as sent",
     ],
   },
 };
-
-/** The way a connection row connects, in words (a retired QR link included, for its history). */
-export const providerLabel = (p: string | null | undefined): string => (p === "cloud_api" ? PROVIDER_INFO.cloud_api.label : p === WA_RETIRED_PROVIDER ? "Phone linked with a QR code (retired)" : "Not connected");
 
 // ---------------------------------------------------------------------------
 // Connection states (what the provider last said, never assumed)
 // ---------------------------------------------------------------------------
 
 /**
- * connected: Meta accepted the business's token for the number, and last answered for it
- * logged_out: Meta's access for bizinsights ended (the token expired, or the business removed it):
- *   the merchant connects again
- * failed: setting the number up didn't finish
- * disconnected: the merchant disconnected it (bizinsights forgot the token), or QR linking was
- *   retired (reason WA_QR_RETIRED); history is kept
- * pairing and reconnecting were a QR-linked phone's states; old rows may still name them.
+ * pairing: created, waiting for the phone to scan the code (or type the pairing code)
+ * connected: the provider reports the connection open
+ * reconnecting: the provider lost the connection and is reconnecting by itself
+ * logged_out: the phone (or WhatsApp) ended the link; it must be paired again
+ * failed: pairing gave up (the codes ran out) or the provider refused the connection
+ * disconnected: the merchant disconnected it (the provider's instance is deleted); history is kept
  */
 export const WA_CONNECTION_STATUSES = ["pairing", "connected", "reconnecting", "logged_out", "failed", "disconnected"] as const;
 export type WaConnectionStatus = (typeof WA_CONNECTION_STATUSES)[number];
@@ -83,13 +88,65 @@ export const WA_CONNECTION_LABEL: Record<WaConnectionStatus, string> = {
   pairing: "Waiting for your phone",
   connected: "Connected",
   reconnecting: "Reconnecting",
-  logged_out: "Needs reconnecting",
+  logged_out: "Logged out",
   failed: "Not connected",
   disconnected: "Disconnected",
 };
 
 /** Whether a connection in this state can send now. */
 export const waCanSend = (status: string | null | undefined) => status === "connected";
+
+/**
+ * Evolution API's connection state (`open`, `connecting`, `close`, and `refused` once its QR codes
+ * run out) as a connection status. `connecting` on a connection that was connected before is the
+ * provider reconnecting; before that, it is waiting for the phone.
+ */
+export function connectionStatusFromProvider(state: string | null | undefined, previous: WaConnectionStatus | null): WaConnectionStatus | null {
+  switch (state) {
+    case "open":
+      return "connected";
+    case "connecting":
+      return previous === "connected" || previous === "reconnecting" ? "reconnecting" : "pairing";
+    case "refused":
+      return "failed";
+    case "close":
+      return previous === "connected" || previous === "reconnecting" ? "reconnecting" : previous === "pairing" ? "failed" : previous;
+    default:
+      return null;
+  }
+}
+
+/**
+ * WhatsApp's (Baileys') reasons a connection closed, as Evolution API reports them in
+ * `statusReason`. 401 (logged out) and 403 (forbidden) end the link: it must be paired again.
+ */
+export function closeReasonLabel(code: number | null | undefined): string | null {
+  switch (code) {
+    case 401:
+      return "The phone logged this link out (or removed it under Linked devices).";
+    case 403:
+      return "WhatsApp refused this number's connection. Open WhatsApp on the phone for details.";
+    case 408:
+      return "The connection timed out.";
+    case 411:
+      return "WhatsApp asked for the link to be set up again.";
+    case 428:
+      return "WhatsApp closed the connection.";
+    case 440:
+      return "This link was replaced by another session of the same account.";
+    case 500:
+      return "The session's keys stopped working; pair the phone again.";
+    case 503:
+      return "WhatsApp was unavailable.";
+    case 515:
+      return "WhatsApp asked for a restart.";
+    default:
+      return null;
+  }
+}
+
+/** Close reasons after which reconnecting by itself can't work. */
+export const isTerminalCloseReason = (code: number | null | undefined) => code === 401 || code === 403 || code === 500;
 
 // ---------------------------------------------------------------------------
 // Messages and their states
@@ -124,15 +181,12 @@ const STATUS_RANK: Partial<Record<WaMessageStatus, number>> = { queued: 0, sendi
 export const isFinalStatus = (s: string) => s === "read" || s === "failed" || s === "cancelled" || s === "skipped" || s === "received";
 
 /**
- * The provider's word for a message's state (Meta's accepted, sent, delivered, read, failed,
- * upper-cased; and, until the last QR-linked phone's reports are in, Baileys' PENDING, SERVER_ACK,
- * DELIVERY_ACK, PLAYED, ERROR) as a status, or null when it isn't one bizinsights knows (it is then
- * recorded but changes nothing).
+ * The provider's word for a message's state (Evolution API: Baileys' ERROR, PENDING, SERVER_ACK,
+ * DELIVERY_ACK, READ, PLAYED; Meta's sent, delivered, read, failed upper-cased) as a status, or
+ * null when it isn't one bizinsights knows (it is then recorded but changes nothing).
  */
 export function messageStatusFromProvider(status: string | null | undefined): WaMessageStatus | null {
   switch ((status ?? "").toUpperCase()) {
-    case "ACCEPTED":
-    case "HELD_FOR_QUALITY_ASSESSMENT":
     case "PENDING":
       return "accepted";
     case "SERVER_ACK":
@@ -210,10 +264,6 @@ export const WA_SKIP_REASONS = [
   "unknown_contact",
   "manual_cancel",
   "qr_linking_retired",
-  "outside_window",
-  "undeliverable",
-  "rate_limited",
-  "provider_unavailable",
 ] as const;
 export type WaSkipReason = (typeof WA_SKIP_REASONS)[number];
 
@@ -246,11 +296,7 @@ export const WA_SKIP_LABEL: Record<WaSkipReason, string> = {
   gave_up: "Couldn't be sent after several tries",
   unknown_contact: "The number isn't one of the store's customers",
   manual_cancel: "Cancelled by the store",
-  qr_linking_retired: "WhatsApp's QR-code link was retired before it was sent",
-  outside_window: "The customer last wrote more than 24 hours ago: only a template Meta approved can be sent",
-  undeliverable: "WhatsApp couldn't deliver it to this number (it may not be on WhatsApp)",
-  rate_limited: "Meta asked bizinsights to send more slowly; it goes shortly",
-  provider_unavailable: "Meta's WhatsApp service wasn't answering; it goes once it does",
+  qr_linking_retired: "Cancelled on 28 October, while QR-code linking was switched off (it wasn't sent)",
 };
 
 export const waSkipLabel = (reason: string | null | undefined): string | null =>
@@ -265,12 +311,14 @@ export const WA_MAX_SEND_ATTEMPTS = WA_RETRY_DELAYS_S.length + 1;
 // ---------------------------------------------------------------------------
 
 /**
- * A number's messages go out at most this many a second (Meta allows 80 a second per number by
- * default; bizinsights stays well under it).
+ * A linked phone (QR) gets at most one message every QR_MIN_GAP_MS, plus a random extra pause, so
+ * a burst looks like a person typing rather than a broadcast. The Cloud API is paced per second.
  */
+export const QR_MIN_GAP_MS = 4_000;
+export const QR_GAP_JITTER_MS = 4_000;
 export const CLOUD_SENDS_PER_SECOND = 20;
-/** Messages a store may start in a day by default, and the most it may choose. */
-export const WA_DAILY_LIMIT = { default: 1000, max: 100_000 };
+/** Messages a store may start in a day by default, and the most it may choose, per provider. */
+export const WA_DAILY_LIMIT: Record<WaProvider, { default: number; max: number }> = { qr: { default: 200, max: 1000 }, cloud_api: { default: 1000, max: 100_000 } };
 /** Business-started messages one customer may get in a day by default (a reply to their message doesn't count). */
 export const WA_PER_CUSTOMER_DAILY = { default: 3, max: 10 };
 
@@ -756,8 +804,8 @@ export type WaCampaignInput = z.output<typeof waCampaignSchema>;
 export const WA_CAMPAIGN_STATUSES = ["draft", "scheduled", "sending", "completed", "cancelled"] as const;
 export type WaCampaignStatus = (typeof WA_CAMPAIGN_STATUSES)[number];
 
-/** The most recipients one campaign may have. */
-export const WA_CAMPAIGN_MAX = 100_000;
+/** The most recipients one campaign may have, per provider: a linked phone isn't for broadcasts. */
+export const WA_CAMPAIGN_MAX: Record<WaProvider, number> = { qr: 250, cloud_api: 100_000 };
 
 export const waLaunchSchema = z.object({
   /** The recipient count the merchant saw and confirmed: launching refuses if the audience changed since. */
@@ -841,7 +889,7 @@ export const waSendSchema = z
 export type WaSendInput = z.output<typeof waSendSchema>;
 
 // ---------------------------------------------------------------------------
-// Meta's Embedded Signup window (the way to connect), as the browser hears it
+// Meta's Embedded Signup window (the Cloud API way to connect), as the browser hears it
 // ---------------------------------------------------------------------------
 
 export type EmbeddedSignupEvent =
@@ -898,22 +946,15 @@ export function signupStepLabel(step: string | null | undefined): string | null 
 export const WA_SETUP_STEPS = ["connect", "authorize", "configure", "test"] as const;
 export type WaSetupStep = (typeof WA_SETUP_STEPS)[number];
 
-/**
- * Connect is Meta's Embedded Signup (sign in, pick the business, its WhatsApp Business account and
- * number); Authorize is what bizinsights then checks with Meta (the permissions granted for that
- * account, the number in it, its webhooks, its registration). One press does both; each is done
- * only on Meta's word.
- */
 export const WA_SETUP_STEP_INFO: Record<WaSetupStep, { label: string; help: string }> = {
-  connect: { label: "Connect", help: "Connect your WhatsApp Business account with Meta." },
-  authorize: { label: "Authorize", help: "bizinsights checks with Meta that it may send for your number." },
+  connect: { label: "Connect", help: "Choose how bizinsights connects to your WhatsApp." },
+  authorize: { label: "Authorize", help: "Scan the code with your phone, or sign in with Meta." },
   configure: { label: "Configure", help: "Your business name, how customers agree to messages, sending hours." },
   test: { label: "Test and activate", help: "Send a test to your own verified number, then switch automations on." },
 };
 
 export interface WaSetupFacts {
-  /** The live connection's provider (callers pass a live connection only: a retired QR link isn't one). */
-  provider: WaConnectionProvider | null;
+  provider: WaProvider | null;
   status: WaConnectionStatus | null;
   configuredAt: Date | string | null;
   orderUpdates: WaOrderUpdateBasis;
@@ -953,3 +994,10 @@ export function waAutomationState(f: { connected: boolean; paused: boolean; setu
   if (f.blocked) return "needs_attention";
   return f.active ? "active" : "idle";
 }
+
+/**
+ * The notice Evolution API's licence asks for (its LICENSE, "Usage Notification Requirement"):
+ * shown on the WhatsApp settings and in the docs.
+ */
+export const EVOLUTION_NOTICE =
+  "WhatsApp connections run on Evolution API (https://github.com/evolution-foundation/evolution-api), open-source software by Evolution Foundation, licensed under the Apache License 2.0 with additional conditions.";

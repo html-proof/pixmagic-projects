@@ -3,9 +3,7 @@
  * the person may send (the route), the store's connection is up, the number is a valid
  * international one, the reason they give allows it (a customer who wrote in the last 24 hours, an
  * order update under the store's consent choice, marketing only with marketing consent), the
- * customer hasn't opted out, the store isn't sending too fast, and Meta would deliver it: free text
- * (or an attachment) only to a customer who wrote in the last 24 hours, a template Meta approved
- * otherwise. "The customer asked to be
+ * customer hasn't opted out, and the store isn't sending too fast. "The customer asked to be
  * messaged on WhatsApp" is recorded as consent from the store, with who said it.
  *
  * The same idempotency key sends once: a double press, or a retried request, finds the first.
@@ -14,7 +12,6 @@ import { systemDb, type Store, type WappMessage } from "@app/db";
 import {
   normalizePhone,
   renderWaText,
-  variablesIn,
   WaMissingValueError,
   waSendSchema,
   WA_ATTACHMENT_MAX_BYTES,
@@ -76,26 +73,19 @@ export async function sendManualMessage(deps: Pick<WaDeps, "queues" | "coord" | 
 
   let text = d.text;
   let templateId: string | null = null;
-  let meta: MessagePayload["meta"] = null;
-  if (d.templateId && d.attachment) throw new WhatsappError("A template goes as Meta approved it: attach a file to a message you write yourself.", 400, "template_with_attachment");
   if (d.templateId) {
     const t = await systemDb.wappTemplate.findFirst({ where: { id: d.templateId, storeId: input.store.id } });
     if (!t) throw new WhatsappError("Pick one of this store's templates.", 400, "template_not_found");
     const usable = templateUsable(t, conn);
     if (!usable.ok) throw new WhatsappError(`That template can't be sent: ${usable.reason}`, 409, "template_unavailable");
     if (t.category === "marketing" && info.category !== "marketing") throw new WhatsappError("That's a marketing template: choose \"Marketing\" as the reason.", 400, "category_mismatch");
-    const values: Record<string, string | undefined> = { store_name: businessNameOf(input.store, settings), customer_first_name: contactFirstName(contact) ?? undefined };
     try {
-      text = renderWaText(t.body, values);
+      text = renderWaText(t.body, { store_name: businessNameOf(input.store, settings), customer_first_name: contactFirstName(contact) ?? undefined });
     } catch (e) {
       if (e instanceof WaMissingValueError) throw new WhatsappError(`This template needs ${e.missing.map((v) => `{{${v}}}`).join(", ")}, which bizinsights doesn't have here. Write the message yourself instead.`, 400, "missing_values");
       throw e;
     }
     templateId = t.id;
-    if (t.metaName) meta = { name: t.metaName, language: t.metaLanguage ?? "en", params: variablesIn(t.body).map((v) => values[v] ?? "") };
-  }
-  if (!meta && !(contact.lastInboundAt && Date.now() - contact.lastInboundAt.getTime() < 24 * 3600_000)) {
-    throw new WhatsappError("This customer hasn't written to you in the last 24 hours, so Meta only delivers a message template it approved. Pick an approved template instead.", 409, "outside_window");
   }
 
   let attachment: MessagePayload["attachment"] = null;
@@ -115,7 +105,7 @@ export async function sendManualMessage(deps: Pick<WaDeps, "queues" | "coord" | 
     category: info.category,
     phone,
     contactId: contact.id,
-    payload: { text, attachment, meta },
+    payload: { text, attachment },
     templateId,
     idempotencyKey: `manual:${d.idempotencyKey}`,
     createdByUserId: input.userId,
