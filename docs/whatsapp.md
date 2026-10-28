@@ -11,9 +11,9 @@ owner's decision ("Official only"). A store connects with Meta's **Embedded Sign
 then sends through Meta's Graph API with that business's own token. There is one way to connect.
 
 Before that (2026-10-26 to 2026-10-28) a store could also link a WhatsApp phone with a QR code through
-**Evolution API**, an open-source gateway bizinsights hosted on ECS. QR linking is retired: nothing
-creates, pairs or sends through Evolution any more, and the phones that were linked are disconnected
-by a one-time cleanup ([Removing Evolution](#removing-evolution)). Earlier designs (2026-10-10, and
+**Evolution API**, an open-source gateway bizinsights hosted on ECS. QR linking is retired and the
+service is removed: release 1 disconnected the linked phones with a one-time cleanup, release 2 took
+the service, its database and its webhook away ([Removing Evolution](#removing-evolution)). Earlier designs (2026-10-10, and
 Meta + Nango on 2026-10-25) left tables that are erase-only ([The old tables](#the-old-tables)).
 
 ## Where Meta's approval stands
@@ -55,16 +55,16 @@ Meta ──webhook (X-Hub-Signature-256)──> https://bizinsights.io/api/webho
 - **Attachments** (3 MB at most) wait in the payloads bucket (`wapp-media/<message>`) until they are
   sent, then go to Meta's media endpoint and are named in the message by Meta's media id.
 - **Nothing of bizinsights' own runs for WhatsApp** beyond the functions, the queue and the cron:
-  no container, no gateway. (Evolution's ECS service still runs in release 1, for the cleanup only.)
+  no container, no gateway.
 
 ### Cost
 
 Nothing per message for bizinsights. Meta charges the **merchant's** WhatsApp Business account for
 the conversations Meta bills (marketing and utility templates; service replies inside the 24-hour
-window are free), on the account's own payment method. Removing Evolution (release 2) saves
-**~US$19 a month** (on-demand in Sydney, priced 2026-10-25, before GST):
+window are free), on the account's own payment method. Removing Evolution (release 2) saved
+**~US$19 a month** (on-demand in Sydney, priced 2026-10-25, before GST; the two secrets go in release 3):
 
-| Part removed in release 2 | Month |
+| Part removed | Month |
 | --- | --- |
 | Fargate task, 0.5 vCPU + 1 GB on Graviton, always on | US$17.29 |
 | Route 53 private hosted zone (Cloud Map's namespace) + one registered instance | ~US$0.60 |
@@ -90,7 +90,7 @@ window are free), on the account's own payment method. Removing Evolution (relea
 | Campaigns | `whatsapp/campaigns.ts` |
 | Settings, the test number, Pause all automation | `whatsapp/settings.ts` |
 | The 15-minute sweep, retention | `whatsapp/sweep.ts` |
-| Retiring QR linking (release 1 only) | `whatsapp/retireQr.ts`; Evolution's client `whatsapp/evolution.ts`, its webhook `whatsapp/webhook.ts` |
+| What is left of QR linking (until release 3): a QR row release 1 didn't reach, Evolution's stored events | `whatsapp/retireQr.ts` |
 | Privacy (export, customers/redact, key rotation), erasing a store, the old tables | `whatsapp/privacy.ts`, `whatsapp/purge.ts`, `whatsapp/legacy.ts` |
 | Merchant API | `apps/api/src/routes/whatsapp.ts`; machine endpoints: `whatsappWebhook.ts` |
 | Jobs | `apps/worker/src/handlers/integrations.ts` (`runWhatsappJob`), `apps/worker/src/index.ts` (queue, sweep) |
@@ -250,11 +250,9 @@ template reviews:
   template review by Meta's template id. A report for a number disconnected here (its phone number id
   was let go) belongs to nobody and is skipped. Statuses only move forward.
 
-**Evolution → bizinsights** (`/api/webhooks/whatsapp/evolution/:instance`) stays in release 1 only,
-receive-only: until an instance is deleted, its customers' messages (a STOP above all) and delivery
-reports are still taken, with the instance's HS256 JWT as before; connection events change nothing.
-Removing the route in this release would drop a customer's STOP sent to a linked phone between the
-deploy and the cleanup's tick (Evolution doesn't retry a 404). Release 2 removes it.
+**Evolution → bizinsights** (`/api/webhooks/whatsapp/evolution/:instance`) went with the service in
+release 2 (a post there gets 404). Release 1 kept it receive-only so that a customer's STOP to a
+linked phone was kept until that phone's instance was deleted.
 
 **Tenancy and secrets.**
 
@@ -317,7 +315,7 @@ records why it didn't send when it didn't, never triggers another, and starts in
 ## Data and retention
 
 Tables (`wapp_*`): connections, settings, templates, contacts, consent events, suppressions,
-messages, message events, webhook events (a QR-linked phone's, until release 2), automations,
+messages, message events, webhook events (a QR-linked phone's, set aside since release 2), automations,
 automation runs, campaigns. Message texts are kept for the store's retention (default 90 days,
 7–365), then only the record; records 365 days and automation runs 90 days (what the privacy policy
 says); attachments until sent (and Meta keeps an uploaded file 30 days). `customers/redact` erases a
@@ -332,7 +330,6 @@ secret, the business's token included.
 | `WHATSAPP_CONFIG_ID` | `apps/aws/src/settings.ts` | Embedded Signup's configuration on the Meta app "Insights" 971575545351940: `2228218088074576` |
 | `WHATSAPP_APP_ID` (empty: `META_APP_ID`), `WHATSAPP_API_VERSION` (`v26.0`) | `apps/aws/src/settings.ts` | WhatsApp runs on the Meta Ads app |
 | `META_APP_SECRET` (or `WHATSAPP_APP_SECRET` on an app of its own), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Secrets Manager `insights/<env>/app` | Code exchange, `appsecret_proof`, webhook signatures, the handshake |
-| `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_*` | CDK and `insights/<env>/evolution-api` | Release 1 only: the cleanup's access to Evolution |
 
 Nothing is pasted by a merchant. The Deploy run's config check prints "Cloud API off (needs …)" while
 a Meta setting is missing; the page then offers nothing to connect and says why.
@@ -383,7 +380,7 @@ tick reaches it), and a message queued for it is cancelled with the reason when 
 an instance is deleted, a customer's STOP to that phone is still applied (the Evolution webhook route
 stays, receive-only). Infrastructure is unchanged.
 
-**Release 2 (`claude/whatsapp-remove-evolution`, stacked on release 1).** Merge it only after release
+**Release 2 (`claude/whatsapp-remove-evolution`, stacked on release 1: this one).** Merge it only after release
 1's Deploy succeeded and the cron logged its cleanup done (`whatsapp qr linking: what was left of it
 retired` no longer appears and the last one said `left: 0`, or `whatsapp:retire-qr:done` is set in
 the coordinator table). It removes the service:
@@ -432,18 +429,24 @@ Each release ships through `main` → CI → Deploy like any other; none needs a
   minute after repeated failures or Meta's rate limit (`whatsapp circuit opened` in the logs).
 - **A template doesn't send**: its Meta status on the Templates tab (pending, rejected, paused,
   disabled); 132xxx failures say which.
-- **Release 1's cleanup**: `whatsapp qr link retired` per store, `evolution instance deleted` per
-  instance, `whatsapp qr linking: what was left of it retired` with what is left.
+- **What is left of QR linking**: `whatsapp qr link retired` per store release 1 didn't reach, and
+  `whatsapp qr linking: what was left of it retired` with what was done (rows retired, instances
+  forgotten, stored events set aside).
 
 ## Deployment, migration and rollback
 
 1. **No migration**: the business's token reuses `instance_token_enc`, the new reasons are strings
    (`status_reason`, `reason`), and `schema.prisma` changed only in its comments.
 2. Release 1 deploys like any other. Its first cron tick retires the QR links (above).
-3. **Rollback** (Deploy to AWS moves the functions back): the previous release reads the same tables.
-   A QR link already retired stays disconnected (the merchant would link the phone again in that
-   release); a Cloud API connection made in release 1 has no Evolution instance, which the previous
-   release needs to send, so it shows as not connected there until it is connected again.
+3. Release 2 deploys like any other: the Data stack (keeping its four exports), the App stack (no
+   Evolution wiring), then the WhatsApp stack (its custom resource drops the database; the cleanup
+   deletes the service). Its checks are "Removing Evolution" step by step.
+4. **Rollback** (Deploy to AWS moves the functions back): the previous release reads the same tables.
+   A QR link already retired stays disconnected (the merchant would link the phone again in release
+   1's predecessor); a Cloud API connection made since release 1 has no Evolution instance, which that
+   predecessor needs to send, so it shows as not connected there until it is connected again. After
+   release 2, rolling the functions back to release 1 is harmless: its cleanup finds nothing to do,
+   and its Evolution calls fail and are retried, logged.
 
 ## The old tables
 
@@ -462,7 +465,7 @@ their models and `legacy.ts`.
 
 ```bash
 pnpm --filter @app/shared test
-pnpm --filter @app/core exec vitest run test/whatsappCloudApi.test.ts test/whatsappEvolution.test.ts
+pnpm --filter @app/core exec vitest run test/whatsappCloudApi.test.ts
 ```
 
 ```bash
@@ -471,8 +474,8 @@ TEST_PG_PORT=5501 TEST_PG_PASSWORD=app TEST_DB=wacloud_test pnpm --filter @app/w
 ```
 
 Meta's Graph API is `test-support/cloudApiFake.ts`: it checks what Meta checks (the token in the
-header, its `appsecret_proof`, the token's app and permissions) and signs its webhooks as Meta does;
-Evolution (for the cleanup) is `test-support/evolutionFake.ts`. Nothing leaves the machine. The API
+header, its `appsecret_proof`, the token's app and permissions) and signs its webhooks as Meta does.
+Nothing leaves the machine. The API
 test covers Embedded Signup (connected only after every check; another app's token, a missing
 permission, a number outside the account, an expired code; Meta's app not set up), Meta's webhook
 (signature, duplicate deliveries, accepted → sent → delivered → read, failed with Meta's code, an
@@ -480,11 +483,12 @@ uncertain send settled by its reference), the test number and the test's real st
 the 24-hour window, templates, attachments by media id, uncertain sends, retries, Meta's rate limit
 and the circuit, an access Meta ended → reconnect), STOP and START, automations and campaigns as
 approved templates, tenant isolation (including Meta's reports), viewers, a shared link, disconnecting,
-and a QR-linked phone shown retired, its STOP kept and retired on connecting. The worker test covers
-the queue (duplicate deliveries, retries, the circuit), the sweep (uncertain sends, checks with Meta,
-token renewal and expiry, 48 hours down, retention) and the QR cleanup (instances logged out and
-deleted, connections disconnected with the reason, queued messages cancelled, Evolution down,
-idempotent second run).
+and a QR-linked phone shown retired, without a webhook, and retired on connecting. The worker test
+covers the queue (duplicate deliveries, retries, the circuit), the sweep (uncertain sends, checks with
+Meta, token renewal and expiry, 48 hours down, retention) and what is left of QR linking (a row
+release 1 didn't reach retired with the reason, instances forgotten, stored events set aside,
+idempotent second run). The CDK test checks the WhatsApp stack holds no service and imports nothing,
+and that the Data stack still exports what the stack's previous version imported, by the same names.
 
 In a real browser: `apps/web/e2e/whatsapp.spec.ts`, with Meta's JavaScript SDK stubbed in the page and
 `apps/web/e2e/meta-graph-stub.mjs` as the Graph API (the local server sends Meta's calls to it,
