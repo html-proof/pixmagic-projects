@@ -74,7 +74,12 @@ module.exports = {
           "Yes only if they did: for example they ticked a WhatsApp box on your Meta or Google Ads lead form. bizinsights records it as their consent, with Where they agreed. No: the message goes only if bizinsights already has their consent.",
       },
       { key: "consent_note", label: "Where they agreed", helpText: 'Kept with their consent, for example: Meta lead form "Spring sale", WhatsApp checkbox.' },
-      { key: "unique_key", label: "Unique key", helpText: "Map the lead's or order's ID: messages with the same key are sent once. Empty: the same Zap, number, template and values are sent once a day." },
+      {
+        key: "unique_key",
+        label: "Unique key",
+        required: true,
+        helpText: "Map the lead's or order's ID. This template goes once per key, however often the Zap runs for it (a replayed task, a copied Zap, Zapier connected again).",
+      },
     ],
     perform: async (z, bundle) => {
       const d = bundle.inputData;

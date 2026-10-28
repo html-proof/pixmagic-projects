@@ -12,7 +12,7 @@
  * one Meta approved: a Zap doesn't know whether the customer wrote in the last 24 hours).
  */
 import { systemDb, type WappTemplate, type ZapierGrant } from "@app/db";
-import { allows, localDay, normalizePhone, renderWaText, sha256Hex, variablesIn, WaMissingValueError, waSkipLabel, WA_CATEGORY_INFO, type WaTemplateCategory } from "@app/shared";
+import { allows, normalizePhone, renderWaText, sha256Hex, variablesIn, WaMissingValueError, waSkipLabel, WA_CATEGORY_INFO, type WaTemplateCategory } from "@app/shared";
 import { ZAPIER_SCOPE_INFO, ZAPIER_WA_SENDS_PER_MINUTE, ZAPIER_WA_VALUE_MAX, zapierFillable, zapierWaValue, zapierWhatsappSendSchema } from "@app/shared/zapier";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
@@ -105,12 +105,10 @@ export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">,
   if (!usable.ok) throw new ZapierError(`That template can't be sent: ${usable.reason}`, 409, "template_unavailable");
   const category = t.category as WaTemplateCategory;
 
-  // The same purpose sends once: the Zap's own key (a lead's id), or else the same Zap, number,
-  // template and values on the same day of the store (Zapier replaying a step, a trigger that fired twice).
+  // The same purpose sends once: this template with the Zap's key (a lead's or order's id), per store,
+  // so a replayed task, a copied Zap or Zapier connected again (a new grant) never sends it twice.
   const valuesIn = Object.fromEntries(Object.entries(d.values).map(([k, v]) => [k, zapierWaValue(v)]));
-  const key = d.unique_key
-    ? `zapier:${grant.id}:k:${sha256Hex(d.unique_key)}`
-    : `zapier:${grant.id}:a:${sha256Hex(JSON.stringify([d.zap_id ?? "", phone.e164, t.id, valuesIn, localDay(now, store.timezone)]))}`;
+  const key = `zapier:k:${sha256Hex(JSON.stringify([t.id, d.unique_key]))}`;
   const existing = await systemDb.wappMessage.findUnique({ where: { storeId_idempotencyKey: { storeId: store.id, idempotencyKey: key } } });
   if (existing) return answer(existing, t, { duplicate: true, consentRecorded: false });
 

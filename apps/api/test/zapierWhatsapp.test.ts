@@ -118,7 +118,10 @@ async function zapier(headers: Record<string, string>, ws: string, storeId: stri
 }
 
 const zget = (t: string, url: string) => ctx.app.inject({ method: "GET", url, headers: { authorization: `Bearer ${t}` } });
-const zsend = (t: string, payload: Record<string, unknown>) => ctx.app.inject({ method: "POST", url: "/zapier/whatsapp/messages", headers: { authorization: `Bearer ${t}` }, payload });
+let keys = 0;
+/** The action as Zapier posts it; a fresh Unique key unless the test gives one. */
+const zsend = (t: string, payload: Record<string, unknown>) =>
+  ctx.app.inject({ method: "POST", url: "/zapier/whatsapp/messages", headers: { authorization: `Bearer ${t}` }, payload: { unique_key: `lead-${++keys}`, ...payload } });
 
 describe("allowing Zapier to send WhatsApp messages (the consent page)", () => {
   it("is offered to owners and admins only, unticked unless chosen, and kept on the connection", async () => {
@@ -206,10 +209,28 @@ describe("Send WhatsApp Template Message", () => {
     await drain();
     expect(meta.sends).toHaveLength(1);
 
+    // Zapier connected again (a new grant), or by another owner: the same key still finds the first message.
+    const second = await signIn(ctx, "zw-admin2", "admin2@zapwa.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: second.user.id, role: "admin" } });
+    for (const tok of [await zapier(o.headers, o.ws, o.store.id), await zapier(second.headers, o.ws, o.store.id)]) {
+      expect(ok(await zsend(tok, { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-77" }, customer_agreed: true, unique_key: "lead-1" }))).toMatchObject({ id: message.id, duplicate: true });
+    }
+    await drain();
+    expect(meta.sends).toHaveLength(1);
+
     // Consent stands now: the next message to that customer needs no "agreed" from the Zap.
     ok(await zsend(t, { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-78" } }), 201);
     await drain();
     expect(meta.sends.at(-1)!.template!.params).toEqual(["Sam", "Green Leaf", "Q-78"]);
+
+    // Another template with the same lead's key (a follow-up Zap) is another message.
+    const followUp = await approvedTemplate(o, { name: "Follow up", category: "transactional", body: "Still thinking about it, {{customer_first_name}}? {{store_name}} is here to help." });
+    expect(ok(await zsend(t, { template_id: followUp.id, phone: LEAD, unique_key: "lead-1" }), 201).duplicate).toBe(false);
+
+    // Without a key nothing goes: the action needs one.
+    const noKey = await ctx.app.inject({ method: "POST", url: "/zapier/whatsapp/messages", headers: { authorization: `Bearer ${t}` }, payload: { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-79" }, unique_key: " " } });
+    expect(noKey.statusCode).toBe(400);
+    expect(noKey.json().message).toContain("Unique key");
   });
 
   it("keeps WhatsApp's rules: STOP, marketing consent, Pause all automation, the store's own templates, the member's permission", async () => {

@@ -166,6 +166,8 @@ describe("the action: Send WhatsApp Template Message", () => {
       ["value_order_number", true],
     ]);
     expect(fieldsFor[0].helpText).toContain("your quote {{order_number}} is ready");
+    // The send-once key is required: Zapier doesn't give an action the trigger item's id.
+    expect(App.creates.send_whatsapp_template.operation.inputFields.find((f) => f.key === "unique_key")).toMatchObject({ required: true });
   });
 
   it("posts the message with the mapped values, the consent and the Zap's id, and answers what was queued", async () => {

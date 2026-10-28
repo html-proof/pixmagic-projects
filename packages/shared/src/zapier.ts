@@ -159,8 +159,11 @@ export const zapierWhatsappSendSchema = z.object({
   /** The store says this customer agreed to WhatsApp messages from it: recorded as their consent, with the note. */
   customer_agreed: z.preprocess((v) => yes(v), z.boolean()),
   consent_note: z.preprocess(blankToUndefined, z.string().trim().max(200).optional()),
-  /** Messages with the same key go once (a lead's id). Without one: the same Zap, number, template and values on the same day go once. */
-  unique_key: z.preprocess(blankToUndefined, z.string().trim().max(200).optional()),
+  /**
+   * The lead's or order's id: the same template with the same key goes once per store, whichever Zap or
+   * Zapier connection sends it (a replayed task, a Zap copied, Zapier connected again).
+   */
+  unique_key: z.preprocess(blankToUndefined, z.string({ error: "Map the lead's or order's ID into Unique key: the same template with the same key goes once." }).trim().min(1).max(200)),
   zap_id: z.preprocess((v) => (typeof v === "number" ? String(v) : blankToUndefined(v)), z.string().max(40).optional()),
 });
 export type ZapierWhatsappSendInput = z.infer<typeof zapierWhatsappSendSchema>;

@@ -202,9 +202,13 @@ for its variables; bizinsights queues it on the store's own WhatsApp ([whatsapp.
   agreement even under "Customers told at checkout", which covers the store's own customers. A
   customer who replied STOP: 409 `opted_out` (only their START undoes it). Marketing templates need
   marketing switched on and the customer's marketing yes.
-- **Once per key**: Unique key (map the lead's or order's id) sends the message once; without one, the
-  same Zap, number, template and values on the same store day go once. A repeat answers the first
-  message with `duplicate: true`.
+- **Once per key**: Unique key (required: map the lead's or order's id; Zapier doesn't give an action
+  the trigger item's id) makes a template go once per key **per store**, whichever Zap or connection
+  sends it: a replayed task, a copied Zap, Zapier connected again or by another owner (a new grant)
+  all find the first message (`duplicate: true`). Another template with the same key (a follow-up
+  Zap) is another message. Nothing compares a Zap with bizinsights' own WhatsApp automations: an
+  automation on "order paid" and a Zap on the same order both send (the customer's daily limit still
+  applies), so use one or the other for an event.
 - **WhatsApp's limits**: counted in the store's daily limit and the customer's daily limit, kept to
   the sending hours (a lead at 2 am gets it when the hours open), held by Pause all automation, paced
   per number, Meta's own limits and the circuit breaker. On top, 60 a minute per store from Zapier
@@ -327,8 +331,9 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
   currencies, the Settings card and Disconnect.
 - `apps/api/test/zapierWhatsapp.test.ts`: the scope on the consent page (owners and admins only,
   unticked by default, unknown scopes refused), the approved-template list, a lead who agreed sent a
-  template with the Zap's values through Meta's fake, consent recorded with its note, once per key,
-  missing values (nothing recorded), a lead without consent, STOP, marketing consent, Pause all
+  template with the Zap's values through Meta's fake, consent recorded with its note, once per key
+  per store (Zapier connected again, a second owner; another template with the same key sends; no key
+  refused), missing values (nothing recorded), a lead without consent, STOP, marketing consent, Pause all
   automation, another store's template, a demoted member, not connected, a bad number.
 - `apps/api/test/routeAccess.test.ts`: every new route classified; Zapier's bearer-only routes.
 - `apps/worker/test/zapier.test.ts`: delivered once, dedupe, 5xx backoff, max attempts, 410, refusals
