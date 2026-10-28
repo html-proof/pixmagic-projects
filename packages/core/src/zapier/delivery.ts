@@ -148,10 +148,10 @@ async function attempt(deliveryId: string, deps: ZapierDeliveryDeps, now: Date):
  * once a day the outbox's retention.
  */
 export async function sweepZapier(deps: ZapierDeliveryDeps, now = new Date()) {
-  const stuck = await systemDb.zapierDelivery.updateMany({
-    where: { status: "delivering", lastAttemptAt: { lt: new Date(now.getTime() - STUCK_MS) } },
-    data: { status: "retrying", errorCode: "timeout", nextAttemptAt: now, enqueuedAt: null },
-  });
+  const cutShort = { status: "delivering", lastAttemptAt: { lt: new Date(now.getTime() - STUCK_MS) } };
+  // One cut short on its last attempt has had them all.
+  await systemDb.zapierDelivery.updateMany({ where: { ...cutShort, attempts: { gte: ZAPIER_MAX_ATTEMPTS } }, data: { status: "failed", errorCode: "timeout" } });
+  const stuck = await systemDb.zapierDelivery.updateMany({ where: cutShort, data: { status: "retrying", errorCode: "timeout", nextAttemptAt: now, enqueuedAt: null } });
   const summaries = await sweepAdsDailySummaries(deps.queues, now).catch((err: unknown) => {
     logger.error({ err }, "zapier daily summaries failed; the next tick tries again");
     return 0;

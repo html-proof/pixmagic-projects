@@ -199,6 +199,16 @@ describe("delivering an event to a Zap", () => {
     expect((await sweepZapier(deps)).queued).toBe(0);
   });
 
+  it("an attempt cut short on its last try is failed by the sweep, not tried a ninth time", async () => {
+    const w = await world("alert_raised");
+    await alertEvent(w);
+    await systemDb.zapierDelivery.updateMany({ data: { status: "delivering", lastAttemptAt: new Date(Date.now() - 10 * 60_000), attempts: ZAPIER_MAX_ATTEMPTS } });
+    queues.clear();
+    expect((await sweepZapier(deps)).unstuck).toBe(0);
+    expect(await onlyDelivery()).toMatchObject({ status: "failed", errorCode: "timeout" });
+    expect(zapierJobs()).toHaveLength(0);
+  });
+
   it("leaves Shopify's sales out of the daily summary for someone who can't see them", async () => {
     const w = await world("ads_daily_summary", {}, { permissions: ["integrations.status", "integrations.manage", "marketing.ads"] });
     await recordZapierEvent({ workspaceId: w.ws.id, storeId: w.store.id, event: "ads_daily_summary", dedupeKey: "s1", data: { day: "2026-10-27", platforms: [], shopify: { net_sales: 1234.5 } } }, queues);
