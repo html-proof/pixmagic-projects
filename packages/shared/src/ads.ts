@@ -33,6 +33,19 @@ export const AD_CONNECTION_STATUSES = ["active", "reconnect", "permission", "una
 export type AdConnectionStatus = (typeof AD_CONNECTION_STATUSES)[number];
 
 /**
+ * Why a connected sign-in has no ad account connected yet (ad_logins.reason): it stays connected, and
+ * bizinsights connects its ad accounts by itself once the platform lists some.
+ * "no_ads_account": the login reaches no ad account (none of its own, or not assigned to one in a business portfolio).
+ * "none_shared": no ad account was ticked on the platform's screen.
+ * "unanswered": the platform didn't list the login's ad accounts in time.
+ * "choose": it lists more than bizinsights connects without asking (AD_LOGIN_AUTO_CONNECT_MAX).
+ */
+export const AD_LOGIN_REASONS = ["no_ads_account", "none_shared", "unanswered", "choose"] as const;
+export type AdLoginReason = (typeof AD_LOGIN_REASONS)[number];
+/** The most ad accounts a waiting sign-in connects by itself once they appear; more wait for the person's choice. */
+export const AD_LOGIN_AUTO_CONNECT_MAX = 10;
+
+/**
  * Why a connection isn't working (ad_connections.error_code). The platform's own words go to the
  * logs (through providerDetail()); people read the wording below.
  */

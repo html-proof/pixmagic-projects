@@ -1,5 +1,5 @@
 import type { StoreSummary } from "@/components/AppContext";
-import { RECONNECT_STATES, type AdConnection, type AdProvider, type AdsState, type AdState } from "@/lib/adConnections";
+import { RECONNECT_STATES, type AdConnection, type AdLogin, type AdProvider, type AdsState, type AdState } from "@/lib/adConnections";
 import { AD_PLATFORMS, type AdPlatformInfo } from "./adPlatforms";
 
 /** What an ad platform's card is given, on Settings → Advertising (AdPlatformPanel). */
@@ -27,6 +27,9 @@ export interface AdPlatformProps {
   onTryDemo?: () => void;
   onDemoSync?: () => void;
   onDemoReset?: () => void;
+  /** A sign-in connected with no ad account yet: ask the platform for its accounts now, or disconnect it. */
+  onCheckLogin?: (l: AdLogin) => void;
+  onDisconnectLogin?: (l: AdLogin) => void;
 }
 
 /** What every ad platform card works out from its props before drawing anything. */

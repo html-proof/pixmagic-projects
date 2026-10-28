@@ -23,7 +23,6 @@ const KEYS = [
   "GOOGLE_ADS_ENABLED",
   "GOOGLE_ADS_OAUTH_VERIFIED",
   "NANGO_SECRET_KEY",
-  "NANGO_PROVIDERS",
   "WHATSAPP_APP_ID",
   "WHATSAPP_APP_SECRET",
   "WHATSAPP_CONFIG_ID",
@@ -105,7 +104,7 @@ const half = (vars: Record<string, string>) => halfConfigured(vars).map((c) => c
 describe("which provider has its public id but not its secret", () => {
   it("names each provider whose id is set and whose secret is missing, and no other", () => {
     const vars = { META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-y", EMAIL_MICROSOFT_CLIENT_SECRET: "a secret without its id" };
-    expect(half(vars)).toEqual(["Meta Ads", "Ad platforms through Nango"]);
+    expect(half(vars)).toEqual(["Meta Ads"]);
     const meta = providerCredentials(vars).find((c) => c.provider === "Meta Ads")!;
     expect(meta).toEqual({
       provider: "Meta Ads",
@@ -132,7 +131,6 @@ describe("which provider has its public id but not its secret", () => {
       "SHOPIFY_EXTRA_APPS/SHOPIFY_APP_SECRET_APPSTORE",
       "META_APP_ID/META_APP_SECRET",
       "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET",
-      "GOOGLE_ADS_CLIENT_ID/NANGO_SECRET_KEY",
       // No WHATSAPP_APP_ID: WhatsApp runs on the Meta Ads app, with its secret.
       "WHATSAPP_CONFIG_ID/META_APP_SECRET",
       "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
@@ -152,7 +150,7 @@ describe("which provider has its public id but not its secret", () => {
   });
 
   it("lets WhatsApp borrow the Meta Ads app's secret only when it runs on that app", () => {
-    const signup = { WHATSAPP_CONFIG_ID: "public-wa-config-9999", META_APP_ID: "971575545351940", META_APP_SECRET: "m", NANGO_SECRET_KEY: "n" };
+    const signup = { WHATSAPP_CONFIG_ID: "public-wa-config-9999", META_APP_ID: "971575545351940", META_APP_SECRET: "m" };
     // Its own app: only its own secret signs what it sends.
     expect(half({ ...signup, WHATSAPP_APP_ID: "1799660384680551" })).toEqual(["WhatsApp (Embedded Signup)"]);
     expect(half({ ...signup, WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w" })).toEqual([]);
@@ -189,10 +187,10 @@ describe("the configuration report", () => {
   it("says what is set up, as booleans", () => {
     setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", COGNITO_EMAIL_OTP: "" });
     const r = configReport();
-    expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: true, google: true, adsense: true } });
+    expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
     expect(r.whatsapp).toEqual({ evolution: true, evolutionNeeds: [], embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
-    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false });
+    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
     expect(r.halfConfigured).toEqual([]);
   });
 
@@ -209,7 +207,7 @@ describe("the configuration report", () => {
   it("lists the half-configured providers, and the ad platforms they leave off", () => {
     setEnv({ META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_ENABLED: "1" });
     const r = configReport();
-    expect(r.halfConfigured).toEqual(["Meta Ads", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
+    expect(r.halfConfigured).toEqual(["Meta Ads", "Google Ads and Google AdSense"]);
     expect(r.ads.configured).toEqual({ meta: false, google: false, adsense: false });
     expect(r.ads.restricted).toEqual({ meta: false, google: false, adsense: false });
   });
@@ -228,16 +226,17 @@ describe("the configuration report", () => {
   });
 
   it("names what the Cloud API way still lacks, exactly when it is off", () => {
-    const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", EVOLUTION_API_URL: "u", EVOLUTION_API_KEY: "k" };
+    const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" };
     const cases: Array<[Record<string, string>, string[]]> = [
-      [{}, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"]],
+      [{}, ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"]],
       // Production today: the app is picked, its configuration and secret aren't there.
       [{ WHATSAPP_APP_ID: "1799660384680551", ...ready }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", ...ready }, ["WHATSAPP_CONFIG_ID"]],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m", ...ready }, ["WHATSAPP_APP_SECRET"]],
       [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" }, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"]],
+      // Evolution API (only retiring QR linking now) isn't needed to connect.
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "" }, []],
     ];
     for (const [vars, needs] of cases) {
       setEnv(vars);
@@ -253,7 +252,7 @@ describe("the configuration report", () => {
     setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: " Google ,Facebook" });
     expect(configReport().auth.google).toBe(true);
     setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
-    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false, loginCode: false });
+    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
   });
 });
 
@@ -265,7 +264,6 @@ describe("the warning at cold start", () => {
     warnHalfConfigured(vars);
     expect(warn.mock.calls).toEqual([
       [{ provider: "Meta Ads", idSetting: "META_APP_ID", secretSetting: "META_APP_SECRET" }, "public id set but secret missing"],
-      [{ provider: "Ad platforms through Nango", idSetting: "META_APP_ID", secretSetting: "NANGO_SECRET_KEY" }, "public id set but secret missing"],
       [{ provider: "WhatsApp (Embedded Signup)", idSetting: "WHATSAPP_CONFIG_ID", secretSetting: "WHATSAPP_APP_SECRET" }, "public id set but secret missing"],
     ]);
   });

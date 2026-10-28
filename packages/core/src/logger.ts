@@ -45,8 +45,6 @@ const REDACT = new Set(
     "hmac",
     "x-shopify-access-token",
     "x-shopify-hmac-sha256",
-    "x-nango-hmac-sha256",
-    "x-nango-signature",
     "sessionToken",
     // SMTP logins (nodemailer's auth.pass), CloudFront's origin secret, API keys, AWS keys, PKCE
     // verifiers, Google Ads' developer token header and Meta's signed requests.
@@ -69,7 +67,7 @@ const REDACT = new Set(
     "verifyToken",
     "verify_token",
     "hub.verify_token",
-    // Evolution API: instance keys, webhook signing keys, pairing QR codes and codes, message texts.
+    // Evolution API (what is left of QR linking until release 2): instance keys, webhook signing keys, QR codes, message texts.
     "apikey",
     "token",
     "jwt_key",

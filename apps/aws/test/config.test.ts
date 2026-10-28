@@ -36,8 +36,6 @@ describe("the shipped settings", () => {
       "Shopify app appstore: SHOPIFY_APP_SECRET_APPSTORE",
       "Meta Ads: META_APP_SECRET",
       "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
-      // Every ad platform connects through Nango (docs/nango.md): its key is a secret too.
-      "Ad platforms through Nango: NANGO_SECRET_KEY",
       // WhatsApp runs on the Meta Ads app, so that app's secret is WhatsApp's too.
       "WhatsApp (Embedded Signup): META_APP_SECRET",
     ]);
@@ -60,15 +58,15 @@ describe('the cron action {"action":"config"}', () => {
 
     const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
 
-    expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false }, nango: { meta: false, google: false, adsense: false } });
-    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Ad platforms through Nango"]);
+    expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
+    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense"]);
     // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed. Evolution API's address
-    // and key come from the CDK app and Secrets Manager (not set in this test).
+    // and key come from the CDK app and Secrets Manager (not set in this test); connecting doesn't need them.
     expect(report.whatsapp).toEqual({
       evolution: false,
       evolutionNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"],
       embeddedSignup: false,
-      embeddedSignupNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"],
+      embeddedSignupNeeds: ["WHATSAPP_WEBHOOK_VERIFY_TOKEN"],
       webhookVerifyToken: false,
     });
     const text = JSON.stringify(report);

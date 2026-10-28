@@ -1,8 +1,9 @@
 import { Prisma, systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
+import { logger } from "./logger.js";
 import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
-import { revokeAdAccessIfUnused } from "./adConnections.js";
+import { releaseAdLoginsWhere, revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
 import { deleteRetiredNangoToken, purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
 
@@ -956,7 +957,7 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.adsenseDaily.deleteMany({ where: { storeId } }),
     systemDb.adConnection.deleteMany({ where: { storeId } }),
     // WhatsApp Automation: customers' numbers, consent, messages, automations, campaigns and the
-    // store's connection (its Evolution API instance goes first: the erase's caller deletes it).
+    // store's connection (what was set up at Meta for its number is undone first: the erase's caller does it).
     // Then what the retired WhatsApp features still hold until their tables are dropped.
     ...purgeWhatsappStoreOps(storeId),
     ...purgeLegacyWhatsappOps(storeId),
@@ -985,4 +986,6 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   ]);
   // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
   for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);
+  // A sign-in still waiting for its ad accounts goes too, with its grant.
+  await releaseAdLoginsWhere({ storeId }, fetchImpl).catch((err: unknown) => logger.warn({ err, storeId }, "a waiting ad login wasn't let go with its store"));
 }

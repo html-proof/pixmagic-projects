@@ -214,14 +214,16 @@ export async function storeOverview(
   if (sees("ad_connections")) {
     // Which platforms are connected at all, hidden accounts included: the Advertising section
     // offers the ones that aren't, and says so when every account is hidden. Counts only, and
-    // only for a store with ad accounts (absent means none).
+    // only for a store with ad accounts (absent means none). `waiting`: the platforms whose sign-in
+    // is connected with no ad account yet (adConnections/logins.ts), which the section says instead.
     const adCounts = await tx.adConnection.groupBy({ by: ["provider", "enabled"], where: { workspaceId: ws, storeId: store.id }, _count: { _all: true } });
-    const connected = { meta: 0, google: 0, adsense: 0, hidden: 0 };
+    const waiting = (await tx.adLogin.findMany({ where: { workspaceId: ws, storeId: store.id }, select: { provider: true } })).map((l) => l.provider);
+    const connected = { meta: 0, google: 0, adsense: 0, hidden: 0, ...(waiting.length ? { waiting } : {}) };
     for (const g of adCounts) {
       if (g.provider === "meta" || g.provider === "google" || g.provider === "adsense") connected[g.provider] += g._count._all;
       if (!g.enabled) connected.hidden += g._count._all;
     }
-    if (adCounts.length) modules.ad_connections = connected;
+    if (adCounts.length || waiting.length) modules.ad_connections = connected;
   }
   // Which platforms this server can connect at all: the dashboard only offers those.
   const configured = adsConfigured();

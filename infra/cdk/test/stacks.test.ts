@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1221,6 +1222,52 @@ describe("the WhatsApp stack (Evolution API)", () => {
     expect(c.Command[0]).toContain("unset EVO_DB_PASSWORD");
     // Only Evolution's own log lines reach CloudWatch: its stray console.log calls print customers' messages.
     expect(c.Command[0]).toContain("exec node --require /tmp/quiet-console.cjs dist/main");
+  });
+
+  it("lets only Evolution's logger and pino through the console, on every method (libsignal prints private keys)", () => {
+    const { c } = container();
+    const filter = /cat > \/tmp\/quiet-console\.cjs <<'JS'\n([\s\S]*?)\nJS\n/.exec(c.Command[0])?.[1];
+    expect(filter).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "quiet-console-"));
+    writeFileSync(join(dir, "quiet-console.cjs"), `${filter}\n`);
+    // Every function on the console, called with a secret, then what libsignal 1c30d7d (Baileys' fork)
+    // prints in session_record.js, then Evolution's own lines and a pino line, which must stay.
+    const probe = join(dir, "probe.cjs");
+    writeFileSync(
+      probe,
+      `const fs = require("node:fs");
+const key = { privKey: Buffer.from("SECRET-buffer"), rootKey: Buffer.from("SECRET-buffer") };
+for (const m of Object.getOwnPropertyNames(console)) {
+  if (typeof console[m] !== "function" || m === "Console") continue;
+  try { console[m]("SECRET-" + m, key); } catch {}
+  try { console[m](false, "SECRET-" + m, key); } catch {}
+}
+console.time("SECRET-timer"); console.timeLog("SECRET-timer", key); console.timeEnd("SECRET-timer");
+console.table([{ secret: "SECRET-table" }]);
+console.info("Closing session:", { currentRatchet: { ephemeralKeyPair: key } });
+console.info("Opening session:", { currentRatchet: { ephemeralKeyPair: key } });
+console.info("Removing old closed session:", { currentRatchet: { ephemeralKeyPair: key } });
+console.warn("Session already closed", { currentRatchet: { ephemeralKeyPair: key } });
+console.error("Session error:SECRET-error", new Error("SECRET-stack").stack);
+console.log("[Evolution API]", "", "1", "-", "Mon Oct 26 2026 01:48:55  ", "ERROR ", "[ChannelStartupService]", "[string]", "KEPT-error");
+console.log("[Evolution API]", "", "1", "-", "Mon Oct 26 2026 01:48:55  ", "WARN ", "[ChannelStartupService]", "[object]", { kept: "KEPT-warn" });
+fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
+`,
+    );
+    const run = (...flags: string[]) => {
+      const r = spawnSync(process.execPath, [...flags, probe], { encoding: "utf8" });
+      expect(r.status).toBe(0);
+      return r.stdout + r.stderr;
+    };
+    // Without the filter, the probe does print its secrets on every method that prints...
+    const open = run();
+    for (const m of ["log", "info", "debug", "warn", "error", "trace", "dir", "dirxml", "table", "group", "groupCollapsed", "assert", "count", "timer"]) expect(open, m).toContain(`SECRET-${m}`);
+    expect(open).toMatch(/Closing session:[\s\S]*privKey: <Buffer/);
+    // ...and with it, nothing but Evolution's logger and pino.
+    const quiet = run("--require", join(dir, "quiet-console.cjs"));
+    expect(quiet).not.toContain("SECRET");
+    expect(quiet).not.toMatch(/session|Buffer|privKey/i);
+    for (const kept of ["KEPT-error", "KEPT-warn", "KEPT-pino"]) expect(quiet).toContain(kept);
   });
 
   it("lets only the functions in (8080), and itself into the database (5432)", () => {

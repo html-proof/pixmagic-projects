@@ -7,9 +7,10 @@ import { refreshCadence } from "@/components/integrations/AdUi";
 import { NotConfiguredNote, platformFacts, type AdPlatformProps } from "@/components/integrations/adPlatformParts";
 import type { AdPlatformInfo } from "@/components/integrations/adPlatforms";
 import { canOpenPage } from "@/lib/access";
-import { accountLabel, stateInfo, type AdConnection, type AdProvider, type AdState } from "@/lib/adConnections";
+import { accountLabel, adLoginOf, stateInfo, type AdConnection, type AdProvider, type AdState } from "@/lib/adConnections";
 import { friendlyError } from "@/lib/api";
 import { AccountPanel } from "./AccountPanel";
+import { LoginPanel } from "./LoginPanel";
 import { LogoTile, PanelTitle, ReadsFlow, STATE_COLOR, StatePill, Tick, tone } from "./ui";
 
 /** What the status panel beside the accounts says for each state a connected platform can be in. */
@@ -82,12 +83,14 @@ const ButtonMark = ({ P }: { P: AdPlatformInfo }) => (
  * Settings → Integrations (components/integrations/adPlatformParts.tsx).
  */
 export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConnection) => ReactNode }) {
-  const { provider, answer, loadError, connections, view, store, manage, busy, leaving, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, rowExtra } = props;
+  const { provider, answer, loadError, connections, view, store, manage, busy, leaving, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, onCheckLogin, onDisconnectLogin, rowExtra } = props;
   const { P, configured, reconnect, readable, canAct, real, demoOffered, demoConnected, missing } = platformFacts(props);
   const { access, workspace, me, offers } = useApp();
   const [more, setMore] = useState(false);
   const testid = `ads-provider-${provider}`;
   const single = connections.length === 1 ? connections[0]! : null;
+  // Signed in with no ad account yet: connected, and its accounts follow by themselves (never an error).
+  const login = connections.length ? null : adLoginOf(answer, provider);
   const moreIds = connections.map((c) => `${testid}-more-${c.id}`);
   // The Advertising area's page for this platform, when this member may open it (Team & Access).
   const dashboard = canOpenPage(P.page, access, workspace.staffRole ?? null, !!me.shared, offers);
@@ -107,7 +110,7 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
 
   const headerActions = (
     <>
-      {canAct && configured && !real.length && connectButton(P.button, "btn-primary", `connect-${provider}`)}
+      {canAct && configured && !real.length && !login && connectButton(P.button, "btn-primary", `connect-${provider}`)}
       {/* Not beside a real account: the demo is for trying bizinsights before connecting one. */}
       {canAct && demoOffered && !demoConnected && !real.length && onTryDemo && (
         <button type="button" className={configured ? "btn-secondary" : "btn-primary"} onClick={onTryDemo} disabled={!!busy} data-testid="try-demo-google">
@@ -120,6 +123,12 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
           {single.demo ? "Disconnect demo" : "Disconnect"}
         </button>
       )}
+      {manage && login && onDisconnectLogin && (
+        <button type="button" className="btn-secondary" onClick={() => onDisconnectLogin(login)} disabled={!!busy} aria-label={`Disconnect ${P.name}`} data-testid="login-disconnect">
+          <Unlink size={15} aria-hidden />
+          {busy === `login-delete-${login.id}` ? "Disconnecting…" : "Disconnect"}
+        </button>
+      )}
     </>
   );
 
@@ -127,7 +136,22 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
   if (!store) body = <p className="text-sm text-muted">Connect your Shopify store first: ad accounts are connected to a store.</p>;
   else if (!answer && loadError) body = <p className="text-sm text-muted">We couldn&apos;t check {P.name} just now. {friendlyError(loadError)}</p>;
   else if (!answer) body = <div className="skeleton h-40" aria-hidden />;
-  else if (connections.length) {
+  else if (login) {
+    body = (
+      <LoginPanel
+        login={login}
+        P={P}
+        testid={testid}
+        canAct={canAct && configured}
+        busy={!!busy}
+        checking={busy === `login-check-${login.id}`}
+        leaving={leaving}
+        dashboard={dashboard}
+        onCheck={() => onCheckLogin?.(login)}
+        onChoose={onConnect}
+      />
+    );
+  } else if (connections.length) {
     body = (
       <>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">

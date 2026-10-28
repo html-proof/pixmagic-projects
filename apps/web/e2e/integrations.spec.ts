@@ -106,11 +106,11 @@ test("Connect goes straight to the platform's sign-in, with no note, even while 
     });
   });
   const started: string[] = [];
-  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/*/nango/session`, (route) => {
-    const p = new URL(route.request().url()).pathname.split("/").at(-3)!;
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/*/connect`, (route) => {
+    const p = new URL(route.request().url()).pathname.split("/").at(-2)!;
     started.push(p);
-    // No Nango here: the sign-in window can't open, which the card says; what matters is that it was started.
-    return route.fulfill({ status: 503, json: { error: "nango_busy", message: "x" } });
+    // Back to this page instead of the platform's sign-in, marked so the test can wait until the browser is there.
+    return route.fulfill({ json: { url: `/settings/integrations?back=${p}` } });
   });
   await page.goto("/settings/integrations");
 
@@ -119,14 +119,17 @@ test("Connect goes straight to the platform's sign-in, with no note, even while 
   await expect(platform(page, "int-meta")).toHaveText("Not connected");
   // The real sign-in is set up, so the demo is a line under it, not the button.
   await expect(google.getByTestId("int-google-try-demo")).toBeVisible();
-  // Each Connect starts its platform's sign-in at once: no window in between.
+  // Each Connect leaves for its platform's sign-in at once: no window in between. The page leaves by
+  // itself: wait for it to arrive, or a click of ours would land on the page being left.
   await google.getByRole("button", { name: "Connect Google Ads" }).click();
-  await expect.poll(() => started).toEqual(["google"]);
-  await expect(page.getByText("The Google Ads sign-in window couldn't be opened just now")).toBeVisible();
+  await page.waitForURL(/\/settings\/integrations\?back=google$/);
+  expect(started).toEqual(["google"]);
   await page.getByTestId("int-adsense").getByRole("button", { name: "Connect Google AdSense" }).click();
-  await expect.poll(() => started).toEqual(["google", "adsense"]);
+  await page.waitForURL(/\/settings\/integrations\?back=adsense$/);
+  expect(started).toEqual(["google", "adsense"]);
   await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta Ads" }).click();
-  await expect.poll(() => started).toEqual(["google", "adsense", "meta"]);
+  await page.waitForURL(/\/settings\/integrations\?back=meta$/);
+  expect(started).toEqual(["google", "adsense", "meta"]);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // Settings → Advertising: both cards read "Not connected", with no note about the platform's review.

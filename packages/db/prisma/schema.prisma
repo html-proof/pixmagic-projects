@@ -1158,8 +1158,9 @@ model AdConnection {
   demoSeed             Int?      @map("demo_seed")
   /**
    * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
-   * platform's) or "nango" (the same sign-in authorized through Nango, which keeps the token;
-   * sourceLoginId is the Nango connection's id; docs/nango.md). sourceLoginId is null for "direct".
+   * platform's) or "nango" (a sign-in made through Nango from 2026-10-22 to 2026-10-28 whose token is
+   * still there; sourceLoginId is the Nango connection's id) until leaveNango.ts moves it
+   * (docs/ads-setup.md, "Leaving Nango"). sourceLoginId is null for "direct".
    * Added by migration 20261022120000 (the same rules as every other column).
    */
   source               String    @default("direct")
@@ -1177,6 +1178,49 @@ model AdConnection {
   @@index([workspaceId])
   @@index([externalUserId])
   @@map("ad_connections")
+}
+
+// A platform sign-in that reaches no ad account yet, kept connected rather than refused (Meta: the
+// Facebook login has no ad account, its accounts sit in a business portfolio it isn't assigned to, it
+// shared none on Facebook's screen, or Meta didn't list them in time). The card says who is connected;
+// the cron tick asks the platform again (adConnections/logins.ts) and connects the login's ad accounts
+// once it lists some, and then this row goes. One per store and platform. Added by migration
+// 20261026150000 (the same rules as ad_connections: tenant rows, nothing secret: Nango keeps the token).
+model AdLogin {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @map("workspace_id")
+  storeId              String    @map("store_id")
+  provider             String // "meta"
+  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts); "" while it is still at Nango. */
+  accessTokenEnc       String    @default("") @map("access_token_enc")
+  tokenKeyVersion      Int?      @map("token_key_version")
+  /** A login made through Nango (2026-10-26 to 2026-10-28) not moved off it yet: its Nango connection and integration (leaveNango.ts). */
+  sourceLoginId        String?   @map("source_login_id")
+  nangoIntegrationKey  String?   @map("nango_integration_key")
+  /** The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned. */
+  externalUserId       String?   @map("external_user_id")
+  /** The name the platform's sign-in went by (Meta's profile name), for "Connected as …" on the card. */
+  loginName            String?   @map("login_name")
+  /** The permissions that person granted. */
+  grantedScopes        String[]  @default([]) @map("granted_scopes")
+  accessTokenExpiresAt DateTime? @map("access_token_expires_at")
+  connectedByUserId    String?   @map("connected_by_user_id")
+  /**
+   * Why no ad account is connected yet (AD_LOGIN_REASONS in @app/shared/ads): "no_ads_account" (the login
+   * reaches none), "none_shared" (none was ticked on the platform's screen), "unanswered" (the platform
+   * didn't list them in time) or "choose" (it lists more than are connected without asking).
+   */
+  reason               String
+  /** When the platform was last asked for the login's ad accounts. */
+  checkedAt            DateTime  @default(now()) @map("checked_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, provider])
+  @@index([workspaceId])
+  @@index([externalUserId])
+  @@index([sourceLoginId])
+  @@map("ad_logins")
 }
 
 // Each sync of one ad account, as it ended: when, what it was asked to fetch and by whom, and what came
@@ -2215,31 +2259,33 @@ model WaCampaign {
 }
 
 // ---------------------------------------------------------------------------------------------
-// WhatsApp Automation on Evolution API (docs/whatsapp.md, 2026-10-26). Each store's connection is
-// one instance on bizinsights' own Evolution API service (a phone linked by QR code, or Meta's
-// Cloud API). Every table carries workspace_id under the tenant row-level-security policy.
-// Customers' numbers, names and message texts are ENCRYPTED (AES-256-GCM, AAD "wapp:<storeId>:<kind>"),
-// found by a keyed hash and shown masked; message texts are cleared after the store's retention.
-// Instance keys and webhook keys are encrypted too and never leave the server.
+// WhatsApp Automation (docs/whatsapp.md). Since 2026-10-28 each store's connection is one number on
+// Meta's WhatsApp Business Platform (Cloud API), connected through Embedded Signup; from 2026-10-26
+// it could also be a phone linked by QR code through bizinsights' Evolution API service, now
+// retired (those rows stay, disconnected, for their history). Every table carries workspace_id under
+// the tenant row-level-security policy. Customers' numbers, names and message texts are ENCRYPTED
+// (AES-256-GCM, AAD "wapp:<storeId>:<kind>"), found by a keyed hash and shown masked; message texts
+// are cleared after the store's retention. The business's Meta token is encrypted too and never
+// leaves the server.
 // ---------------------------------------------------------------------------------------------
 
-/// A store's WhatsApp connection (one Evolution API instance). One row per store, kept after a disconnect for the history.
+/// A store's WhatsApp connection (one number on Meta's WhatsApp Business Platform). One row per store, kept after a disconnect for the history.
 model WappConnection {
   id               String    @id @default(cuid())
   workspaceId      String    @map("workspace_id")
   storeId          String    @unique @map("store_id")
-  /// qr | cloud_api (WA_PROVIDERS)
+  /// cloud_api (WA_PROVIDERS); qr: a phone linked with a QR code before 2026-10-28, retired (status_reason qr_linking_retired)
   provider         String
   /// WA_CONNECTION_STATUSES: what the provider last reported, never assumed.
   status           String    @default("pairing")
   /// Why it is in that state: Baileys' close code ("close_401"), "qr_limit", "create_failed"... Never a provider's raw answer.
   statusReason     String?   @map("status_reason")
-  /// The Evolution API server (shard) that holds the instance.
+  /// "meta" for a number connected since 2026-10-28; the Evolution API server (shard) that held an instance before.
   shard            String
-  /// Evolution's instance name: random, never derived from the tenant; null once the instance is deleted.
+  /// An Evolution API instance left from before 2026-10-28 (random name), until the QR cleanup deletes it; null for every connection since.
   instanceName     String?   @unique @map("instance_name")
   instanceId       String?   @map("instance_id")
-  /// The instance's own API key (Evolution's per-instance token; Meta's access token for cloud_api), encrypted.
+  /// cloud_api: the business's Meta access token, encrypted (AAD kind "instance_token", the name it had when Evolution held it). qr: the instance's key, until it is deleted.
   instanceTokenEnc String?   @map("instance_token_enc")
   /// The key Evolution signs this instance's webhook JWTs with (HS256), encrypted.
   webhookKeyEnc    String?   @map("webhook_key_enc")

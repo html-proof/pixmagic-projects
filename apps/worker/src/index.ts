@@ -49,8 +49,8 @@ import {
   scheduleReconcile,
   seedSalesRereads,
   sweepAdConnectionAlerts,
-  sweepNangoLeftovers,
-  moveDirectAdConnections,
+  checkWaitingAdLogins,
+  moveAdConnectionsOffNango,
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
@@ -422,9 +422,9 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "sales re-read sweep failed; the next tick tries again");
       return null;
     });
-    // Ad connections made before Nango: moved to it first, so the syncs scheduled next already read through it.
-    const adsMovedToNango = await moveDirectAdConnections(deps).catch((err: unknown) => {
-      logger.error({ err }, "moving direct ad connections to Nango failed; the next tick tries again");
+    // Ad connections made through Nango: moved off it first, so the syncs scheduled next read with bizinsights' own tokens.
+    const adsMovedOffNango = await moveAdConnectionsOffNango(deps).catch((err: unknown) => {
+      logger.error({ err }, "moving ad connections off Nango failed; the next tick tries again");
       return null;
     });
     // Ad accounts on their own leases, after everything the store itself depends on.
@@ -437,9 +437,9 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad alert sweep failed; the next tick tries again");
       return null;
     });
-    // Nango connections authorized but never finished (the window closed first): let go after a grace period.
-    const nangoReleased = await sweepNangoLeftovers(deps).catch((err: unknown) => {
-      logger.error({ err }, "nango leftover sweep failed; the next tick tries again");
+    // Sign-ins connected with no ad account yet: asked again, and their accounts connected once listed.
+    const adLogins = await checkWaitingAdLogins(deps).catch((err: unknown) => {
+      logger.error({ err }, "waiting ad login check failed; the next tick tries again");
       return null;
     });
     // WhatsApp Automation: due messages, webhook retries, campaigns, health checks, retention. On its own leases.
@@ -495,7 +495,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync records prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedToNango, adsSynced, adAlerts, nangoReleased, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedOffNango, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

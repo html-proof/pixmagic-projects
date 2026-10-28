@@ -54,6 +54,12 @@ const schema = z.object({
    */
   AUTH_LOGIN_EMAIL_CODE: z.string().optional().default(""),
   /**
+   * Addresses (comma-separated) whose password alone signs in even with AUTH_LOGIN_EMAIL_CODE on:
+   * the account given to an app store's reviewers (Meta App Review), who can't read its inbox.
+   * Empty: none.
+   */
+  AUTH_LOGIN_CODE_EXEMPT: z.string().optional().default(""),
+  /**
    * How many sign-up and sign-in codes one address may be emailed an hour and a day (each code also
    * waits 60 seconds for the next). Empty: 6 and 20.
    */
@@ -154,26 +160,14 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * Nango (docs/nango.md): the secret API key of bizinsights' Nango environment (its prod environment in
-   * production), a secret (Secrets Manager, put-secrets.mjs --set NANGO_SECRET_KEY). Every ad platform is
-   * connected through it: "Continue with Meta Ads / Google Ads / Google AdSense" open Nango's Connect UI,
-   * the merchant authorizes bizinsights' own Meta app or Google client there, Nango keeps and renews the
-   * tokens, and bizinsights reads the platform with them. Empty: no ad platform can be connected (the
-   * cards say so), and connections made before Nango keep working until they can be moved there.
+   * The secret API key of bizinsights' old Nango environment, a secret (Secrets Manager), kept only
+   * while the connections made through Nango (2026-10-22 to 2026-10-28) are moved off it
+   * (adConnections/leaveNango.ts; docs/ads-setup.md, "Leaving Nango"). Nothing connects through Nango
+   * any more; once the move logs `left: 0` the secret is deleted and this setting goes.
    */
   NANGO_SECRET_KEY: z.string().optional().default(""),
-  /** The webhook signing key of the same environment (Environment Settings → Webhooks), a secret. Empty: Nango's webhooks are refused. */
-  NANGO_WEBHOOK_SECRET: z.string().optional().default(""),
   /** Nango's API. */
   NANGO_API_URL: z.string().default("https://api.nango.dev"),
-  /**
-   * The platforms connected through Nango once the key is set, comma-separated (meta, google, adsense):
-   * one left out can't be connected (its card says so). Each also needs its own app's keys here
-   * (META_APP_ID/SECRET, GOOGLE_ADS_CLIENT_*), which Nango's integration must carry too: bizinsights
-   * checks every token was issued to them. And each one's integration must exist in Nango, which is
-   * asked (nango-setup.mjs makes them).
-   */
-  NANGO_PROVIDERS: z.string().optional().default("meta,google,adsense"),
   /**
    * WhatsApp Automation on Evolution API (docs/whatsapp.md): bizinsights' own Evolution API service.
    * Its internal base URL (in AWS the ECS service's private DNS name, reachable only from the
@@ -189,11 +183,11 @@ const schema = z.object({
   /** Each call to Evolution API gives up after this long (ms). */
   EVOLUTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
   /**
-   * The Cloud API way to connect (Meta's Embedded Signup, then Evolution API's WHATSAPP-BUSINESS
-   * integration sends through it): the Meta app's id and secret (the ad accounts' Meta app when
-   * these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
-   * Signup variation, and the verify token of Meta's webhook. Without them the page offers only the
-   * linked phone, and says why.
+   * WhatsApp's one way to connect, Meta's WhatsApp Business Platform (Embedded Signup; bizinsights
+   * then calls Meta's Graph API with the business's token): the Meta app's id and secret (the ad
+   * accounts' Meta app when these are empty), the Facebook Login for Business configuration id of
+   * its WhatsApp Embedded Signup variation, and the verify token of Meta's webhook. Without them the
+   * page offers nothing to connect, and says why.
    */
   WHATSAPP_APP_ID: z.string().optional().default(""),
   WHATSAPP_APP_SECRET: z.string().optional().default(""),

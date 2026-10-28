@@ -5,7 +5,7 @@
  * through this module, so a state has one name and one badge on both pages.
  */
 import { AD_CONNECTION_STATUSES, AD_ERROR_STATUS, adErrorMessage, isAdAccountStatus, isAdErrorCode } from "@app/shared/ads";
-import type { AdAccountStatus, AdConnectionStatus, AdErrorCode, AdProvider } from "@app/shared/ads";
+import type { AdAccountStatus, AdConnectionStatus, AdErrorCode, AdLoginReason, AdProvider } from "@app/shared/ads";
 import type { GoogleAdsConnectionStatus } from "@app/shared/adsDemo";
 
 export type { AdProvider };
@@ -33,9 +33,9 @@ export interface AdConnection {
   /** When the last sync started, whatever came of it. */
   lastSyncAttemptAt: string | null;
   /**
-   * How the account was authorized: through Nango, which keeps the token ("nango", every connection made
-   * now), or bizinsights' own older sign-in ("direct"), which moves to Nango by itself (docs/nango.md).
-   * bizinsights reads the platform's API itself either way.
+   * How the account is read: bizinsights' own sign-in with the platform ("direct"), or ("nango") one made
+   * through Nango that bizinsights is still moving off it (a few minutes). bizinsights reads the
+   * platform's API itself either way.
    */
   source: "direct" | "nango";
   /** The account's own last day (YYYY-MM-DD) stored without a gap, and the first. */
@@ -88,11 +88,34 @@ export interface AdsState {
    */
   restricted: Record<AdProvider, boolean>;
   connections: ConnectionAnswer[];
+  /** Sign-ins connected with no ad account yet (absent from an API before 2026-10-26). */
+  logins?: AdLogin[];
   /** Which platforms offer a simulated account ("Try demo"); absent from older answers. */
   demo?: Partial<Record<AdProvider, boolean>>;
   /** The settings each platform's real sign-in still lacks on this server, by name (never a value). */
   missing?: Partial<Record<AdProvider, string[]>>;
 }
+
+/**
+ * A sign-in connected with no ad account yet (GET .../ads `logins`; the API's ad_logins): the person
+ * authorized bizinsights, and the platform lists no ad account for that login so far (or didn't answer
+ * in time). bizinsights asks again every hour and connects its ad accounts by itself once they appear,
+ * so the card says "Connected", never an error.
+ */
+export interface AdLogin {
+  id: string;
+  provider: AdProvider;
+  /** The name the platform's sign-in went by ("Connected as …"), when the platform said. */
+  name: string | null;
+  reason: AdLoginReason;
+  connectedAt: string;
+  /** When the platform was last asked for the login's ad accounts. */
+  checkedAt: string;
+  connectedBy: { name: string | null; email: string | null; you: boolean } | null;
+}
+
+/** The store's sign-in for this platform that waits for its ad accounts, if there is one. */
+export const adLoginOf = (state: AdsState | null, provider: AdProvider): AdLogin | null => state?.logins?.find((l) => l.provider === provider) ?? null;
 
 /** One sync of a connection as it ended (GET .../ads/connections/:id/syncs). */
 export interface AdSyncRun {
@@ -198,7 +221,8 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
  * | synchronizing          | Synchronizing          | shown on the dashboard, and a sync someone asked for is on its way (syncRequestedAt, for up to 30 minutes), |
  * |                        |                        | or active and never synced, in the first 30 minutes after connecting                                      |
  * | connected              | Connected              | active, and a sync has worked; or hidden from the dashboard before its first sync (nothing is fetched for a |
- * |                        |                        | hidden account, so nothing is under way: its row says so)                                                 |
+ * |                        |                        | hidden account, so nothing is under way: its row says so); or no account yet, but a sign-in connected     |
+ * |                        |                        | that waits for its ad accounts (AdLogin)                                                                  |
  * | authorization_required | Authorization required | reconnect + connector_left: the person whose login powered it left; someone with access must authorize again |
  * | permission_missing     | Permission missing     | reconnect + scope_missing (the read permission was taken back), or status permission (this login lost the account) |
  * | verification_pending   | Verification pending   | error + not_approved; unavailable + account_not_ready;                                                    |
@@ -341,6 +365,8 @@ export function platformState(provider: AdProvider, input: PlatformInput, now = 
   const mine = input.connections.filter((c) => c.provider === provider);
   if (!mine.length) {
     if (input.justDisconnected) return { state: "disconnected", hidden: false, demo: !!input.justDisconnectedDemo };
+    // Signed in and authorized, its ad accounts not listed yet: connected, and they follow by themselves.
+    if (adLoginOf(input.answer, provider)) return { state: "connected", hidden: false, demo: false };
     // A platform not set up on this server offers its demo where it has one: never "Coming soon" with a button under it.
     if (!input.answer.configured[provider]) return { state: input.answer.demo?.[provider] ? "not_connected" : "coming_soon", hidden: false, demo: false };
     return { state: "not_connected", hidden: false, demo: false };

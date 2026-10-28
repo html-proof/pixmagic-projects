@@ -1,4 +1,4 @@
-import { reencryptAdTokens } from "./adConnections.js";
+import { reencryptAdLoginTokens, reencryptAdTokens } from "./adConnections.js";
 import { reencryptEmailCredentials } from "./email/tokens.js";
 import { logger } from "./logger.js";
 import { reencryptStoreTokens } from "./tokens.js";
@@ -7,7 +7,7 @@ import { reencryptInventorySettings } from "./inventory/settings.js";
 
 /**
  * Re-encrypt everything stored under the keyrings with their active key (run after adding a new
- * key, and before removing the old one; docs/RUNBOOK.md): store tokens, ad tokens and WhatsApp
+ * key, and before removing the old one; docs/RUNBOOK.md): store tokens, ad tokens (waiting logins too) and WhatsApp
  * Automation's data under TOKEN_ENCRYPTION_KEYS (and the inventory alerts' WhatsApp numbers; the
  * earlier WhatsApp feature's tables, read by nothing, are left as they are), and the email
  * credentials' data keys, which are re-wrapped under
@@ -23,6 +23,7 @@ export async function reencryptAllTokens(): Promise<number> {
   const parts: Array<[string, () => Promise<number>]> = [
     ["store tokens", reencryptStoreTokens],
     ["ad tokens", reencryptAdTokens],
+    ["waiting ad logins", reencryptAdLoginTokens],
     ["WhatsApp data", reencryptWhatsappData],
     ["email credentials", reencryptEmailCredentials],
     ["inventory settings", reencryptInventorySettings],

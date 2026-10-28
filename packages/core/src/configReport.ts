@@ -8,7 +8,7 @@
  */
 import type { AdProvider } from "@app/shared";
 import type { OAuthProvider } from "@app/shared/email";
-import { adsConfigured, adsRestricted, nangoProviders } from "./adConnections/config.js";
+import { adsConfigured, adsRestricted } from "./adConnections/config.js";
 import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
 import { env, switchedOn } from "./env.js";
@@ -29,12 +29,13 @@ export interface ProviderCredentials {
 
 export interface ConfigReport {
   /** Each ad platform: set up (Connect works), and restricted (its sign-in lets only some people through yet). */
-  /** `configured`: the platform's own app is set up here; `nango`: it is also connected through Nango (docs/nango.md). */
-  ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean>; nango: Record<AdProvider, boolean> };
+  /** `configured`: the platform's own app is set up here, so its Connect button signs in. */
+  ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean> };
   /**
-   * WhatsApp Automation: linking a phone through bizinsights' Evolution API service (on once its
-   * URL and key are set), connecting through Meta's Cloud API (Embedded Signup; the settings it still
-   * lacks, empty once it can be offered), and the verify token of Meta's webhook.
+   * WhatsApp Automation: connecting through Meta's WhatsApp Business Platform (Embedded Signup; the
+   * settings it still lacks, empty once it can be offered), the verify token of Meta's webhook, and
+   * bizinsights' Evolution API service, which is only retiring what is left of QR linking until
+   * release 2 removes it (docs/whatsapp.md, "Removing Evolution").
    */
   whatsapp: {
     evolution: boolean;
@@ -48,7 +49,7 @@ export interface ConfigReport {
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
-  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean };
+  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
   /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
   sms: { mode: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean };
   credentials: ProviderCredentials[];
@@ -126,36 +127,24 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
       "GOOGLE_ADS_CLIENT_SECRET",
       'Google Ads and AdSense say "Coming soon" and their connections stop syncing',
     ),
-    // Every ad platform is connected through Nango (docs/nango.md) with bizinsights' own Meta app or
-    // Google client: either app's id set without Nango's key leaves none of them to connect.
-    {
-      provider: "Ad platforms through Nango",
-      idSetting: vars.META_APP_ID ? "META_APP_ID" : "GOOGLE_ADS_CLIENT_ID",
-      secretSetting: "NANGO_SECRET_KEY",
-      idSet: !!vars.META_APP_ID || !!vars.GOOGLE_ADS_CLIENT_ID,
-      secretSet: !!vars.NANGO_SECRET_KEY,
-      effect: "no ad platform can be connected (each card says it isn't set up yet), while connections made before Nango keep syncing",
-    },
     whatsapp,
     pair("Gmail (email sending)", "EMAIL_GOOGLE_CLIENT_ID", "EMAIL_GOOGLE_CLIENT_SECRET", "Connect Gmail says it isn't set up"),
     pair("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", "Connect Outlook says it isn't set up"),
   ];
 }
 
-/** What bizinsights' Evolution API service still lacks here (empty: phones can be linked). */
+/** What bizinsights' Evolution API service still lacks here (empty: the QR cleanup can reach it). */
 export function evolutionNeeds(vars: Vars = process.env): string[] {
   return [!vars.EVOLUTION_API_URL ? "EVOLUTION_API_URL" : null, !vars.EVOLUTION_API_KEY ? "EVOLUTION_API_KEY" : null].filter((n): n is string => n !== null);
 }
 
 /**
- * What connecting through Meta's Cloud API still lacks, by setting name: the Evolution API service it
- * sends through, Meta's app (its own, or the Meta Ads app's), the Embedded Signup configuration,
- * that app's secret and the webhook verify token. Empty when it can be offered (whatsapp/overview.ts
- * cloudApiMissing asks for the same).
+ * What connecting through Meta still lacks, by setting name: Meta's app (its own, or the Meta Ads
+ * app's), the Embedded Signup configuration, that app's secret and the webhook verify token. Empty
+ * when it can be offered (whatsapp/cloudApi.ts cloudApiMissing asks for the same).
  */
 export function embeddedSignupNeeds(vars: Vars = process.env): string[] {
   return [
-    ...evolutionNeeds(vars),
     !vars.WHATSAPP_APP_ID && !vars.META_APP_ID ? "WHATSAPP_APP_ID" : null,
     !vars.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
     !waSecretSet(vars) ? "WHATSAPP_APP_SECRET" : null,
@@ -173,7 +162,7 @@ export function configReport(): ConfigReport {
   const e = env();
   const credentials = providerCredentials();
   return {
-    ads: { configured: adsConfigured(), restricted: adsRestricted(), nango: nangoProviders() },
+    ads: { configured: adsConfigured(), restricted: adsRestricted() },
     whatsapp: {
       evolution: evolutionNeeds().length === 0,
       evolutionNeeds: evolutionNeeds(),
@@ -188,6 +177,8 @@ export function configReport(): ConfigReport {
       google: !!e.COGNITO_DOMAIN && e.COGNITO_IDENTITY_PROVIDERS.split(",").some((p) => p.trim() === "Google"),
       emailOtp: e.COGNITO_EMAIL_OTP === "1",
       loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
+      // How many addresses skip that code (never which).
+      loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
     },
     sms: { mode: e.SMS_MODE, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim() },
     credentials,
