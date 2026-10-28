@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { systemDb, type User } from "@app/db";
 import { accountDeletionEmail, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants } from "@app/core";
+import { revokeZapierGrants } from "@app/core/zapier";
 import { accountPasswordProblem, EMAIL_CODE_RE, safeEqual, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
@@ -659,6 +660,8 @@ export function accountRoutes(app: App, deps: Deps) {
         logger.error({ err, userId: user.id }, "account deletion: the person's ad connections weren't released; their tokens remain until a disconnect");
         return null;
       });
+      // Zapier connections they allowed stop working, and their Zaps' triggers go (docs/zapier.md).
+      await revokeZapierGrants({ userId: user.id }, "account_deleted").catch((err: unknown) => logger.error({ err, userId: user.id }, "account deletion: the person's Zapier connections weren't revoked"));
       await systemDb.user.delete({ where: { id: user.id } });
     } catch (err) {
       logger.error({ err, userId: user.id }, "account deletion: Cognito users deleted but the user row was not; finish by hand (docs/RUNBOOK.md)");

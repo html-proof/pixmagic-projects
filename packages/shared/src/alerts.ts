@@ -8,6 +8,9 @@
 //
 // Imported by the UI through `@app/shared/alerts`: no I/O, no node: imports.
 
+import { allows, hasFullAccess, type MemberAccess } from "./access";
+import { staffAccess, staffCan, type StaffRole } from "./staff/access";
+
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
@@ -184,4 +187,27 @@ export function describeAlert(alert: { code: string; severity: string; message: 
     return { severity, area: "sms", title: "Texts are on hold: the SMS spending limit is reached", body: "The account's monthly SMS spending limit is reached, so texts wait until it is raised or the month ends. Contact support if this stays." };
   }
   return { severity, area: "general", title: "Something needs your attention", body: "If this keeps showing, contact support and we'll look into it." };
+}
+
+/**
+ * Whether a member may see (and fix) an alert of this area: the bell's rule (GET .../alerts), which
+ * Zapier's "New alert" trigger follows for the person who connected it. Settings → Privacy requests
+ * needs audit:read; Settings → Advertising, "Manage integrations"; WhatsApp, "View campaigns"; the
+ * Shopify connection and the help page's alerts go to owners and admins.
+ */
+export function mayFixAlert(area: AlertArea, access: MemberAccess, staffRole: StaffRole | null): boolean {
+  switch (area) {
+    case "staff":
+      return staffCan(staffAccess(access.role, staffRole, access.permissions), "attendance:view");
+    case "email":
+      return allows(access, "email:read");
+    case "privacy":
+      return allows(access, "audit:read");
+    case "whatsapp":
+      return allows(access, "marketing.campaigns");
+    case "ads":
+      return allows(access, "integrations.manage");
+    default:
+      return hasFullAccess(access.role);
+  }
 }

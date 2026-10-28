@@ -11,6 +11,8 @@ import { AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { ConnectButton, IntegrationRow, ManageLink, OneClickSetup, RowPill } from "@/components/integrations/IntegrationRow";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
+import { ZapierCard } from "@/components/integrations/ZapierCard";
+import { ZAPIER_CARD } from "@/lib/features";
 import { waHref, WA_PAGE, WhatsappIcon } from "@/components/whatsapp/WaUi";
 import type { WaOverview } from "@/components/whatsapp/types";
 import { stateInfo, type AdProvider, type StateTone } from "@/lib/adConnections";
@@ -229,6 +231,7 @@ export default function IntegrationsPage() {
 
         {adRow("meta")}
         {adRow("adsense")}
+        {ZAPIER_CARD && offers("zapier") && allowed("integrations.status") && <ZapierCard workspaceId={workspace.id} store={store} manage={manage} full={manageStores} />}
       </div>
 
       <GoogleAdsDemoDialog open={ads.demoOpen} store={store} onClose={ads.closeDemo} onConnect={ads.connectDemo} onDisconnect={ads.disconnectDemo} />

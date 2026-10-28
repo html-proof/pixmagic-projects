@@ -85,6 +85,21 @@ const PUBLIC = new Set([
   "POST /staff/invitations/accept",
   "POST /invitations/preview",
   "POST /invitations/open",
+  // Zapier's server exchanging a code or a refresh token: authenticated by bizinsights' client secret (zapierOAuth.ts).
+  "POST /oauth/token",
+]);
+
+/**
+ * Zapier's API (routes/zapier.ts): only a bearer zat_ token of a Zapier connection gets in, never a
+ * session cookie, a shared link or a workspace API key; its store is the connection's own.
+ */
+const ZAPIER_BEARER = new Set([
+  "GET /zapier/me",
+  "POST /zapier/hooks",
+  "DELETE /zapier/hooks/:id",
+  "GET /zapier/samples/:event",
+  "GET /zapier/search/ad-performance",
+  "GET /zapier/search/adsense-earnings",
 ]);
 
 /** A shared link may still use this account route: who am I (that workspace only, read-only). */
@@ -241,13 +256,14 @@ afterAll(async () => teardown(ctx));
 
 describe("every route of the API, deny by default", () => {
   it("knows every route: each is public by design, an account's own, or a workspace's", () => {
-    const unknown = ctx.routes.filter((r) => !PUBLIC.has(key(r)) && !isWorkspaceRoute(r.path) && !r.path.startsWith("/auth/") && !r.path.startsWith("/me"));
+    const unknown = ctx.routes.filter((r) => !PUBLIC.has(key(r)) && !ZAPIER_BEARER.has(key(r)) && !isWorkspaceRoute(r.path) && !r.path.startsWith("/auth/") && !r.path.startsWith("/me"));
     // The account routes outside /auth and /me, listed so a new one is a decision, not a default.
-    const accountElsewhere = ["POST /workspaces", "GET /employee/workspaces", "POST /invitations/accept", "POST /staff/invitations/accept-existing", "POST /shopify/claim", "GET /staff/exports/:token"];
+    // GET /oauth/zapier/authorize: what Zapier's consent page shows the signed-in person (their workspaces).
+    const accountElsewhere = ["POST /workspaces", "GET /employee/workspaces", "POST /invitations/accept", "POST /staff/invitations/accept-existing", "POST /shopify/claim", "GET /staff/exports/:token", "GET /oauth/zapier/authorize"];
     expect(unknown.map(key).filter((k) => !accountElsewhere.includes(k))).toEqual([]);
     // Every list names only routes that exist (a renamed route must be moved, not forgotten).
     const all = new Set(ctx.routes.map(key));
-    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE, new Set(Object.keys(QUERY)), new Set(Object.keys(BODY))]) expect([...list].filter((k) => !all.has(k))).toEqual([]);
+    for (const list of [PUBLIC, ZAPIER_BEARER, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE, new Set(Object.keys(QUERY)), new Set(Object.keys(BODY))]) expect([...list].filter((k) => !all.has(k))).toEqual([]);
     // Enough routes that the list above can't be an empty app.
     expect(ctx.routes.filter((r) => isWorkspaceRoute(r.path)).length).toBeGreaterThan(250);
   });
@@ -348,6 +364,17 @@ describe("every route of the API, deny by default", () => {
     }
     expect(wrong).toEqual([]);
   }, 120_000);
+
+  it("Zapier's API: no session, shared link or workspace API key gets in, only a Zapier connection's own token", async () => {
+    const wrong: string[] = [];
+    for (const r of ctx.routes.filter((r) => ZAPIER_BEARER.has(key(r)))) {
+      for (const [who, headers] of [["owner", w.owner.headers], ["shared link", w.link], ["API key", w.apiKey], ["made-up token", { authorization: `Bearer zat_${randomBytes(32).toString("base64url")}` }]] as const) {
+        const res = await send(r, headers);
+        if (res.statusCode !== 401) wrong.push(`${key(r)} as ${who} → ${res.statusCode} ${res.body.slice(0, 120)}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
 
   it("a workspace API key (read-only): every route that changes something refuses it", async () => {
     const wrong: string[] = [];

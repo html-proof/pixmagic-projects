@@ -30,7 +30,8 @@
     "./staff": "./src/staff/index.ts",
     "./team": "./src/team.ts",
     "./email": "./src/email/index.ts",
-    "./automations": "./src/automations.ts"
+    "./automations": "./src/automations.ts",
+    "./zapier": "./src/zapier.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
