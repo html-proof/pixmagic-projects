@@ -9,7 +9,6 @@ import {
   enqueueAdSync,
   googleAdsBudget,
   googleAdsBudgetAllows,
-  leaveNango,
   nextHistoryWindow,
   recheckDays,
   sweepAdAlerts,
@@ -197,9 +196,4 @@ export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | 
  */
 export async function checkWaitingAdLogins(deps: Pick<WorkerDeps, "coord" | "queues" | "fetchImpl">) {
   return checkAdLogins(deps);
-}
-
-/** Ad connections made through Nango (2026-10-22 to 2026-10-28): moved off it, a few a tick (core's leaveNango.ts). */
-export async function moveAdConnectionsOffNango(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
-  return leaveNango(deps.coord, { fetchImpl: deps.fetchImpl });
 }

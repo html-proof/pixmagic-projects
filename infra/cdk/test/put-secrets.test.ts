@@ -41,8 +41,6 @@ describe("the shapes put-secrets.mjs accepts", () => {
     expect(secretProblem("GOOGLE_ADS_CLIENT_SECRET", "GOCSPX-abcdefghijklmnopqrstuvwxyz12")).toBeNull();
     expect(secretProblem("SHOPIFY_APP_SECRET_PIXMAGIC", `shpss_${META_SECRET}`)).toBeNull();
     expect(secretProblem("RESEND_API_KEY", "not a key")).toMatch(/Resend API key/);
-    expect(secretProblem("NANGO_SECRET_KEY", "0f0f0f0f-1111-2222-3333-444444444444")).toBeNull();
-    expect(secretProblem("NANGO_SECRET_KEY", "https://api.nango.dev")).toMatch(/Nango secret API key/);
     // A secret without a known shape takes any value, but not none.
     expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "anything-at-all")).toBeNull();
     expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")).toMatch(/0 characters/);

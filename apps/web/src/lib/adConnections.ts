@@ -32,12 +32,6 @@ export interface AdConnection {
   lastSyncedAt: string | null;
   /** When the last sync started, whatever came of it. */
   lastSyncAttemptAt: string | null;
-  /**
-   * How the account is read: bizinsights' own sign-in with the platform ("direct"), or ("nango") one made
-   * through Nango that bizinsights is still moving off it (a few minutes). bizinsights reads the
-   * platform's API itself either way.
-   */
-  source: "direct" | "nango";
   /** The account's own last day (YYYY-MM-DD) stored without a gap, and the first. */
   syncedThrough: string | null;
   historyFrom: string | null;
@@ -183,7 +177,6 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
       accountStatusDetail: raw.accountStatusDetail ?? null,
       lastSyncedAt: raw.lastSyncedAt ?? null,
       lastSyncAttemptAt: raw.lastSyncAttemptAt ?? null,
-      source: raw.source === "nango" ? "nango" : "direct",
       syncedThrough: raw.syncedThrough ?? null,
       historyFrom: raw.historyFrom ?? null,
       syncRequestedAt: raw.syncRequestedAt ?? null,

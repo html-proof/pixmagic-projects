@@ -1154,10 +1154,11 @@ model AdConnection {
   isDemo               Boolean   @default(false) @map("is_demo")
   demoSeed             Int?      @map("demo_seed")
   /**
-   * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
-   * platform's) or "nango" (a sign-in made through Nango from 2026-10-22 to 2026-10-28 whose token is
-   * still there; sourceLoginId is the Nango connection's id) until leaveNango.ts moves it
-   * (docs/ads-setup.md, "Leaving Nango"). sourceLoginId is null for "direct".
+   * No longer used, dropped by a later migration (kept so a rollback still reads them): every row is
+   * bizinsights' own sign-in ("direct", sourceLoginId null) since the connections made through Nango
+   * (2026-10-22 to 2026-10-28) were moved off it (docs/ads-setup.md, "Leaving Nango"). Until then a
+   * connect writes "direct", syncs record it (ad_sync_runs.source), and a row with anything else is
+   * never read: it waits for a reconnect (adConnections/credentials.ts holdsOwnSignIn).
    * Added by migration 20261022120000 (the same rules as every other column).
    */
   source               String    @default("direct")
@@ -1182,16 +1183,19 @@ model AdConnection {
 // shared none on Facebook's screen, or Meta didn't list them in time). The card says who is connected;
 // the cron tick asks the platform again (adConnections/logins.ts) and connects the login's ad accounts
 // once it lists some, and then this row goes. One per store and platform. Added by migration
-// 20261026150000 (the same rules as ad_connections: tenant rows, nothing secret: Nango keeps the token).
+// 20261026150000 (the same rules as ad_connections: tenant rows); its token by 20261028100000.
 model AdLogin {
   id                   String    @id @default(cuid())
   workspaceId          String    @map("workspace_id")
   storeId              String    @map("store_id")
   provider             String // "meta"
-  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts); "" while it is still at Nango. */
+  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts). A login without one ends at its next check. */
   accessTokenEnc       String    @default("") @map("access_token_enc")
   tokenKeyVersion      Int?      @map("token_key_version")
-  /** A login made through Nango (2026-10-26 to 2026-10-28) not moved off it yet: its Nango connection and integration (leaveNango.ts). */
+  /**
+   * No longer used, dropped by a later migration (kept so a rollback still reads them): the Nango
+   * connection of a login made through Nango (2026-10-26 to 2026-10-28), emptied when it was moved off it.
+   */
   sourceLoginId        String?   @map("source_login_id")
   nangoIntegrationKey  String?   @map("nango_integration_key")
   /** The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned. */
@@ -1228,7 +1232,7 @@ model AdSyncRun {
   storeId      String   @map("store_id")
   connectionId String   @map("connection_id")
   provider     String
-  // direct | nango (ad_connections.source when it ran)
+  // ad_connections.source when it ran: "direct" (a run from before 2026-10-28 may hold the old value until pruned)
   source       String
   // request | schedule | history (AdsSyncTrigger)
   trigger      String

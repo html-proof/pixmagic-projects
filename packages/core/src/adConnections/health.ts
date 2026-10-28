@@ -1,13 +1,12 @@
 /**
  * How the ad connections stand, for whoever runs bizinsights (`pnpm --filter @app/worker ops:ad-health`,
- * docs/RUNBOOK.md): how many there are per platform, how each is authorized and where each stands,
- * which ones stopped syncing or keep failing, what the last day's syncs came to, which platforms can be
- * connected, and how many connections still wait to be moved off Nango. Ids and counts only: never a
- * token, a ciphertext, an email or an account's name, so the report can be pasted into a ticket.
+ * docs/RUNBOOK.md): how many there are per platform and where each stands, which ones stopped syncing
+ * or keep failing, what the last day's syncs came to, and which platforms can be connected. Ids and
+ * counts only: never a token, a ciphertext, an email or an account's name, so the report can be pasted
+ * into a ticket.
  */
 import { systemDb } from "@app/db";
 import type { AdProvider } from "@app/shared";
-import { env } from "../env.js";
 import { adsConfigured } from "./config.js";
 
 /** How long an active, shown account may go without a successful sync before it is listed. */
@@ -25,7 +24,6 @@ export interface AdHealthConnection {
   accountId: string;
   workspaceId: string;
   storeId: string;
-  source: string;
   status: string;
   errorCode: string | null;
   lastSyncedAt: Date | null;
@@ -35,12 +33,10 @@ export interface AdHealthConnection {
 
 export interface AdConnectionHealth {
   at: Date;
-  /** Connections per platform, how they read (direct; nango until moved off it) and their status. */
-  connections: Array<{ provider: string; source: string; status: string; count: number }>;
+  /** Connections per platform and status. */
+  connections: Array<{ provider: string; status: string; count: number }>;
   /** Connections per error code (none: working). */
   errorCodes: Array<{ errorCode: string; count: number }>;
-  /** Made through Nango and not moved off it yet (rows and waiting logins, leaveNango.ts): 0 once it is done. */
-  nangoLeft: number;
   /** Waiting for someone to press Reconnect. */
   waitingForReconnect: number;
   /** Shown, active, and no successful sync for a day (or never, an hour after connecting). At most 50. */
@@ -56,8 +52,6 @@ export interface AdConnectionHealth {
   };
   /** The platforms a card offers Connect for (this server holds the platform's own app's keys). */
   configured: Record<AdProvider, boolean>;
-  /** NANGO_SECRET_KEY is still set (needed only while nangoLeft isn't 0). */
-  nangoKeySet: boolean;
 }
 
 const listed = {
@@ -66,7 +60,6 @@ const listed = {
   accountId: true,
   workspaceId: true,
   storeId: true,
-  source: true,
   status: true,
   errorCode: true,
   lastSyncedAt: true,
@@ -79,12 +72,9 @@ export async function adConnectionHealth(opts: { now?: Date } = {}): Promise<AdC
   const now = opts.now ?? new Date();
   const staleBefore = new Date(now.getTime() - AD_HEALTH_STALE_MS);
   const since = new Date(now.getTime() - 24 * 3600_000);
-  const [connections, errorCodes, nangoRows, nangoLogins, waitingForReconnect, stale, failing, byOutcome, byProvider, reasons] = await Promise.all([
-    systemDb.adConnection.groupBy({ by: ["provider", "source", "status"], _count: { _all: true }, orderBy: [{ provider: "asc" }, { source: "asc" }, { status: "asc" }] }),
+  const [connections, errorCodes, waitingForReconnect, stale, failing, byOutcome, byProvider, reasons] = await Promise.all([
+    systemDb.adConnection.groupBy({ by: ["provider", "status"], _count: { _all: true }, orderBy: [{ provider: "asc" }, { status: "asc" }] }),
     systemDb.adConnection.groupBy({ by: ["errorCode"], where: { errorCode: { not: null } }, _count: { _all: true }, orderBy: { errorCode: "asc" } }),
-    // As leaveNango.ts counts what is left to move.
-    systemDb.adConnection.count({ where: { source: "nango" } }),
-    systemDb.adLogin.count({ where: { sourceLoginId: { not: null }, accessTokenEnc: "" } }),
     systemDb.adConnection.count({ where: { status: "reconnect" } }),
     systemDb.adConnection.findMany({
       where: {
@@ -108,9 +98,8 @@ export async function adConnectionHealth(opts: { now?: Date } = {}): Promise<AdC
   ]);
   return {
     at: now,
-    connections: connections.map((g) => ({ provider: g.provider, source: g.source, status: g.status, count: g._count._all })),
+    connections: connections.map((g) => ({ provider: g.provider, status: g.status, count: g._count._all })),
     errorCodes: errorCodes.map((g) => ({ errorCode: g.errorCode!, count: g._count._all })),
-    nangoLeft: nangoRows + nangoLogins,
     waitingForReconnect,
     stale,
     failing,
@@ -123,6 +112,5 @@ export async function adConnectionHealth(opts: { now?: Date } = {}): Promise<AdC
         .slice(0, 10),
     },
     configured: adsConfigured(),
-    nangoKeySet: !!env().NANGO_SECRET_KEY,
   };
 }

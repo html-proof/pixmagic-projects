@@ -160,15 +160,6 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * The secret API key of bizinsights' old Nango environment, a secret (Secrets Manager), kept only
-   * while the connections made through Nango (2026-10-22 to 2026-10-28) are moved off it
-   * (adConnections/leaveNango.ts; docs/ads-setup.md, "Leaving Nango"). Nothing connects through Nango
-   * any more; once the move logs `left: 0` the secret is deleted and this setting goes.
-   */
-  NANGO_SECRET_KEY: z.string().optional().default(""),
-  /** Nango's API. */
-  NANGO_API_URL: z.string().default("https://api.nango.dev"),
-  /**
    * WhatsApp Automation on Evolution API (docs/whatsapp.md): bizinsights' own Evolution API service.
    * Its internal base URL (in AWS the ECS service's private DNS name, reachable only from the
    * functions; locally the docker-compose service), its global API key (a secret, used only to
