@@ -149,7 +149,7 @@ AWS with CDK (no second infrastructure framework was added).
 | AWS End User Messaging Social (WhatsApp) | Not used: WhatsApp runs on Evolution API, which bizinsights hosts on ECS Fargate: a phone linked with a QR code, or Meta's WhatsApp Cloud API through Embedded Signup ([whatsapp.md](whatsapp.md)). | Linking a merchant's WhatsApp Business account to End User Messaging Social puts it inside bizinsights' AWS account (and Meta's conversation charges on bizinsights' AWS bill), which needs a per-merchant linking and billing story. To decide if WhatsApp joins the hub. |
 | AWS End User Messaging SMS | Used: the platform's account, `SendTextMessage` with a configuration set, events → SNS → SQS | [sms.md](sms.md). Sandbox until the owner's steps in "Going live". |
 | CloudWatch | Logs (redacted), queue-age and DLQ alarms, error lines, SMS holds, and the new `messaging-send-failures` alarm | Alarms email the alarm topic's subscribers. |
-| Nango | Meta Ads, AdSense and Google Ads (WhatsApp no longer uses it) | Email sign-in stays direct OAuth (Google, Microsoft): no broker sees mail-sending tokens, and Nango's free plan has 10 connections. SMS has no merchant credentials at all. |
+| Nango | Not used any more. It brokered the Meta Ads, AdSense and Google Ads sign-ins from 2026-10-22 to 2026-10-28; bizinsights signs in with them itself again, and the connections made then move off it by themselves ([ads-setup.md](ads-setup.md#leaving-nango)) | Every merchant credential stays with bizinsights, encrypted under its own keys: email sign-in is direct OAuth (Google, Microsoft), the ad platforms likewise, and SMS has no merchant credentials at all. |
 
 ## How one message travels
 

@@ -3,13 +3,18 @@ import {
   AdsApiError,
   AdsAuthError,
   adsenseAccounts,
+  adsenseAuthorizeUrl,
   adsenseSiteDays,
   AdsRetryableError,
   googleAdAccounts,
+  googleAuthorizeUrl,
   googleCampaignDays,
+  googleExchangeCode,
   googleRefresh,
   metaAdAccounts,
+  metaAuthorizeUrl,
   metaCampaignDays,
+  metaExchangeCode,
   ADS_GOOGLE_RECHECK_DAYS,
   ADS_RECHECK_DAYS,
   recheckDays,
@@ -33,6 +38,29 @@ const meta = (fetchImpl: FetchLike) => ({ appId: "app1", appSecret: "sec", versi
 const google = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec", version: "v25", fetchImpl });
 
 describe("Meta", () => {
+  it("asks only to read ads, and turns the code into a long-lived token", async () => {
+    const url = new URL(metaAuthorizeUrl(meta(fetch), "https://app/api/integrations/meta/callback", "st"));
+    expect(url.origin + url.pathname).toBe("https://www.facebook.com/v25.0/dialog/oauth");
+    expect(url.searchParams.get("scope")).toBe("ads_read");
+    expect(url.searchParams.get("state")).toBe("st");
+    expect(url.searchParams.get("client_id")).toBe("app1");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://app/api/integrations/meta/callback");
+    expect(url.searchParams.get("response_type")).toBe("code");
+    // A permission declined last time is asked for again (Meta won't show it otherwise).
+    expect(url.searchParams.get("auth_type")).toBe("rerequest");
+    // Never the app secret.
+    expect(url.searchParams.has("client_secret")).toBe(false);
+
+    const f = fake((u) =>
+      u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "LONG", expires_in: 5_184_000 }) : json({ access_token: "SHORT", expires_in: 3600 }),
+    );
+    const t = await metaExchangeCode(meta(f.fetchImpl), "CODE", "https://app/cb");
+    expect(t.accessToken).toBe("LONG");
+    expect(t.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 86_400_000);
+    expect(f.calls[0]!.url.searchParams.get("code")).toBe("CODE");
+    expect(f.calls[1]!.url.searchParams.get("fb_exchange_token")).toBe("SHORT");
+  });
+
   it("lists ad accounts across pages and reads daily campaign numbers", async () => {
     const f = fake((u) => {
       if (u.pathname.endsWith("/me/adaccounts") && !u.searchParams.get("after")) {
@@ -62,15 +90,29 @@ describe("Meta", () => {
     const denied = fake(() => json({ error: { message: "(#200) Requires ads_read permission", code: 200 } }, 403));
     await expect(metaAdAccounts(meta(denied.fetchImpl), "T")).rejects.toMatchObject({ status: 403, code: 200 });
   });
+
+  it("uses a Facebook Login for Business configuration when one is set", () => {
+    const url = new URL(metaAuthorizeUrl({ ...meta(fetch), configId: "cfg9" }, "https://app/cb", "st"));
+    expect(url.searchParams.get("config_id")).toBe("cfg9");
+    expect(url.searchParams.has("scope")).toBe(false);
+    // The configuration says what is asked: no rerequest of a scope that isn't sent.
+    expect(url.searchParams.has("auth_type")).toBe(false);
+  });
 });
 
 describe("Google", () => {
-  it("renews a connection made before Nango from its refresh token, until it is moved", async () => {
+  it("asks for offline access to Google Ads reporting", async () => {
+    const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords openid");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+
     const f = fake(async (_u, init) => {
       const form = new URLSearchParams(String(init?.body));
+      if (form.get("grant_type") === "authorization_code") return json({ access_token: "AT", refresh_token: "RT", expires_in: 3599 });
       if (form.get("refresh_token") === "RT") return json({ access_token: "AT2", expires_in: 3599 });
       return json({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400);
     });
+    expect(await googleExchangeCode(google(f.fetchImpl), "CODE", "https://app/cb")).toMatchObject({ accessToken: "AT", refreshToken: "RT" });
     expect(await googleRefresh(google(f.fetchImpl), "RT")).toMatchObject({ accessToken: "AT2", refreshToken: "RT" });
     await expect(googleRefresh(google(f.fetchImpl), "OLD")).rejects.toBeInstanceOf(AdsAuthError);
   });
@@ -120,6 +162,14 @@ describe("AdSense", () => {
       { name: "CLICKS", type: "METRIC_TALLY" },
     ],
     rows: [{ cells: [{ value: "2026-10-01" }, ...(bySite ? [{ value: "shop.example.com" }] : []), { value: "4.2" }, { value: "900" }, { value: "1800" }, { value: "3" }] }],
+  });
+
+  it("asks for offline, read-only access to AdSense, with no developer token", () => {
+    const url = new URL(adsenseAuthorizeUrl(adsense(fetch), "https://app/api/ads/adsense/callback", "st"));
+    expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly openid");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://app/api/ads/adsense/callback");
   });
 
   it("lists accounts across pages, leaving closed ones out", async () => {

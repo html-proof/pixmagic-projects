@@ -199,18 +199,12 @@ describe("errors and debug output (scenario 14)", () => {
 describe("OAuth state (scenario 17)", () => {
   it("a Shopify or ad-platform callback with a state this browser didn't start is refused", async () => {
     const { owner } = await team("viewer");
-    // Every platform comes back through Nango's callback, forwarded only for someone who started a Nango session in this browser.
-    ctx.setEnv({ NANGO_SECRET_KEY: "nango-secret-0123456789abcdef0123456789" });
-    try {
-      const ads = await call("GET", "/ads/nango/oauth-callback?state=forged-state&code=abc", owner.headers);
+    // bizinsights' own sign-in: the state must be one this browser started (its cookie), whatever the platform.
+    for (const provider of ["meta", "google", "adsense"]) {
+      const ads = await call("GET", `/ads/${provider}/callback?state=forged-state&code=abc`, owner.headers);
       expect(ads.statusCode).toBe(302);
-      expect(ads.headers.location).toContain("error=state_mismatch");
-    } finally {
-      ctx.setEnv({ NANGO_SECRET_KEY: "" });
+      expect(ads.headers.location).toBe(`http://localhost:3001/settings/ads?error=state_mismatch&provider=${provider}`);
     }
-    // The old direct callback signs nothing in any more.
-    const old = await call("GET", "/ads/google/callback?state=forged-state&code=abc", owner.headers);
-    expect(old.headers.location).toContain("error=state_expired");
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 });

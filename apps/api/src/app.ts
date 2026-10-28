@@ -22,7 +22,6 @@ import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
-import { adsNangoRoutes } from "./routes/adsNango.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappWebhookRoutes } from "./routes/whatsappWebhook.js";
@@ -219,9 +218,6 @@ export function buildApp(deps: Deps): App {
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
-  // Nango (docs/nango.md): its session/finish routes, and /ads/nango/oauth-callback before adsRoutes (whose
-  // /ads/:provider/callback would otherwise take it: routes match in order); /webhooks/nango.
-  adsNangoRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.
