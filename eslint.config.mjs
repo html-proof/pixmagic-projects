@@ -65,11 +65,11 @@ export default tseslint.config(
   },
   {
     // bizinsights' Zapier app (integrations/zapier, docs/zapier.md): CommonJS, as Zapier's CLI runs it,
-    // tested with Jest. Outside the pnpm workspace: its own npm install, and no type check here.
+    // tested with Node's own runner (node:test). Outside the pnpm workspace: its own npm install, and no type check here.
     files: ["integrations/zapier/**/*.js"],
     languageOptions: {
       sourceType: "commonjs",
-      globals: { URLSearchParams: "readonly", describe: "readonly", it: "readonly", expect: "readonly", beforeAll: "readonly", afterAll: "readonly", beforeEach: "readonly", afterEach: "readonly", jest: "readonly" },
+      globals: { URLSearchParams: "readonly" },
     },
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },

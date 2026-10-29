@@ -1,7 +1,9 @@
 /**
- * The app's non-secret settings, the same in every environment: the CDK app puts them in the
- * functions' environment (infra/cdk/lib/app-stack.ts), and the local server (local.ts) starts from
- * them too, under whatever its env file sets. Left out on purpose: NODE_ENV, the addresses (APP_URL,
+ * The app's non-secret settings, the same in every environment. They ship in the functions' package:
+ * at cold start index.ts puts them in process.env under whatever the function's environment sets (not
+ * in that environment, which Lambda caps at 4 KB), and the local server (local.ts) starts from them
+ * too, under whatever its env file sets. A change here is live once its Deploy has succeeded
+ * (/api/version names the commit). Left out on purpose: NODE_ENV, the addresses (APP_URL,
  * API_URL) and the Cognito ids, which each environment gets from its own stacks (the runtime
  * parameter, secrets.ts). Secrets are in Secrets Manager (infra/cdk/scripts/put-secrets.mjs).
  *

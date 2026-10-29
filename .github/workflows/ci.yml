@@ -216,6 +216,11 @@ jobs:
         run: PGPASSWORD="${TEST_PG_PASSWORD:-app}" psql -h 127.0.0.1 -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
       - run: pnpm typecheck
       - run: pnpm test
+      # The CDK app's tests (synthesizing every stack). Deploy to AWS runs them again before it deploys;
+      # here a pull request hears first that it breaks them (#275 merged green and its Deploy then
+      # failed on them, 2026-10-29: the functions' environment had outgrown its 4 KB).
+      - name: CDK unit tests
+        run: pnpm --filter @infra/cdk test
       # The integration tests and the migrations check after them (about 4 of this job's 7.5 minutes)
       # read only these: @app/api and @app/worker, the packages they build on (@app/core, @app/db,
       # @app/shared), the test setup, the role grants, the dependencies, the TypeScript base config,

@@ -257,8 +257,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../../..");
 
 /**
- * The app's non-secret settings (apps/aws/src/settings.ts). The addresses and Cognito ids are not
- * among them: this environment gets those from its own stacks (the runtime parameter).
+ * The app's non-secret settings (apps/aws/src/settings.ts). The app's functions read them from their
+ * package, not their environment; the Cognito email function is given the few it needs (auth-stack.ts).
+ * The addresses and Cognito ids are not among them: this environment gets those from its own stacks
+ * (the runtime parameter).
  */
 export function appVars(): Record<string, string> {
   return { ...APP_SETTINGS };
