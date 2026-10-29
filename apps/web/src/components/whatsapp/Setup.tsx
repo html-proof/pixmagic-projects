@@ -6,6 +6,7 @@ import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaProvider, typ
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
+import { AppTokenConnect } from "./AppTokenConnect";
 import { CloudSignup } from "./CloudSignup";
 import { SettingsForm } from "./SettingsForm";
 import type { WaMessage, WaMessageEvent, WaOverview, WaPairing, WaTemplatesResponse } from "./types";
@@ -175,6 +176,22 @@ function ConnectStep({ overview, provider, setProvider, next }: { overview: WaOv
         <button type="button" className="btn-primary" disabled={!provider || (provider === "qr" && !understood)} onClick={next}>
           Continue
         </button>
+            </div>
+          </div>
+          {!overview.can.connect ? (
+            <p className="text-sm text-muted">Only people who may manage integrations can connect WhatsApp.</p>
+          ) : !overview.cloudSignup ? (
+            <Alert kind="info">
+              Connecting WhatsApp isn&apos;t available on bizinsights yet: its Meta app isn&apos;t set up{missing.length ? ` (missing ${missing.join(", ")})` : ""}. Nothing is connected and nothing is sent. bizinsights&apos; administrator sets these up; nothing
+              needs changing in your accounts.
+            </Alert>
+          ) : (
+            <>
+              <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} />
+              {overview.tokenConnect && <AppTokenConnect base={base} onConnected={onConnected} />}
+            </>
+          )}
+        </>
       )}
     </div>
   );

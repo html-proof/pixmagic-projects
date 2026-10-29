@@ -58,6 +58,30 @@ Hub image:
 | State | Sessions in PostgreSQL (`DATABASE_SAVE_DATA_INSTANCE`); instances belong to a `DATABASE_CONNECTION_CLIENT_NAME`, which allows shards. |
 | Checked running | 2.3.7 built from its source with the ECS task's settings on PostgreSQL 18, driven by bizinsights' own client (`evolution.ts`): create, webhook, a real QR code from WhatsApp on the first `connect` (and the same code again while pairing, not a restart), `connectionState`, a wrong token refused (401), logout, delete; its `CONNECTION_UPDATE` and `QRCODE_UPDATED` webhooks verified with `verifyEvolutionJwt` (and refused with another key). It showed three things the source reading hadn't: **`CORS_ORIGIN` must be `*`** (any other value answers 500 to a call without an `Origin` header, which is every server's call and the health check); delete answers before the instance is gone (it goes a moment later); a send to an instance still pairing waits for the client's timeout instead of failing (bizinsights only sends once the provider said "open"). `fetchInstances` returns instance tokens to the global key (server side only; webhooks carry none). |
 | Quirks handled | The image's time zone is São Paulo and `date_time` carries a "Z": the task sets `TZ=UTC`. Its start script prints `DATABASE_URL`: only `DATABASE_CONNECTION_URI` is set. At LOG level it prints QR codes and at INFO numbers: `LOG_LEVEL=ERROR,WARN`. Its SQS mode needs static AWS keys and drops failures: webhooks are used instead. Its Cloud integration answers Meta's errors with a 2xx and stores every sent message: the client treats such an answer as a refusal, and the nightly cron prunes Evolution's own message rows after 7 days. Its code `console.log`s every message received (number and text) whatever `LOG_LEVEL` says, and libsignal (inside Baileys) prints whole Signal sessions, private keys included, with `console.info` ("Closing session", "Opening session", "Removing old closed session") and `console.warn` ("Session already closed"): the task loads a filter (`/tmp/quiet-console.cjs`) that drops everything printed through the console, on every method (`log`, `info`, `warn`, `error`, `debug`, `trace`, `dir`, `table`, …), except the lines of Evolution's own logger (`[Evolution API] …`, its ERROR and WARN lines included), so neither customers' messages nor session keys reach CloudWatch. Baileys' own error lines (pino's JSON) don't go through the console and stay, and so does a crash's stack; Node's own warnings (`(node:1) Warning: …`) go with the rest. `stacks.test.ts` runs the filter against every console method. |
+Since 2026-10-28 it runs on **Meta's official WhatsApp Business Platform (Cloud API) only**, the
+owner's decision ("Official only"). A store connects with Meta's **Embedded Signup**; bizinsights
+then sends through Meta's Graph API with that business's own token. There is one way to connect.
+
+Before that (2026-10-26 to 2026-10-28) a store could also link a WhatsApp phone with a QR code through
+**Evolution API**, an open-source gateway bizinsights hosted on ECS. QR linking is retired: nothing
+creates, pairs or sends through Evolution any more, and the phones that were linked are disconnected
+by a one-time cleanup ([Removing Evolution](#removing-evolution)). Earlier designs (2026-10-10, and
+Meta + Nango on 2026-10-25) left tables that are erase-only ([The old tables](#the-old-tables)).
+
+## Where Meta's approval stands
+
+Meta lets other businesses connect through bizinsights' app only once it has approved bizinsights as
+a **Tech Provider**. On 2026-10-28: business verification of Zodiix Pty Ltd is **done**; App Review for
+`whatsapp_business_messaging` and `whatsapp_business_management` is **not submitted yet**
+([Owner's steps](#owners-steps-meta)); its recordings are made with the app's own test number,
+connected with a token of the app ([Connecting](#connecting)). Until Meta approves:
+
+- no merchant can connect WhatsApp: Meta's window stops on "can't onboard customers right now", and
+  the page says what that means (it never shows a connection Meta didn't confirm). People with a role
+  on the app (admins, developers, testers) can connect their own business;
+- the owner's phone that was linked with a QR code is disconnected by the cleanup;
+- automations that would send on WhatsApp have no WhatsApp to send through: the Autopilot work
+  (stacked on PR #272, not on `main` yet) falls back to SMS, then email.
 
 ## Architecture
 
@@ -217,6 +241,110 @@ elsewhere later means resetting two-step verification in WhatsApp Manager); and 
 with the token. The token (60 days, the configuration's setting) is renewed by the sweep 30 days
 before it ends. Meta's webhooks for these numbers (statuses, customers' messages, template reviews)
 come to bizinsights directly, signed with the app secret.
+The page loads Meta's JavaScript SDK and opens Embedded Signup (v4) with bizinsights' Meta app and
+its configuration (`WHATSAPP_CONFIG_ID` = `2228218088074576`: Cloud API, WhatsApp accounts, both
+`whatsapp_*` permissions, a 60-day system-user token). Meta's window does the sign-in, the business,
+the WhatsApp Business account and the number, posts what was picked to the page (only messages from
+facebook.com are read) and hands back a code that lives 30 seconds. `POST …/whatsapp/connection/cloud`
+then, server side (`connectCloudApi`):
+
+1. exchanges the code for the business's token (`GET /oauth/access_token`);
+2. asks Meta's token inspector (`GET /debug_token`, with the app token): it must have been issued to
+   **bizinsights' app**, hold **both** `whatsapp_business_management` and `whatsapp_business_messaging`,
+   and cover the account picked. Refused otherwise (`wrong_app`, `missing_permissions`,
+   `waba_not_granted`), with nothing changed;
+3. checks the number is **in that account** (`GET /{waba-id}/phone_numbers`; else `phone_not_in_account`)
+   and not connected to another store here (`number_taken`);
+4. subscribes the account's webhooks to bizinsights' app (`POST /{waba-id}/subscribed_apps`) and
+   registers the number with the Cloud API when it isn't yet (`POST /{phone-number-id}/register`, with
+   a random 6-digit two-step verification PIN bizinsights doesn't keep; a number that already has a PIN
+   is refused with how to turn it off);
+5. keeps the token on the connection row, encrypted (`instance_token_enc`, the column Evolution's
+   instance keys used: no migration), with its expiry, and marks the connection **connected**. A
+   phone the store had linked with a QR code is retired first (its waiting messages cancelled with
+   that reason).
+
+Ten attempts an hour per store at most.
+
+**Token renewal.** Embedded Signup tokens last 60 days. The sweep renews a token in its last 30 days
+(`renewCloudToken`: `fb_exchange_token`, on the row, only over the token it read). A token Meta no
+longer accepts (190, an expired one, or access removed in Meta's business settings) makes the
+connection **Needs reconnecting** (`logged_out`, reason `token_expired` or `access_removed`), raises
+the alert `whatsapp_reconnect` once, and holds messages; going through Meta's window again (same
+account and number) resolves it and the held messages go. Down 48 hours: waiting messages and running
+campaigns are cancelled, and the store is told.
+
+**Connecting with the app's own token** (bizinsights' own team only). Until Meta approves bizinsights
+as a Tech Provider, Embedded Signup onboards no one, so App Review's recordings can't be made through
+it. The workspaces in `WHATSAPP_TOKEN_CONNECT_WORKSPACES` (the PixMagic workspace since 2026-10-29;
+empty: no one) see a second way under the button, **bizinsights team: connect with the app's own
+token**: the WhatsApp Business account ID, the phone number ID and a token of the Insights app made in
+Meta's dashboard by someone with a role on it (a system user's in Business settings, or API Setup's
+temporary one). `POST …/whatsapp/connection/cloud-token` (`connectCloudApiWithToken`) refuses every
+other workspace (403 `token_connect_off`) before Meta is asked, then runs steps 2-5 above unchanged:
+the token must be the app's, with both permissions, for that account, and the number in it. The
+token is kept like Embedded Signup's, never shown or logged; the audit row says `via: "app_token"`. A
+system user's token never expires (nothing to renew); API Setup's temporary one is renewed like any.
+
+**Check again** (and the sweep, every 6 hours per connection) asks Meta for the number
+(`GET /{phone-number-id}`): an answer means connected; a refused token means reconnect.
+
+**Disconnect** forgets the token, lets the number go (it may be connected again, here or elsewhere),
+cancels what waits, pauses automations, stops campaigns, keeps the history, and unsubscribes the
+account's webhooks from bizinsights' app when no other store here uses that account. Uninstalling the
+Shopify app disconnects the same way; erasing a store (shop/redact) undoes what was set up at Meta first.
+
+## Sending
+
+`queueMessage` makes one row per purpose (`idempotencyKey`, unique per store), so Shopify's retries,
+a duplicate queue delivery or a double press send once. The `whatsapp` queue's `wapp_send` job claims
+the row (`queued` → `sending`, one claim wins) and checks, in order: the connection is up (else held,
+cancelled after 48 hours; a message queued for a retired QR phone is cancelled with
+`qr_linking_retired`), the automation or campaign still runs, automation isn't paused, consent, the
+sending hours (store time), the store's daily limit, the customer's daily limit, **Meta's 24-hour
+window** (free text or an attachment to a customer who last wrote more than 24 hours ago is skipped
+as `outside_window` without asking Meta; a template is fine), the **number's circuit breaker**, and the
+pace (20 a second per number). Then one call: `POST /{phone-number-id}/messages`.
+
+- **What goes**: an approved template with its body's values in order (`type: template`), free text
+  (`type: text`, link previews on), or an image or PDF uploaded first (`POST /{phone-number-id}/media`,
+  then `type: image|document` by media id, the text as caption). Every message carries bizinsights'
+  message id as `biz_opaque_callback_data`, which Meta returns on each status report.
+- Meta's answer makes the message **accepted**; **sent**, **delivered** and **read** come only from
+  Meta's status reports, recorded once each, and a message never moves backwards. A report that comes
+  before the answer was recorded finds the message by its reference and keeps its status.
+- **There is no "is this number on WhatsApp?"** on the Cloud API: a number that isn't is only known
+  from Meta's failed report afterwards (131026, "undeliverable").
+- **Meta never reached** (the connection was refused, the name didn't resolve): retried after 30 s,
+  2 min, 10 min, 30 min, then failed with the reason.
+- **A send that may have gone** (it timed out, the connection dropped after the request went out,
+  Meta answered 5xx, or a 2xx without a message id): marked failed ("uncertain") and **never retried
+  automatically**; the merchant decides (Retry). If Meta then reports it sent or delivered (found by
+  its reference), the message is settled as sent. A send that never finished (the worker died) is
+  marked uncertain by the sweep.
+- **Meta's limits** (130429, 4, 80007: the number, app or account; 131056: one customer): the message
+  is sent again later, a try spent, never twice; 130429 and its kin also **open the number's circuit**
+  for a minute, which holds that number's other messages without spending their tries. Five
+  failures in five minutes (unreachable, 5xx) open it too.
+- **Meta's access ended** (190, the permission errors 10 and 2xx, 131005, 133010): the connection
+  needs reconnecting (above); the message waits.
+- **Refused for this message**: failed with Meta's code (`meta_<code>`) and its meaning in words:
+
+  | Code | Means | Shown as |
+  | --- | --- | --- |
+  | 131047 | More than 24 hours since the customer last wrote: only an approved template | `outside_window` |
+  | 131026 | Undeliverable: not on WhatsApp, an old app, terms not accepted | `undeliverable` |
+  | 132000, 132001, 132005, 132007, 132012, 132015, 132016 (and 132xxx) | The template: values that don't fit, missing, too long, paused, disabled | `template_unavailable` |
+  | 131030 | A test number sends only to the numbers listed on it in WhatsApp Manager | `provider_rejected` |
+  | 131050 | The customer stopped marketing from the business in WhatsApp | `no_marketing_consent` |
+  | 131049, 130472 | Meta chose not to deliver (marketing limits, an experiment) | `provider_rejected` |
+  | 368, 131031, 131042, 131048, 130497, 131037 | The account can't send (policy, locked, payment, spam limit, country, display name) | `provider_rejected` |
+
+- Limits: daily per store (default 1,000, at most 100,000), per customer 3 a day (at most 10), 20
+  dashboard messages a minute, campaigns at most 100,000 recipients.
+
+**Test sends.** A number that is still Meta's test number (WhatsApp Manager → API Setup) sends only to
+up to five numbers listed there; anything else fails with 131030, worded as such.
 
 ## Webhooks and security
 
@@ -389,6 +517,47 @@ Still the owner's:
 2. **App Review**: Advanced Access for `whatsapp_business_messaging` and
    `whatsapp_business_management` (and `public_profile` if not granted), with screencasts of a
    message sent from bizinsights arriving and a template created in bizinsights.
+| `WHATSAPP_CONFIG_ID` | `apps/aws/src/settings.ts` | Embedded Signup's configuration on the Meta app "Insights" 971575545351940: `2228218088074576` |
+| `WHATSAPP_APP_ID` (empty: `META_APP_ID`), `WHATSAPP_API_VERSION` (`v26.0`) | `apps/aws/src/settings.ts` | WhatsApp runs on the Meta Ads app |
+| `WHATSAPP_TOKEN_CONNECT_WORKSPACES` | `apps/aws/src/settings.ts` | Workspaces that may also connect with a token of the app ([Connecting](#connecting)): PixMagic's `cmvarpfwa000002jngkgh5ji2`; empty: no one |
+| `META_APP_SECRET` (or `WHATSAPP_APP_SECRET` on an app of its own), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Secrets Manager `insights/<env>/app` | Code exchange, `appsecret_proof`, webhook signatures, the handshake |
+| `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_*` | CDK and `insights/<env>/evolution-api` | Release 1 only: the cleanup's access to Evolution |
+
+Nothing is pasted by a merchant (only bizinsights' own team pastes the app's token). The Deploy run's config check prints "Cloud API off (needs …)" while
+a Meta setting is missing; the page then offers nothing to connect and says why.
+
+## Owner's steps (Meta)
+
+Only the owner can do these, in Meta's consoles (never automated: it has blocked the admin account
+before). Done: WhatsApp added to the app "Insights" (971575545351940), Facebook Login for Business
+settings and domains, the Embedded Signup configuration `2228218088074576`, the webhook verify token,
+**business verification** of Zodiix Pty Ltd. Still the owner's:
+
+1. **App Review**: in the app dashboard, **Use cases → WhatsApp (Connect with customers through
+   WhatsApp) → Customize → Become Tech Provider** (1 of 2 steps done on 2026-10-29: business
+   verification Approved), request Advanced Access for `whatsapp_business_messaging` and
+   `whatsapp_business_management`, with screencasts of a message sent from bizinsights arriving and a
+   template created in bizinsights (a reviewer can't be sent an emailed sign-in code: see
+   docs/ads-review-packs.md for the reviewer account). The recordings, with the app's test number:
+   1. Meta dashboard → the Insights app → **WhatsApp → API Setup**: note the test number's **Phone
+      number ID** and the **WhatsApp Business Account ID**; under "To", add your own WhatsApp number
+      (a test number sends only to the numbers listed there).
+   2. Business settings (portfolio Zodiix Pty Ltd) → **Users → System users**: add an admin system
+      user, give it the Insights app and the test WhatsApp account (full control), **Generate token**
+      for the Insights app with `whatsapp_business_management` and `whatsapp_business_messaging`,
+      expiry "Never". (API Setup's temporary token works too, for 24 hours.)
+   3. bizinsights → PixMagic → WhatsApp → **Setup → 1. Connect** → **bizinsights team: connect with
+      the app's own token**: paste the two ids and the token, **Connect with this token**. Then step 3
+      (Configure).
+   4. **Video 1** (`whatsapp_business_messaging`): from your phone, write to the test number; in
+      bizinsights send a reply from the Messages tab (or step 4's test message to your own number),
+      with WhatsApp on the phone (or WhatsApp Web) in view as it arrives.
+   5. **Video 2** (`whatsapp_business_management`): in bizinsights' **Templates** tab create a
+      template and submit it to Meta; show it in WhatsApp Manager → Message templates.
+   6. In App Review → Permissions and features, add both permissions back to the request (they were
+      taken out on 2026-10-26: docs/ads-review-packs.md), attach each video, and submit.
+2. **Tech Provider onboarding**: once App Review passes, finish Meta's Tech Provider steps for the app
+   (WhatsApp → Quickstart / Partner settings) so Embedded Signup onboards other businesses.
 3. In **WhatsApp → Configuration**, the app's webhook: `https://bizinsights.io/api/webhooks/whatsapp`
    with the verify token, fields `messages` and `message_template_status_update`.
 
