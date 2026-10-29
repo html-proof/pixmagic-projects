@@ -6,6 +6,7 @@ import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaProvider, typ
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
+import { AppTokenConnect } from "./AppTokenConnect";
 import { CloudSignup } from "./CloudSignup";
 import { SettingsForm } from "./SettingsForm";
 import type { WaMessage, WaMessageEvent, WaOverview, WaPairing, WaTemplatesResponse } from "./types";
@@ -226,6 +227,7 @@ function AuthorizeStep({ base, overview, provider, back, onConnected }: { base: 
           Meta&apos;s own window opens. Sign in with Facebook, pick or create your business portfolio and WhatsApp Business account, and add or pick the phone number. bizinsights then checks with Meta that it may send for you, and registers the number.
         </p>
         {overview.cloudSignup ? <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} /> : <Alert kind="info">The Cloud API isn&apos;t available on bizinsights yet.</Alert>}
+        {overview.cloudSignup && overview.tokenConnect && <AppTokenConnect base={base} onConnected={onConnected} />}
         <button type="button" className="btn-secondary" onClick={back}>
           Back
         </button>

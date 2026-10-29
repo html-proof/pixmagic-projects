@@ -156,6 +156,8 @@ export interface WaOverview {
   triggers: WaTriggerAvailability;
   /** The Meta app's public ids for Embedded Signup (only for people who may connect; null when it isn't set up). */
   cloudSignup: { appId: string; configId: string; version: string } | null;
+  /** Whether this workspace may also connect with a token of bizinsights' own Meta app (bizinsights' own team only). */
+  tokenConnect?: boolean;
 }
 
 export interface WaTemplate {

@@ -218,6 +218,19 @@ with the token. The token (60 days, the configuration's setting) is renewed by t
 before it ends. Meta's webhooks for these numbers (statuses, customers' messages, template reviews)
 come to bizinsights directly, signed with the app secret.
 
+**Connecting with the app's own token** (bizinsights' own team only, PR #281, kept when QR came back).
+Until Meta approves bizinsights as a Tech Provider, Embedded Signup onboards no one, so App Review's
+recordings can't be made through it. The workspaces in `WHATSAPP_TOKEN_CONNECT_WORKSPACES` (the
+PixMagic workspace since 2026-10-29; empty: no one) see a second way under Meta's button in step 2,
+**bizinsights team: connect with the app's own token**: the WhatsApp Business account ID, the phone
+number ID and a token of the Insights app made in Meta's dashboard by someone with a role on it (a
+system user's in Business settings, or API Setup's temporary one). `POST …/whatsapp/connection/cloud-token`
+(`connectCloudApiWithToken`) refuses every other workspace (403 `token_connect_off`) before Meta is
+asked, then runs the steps above from the token inspector on, unchanged: the token must be the app's,
+with both permissions, for that account, and the number in it; then the webhooks, the registration
+and the `WHATSAPP-BUSINESS` instance. The token is kept like Embedded Signup's, never shown or logged;
+the audit row says `via: "app_token"`. A system user's token never expires (nothing to renew).
+
 ## Webhooks and security
 
 **Evolution → bizinsights** (`POST /api/webhooks/whatsapp/evolution/:instance`). Evolution 2.3.7
@@ -370,9 +383,10 @@ connections keep their shard (stored on the row).
 | `EVOLUTION_WEBHOOK_URL` | optional | Where Evolution posts (default `API_URL`); local development only |
 | `EVOLUTION_TIMEOUT_MS` | default 15000 | Per call to Evolution |
 | `WHATSAPP_CONFIG_ID`, `WHATSAPP_APP_ID` (empty: `META_APP_ID`), `WHATSAPP_API_VERSION` | `apps/aws/src/settings.ts` | Cloud API: Embedded Signup's configuration on the Meta app "Insights" 971575545351940 (`2228218088074576`) |
+| `WHATSAPP_TOKEN_CONNECT_WORKSPACES` | `apps/aws/src/settings.ts` | Workspaces that may also connect with a token of the app ([Connecting](#connecting)): PixMagic's `cmvarpfwa000002jngkgh5ji2`; empty: no one |
 | `META_APP_SECRET` (or `WHATSAPP_APP_SECRET`), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Secrets Manager `insights/<env>/app` | Cloud API: code exchange, webhook signatures, the handshake |
 
-Nothing is pasted by a merchant. The Deploy run's config check prints "WhatsApp service on, Cloud API
+Nothing is pasted by a merchant (only bizinsights' own team pastes the app's token). The Deploy run's config check prints "WhatsApp service on, Cloud API
 off (needs …)" while a Cloud API setting is missing; the page then offers only the QR way.
 
 ## Owner's steps (Cloud API)
@@ -385,10 +399,30 @@ Facebook Login for Business settings and domains, the Embedded Signup configurat
 Still the owner's:
 
 1. **Business verification** of Zodiix Pty Ltd (Business settings → Security Center), for the
-   portfolio the app is linked to (bizinsights.io).
-2. **App Review**: Advanced Access for `whatsapp_business_messaging` and
-   `whatsapp_business_management` (and `public_profile` if not granted), with screencasts of a
-   message sent from bizinsights arriving and a template created in bizinsights.
+   portfolio the app is linked to (bizinsights.io): **Approved** (2026-10-29).
+2. **App Review**: in the app dashboard, **Use cases → WhatsApp (Connect with customers through
+   WhatsApp) → Customize → Become Tech Provider**, Advanced Access for `whatsapp_business_messaging`
+   and `whatsapp_business_management` (and `public_profile` if not granted), with screencasts of a
+   message sent from bizinsights arriving and a template created in bizinsights (a reviewer can't be
+   sent an emailed sign-in code: see docs/ads-review-packs.md for the reviewer account). The
+   recordings, with the app's test number:
+   1. Meta dashboard → the Insights app → **WhatsApp → API Setup**: note the test number's **Phone
+      number ID** and the **WhatsApp Business Account ID**; under "To", add your own WhatsApp number
+      (a test number sends only to the numbers listed there).
+   2. Business settings (portfolio Zodiix Pty Ltd) → **Users → System users**: add an admin system
+      user, give it the Insights app and the test WhatsApp account (full control), **Generate token**
+      for the Insights app with `whatsapp_business_management` and `whatsapp_business_messaging`,
+      expiry "Never". (API Setup's temporary token works too, for 24 hours.)
+   3. bizinsights → PixMagic → WhatsApp → **Setup → 1. Choose how to connect** → Official WhatsApp
+      Business Platform → Continue → **bizinsights team: connect with the app's own token**: paste
+      the two ids and the token, **Connect with this token**. Then step 3 (Configure).
+   4. **Video 1** (`whatsapp_business_messaging`): from your phone, write to the test number; in
+      bizinsights send a reply from the Messages tab (or step 4's test message to your own number),
+      with WhatsApp on the phone (or WhatsApp Web) in view as it arrives.
+   5. **Video 2** (`whatsapp_business_management`): in bizinsights' **Templates** tab create a
+      template and submit it to Meta; show it in WhatsApp Manager → Message templates.
+   6. In App Review → Permissions and features, add both permissions back to the request (they were
+      taken out on 2026-10-26: docs/ads-review-packs.md), attach each video, and submit.
 3. In **WhatsApp → Configuration**, the app's webhook: `https://bizinsights.io/api/webhooks/whatsapp`
    with the verify token, fields `messages` and `message_template_status_update`.
 
@@ -461,7 +495,8 @@ TEST_PG_PORT=5463 TEST_PG_PASSWORD=app TEST_DB=wapp_test pnpm --filter @app/work
 ```
 
 Evolution is `test-support/evolutionFake.ts` (answers as 2.3.7 does, signs webhooks as it does);
-nothing leaves the machine. The API test covers pairing with the provider's QR, "connected" only on
+nothing leaves the machine. The API test covers pairing with the provider's QR, connecting with the app's own token (only the listed workspaces;
+Meta's Graph API answered in the test), "connected" only on
 the provider's word, every way a webhook is refused, the test number and the test's real status,
 sends (consent, idempotency, attachments, uncertain sends, retries), STOP and START from anyone,
 automations from Shopify's events (once per order, test mode, stale and paused), campaigns (exact

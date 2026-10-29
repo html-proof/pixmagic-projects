@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import { systemDb, type Store } from "@app/db";
 import { dispatchCampaign, processWebhookEvent, sendQueuedMessage, waEncrypt, whatsappOnShopifyEvent } from "@app/core";
@@ -254,6 +254,95 @@ describe("connecting a phone (Steps 1-2)", () => {
     // The cancelled message stays cancelled: nothing is resent by itself.
     expect(await drain()).toEqual([]);
     expect(evo.sends).toHaveLength(0);
+  });
+});
+
+describe("connecting with a token of bizinsights' own Meta app (its own team only)", () => {
+  const META = { META_APP_ID: "971575545351940", META_APP_SECRET: "meta-secret-for-tests", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-me", WHATSAPP_CONFIG_ID: "2228218088074576" };
+  const WABA = "2098765432101";
+  const PHONE_ID = "1098765432101";
+  const TOKEN = `EAAG${"t".repeat(40)}`;
+  const BODY = { accessToken: TOKEN, wabaId: WABA, phoneNumberId: PHONE_ID };
+  let graphCalls: string[];
+
+  /** Meta's Graph API as connecting asks it (the token inspector, the account's numbers, its webhooks); Evolution for the rest. */
+  const meta = (grant: { appId?: string; scopes?: string[]; inAccount?: boolean } = {}) => {
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(input instanceof Request ? input.url : String(input));
+      if (u.hostname !== "graph.facebook.com") return evo.fetch(input, init);
+      const path = u.pathname.split("/").slice(2).join("/");
+      graphCalls.push(`${init?.method ?? "GET"} ${path}`);
+      const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+      if (path === "debug_token") {
+        const scopes = grant.scopes ?? ["whatsapp_business_management", "whatsapp_business_messaging"];
+        return json({ data: { app_id: grant.appId ?? META.META_APP_ID, is_valid: u.searchParams.get("input_token") === TOKEN, scopes, granular_scopes: scopes.map((scope) => ({ scope, target_ids: [WABA] })) } });
+      }
+      if (path === `${WABA}/phone_numbers`) return json({ data: grant.inAccount === false ? [] : [{ id: PHONE_ID, display_phone_number: "+61 400 222 333", verified_name: "Green Leaf", platform_type: "CLOUD_API", status: "CONNECTED" }] });
+      if (path === `${WABA}/subscribed_apps`) return json({ success: true });
+      return json({ error: { message: "Unsupported request", type: "GraphMethodException", code: 100 } }, 400);
+    });
+  };
+  beforeEach(() => {
+    graphCalls = [];
+    ctx.setEnv(META);
+    meta();
+  });
+  afterEach(() => ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: "", META_APP_ID: "", META_APP_SECRET: "", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "", WHATSAPP_CONFIG_ID: "" }));
+
+  it("is offered only to the workspaces listed, and refused to every other one before Meta is asked", async () => {
+    const o = await owner();
+    expect(ok(await o.call("GET")).tokenConnect).toBe(false);
+    expect(ok(await o.call("POST", "/connection/cloud-token", BODY), 403).error).toBe("token_connect_off");
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: "cmvsomeotherworkspace0001" });
+    expect(ok(await o.call("GET")).tokenConnect).toBe(false);
+    expect(ok(await o.call("POST", "/connection/cloud-token", BODY), 403).error).toBe("token_connect_off");
+    expect(graphCalls).toEqual([]);
+    expect(ok(await o.call("GET")).connection).toBeNull();
+
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: ` cmvsomeotherworkspace0001 , ${o.ws} ` });
+    expect(ok(await o.call("GET")).tokenConnect).toBe(true);
+    // Not to someone in that workspace who may not connect.
+    const v = await signIn(ctx, "v", "v@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "custom", permissions: ["marketing.campaigns"] } });
+    expect(ok(await o.call("GET", "", undefined, v.headers)).tokenConnect).toBe(false);
+    expect((await o.call("POST", "/connection/cloud-token", BODY, v.headers)).statusCode).toBe(403);
+  });
+
+  it("connects through a WHATSAPP-BUSINESS instance after the same checks as Meta's window, and keeps the token sealed", async () => {
+    const o = await owner();
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: o.ws });
+    const { connection } = ok(await o.call("POST", "/connection/cloud-token", BODY), 201);
+    expect(connection).toMatchObject({ provider: "cloud_api", status: "connected" });
+    // Meta's token inspector, the account's numbers, its webhooks (the number is already on the Cloud API: no registration).
+    expect(graphCalls).toEqual(["GET debug_token", `GET ${WABA}/phone_numbers`, `POST ${WABA}/subscribed_apps`]);
+    const row = await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } });
+    expect(row).toMatchObject({ provider: "cloud_api", status: "connected", wabaId: WABA, phoneNumberId: PHONE_ID, businessId: null, tokenExpiresAt: null });
+    expect(evo.instances.get(row.instanceName!)).toMatchObject({ integration: "WHATSAPP-BUSINESS", token: TOKEN, number: PHONE_ID });
+    expect(row.instanceTokenEnc).not.toContain(TOKEN);
+    expect((await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: o.ws, action: "whatsapp.connected" } })).metadata).toMatchObject({ via: "app_token", wabaId: WABA });
+    for (const res of [await o.call("GET"), await o.call("POST", "/connection/check")]) expect(res.body).not.toContain(TOKEN);
+    expect(ok(await o.call("POST", "/connection/cloud-token", BODY), 409).error).toBe("already_connected");
+  });
+
+  it("refuses a token Meta doesn't vouch for, in its own words, and changes nothing", async () => {
+    const o = await owner();
+    ctx.setEnv({ WHATSAPP_TOKEN_CONNECT_WORKSPACES: o.ws });
+    const attempt = async (body: Record<string, unknown>, status = 400) => ok(await o.call("POST", "/connection/cloud-token", body), status);
+    meta({ appId: "1111111111" });
+    expect(await attempt(BODY)).toMatchObject({ error: "wrong_app", message: expect.stringMatching(/isn't a valid one of bizinsights' Meta app/) });
+    meta();
+    expect(await attempt({ ...BODY, accessToken: `EAAG${"z".repeat(40)}` })).toMatchObject({ error: "wrong_app" });
+    meta({ scopes: ["whatsapp_business_management"] });
+    expect(await attempt(BODY)).toMatchObject({ error: "missing_permissions", message: expect.stringMatching(/whatsapp_business_messaging/) });
+    meta();
+    expect(await attempt({ ...BODY, wabaId: "123456789" })).toMatchObject({ error: "waba_not_granted" });
+    meta({ inAccount: false });
+    expect(await attempt(BODY)).toMatchObject({ error: "phone_not_in_account", message: expect.stringMatching(/API Setup/) });
+    expect((await attempt({ wabaId: WABA, phoneNumberId: PHONE_ID, accessToken: "short" })).error).toBe("validation");
+    // Nothing was subscribed or kept, and no instance was made.
+    expect(graphCalls.filter((c) => !c.startsWith("GET "))).toEqual([]);
+    expect(evo.instances.size).toBe(0);
+    expect(ok(await o.call("GET")).connection).toBeNull();
   });
 });
 
@@ -725,6 +814,7 @@ describe("who may see and do what", () => {
     expect((await o.call("GET", `/messages?phone=${encodeURIComponent(CUSTOMER)}`, undefined, v.headers)).statusCode).toBe(403);
     for (const [method, path, payload] of [
       ["POST", "/connection", { method: "qr" }],
+      ["POST", "/connection/cloud-token", { accessToken: `EAAG${"x".repeat(40)}`, wabaId: "100000", phoneNumberId: "200000" }],
       ["DELETE", "/connection", undefined],
       ["PUT", "/settings", SETTINGS],
       ["POST", "/settings/pause", { paused: true }],
@@ -764,6 +854,7 @@ describe("who may see and do what", () => {
     expect(ov.can).toMatchObject({ connect: false, manage: false });
     for (const [method, path, payload] of [
       ["POST", "/connection", { method: "qr" }],
+      ["POST", "/connection/cloud-token", { accessToken: `EAAG${"x".repeat(40)}`, wabaId: "100000", phoneNumberId: "200000" }],
       ["DELETE", "/connection", undefined],
       ["POST", "/connection/reconnect", undefined],
       ["PUT", "/settings", SETTINGS],
