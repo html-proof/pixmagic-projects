@@ -22,7 +22,7 @@ import type { Coord } from "../coord.js";
 import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
-import { countGoogleAdsOperations, countingGoogleAdsFetch, googleAdsPaused, pauseGoogleAds } from "./budget.js";
+import { countGoogleAdsOperations, countingGoogleAdsFetch, googleAdsPaused, isMetaAppLimit, metaAdsPausedUntil, pauseGoogleAds, pauseMetaAds } from "./budget.js";
 import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig } from "./config.js";
 import { adAccessToken } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
@@ -57,13 +57,18 @@ async function liveReport<T>(conn: AdConnection, read: () => Promise<T>): Promis
   }
 }
 
+/** Meta Ads is paused for Meta's limit on bizinsights' app: no call is made until it ends (`seconds` from now). */
+const metaAppLimitReached = (seconds: number) => new AdsRateLimitedError("Meta Ads calls are paused: bizinsights' app is over Meta's request limit", seconds, "rate_limited");
+
 /**
  * The Meta Ads report for one connected account and range, straight from Meta. A permission error
  * says whether ads_read was taken back (reconnect) or this login lost the account (permission).
  * `opts.deadline` (epoch ms): when Meta's reads must be done; by default META_REPORT_JOB.budgetMs from
  * now. A request that asks for two ranges (a comparison) passes one deadline to both, so together they
  * still fit the request's time; the comparison's range is read without delivery statuses
- * (`statuses: false`), which only the report's own rows show.
+ * (`statuses: false`), which only the report's own rows show. With `coord`, Meta isn't asked at all while
+ * Meta Ads is paused for Meta's limit on bizinsights' app (the answer is an AdsRateLimitedError, as Meta's
+ * own throttling is), and Meta saying the app is over it pauses the syncs too.
  */
 export async function metaReportForConnection(
   conn: AdConnection,
@@ -71,19 +76,26 @@ export async function metaReportForConnection(
   since: string,
   until: string,
   fetchImpl?: FetchLike,
-  opts: { deadline?: number; statuses?: boolean } = {},
+  opts: { coord?: Coord; deadline?: number; statuses?: boolean } = {},
 ): Promise<MetaReport> {
   const cfg = metaConfig(fetchImpl);
   if (!cfg) throw notSetUp("meta");
+  const paused = opts.coord ? await metaAdsPausedUntil(opts.coord) : null;
+  if (paused) throw metaAppLimitReached(Math.ceil((paused.getTime() - Date.now()) / 1000));
   const deadline = opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs;
-  return liveReport(conn, async () => {
-    const token = await adAccessToken(conn, fetchImpl);
-    try {
-      return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, { deadline, currency: conn.currency, ...(opts.statuses === false ? { statuses: false } : {}) });
-    } catch (err) {
-      throw await metaClassifyPermissionError(cfg, token, err);
-    }
-  });
+  try {
+    return await liveReport(conn, async () => {
+      const token = await adAccessToken(conn, fetchImpl);
+      try {
+        return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, { deadline, currency: conn.currency, ...(opts.statuses === false ? { statuses: false } : {}) });
+      } catch (err) {
+        throw await metaClassifyPermissionError(cfg, token, err);
+      }
+    });
+  } catch (err) {
+    if (opts.coord && isMetaAppLimit(err)) await pauseMetaAds(opts.coord, err.retryAfterS);
+    throw err;
+  }
 }
 
 /** bizinsights has used the day's Google Ads API operations: no call is made until Google's allowance comes back. */

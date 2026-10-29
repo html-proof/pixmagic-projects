@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanValue,
+  connectionStatusFromProvider,
   evaluateWaConditions,
+  isTerminalCloseReason,
   messageStatusFromProvider,
   parseEmbeddedSignupMessage,
-  providerLabel,
   renderWaText,
   statusAfterReport,
   statusBucket,
@@ -23,11 +24,7 @@ import {
 } from "../src/whatsapp";
 
 describe("message statuses", () => {
-  it("maps Meta's words (and the last QR-linked phones' Baileys words), and says nothing of what it doesn't know", () => {
-    expect(messageStatusFromProvider("accepted")).toBe("accepted");
-    expect(messageStatusFromProvider("held_for_quality_assessment")).toBe("accepted");
-    expect(messageStatusFromProvider("sent")).toBe("sent");
-    expect(messageStatusFromProvider("read")).toBe("read");
+  it("maps Evolution's (Baileys') and Meta's words, and says nothing of what it doesn't know", () => {
     expect(messageStatusFromProvider("PENDING")).toBe("accepted");
     expect(messageStatusFromProvider("SERVER_ACK")).toBe("sent");
     expect(messageStatusFromProvider("DELIVERY_ACK")).toBe("delivered");
@@ -66,11 +63,22 @@ describe("message statuses", () => {
   });
 });
 
-describe("connection providers", () => {
-  it("names the one way to connect, and a retired QR link for its history only", () => {
-    expect(providerLabel("cloud_api")).toBe("WhatsApp Business Platform (Meta)");
-    expect(providerLabel("qr")).toMatch(/retired/);
-    expect(providerLabel(null)).toBe("Not connected");
+describe("connection states", () => {
+  it("is connected only when the provider says open", () => {
+    expect(connectionStatusFromProvider("open", "pairing")).toBe("connected");
+    expect(connectionStatusFromProvider("connecting", "pairing")).toBe("pairing");
+    expect(connectionStatusFromProvider("connecting", "connected")).toBe("reconnecting");
+    expect(connectionStatusFromProvider("close", "connected")).toBe("reconnecting");
+    expect(connectionStatusFromProvider("close", "pairing")).toBe("failed");
+    expect(connectionStatusFromProvider("refused", "pairing")).toBe("failed");
+    expect(connectionStatusFromProvider("nonsense", "connected")).toBeNull();
+  });
+
+  it("knows the close reasons after which only a new pairing helps", () => {
+    expect(isTerminalCloseReason(401)).toBe(true);
+    expect(isTerminalCloseReason(403)).toBe(true);
+    expect(isTerminalCloseReason(428)).toBe(false);
+    expect(isTerminalCloseReason(null)).toBe(false);
   });
 });
 

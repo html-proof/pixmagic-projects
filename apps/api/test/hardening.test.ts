@@ -207,6 +207,17 @@ describe("OAuth state (scenario 17)", () => {
     }
     expect(await systemDb.adConnection.count()).toBe(0);
   });
+
+  it("the addresses Nango was reached at (2026-10-22 to 2026-10-28) are no routes any more, signed in or not", async () => {
+    const { owner } = await team("viewer");
+    for (const headers of [{}, owner.headers]) {
+      const back = await call("GET", "/ads/nango/oauth-callback?state=forged-state&code=abc", headers);
+      expect(back.statusCode).toBe(404);
+      expect(back.headers.location).toBeUndefined();
+      expect((await call("POST", "/webhooks/nango", { ...headers, "content-type": "application/json" }, JSON.stringify({ type: "auth", operation: "creation", connectionId: "c" }))).statusCode).toBe(404);
+    }
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
 });
 
 describe("security headers (scenario 18)", () => {

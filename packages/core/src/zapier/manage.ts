@@ -1,11 +1,14 @@
 /**
  * Settings → Integrations' Zapier card: the store's connections (who allowed each, when, its last use,
- * its triggers), the last deliveries with their outcome, and Disconnect. And the removals that go with
- * a store's data (purgeStoreData).
+ * its triggers), the last deliveries with their outcome, Disconnect, and Retry for a delivery that
+ * failed. And the removals that go with a store's data (purgeStoreData).
  */
 import { systemDb } from "@app/db";
 import { deliveryOutcome, ZAPIER_EVENT_INFO, type ZapierEvent } from "@app/shared/zapier";
+import { logger } from "../logger.js";
 import { audit } from "../notify.js";
+import type { Queues } from "../queues.js";
+import { zapierQueue } from "./common.js";
 import { zapierConfig } from "./config.js";
 import { revokeZapierGrants } from "./oauth.js";
 
@@ -58,8 +61,46 @@ export async function zapierOverview(workspaceId: string, storeId: string, opts:
       lastAttemptAt: d.lastAttemptAt?.toISOString() ?? null,
       deliveredAt: d.deliveredAt?.toISOString() ?? null,
       nextAttemptAt: d.status === "retrying" ? d.nextAttemptAt.toISOString() : null,
+      // Failed, and its trigger is still there to send it to (Retry).
+      retryable: d.status === "failed" && !!d.hookId,
     })),
   };
+}
+
+export type ZapierRetryOutcome = "queued" | "not_found" | "not_failed" | "trigger_gone";
+
+/**
+ * Retry (owners and admins): send a failed delivery again, as if new: its attempts start over and
+ * the member behind the connection is checked again at delivery. Only a failed one whose trigger is
+ * still there (a Zap turned off or Zapier disconnected has nowhere to send it).
+ */
+export async function retryZapierDelivery(
+  workspaceId: string,
+  storeId: string,
+  deliveryId: string,
+  queues: Pick<Queues, "sync">,
+  actor: { userId: string; ip?: string },
+  now = new Date(),
+): Promise<ZapierRetryOutcome> {
+  const d = await systemDb.zapierDelivery.findFirst({ where: { id: deliveryId, workspaceId, storeId }, include: { hook: { include: { grant: true } } } });
+  if (!d) return "not_found";
+  if (d.status !== "failed") return "not_failed";
+  if (!d.hook || d.hook.grant.revokedAt) return "trigger_gone";
+  // Conditional: two clicks at once queue it once.
+  const reset = await systemDb.zapierDelivery.updateMany({
+    where: { id: d.id, status: "failed" },
+    data: { status: "pending", attempts: 0, nextAttemptAt: now, errorCode: null, responseStatus: null, enqueuedAt: null },
+  });
+  if (!reset.count) return "not_failed";
+  try {
+    await zapierQueue(queues).send({ kind: "zapier", deliveryId: d.id });
+    await systemDb.zapierDelivery.update({ where: { id: d.id }, data: { enqueuedAt: now } });
+  } catch (err) {
+    // Pending and due: the cron sweep sends it.
+    logger.warn({ err, deliveryId: d.id }, "zapier retry not queued; the sweep will send it");
+  }
+  await audit({ workspaceId, actorUserId: actor.userId, action: "zapier.delivery_retried", targetType: "zapier_delivery", targetId: d.id, metadata: { storeId, event: d.event, hookId: d.hookId }, ip: actor.ip });
+  return "queued";
 }
 
 /** Disconnect one Zapier connection of the store: its tokens stop working and its triggers are deleted. */

@@ -43,7 +43,7 @@ module.exports = {
   display: {
     label: "Send WhatsApp Template Message",
     description:
-      "Sends a customer one of your WhatsApp templates Meta approved, through your store's WhatsApp in bizinsights. For example: thank a new Meta or Google Ads lead on WhatsApp within minutes.",
+      "Sends a customer one of your WhatsApp templates, through your store's WhatsApp in bizinsights. For example: thank a new Meta or Google Ads lead on WhatsApp within minutes.",
   },
   operation: {
     inputFields: [
@@ -53,7 +53,7 @@ module.exports = {
         required: true,
         dynamic: "whatsapp_templates.id.name",
         altersDynamicFields: true,
-        helpText: "One of your templates Meta approved (WhatsApp page in bizinsights, Templates). Marketing templates go only to customers who agreed to marketing.",
+        helpText: "One of your WhatsApp templates that can send now (WhatsApp page in bizinsights, Templates; on Meta's Business Platform, the ones Meta approved). Marketing templates go only to customers who agreed to marketing.",
       },
       templateValues,
       {

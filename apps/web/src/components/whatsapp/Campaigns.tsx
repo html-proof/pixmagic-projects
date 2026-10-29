@@ -76,7 +76,8 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
   const [deleting, setDeleting] = useState<WaCampaign | null>(null);
   const { busy, run } = useWaAction();
   const manage = overview.can.manage;
-  const cap = WA_CAMPAIGN_MAX;
+  const provider = overview.connection?.provider ?? "qr";
+  const cap = WA_CAMPAIGN_MAX[provider];
   const tz = overview.store.timezone;
 
   if (list.error && !list.data) return <LoadError what="campaigns" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />;
@@ -91,6 +92,7 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
         templates={marketing}
         samples={templates.data.samples as Record<string, string>}
         cap={cap}
+        qr={provider === "qr"}
         onDone={(saved) => {
           setEditing(null);
           void list.reload();
@@ -109,7 +111,7 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
             <h2 className="text-base font-semibold">Campaigns</h2>
             <p className="mt-1 text-sm text-muted">
               Send a marketing message to customers who agreed to marketing messages. Customers who opted out, are on your do-not-message list, or aren&apos;t on WhatsApp are always left out.
-              Each campaign goes to at most {fmtNum(cap)} people, as a template Meta approved.
+              Each campaign sends to at most {fmtNum(cap)} people on this connection.
             </p>
           </div>
           {manage && (
@@ -118,6 +120,7 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
             </button>
           )}
         </div>
+        {provider === "qr" && <QrWarning />}
         {!overview.settings.marketingEnabled && (
           <div className="mt-3">
             <Alert kind="info">
@@ -199,6 +202,7 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
           campaign={launching}
           template={templates.data.templates.find((t) => t.id === launching.templateId) ?? null}
           cap={cap}
+          qr={provider === "qr"}
           tz={tz}
           onClose={(launched) => {
             setLaunching(null);
@@ -244,6 +248,17 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
       >
         <p>The campaign goes from this list. Its messages stay in Message history.</p>
       </ConfirmDialog>
+    </div>
+  );
+}
+
+function QrWarning() {
+  return (
+    <div className="mt-3">
+      <Alert kind="info">
+        This store sends from a phone linked with a QR code, not Meta&apos;s official API. WhatsApp may restrict or ban a number it sees sending bulk or unwanted messages, so send campaigns only to
+        customers who asked for them. bizinsights paces them (a message every few seconds) and caps how many go out a day.
+      </Alert>
     </div>
   );
 }
@@ -304,6 +319,7 @@ function Editor({
   templates,
   samples,
   cap,
+  qr,
   onDone,
 }: {
   base: string;
@@ -311,6 +327,7 @@ function Editor({
   templates: WaTemplate[];
   samples: Record<string, string>;
   cap: number;
+  qr: boolean;
   onDone: (saved: WaCampaign | null) => void;
 }) {
   const [name, setName] = useState(campaign?.name ?? "");
@@ -354,6 +371,7 @@ function Editor({
             Back to campaigns
           </button>
         </div>
+        {qr && <QrWarning />}
       </div>
 
       <div className="card space-y-4">
@@ -453,7 +471,7 @@ function Editor({
               <>
                 <span className="font-semibold">{plural(estimate.count ?? 0, "customer")}</span> can receive it now. <span className="text-muted">{describeWaAudience(audience)}.</span>
                 {template?.variables.includes("customer_first_name") && <span className="text-muted"> Customers whose first name bizinsights doesn&apos;t have are left out: the template greets them by name.</span>}
-                {(estimate.count ?? 0) > cap && <span className="mt-1 block text-danger">That&apos;s more than the {fmtNum(cap)} one campaign can send to: narrow the audience.</span>}
+                {(estimate.count ?? 0) > cap && <span className="mt-1 block text-danger">That&apos;s more than the {fmtNum(cap)} one campaign can send to on this connection: narrow the audience.</span>}
               </>
             )}
           </div>
@@ -482,6 +500,7 @@ function LaunchDialog({
   campaign,
   template,
   cap,
+  qr,
   tz,
   onClose,
 }: {
@@ -489,6 +508,7 @@ function LaunchDialog({
   campaign: WaCampaign;
   template: WaTemplate | null;
   cap: number;
+  qr: boolean;
   tz: string;
   onClose: (launched: boolean) => void;
 }) {
@@ -541,10 +561,15 @@ function LaunchDialog({
               <span className="text-base font-semibold">{plural(shown, "customer")}</span> will receive it.
               {count !== null && <span className="mt-1 block text-warn">The audience changed since you last looked: this is the new count.</span>}
               {shown === 0 && <span className="mt-1 block text-muted">Nobody in this audience can receive marketing messages right now.</span>}
-              {tooMany && <span className="mt-1 block text-danger">More than the {fmtNum(cap)} one campaign may send to. Edit the audience to narrow it.</span>}
+              {tooMany && <span className="mt-1 block text-danger">More than the {fmtNum(cap)} one campaign may send to on this connection. Edit the audience to narrow it.</span>}
             </>
           )}
         </div>
+        {qr && (
+          <Alert kind="info">
+            Sent from your linked phone, a message every few seconds, within your sending hours and daily limit. WhatsApp may restrict a number that sends unwanted bulk messages.
+          </Alert>
+        )}
         <fieldset className="space-y-2">
           <legend className="label">When</legend>
           <label className="flex items-center gap-2">

@@ -1,6 +1,6 @@
 /**
  * Zapier's one action, "Send WhatsApp Template Message" (docs/zapier.md): a Zap hands bizinsights a
- * customer's number, one of the store's templates Meta approved and the values for its variables, and
+ * customer's number, one of the store's templates and the values for its variables, and
  * bizinsights queues it through the store's own WhatsApp path (docs/whatsapp.md, "Sending"), so every
  * rule a message from the dashboard keeps applies: the connection, consent and the do-not-message list
  * (checked now and again when it is sent), the store's daily and per-customer limits, its sending

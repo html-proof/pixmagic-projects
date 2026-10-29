@@ -1356,22 +1356,6 @@ export interface AdsenseReport {
 }
 
 /**
- * A report's totals: AdSense's own totals row when it sent one (it covers every matched row, also the
- * ones a cut-off report leaves out), else the sum of `rows`.
- */
-export function adsenseReportTotals(report: AdsenseReport, rows: readonly AdsenseTotals[]): AdsenseTotals {
-  const headers = report.headers ?? [];
-  const cells = report.totals?.cells;
-  const col = (name: string) => headers.findIndex((h) => h.name === name);
-  const at = { earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
-  const num = (i: number) => (cells && i >= 0 ? Number(cells[i]?.value ?? 0) || 0 : 0);
-  type Counts = Pick<AdsenseTotals, "earnings" | "pageViews" | "impressions" | "clicks">;
-  const sum = (list: readonly Counts[]) => adsenseTotals(list.map((r) => ({ accountId: "", site: "", day: "", earnings: r.earnings, pageViews: r.pageViews, impressions: r.impressions, clicks: r.clicks })));
-  if (cells && at.earnings >= 0) return sum([{ earnings: num(at.earnings), pageViews: Math.round(num(at.pageViews)), impressions: Math.round(num(at.impressions)), clicks: Math.round(num(at.clicks)) }]);
-  return sum(rows);
-}
-
-/**
  * The rows of a report by DATE (and DOMAIN_CODE, when it was split by site), and the currency its
  * money is in. Columns are found by name, so their order doesn't matter.
  */
@@ -1401,27 +1385,148 @@ export function fromAdsenseReport(accountId: string, report: AdsenseReport): { r
 /** AdSense names accounts "accounts/pub-<digits>"; the publisher id is the part after the slash. */
 export const adsenseAccountId = (name: string) => name.replace(/^accounts\//, "");
 
+/**
+ * Up to this day of a month, the daily re-check reads the whole month before again (recheckDays in
+ * packages/core/src/adConnections/sync.ts): AdSense finalizes a month's estimated earnings in the
+ * first days of the next.
+ */
+export const ADSENSE_FINALIZED_BY_DAY = 10;
+
+/**
+ * The last day of AdSense figures read on `readOn` (the account's own day) that are final rather
+ * than AdSense's estimate: every month that ended before the month before `readOn`'s, and that month
+ * too once `readOn` is past the 10th, when the re-reads of its first ten days have all had their turn.
+ * Null: nothing read yet. For stored days, `readOn` is the day of the last sync that worked
+ * (lastSyncedAt): the figures stay as they were then, so an account whose syncs stopped is final
+ * only as far as it was when it last synced.
+ */
+export function adsenseFinalThrough(readOn: string | null): string | null {
+  if (!isDay(readOn)) return null;
+  const [y, m, d] = readOn.split("-").map(Number) as [number, number, number];
+  // The first of the month whose day before is the last one final: readOn's month, or by the 10th the one before.
+  const month = d > ADSENSE_FINALIZED_BY_DAY ? m : m - 1;
+  const first = month >= 1 ? `${y}-${String(month).padStart(2, "0")}-01` : `${y - 1}-12-01`;
+  return addDays(first, -1);
+}
+
 // ---------------------------------------------------------------------------
-// The AdSense report: one date range at a time, asked of AdSense directly, by site, country or
-// device type (AdSense's PLATFORM_TYPE: desktop, high-end mobile, tablet...).
+// The AdSense report: one date range at a time, asked of AdSense directly, by site, country, device
+// type (AdSense's PLATFORM_TYPE: desktop, high-end mobile, tablet...) or ad unit. Besides the stored
+// days' figures it gives three of AdSense's own that are never stored: ad requests, their coverage
+// and Active View viewability.
 // ---------------------------------------------------------------------------
 
-export const ADSENSE_REPORT_LEVELS = ["site", "country", "platform"] as const;
+export const ADSENSE_REPORT_LEVELS = ["site", "country", "platform", "ad_unit"] as const;
 export type AdsenseReportLevel = (typeof ADSENSE_REPORT_LEVELS)[number];
 
-/** The AdSense dimensions each level is split by (reports:generate `dimensions`): an id, then a name when AdSense has one. */
+/**
+ * The AdSense dimensions each level is split by (reports:generate `dimensions`): an id, then a name
+ * when AdSense has one. AD_UNIT_ID is AdSense's reporting id of the ad unit, AD_UNIT_NAME the name it
+ * was given in AdSense (https://developers.google.com/adsense/management/reference/rest/v2/Dimension).
+ */
 export const ADSENSE_REPORT_DIMENSIONS: Record<AdsenseReportLevel, string[]> = {
   site: ["DOMAIN_CODE"],
   country: ["COUNTRY_CODE", "COUNTRY_NAME"],
   platform: ["PLATFORM_TYPE_CODE", "PLATFORM_TYPE_NAME"],
+  ad_unit: ["AD_UNIT_ID", "AD_UNIT_NAME"],
 };
 
-/** The metrics the report asks for (estimated: AdSense finalizes earnings after the month ends). */
-export const ADSENSE_REPORT_METRICS = ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"] as const;
+/**
+ * The stored days' measures (the sync reads the same), which every report has. Earnings are estimated
+ * until AdSense finalizes the month (adsenseFinalThrough).
+ */
+export const ADSENSE_REPORT_DAY_METRICS = ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"] as const;
 
-export interface AdsenseReportRow extends AdsenseTotals {
+/**
+ * The three metrics only the report reads, never stored. AD_REQUESTS: ad units that asked for ads (one
+ * request can show none, one or several); AD_REQUESTS_COVERAGE: the share of them that got an ad back;
+ * ACTIVE_VIEW_VIEWABILITY: the share of the impressions Active View could measure that were viewable.
+ * The last two are ratios (0 to 1). Google's reference doesn't say which dimensions they go with, so a
+ * report AdSense refuses with them is read again without them (adsenseReport in packages/core).
+ */
+export const ADSENSE_REPORT_EXTRA_METRICS = ["AD_REQUESTS", "AD_REQUESTS_COVERAGE", "ACTIVE_VIEW_VIEWABILITY"] as const;
+
+/**
+ * The metrics the report asks for (https://developers.google.com/adsense/management/reference/rest/v2/Metric):
+ * the stored days' measures, then the three only it reads.
+ */
+export const ADSENSE_REPORT_METRICS = [...ADSENSE_REPORT_DAY_METRICS, ...ADSENSE_REPORT_EXTRA_METRICS] as const;
+
+/** A report's figures: the stored days' measures and the three only the live report gives (null: AdSense didn't send that column, or there is nothing to work it out on). */
+export interface AdsenseReportTotals extends AdsenseTotals {
+  adRequests: number | null;
+  /** Ad requests that got an ad back ÷ ad requests. */
+  coverage: number | null;
+  /** Viewable impressions ÷ the impressions Active View could measure. */
+  viewability: number | null;
+}
+
+export interface AdsenseReportRow extends AdsenseReportTotals {
   id: string;
   name: string;
+}
+
+/** The columns of a report's metrics, by name (-1: not in the report). */
+function metricColumns(report: AdsenseReport) {
+  const headers = report.headers ?? [];
+  const col = (name: string) => headers.findIndex((h) => h.name === name);
+  return {
+    earnings: col("ESTIMATED_EARNINGS"),
+    pageViews: col("PAGE_VIEWS"),
+    impressions: col("IMPRESSIONS"),
+    clicks: col("CLICKS"),
+    adRequests: col("AD_REQUESTS"),
+    coverage: col("AD_REQUESTS_COVERAGE"),
+    viewability: col("ACTIVE_VIEW_VIEWABILITY"),
+  };
+}
+
+/** One row's (or the totals row's) figures; a ratio AdSense left empty is unknown, never 0. */
+function readMetrics(cells: Array<{ value?: string }>, at: ReturnType<typeof metricColumns>) {
+  const num = (i: number) => (i < 0 ? 0 : Number(cells[i]?.value ?? 0) || 0);
+  const known = (i: number) => {
+    const v = i < 0 ? undefined : cells[i]?.value;
+    const n = v === undefined || v === "" ? NaN : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    earnings: num(at.earnings),
+    pageViews: Math.round(num(at.pageViews)),
+    impressions: Math.round(num(at.impressions)),
+    clicks: Math.round(num(at.clicks)),
+    adRequests: at.adRequests < 0 ? null : Math.round(num(at.adRequests)),
+    coverage: known(at.coverage),
+    viewability: known(at.viewability),
+  };
+}
+type ReportMetrics = ReturnType<typeof readMetrics>;
+
+/**
+ * Rows' figures added up. Ad requests add; coverage is worked back to the requests that got an ad
+ * (coverage × requests, exactly what AdSense divided) and divided again; viewability can't be, since
+ * the impressions Active View measured aren't read, so it is known only for a single row.
+ */
+function reportTotals(list: readonly ReportMetrics[]): AdsenseReportTotals {
+  const base = adsenseTotals(list.map((r) => ({ accountId: "", site: "", day: "", earnings: r.earnings, pageViews: r.pageViews, impressions: r.impressions, clicks: r.clicks })));
+  const requests = list.length && list.every((r) => r.adRequests !== null) ? list.reduce((s, r) => s + r.adRequests!, 0) : null;
+  const matched = requests !== null && list.every((r) => r.coverage !== null) ? list.reduce((s, r) => s + r.coverage! * r.adRequests!, 0) : null;
+  return {
+    ...base,
+    adRequests: requests,
+    coverage: list.length === 1 ? list[0]!.coverage : matched === null || requests === null ? null : ratio(matched, requests),
+    viewability: list.length === 1 ? list[0]!.viewability : null,
+  };
+}
+
+/**
+ * A report's totals: AdSense's own totals row when it sent one (it covers every matched row, also the
+ * ones a cut-off report leaves out, and its ratios are AdSense's over all of them), else `rows` added up.
+ */
+export function adsenseReportTotals(report: AdsenseReport, rows: readonly AdsenseReportTotals[]): AdsenseReportTotals {
+  const at = metricColumns(report);
+  const cells = report.totals?.cells;
+  if (cells && at.earnings >= 0) return reportTotals([readMetrics(cells, at)]);
+  return reportTotals(rows);
 }
 
 /** A report split by one level → its rows, biggest earner first, and the currency its money is in. */
@@ -1429,28 +1534,20 @@ export function adsenseReportRows(level: AdsenseReportLevel, report: AdsenseRepo
   const headers = report.headers ?? [];
   const col = (name: string) => headers.findIndex((h) => h.name === name);
   const [idDim, nameDim] = ADSENSE_REPORT_DIMENSIONS[level];
-  const at = { id: col(idDim!), name: nameDim ? col(nameDim) : -1, earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
-  const num = (cells: Array<{ value?: string }>, i: number) => (i < 0 ? 0 : Number(cells[i]?.value ?? 0) || 0);
-  const groups = new Map<string, { name: string; rows: AdsenseDayRow[] }>();
+  const at = { id: col(idDim!), name: nameDim ? col(nameDim) : -1 };
+  const metrics = metricColumns(report);
+  const groups = new Map<string, { name: string; rows: ReportMetrics[] }>();
   for (const r of report.rows ?? []) {
     const cells = r.cells ?? [];
     const id = (at.id < 0 ? "" : cells[at.id]?.value) || "unknown";
     const label = at.name >= 0 ? cells[at.name]?.value : undefined;
     const name = label || (level === "country" ? countryName(id === "unknown" ? null : id) : id === "unknown" ? "Unknown" : id);
     const g = groups.get(id) ?? { name, rows: [] };
-    g.rows.push({
-      accountId: "",
-      site: level === "site" ? id : "",
-      day: "",
-      earnings: num(cells, at.earnings),
-      pageViews: Math.round(num(cells, at.pageViews)),
-      impressions: Math.round(num(cells, at.impressions)),
-      clicks: Math.round(num(cells, at.clicks)),
-    });
+    g.rows.push(readMetrics(cells, metrics));
     groups.set(id, g);
   }
   const rows = [...groups.entries()]
-    .map(([id, g]) => ({ id, name: g.name, ...adsenseTotals(g.rows) }))
+    .map(([id, g]) => ({ id, name: g.name, ...reportTotals(g.rows) }))
     .sort((a, b) => b.earnings - a.earnings || b.pageViews - a.pageViews || a.name.localeCompare(b.name));
   return { rows, currency: headers.find((h) => h.type === "METRIC_CURRENCY")?.currencyCode ?? null };
 }

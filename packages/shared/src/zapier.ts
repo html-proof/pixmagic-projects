@@ -35,9 +35,26 @@ export const ZAPIER_REFRESH_REUSE_GRACE_MS = 60_000;
 // The triggers (REST hooks)
 // ---------------------------------------------------------------------------
 
-export const ZAPIER_EVENTS = ["alert_raised", "ad_spend_threshold", "adsense_earnings_threshold", "ads_daily_summary", "whatsapp_message_failed"] as const;
+export const ZAPIER_EVENTS = [
+  "alert_raised",
+  "ad_spend_threshold",
+  "adsense_earnings_threshold",
+  "ads_daily_summary",
+  "whatsapp_message_failed",
+  "integration_connected",
+  "integration_disconnected",
+  "sync_completed",
+  "order_paid",
+] as const;
 export type ZapierEvent = (typeof ZAPIER_EVENTS)[number];
 export const isZapierEvent = (s: string): s is ZapierEvent => (ZAPIER_EVENTS as readonly string[]).includes(s);
+
+/**
+ * The shape of what a Zap receives (the envelope's `schema_version`). Raised only for a change that
+ * would break a Zap already mapping fields (a field renamed, removed or changing type); new fields
+ * keep it.
+ */
+export const ZAPIER_SCHEMA_VERSION = 1;
 
 export interface ZapierEventInfo {
   label: string;
@@ -64,7 +81,7 @@ export const ZAPIER_EVENT_INFO: Record<ZapierEvent, ZapierEventInfo> = {
   },
   adsense_earnings_threshold: {
     label: "AdSense earnings passed an amount",
-    description: "Once a day or a month, when the store's estimated AdSense earnings pass the amount you set.",
+    description: "Once a day or a month, when the store's estimated AdSense earnings pass the amount you set, or once a finished day or month ended below it.",
     needs: "marketing.ads",
   },
   ads_daily_summary: {
@@ -77,7 +94,41 @@ export const ZAPIER_EVENT_INFO: Record<ZapierEvent, ZapierEventInfo> = {
     description: "A WhatsApp message to a customer couldn't be delivered. The customer's number is masked.",
     needs: "marketing.campaigns",
   },
+  integration_connected: {
+    label: "Integration connected",
+    description: "An ad platform (Meta Ads, Google Ads, AdSense), WhatsApp or Zapier was connected to the store.",
+    needs: "integrations.status",
+  },
+  integration_disconnected: {
+    label: "Integration disconnected",
+    description: "An ad platform, WhatsApp or Zapier was disconnected from the store.",
+    needs: "integrations.status",
+  },
+  sync_completed: {
+    label: "Ad account synced",
+    description: "bizinsights finished reading an ad account's figures (Meta Ads, Google Ads, AdSense): at most once an hour per account, with the days it now has.",
+    needs: "integrations.status",
+  },
+  order_paid: {
+    label: "Order paid",
+    description: "A Shopify order was paid: its number, amounts and items. Never the customer's name, email, address or phone.",
+    needs: "analytics.sales",
+  },
 };
+
+/** The integrations "Integration connected / disconnected" and "Ad account synced" name. */
+export const ZAPIER_INTEGRATIONS = {
+  meta_ads: "Meta Ads",
+  google_ads: "Google Ads",
+  adsense: "Google AdSense",
+  whatsapp: "WhatsApp",
+  zapier: "Zapier",
+} as const;
+export type ZapierIntegration = keyof typeof ZAPIER_INTEGRATIONS;
+
+/** An ad connection's provider (ad_connections.provider) as an integration. */
+export const integrationOfProvider = (provider: string): ZapierIntegration | null =>
+  provider === "meta" ? "meta_ads" : provider === "google" ? "google_ads" : provider === "adsense" ? "adsense" : null;
 
 /** The searches Zapier may run, for the consent page. */
 export const ZAPIER_SEARCHES = [
@@ -101,7 +152,7 @@ export const ZAPIER_SCOPE_INFO: Record<ZapierScope, { label: string; description
   whatsapp_send: {
     label: "Send WhatsApp template messages to your customers",
     description:
-      "From your Zaps (a new Meta or Google Ads lead, an order, a form), with templates Meta approved only, to customers who agreed, within your WhatsApp settings' sending hours and limits. A customer who replied STOP never gets one.",
+      "From your Zaps (a new Meta or Google Ads lead, an order, a form), with your WhatsApp templates only, to customers who agreed, within your WhatsApp settings' sending hours and limits. A customer who replied STOP never gets one.",
     // The same people who may send from the WhatsApp page (docs/whatsapp.md, "Who may do what").
     needs: "stores:manage",
     needsLabel: "the store's owners and admins",
@@ -110,14 +161,14 @@ export const ZAPIER_SCOPE_INFO: Record<ZapierScope, { label: string; description
 
 /** The actions Zapier may run, for the consent page; each needs its scope. */
 export const ZAPIER_ACTIONS = [
-  { key: "send_whatsapp_template", label: "Send WhatsApp Template Message", description: "Sends one customer a WhatsApp template Meta approved, with the values your Zap maps in.", scope: "whatsapp_send" },
+  { key: "send_whatsapp_template", label: "Send WhatsApp Template Message", description: "Sends one customer one of your WhatsApp templates, with the values your Zap maps in.", scope: "whatsapp_send" },
 ] as const satisfies ReadonlyArray<{ key: string; label: string; description: string; scope: ZapierScope }>;
 
 /** What the consent page says Zapier can't do once allowed, given what was ticked. */
 export function zapierCannot(scopes: readonly string[]): string[] {
   return [
     "Change anything in bizinsights, Shopify or your ad accounts",
-    scopes.includes("whatsapp_send") ? "Send customers anything but a WhatsApp template Meta approved, or message anyone who replied STOP" : "Send messages to your customers",
+    scopes.includes("whatsapp_send") ? "Send customers anything but one of your WhatsApp templates, or message anyone who replied STOP" : "Send messages to your customers",
     "See customers' names, emails or full phone numbers",
     "Reach your other stores or workspaces",
   ];
@@ -176,6 +227,13 @@ export const ZAPIER_SPEND_PLATFORMS = ["meta", "google", "any"] as const;
 export type ZapierSpendPlatform = (typeof ZAPIER_SPEND_PLATFORMS)[number];
 export const ZAPIER_PERIODS = ["day", "month"] as const;
 export type ZapierPeriod = (typeof ZAPIER_PERIODS)[number];
+/**
+ * Which way a threshold is crossed (AdSense): "above" when the total reaches the amount, "below"
+ * when a finished period ended under it. A total still growing can't be below for good, so "below"
+ * is only checked once the period is over and every account has its last day stored.
+ */
+export const ZAPIER_DIRECTIONS = ["above", "below"] as const;
+export type ZapierDirection = (typeof ZAPIER_DIRECTIONS)[number];
 
 /** Most triggers one Zapier connection may hold (each Zap's trigger is one). */
 export const ZAPIER_MAX_HOOKS_PER_GRANT = 50;
@@ -230,8 +288,8 @@ export function singleCurrencyTotal(rows: readonly CurrencyAmount[]): { total: n
   return { total, currency: currencies[0] ?? null };
 }
 
-/** Whether a total has reached the amount a trigger was set to. */
-export const thresholdReached = (total: number, amount: number): boolean => total >= amount;
+/** Whether a total has crossed the amount a trigger was set to: reached it ("above"), or stayed under it ("below"). */
+export const thresholdReached = (total: number, amount: number, direction: ZapierDirection = "above"): boolean => (direction === "below" ? total < amount : total >= amount);
 
 // ---------------------------------------------------------------------------
 // Deliveries

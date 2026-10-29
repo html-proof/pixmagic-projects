@@ -7,7 +7,7 @@ module.exports = {
   noun: "WhatsApp Template",
   display: {
     label: "WhatsApp Templates",
-    description: "Lists the store's WhatsApp templates Meta approved, for choosing one in an action.",
+    description: "Lists the store's WhatsApp templates that can send now, for choosing one in an action.",
     hidden: true,
   },
   operation: {

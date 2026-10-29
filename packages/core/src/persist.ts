@@ -5,7 +5,7 @@ import { logger } from "./logger.js";
 import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
 import { releaseAdLoginsWhere, revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
-import { deleteRetiredNangoToken, purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
+import { purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
 import { purgeZapierStoreOps } from "./zapier/manage.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
@@ -922,8 +922,6 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   // Read first: the ad platforms' grants are revoked once the rows are gone (so the store's own
   // connections no longer count as "still using" the grant). Best effort, never blocks the purge.
   const adConnections = await systemDb.adConnection.findMany({ where: { storeId } });
-  // The retired WhatsApp module kept its token at Nango: it goes first (best effort), while its row still says where.
-  await deleteRetiredNangoToken(storeId, fetchImpl ?? fetch);
   await systemDb.$transaction([
     systemDb.orderLineItem.deleteMany({ where: { storeId } }),
     systemDb.orderSale.deleteMany({ where: { storeId } }),
@@ -958,7 +956,7 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.adsenseDaily.deleteMany({ where: { storeId } }),
     systemDb.adConnection.deleteMany({ where: { storeId } }),
     // WhatsApp Automation: customers' numbers, consent, messages, automations, campaigns and the
-    // store's connection (what was set up at Meta for its number is undone first: the erase's caller does it).
+    // store's connection (its Evolution API instance goes first: the erase's caller deletes it).
     // Then what the retired WhatsApp features still hold until their tables are dropped.
     ...purgeWhatsappStoreOps(storeId),
     ...purgeLegacyWhatsappOps(storeId),

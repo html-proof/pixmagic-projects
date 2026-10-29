@@ -2,38 +2,39 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { processWebhookEvent, sendQueuedMessage } from "@app/core";
 import { systemDb } from "@app/db";
-import { cloudApiFake, META_ENV, META_ENV_OFF, type CloudFake } from "../../../test-support/cloudApiFake.js";
+import { EVOLUTION_ENV, evolutionFake, type EvolutionFake } from "../../../test-support/evolutionFake.js";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
  * Zapier's action "Send WhatsApp Template Message" (docs/zapier.md; core zapier/whatsapp.ts): the
- * scope ticked on the consent page (offered to owners and admins only), the approved-template
- * dropdown, and a Zap's message going out through the store's own WhatsApp with every rule the
- * WhatsApp page keeps: consent (a lead needs their own), STOP, approved templates only, its values,
- * once per key, Pause all automation, the member's permission. Real Postgres; Meta's Graph API is
- * test-support/cloudApiFake.ts; nothing leaves the process.
+ * scope ticked on the consent page (offered to owners and admins only), the template dropdown, and a
+ * Zap's message going out through the store's own WhatsApp with every rule the WhatsApp page keeps:
+ * consent (a lead needs their own), STOP, templates only (on Meta's Business Platform, ones Meta
+ * approved, sent by Meta's name), its values, once per key, Pause all automation, the member's
+ * permission. Real Postgres; Evolution API is test-support/evolutionFake.ts; nothing leaves the process.
  */
 
 let ctx: TestCtx;
-let meta: CloudFake;
+let evo: EvolutionFake;
 const CLIENT_ID = "bizinsights-zapier-test";
 const CLIENT_SECRET = randomBytes(32).toString("base64url");
 const REDIRECT = "https://zapier.com/dashboard/auth/oauth/return/App4242CLIAPI/";
 const ZAPIER_ENV = { ZAPIER_CLIENT_ID: CLIENT_ID, ZAPIER_CLIENT_SECRET: CLIENT_SECRET, ZAPIER_REDIRECT_URI: REDIRECT, ZAPIER_INVITE_URL: "https://zapier.com/developer/public-invite/1/abc/" };
+const WEBHOOK_BASE = "https://bizinsights.test/api";
 const LEAD = "+61412345678";
 
 beforeAll(async () => {
   ctx = await setup();
 });
 afterAll(async () => {
-  ctx.setEnv(META_ENV_OFF);
+  ctx.setEnv({ EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "", EVOLUTION_WEBHOOK_URL: "" });
   await teardown(ctx);
 });
 beforeEach(async () => {
   await clean(ctx);
-  meta = cloudApiFake();
-  ctx.setFetch((input, init) => meta.fetch(input, init));
-  ctx.setEnv({ ...META_ENV, ...ZAPIER_ENV });
+  evo = evolutionFake();
+  ctx.setFetch(evo.fetch);
+  ctx.setEnv({ ...EVOLUTION_ENV, EVOLUTION_WEBHOOK_URL: WEBHOOK_BASE, ...ZAPIER_ENV });
 });
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
@@ -53,12 +54,15 @@ async function owner(uid = "zw-owner", email = "owner@zapwa.test") {
 }
 type Owner = Awaited<ReturnType<typeof owner>>;
 
+/** Delivers a webhook the way Evolution posts it. */
 const deliver = (w: { url: string; headers: Record<string, string>; body: string }) => ctx.app.inject({ method: "POST", url: w.url, headers: w.headers, payload: w.body });
 
-/** WhatsApp connected through Embedded Signup (the fake's Meta), and Settings saved. */
-async function whatsapp(o: Owner, settings: Record<string, unknown> = {}) {
-  const s = meta.signup();
-  ok(await o.call("POST", "/connection/cloud", { code: s.code, wabaId: s.wabaId, phoneNumberId: s.phoneNumberId, businessId: s.businessId }), 201);
+/** A phone linked with the QR code (Evolution's webhook says the connection is open), and Settings saved. */
+async function whatsapp(o: Owner, settings: Record<string, unknown> = {}, phone = "61400000099") {
+  ok(await o.call("POST", "/connection", { method: "qr" }), 201);
+  const name = (await systemDb.wappConnection.findUniqueOrThrow({ where: { storeId: o.store.id } })).instanceName!;
+  evo.open(name, phone, "Green Leaf");
+  ok(await deliver(evo.webhook(name, "connection.update", { instance: name, wuid: `${phone}@s.whatsapp.net`, profileName: "Green Leaf", state: "open", statusReason: 200 })));
   ok(
     await o.call("PUT", "/settings", {
       businessName: "Green Leaf",
@@ -73,18 +77,25 @@ async function whatsapp(o: Owner, settings: Record<string, unknown> = {}) {
       ...settings,
     }),
   );
-  return s;
+  return name;
 }
 
-/** A template written in bizinsights, submitted to Meta and approved by Meta's webhook. */
-async function approvedTemplate(o: Owner, t: { name: string; category: "transactional" | "marketing"; body: string }) {
-  const created = ok(await o.call("POST", "/templates", t), 201).template;
-  ok(await o.call("POST", `/templates/${created.id}/submit`));
-  ok(await deliver(meta.templateReview(meta.templates.at(-1)!.id, "APPROVED")));
-  return created as { id: string; name: string };
+/** A template written on the WhatsApp page. */
+async function template(o: Owner, t: { name: string; category: "transactional" | "marketing"; body: string; active?: boolean }) {
+  return ok(await o.call("POST", "/templates", { active: true, ...t }), 201).template as { id: string; name: string };
 }
 
-/** The worker, in-process: sends what waits on the whatsapp queue now. */
+/** A customer's message to the store's number, as Evolution reports it. */
+const inbound = (name: string, from: string, text: string) =>
+  evo.webhook(name, "messages.upsert", {
+    key: { remoteJid: `${from.replace(/^\+/, "")}@s.whatsapp.net`, fromMe: false, id: `IN${Math.random().toString(16).slice(2, 14).toUpperCase()}` },
+    pushName: "Pat",
+    message: { conversation: text },
+    messageType: "conversation",
+    messageTimestamp: Math.floor(Date.now() / 1000),
+  });
+
+/** The worker, in-process: sends what waits on the whatsapp queue now, and applies stored webhook events. */
 async function drain(): Promise<string[]> {
   const out: string[] = [];
   for (let round = 0; round < 10; round++) {
@@ -160,20 +171,20 @@ describe("allowing Zapier to send WhatsApp messages (the consent page)", () => {
 });
 
 describe("Send WhatsApp Template Message", () => {
-  it("sends a lead who agreed an approved template with the Zap's values, records their consent, and sends once per key", async () => {
+  it("sends a lead who agreed a template with the Zap's values, records their consent, and sends once per key", async () => {
     const o = await owner();
-    const s = await whatsapp(o);
-    const tmpl = await approvedTemplate(o, { name: "Quote ready", category: "transactional", body: "Hi {{customer_first_name}}, {{store_name}} here: your quote {{order_number}} is ready." });
-    // Not approved: never listed, never sent.
-    const draft = ok(await o.call("POST", "/templates", { name: "Draft", category: "transactional", body: "Hello from {{store_name}}." }), 201).template;
+    const name = await whatsapp(o);
+    const tmpl = await template(o, { name: "Quote ready", category: "transactional", body: "Hi {{customer_first_name}}, {{store_name}} here: your quote {{order_number}} is ready." });
+    // Switched off: never listed, never sent.
+    const off = await template(o, { name: "Old", category: "transactional", body: "Hello from {{store_name}}.", active: false });
     const t = await zapier(o.headers, o.ws, o.store.id);
 
     const list = ok(await zget(t, "/zapier/whatsapp/templates"));
     expect(list).toEqual([expect.objectContaining({ id: tmpl.id, name: "Quote ready", category: "transactional", variables: ["customer_first_name", "order_number"], automatic: ["store_name"] })]);
 
-    const notApproved = await zsend(t, { template_id: draft.id, phone: LEAD, customer_agreed: true });
-    expect(notApproved.statusCode).toBe(409);
-    expect(notApproved.json().error).toBe("template_unavailable");
+    const switchedOff = await zsend(t, { template_id: off.id, phone: LEAD, customer_agreed: true });
+    expect(switchedOff.statusCode).toBe(409);
+    expect(switchedOff.json().error).toBe("template_unavailable");
 
     // A number bizinsights knows only from the Zap: "Customers told at checkout" doesn't cover it.
     const noConsent = await zsend(t, { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-77" }, first_name: "Sam", customer_agreed: false });
@@ -191,7 +202,8 @@ describe("Send WhatsApp Template Message", () => {
     expect(queued).toMatchObject({ status: "queued", duplicate: false, phone_masked: expect.stringContaining("678"), template: { id: tmpl.id, name: "Quote ready" }, consent_recorded: true });
     expect(JSON.stringify(queued)).not.toContain("412345678");
     expect(await drain()).toEqual(["accepted"]);
-    expect(meta.sends.at(-1)).toMatchObject({ phoneNumberId: s.phoneNumberId, to: "61412345678", type: "template", template: { params: ["Sam", "Green Leaf", "Q-77"] } });
+    // A linked phone sends the template's text, filled in.
+    expect(evo.sends.at(-1)).toMatchObject({ instance: name, path: "sendText", body: { number: "61412345678", text: "Hi Sam, Green Leaf here: your quote Q-77 is ready." } });
 
     const message = await systemDb.wappMessage.findUniqueOrThrow({ where: { id: queued.id } });
     expect(message).toMatchObject({ source: "zapier", category: "transactional", templateId: tmpl.id, status: "accepted" });
@@ -204,10 +216,11 @@ describe("Send WhatsApp Template Message", () => {
     expect(listed.map((m: { id: string }) => m.id)).toEqual([message.id]);
 
     // The same key (Zapier replaying the step): the first message, nothing sent again.
+    const sends = evo.sends.length;
     const again = ok(await zsend(t, { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-77" }, customer_agreed: true, unique_key: "lead-1" }));
     expect(again).toMatchObject({ id: message.id, duplicate: true });
     await drain();
-    expect(meta.sends).toHaveLength(1);
+    expect(evo.sends).toHaveLength(sends);
 
     // Zapier connected again (a new grant), or by another owner: the same key still finds the first message.
     const second = await signIn(ctx, "zw-admin2", "admin2@zapwa.test");
@@ -216,15 +229,15 @@ describe("Send WhatsApp Template Message", () => {
       expect(ok(await zsend(tok, { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-77" }, customer_agreed: true, unique_key: "lead-1" }))).toMatchObject({ id: message.id, duplicate: true });
     }
     await drain();
-    expect(meta.sends).toHaveLength(1);
+    expect(evo.sends).toHaveLength(sends);
 
     // Consent stands now: the next message to that customer needs no "agreed" from the Zap.
     ok(await zsend(t, { template_id: tmpl.id, phone: LEAD, values: { order_number: "Q-78" } }), 201);
     await drain();
-    expect(meta.sends.at(-1)!.template!.params).toEqual(["Sam", "Green Leaf", "Q-78"]);
+    expect(evo.sends.at(-1)!.body.text).toBe("Hi Sam, Green Leaf here: your quote Q-78 is ready.");
 
     // Another template with the same lead's key (a follow-up Zap) is another message.
-    const followUp = await approvedTemplate(o, { name: "Follow up", category: "transactional", body: "Still thinking about it, {{customer_first_name}}? {{store_name}} is here to help." });
+    const followUp = await template(o, { name: "Follow up", category: "transactional", body: "Still thinking about it, {{customer_first_name}}? {{store_name}} is here to help." });
     expect(ok(await zsend(t, { template_id: followUp.id, phone: LEAD, unique_key: "lead-1" }), 201).duplicate).toBe(false);
 
     // Without a key nothing goes: the action needs one.
@@ -233,11 +246,41 @@ describe("Send WhatsApp Template Message", () => {
     expect(noKey.json().message).toContain("Unique key");
   });
 
+  it("on Meta's Business Platform, offers and sends only templates Meta approved, by Meta's name", async () => {
+    const o = await owner();
+    const name = await whatsapp(o);
+    // The same instance stands in for one of Evolution's WHATSAPP-BUSINESS ones: only the provider decides here.
+    await systemDb.wappConnection.update({ where: { storeId: o.store.id }, data: { provider: "cloud_api", phoneNumberId: "1098765432101", wabaId: "2098765432101" } });
+    const approved = await systemDb.wappTemplate.create({
+      data: { workspaceId: o.ws, storeId: o.store.id, name: "Quote ready", category: "transactional", body: "Hi {{customer_first_name}}, {{store_name}} here: your quote {{order_number}} is ready.", metaName: "quote_ready", metaLanguage: "en", metaStatus: "APPROVED" },
+    });
+    const pending = await systemDb.wappTemplate.create({
+      data: { workspaceId: o.ws, storeId: o.store.id, name: "Pending", category: "transactional", body: "Hello from {{store_name}}.", metaName: "pending_one", metaLanguage: "en", metaStatus: "PENDING" },
+    });
+    const notSubmitted = await template(o, { name: "Draft", category: "transactional", body: "Hello again from {{store_name}}." });
+    const t = await zapier(o.headers, o.ws, o.store.id);
+
+    expect(ok(await zget(t, "/zapier/whatsapp/templates")).map((x: { id: string }) => x.id)).toEqual([approved.id]);
+    for (const id of [pending.id, notSubmitted.id]) {
+      const res = await zsend(t, { template_id: id, phone: LEAD, customer_agreed: true });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("template_unavailable");
+    }
+
+    ok(await zsend(t, { template_id: approved.id, phone: LEAD, values: { order_number: "Q-77" }, first_name: "Sam", customer_agreed: true }), 201);
+    expect(await drain()).toEqual(["accepted"]);
+    expect(evo.sends.at(-1)).toMatchObject({
+      instance: name,
+      path: "sendTemplate",
+      body: { name: "quote_ready", language: "en", components: [{ type: "body", parameters: [{ type: "text", text: "Sam" }, { type: "text", text: "Green Leaf" }, { type: "text", text: "Q-77" }] }] },
+    });
+  });
+
   it("keeps WhatsApp's rules: STOP, marketing consent, Pause all automation, the store's own templates, the member's permission", async () => {
     const o = await owner();
-    const s = await whatsapp(o);
-    const update = await approvedTemplate(o, { name: "Thanks", category: "transactional", body: "Thanks for your enquiry, {{store_name}} will be in touch." });
-    const promo = await approvedTemplate(o, { name: "Promo", category: "marketing", body: "Spring sale at {{store_name}}: 20% off this week. Reply STOP to opt out." });
+    const name = await whatsapp(o);
+    const update = await template(o, { name: "Thanks", category: "transactional", body: "Thanks for your enquiry, {{store_name}} will be in touch." });
+    const promo = await template(o, { name: "Promo", category: "marketing", body: "Spring sale at {{store_name}}: 20% off this week. Reply STOP to opt out." });
     const t = await zapier(o.headers, o.ws, o.store.id);
 
     // Marketing: only with the customer's marketing yes.
@@ -246,12 +289,12 @@ describe("Send WhatsApp Template Message", () => {
     expect(noMarketing.json().message).toContain("marketing");
     const promoSent = ok(await zsend(t, { template_id: promo.id, phone: LEAD, customer_agreed: true, consent_note: "Google Ads lead form" }), 201);
     await drain();
-    expect(meta.sends.at(-1)!.template).toMatchObject({ name: expect.stringContaining("promo") });
+    expect(evo.sends.at(-1)!.body.text).toContain("Spring sale at Green Leaf");
     expect((await systemDb.wappContact.findFirstOrThrow({ where: { storeId: o.store.id } })).marketing).toBe("opted_in");
     expect(promoSent.consent_recorded).toBe(true);
 
     // The customer replies STOP: the Zap can't opt them back in.
-    ok(await deliver(meta.inbound(s.phoneNumberId, LEAD.slice(1), "STOP")));
+    ok(await deliver(inbound(name, LEAD, "STOP")));
     await drain();
     const stopped = await zsend(t, { template_id: update.id, phone: LEAD, customer_agreed: true });
     expect(stopped.statusCode).toBe(409);
@@ -260,15 +303,15 @@ describe("Send WhatsApp Template Message", () => {
     // Pause all automation holds a Zap's messages too.
     ok(await o.call("POST", "/settings/pause", { paused: true }));
     const held = ok(await zsend(t, { template_id: update.id, phone: "+61412000111", customer_agreed: true }), 201);
-    const before = meta.sends.length;
+    const before = evo.sends.length;
     await drain();
-    expect(meta.sends).toHaveLength(before);
+    expect(evo.sends).toHaveLength(before);
     expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: held.id } })).toMatchObject({ status: "queued", reason: "automation_paused" });
 
     // Another store's template is never found.
     const other = await owner("zw-other", "other@zapwa.test");
-    await whatsapp(other);
-    const theirs = await approvedTemplate(other, { name: "Theirs", category: "transactional", body: "Hello from {{store_name}}." });
+    await whatsapp(other, {}, "61400000088");
+    const theirs = await template(other, { name: "Theirs", category: "transactional", body: "Hello from {{store_name}}." });
     const cross = await zsend(t, { template_id: theirs.id, phone: "+61412000222", customer_agreed: true });
     expect(cross.statusCode).toBe(400);
     expect(cross.json().error).toBe("template_not_found");

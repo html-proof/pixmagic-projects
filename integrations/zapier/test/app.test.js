@@ -34,12 +34,39 @@ after(() => nock.enableNetConnect());
 describe("the app definition", () => {
   it("is valid for Zapier's schema, with every trigger, search and action Zapier will list", () => {
     assert.deepEqual(validateApp(compileApp(App)), []);
-    assert.deepEqual(Object.keys(App.triggers), ["alert_raised", "ad_spend_threshold", "adsense_earnings_threshold", "ads_daily_summary", "whatsapp_message_failed", "whatsapp_templates"]);
+    assert.deepEqual(Object.keys(App.triggers), [
+      "alert_raised",
+      "ad_spend_threshold",
+      "adsense_earnings_threshold",
+      "ads_daily_summary",
+      "whatsapp_message_failed",
+      "integration_connected",
+      "integration_disconnected",
+      "sync_completed",
+      "order_paid",
+      "whatsapp_templates",
+    ]);
     assert.deepEqual(Object.keys(App.searches), ["find_ad_performance", "find_adsense_earnings"]);
     assert.deepEqual(Object.keys(App.creates), ["send_whatsapp_template"]);
     // Every listed trigger is instant; the template list only feeds the action's dropdown.
     for (const t of Object.values(App.triggers)) if (!t.display.hidden) assert.equal(t.operation.type, "hook");
     assert.equal(App.triggers.whatsapp_templates.display.hidden, true);
+  });
+
+  it("says which payload version every trigger's events and samples are", () => {
+    for (const t of Object.values(App.triggers)) {
+      // The template list isn't an event: it only feeds the action's dropdown.
+      if (t.display.hidden) continue;
+      assert.equal(t.operation.sample.schema_version, 1);
+      assert.ok(t.operation.outputFields.map((f) => f.key).includes("schema_version"), t.key);
+      // The sample is the trigger's own event.
+      assert.equal(t.operation.sample.event, t.key);
+    }
+  });
+
+  it("never puts a customer's details in a paid order's sample", () => {
+    const sample = JSON.stringify(App.triggers.order_paid.operation.sample);
+    assert.doesNotMatch(sample, /email|phone|address|customer|first_name|last_name|discount_code/i);
   });
 });
 
@@ -103,6 +130,31 @@ describe("the triggers (REST hooks)", () => {
     assert.deepEqual(sub, { id: "hook_1", event: "ad_spend_threshold" });
     nock(BASE).delete("/api/zapier/hooks/hook_1").reply(200, { ok: true });
     assert.deepEqual(await appTester(App.triggers.ad_spend_threshold.operation.performUnsubscribe, { authData, subscribeData: sub }), { ok: true });
+  });
+
+  it("subscribes AdSense's threshold with which way it is crossed: reached, or a finished period ended below it", async () => {
+    nock(BASE)
+      .post("/api/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "day", amount: 20, direction: "below" })
+      .reply(201, { id: "hook_2", event: "adsense_earnings_threshold" });
+    await appTester(App.triggers.adsense_earnings_threshold.operation.performSubscribe, { authData, targetUrl: HOOK, inputData: { period: "day", amount: "20", direction: "below" } });
+    // Anything but "below" is "above", the default.
+    nock(BASE)
+      .post("/api/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "month", amount: 300, direction: "above" })
+      .reply(201, { id: "hook_3", event: "adsense_earnings_threshold" });
+    await appTester(App.triggers.adsense_earnings_threshold.operation.performSubscribe, { authData, targetUrl: HOOK, inputData: { period: "month", amount: "300" } });
+    const direction = App.triggers.adsense_earnings_threshold.operation.inputFields.find((f) => f.key === "direction");
+    assert.equal(direction.required, true);
+    assert.equal(direction.default, "above");
+    assert.deepEqual(Object.keys(direction.choices), ["above", "below"]);
+  });
+
+  it("subscribes the new triggers with their own event", async () => {
+    for (const key of ["integration_connected", "integration_disconnected", "sync_completed", "order_paid"]) {
+      nock(BASE).post("/api/zapier/hooks", { event: key, targetUrl: HOOK }).reply(201, { id: `hook_${key}`, event: key });
+      assert.deepEqual(await appTester(App.triggers[key].operation.performSubscribe, { authData, targetUrl: HOOK, inputData: {} }), { id: `hook_${key}`, event: key });
+      nock(BASE).get(`/api/zapier/samples/${key}`).reply(200, []);
+      assert.deepEqual(await appTester(App.triggers[key].operation.performList, { authData }), []);
+    }
   });
 
   it("passes on the event bizinsights posted, as it came", async () => {

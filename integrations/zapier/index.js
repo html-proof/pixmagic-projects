@@ -1,8 +1,8 @@
 // bizinsights on Zapier (docs/zapier.md): the store's alerts, advertising thresholds, daily
-// advertising summary and failed WhatsApp messages as instant triggers (REST hooks), two searches
-// over its stored advertising figures, and one action: send a customer a WhatsApp template Meta
-// approved, for a connection allowed to (ticked on bizinsights' page). Nothing else in bizinsights is
-// changed from Zapier.
+// advertising summary, failed WhatsApp messages, integrations connected or disconnected, ad accounts
+// synced and paid orders as instant triggers (REST hooks), two searches over its stored advertising
+// figures, and one action: send a customer one of the store's WhatsApp templates, for a connection
+// allowed to (ticked on bizinsights' page). Nothing else in bizinsights is changed from Zapier.
 const { version } = require("./package.json");
 const { version: platformVersion } = require("zapier-platform-core");
 const authentication = require("./authentication");
@@ -14,6 +14,10 @@ const triggers = [
   require("./triggers/adsenseEarningsThreshold"),
   require("./triggers/adsDailySummary"),
   require("./triggers/whatsappMessageFailed"),
+  require("./triggers/integrationConnected"),
+  require("./triggers/integrationDisconnected"),
+  require("./triggers/syncCompleted"),
+  require("./triggers/orderPaid"),
   // Hidden: the action's template dropdown.
   require("./triggers/whatsappTemplates"),
 ];

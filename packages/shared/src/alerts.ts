@@ -14,12 +14,13 @@ import { staffAccess, staffCan, type StaffRole } from "./staff/access";
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "general";
+export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "integrations" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
   shopify: "/settings/stores",
   ads: "/settings/ads",
+  integrations: "/settings/integrations",
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
   whatsapp: "/dashboard/whatsapp-automation",
@@ -134,24 +135,7 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   // Composed from the app's wording and the store's own counts (core's inventory alerts).
   if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
-  // WhatsApp Automation (core whatsapp/connection.ts, retireQr.ts and sweep.ts): worded here from the code alone.
-  if (code === "whatsapp_reconnect") {
-    return {
-      severity,
-      area: "whatsapp",
-      title: "Reconnect WhatsApp Business",
-      body: "Meta's access for bizinsights to your WhatsApp Business number ended (it expired, or it was removed in Meta's business settings), so nothing is being sent. Open WhatsApp Automation and connect it again: messages waiting are sent if you do within 48 hours.",
-    };
-  }
-  if (code === "whatsapp_qr_retired") {
-    return {
-      severity,
-      area: "whatsapp",
-      title: "Connect WhatsApp Business to keep sending",
-      body: "bizinsights no longer links a WhatsApp phone with a QR code, so your linked phone was disconnected and messages that were waiting were cancelled (none was sent). Open WhatsApp Automation and connect your number through Meta's WhatsApp Business Platform.",
-    };
-  }
-  // A phone linked with a QR code (retired 2026-10-28): old alerts keep their wording until they are resolved.
+  // WhatsApp Automation (core whatsapp/connection.ts and sweep.ts): worded here from the code alone.
   if (code === "whatsapp_logged_out") {
     return {
       severity,
@@ -164,7 +148,16 @@ export function describeAlert(alert: { code: string; severity: string; message: 
     return { severity, area: "whatsapp", title: "WhatsApp has been disconnected for 2 days", body: "The messages that were waiting to go were cancelled. Open WhatsApp Automation to connect it again." };
   }
   if (code === "whatsapp_provider_down") {
-    return { severity, area: "whatsapp", title: "WhatsApp messages are waiting", body: "WhatsApp's service isn't answering, so messages wait and are sent once it is back. Nothing needs doing; contact bizinsights support if this lasts." };
+    return { severity, area: "whatsapp", title: "WhatsApp messages are waiting", body: "bizinsights' WhatsApp service isn't answering, so messages wait and are sent once it is back. Nothing needs doing; contact bizinsights support if this lasts." };
+  }
+  // Raised on 2026-10-28, while QR linking was switched off for a day; resolved when the store links a phone again.
+  if (code === "whatsapp_qr_retired") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Link your WhatsApp phone again",
+      body: "QR-code linking was switched off for a day, so your linked phone was disconnected, the messages waiting were cancelled (none was sent) and your automations were paused. QR-code linking is back: open WhatsApp Automation, link the phone again, then turn your automations back on.",
+    };
   }
   // Customer Messaging (core/sms): worded here from the code alone.
   const budget = /^sms_budget_(50|80|100)$/.exec(code);
@@ -186,6 +179,15 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   if (code === "sms_account_limit") {
     return { severity, area: "sms", title: "Texts are on hold: the SMS spending limit is reached", body: "The account's monthly SMS spending limit is reached, so texts wait until it is raised or the month ends. Contact support if this stays." };
   }
+  // Zapier (core zapier/delivery.ts): an event Zapier never took, after its tries. Worded from the code alone.
+  if (code === "zapier_delivery_failed") {
+    return {
+      severity,
+      area: "integrations",
+      title: "Some events didn't reach Zapier",
+      body: "Zapier refused one of this store's events, or didn't answer after several tries, so the Zap waiting for it didn't run. Settings → Integrations → Zapier shows which and why; an owner or admin can send it again with Retry.",
+    };
+  }
   return { severity, area: "general", title: "Something needs your attention", body: "If this keeps showing, contact support and we'll look into it." };
 }
 
@@ -193,7 +195,8 @@ export function describeAlert(alert: { code: string; severity: string; message: 
  * Whether a member may see (and fix) an alert of this area: the bell's rule (GET .../alerts), which
  * Zapier's "New alert" trigger follows for the person who connected it. Settings → Privacy requests
  * needs audit:read; Settings → Advertising, "Manage integrations"; WhatsApp, "View campaigns"; the
- * Shopify connection and the help page's alerts go to owners and admins.
+ * Shopify connection, Zapier's undelivered events (Retry is theirs) and the help page's alerts go to
+ * owners and admins.
  */
 export function mayFixAlert(area: AlertArea, access: MemberAccess, staffRole: StaffRole | null): boolean {
   switch (area) {
