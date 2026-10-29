@@ -25,7 +25,7 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
 import { API_PATH_PATTERNS } from "../../../apps/aws/src/paths.js";
-import { appVars, FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
+import { FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
 
 /** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
 const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
@@ -128,8 +128,9 @@ export class AppStack extends Stack {
 
     // --- Functions.
     const code = lambda.Code.fromAsset(FUNCTION_DIR);
+    // What only this deployment knows. The app's settings (apps/aws/src/settings.ts) are not here:
+    // they ship in the package (index.ts), since together they would fill most of the 4 KB.
     const environment: Record<string, string> = {
-      ...appVars(),
       NODE_ENV: "production",
       LOG_LEVEL: "info",
       APP_COMMIT: commit,

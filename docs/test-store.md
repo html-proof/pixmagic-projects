@@ -35,7 +35,7 @@ In `apps/aws/src/settings.ts`, in `APP_SETTINGS`:
 "SHOPIFY_DEFAULT_APP_SHOPS": "your-dev-store.myshopify.com",
 ```
 
-Then merge it to `main`: the **Deploy to AWS** workflow puts it in the functions' environment
+Then merge it to `main`: the **Deploy to AWS** workflow ships it in the functions' package
 ([aws-deployment.md](aws-deployment.md)). Two effects:
 
 - Any other store is refused by our own backend with the `app_unavailable` message

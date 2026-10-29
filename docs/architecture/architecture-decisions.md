@@ -85,8 +85,9 @@ from `routes/dashboard.ts` to `core/reports/`, and its health grading from compo
 ## ADR-007: Configuration stays per consumer, not per environment file
 
 **Decision.** No `.env.development` / `.env.test` / `.env.production` set. Configuration is split by
-*who reads it*: the app (non-secret settings in `apps/aws/src/settings.ts`, which the CDK puts in
-the functions' environment; the address and Cognito ids in an SSM parameter; secrets in Secrets
+*who reads it*: the app (non-secret settings in `apps/aws/src/settings.ts`, which ship in
+the functions' package (since 2026-10-29; before, the CDK put them in the functions' environment,
+until they outgrew its 4 KB); the address and Cognito ids in an SSM parameter; secrets in Secrets
 Manager, set with `infra/cdk/scripts/put-secrets.mjs`; locally `apps/aws/.env`), and local tools
 (repo-root `.env`). The UI build has no settings: the same build works everywhere. The test values
 live in `test-support/env.ts` and `apps/web/e2e/server.env`. Everything the app reads is validated
