@@ -54,7 +54,10 @@ describe("the shipped settings", () => {
 
 describe('the cron action {"action":"config"}', () => {
   it("answers what is set up, by setting name, without a value", async () => {
-    Object.assign(process.env, APP_SETTINGS, SECRETS);
+    // The secrets only: the shipped settings come from the package (index.ts), as on AWS, where the
+    // functions' environment doesn't carry them.
+    for (const k of Object.keys(APP_SETTINGS)) delete process.env[k];
+    Object.assign(process.env, SECRETS);
     resetEnvCache();
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 

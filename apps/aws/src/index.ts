@@ -19,6 +19,7 @@ import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { apiPath } from "./paths.js";
 import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
+import { APP_SETTINGS } from "./settings.js";
 import { chooseMailer } from "./mailers.js";
 import { awsSmsProvider } from "./smsProvider.js";
 import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
@@ -96,6 +97,10 @@ let secretsLoaded: Promise<void> | undefined;
 /** Cold start: secrets and settings into process.env, once per instance (retried after a failure). */
 function ensureSecrets(): Promise<void> {
   secretsLoaded ??= (async () => {
+    // The app's settings ship in this package, not in the functions' 4 KB environment (infra/cdk):
+    // a variable the function was given wins, and the secrets fill whatever is still empty, as
+    // when the settings were in the environment.
+    for (const [k, v] of Object.entries(APP_SETTINGS)) process.env[k] ??= v;
     await loadSecrets();
     // On AWS the function's own role makes Cognito's admin calls (least privilege, no long-lived keys).
     if (!process.env.COGNITO_ADMIN_ACCESS_KEY_ID && process.env.AWS_ACCESS_KEY_ID) {
