@@ -1,4 +1,5 @@
 /** Display helpers shared by the dashboard cards. Money/number/percent formatting lives in lib/api. */
+import { daysBetweenInclusive, weekStart, type PeriodGranularity } from "@app/shared/dates";
 
 /** "2026-03-08" → "8 Mar 2026" (a calendar day: formatted without shifting time zones). */
 export function fmtDay(day: string | null | undefined, opts: { year?: boolean } = {}): string {
@@ -52,6 +53,34 @@ export function fmtMonth(month: string, opts: { short?: boolean; year?: boolean 
     new Date(`${month}-01T00:00:00Z`),
   );
 }
+
+/**
+ * How a trend chart's dates can be grouped: by day always, by week (Monday to Sunday) once they hold
+ * more than one, by calendar month once they reach into a second month and run past a month.
+ */
+export function periodChoices(range: { from: string; to: string }): Array<[PeriodGranularity, string]> {
+  const n = daysBetweenInclusive(range.from, range.to);
+  return [
+    ["day", "By day"],
+    ...(n > 7 ? [["week", "By week (Mon – Sun)"] as [PeriodGranularity, string]] : []),
+    ...(n > 31 && range.from.slice(0, 7) !== range.to.slice(0, 7) ? [["month", "By month"] as [PeriodGranularity, string]] : []),
+  ];
+}
+
+/**
+ * A week or month of a grouped chart in words: short for a tick ("19 Oct", "Oct"), long for a
+ * tooltip ("Week of 19 Oct 2026", "October 2026"), with the days of it the dates picked hold when
+ * they cut it ("· 22–25 Oct only").
+ */
+export function fmtPeriod(p: { key: string; from: string; to: string }, g: Exclude<PeriodGranularity, "day">, style: "tick" | "long"): string {
+  if (style === "tick") return g === "month" ? fmtMonth(p.key, { short: true }) : fmtDay(p.from, { year: false });
+  const monday = weekStart(p.from);
+  const name = g === "month" ? fmtMonth(p.key, { year: true }) : `Week of ${fmtDay(monday)}`;
+  const whole = g === "month" ? p.from.endsWith("-01") && p.to === lastOfMonth(p.from) : p.from === monday && daysBetweenInclusive(p.from, p.to) === 7;
+  return whole ? name : `${name} · ${fmtSpan(p.from, p.to)} only`;
+}
+
+const lastOfMonth = (day: string) => new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).toISOString().slice(0, 10);
 
 /** Money without cents, for labels on chart marks: "A$1,751". */
 export function fmtMoneyWhole(n: number, currency: string): string {

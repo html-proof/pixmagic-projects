@@ -19,8 +19,13 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 
 - **Dates**: the dashboard's own address-bar state (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`), kept
   for the tab, so the dashboard and every Advertising page show the same dates. The presets are the
-  dashboard's: Today, Yesterday, Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year
-  (`lastyear`, compared with the whole year before), Custom (`@app/shared/dates`).
+  dashboard's: Today, Yesterday, This week (`wtd`, Monday to today) and Last week (`lastweek`, Monday to
+  Sunday), Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year (`lastyear`, compared
+  with the whole year before), Custom (`@app/shared/dates`). Weeks run Monday to Sunday everywhere.
+- **By day, week or month**: the overview's charts ("Ad charts group") and the Meta and Google pages'
+  trend ("Trend groups") add the days up per week or calendar month once the dates are long enough
+  (`groupSeries` in @app/shared/ads): a week or month missing any day's figures is left blank, and a
+  rate is worked out from the period's sums.
 - **Platform and account**: `?platform=meta|google|adsense` and `?account=<ad connection id>`, picked on
   the page and kept in the address too.
 - **Campaign and campaign status** (Campaign comparison): find a campaign by part of its name or its id,
@@ -39,6 +44,12 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
   campaign comparison "View campaigns", `PAGE_NEED` in apps/web/src/lib/access.ts), and the API leaves
   out what isn't granted.
 
+## Printing
+
+Every Advertising page has **Print or save as PDF** (for whoever may export reports, and owners and
+admins, as on the Shopping Funnel): the browser's print dialog, with the menus left out and the store
+and dates written under the title instead.
+
 ## Rules the pages keep
 
 - A figure exists only for days every account behind it has stored; otherwise it is Unavailable, with
@@ -50,6 +61,8 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
   with one platform or one account picked, `sales`, `shareOfSales` (and for one account, `sourced`)
   are left out.
 - AdSense's earnings are money in: their own tile, card and report, never added to spend.
+- Clicks, reach and store visits are different counts: the overview says so under its figures, and
+  none is added to another (docs/kpis.md, "Ads").
 
 ## Reports and downloads
 

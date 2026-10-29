@@ -879,11 +879,12 @@ export function adsRoutes(app: App, deps: Deps) {
     const today = adToday(conn);
     const deadline = Date.now() + META_REPORT_JOB.budgetMs;
     // Days that are over change little (Meta still revises purchases for a while); today's keep coming in.
+    // The key's version moves whenever a report gains figures, so none cached without them is read back.
     const { reports, cached } = await readRanges<MetaReport>(
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-report:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
+      (r) => `ads-report:v2:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
       (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline, ...(r.compare ? { statuses: false } : {}) }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
@@ -912,11 +913,12 @@ export function adsRoutes(app: App, deps: Deps) {
     // Both ranges' calls end within one deadline, so the answer comes within the request's time.
     const deadline = Date.now() + AD_REPORT_BUDGET_MS;
     // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
+    // The key's version moves whenever a report gains figures, so none cached without them is read back.
     const { reports, cached } = await readRanges<GoogleReport>(
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-greport:${conn.id}:${q.level}:${r.from}:${r.to}`,
+      (r) => `ads-greport:v2:${conn.id}:${q.level}:${r.from}:${r.to}`,
       (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {

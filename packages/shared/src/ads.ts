@@ -9,7 +9,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/ads), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, eachDay, isDay, localDay, localTime } from "./dates";
+import { addDays, eachDay, isDay, localDay, localTime, periodsOf, type PeriodGranularity } from "./dates";
 
 /** Everything that can be connected on Settings → Ad accounts. */
 export const AD_PROVIDERS = ["meta", "google", "adsense"] as const;
@@ -505,6 +505,29 @@ export interface AdSeriesDay {
 }
 
 /**
+ * A daily series (ads, AdSense) added up into weeks (Monday to Sunday) or calendar months
+ * (`periodsOf`): each figure is the sum of the period's days, or null when any of its days in the
+ * range lacks it, as every figure over days is here: never a part of a week passed off as the whole.
+ * `day` is the period's first day in the range; `from` and `to` its days in the range.
+ */
+export function groupSeries<T extends { day: string }>(series: readonly T[], range: { from: string; to: string }, g: PeriodGranularity): Array<T & { key: string; from: string; to: string }> {
+  const byDay = new Map(series.map((d) => [d.day, d]));
+  return periodsOf(range, g).flatMap((p) => {
+    const days = eachDay(p.from, p.to).flatMap((d) => byDay.get(d) ?? []);
+    if (!days.length) return [];
+    const sums: Record<string, number | null> = {};
+    for (const d of days) {
+      for (const [k, v] of Object.entries(d)) {
+        if (k === "day" || (typeof v !== "number" && v !== null)) continue;
+        const before = k in sums ? sums[k]! : 0;
+        sums[k] = before === null || v === null ? null : Math.round((before + (v as number)) * 100) / 100;
+      }
+    }
+    return [{ ...days[0]!, ...sums, day: p.from, key: p.key, from: p.from, to: p.to }];
+  });
+}
+
+/**
  * One point per day of the range. A day `coverage` includes and nothing ran on is a real 0; a day
  * outside it is missing (every figure null). Without a coverage every day counts as covered.
  */
@@ -562,6 +585,8 @@ export function previousRange(range: { from: string; to: string }) {
 /** Meta reports every action type it tracks; these are the ones that mean a purchase or a lead, best first. */
 const META_PURCHASE = ["omni_purchase", "purchase", "offsite_conversion.fb_pixel_purchase", "onsite_web_purchase"];
 const META_LEAD = ["lead", "onsite_conversion.lead_grouped", "offsite_conversion.fb_pixel_lead"];
+/** A landing page loaded after a link click, as Meta counts it (the omni count first: they overlap). */
+const META_LANDING_PAGE_VIEW = ["omni_landing_page_view", "landing_page_view"];
 
 type MetaAction = { action_type: string; value: string | number };
 
@@ -697,6 +722,12 @@ export interface MetaReportMetrics {
   costPerLinkClick: number | null;
   /** Spend per thousand impressions. */
   cpm: number | null;
+  /**
+   * Link clicks after which the landing page loaded, as Meta's pixel saw it: Meta's count, not the
+   * store's sessions (a visit Meta can't see isn't one, and one person can land twice).
+   */
+  landingPageViews: number;
+  costPerLandingPageView: number | null;
   /** Purchases Meta attributes to the ads (its own count, not the store's orders). */
   purchases: number;
   purchaseValue: number;
@@ -946,6 +977,8 @@ export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
   const cpl = ratio(spend, linkClicks);
   const cpm = ratio(spend * 1000, impressions);
   const cpp = ratio(spend, purchases);
+  const landingPageViews = Math.round(firstAction(r.actions, META_LANDING_PAGE_VIEW));
+  const cplpv = ratio(spend, landingPageViews);
   return {
     spend,
     impressions,
@@ -956,6 +989,8 @@ export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
     linkCtr: ratio(linkClicks, impressions),
     costPerLinkClick: cpl === null ? null : r2(cpl),
     cpm: cpm === null ? null : r2(cpm),
+    landingPageViews,
+    costPerLandingPageView: cplpv === null ? null : r2(cplpv),
     purchases,
     purchaseValue,
     costPerPurchase: cpp === null ? null : r2(cpp),
@@ -1123,6 +1158,8 @@ export interface GoogleReportMetrics {
   cpm: number | null;
   /** Google's own count, by each conversion action's own attribution model. */
   conversions: number;
+  /** Conversions per click (Google's "conv. rate", on every conversion action). */
+  conversionRate: number | null;
   conversionValue: number;
   costPerConversion: number | null;
   /** Conversion value per unit of spend. */
@@ -1178,6 +1215,7 @@ export function googleReportMetrics(m: GoogleReportApiRow["metrics"]): GoogleRep
     cpc: cpc === null ? null : r2(cpc),
     cpm: cpm === null ? null : r2(cpm),
     conversions,
+    conversionRate: ratio(conversions, clicks),
     conversionValue,
     costPerConversion: cpa === null ? null : r2(cpa),
     roas: ratio(conversionValue, spend),

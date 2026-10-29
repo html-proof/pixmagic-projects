@@ -23,6 +23,7 @@ import {
   fromAdsenseReport,
   fromGoogleAdsRow,
   fromMetaInsight,
+  groupSeries,
   fromMetaRangeInsight,
   metaAttributionLabel,
   metaReportMetrics,
@@ -358,6 +359,31 @@ describe("AdSense", () => {
   });
 });
 
+describe("a daily series in weeks and months", () => {
+  const d = (day: string, spend: number | null, clicks: number | null = spend === null ? null : 1) => ({ day, spend, clicks });
+
+  it("adds each Monday-to-Sunday week's days up, and leaves a week missing any day blank", () => {
+    // Thursday 1 Oct to Wednesday 14 Oct: 4 days of one week, a whole week, 3 days of the next.
+    const days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14"];
+    const series = days.map((day) => d(day, day === "2026-10-13" ? null : 10.1));
+    const weeks = groupSeries(series, { from: "2026-10-01", to: "2026-10-14" }, "week");
+    expect(weeks.map((w) => [w.key, w.day, w.from, w.to, w.spend, w.clicks])).toEqual([
+      ["2026-W40", "2026-10-01", "2026-10-01", "2026-10-04", 40.4, 4],
+      ["2026-W41", "2026-10-05", "2026-10-05", "2026-10-11", 70.7, 7],
+      // 13 Oct has no figures yet: the week is unknown, not 20.2.
+      ["2026-W42", "2026-10-12", "2026-10-12", "2026-10-14", null, null],
+    ]);
+  });
+
+  it("adds calendar months up, and keeps a figure missing on one day apart from the others", () => {
+    const series = [d("2026-09-29", 5), d("2026-09-30", 5), { day: "2026-10-01", spend: 7, clicks: null }, d("2026-10-02", 3)];
+    expect(groupSeries(series, { from: "2026-09-29", to: "2026-10-02" }, "month")).toEqual([
+      { day: "2026-09-29", key: "2026-09", from: "2026-09-29", to: "2026-09-30", spend: 10, clicks: 2 },
+      { day: "2026-10-01", key: "2026-10", from: "2026-10-01", to: "2026-10-02", spend: 10, clicks: null },
+    ]);
+  });
+});
+
 describe("the Meta Ads report's numbers", () => {
   it("works out link clicks, costs, purchases and return from one range's row, counting a purchase once", () => {
     const m = metaReportMetrics({
@@ -372,6 +398,8 @@ describe("the Meta Ads report's numbers", () => {
         { action_type: "purchase", value: "10" },
         { action_type: "offsite_conversion.fb_pixel_purchase", value: "10" },
         { action_type: "lead", value: "3" },
+        { action_type: "omni_landing_page_view", value: "500" },
+        { action_type: "landing_page_view", value: "500" },
       ],
       action_values: [
         { action_type: "omni_purchase", value: "1000" },
@@ -388,6 +416,9 @@ describe("the Meta Ads report's numbers", () => {
       linkCtr: 0.012,
       costPerLinkClick: 0.42,
       cpm: 5,
+      // Counted once, though Meta reports it under two names.
+      landingPageViews: 500,
+      costPerLandingPageView: 0.5,
       purchases: 10,
       purchaseValue: 1000,
       costPerPurchase: 25,
@@ -398,7 +429,7 @@ describe("the Meta Ads report's numbers", () => {
 
   it("says 'unknown' rather than zero when Meta leaves a figure out, and never divides by zero", () => {
     const m = metaReportMetrics({ spend: "0", impressions: "0" });
-    expect(m).toMatchObject({ reach: null, frequency: null, linkCtr: null, costPerLinkClick: null, cpm: null, costPerPurchase: null, roas: null, purchases: 0 });
+    expect(m).toMatchObject({ reach: null, frequency: null, linkCtr: null, costPerLinkClick: null, cpm: null, landingPageViews: 0, costPerLandingPageView: null, costPerPurchase: null, roas: null, purchases: 0 });
     // Frequency is impressions per person when Meta gives reach but not frequency.
     expect(metaReportMetrics({ impressions: "300", reach: "120" }).frequency).toBe(2.5);
   });
