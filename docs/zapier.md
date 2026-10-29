@@ -268,6 +268,11 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
    and warns when the client id is set without its secret.
 5. Try a Zap, then `ZAPIER_ENABLED = true` in `apps/web/src/lib/features.ts`.
 
+Done for app 248720 (v1.0.0): live since release 130 (2026-10-29), and the first test Zap passed that
+day on the owner's Zapier account. That Zap connected store PixMagic, and its New Alert, Find Ad
+Performance and Find AdSense Earnings steps matched bizinsights' own figures. Turning it on and off
+added and removed its hook. `ZAPIER_ENABLED` is still off.
+
 A new version of the Zapier app (new triggers, changed fields) goes out only after the bizinsights
 side it calls is live, through a staging version the owner tries first:
 [integrations/zapier/README.md](../integrations/zapier/README.md#a-new-version-staging-then-promote).
@@ -284,6 +289,7 @@ side it calls is live, through a staging version the owner tries first:
 
 | Symptom | Why, and what to do |
 | --- | --- |
+| Pressing **Sign in** on Zapier seems to do nothing, and bizinsights' logs show no "zapier authorization allowed" | Zapier's sign-in pop-up first shows its own page (connect.zapier.com, "Connect to Zapier … Connect"), and only after **Connect** shows bizinsights' consent page (`/connect/zapier`). A pop-up behind the Zapier window, or one the browser blocked, sits on that first page. Bring it to the front (or allow pop-ups for zapier.com), press Connect, then sign in to bizinsights and Allow. |
 | Zapier shows bizinsights' page saying the request "would send you somewhere other than Zapier" | `ZAPIER_REDIRECT_URI` isn't exactly the app's redirect URI (trailing slash, App id). Copy it from `zapier describe`. |
 | "This request doesn't come from bizinsights' Zapier app" | The Zapier app's `CLIENT_ID` differs from `ZAPIER_CLIENT_ID`. |
 | Connecting fails after Allow (Zapier says the token request failed) | `invalid_client`: `CLIENT_SECRET` differs from `ZAPIER_CLIENT_SECRET`, or the version's environment isn't set (`zapier env:get <version>`). Logs: "zapier token request refused" with the OAuth error. |
