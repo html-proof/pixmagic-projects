@@ -17,6 +17,7 @@ import { webhookRoutes } from "./routes/webhooks.js";
 import { mailEventRoutes } from "./routes/mailEvents.js";
 import { pixelRoutes } from "./routes/pixel.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { businessEventRoutes } from "./routes/businessEvents.js";
 import { workspaceRoutes } from "./routes/workspaces.js";
 import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
@@ -220,6 +221,7 @@ export function buildApp(deps: Deps): App {
   mailEventRoutes(app, deps);
   pixelRoutes(app, deps);
   dashboardRoutes(app, deps);
+  businessEventRoutes(app, deps);
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
