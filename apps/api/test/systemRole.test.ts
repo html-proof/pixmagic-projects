@@ -203,11 +203,11 @@ describe("the API's row scopes", () => {
     const app = buildApp(ctx.deps);
     // A route that forgets its where-clause: only the workspace in the path comes back.
     app.get("/workspaces/:ws/__forgot-the-filter", async (c) => c.json({ scope: rowScope(), connections: (await systemDb.adConnection.findMany()).map((x) => x.workspaceId) }));
-    const res = await asSystem(() => app.request(`/workspaces/${wsA}/__forgot-the-filter`, { headers: a.headers }));
+    const res = await asSystem(async () => app.request(`/workspaces/${wsA}/__forgot-the-filter`, { headers: a.headers }));
     expect(await res.json()).toEqual({ scope: { kind: "tenant", workspaceId: wsA }, connections: [wsA] });
     // The scope follows the path, not the caller: it only narrows. Whether A may use B's routes at
     // all is each route's own check (the 404s of crossAccount.test.ts); this probe has none.
-    const other = await asSystem(() => app.request(`/workspaces/${wsB}/__forgot-the-filter`, { headers: a.headers }));
+    const other = await asSystem(async () => app.request(`/workspaces/${wsB}/__forgot-the-filter`, { headers: a.headers }));
     expect((await other.json()).connections).toEqual([wsB]);
   });
 
