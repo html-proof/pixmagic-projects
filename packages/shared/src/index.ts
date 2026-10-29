@@ -22,3 +22,4 @@ export * from "./team.js";
 export * from "./inventory.js";
 export * from "./salesCalculation.js";
 export * from "./partialUpdate.js";
+export * from "./orders.js";

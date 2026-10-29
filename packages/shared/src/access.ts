@@ -514,6 +514,9 @@ export const OVERVIEW_MODULE_ACCESS = {
   fulfillment: ["orders.fulfillment"],
   discount_codes: ["discounts.codes"],
   recent_orders: ["orders.list"],
+  // Orders at a glance (OrderOutcomes in ./orders.ts): its payment, shipping and checkout parts each
+  // need their own permission (redactFields), so it is shown with any of them.
+  order_outcomes: ["orders.list", "orders.fulfillment", "analytics.abandonment"],
   inventory: ["products.inventory"],
   // The Inventory module's own Shopify access (capabilities.ts): its pages, not the dashboard's.
   stock_levels: ["inventory.view"],
@@ -606,6 +609,18 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
     ];
     // How many orders were cancelled in the dates is cancellation detail too.
     if (drop.length) out.recent_orders = { ...((g.has("orders.cancellations") ? recent : omit(recent, ["cancelledInRange"])) as Obj), items: recent.items.map((i: unknown) => omit(i, drop)) };
+  }
+  // How the dates' orders went: paid or not is payment status, cancelled ones cancellations, and the
+  // count of orders goes with seeing orders or their shipping at all.
+  const outcomes = out.order_outcomes;
+  if (isObj(outcomes)) {
+    const drop = [
+      ...(g.has("orders.payments") && g.has("orders.cancellations") ? [] : ["outcome"]),
+      ...(g.has("orders.fulfillment") ? [] : ["shipping"]),
+      ...(g.has("analytics.abandonment") ? [] : ["checkouts"]),
+      ...(g.has("orders.list") || g.has("analytics.sales") || g.has("orders.fulfillment") ? [] : ["orders"]),
+    ];
+    if (drop.length) out.order_outcomes = omit(outcomes, drop);
   }
   // The Shopping Funnel's visits by where they came from: the traffic sources permission's, like orders by source.
   const funnel = out.funnel;
