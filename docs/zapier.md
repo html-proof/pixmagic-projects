@@ -253,7 +253,7 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
   mixed currencies, demo excluded, AdSense), the daily summary, WhatsApp failures.
 - `packages/shared/test/zapier.test.ts`: periods, currency totals, thresholds, hook URLs, backoff,
   wording, `mayFixAlert`.
-- `integrations/zapier`: `npm test` (Jest, appTester, nock, and Zapier's schema).
+- `integrations/zapier`: `npm test` (Node's own test runner, appTester, nock, and Zapier's schema).
 
 ## Not built, and why
 
