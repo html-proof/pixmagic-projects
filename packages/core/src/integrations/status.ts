@@ -42,8 +42,8 @@ import { isDemoConnection } from "../ads/googleAdsSource.js";
 import { hubConnections, hubPermissions, type ChannelConnection, type HubContext, type HubDeps } from "../automations/index.js";
 import { listEmailAccounts } from "../email/accounts.js";
 import { syncProblem } from "../reports/overview.js";
-import { cloudApiMissing } from "../whatsapp/cloudApi.js";
 import { connectionOf } from "../whatsapp/common.js";
+import { evolutionConfigured } from "../whatsapp/evolution.js";
 import { waConnectionView } from "../whatsapp/overview.js";
 
 export interface IntegrationsViewer {
@@ -198,22 +198,24 @@ async function whatsappModule(store: Store, viewer: IntegrationsViewer): Promise
   const row = await connectionOf(store.id);
   const view = waConnectionView(row);
   const status = whatsappIntegrationStatus(view?.status);
-  const configured = !cloudApiMissing().length;
-  // A connection that was disconnected, or a QR-linked phone that was retired, is no account any more: its reason says which.
+  // Every way of connecting goes through bizinsights' Evolution API service: a QR code needs nothing
+  // more, Meta's Cloud API its settings too (overview.ts cloudApiMissing, shown on WhatsApp's page).
+  const configured = evolutionConfigured();
+  // A connection that was disconnected is no account any more: its reason says why.
   const live = !!row && !!view && view.status !== "disconnected";
   const accounts: Account[] = live
-    ? [{ id: row.id, name: view.profileName ?? view.phone, status, lastSyncedAt: null, lastAttemptAt: view.lastCheckedAt, code: status === "connected" ? null : view.reasonCode, demo: false }]
+    ? [{ id: row.id, name: view.profileName ?? view.phone, status, lastSyncedAt: null, lastAttemptAt: view.lastCheckedAt, code: status === "connected" ? null : row.statusReason, demo: false }]
     : [];
   const actions: IntegrationAction[] = [];
   if (viewer.acts) {
     const manage = allows(viewer.access, "integrations.manage");
     if (manage && configured && !live) actions.push("connect");
     if (manage && configured && live && (status === "reauthorization_required" || status === "error")) actions.push("reconnect");
-    // "Check now" asks Meta for the connection's state: anyone who may see WhatsApp's page.
+    // "Check now" asks the provider for the connection's state: anyone who may see WhatsApp's page.
     if (live && allows(viewer.access, "marketing.campaigns")) actions.push("refresh");
     if (manage && live) actions.push("disconnect");
   }
-  return moduleOf("whatsapp", status, accounts, { code: live ? undefined : !configured ? "not_configured" : (view?.reasonCode ?? null), actions });
+  return moduleOf("whatsapp", status, accounts, { code: live ? undefined : !configured ? "not_configured" : (row?.statusReason ?? null), actions });
 }
 
 // ---------------------------------------------------------------------------

@@ -32,10 +32,13 @@ const OFF = {
   WHATSAPP_APP_SECRET: "",
   WHATSAPP_CONFIG_ID: "",
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: "",
+  EVOLUTION_API_URL: "",
+  EVOLUTION_API_KEY: "",
   SMS_MODE: "off",
 };
 const ADS = { META_APP_ID: "meta_app", META_APP_SECRET: "meta_secret", GOOGLE_ADS_CLIENT_ID: "g_client", GOOGLE_ADS_CLIENT_SECRET: "g_secret", GOOGLE_ADS_ENABLED: "1" };
-const WHATSAPP = { META_APP_ID: "meta_app", META_APP_SECRET: "meta_secret", WHATSAPP_CONFIG_ID: "wa_config", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "wa_verify" };
+// The Evolution API service is what lets a store connect at all (QR code); Meta's settings add the Cloud API.
+const WHATSAPP = { EVOLUTION_API_URL: "https://evolution.example", EVOLUTION_API_KEY: "evolution_key", META_APP_ID: "meta_app", META_APP_SECRET: "meta_secret", WHATSAPP_CONFIG_ID: "wa_config", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "wa_verify" };
 
 beforeAll(async () => {
   ctx = await setup();
@@ -276,7 +279,7 @@ describe("WhatsApp", () => {
       },
     });
 
-  it("connected, needing a new sign-in, and a phone once linked with a QR code (retired), each with what may be done", async () => {
+  it("connected, needing a new sign-in, and a phone linked with a QR code, each with what may be done", async () => {
     ctx.setEnv(WHATSAPP);
     const b = await business();
     expect((await status(b)).of("whatsapp")).toMatchObject({ status: "disconnected", code: null, accounts: [], actions: ["connect"] });
@@ -296,8 +299,21 @@ describe("WhatsApp", () => {
     });
 
     await systemDb.wappConnection.delete({ where: { id: row.id } });
-    await waRow(b, { provider: "qr", shard: "a", instanceName: "bi_qr_instance", phoneNumberId: null });
-    expect((await status(b)).of("whatsapp")).toMatchObject({ status: "disconnected", code: "qr_linking_retired", accounts: [], actions: ["connect"] });
+    const qr = await waRow(b, { provider: "qr", shard: "a", instanceName: "bi_qr_instance", wabaId: null, phoneNumberId: null });
+    expect((await status(b)).of("whatsapp")).toMatchObject({
+      status: "connected",
+      accounts: [expect.objectContaining({ id: qr.id, name: "Green Leaf", status: "connected", code: null })],
+      actions: ["refresh", "disconnect"],
+    });
+    // The WhatsApp service lost the phone's link: Reconnect gets a new QR code.
+    await systemDb.wappConnection.update({ where: { id: qr.id }, data: { status: "failed", statusReason: "instance_removed" } });
+    expect((await status(b)).of("whatsapp")).toMatchObject({
+      status: "error",
+      accounts: [expect.objectContaining({ id: qr.id, code: "instance_removed" })],
+      actions: ["reconnect", "refresh", "disconnect"],
+    });
+    await systemDb.wappConnection.update({ where: { id: qr.id }, data: { status: "disconnected", statusReason: null } });
+    expect((await status(b)).of("whatsapp")).toMatchObject({ status: "disconnected", code: null, accounts: [], actions: ["connect"] });
   });
 });
 

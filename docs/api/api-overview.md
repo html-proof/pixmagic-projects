@@ -104,7 +104,9 @@ Where each provider's own states land:
   account it counts is the demo.
 - **WhatsApp** (the connection as its page shows it, `waConnectionView`): connected; pairing →
   pending; reconnecting → syncing; logged out → reauthorization_required; failed → error;
-  disconnected → disconnected, as is a phone once linked with a QR code (`qr_linking_retired`).
+  disconnected → disconnected, with the connection's reason as its `code`. A store can connect once
+  bizinsights' Evolution API service is set up (a QR code; Meta's Cloud API needs its settings too);
+  without it the module says `not_configured`.
 - **SMS** (the Automations hub's card): connected; needing attention → error when the check at AWS
   failed (`connection_failed`), pending while the store's setup is left (the first step as `code`);
   not connected → disconnected.
