@@ -15,7 +15,7 @@ export function businessEventRoutes(app: App, deps: Deps) {
   const day = z.string().refine((s) => isDay(s), "Pick a real date (YYYY-MM-DD)");
   const listQuery = z.object({ from: day.optional(), to: day.optional() });
 
-  /** The store, checked to be the workspace's: a 404 otherwise, the same as one that doesn't exist. */
+  /** The store, checked to be the workspace's before anything else is: a 404 otherwise, the same as one that doesn't exist. */
   async function storeOf(ws: string, storeId: string) {
     return withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true } });
@@ -37,10 +37,10 @@ export function businessEventRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/business-events", async (c) => {
     const { ws, storeId } = c.req.param();
     await requireWorkspace(c, deps, ws, "analytics.sales");
+    await storeOf(ws, storeId);
     const q = listQuery.parse(c.req.query());
     if (!q.from !== !q.to) throw new HttpError(400, "Give both from and to, or neither.", "invalid_range");
     if (q.from && q.to && q.from > q.to) throw new HttpError(400, "The dates end before they start.", "invalid_range");
-    await storeOf(ws, storeId);
     const events = await withTenant(ws, (tx) => listBusinessEvents(tx, { ws, storeId }, q.from && q.to ? { from: q.from, to: q.to } : undefined));
     return c.json({ events });
   });
@@ -48,8 +48,8 @@ export function businessEventRoutes(app: App, deps: Deps) {
   app.post("/workspaces/:ws/stores/:storeId/business-events", async (c) => {
     const { ws, storeId } = c.req.param();
     const userId = editor(await requireWorkspace(c, deps, ws, "analytics.sales"));
-    const input = businessEventInput.parse(await body(c));
     await storeOf(ws, storeId);
+    const input = businessEventInput.parse(await body(c));
     const event = await withTenant(ws, (tx) => createBusinessEvent(tx, { ws, storeId }, input, userId));
     await auditEvent(c, ws, userId, "business_event.created", { eventId: event.id, kind: event.kind, startsOn: event.startsOn, endsOn: event.endsOn });
     return c.json({ event }, 201);
@@ -58,8 +58,8 @@ export function businessEventRoutes(app: App, deps: Deps) {
   app.put("/workspaces/:ws/stores/:storeId/business-events/:id", async (c) => {
     const { ws, storeId, id } = c.req.param();
     const userId = editor(await requireWorkspace(c, deps, ws, "analytics.sales"));
-    const input = businessEventInput.parse(await body(c));
     await storeOf(ws, storeId);
+    const input = businessEventInput.parse(await body(c));
     const result = await withTenant(ws, (tx) => updateBusinessEvent(tx, { ws, storeId }, id, input, userId));
     if (!result) throw new HttpError(404, "Not found", "not_found");
     const { saved, before } = result;
