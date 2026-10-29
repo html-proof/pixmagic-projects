@@ -432,6 +432,8 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
       : ` A ${per} a platform lacks any day's figures for is left blank, not drawn as a lower figure.`
     : "";
   const weeks = by === "week" ? " Weeks run Monday to Sunday." : "";
+  // The chart's name for screen readers is its title: "spend and earnings" only when both are drawn.
+  const moneyTitle = ads && sense ? `Ad spend and estimated ad earnings per ${per}` : ads ? `Ad spend per ${per}` : `Estimated ad earnings per ${per}`;
 
   return (
     <div className="mt-4 space-y-4">
@@ -442,11 +444,11 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
       )}
       {sameMoney ? (
         <ChartCard
-          title={ads && sense ? `Ad spend and estimated ad earnings per ${per}` : ads ? `Ad spend per ${per}` : `Estimated ad earnings per ${per}`}
+          title={moneyTitle}
           sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; estimated earnings are what AdSense expects to pay you, not money paid out yet." : ""}${weeks}${gaps}`}
           testid="ads-money-chart"
         >
-          {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `Ad spend and earnings per ${per}, ${span}`)}
+          {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `${moneyTitle}, ${span}`)}
         </ChartCard>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
