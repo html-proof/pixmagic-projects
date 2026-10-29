@@ -10,17 +10,24 @@ name: CI
 #   (tested job below): merging an up-to-date pull request costs about a minute, not twelve.
 # - The integration tests run only when something they read changed since a run (pull request or
 #   main) where they passed (checks job, "What the integration tests read").
+# - A draft pull request runs nothing: its jobs show as skipped, not failed. A draft is how a pull
+#   request is held (another one needs the PC's runner first, or it has to land after another):
+#   making it one starts a run that cancels the queued or running one and skips every job, so the
+#   pull request shows grey checks instead of the red of a cancelled run. Marking it ready for
+#   review runs everything.
 on:
   push:
     branches: [main]
     paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    # GitHub's three by default, and the two that make a pull request a draft and ready again.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths-ignore: ["**.md", "docs/**"]
 
-# A newer push cancels the older run on the same pull request. On main it waits instead: the run in
-# progress finishes and deploys, then the newest waiting push runs (GitHub drops older waiting runs
-# in a group). With the checks taking ~25 min on the PC, cancelling there meant merges a few
-# minutes apart never deployed at all.
+# A newer push, or making it a draft, cancels the older run on the same pull request. On main it
+# waits instead: the run in progress finishes and deploys, then the newest waiting push runs (GitHub
+# drops older waiting runs in a group). With the checks taking ~25 min on the PC, cancelling there
+# meant merges a few minutes apart never deployed at all.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -99,7 +106,8 @@ jobs:
   checks:
     name: Lint, typecheck, unit & integration tests, build
     needs: tested
-    if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' }}
+    # Not on a draft pull request (top of this file); the e2e job then skips too.
+    if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' && !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     # statuses: write for the pass records (ci/passed-checks, ci/passed-integration).
     permissions:

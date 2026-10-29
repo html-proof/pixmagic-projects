@@ -24,6 +24,10 @@ The owner wants every change made to this project live on AWS
 - The integration tests run only when one of the paths they read changed (list in `ci.yml`, step
   "What the integration tests read"). A test of `apps/api`/`apps/worker` that starts reading a file
   outside that list needs it added there, or a change to that file won't re-run them.
+- Holding an open pull request (another one needs the runner first, or it has to land after
+  another)? Make it a draft: `gh pr ready <n> --undo`. Its CI stops and its checks show as skipped;
+  `gh pr ready <n>` runs them again. Never `gh run cancel` it: a cancelled run shows as failing
+  checks, and the owner reads those as broken work.
 - Don't `cdk deploy` the App stack by hand from a branch: the next `main` deploy replaces it.
 - A schema change ships with its migration (CI checks they match); the deploy applies it.
 - Not ready for merchants yet? Merge it behind a flag in `apps/web/src/lib/features.ts` rather
