@@ -382,6 +382,15 @@ describe("the app stack", () => {
     }
   });
 
+  it("leaves the app's settings to the package, so the 4 KB environment holds what only the deploy knows", () => {
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      // apps/aws/src/index.ts puts them in process.env at cold start (apps/aws/test/config.test.ts).
+      for (const name of Object.keys(appVars())) expect(vars[name]).toBeUndefined();
+    }
+  });
+
   it("puts CloudFront (WAF, HTTPS only) in front of the function URL, with the origin secret", () => {
     t.app.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
