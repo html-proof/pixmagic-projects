@@ -315,7 +315,7 @@ side it calls is live, through a staging version the owner tries first:
 - `packages/shared/test/zapier.test.ts`: periods, currency totals, thresholds (below too), hook URLs,
   backoff, wording, permissions, `mayFixAlert`, the failed-delivery alert's wording.
 - `infra/cdk/test/put-secrets.test.ts`: the previous secret's shape, what `--set` keeps and `--unset` may remove.
-- `integrations/zapier`: `npm test` (Jest, appTester, nock, and Zapier's schema).
+- `integrations/zapier`: `npm test` (Node's own test runner, appTester, nock, and Zapier's schema).
 
 ## Not built, and why
 
