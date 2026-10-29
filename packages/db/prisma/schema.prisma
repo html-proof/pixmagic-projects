@@ -348,6 +348,8 @@ model Store {
   salesCalculation      SalesCalculation?
   inventoryAlerts       InventoryAlert[]
   inventorySyncRuns     InventorySyncRun[]
+  expenses              StoreExpense[]
+  expenseSettings       StoreExpenseSettings?
 
   @@index([workspaceId])
   @@map("stores")
@@ -999,6 +1001,52 @@ model SalesCalculation {
 
   @@index([workspaceId])
   @@map("sales_calculations")
+}
+
+// A cost the store's owner keeps in bizinsights (Settings → Costs, docs/kpis.md "Costs and net
+// profit"): what Shopify, its profit report and the ad platforms can't say (the Shopify plan, apps,
+// staff, rent, shipping labels, fees...). The dashboard spreads it over the days it covers
+// (expenseInRange in @app/shared/expenses); only the owner's own figure is kept.
+model StoreExpense {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  name            String
+  /// shopify_plan | shopify_apps | software | staff | rent | shipping | payment_fees | marketing | other (EXPENSE_CATEGORIES)
+  category        String
+  /// In the store's currency.
+  amount          Decimal  @db.Decimal(18, 2)
+  /// once | weekly | monthly | yearly (EXPENSE_CADENCES)
+  cadence         String
+  /// The store-local day it starts, YYYY-MM-DD (paid once: the day it was paid).
+  startsOn        String   @map("starts_on")
+  /// The last store-local day it applies to; null while it goes on.
+  endsOn          String?  @map("ends_on")
+  note            String?
+  createdByUserId String?  @map("created_by_user_id")
+  updatedByUserId String?  @map("updated_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([storeId])
+  @@map("store_expenses")
+}
+
+// Whether the store's costs list holds every cost, and from which day: net profit is given only for
+// dates from then on (expensesComplete in @app/shared/expenses). One row per store, once said.
+model StoreExpenseSettings {
+  storeId         String   @id @map("store_id")
+  workspaceId     String   @map("workspace_id")
+  /// The first store-local day the list holds every cost from; null: not said, or taken back.
+  completeFrom    String?  @map("complete_from")
+  updatedByUserId String?  @map("updated_by_user_id")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("store_expense_settings")
 }
 
 model FunnelDaily {
