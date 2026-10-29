@@ -6,6 +6,7 @@ import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, Normalized
 import { releaseAdLoginsWhere, revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
 import { deleteRetiredNangoToken, purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
+import { purgeZapierStoreOps } from "./zapier/manage.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
 
@@ -980,6 +981,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.smsAuditLog.deleteMany({ where: { storeId } }),
     systemDb.smsSenderConfiguration.deleteMany({ where: { storeId } }),
     systemDb.smsSetup.deleteMany({ where: { storeId } }),
+    // Zapier: the store's connections (their tokens stop working), its Zaps' triggers and its outbox.
+    ...purgeZapierStoreOps(storeId),
     // The orders and visits are gone, and where their history started with them: the next import
     // and pixel record their own.
     systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null } }),

@@ -135,6 +135,11 @@ export const APP_SETTINGS = {
   "WHATSAPP_APP_ID": "",
   "WHATSAPP_CONFIG_ID": "2228218088074576",
   "WHATSAPP_API_VERSION": "v26.0",
+  // Workspaces (ids, comma-separated) that may also connect WhatsApp with a token of the Insights app
+  // made in Meta's dashboard, instead of Meta's window (docs/whatsapp.md, "Connecting with the app's own
+  // token"): bizinsights' own team, to record App Review with the app's test number before Meta
+  // approves bizinsights as a Tech Provider. Since 2026-10-29: the PixMagic workspace. Empty: no one.
+  "WHATSAPP_TOKEN_CONNECT_WORKSPACES": "cmvarpfwa000002jngkgh5ji2",
   // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "live" since 2026-10-25:
   // automations, campaigns and Send SMS hand texts to AWS, each after every check (sender verified
   // and tagged for the store, sending on, consent, opt-outs, quiet hours, the monthly limit). AWS
@@ -156,4 +161,14 @@ export const APP_SETTINGS = {
   "EMAIL_GOOGLE_CLIENT_ID": "",
   "EMAIL_MICROSOFT_CLIENT_ID": "",
   "EMAIL_MICROSOFT_AUTHORITY": "common",
+  // Zapier (docs/zapier.md, "Owner setup"): bizinsights is the OAuth provider of its app on Zapier's
+  // Developer Platform. ZAPIER_CLIENT_ID: the client id the owner chose and entered in the Zapier app's
+  // environment (CLIENT_ID); its secret is in Secrets Manager (put-secrets.mjs --set ZAPIER_CLIENT_SECRET).
+  // ZAPIER_REDIRECT_URI: the redirect URI the Zapier app shows under Authentication (exact match).
+  // ZAPIER_INVITE_URL: the app's invite link (Zapier → Manage team → Invite), what Connect opens.
+  // The app is "bizinsights", Zapier app 248720 (integrations/zapier/.zapierapprc), registered and
+  // pushed 2026-10-28, private. Without ZAPIER_CLIENT_SECRET every Zapier endpoint answers not_configured.
+  "ZAPIER_CLIENT_ID": "bizinsights-zapier",
+  "ZAPIER_REDIRECT_URI": "https://zapier.com/dashboard/auth/oauth/return/App248720CLIAPI/",
+  "ZAPIER_INVITE_URL": "https://zapier.com/developer/public-invite/248720/2c93102b9c4308838f92f4a1caf4e20f/",
 } as const satisfies Record<string, string>;

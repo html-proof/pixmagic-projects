@@ -118,6 +118,11 @@ const PROVIDERS = [
     name: "Google (Gmail API), Microsoft (Microsoft Graph) or your own SMTP provider",
     purpose: "Send the emails you set up, from the account you connect, only for workspaces that connect one.",
   },
+  {
+    name: "Zapier",
+    purpose:
+      "Only for stores whose team connects bizinsights to their own Zapier account: receives the events and figures that team's Zaps ask for (alerts, advertising results, failed WhatsApp messages with the number masked), never customers' names, emails or full phone numbers. What Zapier does with them is under that team's own Zapier account and Zapier's terms.",
+  },
 ] as const;
 
 export default function PrivacyPage() {

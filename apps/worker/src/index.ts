@@ -52,9 +52,12 @@ import {
   sweepAdConnectionAlerts,
   checkWaitingAdLogins,
   moveAdConnectionsOffNango,
+  runZapierJob,
+  sweepZapierDeliveries,
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
+import type { ZapierJob } from "@app/core/zapier";
 import { runShopifyReports } from "./shopifyReports.js";
 
 import { failVerify, runVerify } from "./verify.js";
@@ -148,6 +151,8 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     else if (queue === "sync" && kind === "verify") await runVerify(job as VerifyJob, deps);
     // Shopify's report figures for the dashboard ride the sync queue too; the kept rows carry their state.
     else if (queue === "sync" && kind === "shopify_reports") await runShopifyReports(job as ShopifyReportsJob, deps);
+    // Zapier deliveries (docs/zapier.md) ride the sync queue too; the delivery rows carry their own retries.
+    else if (queue === "sync" && kind === "zapier") await runZapierJob(job as ZapierJob, deps);
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else if (queue === "email") await runEmailJob(job as EmailJob, deps);
@@ -287,6 +292,10 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // Nothing to mark: the dashboard asks again for whatever is still missing or stale.
     return;
   }
+  if (queue === "sync" && kind === "zapier") {
+    // The delivery row is the record: one cut short is tried again by the cron sweep (stuck "delivering").
+    return;
+  }
   if (queue === "sync" && (body as { kind?: string })?.kind === "ads") {
     // An ad account, not the store's import: never touches the store's status or raises a store
     // alert. The account's own state is marked from what the last attempt met, as a code and the
@@ -344,6 +353,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
       },
       deps.mailer,
       deps.fetchImpl,
+      deps.queues,
     );
   } else if (queue === "webhooks") {
     const data = body as WebhookJobData;
@@ -355,6 +365,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
         { workspaceId: ev.workspaceId, storeId: ev.storeId, severity: "warning", code: "webhook_failed", message: `Processing ${ev.topic} failed: ${err.message}` },
         deps.mailer,
         deps.fetchImpl,
+        deps.queues,
       );
     }
     if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
@@ -532,7 +543,12 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync records prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedOffNango, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
+    // Zapier last: the alerts the sweeps above raised (with no queue at hand) go out in this same tick.
+    const zapier = await sweepZapierDeliveries(deps).catch((err: unknown) => {
+      logger.error({ err }, "zapier sweep failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedOffNango, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

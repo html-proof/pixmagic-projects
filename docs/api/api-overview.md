@@ -17,6 +17,7 @@ The JSON API the web app uses, served by the same Lambda function as the UI. Beh
 | --- | --- | --- |
 | Signed-in user | `__session` cookie (our signed session, httpOnly, SameSite=Lax; `__session_rt` holds the encrypted Cognito refresh token, sent to `/api` only) | Mutations must come from the app's Origin (CSRF). Sign-in endpoints check Origin even without a cookie. |
 | API key | `Authorization: Bearer sk_live_...` | Read-only (acts as `viewer`), one workspace. |
+| Zapier | `Authorization: Bearer zat_...` (OAuth access token, [../zapier.md](../zapier.md)) | `/zapier/*` only, one store; the member who connected it is re-checked on every request. |
 | Providers | Shopify HMAC, Meta `X-Hub-Signature-256`, OAuth state + PKCE | Verified before anything is read or written. |
 
 Workspace routes check membership first (non-members get **404**, so ids can't be probed), then
@@ -238,3 +239,14 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | POST | `/workspaces/:ws/billing/subscribe` | billing:manage | workspaces.ts |
 | GET | `/workspaces/:ws/audit-logs` | audit:read | workspaces.ts |
 | GET | `/workspaces/:ws/alerts` | dashboard:read | workspaces.ts |
+| GET | `/oauth/zapier/authorize` | signed in (own sign-in, not a shared link) | zapierOAuth.ts |
+| POST | `/workspaces/:ws/stores/:storeId/zapier/authorize` | integrations.manage | zapierOAuth.ts |
+| POST | `/oauth/token` | public (Zapier's client secret) | zapierOAuth.ts |
+| GET | `/zapier/me` | Zapier bearer token (`zat_`) only | zapier.ts |
+| POST | `/zapier/hooks` | Zapier bearer token only | zapier.ts |
+| DELETE | `/zapier/hooks/:id` | Zapier bearer token only | zapier.ts |
+| GET | `/zapier/samples/:event` | Zapier bearer token only | zapier.ts |
+| GET | `/zapier/search/ad-performance` | Zapier bearer token only, marketing.ads | zapier.ts |
+| GET | `/zapier/search/adsense-earnings` | Zapier bearer token only, marketing.ads | zapier.ts |
+| GET | `/workspaces/:ws/stores/:storeId/zapier` | integrations.status | zapier.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/zapier/connections/:grantId` | integrations.manage | zapier.ts |
