@@ -39,7 +39,7 @@ Audits: [2026-10-10](security-audit-2026-10-10.md), [2026-10-14](security/SECURI
 | Headers | UI: HSTS, `X-Frame-Options: DENY`, an enforced allowlist CSP (`default-src 'self'`; outside origins: only Meta's SDK and frames for WhatsApp sign-up, and Cloudflare's analytics beacon; Google sign-in and the ad platforms' sign-ins are full-page redirects, so they need none; `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self'`; inline scripts still allowed, as the static export's bootstrap needs them), COOP `same-origin-allow-popups`, nosniff, referrer and permissions policies. API: nosniff, `Cache-Control: no-store`, CSP `default-src 'none'`, `X-Frame-Options: DENY`, HSTS over https | `apps/web/public/_headers` (applied by `apps/aws/src/staticSite.ts`), `apps/api/src/app.ts` |
 | Source maps | Not produced for the browser (Next.js default) or for the functions (`sourcemap: false`) | `apps/web/next.config.ts`, `apps/aws/scripts/build.mjs` |
 | Dependencies | `pnpm audit` clean and enforced in CI (`--audit-level high`); vulnerable transitive build tools pinned up through `pnpm.overrides`; install scripts run only for the packages `pnpm.onlyBuiltDependencies` names; the deploy is two jobs, and only the one that installs nothing but the CDK tools (no install scripts) can ask for the deploy role's token (docs/aws-deployment.md, Deploy) | `package.json`, `.github/workflows/ci.yml` |
-| Database roles | `app_rls` (every tenant request) has RLS on every tenant table, no write access to `users`, and append-only `audit_logs`. In production the tenant pool never falls back to the owner's login (a missing `APP_DATABASE_URL` fails tenant queries), and `/readyz` reports not ready if the tenant connection's role is a superuser or bypasses RLS | `infra/postgres/init.sql`, migrations |
+| Database roles | No request, job or sweep logs in as the tables' owner. `app_rls` (every tenant request) has RLS on every tenant table, no write access to `users`, and append-only `audit_logs`. `app_system` (`systemDb`: webhooks, jobs, sweeps, sign-in, the integration code) is no owner and has no BYPASSRLS, so RLS binds it too. Each request, job or sweep names its row scope: one workspace (every `/workspaces/:ws` route, each job), or across workspaces for a reason on the reviewed list ([system-database-role.md](system-database-role.md)). In production neither pool falls back to the owner's login, and `/readyz` reports not ready if either connection's role is a superuser, bypasses RLS or owns a table | `infra/postgres/init.sql`, `packages/db/src/index.ts`, `packages/db/src/crossTenant.ts`, `apps/api/src/rowScope.ts`, `apps/worker/src/rowScope.ts` |
 
 ## Database credentials and network exposure
 
@@ -59,15 +59,23 @@ ALTER ROLE app_rls PASSWORD '<new tenant password>';
 Local tools that connect directly (`DATABASE_URL`, `APP_DATABASE_URL`, the tests' `TEST_PG_PORT`
 database) need the new passwords too.
 
-On AWS neither is a default: RDS generates the owner's password into Secrets Manager
-(`insights/<environment>/db-owner`), `put-secrets.mjs` generates `APP_RLS_PASSWORD`, and the
-`migrate` action sets the `app_rls` role's password from it. The database is in isolated subnets,
-not publicly accessible, accepts 5432 only from the functions' and the admin host's security
-groups, and requires TLS (`rds.force_ssl`), which the app verifies against Amazon's CA
+On AWS none is a default:
+- RDS generates the owner's password into Secrets Manager (`insights/<environment>/db-owner`).
+- CloudFormation generates the system role's into `insights/<environment>/db-system`.
+- `put-secrets.mjs` generates `APP_RLS_PASSWORD`.
+- The `migrate` action sets both roles' passwords; it creates `app_system` with its password before
+  `init.sql` runs.
+
+The database is in isolated subnets, not publicly accessible, accepts 5432 only from the
+functions' and the admin host's security groups, and requires TLS (`rds.force_ssl`), which the app verifies against Amazon's CA
 (`infra/cdk/lib/data-stack.ts`, `apps/aws/src/secrets.ts`). The old deployment's database on the
 owner's PC was created with the development defaults; it goes when that deployment is retired
 ([aws-deployment.md](aws-deployment.md#retiring-the-old-cloudflare-deployment)).
 
-The owner role `app` is the RDS master user (a member of `rds_superuser`). The system paths
-(webhooks, jobs, auth bootstrap) use it, so it can do anything in the database. Moving those paths
-to a narrower owner is tracked in [the 2026-10-10 audit](security-audit-2026-10-10.md).
+The owner role `app` is the RDS master user (a member of `rds_superuser`). Only the cron function
+has its secret, for the maintenance actions that change tables (`migrate`, `counts`,
+`evolution-db`), plus the admin host for SQL by hand. The api and jobs functions log in as
+`app_system` and can't read it. That closes finding 5 of
+[the 2026-10-10 audit](security-audit-2026-10-10.md); how the system paths name their scope, and
+what that doesn't cover (it guards against a forgotten where-clause, not SQL injection), is in
+[system-database-role.md](system-database-role.md).

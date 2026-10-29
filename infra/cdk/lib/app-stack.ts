@@ -139,7 +139,9 @@ export class AppStack extends Stack {
       NODE_EXTRA_CA_CERTS: "/var/task/rds-ca.pem",
       APP_SECRET_ARN: data.appSecret.secretArn,
       RUNTIME_PARAM: this.runtimeParam,
-      DB_SECRET_ARN: data.dbSecret.secretArn,
+      // The database login of every function: the system role (docs/system-database-role.md), by name
+      // like the Evolution secrets below. Only the cron is given the owner's (DB_SECRET_ARN, below).
+      SYSTEM_DB_SECRET_ARN: `insights/${cfg.name}/db-system`,
       DB_HOST: data.db.dbInstanceEndpointAddress,
       DB_PORT: data.db.dbInstanceEndpointPort,
       DB_NAME: "app",
@@ -182,8 +184,8 @@ export class AppStack extends Stack {
           ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
           // Only the cron makes the WhatsApp service's database role (its "evolution-db" action) and prunes its data.
           ...(name === "cron" ? { EVOLUTION_DB_SECRET_ARN: `insights/${cfg.name}/evolution-db` } : {}),
-          // The system role's login, by name like the one above: the cron's migrate action makes the role from it.
-          ...(name === "cron" ? { SYSTEM_DB_SECRET_ARN: `insights/${cfg.name}/db-system` } : {}),
+          // The owner's login: the cron's maintenance actions (migrate, counts, evolution-db) change tables.
+          ...(name === "cron" ? { DB_SECRET_ARN: data.dbSecret.secretArn } : {}),
         },
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
@@ -195,10 +197,10 @@ export class AppStack extends Stack {
         currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
       });
       data.appSecret.grantRead(f);
-      data.dbSecret.grantRead(f);
+      data.systemDbSecret.grantRead(f);
+      if (name === "cron") data.dbSecret.grantRead(f);
       data.evolutionSecret.grantRead(f);
       if (name === "cron") data.evolutionDbSecret.grantRead(f);
-      if (name === "cron") data.systemDbSecret.grantRead(f);
       data.coordTable.grantReadWriteData(f);
       data.payloads.grantReadWrite(f);
       for (const q of Object.values(queues)) q.grantSendMessages(f);

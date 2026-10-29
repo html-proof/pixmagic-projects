@@ -16,8 +16,10 @@ Workspace ──< Membership >── User           (role: owner | admin | analy
 
 - **Every tenant table carries `workspace_id`** (store-scoped ones also `store_id`), so row-level
   security can check it without joins.
-- **Two roles.** `app` owns the tables and runs migrations and system paths (`systemDb`: auth
-  bootstrap, webhooks, jobs; RLS does not apply to it). `app_rls` is what tenant reads use
+- **Three roles.** `app` owns the tables and runs migrations (the cron's `migrate` action only).
+  `app_system` is `systemDb`'s login (auth bootstrap, webhooks, jobs): no owner, so RLS applies, in
+  the row scope its entry point names; every workspace table also has a `system_all` policy that
+  opens it inside `crossTenant` ([system-database-role.md](../system-database-role.md)). `app_rls` is what tenant reads use
   (`withTenant(workspaceId, tx => ...)`): every tenant table has a `tenant_isolation` policy on
   `current_setting('app.workspace_id')`, set per transaction. `apps/api/test/security.test.ts`
   fails any new tenant table without a policy.

@@ -14,7 +14,7 @@ import { insertStore, signUp, uniqueEmail } from "./helpers";
  * 2026-10-28 shown as retired.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function control<T = unknown>(path: string, body?: unknown): Promise<T> {

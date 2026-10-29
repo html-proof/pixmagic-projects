@@ -10,7 +10,7 @@
  *    webhooks when no other store on bizinsights uses that account); the history stays.
  * A phone linked with a QR code (until 2026-10-28) is only ever retired (retireQr.ts).
  */
-import { systemDb, type WappConnection } from "@app/db";
+import { crossTenant, systemDb, type WappConnection } from "@app/db";
 import { maskPhone, normalizePhone, WA_QR_RETIRED, WA_RETIRED_PROVIDER } from "@app/shared";
 import { logger } from "../logger.js";
 import { audit, raiseAlert, resolveAlerts } from "../notify.js";
@@ -129,7 +129,10 @@ async function endConnection(deps: Pick<WaDeps, "fetchImpl" | "mailer">, conn: W
  */
 async function releaseNumber(deps: Pick<WaDeps, "fetchImpl">, conn: WappConnection) {
   if (conn.provider === "cloud_api" && conn.instanceTokenEnc && conn.wabaId) {
-    const others = await systemDb.wappConnection.count({ where: { wabaId: conn.wabaId, id: { not: conn.id }, provider: "cloud_api", status: { not: "disconnected" } } });
+    // Stores of any workspace: Meta's subscription is the app's, not one store's.
+    const others = await crossTenant("already_connected", () =>
+      systemDb.wappConnection.count({ where: { wabaId: conn.wabaId, id: { not: conn.id }, provider: "cloud_api", status: { not: "disconnected" } } }),
+    );
     if (!others && !(await unsubscribeCloudAccount(deps, conn))) logger.warn({ connectionId: conn.id, storeId: conn.storeId }, "whatsapp business account's webhooks not unsubscribed at Meta");
   }
   if (conn.instanceName) await dropEvolutionInstance(conn, deps);

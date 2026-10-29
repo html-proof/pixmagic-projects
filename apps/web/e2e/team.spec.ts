@@ -10,7 +10,7 @@ import { asNewVisitor, signUp, uniqueEmail } from "./helpers";
  * The API side (every refusal, redaction and race) is covered by apps/api/test/team.test.ts.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function createWorkspace(page: Page, name: string): Promise<string> {

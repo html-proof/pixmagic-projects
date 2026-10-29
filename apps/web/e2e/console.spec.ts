@@ -19,7 +19,7 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
  * budget, and a failure names the page. The signed-in tests share one account, created once.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 const PRELOAD_WARNING = /preloaded using link preload but not used/;

@@ -186,17 +186,23 @@ export function buildApp(deps: Deps): App {
     });
   });
   /**
-   * Ready to serve: both database connections (the owner role, and `app_rls`, which every tenant
+   * Ready to serve: both database connections (the system role, and `app_rls`, which every tenant
    * read uses) and the coordinator answer. Each probe is bounded, so a stalled tunnel makes this
    * say "not ready" in seconds instead of hanging, and a failed probe is logged with its reason.
    * The tenant connection must also be one row-level security binds: a superuser or a BYPASSRLS
-   * role there would answer every query, for every workspace.
+   * role there would answer every query, for every workspace. In production so must the system
+   * connection (docs/system-database-role.md), and it must own no table, since owners skip it too.
    */
   app.get("/readyz", async (c) => {
     const [system, tenant, coord] = await Promise.all([
       deps.dbHealthy
         ? deps.dbHealthy().then((up): ProbeResult => (up ? { ok: true } : { ok: false, error: "database health check failed" }))
-        : probeDb(() => systemDb.$queryRaw`SELECT 1`),
+        : probeDb(async () => {
+            const [role] = await systemDb.$queryRaw<Array<{ bypasses: boolean }>>`
+              SELECT (rolsuper OR rolbypassrls OR EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tableowner = current_user)) AS bypasses
+              FROM pg_roles WHERE rolname = current_user`;
+            if (process.env.NODE_ENV === "production" && (!role || role.bypasses)) throw new Error("the system connection's role isn't bound by row-level security");
+          }),
       probeDb(async () => {
         const [role] = await tenantDb.$queryRaw<Array<{ bypasses: boolean }>>`SELECT (rolsuper OR rolbypassrls) AS bypasses FROM pg_roles WHERE rolname = current_user`;
         if (!role || role.bypasses) throw new Error("the tenant connection's role bypasses row-level security");

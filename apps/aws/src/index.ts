@@ -312,19 +312,21 @@ export const handler = async (event: unknown, context: unknown) => {
     // the service starts (infra/cdk/lib/whatsapp-stack.ts). Idempotent; the password comes from its secret.
     await ensureSecrets();
     const e = process.env;
-    if (!e.DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
-    const result = await ensureEvolutionDb({ databaseUrl: e.DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
+    if (!e.OWNER_DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
+    const result = await ensureEvolutionDb({ databaseUrl: e.OWNER_DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
     logger.info(result, "evolution database ready");
     return result;
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();
-    if (!process.env.DATABASE_URL) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
-    if (action === "counts") return tableCounts(process.env.DATABASE_URL);
+    // The owner's login (only the cron is given it): migrations change tables, which the system role can't.
+    const ownerUrl = process.env.OWNER_DATABASE_URL;
+    if (!ownerUrl) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
+    if (action === "counts") return tableCounts(ownerUrl);
     // Without it init.sql would make the system role with its development password.
     if (process.env.NODE_ENV === "production" && !process.env.SYSTEM_DB_PASSWORD) throw new Error("SYSTEM_DB_SECRET_ARN is not set (insights/<env>/db-system)");
     const result = await migrate({
-      databaseUrl: process.env.DATABASE_URL,
+      databaseUrl: ownerUrl,
       migrationsDir: join(here, "migrations"),
       initSql: readFileSync(join(here, "init.sql"), "utf8"),
       appRlsPassword: process.env.APP_RLS_PASSWORD,

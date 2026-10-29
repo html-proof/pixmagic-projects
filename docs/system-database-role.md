@@ -128,10 +128,17 @@ until migrate finished. So there are three PRs:
    - In production the settings change nothing yet, because `app` skips row-level security.
 2. **Switch.**
    - `DATABASE_URL` is built from `db-system`.
-   - The api and jobs functions lose read access to the `db-owner` secret. The cron keeps it for its
-     maintenance actions (`evolutionDbUrl(…, "master")` moves to the owner URL).
-   - `/readyz` also reports not ready if the system connection is a superuser, bypasses RLS or owns
-     tables.
+   - The api and jobs functions lose read access to the `db-owner` secret. The cron keeps it
+     (`OWNER_DATABASE_URL`) for its maintenance actions: `migrate`, `counts`, `evolution-db`.
+   - `/readyz` also reports not ready in production if the system connection is a superuser,
+     bypasses RLS or owns tables. The deploy's smoke test reads it.
+   - The integration tests and e2e run `systemDb` on `app_system` too. Migrations, `resetDb` and
+     e2e's seeding use `OWNER_DATABASE_URL`, which `prisma.config.ts` prefers when it is set.
+   - Local development may keep the owner's login in `.env`; the scopes then change nothing there.
+   - The paths the tests found reading across workspaces from inside one workspace's scope now say
+     so. Connecting a store (is the shop live elsewhere, does it move, where does a member land)
+     uses `shopify_install`. A WhatsApp number already connected to another store uses
+     `already_connected`.
    - Rollback: Deploy's automatic rollback, or revert the PR.
 3. **Fail closed** after seven days with no "unscoped system query" warning in CloudWatch Logs
    (each warning is fixed by scoping its entry point).

@@ -21,7 +21,7 @@
  * the same checks, so App Review can be recorded with the app's own test number.
  */
 import { randomInt } from "node:crypto";
-import { systemDb, type Store, type WappConnection } from "@app/db";
+import { crossTenant, systemDb, type Store, type WappConnection } from "@app/db";
 import { maskPhone, normalizePhone, WA_RETIRED_PROVIDER } from "@app/shared";
 import { z } from "zod";
 import { env } from "../env.js";
@@ -203,8 +203,10 @@ async function finishConnect(
     logger.warn({ err: e, storeId: input.store.id }, "whatsapp cloud api: Meta didn't list the account's numbers");
     throw new WhatsappError(say.list, 502, "meta_refused");
   }
-  // Another store can't hold the same number (phone_number_id is unique while connected).
-  const taken = await systemDb.wappConnection.findFirst({ where: { phoneNumberId: d.phoneNumberId, storeId: { not: input.store.id } }, select: { id: true } });
+  // Another store can't hold the same number (phone_number_id is unique while connected), in any workspace.
+  const taken = await crossTenant("already_connected", () =>
+    systemDb.wappConnection.findFirst({ where: { phoneNumberId: d.phoneNumberId, storeId: { not: input.store.id } }, select: { id: true } }),
+  );
   if (taken) throw new WhatsappError("This number is already connected to another store on bizinsights.", 409, "number_taken");
 
   try {

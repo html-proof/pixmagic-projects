@@ -35,8 +35,14 @@ const PG_PORT = process.env.TEST_PG_PORT ?? "5434";
 // The superuser's password: "app" (docker compose), or the one a CI job on the PC gave its server.
 const PG_PASSWORD = encodeURIComponent(process.env.TEST_PG_PASSWORD ?? "app");
 
+/**
+ * The app logs in as production's roles: the system role (systemDb, row-level security applies;
+ * docs/system-database-role.md) and app_rls. The specs seed and inspect rows, and global setup
+ * migrates, on the owner's login.
+ */
 export const E2E_ENV = {
-  DATABASE_URL: `postgresql://app:${PG_PASSWORD}@127.0.0.1:${PG_PORT}/app_e2e`,
+  DATABASE_URL: `postgresql://app_system:app_system@127.0.0.1:${PG_PORT}/app_e2e`,
+  OWNER_DATABASE_URL: `postgresql://app:${PG_PASSWORD}@127.0.0.1:${PG_PORT}/app_e2e`,
   APP_DATABASE_URL: `postgresql://app_rls:app_rls@127.0.0.1:${PG_PORT}/app_e2e`,
 };
 

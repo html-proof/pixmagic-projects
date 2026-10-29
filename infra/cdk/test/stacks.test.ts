@@ -382,17 +382,28 @@ describe("the app stack", () => {
     }
   });
 
-  it("generates the system role's login (docs/system-database-role.md), for the cron's migrate action only", () => {
+  it("logs every function in as the system role (docs/system-database-role.md), and lets only the cron read the owner's login", () => {
     t.data.hasResourceProperties("AWS::SecretsManager::Secret", {
       Name: "insights/production/db-system",
       GenerateSecretString: { SecretStringTemplate: JSON.stringify({ SYSTEM_DB_USER: "app_system" }), GenerateStringKey: "SYSTEM_DB_PASSWORD", ExcludePunctuation: true },
     });
     const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    expect(fns).toHaveLength(3);
     for (const f of fns) {
       const vars = f.Properties.Environment.Variables as Record<string, unknown>;
-      expect(vars.SYSTEM_DB_SECRET_ARN).toBe(String(f.Properties.FunctionName).endsWith("-cron") ? "insights/production/db-system" : undefined);
+      expect(vars.SYSTEM_DB_SECRET_ARN).toBe("insights/production/db-system");
+      // The owner's secret only where migrate, counts and evolution-db run.
+      expect(vars.DB_SECRET_ARN !== undefined).toBe(String(f.Properties.FunctionName).endsWith("-cron"));
       expect(vars.SYSTEM_DB_PASSWORD).toBeUndefined();
     }
+    // Who may read each secret: the roles whose policies name it.
+    const readers = (secret: RegExp) =>
+      Object.values(t.app.findResources("AWS::IAM::Policy"))
+        .filter((p) => (p.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>).some((st) => JSON.stringify(st.Action).includes("GetSecretValue") && secret.test(JSON.stringify(st.Resource))))
+        .flatMap((p) => (p.Properties.Roles as Array<{ Ref: string }>).map((r) => r.Ref.replace(/ServiceRole.*$/, "")))
+        .sort();
+    expect(readers(/RefSystemDbSecret/)).toEqual(["Fnapi", "Fncron", "Fnjobs"]);
+    expect(readers(/RefDbSecretAttachment/)).toEqual(["Fncron"]);
   });
 
   it("puts CloudFront (WAF, HTTPS only) in front of the function URL, with the origin secret", () => {

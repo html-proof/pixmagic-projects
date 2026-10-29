@@ -31,7 +31,7 @@ Principles:
 | Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
 | Background jobs (sync, webhooks, aggregate, email, whatsapp), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
 | `*/15 * * * *`: token refresh, stale jobs, ads sync, WhatsApp, open shifts, email sweeps; `15 3 * * *`: nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron, UTC. |
-| Connection pooling to Postgres (two logins: the owner role and the RLS role) | Capped Lambda concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
+| Connection pooling to Postgres (two logins: the system role and the tenant role, both bound by RLS) | Capped Lambda concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
 | All data | **RDS for PostgreSQL 17** (encrypted, automated backups, point-in-time restore) | No single machine to keep running (the old deployment's database on the owner's PC went down when Docker Desktop stopped). |
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
 | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
