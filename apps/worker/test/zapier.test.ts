@@ -281,6 +281,26 @@ describe("the advertising triggers", () => {
     expect(String(data.estimates_note)).toMatch(/estimates/);
   });
 
+  it("AdSense earnings count only the sites chosen for the store, as the dashboard does", async () => {
+    const w = await world("adsense_earnings_threshold", { period: "day", amount: 20 });
+    const c = await account(w, "adsense", "pub-2", "AUD", { sites: ["shop.example.com"] });
+    const day = (site: string, earnings: number) =>
+      systemDb.adsenseDaily.upsert({
+        where: { connectionId_site_day: { connectionId: c.id, site, day: "2026-10-28" } },
+        create: { workspaceId: w.ws.id, storeId: w.store.id, connectionId: c.id, accountId: "pub-2", site, day: "2026-10-28", earnings, currency: "AUD" },
+        update: { earnings },
+      });
+    // Another site's earnings, and a day AdSense didn't split by site, aren't the store's: 15 counted, not 85.
+    await day("shop.example.com", 15);
+    await day("other.example.com", 30);
+    await day("", 40);
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+    await day("shop.example.com", 25);
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(1);
+    const data = ((await systemDb.zapierEvent.findFirstOrThrow()).payload as { data: Record<string, unknown> }).data;
+    expect(data).toMatchObject({ earnings_estimated: 25, currency: "AUD" });
+  });
+
   it("the daily summary goes once yesterday is in for every account, with Shopify's sales apart from the platforms' attribution", async () => {
     const w = await world("ads_daily_summary");
     const meta = await account(w, "meta", "act_1", "AUD", { syncedThrough: "2026-10-26" });

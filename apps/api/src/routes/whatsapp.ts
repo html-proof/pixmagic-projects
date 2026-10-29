@@ -11,6 +11,7 @@ import {
   cloudApiMissing,
   confirmTestVerification,
   connectCloudApi,
+  connectCloudApiWithToken,
   connectionOf,
   createWaTemplate,
   deleteAutomation,
@@ -21,6 +22,7 @@ import {
   estimateWaAudience,
   launchCampaign,
   metaSignupConfig,
+  tokenConnectAllowed,
   pauseAutomation,
   removeWaSuppression,
   retryMessage,
@@ -209,6 +211,8 @@ export function whatsappRoutes(app: App, deps: Deps) {
       triggers: triggerAvailability(store),
       // The Meta app's public ids, for Embedded Signup (only to those who may connect).
       cloudSignup: can.connect ? metaSignupConfig() : null,
+      // Whether this workspace may also connect with a token of bizinsights' own Meta app (WHATSAPP_TOKEN_CONNECT_WORKSPACES).
+      tokenConnect: can.connect && !!metaSignupConfig() && tokenConnectAllowed(ws),
     });
   });
 
@@ -235,6 +239,21 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
     const conn = await connectCloudApi(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ connection: waConnectionView(conn) }, 201);
+  });
+
+  /**
+   * Connecting with a token of bizinsights' own Meta app instead of Meta's window: only the
+   * workspaces in WHATSAPP_TOKEN_CONNECT_WORKSPACES (bizinsights' own team, e.g. to record Meta's App
+   * Review with the app's test number), and only a token Meta says is the app's, with both WhatsApp
+   * permissions for the account. It is kept like Embedded Signup's and never shown again.
+   */
+  app.post(`${base}/connection/cloud-token`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectCloudApiWithToken(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
     return c.json({ connection: waConnectionView(conn) }, 201);
   });
 

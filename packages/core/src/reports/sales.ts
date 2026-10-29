@@ -18,6 +18,7 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
     duties: toNumber(x.duties),
     additionalFees: toNumber(x.additionalFees),
     totalSales: toNumber(x.totalSales),
+    totalRefunded: toNumber(x.totalRefunded),
     orders: x.orders,
     // A row from before order_value was kept: gross − discounts, as average order value was then.
     orderValue: x.orderValue === null ? r2(toNumber(x.grossSales) - toNumber(x.discounts)) : toNumber(x.orderValue),
@@ -46,6 +47,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
     | "duties"
     | "additional_fees"
     | "total_sales"
+    | "total_refunded"
     | "orders"
     | "order_value"
     | "units"
@@ -54,7 +56,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
     | "refunded_orders";
   const part = await tx.$queryRaw<Array<Record<Column | "day", string>>>`
     ${dayTotals({ id: storeId, workspaceId }, [c.to], localMoment(c.to, c.until, timeZone))}
-    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, duties::text, additional_fees::text, total_sales::text,
+    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, duties::text, additional_fees::text, total_sales::text, total_refunded::text,
            orders::text, order_value::text, units::text, orders_with_customer::text, returning_customer_orders::text, refunded_orders::text
     FROM t`;
   return [
@@ -69,6 +71,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
       duties: Number(x.duties),
       additionalFees: Number(x.additional_fees),
       totalSales: Number(x.total_sales),
+      totalRefunded: Number(x.total_refunded),
       orders: Number(x.orders),
       orderValue: Number(x.order_value),
       units: Number(x.units),

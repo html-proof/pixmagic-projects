@@ -195,6 +195,12 @@ const schema = z.object({
   WHATSAPP_API_VERSION: z.string().default("v26.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
   /**
+   * Workspace ids (comma-separated) that may also connect WhatsApp with a token of bizinsights' own
+   * Meta app instead of Meta's window: bizinsights' own team, e.g. to record Meta's App Review with
+   * the app's test number. Empty: no one.
+   */
+  WHATSAPP_TOKEN_CONNECT_WORKSPACES: z.string().optional().default(""),
+  /**
    * Customer Messaging: SMS through AWS End User Messaging (docs/sms.md).
    *  - off: nothing is sent to AWS. The pages work; rules and campaigns record dry runs.
    *  - sandbox: test texts only, to numbers a merchant verified with AWS (AWS's own sandbox
