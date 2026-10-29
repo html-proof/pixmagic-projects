@@ -290,10 +290,14 @@ affect:
   still deploy, at most one run behind. Before 2026-10-18 `main` cancelled, and that day only 2 of 8
   main runs reached Deploy.
 - On a pull request, the checks and e2e jobs start `infra/runner/stop-when-superseded.mjs`, which
-  asks GitHub every minute for the pull request's head. A newer push that changed only Markdown or
-  `docs/` lets the run finish, and the run for that push then skips what it passed. One that changed
-  code (or rewrote the branch) cancels the run within a minute; the job's last step, "Newer pushes
-  while this job ran", prints why, and the run's Annotations show it. Until 2026-10-29 every push
+  asks GitHub every minute for the pull request's head. Once a newer push arrives it compares the
+  code the run tests (the pull request merged into `main`) with GitHub's merge of the newer head
+  into `main`, Markdown and `docs/` aside. The same code (a push of only docs, or `main` merged into
+  the branch by hand) lets the run finish, and the run for that push then skips what it passed.
+  Other code, or a push that conflicts with `main`, cancels the run within a minute; the job's last
+  step, "Newer pushes while this job ran", prints why, and the run's Annotations show it. Comparing
+  the two heads instead would stop a run whenever `main` is merged into the branch: that lists
+  every file `main` changed since the branch's last merge. Until 2026-10-29 every push
   cancelled the pull request's run in progress: a merge of a docs-only `main` into #290 cancelled
   its run 27 minutes into the checks, and the PC had to start over.
 - Re-run a failed job only when it is flaky, not to retry a real failure.

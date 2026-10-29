@@ -23,10 +23,11 @@ on:
 # than cancelling it (GitHub drops older waiting runs in a group, so only the newest waits):
 # - On main the run in progress finishes and deploys. With the checks taking ~25 min on the PC,
 #   cancelling there meant merges a few minutes apart never deployed at all (2026-10-18).
-# - On a pull request, a push that changes only Markdown or docs/ lets it finish, and the run for
-#   that push then skips what it passed (tested job). A push that changes code makes the run stop
-#   itself within a minute (infra/runner/stop-when-superseded.mjs, started by the checks and e2e
-#   jobs), saying why under Annotations. Until 2026-10-29 every push cancelled the run in progress:
+# - On a pull request, a push after which a run tests the same code (it changed only Markdown or
+#   docs/, or merged in the main the run tests) lets it finish, and the run for that push then skips
+#   what it passed (tested job). A push that changes the code makes the run stop itself within a
+#   minute (infra/runner/stop-when-superseded.mjs, started by the checks and e2e jobs), saying why
+#   under Annotations. Until 2026-10-29 every push cancelled the run in progress:
 #   a merge of a docs-only main into #290 cancelled its run 27 minutes into the checks.
 concurrency:
   group: ci-${{ github.ref }}
@@ -218,9 +219,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # A newer push to this pull request that changes code stops this run within a minute; one of
-      # only Markdown or docs/ lets it finish (infra/runner/stop-when-superseded.mjs; concurrency, at
-      # the top). The job's last step prints what it saw.
+      # A newer push to this pull request that changes the code a run tests (the pull request merged
+      # into main) stops this run within a minute; one that leaves it as it is lets it finish
+      # (infra/runner/stop-when-superseded.mjs; concurrency, at the top). The job's last step prints
+      # what it saw.
       - name: Stop this run if a newer push changes code (pull request)
         if: github.event_name == 'pull_request'
         continue-on-error: true
@@ -394,9 +396,11 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.tested.outputs.e2e != 'true'
       && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true')) }}
-    # statuses: write for the pass record (ci/passed-e2e); actions: write as in the checks job.
+    # statuses: write for the pass record (ci/passed-e2e); pull-requests: read and actions: write as
+    # in the checks job (a job's own list leaves out everything it doesn't name, the workflow's too).
     permissions:
       contents: read
+      pull-requests: read
       statuses: write
       actions: write
     timeout-minutes: 30
