@@ -380,7 +380,7 @@ jobs:
         run: |
           pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
           data="$(cygpath -m "$RUNNER_TEMP")/pg"
-          read -r pg mail app cognito login evo graph < <(node -e "const n=require('net');Promise.all([1,2,3,4,5,6,7].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
+          read -r pg mail app cognito login evo < <(node -e "const n=require('net');Promise.all([1,2,3,4,5,6].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
           # A superuser password of its own and 127.0.0.1 only, as in the checks job (Throwaway Postgres).
           pw=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
           echo "::add-mask::$pw"
@@ -388,7 +388,7 @@ jobs:
           "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
           "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=127.0.0.1 -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
           node -e "require('child_process').spawn(process.execPath,['apps/web/e2e/mailpit-stub.mjs',process.argv[1]],{detached:true,stdio:'ignore',windowsHide:true}).unref()" "$mail"
-          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; echo "E2E_EVOLUTION_PORT=$evo"; echo "E2E_GRAPH_PORT=$graph"; } >> "$GITHUB_ENV"
+          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; echo "E2E_EVOLUTION_PORT=$evo"; } >> "$GITHUB_ENV"
           # The runner uses browsers kept on the PC; the step below then only checks them, and
           # downloads only when Playwright moves to a new browser build (docs/aws-deployment.md).
           echo "PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS:-C:\\ms-playwright}" >> "$GITHUB_ENV"

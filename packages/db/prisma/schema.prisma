@@ -2263,33 +2263,31 @@ model WaCampaign {
 }
 
 // ---------------------------------------------------------------------------------------------
-// WhatsApp Automation (docs/whatsapp.md). Since 2026-10-28 each store's connection is one number on
-// Meta's WhatsApp Business Platform (Cloud API), connected through Embedded Signup; from 2026-10-26
-// it could also be a phone linked by QR code through bizinsights' Evolution API service, now
-// retired (those rows stay, disconnected, for their history). Every table carries workspace_id under
-// the tenant row-level-security policy. Customers' numbers, names and message texts are ENCRYPTED
-// (AES-256-GCM, AAD "wapp:<storeId>:<kind>"), found by a keyed hash and shown masked; message texts
-// are cleared after the store's retention. The business's Meta token is encrypted too and never
-// leaves the server.
+// WhatsApp Automation on Evolution API (docs/whatsapp.md, 2026-10-26). Each store's connection is
+// one instance on bizinsights' own Evolution API service (a phone linked by QR code, or Meta's
+// Cloud API). Every table carries workspace_id under the tenant row-level-security policy.
+// Customers' numbers, names and message texts are ENCRYPTED (AES-256-GCM, AAD "wapp:<storeId>:<kind>"),
+// found by a keyed hash and shown masked; message texts are cleared after the store's retention.
+// Instance keys and webhook keys are encrypted too and never leave the server.
 // ---------------------------------------------------------------------------------------------
 
-/// A store's WhatsApp connection (one number on Meta's WhatsApp Business Platform). One row per store, kept after a disconnect for the history.
+/// A store's WhatsApp connection (one Evolution API instance). One row per store, kept after a disconnect for the history.
 model WappConnection {
   id               String    @id @default(cuid())
   workspaceId      String    @map("workspace_id")
   storeId          String    @unique @map("store_id")
-  /// cloud_api (WA_PROVIDERS); qr: a phone linked with a QR code before 2026-10-28, retired (status_reason qr_linking_retired)
+  /// qr | cloud_api (WA_PROVIDERS)
   provider         String
   /// WA_CONNECTION_STATUSES: what the provider last reported, never assumed.
   status           String    @default("pairing")
   /// Why it is in that state: Baileys' close code ("close_401"), "qr_limit", "create_failed"... Never a provider's raw answer.
   statusReason     String?   @map("status_reason")
-  /// "meta" for a number connected since 2026-10-28; the Evolution API server (shard) that held an instance before.
+  /// The Evolution API server (shard) that holds the instance.
   shard            String
-  /// An Evolution API instance left from before 2026-10-28 (random name), until the QR cleanup deletes it; null for every connection since.
+  /// Evolution's instance name: random, never derived from the tenant; null once the instance is deleted.
   instanceName     String?   @unique @map("instance_name")
   instanceId       String?   @map("instance_id")
-  /// cloud_api: the business's Meta access token, encrypted (AAD kind "instance_token", the name it had when Evolution held it). qr: the instance's key, until it is deleted.
+  /// The instance's own API key (Evolution's per-instance token; Meta's access token for cloud_api), encrypted.
   instanceTokenEnc String?   @map("instance_token_enc")
   /// The key Evolution signs this instance's webhook JWTs with (HS256), encrypted.
   webhookKeyEnc    String?   @map("webhook_key_enc")

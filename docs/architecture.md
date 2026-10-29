@@ -119,11 +119,10 @@ is offered which action: [api/api-overview.md](api/api-overview.md#integration-s
   `MAX_ATTEMPTS` (the SQS queues' `maxReceiveCount` in infra/cdk stays above it), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and SQS both deliver at least once.
-- What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, the WhatsApp webhooks)
-  is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts` (`parseShopify`,
-  `parseShopifyList` for a page), `core/whatsapp/cloud.ts` (Meta's WhatsApp webhook) and
-  `core/whatsapp/cloudApi.ts` (Meta's answers to WhatsApp's calls); until release 2 removes it,
-  `core/whatsapp/webhook.ts` for what a QR-linked phone's Evolution API instance still posts.
+- What Shopify, Meta and Evolution API send (webhook payloads, GraphQL pages, bulk JSONL, the
+  WhatsApp webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
+  (`parseShopify`, `parseShopifyList` for a page), `core/whatsapp/webhook.ts` (Evolution API's
+  deliveries) and `core/whatsapp/cloud.ts` (Meta's, for Cloud API numbers).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
   meet the same payload again. The WhatsApp and email automations read an order or checkout only
   once they are about to act on it, so a store that doesn't use them logs nothing about it. The
