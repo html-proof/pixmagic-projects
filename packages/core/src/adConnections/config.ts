@@ -1,6 +1,6 @@
 /** Which ad platforms are set up: each one's keys from the config, its name, and its OAuth callback. */
 import type { AdProvider } from "@app/shared";
-import type { AdsenseConfig, GoogleConfig, MetaConfig, NangoConfig } from "../ads.js";
+import type { AdsenseConfig, GoogleConfig, MetaConfig } from "../ads.js";
 import { env, switchedOn } from "../env.js";
 import type { FetchLike } from "../shopify.js";
 
@@ -57,16 +57,6 @@ export const adsRestricted = (): Record<AdProvider, boolean> => ({
   google: googleConfig() !== null && !switchedOn(env().GOOGLE_ADS_OAUTH_VERIFIED),
   adsense: false,
 });
-
-/**
- * bizinsights' old Nango environment, only while the connections made through it (2026-10-22 to
- * 2026-10-28) are moved off it (leaveNango.ts), or null once its secret key is gone from the config.
- */
-export function nangoConfig(fetchImpl?: FetchLike): NangoConfig | null {
-  const e = env();
-  if (!e.NANGO_SECRET_KEY) return null;
-  return { secretKey: e.NANGO_SECRET_KEY, apiUrl: e.NANGO_API_URL, fetchImpl };
-}
 
 /** The platform's name in messages. */
 export const AD_PROVIDER_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };

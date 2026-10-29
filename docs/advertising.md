@@ -11,9 +11,14 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 | Overview | `/advertising` | Every spend platform together: ad spend, the platforms' own purchases, purchase value and ROAS, the store's Shopify net sales per unit of spend (MER) and AdSense's estimated earnings on a tile of their own; then Shopify's sales against the spend, the platform cards, the daily charts and the platforms side by side. |
 | Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report. |
 | Google Ads | `/advertising/google` | The same for Google Ads, and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
-| AdSense | `/advertising/adsense` | AdSense's estimated earnings by site, country and device. |
+| AdSense | `/advertising/adsense` | AdSense's earnings by site from the stored days, each figure marked Estimated or Final; and AdSense's live report by country, device type or ad unit, with ad requests, coverage and Active View viewability (read when opened and cached briefly, never stored with the days). |
 | Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
+
+The stored days behind these pages are kept current by the syncs: one sync per account at a time, and Meta's
+paused for every account while Meta says bizinsights' app is over its hourly request limit
+([ads-setup.md](ads-setup.md), "Syncing"). During that pause Meta's live report answers "Meta is busy right now.
+Try again in a minute." without asking Meta, as it does when Meta throttles one account.
 
 ## The question
 
@@ -61,6 +66,15 @@ and dates written under the title instead.
   with one platform or one account picked, `sales`, `shareOfSales` (and for one account, `sourced`)
   are left out.
 - AdSense's earnings are money in: their own tile, card and report, never added to spend.
+- AdSense's earnings say **Estimated** until AdSense has finalized every day of them, then **Final**
+  (`final` and `finalThrough` of the AdSense module, from each account's last sync that worked;
+  [ads-setup.md](ads-setup.md), "Estimated or final"). Payments aren't read.
+- A refresh someone asked for (Sync data now, Sync all now, turning an account back on) shows as
+  **Synchronizing** with the time of the last sync that worked, when one ever did (`syncRequestedAt` and
+  `lastSyncedAt` of each account, `syncRunning` in `apps/web/src/lib/adConnections.ts`, the same rule as Settings →
+  Advertising; a working account's first sync stays "Fetching"), and the page asks again every 5 seconds until it
+  lands. An account whose syncs fail says when it was last tried (`lastSyncAttemptAt`), and people who may manage
+  integrations get a link to Settings → Advertising to try again, unless a retry is already on its way.
 - Clicks, reach and store visits are different counts: the overview says so under its figures, and
   none is added to another (docs/kpis.md, "Ads").
 

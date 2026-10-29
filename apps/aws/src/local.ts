@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, type WorkerDeps } from "@app/worker";
-import { logger, mailpitMailer, memoryBlobs, memoryCoord, withTimeout, type Mailer } from "@app/core";
+import { logger, mailpitMailer, memoryBlobs, memoryCoord, reportUnscopedSystemQueries, withTimeout, type Mailer } from "@app/core";
 import { fakeSmsProvider, type FakeSent } from "@app/core/sms";
 import { disconnectDb } from "@app/db";
 import { apiDeps } from "./app.js";
@@ -69,18 +69,6 @@ function localDelivery(sent: FakeSent) {
   };
 }
 
-/**
- * Meta's Graph API at another address when LOCAL_GRAPH_URL says so: the e2e runs' stand-in
- * (apps/web/e2e/meta-graph-stub.mjs), so the local server never reaches Meta while a test connects
- * WhatsApp. Only this local entry reads it; the AWS entry has nothing like it.
- */
-function toGraphStub(input: Parameters<typeof fetch>[0]): Parameters<typeof fetch>[0] {
-  const stub = process.env.LOCAL_GRAPH_URL?.replace(/\/+$/, "");
-  if (!stub || (typeof input !== "string" && !(input instanceof URL))) return input;
-  const url = new URL(String(input));
-  return url.hostname === "graph.facebook.com" ? `${stub}${url.pathname}${url.search}` : input;
-}
-
 export function localDeps(): { jobs: WorkerDeps; queues: LocalQueues } {
   const mailpit = process.env.MAILPIT_URL;
   const queues = localQueues((queue, msg) => consume(queue, msg, jobs));
@@ -99,7 +87,7 @@ export function localDeps(): { jobs: WorkerDeps; queues: LocalQueues } {
     payloads: memoryBlobs(),
     mailer: mailpit ? mailpitMailer(mailpit) : logMailer,
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
-    fetchImpl: withTimeout((input, init) => fetch(toGraphStub(input), init)),
+    fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,
     sms,
   };
@@ -194,6 +182,8 @@ function listen(server: Server, port: number, host: string): Promise<boolean> {
  * a client that tries the missing one first waits for that to fail on every connection.
  */
 export async function startLocal(opts: LocalOptions): Promise<{ close(): Promise<void> }> {
+  // As on AWS (index.ts): a system query that names no row scope is logged.
+  reportUnscopedSystemQueries();
   const { jobs, queues } = localDeps();
   const handle = localHandler(buildApp(apiDeps(jobs)), uiFiles(opts.assets), jobs);
   const servers: Server[] = [];

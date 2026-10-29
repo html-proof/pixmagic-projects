@@ -9,6 +9,7 @@ import { ReportRangeError } from "@app/shared/staff";
 import { clientIp, HttpError, SESSION_COOKIE, SHARE_COOKIE, type AppEnv, type Deps } from "./context.js";
 import { probeDb, tenantDb, type ProbeResult } from "@app/db";
 import { requestContext } from "./requestContext.js";
+import { rowScope } from "./rowScope.js";
 import { authRoutes } from "./routes/auth.js";
 import { accountRoutes } from "./routes/account.js";
 import { sessionRoutes } from "./routes/sessions.js";
@@ -22,6 +23,7 @@ import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
+import { integrationsRoutes } from "./routes/integrations.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappWebhookRoutes } from "./routes/whatsappWebhook.js";
@@ -84,6 +86,8 @@ export function buildApp(deps: Deps): App {
 
   // First, so every response carries the request id and every log line below can be matched to it.
   app.use("*", requestContext());
+  // Whose rows systemDb sees for the rest of the request: the workspace in the path, or a listed reason.
+  app.use("*", rowScope());
 
   app.use("*", async (c, next) => {
     await next();
@@ -225,6 +229,7 @@ export function buildApp(deps: Deps): App {
   contactRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
+  integrationsRoutes(app, deps);
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.
   metaWebhookRoutes(app, deps);
   whatsappRoutes(app, deps);

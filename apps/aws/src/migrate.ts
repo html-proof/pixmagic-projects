@@ -6,13 +6,14 @@ import pg from "pg";
 /**
  * Bring the database up to date: run the Prisma migrations that haven't run yet, in order, and
  * record each in `_prisma_migrations` exactly as `prisma migrate deploy` does (same table, same
- * checksum), so either tool can take over from the other. Then the tenant role's grants
- * (infra/postgres/init.sql) and its password from the app secret.
+ * checksum), so either tool can take over from the other. Then the roles' grants
+ * (infra/postgres/init.sql) and their passwords: the system role's from insights/<env>/db-system,
+ * the tenant role's from the app secret.
  *
  * Runs inside the function (a direct invocation: `{ "action": "migrate" }`), so the database's
  * master password never leaves AWS. Idempotent: run it after every deploy.
  */
-export async function migrate(input: { databaseUrl: string; migrationsDir: string; initSql: string; appRlsPassword?: string }) {
+export async function migrate(input: { databaseUrl: string; migrationsDir: string; initSql: string; appRlsPassword?: string; systemPassword?: string }) {
   const client = new pg.Client({ connectionString: input.databaseUrl });
   await client.connect();
   const applied: string[] = [];
@@ -58,10 +59,23 @@ export async function migrate(input: { databaseUrl: string; migrationsDir: strin
       }
       applied.push(name);
     }
+    // A literal in DDL (no bind parameters there); quote it the way Postgres does.
+    const literal = (s: string) => `'${s.replace(/'/g, "''")}'`;
+    if (input.systemPassword) {
+      // Before init.sql, so the role it grants to exists with its real password from the start
+      // (init.sql would make it with the development one). RDS's master isn't a superuser: it may
+      // set SUPERUSER, REPLICATION and BYPASSRLS only when creating a role (as off), never name them
+      // afterwards.
+      const exists = (await client.query(`SELECT 1 FROM pg_roles WHERE rolname = 'app_system'`)).rowCount! > 0;
+      if (exists) await client.query(`ALTER ROLE app_system WITH LOGIN NOCREATEDB NOCREATEROLE PASSWORD ${literal(input.systemPassword)}`);
+      else await client.query(`CREATE ROLE app_system WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD ${literal(input.systemPassword)}`);
+    }
     await client.query(input.initSql);
+    // Row-level security is the point of the role: refuse to finish with one that would get around it.
+    const loose = (await client.query<{ loose: boolean }>(`SELECT rolsuper OR rolbypassrls AS loose FROM pg_roles WHERE rolname = 'app_system'`)).rows[0];
+    if (loose?.loose) throw new Error("The role app_system is a superuser or bypasses row-level security: drop it and run migrate again");
     if (input.appRlsPassword) {
-      // A literal in DDL (no bind parameters there); quote it the way Postgres does.
-      await client.query(`ALTER ROLE app_rls PASSWORD '${input.appRlsPassword.replace(/'/g, "''")}'`);
+      await client.query(`ALTER ROLE app_rls PASSWORD ${literal(input.appRlsPassword)}`);
     }
     return { applied, total: names.length };
   } finally {

@@ -5,25 +5,33 @@ import {
   adAlertsFor,
   ADS_HISTORY_DAYS,
   ADS_WINDOW_DAYS,
+  AdsRateLimitedError,
+  AdsRetryableError,
   catchUpWindow,
   countGoogleAdsOperations,
   countingGoogleAdsFetch,
   googleAdsBudget,
   googleAdsBudgetAllows,
   googleAdsOperationsToday,
+  googleAdsPaused,
   historyTarget,
+  isMetaAppLimit,
   memoryCoord,
   mergeCoverage,
+  META_ADS_PAUSE_S,
+  metaAdsPaused,
+  metaAdsPausedUntil,
   nextHistoryWindow,
   pauseGoogleAds,
+  pauseMetaAds,
   planAdSyncWindow,
   type FetchLike,
 } from "../src/index.js";
 
 /**
  * Ad syncs, the pure parts: which days a sync fetches (holes first, long ranges cut, history walked
- * back), the unbroken run of stored days it leaves, Google's daily allowance, and what an ad
- * connection's state says in an alert.
+ * back), the unbroken run of stored days it leaves, Google's daily allowance, Meta's limit on
+ * bizinsights' app, and what an ad connection's state says in an alert.
  */
 
 const saved = { ...process.env };
@@ -185,6 +193,42 @@ describe("Google's daily allowance", () => {
     await c.fetchImpl("https://googleads.googleapis.com/v25/customers/1/googleAds:searchStream", { method: "POST" });
     await c.fetchImpl(new URL("https://googleads.googleapis.com/v25/customers:listAccessibleCustomers"));
     expect(c.operations()).toBe(2);
+  });
+});
+
+describe("Meta's limit on bizinsights' app", () => {
+  it("only Meta's code 4 is the app's; 17, 613 and the business use case codes are an account's or a person's", () => {
+    expect(isMetaAppLimit(new AdsRateLimitedError("Application request limit reached", null, "rate_limited", 4))).toBe(true);
+    for (const code of [17, 32, 613, 80000, 80004, undefined]) expect(isMetaAppLimit(new AdsRateLimitedError("limit", 60, "rate_limited", code))).toBe(false);
+    // Not throttling at all, even with the same number.
+    expect(isMetaAppLimit(new AdsRetryableError("Service temporarily unavailable", 4))).toBe(false);
+  });
+
+  it("pauses Meta Ads for a quarter of its rolling hour, longer when the account's own wait is, never over the hour, and never shortens a pause", async () => {
+    const coord = memoryCoord();
+    expect(await metaAdsPaused(coord)).toBe(false);
+    expect(await pauseMetaAds(coord, null)).toBe(META_ADS_PAUSE_S);
+    expect(META_ADS_PAUSE_S).toBe(900);
+    const until = (await metaAdsPausedUntil(coord))!.getTime();
+    expect(until - Date.now()).toBeGreaterThan(899_000);
+    expect(until - Date.now()).toBeLessThanOrEqual(900_000);
+    // A longer wait in the account's headers lengthens it.
+    expect(await pauseMetaAds(coord, 1800)).toBe(1800);
+    const longer = (await metaAdsPausedUntil(coord))!.getTime();
+    // Another call told the same a moment later, naming a shorter wait or none: the pause stands as it was.
+    expect(await pauseMetaAds(coord, 120)).toBeGreaterThan(1790);
+    expect(await pauseMetaAds(coord, null)).toBeGreaterThan(1790);
+    expect((await metaAdsPausedUntil(coord))!.getTime()).toBe(longer);
+    // Never past the hour.
+    expect(await pauseMetaAds(coord, 7200)).toBe(3600);
+    // A short wait on its own is still the quarter hour: it is the account's, not the app's.
+    expect(await pauseMetaAds(memoryCoord(), 5)).toBe(META_ADS_PAUSE_S);
+    // Google's pause is its own.
+    expect(await googleAdsPaused(coord)).toBe(false);
+    // A coordinator that can't keep it: nothing thrown, no pause.
+    const down = { ...memoryCoord(), put: async () => Promise.reject(new Error("unreachable")), peek: async () => Promise.reject(new Error("unreachable")) };
+    expect(await pauseMetaAds(down, null)).toBeNull();
+    expect(await metaAdsPaused(down)).toBe(false);
   });
 });
 

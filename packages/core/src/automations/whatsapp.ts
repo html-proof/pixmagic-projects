@@ -1,7 +1,7 @@
 /**
  * WhatsApp in the hub: a card that points to the WhatsApp Automation page
- * (/dashboard/whatsapp-automation), where its connection (Meta's WhatsApp Business Platform), its
- * templates, automations and campaigns live. The hub doesn't read or change
+ * (/dashboard/whatsapp-automation), where its connection (a phone linked through Evolution API, or
+ * Meta's Cloud API), its templates, automations and campaigns live. The hub doesn't read or change
  * WhatsApp's tables; it may join the hub as an adapter like sms.ts and email.ts later
  * (docs/automations.md, "WhatsApp").
  */

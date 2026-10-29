@@ -1,5 +1,5 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
-import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
+import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
@@ -142,7 +142,12 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   errorCode?: string | null;
   /** The account's own health at the platform (AD_ACCOUNT_STATUSES); null until read. */
   accountStatus?: string | null;
+  /** The last sync that worked: what its figures are as of. */
   lastSyncedAt: string | null;
+  /** A sync someone asked for (Refresh, Sync all now, turning it back on) that hasn't finished yet (syncRunning in lib/adConnections). Absent from older answers. */
+  syncRequestedAt?: string | null;
+  /** When the last sync started, whatever came of it. Absent from older answers. */
+  lastSyncAttemptAt?: string | null;
   /** Added up: in the currency the module is in. */
   counted: boolean;
   /** The Google Ads demo: simulated figures, shown as such and never set against the store's sales. Absent from older answers. */
@@ -160,6 +165,8 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   sites?: string[];
   /** AdSense, sites chosen: the last day read whose earnings AdSense didn't split by site (the store's share of them isn't known). */
   unsplitThrough?: string | null;
+  /** AdSense: its figures are final, not AdSense's estimate, up to this day; null: none is yet. Absent from older answers. */
+  finalThrough?: string | null;
 }
 
 /** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
@@ -308,6 +315,10 @@ export interface AdsenseModule extends AdFigures<AdsenseTotals> {
   sitesLeftOut?: Array<AdsenseTotals & { site: string }>;
   /** Estimated earnings divided by the store's net sales (same currency, every day known). */
   vsSales: number | null;
+  /** The day every counted account's figures are final up to (null: one has none final yet). Absent from older answers. */
+  finalThrough?: string | null;
+  /** AdSense has finalized every day of the figures given (`current`, else `partial`): "Final", else "Estimated". Absent from older answers. */
+  final?: boolean;
 }
 
 /** GET .../ads/adsense/report: one AdSense account split by country or device type, asked of AdSense for exactly these dates. */
@@ -318,14 +329,17 @@ export interface AdsenseReportAnswer {
   report: AdsenseReport;
 }
 
+/** A live report's figures: the stored days' measures, and ad requests, coverage and viewability (absent from answers before 2026-10-29). */
+export type AdsenseReportFigures = AdsenseTotals & Partial<Pick<AdsenseReportTotals, "adRequests" | "coverage" | "viewability">>;
+
 /** The report itself (AdsenseLiveReport in @app/core). */
 export interface AdsenseReport {
   level: AdsenseReportLevel;
   since: string;
   until: string;
   currency: string | null;
-  rows: AdsenseReportRow[];
-  totals: AdsenseTotals;
+  rows: Array<AdsenseReportFigures & { id: string; name: string }>;
+  totals: AdsenseReportFigures;
   truncated: boolean;
   /** The sites the answer is limited to (the connection's chosen sites; empty: every site). Absent: taken as the connection's. */
   sites?: string[];

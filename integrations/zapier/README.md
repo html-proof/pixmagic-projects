@@ -11,12 +11,22 @@ provider, no keys or addresses to copy) and uses these in their Zaps:
 | Trigger | `adsense_earnings_threshold` | AdSense Earnings Passed an Amount (Google's estimates) |
 | Trigger | `ads_daily_summary` | Daily Advertising Summary (yesterday per platform, Shopify's sales beside it) |
 | Trigger | `whatsapp_message_failed` | WhatsApp Message Failed (number masked) |
+| Trigger | `integration_connected` | Integration Connected (Meta Ads, Google Ads, AdSense, WhatsApp, Zapier) |
+| Trigger | `integration_disconnected` | Integration Disconnected |
+| Trigger | `sync_completed` | Ad Account Synced (at most once an hour per account) |
+| Trigger | `order_paid` | Order Paid (number, amounts, items; never the customer) |
 | Search | `find_ad_performance` | Find Ad Performance (stored Meta and Google Ads figures for dates) |
 | Search | `find_adsense_earnings` | Find AdSense Earnings (stored estimates for dates) |
 
-Every trigger is a REST hook (instant). There is no action: nothing in bizinsights changes from
-Zapier and nothing is sent to customers. How it works on bizinsights' side, the payloads and the
-security model: [docs/zapier.md](../../docs/zapier.md).
+Every trigger is a REST hook (instant), and every event carries `schema_version` (1). The AdSense
+threshold's "When" is reaching the amount, or a finished day or month ending below it. There is no
+action: nothing in bizinsights changes from Zapier and nothing is sent to customers. How it works on
+bizinsights' side, the payloads and the security model: [docs/zapier.md](../../docs/zapier.md).
+
+| Version | What it added |
+| --- | --- |
+| 1.0.0 | The first five triggers and two searches |
+| 1.1.0 | AdSense "falls below", `schema_version`, Integration Connected / Disconnected, Ad Account Synced, Order Paid |
 
 This folder is **not** part of the pnpm workspace: it has its own `npm install`, its own
 `package-lock.json`, and CI neither installs nor type-checks it (`pnpm lint` does lint it).
@@ -96,9 +106,64 @@ You need a Zapier account (the owner's) and Node 18.20 or later. PowerShell, one
 9. Show the card to merchants: set `ZAPIER_ENABLED = true` in `apps/web/src/lib/features.ts` (a pull
    request of its own). Settings → Integrations then shows Zapier with Connect (the invite link).
 
-Later versions: bump `version` in `package.json`, `npx zapier-platform-cli push`, check the new
-version has the three values (`npx zapier-platform-cli env:get <version>`; set them with `env:set`
-if not), then `npx zapier-platform-cli promote <version>` to move users onto it.
-
 Listing the app publicly in Zapier's directory (and Zapier's embedding, the Workflow API) needs
 Zapier's review: until then merchants join through the invite link.
+
+## A new version: staging, then promote
+
+A pushed version is private to the app until it is promoted, and existing Zaps stay on the version
+they use until they are migrated. So a new version is tried by the owner first (staging), then
+promoted. PowerShell, from `integrations\zapier`, one line at a time.
+
+1. **Only once bizinsights is live with what the version calls.** Its pull request merged, the
+   **Deploy to AWS** run on that merge green, and `https://bizinsights.io/api/version` showing the
+   merge commit. Before that, a Zap turning on a new trigger is refused (400) by the bizinsights
+   still running.
+2. Bump `version` in `package.json` (`npm version minor --no-git-tag-version` also updates
+   `package-lock.json`), then `npm test`.
+3. Push it. It isn't promoted: nobody's Zaps move.
+
+   ```powershell
+   npx zapier-platform-cli push
+   ```
+
+4. Give it the environment of the version in use, without showing a value: `env:get --format raw`
+   prints only JSON, read into a variable here; `env:set` prints what it sets, so its output is
+   thrown away. Then list the new version's keys (names only).
+
+   ```powershell
+   $from = "1.0.0"; $to = "1.1.0"
+   $vars = (npx zapier-platform-cli env:get $from --format raw | Out-String) | ConvertFrom-Json
+   $pairs = @($vars | Where-Object { $_.key -in "BASE_URL", "CLIENT_ID", "CLIENT_SECRET" } | ForEach-Object { "$($_.key)=$($_.value)" })
+   npx zapier-platform-cli env:set $to @pairs | Out-Null
+   Remove-Variable vars, pairs
+   ((npx zapier-platform-cli env:get $to --format raw | Out-String) | ConvertFrom-Json).key
+   ```
+
+   The last line must list `BASE_URL`, `CLIENT_ID` and `CLIENT_SECRET`.
+
+5. Stage it: move only your own Zaps onto it, and try what changed.
+
+   ```powershell
+   npx zapier-platform-cli migrate 1.0.0 1.1.0 --user=<your Zapier email>
+   ```
+
+   In Zapier, open a Zap with each new or changed trigger, **Test trigger** (the samples are the
+   store's own events: none yet means bizinsights has none of that kind for the store), turn it on,
+   and check bizinsights' Settings → Integrations lists the trigger. Something wrong: move back with
+   `migrate 1.1.0 1.0.0 --user=<your Zapier email>`, fix it, bump again and push.
+
+6. Promote it, so new Zaps use it, then move everyone's existing Zaps onto it:
+
+   ```powershell
+   npx zapier-platform-cli promote 1.1.0
+   npx zapier-platform-cli migrate 1.0.0 1.1.0
+   ```
+
+   A version that only adds triggers or fields is safe to migrate. One that renames or removes a
+   field a Zap may map raises `schema_version` on bizinsights' side and needs Zapier's breaking-change
+   path instead (a new major version, no automatic migration).
+
+Don't push while someone is setting up or testing a Zap on the current version: Zapier's editor can
+switch to the newest version under them.
+

@@ -46,10 +46,10 @@ describe("describeAlert", () => {
     expect(describeAlert({ code: "whatsapp_logged_out", severity: "warning", message: "WhatsApp logged out the linked phone (close_401)" })).toMatchObject({ area: "whatsapp", severity: "warning", title: "Link WhatsApp again" });
     // The internal message never reaches the merchant.
     expect(describeAlert({ code: "whatsapp_provider_down", severity: "warning", message: "internal detail" }).body).not.toContain("internal detail");
-    expect(describeAlert({ code: "whatsapp_reconnect", severity: "warning", message: "token_expired (Meta #190)" })).toMatchObject({ area: "whatsapp", title: "Reconnect WhatsApp Business" });
     const retired = describeAlert({ code: "whatsapp_qr_retired", severity: "warning", message: "internal detail" });
-    expect(retired).toMatchObject({ area: "whatsapp", title: "Connect WhatsApp Business to keep sending" });
+    expect(retired).toMatchObject({ area: "whatsapp", title: "Link your WhatsApp phone again" });
     expect(retired.body).toMatch(/none was sent/);
+    expect(retired.body).not.toMatch(/Meta/);
   });
 
   it("words an ad account's alerts by kind, passes on the message core composes, and sends them to Settings → Advertising", () => {
