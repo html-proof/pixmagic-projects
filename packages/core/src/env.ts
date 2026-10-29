@@ -282,9 +282,12 @@ const schema = z.object({
    * OAuth v2), matched exactly. Until all three are set, every Zapier endpoint answers 503
    * `not_configured` and Settings → Integrations says Zapier isn't set up yet. The invite URL (the
    * Zapier app's invite link, or its public page once Zapier lists it) is what Connect opens.
+   * ZAPIER_CLIENT_SECRET_PREVIOUS: the secret before a rotation, accepted too until every version of
+   * the Zapier app has the new one (docs/RUNBOOK.md); empty otherwise.
    */
   ZAPIER_CLIENT_ID: z.string().optional().default(""),
   ZAPIER_CLIENT_SECRET: z.string().optional().default(""),
+  ZAPIER_CLIENT_SECRET_PREVIOUS: z.string().optional().default(""),
   ZAPIER_REDIRECT_URI: z.union([z.literal(""), z.string().url()]).default(""),
   ZAPIER_INVITE_URL: z.union([z.literal(""), z.string().url()]).default(""),
 });
@@ -311,7 +314,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {

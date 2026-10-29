@@ -10,8 +10,10 @@ const script = (await import(new URL("../scripts/put-secrets.mjs", import.meta.u
   secretProblem: (name: string, value: string, publics?: Publics) => string | null;
   publicSettings: (text?: string) => Publics;
   metaAppOf: (name: string, publics?: Publics) => { appId: string; version?: string } | null;
+  KEEPS_PREVIOUS: Record<string, string>;
+  UNSETTABLE: string[];
 };
-const { secretProblem, publicSettings, metaAppOf } = script;
+const { secretProblem, publicSettings, metaAppOf, KEEPS_PREVIOUS, UNSETTABLE } = script;
 
 const META_SECRET = "0123456789abcdef0123456789abcdef";
 const ENTRA_SECRET = "Xyz8Q~abcdefghijklmnopqrstuvwxyz0123456_";
@@ -44,6 +46,14 @@ describe("the shapes put-secrets.mjs accepts", () => {
     // A secret without a known shape takes any value, but not none.
     expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "anything-at-all")).toBeNull();
     expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")).toMatch(/0 characters/);
+  });
+
+  it("rotates Zapier's client secret: the replaced one is kept as the previous, which --unset alone may remove", () => {
+    const secret = "a".repeat(43);
+    expect(secretProblem("ZAPIER_CLIENT_SECRET_PREVIOUS", secret)).toBeNull();
+    expect(secretProblem("ZAPIER_CLIENT_SECRET_PREVIOUS", "short")).toMatch(/Zapier client secret/);
+    expect(KEEPS_PREVIOUS).toEqual({ ZAPIER_CLIENT_SECRET: "ZAPIER_CLIENT_SECRET_PREVIOUS" });
+    expect(UNSETTABLE).toEqual(["ZAPIER_CLIENT_SECRET_PREVIOUS"]);
   });
 
   it("never repeats the value it refuses", () => {

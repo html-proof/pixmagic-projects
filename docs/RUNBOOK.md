@@ -158,6 +158,32 @@ Queued mail is held (cancelled after 72 hours); the dashboard shows the reason. 
 ### Rotate the Shopify client secret
 Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET` and fresh function instances within that window.
 
+### Rotate the Zapier client secret
+The secret is on both sides: bizinsights' `ZAPIER_CLIENT_SECRET` (Secrets Manager) and the Zapier app's
+`CLIENT_SECRET` (each version's environment). During the change bizinsights accepts the old one too
+(`ZAPIER_CLIENT_SECRET_PREVIOUS`), so no connection breaks. PowerShell, from the repository root:
+1. Make the new secret and copy it (never paste it into a chat):
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))" | Set-Clipboard`
+2. `node infra/cdk/scripts/put-secrets.mjs --set ZAPIER_CLIENT_SECRET` (reads the clipboard). It keeps the
+   replaced secret as `ZAPIER_CLIENT_SECRET_PREVIOUS` and says so. Then fresh function instances: from
+   then on both secrets are accepted.
+3. Give every version of the Zapier app that has users the new secret (`npx zapier-platform-cli versions`
+   lists them). `env:set` prints what it sets, so its output is thrown away; a promoted version needs `--force`:
+   ```powershell
+   cd integrations\zapier
+   $secret = Get-Clipboard
+   npx zapier-platform-cli env:set 1.1.0 "CLIENT_SECRET=$secret" | Out-Null
+   Remove-Variable secret
+   Set-Clipboard -Value " "
+   ```
+4. Wait a day, then check the API's logs for `zapier client used the previous secret` since step 3
+   (CloudWatch Logs Insights on the API function's log group: `filter msg like /previous secret/`). None:
+   `node infra/cdk/scripts/put-secrets.mjs --unset ZAPIER_CLIENT_SECRET_PREVIOUS`, then fresh function
+   instances. Some: a version still has the old secret; repeat step 3 for it first.
+
+Connections keep working throughout: tokens bizinsights issued don't depend on the client secret, only
+Zapier's calls to the token endpoint do.
+
 ### Rotate the OTP pepper
 `OTP_PEPPER` keys the sign-in codes. Unless `CUSTOMER_HASH_KEY` is set, it also keys the stored customer hashes: orders' `customer_key` (returning-customer history) and WhatsApp contacts' phone hash, which is how a customer's STOP opt-out is found again. Rotating it then would reset that history and **let opted-out customers be messaged again**. So, in this order:
 1. If `CUSTOMER_HASH_KEY` is not set yet, set it to the **current** `OTP_PEPPER` value (`node infra/cdk/scripts/put-secrets.mjs --set CUSTOMER_HASH_KEY`). Nothing changes: it is the key the hashes already use.
