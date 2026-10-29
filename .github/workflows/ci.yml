@@ -5,11 +5,13 @@ name: CI
 # - A change of only Markdown files or docs/ starts no run at all: nothing to test, and on main
 #   nothing for Deploy to AWS to ship (it starts only when a CI run on main succeeds).
 # - Pull requests run the browser tests (e2e) only when they change what those tests drive, or
-#   carry the label "e2e" (checks job, first step). Pushes to main always need them before Deploy.
-# - A push to main whose tree a pull request's run already passed, job by job, skips that job
-#   (tested job below): merging an up-to-date pull request costs about a minute, not twelve.
+#   carry the label "e2e" (tested job). Pushes to main always need them before Deploy.
+# - A run skips each job that already passed on the same code, Markdown and docs/ aside (tested job
+#   below): a push to a pull request that changed only those, or a push to main that merges an
+#   up-to-date pull request, costs about a minute, not forty.
 # - The integration tests run only when something they read changed since a run (pull request or
 #   main) where they passed (checks job, "What the integration tests read").
+# These paths-ignore lists are infra/runner/code-key.mjs's CI_IGNORES (its test holds them together).
 on:
   push:
     branches: [main]
@@ -17,13 +19,18 @@ on:
   pull_request:
     paths-ignore: ["**.md", "docs/**"]
 
-# A newer push cancels the older run on the same pull request. On main it waits instead: the run in
-# progress finishes and deploys, then the newest waiting push runs (GitHub drops older waiting runs
-# in a group). With the checks taking ~25 min on the PC, cancelling there meant merges a few
-# minutes apart never deployed at all.
+# One run at a time per pull request, and on main. A newer push waits for the run in progress rather
+# than cancelling it (GitHub drops older waiting runs in a group, so only the newest waits):
+# - On main the run in progress finishes and deploys. With the checks taking ~25 min on the PC,
+#   cancelling there meant merges a few minutes apart never deployed at all (2026-10-18).
+# - On a pull request, a push that changes only Markdown or docs/ lets it finish, and the run for
+#   that push then skips what it passed (tested job). A push that changes code makes the run stop
+#   itself within a minute (infra/runner/stop-when-superseded.mjs, started by the checks and e2e
+#   jobs), saying why under Annotations. Until 2026-10-29 every push cancelled the run in progress:
+#   a merge of a docs-only main into #290 cancelled its run 27 minutes into the checks.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: false
 
 # Checks only read the repository (and a pull request's list of changed files); nothing here should
 # be able to push or edit issues/PRs.
@@ -53,47 +60,110 @@ defaults:
 # calls 3 times (after 1, 4 and 9 s; a failed connect takes 10 s itself) before the step fails.
 
 jobs:
-  # Merging a pull request that is up to date with main leaves main with exactly the tree that the
-  # pull request's last run tested. Each pull-request job that passes records its tree as a commit
-  # status on the pull request's head (context ci/passed-<job>, description "tree <tree>"); on a
-  # push to main this looks them up, and a job that already passed on this exact tree is skipped.
+  # Each pull-request job that passes records the code it tested (the pull request merged into
+  # main) as a commit status on the pull request's head: context ci/passed-<job>, description
+  # "code <key>", where the key hashes the commit's files less Markdown and docs/
+  # (infra/runner/code-key.mjs). This looks them up before the other jobs start, and a job that
+  # already passed on this code is skipped:
+  # - on a pull request, on its newest 30 commits: a push that changed only Markdown or docs/ (a
+  #   merge of a docs-only main, say) costs a minute. A pass found on an older commit is recorded
+  #   again on the head, where the push to main that merges the pull request looks;
+  # - on a push to main, on the commits it was made from and the head of the pull request it merged
+  #   (whatever the merge method): merging a pull request whose last run had main's code skips both.
+  # Records from before 2026-10-29 name the exact tree instead ("tree <tree>"), and still count.
   # Anything it can't confirm runs as usual. Statuses, not artifacts: artifacts count against the
   # account's Actions storage (500 MB on GitHub Free, shared by all its private repositories), and
   # once that is used up no upload works and every record was lost.
   tested:
-    name: Already passed on a pull request?
-    if: github.event_name == 'push'
+    name: Already passed on this code?
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     timeout-minutes: 5
+    # statuses: write to record a pass again on a pull request's head.
     permissions:
       contents: read
       pull-requests: read
-      statuses: read
+      statuses: write
     outputs:
       checks: ${{ steps.find.outputs.checks }}
       e2e: ${{ steps.find.outputs.e2e }}
+      key: ${{ steps.find.outputs.key }}
     steps:
+      # Only the commit is read (git ls-tree) and infra/runner/code-key.mjs, which the checkout
+      # writes: no need to clear what an earlier job left in the PC's workspace (~45 s of
+      # node_modules), which the next job's own checkout does anyway.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: false
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: "true"
+      # Outputs: key, the code's key; checks and e2e, "true" when that job passed on this code
+      # already, or for e2e when a pull request doesn't need the browser tests. The browser tests
+      # drive the UI on the local server (apps/aws) with their own sign-in and mail stand-ins. A pull
+      # request that changes none of that (or the UI's shared package, the dependencies or this
+      # workflow) leaves them to the push to main, unless it has the label "e2e": add it, then push
+      # again (a re-run reuses the old labels). Only an answer of "no" skips them: if this step
+      # fails, everything runs.
       - id: find
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           retries: 3
           script: |
-            const tree = context.payload.head_commit?.tree_id;
-            // Where a pull request's run left its records: the commits this one was made from, and
-            // the head of the pull request it merged (whatever the merge method).
-            const refs = new Set();
-            const { data: commit } = await github.rest.git.getCommit({ ...context.repo, commit_sha: context.sha });
-            for (const p of commit.parents) refs.add(p.sha);
-            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: context.sha });
-            for (const pr of prs) if (pr.merged_at && pr.head.repo?.id === context.payload.repository.id) refs.add(pr.head.sha);
-            const statuses = [];
-            for (const ref of refs) statuses.push(...(await github.paginate(github.rest.repos.listCommitStatusesForRef, { ...context.repo, ref, per_page: 100 })));
-            for (const job of ["checks", "e2e"]) {
+            const pr = context.payload.pull_request;
+            let e2e = true;
+            if (pr && !pr.labels.some((l) => l.name === "e2e")) {
+              const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
+              const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
+              try {
+                const changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+                const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
+                // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
+                e2e = hit !== undefined || changed.length >= 3000;
+                core.info(e2e ? `Browser tests needed (${hit ?? "3,000+ files"} changed).` : "Browser tests not needed: nothing they drive changed.");
+              } catch (err) {
+                core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
+              }
+            }
+            if (!e2e) core.setOutput("e2e", "true");
+
+            const { pathToFileURL } = require("url");
+            const { codeKey } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/infra/runner/code-key.mjs`).href);
+            const git = async (...args) => (await exec.getExecOutput("git", args, { silent: true })).stdout;
+            const key = codeKey(await git("ls-tree", "-r", "-z", "HEAD"));
+            const tree = (await git("rev-parse", "HEAD^{tree}")).trim();
+            core.setOutput("key", key);
+            const refs = [];
+            if (pr) {
+              const commits = await github.paginate(github.rest.pulls.listCommits, { ...context.repo, pull_number: pr.number, per_page: 100 });
+              refs.push(...commits.slice(-30).reverse().map((c) => c.sha));
+            } else {
+              const { data: commit } = await github.rest.git.getCommit({ ...context.repo, commit_sha: context.sha });
+              refs.push(...commit.parents.map((p) => p.sha));
+              const { data: merged } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: context.sha });
+              refs.push(...merged.filter((m) => m.merged_at && m.head.repo?.id === context.payload.repository.id).map((m) => m.head.sha));
+            }
+            const jobs = e2e ? ["checks", "e2e"] : ["checks"];
+            const found = {};
+            for (const ref of new Set(refs)) {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { ...context.repo, ref, per_page: 100 });
               // Only this workflow's own records count: a fork's pull request can't write statuses.
-              const passed = !!tree && statuses.some((s) => s.context === `ci/passed-${job}` && s.state === "success" && s.description === `tree ${tree}` && s.creator?.login === "github-actions[bot]");
-              core.info(`${job}: ${passed ? "passed on a pull request with this exact tree, skipped" : "runs"}`);
-              core.setOutput(job, String(passed));
+              const passed = (job) => statuses.some((s) => s.context === `ci/passed-${job}` && s.state === "success" && (s.description === `code ${key}` || s.description === `tree ${tree}`) && s.creator?.login === "github-actions[bot]");
+              for (const job of jobs) if (!found[job] && passed(job)) found[job] = ref;
+              if (jobs.every((job) => found[job])) break;
+            }
+            for (const job of jobs) {
+              core.info(`${job}: ${found[job] ? `passed on this code (recorded on ${found[job].slice(0, 7)}), skipped` : "runs"}`);
+              if (!found[job]) continue;
+              if (pr && found[job] !== pr.head.sha) {
+                try {
+                  await github.rest.repos.createCommitStatus({ ...context.repo, sha: pr.head.sha, state: "success", context: `ci/passed-${job}`, description: `code ${key}` });
+                } catch (err) {
+                  core.warning(`Couldn't record the ${job} pass on the head (${err.message}): the push to main that merges this runs it again.`);
+                }
+              }
+              core.setOutput(job, "true");
             }
 
   checks:
@@ -101,15 +171,15 @@ jobs:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
-    # statuses: write for the pass records (ci/passed-checks, ci/passed-integration).
+    # statuses: write for the pass records (ci/passed-checks, ci/passed-integration); actions: write
+    # for the step that stops this run when a newer push makes it useless.
     permissions:
       contents: read
       pull-requests: read
       statuses: write
+      actions: write
     # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
     timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
-    outputs:
-      e2e: ${{ steps.scope.outputs.e2e }}
     services:
       postgres:
         # An empty image skips the container (service containers need a Linux runner).
@@ -127,35 +197,6 @@ jobs:
         run: |
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
-      # The browser tests drive the UI on the local server (apps/aws) with their own sign-in and mail
-      # stand-ins. A pull request that changes none of that (or the UI's shared package, the
-      # dependencies or this workflow) leaves them to the push to main, unless it has the label
-      # "e2e": add it, then push again (a re-run reuses the old labels). Only an answer of "no" skips
-      # them: if this step fails, they run.
-      - name: Does this pull request need the browser tests?
-        id: scope
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          retries: 3
-          script: |
-            const pr = context.payload.pull_request;
-            if (pr.labels.some((l) => l.name === "e2e")) return core.setOutput("e2e", "true");
-            const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
-            const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
-            let changed;
-            try {
-              changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
-            } catch (err) {
-              core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
-              return core.setOutput("e2e", "true");
-            }
-            const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
-            // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
-            const run = hit !== undefined || changed.length >= 3000;
-            core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
-            core.setOutput("e2e", String(run));
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         env:
           GIT_CONFIG_COUNT: "1"
@@ -177,10 +218,24 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      # A newer push to this pull request that changes code stops this run within a minute; one of
+      # only Markdown or docs/ lets it finish (infra/runner/stop-when-superseded.mjs; concurrency, at
+      # the top). The job's last step prints what it saw.
+      - name: Stop this run if a newer push changes code (pull request)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node infra/runner/stop-when-superseded.mjs
       - name: Install the pinned pnpm (cached on this runner)
         run: |
           node --test infra/runner/setup-pnpm.test.mjs
           node infra/runner/setup-pnpm.mjs
+      # What CI counts as code (its pass records), and the newer-push watcher started above.
+      - name: Tests of the code key and the newer-push watcher
+        run: node --test infra/runner/code-key.test.mjs infra/runner/stop-when-superseded.test.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -303,18 +358,19 @@ jobs:
       # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
       - name: Build the Lambda package (UI + function)
         run: pnpm --filter @app/aws build
-      # For the push to main that merges this pull request (tested job): the tree this run tested
-      # (the pull request merged into main), on the pull request's head. Failing to record only
-      # means that push runs this job again.
-      - name: Record the tree that passed
-        if: github.event_name == 'pull_request'
+      # For later runs on the same code (tested job): the key of the code this run tested (the pull
+      # request merged into main), on the pull request's head. Failing to record only means a later
+      # run tests again.
+      - name: Record the code that passed
+        if: github.event_name == 'pull_request' && needs.tested.outputs.key != ''
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          KEY: ${{ needs.tested.outputs.key }}
         with:
           retries: 3
           script: |
-            const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
-            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-checks", description: `tree ${tree}` });
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-checks", description: `code ${process.env.KEY}` });
       # What the PC did meanwhile, in this log: each Modern Standby it entered during the job (a
       # test running then could only time out) and whether it ran on battery (2-3 times slower, and
       # the screen-off timer then sleeps it). Read-only; the owner's power settings are the fix.
@@ -322,21 +378,27 @@ jobs:
         if: always() && runner.os == 'Windows'
         continue-on-error: true
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/power-report.ps1
+      # What step "Stop this run if a newer push changes code" saw: a newer push, and whether it
+      # stopped this run (then also under the run's Annotations).
+      - name: Newer pushes while this job ran (pull request)
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        run: cat "$RUNNER_TEMP/superseded.log" 2>/dev/null || true
 
   e2e:
     name: End-to-end (Playwright)
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     needs: [tested, checks]
-    # After the checks pass (or were skipped because they passed on this tree), unless the browser
-    # tests passed on this tree too, or a pull request doesn't need them (checks job, first step).
+    # After the checks pass (or were skipped because they passed on this code), unless the browser
+    # tests passed on this code too, or a pull request doesn't need them (tested job).
     if: >-
       ${{ !cancelled() && needs.tested.outputs.e2e != 'true'
-      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true'))
-      && (github.event_name != 'pull_request' || needs.checks.outputs.e2e != 'false') }}
-    # statuses: write for the pass record (ci/passed-e2e).
+      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true')) }}
+    # statuses: write for the pass record (ci/passed-e2e); actions: write as in the checks job.
     permissions:
       contents: read
       statuses: write
+      actions: write
     timeout-minutes: 30
     steps:
       # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
@@ -362,6 +424,15 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      # As in the checks job.
+      - name: Stop this run if a newer push changes code (pull request)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node infra/runner/stop-when-superseded.mjs
       - name: Install the pinned pnpm (cached on this runner)
         run: node infra/runner/setup-pnpm.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -407,16 +478,22 @@ jobs:
         if: always() && runner.os == 'Windows'
         continue-on-error: true
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/power-report.ps1
-      # For the push to main that merges this pull request (tested job), as in the checks job.
-      - name: Record the tree that passed
-        if: github.event_name == 'pull_request'
+      # For later runs on the same code (tested job), as in the checks job.
+      - name: Record the code that passed
+        if: github.event_name == 'pull_request' && needs.tested.outputs.key != ''
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          KEY: ${{ needs.tested.outputs.key }}
         with:
           retries: 3
           script: |
-            const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
-            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-e2e", description: `tree ${tree}` });
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-e2e", description: `code ${process.env.KEY}` });
+      # As in the checks job.
+      - name: Newer pushes while this job ran (pull request)
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        run: cat "$RUNNER_TEMP/superseded.log" 2>/dev/null || true
       # The failed tests' traces, for three days. This is the workflow's only artifact: they count against
       # the account's 500 MB of Actions storage, and while that is used up the upload fails (the job
       # has failed already; this step's failure adds nothing).

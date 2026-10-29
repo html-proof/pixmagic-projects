@@ -20,7 +20,12 @@ The owner wants every change made to this project live on AWS
 - GitHub-hosted minutes are scarce (Free plan). A pull request runs the browser tests only when it
   touches what they drive (`.github/workflows/ci.yml` says what); add the label `e2e` and push
   again to run them anyway. Merge a pull request whose last run is green on top of the current
-  `main` and the push to `main` skips the jobs that already passed on that tree.
+  `main` and the push to `main` skips the jobs that already passed on that code (Markdown and
+  `docs/` don't count).
+- A push to a pull request doesn't cancel its run in progress. If it changes only Markdown or
+  `docs/` (a merge of a docs-only `main`, say), the run finishes and the next run skips what it
+  passed: such a push is free mid-run. A push that changes code stops the old run within a
+  minute, and that run's Annotations name the file.
 - The integration tests run only when one of the paths they read changed (list in `ci.yml`, step
   "What the integration tests read"). A test of `apps/api`/`apps/worker` that starts reading a file
   outside that list needs it added there, or a change to that file won't re-run them.
