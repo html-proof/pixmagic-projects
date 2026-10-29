@@ -5,7 +5,7 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "test": "jest --testTimeout 10000"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18.20"
@@ -14,7 +14,6 @@
     "zapier-platform-core": "19.2.1"
   },
   "devDependencies": {
-    "jest": "30.5.2",
     "nock": "14.0.17"
   },
   "overrides": {
