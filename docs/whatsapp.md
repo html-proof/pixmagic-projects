@@ -21,7 +21,8 @@ Meta + Nango on 2026-10-25) left tables that are erase-only ([The old tables](#t
 Meta lets other businesses connect through bizinsights' app only once it has approved bizinsights as
 a **Tech Provider**. On 2026-10-28: business verification of Zodiix Pty Ltd is **done**; App Review for
 `whatsapp_business_messaging` and `whatsapp_business_management` is **not submitted yet**
-([Owner's steps](#owners-steps-meta)). Until Meta approves:
+([Owner's steps](#owners-steps-meta)); its recordings are made with the app's own test number,
+connected with a token of the app ([Connecting](#connecting)). Until Meta approves:
 
 - no merchant can connect WhatsApp: Meta's window stops on "can't onboard customers right now", and
   the page says what that means (it never shows a connection Meta didn't confirm). People with a role
@@ -175,6 +176,18 @@ connection **Needs reconnecting** (`logged_out`, reason `token_expired` or `acce
 the alert `whatsapp_reconnect` once, and holds messages; going through Meta's window again (same
 account and number) resolves it and the held messages go. Down 48 hours: waiting messages and running
 campaigns are cancelled, and the store is told.
+
+**Connecting with the app's own token** (bizinsights' own team only). Until Meta approves bizinsights
+as a Tech Provider, Embedded Signup onboards no one, so App Review's recordings can't be made through
+it. The workspaces in `WHATSAPP_TOKEN_CONNECT_WORKSPACES` (the PixMagic workspace since 2026-10-29;
+empty: no one) see a second way under the button, **bizinsights team: connect with the app's own
+token**: the WhatsApp Business account ID, the phone number ID and a token of the Insights app made in
+Meta's dashboard by someone with a role on it (a system user's in Business settings, or API Setup's
+temporary one). `POST …/whatsapp/connection/cloud-token` (`connectCloudApiWithToken`) refuses every
+other workspace (403 `token_connect_off`) before Meta is asked, then runs steps 2-5 above unchanged:
+the token must be the app's, with both permissions, for that account, and the number in it. The
+token is kept like Embedded Signup's, never shown or logged; the audit row says `via: "app_token"`. A
+system user's token never expires (nothing to renew); API Setup's temporary one is renewed like any.
 
 **Check again** (and the sweep, every 6 hours per connection) asks Meta for the number
 (`GET /{phone-number-id}`): an answer means connected; a refused token means reconnect.
@@ -331,10 +344,11 @@ secret, the business's token included.
 | --- | --- | --- |
 | `WHATSAPP_CONFIG_ID` | `apps/aws/src/settings.ts` | Embedded Signup's configuration on the Meta app "Insights" 971575545351940: `2228218088074576` |
 | `WHATSAPP_APP_ID` (empty: `META_APP_ID`), `WHATSAPP_API_VERSION` (`v26.0`) | `apps/aws/src/settings.ts` | WhatsApp runs on the Meta Ads app |
+| `WHATSAPP_TOKEN_CONNECT_WORKSPACES` | `apps/aws/src/settings.ts` | Workspaces that may also connect with a token of the app ([Connecting](#connecting)): PixMagic's `cmvarpfwa000002jngkgh5ji2`; empty: no one |
 | `META_APP_SECRET` (or `WHATSAPP_APP_SECRET` on an app of its own), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Secrets Manager `insights/<env>/app` | Code exchange, `appsecret_proof`, webhook signatures, the handshake |
 | `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_*` | CDK and `insights/<env>/evolution-api` | Release 1 only: the cleanup's access to Evolution |
 
-Nothing is pasted by a merchant. The Deploy run's config check prints "Cloud API off (needs …)" while
+Nothing is pasted by a merchant (only bizinsights' own team pastes the app's token). The Deploy run's config check prints "Cloud API off (needs …)" while
 a Meta setting is missing; the page then offers nothing to connect and says why.
 
 ## Owner's steps (Meta)
@@ -345,10 +359,28 @@ settings and domains, the Embedded Signup configuration `2228218088074576`, the 
 **business verification** of Zodiix Pty Ltd. Still the owner's:
 
 1. **App Review**: in the app dashboard, **Use cases → WhatsApp (Connect with customers through
-   WhatsApp) → Customize**, request Advanced Access for `whatsapp_business_messaging` and
+   WhatsApp) → Customize → Become Tech Provider** (1 of 2 steps done on 2026-10-29: business
+   verification Approved), request Advanced Access for `whatsapp_business_messaging` and
    `whatsapp_business_management`, with screencasts of a message sent from bizinsights arriving and a
    template created in bizinsights (a reviewer can't be sent an emailed sign-in code: see
-   docs/ads-review-packs.md for the reviewer account).
+   docs/ads-review-packs.md for the reviewer account). The recordings, with the app's test number:
+   1. Meta dashboard → the Insights app → **WhatsApp → API Setup**: note the test number's **Phone
+      number ID** and the **WhatsApp Business Account ID**; under "To", add your own WhatsApp number
+      (a test number sends only to the numbers listed there).
+   2. Business settings (portfolio Zodiix Pty Ltd) → **Users → System users**: add an admin system
+      user, give it the Insights app and the test WhatsApp account (full control), **Generate token**
+      for the Insights app with `whatsapp_business_management` and `whatsapp_business_messaging`,
+      expiry "Never". (API Setup's temporary token works too, for 24 hours.)
+   3. bizinsights → PixMagic → WhatsApp → **Setup → 1. Connect** → **bizinsights team: connect with
+      the app's own token**: paste the two ids and the token, **Connect with this token**. Then step 3
+      (Configure).
+   4. **Video 1** (`whatsapp_business_messaging`): from your phone, write to the test number; in
+      bizinsights send a reply from the Messages tab (or step 4's test message to your own number),
+      with WhatsApp on the phone (or WhatsApp Web) in view as it arrives.
+   5. **Video 2** (`whatsapp_business_management`): in bizinsights' **Templates** tab create a
+      template and submit it to Meta; show it in WhatsApp Manager → Message templates.
+   6. In App Review → Permissions and features, add both permissions back to the request (they were
+      taken out on 2026-10-26: docs/ads-review-packs.md), attach each video, and submit.
 2. **Tech Provider onboarding**: once App Review passes, finish Meta's Tech Provider steps for the app
    (WhatsApp → Quickstart / Partner settings) so Embedded Signup onboards other businesses.
 3. In **WhatsApp → Configuration**, the app's webhook: `https://bizinsights.io/api/webhooks/whatsapp`

@@ -16,11 +16,15 @@
  * bizinsights itself, signed with the app secret (X-Hub-Signature-256), and are applied here.
  * Meta onboards a business through Embedded Signup only once it has approved bizinsights as a
  * Tech Provider (business verification, App Review); until then its window says so, not this code.
+ * Meanwhile the workspaces in WHATSAPP_TOKEN_CONNECT_WORKSPACES (bizinsights' own team) may start at
+ * step 2 instead, with a token of bizinsights' app made in Meta's dashboard (connectCloudApiWithToken):
+ * the same checks, so App Review can be recorded with the app's own test number.
  */
 import { randomInt } from "node:crypto";
 import { systemDb, type Store, type WappConnection } from "@app/db";
 import { maskPhone, normalizePhone, WA_RETIRED_PROVIDER } from "@app/shared";
 import { z } from "zod";
+import { env } from "../env.js";
 import { graphCall, type GraphFailure } from "../metaGraph.js";
 import { logger } from "../logger.js";
 import { audit, resolveAlerts } from "../notify.js";
@@ -67,6 +71,40 @@ export const cloudConnectSchema = z.object({
   businessId: z.string().regex(/^\d{5,25}$/).nullable().optional(),
 });
 
+export const cloudTokenConnectSchema = z.object({
+  accessToken: z.string().trim().min(20).max(2000).regex(/^\S+$/),
+  wabaId: z.string().trim().regex(/^\d{5,25}$/),
+  phoneNumberId: z.string().trim().regex(/^\d{5,25}$/),
+});
+
+/** Whether this workspace may connect with a token of bizinsights' own Meta app (WHATSAPP_TOKEN_CONNECT_WORKSPACES). */
+export const tokenConnectAllowed = (workspaceId: string): boolean =>
+  env()
+    .WHATSAPP_TOKEN_CONNECT_WORKSPACES.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(workspaceId);
+
+type Via = "embedded_signup" | "app_token";
+
+/** Each refusal in the words of the way the business came in. */
+const REFUSED: Record<Via, Record<"wrongApp" | "missing" | "waba" | "phone" | "list", string>> = {
+  embedded_signup: {
+    wrongApp: "Meta's sign-up wasn't for bizinsights' app. Open Meta's window again from this page.",
+    missing: "Meta didn't give bizinsights both WhatsApp permissions (manage and message). Open Meta's window again and allow both.",
+    waba: "Meta didn't share that WhatsApp Business account with bizinsights.",
+    phone: "The number you picked isn't in the WhatsApp Business account Meta shared. Try again and pick both in Meta's window.",
+    list: "Meta didn't show bizinsights the account's phone numbers. Open Meta's window again.",
+  },
+  app_token: {
+    wrongApp: "Meta says that token isn't a valid one of bizinsights' Meta app. Make a new one for the app bizinsights.",
+    missing: "That token doesn't have both WhatsApp permissions (whatsapp_business_management and whatsapp_business_messaging). Make one that has both.",
+    waba: "That token can't reach that WhatsApp Business account.",
+    phone: "That phone number ID isn't in that WhatsApp Business account. Copy both from Meta's API Setup page.",
+    list: "Meta didn't show bizinsights that account's phone numbers with that token.",
+  },
+};
+
 async function inspect(p: MetaApp, fetchImpl: FetchLike, token: string) {
   const r = await graph<{ data?: { app_id?: string; is_valid?: boolean; scopes?: string[]; expires_at?: number; granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(p, fetchImpl, `${p.appId}|${p.appSecret}`, "GET", "debug_token", {
     query: { input_token: token },
@@ -77,47 +115,93 @@ async function inspect(p: MetaApp, fetchImpl: FetchLike, token: string) {
   return { appId: d.app_id ? String(d.app_id) : null, valid: d.is_valid !== false, scopes: d.scopes ?? [], wabaIds: [...new Set(targets.map(String))], expiresAt: d.expires_at ? new Date(d.expires_at * 1000) : null };
 }
 
-/**
- * Steps 1-4 above, after Meta's window finished. Refuses (and changes nothing) when any check fails.
- */
-export async function connectCloudApi(deps: Pick<WaDeps, "fetchImpl" | "coord" | "mailer">, input: { store: Pick<Store, "id" | "workspaceId">; userId: string; data: unknown; ip?: string }): Promise<WappConnection> {
+type ConnectInput = { store: Pick<Store, "id" | "workspaceId">; userId: string; data: unknown; ip?: string };
+
+/** What both ways in check first: bizinsights' Meta app is set up, the store isn't connected, not too many tries. */
+function requireMetaApp(): MetaApp {
   const p = metaApp();
   if (!p) throw new WhatsappError("Connecting WhatsApp isn't set up on bizinsights yet: its Meta app isn't configured.", 503, "cloud_api_off");
-  const d = cloudConnectSchema.parse(input.data);
-  const existing = await connectionOf(input.store.id);
+  return p;
+}
+async function connectable(deps: Pick<WaDeps, "coord">, storeId: string): Promise<WappConnection | null> {
+  const existing = await connectionOf(storeId);
   if (existing && existing.provider === "cloud_api" && existing.instanceTokenEnc && (existing.status === "connected" || existing.status === "reconnecting")) {
     throw new WhatsappError("WhatsApp is already connected for this store. Disconnect it first.", 409, "already_connected");
   }
-  if ((await deps.coord.hit(`wapp:cloud:${input.store.id}`, 3600)) > 10) throw new WhatsappError("Too many connection attempts in the last hour. Try again later.", 429, "rate_limited");
-  const f = deps.fetchImpl;
+  if ((await deps.coord.hit(`wapp:cloud:${storeId}`, 3600)) > 10) throw new WhatsappError("Too many connection attempts in the last hour. Try again later.", 429, "rate_limited");
+  return existing;
+}
+
+/**
+ * Steps 1-4 above, after Meta's window finished. Refuses (and changes nothing) when any check fails.
+ */
+export async function connectCloudApi(deps: Pick<WaDeps, "fetchImpl" | "coord" | "mailer">, input: ConnectInput): Promise<WappConnection> {
+  const p = requireMetaApp();
+  const d = cloudConnectSchema.parse(input.data);
+  const existing = await connectable(deps, input.store.id);
   let token: string;
   let info: Awaited<ReturnType<typeof inspect>>;
-  let phone: { display_phone_number?: string; verified_name?: string; platform_type?: string; status?: string };
   try {
-    const r = await graphCall<{ access_token?: string }>(f, { version: p.version, method: "GET", path: "oauth/access_token", query: { client_id: p.appId, client_secret: p.appSecret, code: d.code } }, metaError);
+    const r = await graphCall<{ access_token?: string }>(deps.fetchImpl, { version: p.version, method: "GET", path: "oauth/access_token", query: { client_id: p.appId, client_secret: p.appSecret, code: d.code } }, metaError);
     if (!r.access_token) throw new MetaError(400, null, "no token for the code");
     token = r.access_token;
-    info = await inspect(p, f, token);
+    info = await inspect(p, deps.fetchImpl, token);
   } catch (e) {
     logger.warn({ err: e, storeId: input.store.id }, "whatsapp cloud api: Meta refused the sign-up");
     throw new WhatsappError("Meta didn't accept the sign-up (its code lasts 30 seconds). Open Meta's window again.", 502, "meta_refused");
   }
+  return finishConnect(deps, p, "embedded_signup", { ...input, existing, token, info, wabaId: d.wabaId, phoneNumberId: d.phoneNumberId, businessId: d.businessId ?? null });
+}
+
+/**
+ * Steps 2-4 above with a token of bizinsights' own Meta app that someone with a role on the app made
+ * in Meta's dashboard (a system user's, or API Setup's temporary one), for the workspaces in
+ * WHATSAPP_TOKEN_CONNECT_WORKSPACES only. Meta's token inspector decides the rest, as for Embedded
+ * Signup: bizinsights' app, both WhatsApp permissions, the account. The token is never logged.
+ */
+export async function connectCloudApiWithToken(deps: Pick<WaDeps, "fetchImpl" | "coord" | "mailer">, input: ConnectInput): Promise<WappConnection> {
+  if (!tokenConnectAllowed(input.store.workspaceId)) throw new WhatsappError("Connecting with a token of bizinsights' own Meta app isn't offered to this workspace. Connect WhatsApp Business with Meta's window.", 403, "token_connect_off");
+  const p = requireMetaApp();
+  const d = cloudTokenConnectSchema.parse(input.data);
+  const existing = await connectable(deps, input.store.id);
+  let info: Awaited<ReturnType<typeof inspect>>;
+  try {
+    info = await inspect(p, deps.fetchImpl, d.accessToken);
+  } catch (e) {
+    logger.warn({ err: e, storeId: input.store.id }, "whatsapp cloud api: Meta didn't inspect the app token");
+    throw new WhatsappError("Meta didn't check that token for bizinsights. Try again in a minute.", 502, "meta_refused");
+  }
+  return finishConnect(deps, p, "app_token", { ...input, existing, token: d.accessToken, info, wabaId: d.wabaId, phoneNumberId: d.phoneNumberId, businessId: null });
+}
+
+/** Steps 2-4, the same whichever way the token came: refuses (and changes nothing) when any check fails. */
+async function finishConnect(
+  deps: Pick<WaDeps, "fetchImpl" | "coord" | "mailer">,
+  p: MetaApp,
+  via: Via,
+  input: ConnectInput & { existing: WappConnection | null; token: string; info: Awaited<ReturnType<typeof inspect>>; wabaId: string; phoneNumberId: string; businessId: string | null },
+): Promise<WappConnection> {
+  const { existing, token, info } = input;
+  const d = { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId, businessId: input.businessId };
+  const say = REFUSED[via];
+  const f = deps.fetchImpl;
+  let phone: { display_phone_number?: string; verified_name?: string; platform_type?: string; status?: string };
   // Checked before the token is used for anything: it must be bizinsights' app's, for this account.
-  if (!info.valid || info.appId !== p.appId) throw new WhatsappError("Meta's sign-up wasn't for bizinsights' app. Open Meta's window again from this page.", 400, "wrong_app");
+  if (!info.valid || info.appId !== p.appId) throw new WhatsappError(say.wrongApp, 400, "wrong_app");
   const missing = REQUIRED_SCOPES.filter((s) => !info.scopes.includes(s));
-  if (missing.length) throw new WhatsappError("Meta didn't give bizinsights both WhatsApp permissions (manage and message). Open Meta's window again and allow both.", 400, "missing_permissions", { missing });
-  if (info.wabaIds.length && !info.wabaIds.includes(d.wabaId)) throw new WhatsappError("Meta didn't share that WhatsApp Business account with bizinsights.", 400, "waba_not_granted");
+  if (missing.length) throw new WhatsappError(say.missing, 400, "missing_permissions", { missing });
+  if (info.wabaIds.length && !info.wabaIds.includes(d.wabaId)) throw new WhatsappError(say.waba, 400, "waba_not_granted");
   try {
     const phones = await graph<{ data?: Array<{ id: string; display_phone_number?: string; verified_name?: string; platform_type?: string; status?: string }> }>(p, f, token, "GET", `${d.wabaId}/phone_numbers`, {
       query: { fields: "id,display_phone_number,verified_name,platform_type,status", limit: "100" },
     });
     const found = (phones.data ?? []).find((x) => x.id === d.phoneNumberId);
-    if (!found) throw new WhatsappError("The number you picked isn't in the WhatsApp Business account Meta shared. Try again and pick both in Meta's window.", 400, "phone_not_in_account");
+    if (!found) throw new WhatsappError(say.phone, 400, "phone_not_in_account");
     phone = found;
   } catch (e) {
     if (e instanceof WhatsappError) throw e;
     logger.warn({ err: e, storeId: input.store.id }, "whatsapp cloud api: Meta didn't list the account's numbers");
-    throw new WhatsappError("Meta didn't show bizinsights the account's phone numbers. Open Meta's window again.", 502, "meta_refused");
+    throw new WhatsappError(say.list, 502, "meta_refused");
   }
   // Another store can't hold the same number (phone_number_id is unique while connected).
   const taken = await systemDb.wappConnection.findFirst({ where: { phoneNumberId: d.phoneNumberId, storeId: { not: input.store.id } }, select: { id: true } });
@@ -165,7 +249,7 @@ export async function connectCloudApi(deps: Pick<WaDeps, "fetchImpl" | "coord" |
     profileName: phone.verified_name?.slice(0, 100) ?? null,
     wabaId: d.wabaId,
     phoneNumberId: d.phoneNumberId,
-    businessId: d.businessId ?? null,
+    businessId: d.businessId,
     tokenExpiresAt: info.expiresAt,
     qrCount: 0,
     pairingStartedAt: null,
@@ -178,8 +262,8 @@ export async function connectCloudApi(deps: Pick<WaDeps, "fetchImpl" | "coord" |
   };
   const conn = await systemDb.wappConnection.upsert({ where: { storeId: input.store.id }, create: { workspaceId: input.store.workspaceId, storeId: input.store.id, ...fields }, update: fields });
   await resolveAlerts(input.store.id, [WA_ALERTS.reconnect, WA_ALERTS.down, WA_ALERTS.qrRetired, WA_ALERTS.loggedOut, WA_ALERTS.provider]);
-  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.connected", targetType: "store", targetId: input.store.id, metadata: { provider: "cloud_api", wabaId: d.wabaId }, ip: input.ip });
-  logger.info({ connectionId: conn.id, storeId: input.store.id }, "whatsapp connected through Meta's Cloud API");
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.connected", targetType: "store", targetId: input.store.id, metadata: { provider: "cloud_api", wabaId: d.wabaId, via }, ip: input.ip });
+  logger.info({ connectionId: conn.id, storeId: input.store.id, via }, "whatsapp connected through Meta's Cloud API");
   return conn;
 }
 
