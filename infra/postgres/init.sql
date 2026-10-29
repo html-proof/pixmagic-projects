@@ -1,7 +1,7 @@
 -- Runs on first container start (docker-entrypoint-initdb.d), in CI, and by the
--- test global setup. Idempotent. app_rls is a NON-owner role, so Postgres row
--- level security applies to it. The owner role ("app") runs migrations and
--- system jobs (webhooks, worker).
+-- test global setup. Idempotent. app_rls (tenant requests) and app_system (the
+-- system paths, below) are NON-owner roles, so Postgres row level security
+-- applies to them. The owner role ("app") runs migrations.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rls') THEN
     CREATE ROLE app_rls LOGIN PASSWORD 'app_rls';
@@ -48,4 +48,48 @@ BEGIN
   IF to_regclass('public.sms_audit_logs') IS NOT NULL THEN
     REVOKE UPDATE, DELETE, TRUNCATE ON sms_audit_logs FROM app_rls;
   END IF;
+END $$;
+
+-- app_system: the system paths' login (systemDb: webhooks, jobs, sweeps, sign-in), and like app_rls
+-- a NON-owner, so row-level security applies to it too (docs/system-database-role.md). It reads and
+-- writes rows; it owns nothing and changes no table. On AWS the migrate action creates it first,
+-- with the password from insights/<env>/db-system, so the development password below never exists there.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_system') THEN
+    CREATE ROLE app_system LOGIN PASSWORD 'app_system' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
+  END IF;
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO app_system', current_database());
+END $$;
+GRANT USAGE ON SCHEMA public TO app_system;
+ALTER DEFAULT PRIVILEGES FOR ROLE app IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_system;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_system;
+DO $$
+DECLARE t text;
+BEGIN
+  IF to_regclass('public._prisma_migrations') IS NOT NULL THEN
+    REVOKE ALL ON _prisma_migrations FROM app_system;
+  END IF;
+  -- Which workspace's rows it sees is set per connection by @app/db (forTenant / crossTenant):
+  -- `tenant_isolation` (every role) shows the one in app.workspace_id; this shows every workspace
+  -- inside crossTenant, which sets app.scope = 'all'. Made here rather than in each migration, so a
+  -- new tenant table has it after the next migrate (apps/api/test/security.test.ts checks).
+  FOR t IN
+    SELECT c.relname FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+    WHERE c.relkind = 'r' AND (c.relname = 'workspaces' OR EXISTS (
+      SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'workspace_id' AND NOT a.attisdropped))
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = format('public.%I', t)::regclass AND p.polname = 'system_all') THEN
+      EXECUTE format($p$CREATE POLICY system_all ON public.%I TO app_system USING (current_setting('app.scope', true) = 'all') WITH CHECK (current_setting('app.scope', true) = 'all')$p$, t);
+    END IF;
+  END LOOP;
+  -- Tables that belong to no workspace (people, sign-in, intake): the system paths read them in every
+  -- scope, since sign-in needs them before any workspace is known. Named one by one, so a table only
+  -- joins this list in review.
+  FOREACH t IN ARRAY ARRAY['users', 'auth_identities', 'auth_events', 'user_sessions', 'email_otps', 'pixel_events_seen'] LOOP
+    IF to_regclass(format('public.%I', t)) IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = format('public.%I', t)::regclass AND p.polname = 'system_any') THEN
+      EXECUTE format('CREATE POLICY system_any ON public.%I TO app_system USING (true) WITH CHECK (true)', t);
+    END IF;
+  END LOOP;
 END $$;

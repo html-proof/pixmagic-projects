@@ -7,6 +7,7 @@ import {
   findAdPerformance,
   findAdsenseEarnings,
   hookInputSchema,
+  retryZapierDelivery,
   subscribeZapierHook,
   unsubscribeZapierHook,
   zapierConfig,
@@ -29,7 +30,7 @@ import { limit, LIMITS } from "../rateLimit.js";
  * so Zapier asks for the connection again. The store is the connection's: no route takes one.
  *
  * And Settings → Integrations' Zapier card (/workspaces/:ws/stores/:storeId/zapier): the store's
- * connections, triggers and recent deliveries; Disconnect.
+ * connections, triggers and recent deliveries; Disconnect; Retry a failed delivery (owners and admins).
  */
 
 interface ZapierCtx {
@@ -167,6 +168,22 @@ export function zapierRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:zapier:manage:${ws}`, LIMITS.zapierManage);
     if (!(await disconnectZapier(ws, storeId, grantId, { userId: a.user.id, ip: clientIp(c) }))) throw new HttpError(404, "Not found", "not_found");
     logger.info({ workspaceId: ws, storeId, grantId }, "zapier disconnected from settings");
+    return c.json({ ok: true });
+  });
+
+  /** Retry: send a failed delivery again. Owners and admins, who get the alert about it. */
+  app.post(`${base}/deliveries/:deliveryId/retry`, async (c) => {
+    const { ws, storeId, deliveryId } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "integrations.manage");
+    if (!a.user || a.link) throw new HttpError(403, "Sign in to your own account to send an event again.", "forbidden");
+    if (!hasFullAccess(a.access.role)) throw new HttpError(403, "Only owners and admins can send an event to Zapier again.", "forbidden");
+    await storeIn(ws, storeId);
+    await limit(deps.coord, `rl:zapier:manage:${ws}`, LIMITS.zapierManage);
+    const outcome = await retryZapierDelivery(ws, storeId, deliveryId, deps.queues, { userId: a.user.id, ip: clientIp(c) });
+    if (outcome === "not_found") throw new HttpError(404, "Not found", "not_found");
+    if (outcome === "not_failed") throw new HttpError(409, "Only an event that failed can be sent again: this one was sent, or is being sent.", "not_failed");
+    if (outcome === "trigger_gone") throw new HttpError(409, "The Zap's trigger is gone (the Zap was turned off, or Zapier disconnected), so there is nowhere to send it. Turn the Zap on again in Zapier.", "trigger_gone");
+    logger.info({ workspaceId: ws, storeId, deliveryId }, "zapier delivery sent again from settings");
     return c.json({ ok: true });
   });
 }

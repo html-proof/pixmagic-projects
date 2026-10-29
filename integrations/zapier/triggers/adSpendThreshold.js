@@ -17,7 +17,7 @@ module.exports = hookTrigger({
     occurred_at: "2026-10-28T09:00:00.000Z",
     store: { id: "store_example", name: "Example Store", shop_domain: "example.myshopify.com" },
     data: {
-      trigger: { platform: "meta", period: "month", amount: 500 },
+      trigger: { platform: "meta", period: "month", amount: 500, direction: "above" },
       period: "2026-10",
       period_start: "2026-10-01",
       period_end: "2026-10-31",

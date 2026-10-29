@@ -1,7 +1,8 @@
 // bizinsights on Zapier (docs/zapier.md): the store's alerts, advertising thresholds, daily
-// advertising summary and failed WhatsApp messages as instant triggers (REST hooks), and two searches
-// over its stored advertising figures. No action: nothing in bizinsights is changed from Zapier, and
-// nothing is sent to customers.
+// advertising summary, failed WhatsApp messages, integrations connected or disconnected, ad accounts
+// synced and paid orders as instant triggers (REST hooks), and two searches over its stored
+// advertising figures. No action: nothing in bizinsights is changed from Zapier, and nothing is sent
+// to customers.
 const { version } = require("./package.json");
 const { version: platformVersion } = require("zapier-platform-core");
 const authentication = require("./authentication");
@@ -13,6 +14,10 @@ const triggers = [
   require("./triggers/adsenseEarningsThreshold"),
   require("./triggers/adsDailySummary"),
   require("./triggers/whatsappMessageFailed"),
+  require("./triggers/integrationConnected"),
+  require("./triggers/integrationDisconnected"),
+  require("./triggers/syncCompleted"),
+  require("./triggers/orderPaid"),
 ];
 const searches = [require("./searches/findAdPerformance"), require("./searches/findAdsenseEarnings")];
 

@@ -11,8 +11,6 @@
  * the grant behind it: grantStillUsed (connect.ts) counts it, and whatever ends a connection ends it too
  * (its disconnect, the person removing bizinsights on Facebook or asking for their data to be deleted,
  * the store going, its connector leaving), giving the grant back unless something else relies on it.
- * A login made through Nango (2026-10-26 to 2026-10-28) names its Nango connection instead until
- * leaveNango.ts moves its token here.
  */
 import { systemDb, type AdLogin, type Prisma } from "@app/db";
 import { AD_LOGIN_AUTO_CONNECT_MAX, allows, decrypt, encrypt, keyVersionOf, type AdLoginReason, type AdProvider, type Role } from "@app/shared";
@@ -25,8 +23,8 @@ import type { FetchLike } from "../shopify.js";
 import { memberState } from "../team/common.js";
 import { keyring } from "../tokens.js";
 import { metaConfig } from "./config.js";
-import { dropUnusedGrant, releaseNangoConnectionIfUnused, saveAdConnections, type RevokeOutcome } from "./connect.js";
-import { aad, AdsMovingOffNangoError, platformPerson } from "./credentials.js";
+import { dropUnusedGrant, saveAdConnections, type RevokeOutcome } from "./connect.js";
+import { aad, platformPerson } from "./credentials.js";
 import { enqueueAdCatchUp } from "./sync.js";
 
 /** How often a waiting login is asked again; one whose platform didn't answer, sooner. */
@@ -58,12 +56,8 @@ export function encryptLoginToken(storeId: string, provider: AdProvider, accessT
   return { accessTokenEnc, tokenKeyVersion: keyVersionOf(accessTokenEnc) };
 }
 
-/** A login still read through Nango (not moved yet by leaveNango.ts): it names its connection and holds no token. */
-export const isNangoLogin = (row: Pick<AdLogin, "accessTokenEnc" | "sourceLoginId">): boolean => !row.accessTokenEnc && !!row.sourceLoginId;
-
 /** The token a login holds. One that ended (Meta's long-lived token, about 60 days), or can't be read, is an AdsAuthError: the login ends. */
 function loginToken(row: AdLogin): TokenSet {
-  if (isNangoLogin(row)) throw new AdsMovingOffNangoError();
   if (!row.accessTokenEnc) throw new AdsAuthError("The waiting login holds no token");
   if (row.accessTokenExpiresAt && row.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("The waiting login's access has expired");
   let accessToken: string;
@@ -86,8 +80,6 @@ export async function holdAdLogin(input: HoldAdLoginInput, fetchImpl?: FetchLike
   const before = await systemDb.adLogin.findUnique({ where });
   const fields = {
     ...encryptLoginToken(input.storeId, input.provider, input.tokens.accessToken),
-    sourceLoginId: null,
-    nangoIntegrationKey: null,
     externalUserId: input.externalUserId,
     loginName: input.loginName?.trim().slice(0, 120) || null,
     grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
@@ -104,14 +96,10 @@ export async function holdAdLogin(input: HoldAdLoginInput, fetchImpl?: FetchLike
 
 /**
  * The grant a waiting login held, once its row is gone (or holds another sign-in now): taken back unless
- * a connection or another waiting login still relies on it. A login not moved off Nango yet: its Nango
- * connection goes too. Never throws.
+ * a connection or another waiting login still relies on it. Never throws.
  */
 async function releaseLoginGrant(row: AdLogin, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   const provider = row.provider as AdProvider;
-  if (isNangoLogin(row)) {
-    return releaseNangoConnectionIfUnused({ provider, connectionId: row.sourceLoginId!, integrationKey: row.nangoIntegrationKey ?? "", externalUserId: row.externalUserId }, fetchImpl);
-  }
   try {
     const tokens = loginToken({ ...row, accessTokenExpiresAt: null });
     const person = row.externalUserId ?? (await platformPerson(provider, tokens.accessToken, fetchImpl).catch(() => null));
@@ -200,7 +188,7 @@ export interface AdLoginDeps {
  * connected (each one's catch-up queued) and the login goes. More, or a list cut short: it waits for the
  * person to choose ("choose"; the card's button signs in again for the picker). None: it keeps waiting,
  * with what Meta says now. A token that no longer works, or a connector who can't connect any more: let go.
- * Anything else (Meta busy, a login not moved off Nango yet): asked again later. Never throws.
+ * Anything else (Meta busy): asked again later. Never throws.
  */
 export async function checkAdLogin(row: AdLogin, deps: AdLoginDeps, opts: { interactive?: boolean } = {}): Promise<AdLoginCheck> {
   const lock = `ad-login-check:${row.id}`;
@@ -266,7 +254,6 @@ async function checkOnce(row: AdLogin, deps: AdLoginDeps, opts: { interactive?: 
     tokens,
     userId: row.connectedByUserId,
     externalUserId: row.externalUserId,
-    fetchImpl: deps.fetchImpl,
   });
   // The accounts read with the login's own token now: the row goes, the grant stays.
   await systemDb.adLogin.deleteMany({ where: { id: row.id } });

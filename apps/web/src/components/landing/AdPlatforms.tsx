@@ -17,7 +17,12 @@ const PLATFORMS = [
   {
     name: "Google AdSense",
     scope: "adsense.readonly",
-    text: <>Read-only access (&ldquo;View your AdSense data&rdquo;), to show your site&rsquo;s estimated earnings, page views, ads shown and clicks.</>,
+    text: (
+      <>
+        Read-only access (&ldquo;View your AdSense data&rdquo;), to show your site&rsquo;s estimated earnings, page views, ad impressions and
+        clicks, and in its reports the same by country, device type and ad unit, with ad requests, coverage and Active View viewability.
+      </>
+    ),
   },
   {
     name: "Meta Ads",

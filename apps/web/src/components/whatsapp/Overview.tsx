@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { providerLabel, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO } from "@app/shared/whatsapp";
+import { PROVIDER_INFO, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO } from "@app/shared/whatsapp";
 import { Badge, Empty, Panel, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -25,14 +25,6 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
 
   return (
     <div className="space-y-4">
-      {o.connection?.reasonCode === "qr_linking_retired" && (
-        <Alert kind="info">
-          <span className="font-medium">QR-code linking was retired.</span> {o.connection.reason}{" "}
-          <Link href={waHref("setup")} className="underline">
-            Connect WhatsApp Business
-          </Link>
-        </Alert>
-      )}
       {o.retired && (
         <Alert kind="info">
           This store&apos;s earlier WhatsApp Business connection{o.retired.displayPhoneNumber ? ` (${o.retired.displayPhoneNumber})` : ""} was retired when WhatsApp Automation moved to its new service. Connect again below; nothing from the earlier one sends.
@@ -44,7 +36,7 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
           label="Connection"
           tone={conn ? (CONNECTION_TONE[conn.status] ?? "neutral") : "neutral"}
           value={conn ? conn.statusLabel : "Not connected"}
-          note={conn ? `${conn.phone ?? "Number not reported yet"} · WhatsApp Business Platform` : "Connect on the Setup tab."}
+          note={conn ? `${conn.phone ?? "Number not reported yet"} · ${conn.provider === "qr" ? "linked phone" : "Cloud API"}` : "Connect on the Setup tab."}
         />
         <Stat label="Automation" tone={STATE_TONE[o.automation.state] ?? "neutral"} value={WA_AUTOMATION_STATE_LABEL[o.automation.state]} note={`${o.automation.active} on${o.automation.testMode ? `, ${o.automation.testMode} in test mode` : ""} of ${o.automation.total}`} />
         <Stat label="Sent today" value={`${o.limits.sentToday} / ${o.limits.dailyLimit}`} note="Business-started messages against the daily limit." />
@@ -73,7 +65,7 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
         <Panel
           id="wa-health"
           title="Connection health"
-          help="As Meta last reported it."
+          help="As WhatsApp's service last reported it."
           aside={
             <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => void check()} disabled={busy === "check"}>
               {busy === "check" ? "Checking…" : "Check again"}
@@ -81,7 +73,7 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
           }
         >
           <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-            <Row k="How it connects" v={providerLabel(conn.provider)} />
+            <Row k="How it connects" v={PROVIDER_INFO[conn.provider].label} />
             <Row k="Status" v={<Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>} />
             <Row k="Number" v={conn.phone ?? "–"} />
             <Row k="WhatsApp profile name" v={conn.profileName ?? "–"} />
@@ -93,7 +85,7 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
           {conn.reason && <p className="mt-3 text-sm text-warn">{conn.reason}</p>}
           {(conn.status === "logged_out" || conn.status === "failed") && (
             <Link href={waHref("setup")} className="btn-primary mt-3 inline-flex">
-              Connect WhatsApp Business again
+              Link the phone again
             </Link>
           )}
         </Panel>

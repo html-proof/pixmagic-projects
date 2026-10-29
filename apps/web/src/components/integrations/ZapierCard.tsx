@@ -14,10 +14,25 @@ import { IntegrationRow, RowPill } from "./IntegrationRow";
 // Zapier account through bizinsights' Zapier app. Where it stands comes only from the API's answer
 // (GET .../zapier): not set up by the platform yet, not connected, or each connection with who made
 // it, its triggers and its recent deliveries. Connect opens the Zapier app's invite link in Zapier;
-// Disconnect stops the connection's tokens and deletes its triggers here.
+// Disconnect stops the connection's tokens and deletes its triggers here; Retry (owners and admins)
+// sends a failed delivery again.
 // ---------------------------------------------------------------------------
 
-type Delivery = { id: string; event: string; eventLabel: string; status: string; label: string; tone: StateTone; reason: string | null; attempts: number; createdAt: string; lastAttemptAt: string | null; deliveredAt: string | null; nextAttemptAt: string | null };
+type Delivery = {
+  id: string;
+  event: string;
+  eventLabel: string;
+  status: string;
+  label: string;
+  tone: StateTone;
+  reason: string | null;
+  attempts: number;
+  createdAt: string;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  nextAttemptAt: string | null;
+  retryable: boolean;
+};
 type Trigger = { id: string; event: string; label: string; inputs: Record<string, unknown>; createdAt: string; lastDeliveredAt: string | null; mixedCurrencies: string[] | null };
 type Connection = { id: string; authorizedBy: { email: string; name: string | null } | null; createdAt: string; lastUsedAt: string | null; triggers: Trigger[] };
 type Setup = { ZAPIER_CLIENT_ID: boolean; ZAPIER_CLIENT_SECRET: boolean; ZAPIER_REDIRECT_URI: boolean; ZAPIER_INVITE_URL: boolean };
@@ -36,7 +51,9 @@ const PLATFORM: Record<string, string> = { meta: "Meta Ads", google: "Google Ads
 function triggerDetail(t: Trigger): string | null {
   const i = t.inputs;
   if (t.event === "ad_spend_threshold") return `${PLATFORM[String(i.platform ?? "any")] ?? "Ad"} spend reaching ${i.amount} a ${i.period}`;
-  if (t.event === "adsense_earnings_threshold") return `Estimated earnings reaching ${i.amount} a ${i.period}`;
+  if (t.event === "adsense_earnings_threshold") {
+    return i.direction === "below" ? `Estimated earnings ending a ${i.period} below ${i.amount}` : `Estimated earnings reaching ${i.amount} a ${i.period}`;
+  }
   return null;
 }
 
@@ -98,6 +115,15 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
       return "Zapier disconnected. Its Zaps no longer receive this store's events.";
     });
     setConfirm(null);
+    if (ok) await z.reload();
+  }
+
+  async function retry(d: Delivery) {
+    if (!base) return;
+    const ok = await run(`retry-${d.id}`, "send the event again", async () => {
+      await api(`${base}/deliveries/${d.id}/retry`, { method: "POST" });
+      return `${d.eventLabel}: sending it to Zapier again.`;
+    });
     if (ok) await z.reload();
   }
 
@@ -175,7 +201,7 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
               <summary className="cursor-pointer font-medium">Recent events sent to Zapier</summary>
               <ul className="mt-2 space-y-1.5" data-testid="zapier-deliveries">
                 {o.deliveries.map((d) => (
-                  <li key={d.id} className="flex flex-wrap gap-x-2">
+                  <li key={d.id} className="flex flex-wrap items-center gap-x-2">
                     <span className="font-medium">{d.eventLabel}</span>
                     <span className="text-muted">{when(d.createdAt)}</span>
                     <span className={d.tone === "good" ? "text-good" : d.tone === "danger" ? "text-danger" : d.tone === "warn" ? "text-warn" : "text-muted"}>
@@ -183,6 +209,18 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
                       {d.reason ? `: ${d.reason}` : ""}
                       {d.status === "retrying" && d.nextAttemptAt ? ` (next try ${new Date(d.nextAttemptAt).toLocaleTimeString()})` : ""}
                     </span>
+                    {full && d.retryable && (
+                      <button
+                        type="button"
+                        className="btn-secondary h-8 px-3 text-sm"
+                        onClick={() => void retry(d)}
+                        disabled={busy !== null}
+                        aria-label={`Retry: send ${d.eventLabel} to Zapier again`}
+                        data-testid="zapier-retry"
+                      >
+                        {busy === `retry-${d.id}` ? "Sending…" : "Retry"}
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>

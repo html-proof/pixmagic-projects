@@ -17,6 +17,7 @@
     "./dates": "./src/dates.ts",
     "./device": "./src/device.ts",
     "./health": "./src/health.ts",
+    "./integrations": "./src/integrations.ts",
     "./inventory": "./src/inventory.ts",
     "./journey": "./src/journey.ts",
     "./funnel": "./src/funnel.ts",

@@ -24,8 +24,8 @@ import { fmtAgo, useWaAction, WaBubble } from "./WaUi";
 
 // ---------------------------------------------------------------------------
 // Message templates (docs/whatsapp.md, "Templates"): the store's own wording with {{variables}}.
-// Each one also goes to Meta for review once WhatsApp is connected, and a business-started message
-// can only use one Meta approved.
+// On a linked phone nobody reviews them; on the Cloud API each one also goes to Meta, and a
+// business-started message can only use one Meta approved.
 // ---------------------------------------------------------------------------
 
 const META_TONE: Record<string, Tone> = { APPROVED: "good", PENDING: "warn", IN_APPEAL: "warn", REJECTED: "danger", PAUSED: "danger", DISABLED: "danger", DELETED: "danger" };
@@ -91,8 +91,8 @@ export function Templates({ base, overview, reload }: { base: string; overview: 
             <h2 className="text-base font-semibold">Message templates</h2>
             <p className="mt-1 text-sm text-muted">
               {cloud
-                ? "Each template is also submitted to Meta for review. A message that starts a conversation can only use a template Meta approved."
-                : "Once WhatsApp is connected, each template is submitted to Meta for review: a message that starts a conversation can only use one Meta approved. Make marketing messages say how to stop them."}
+                ? "On Meta's Cloud API, each template is also submitted to Meta for review. A message that starts a conversation can only use a template Meta approved."
+                : "On a linked phone, templates are your store's own wording: nobody reviews them. Keep them clear, and make marketing messages say how to stop them."}
             </p>
           </div>
           {manage && !!list.data?.templates.length && (
@@ -263,7 +263,7 @@ function TemplateEditor({ base, draft, samples, cloud, onClose, onSaved }: { bas
     });
 
   return (
-    <Drawer title={d.id ? "Edit template" : "New template"} sub={cloud ? "Meta reviews it before it can start a conversation" : "Submitted to Meta for review once WhatsApp is connected"} onClose={onClose}>
+    <Drawer title={d.id ? "Edit template" : "New template"} sub={cloud ? "Meta reviews it before it can start a conversation" : "Sent from your linked phone as written"} onClose={onClose}>
       <form
         noValidate
         className="space-y-4"
