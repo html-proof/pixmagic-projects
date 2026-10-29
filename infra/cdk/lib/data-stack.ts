@@ -44,6 +44,8 @@ export class DataStack extends Stack {
   readonly dbSg: ec2.SecurityGroup;
   readonly db: rds.DatabaseInstance;
   readonly dbSecret: secretsmanager.ISecret;
+  /** The system role's login (SYSTEM_DB_USER, SYSTEM_DB_PASSWORD): the cron's migrate action makes the role from it. */
+  readonly systemDbSecret: secretsmanager.Secret;
   readonly appSecret: secretsmanager.Secret;
   /** WhatsApp's Evolution API service: its global key (EVOLUTION_API_KEY), shared by the functions and its container. */
   readonly evolutionSecret: secretsmanager.Secret;
@@ -168,6 +170,17 @@ export class DataStack extends Stack {
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
     this.dbSecret = this.db.secret!;
+    // The system paths' own database login, app_system (docs/system-database-role.md): not the
+    // tables' owner, so row-level security applies to it. Generated here once and never seen by
+    // anyone; the migrate action sets the role's password from it. Letters and digits only: it goes
+    // into a URL as it is. Never edit generateSecretString (CloudFormation would generate a new value).
+    this.systemDbSecret = new secretsmanager.Secret(this, "SystemDbSecret", {
+      // The functions read it by this name (app-stack.ts SYSTEM_DB_SECRET_ARN): keep them the same.
+      secretName: `insights/${cfg.name}/db-system`,
+      description: "Insights database: the system paths' login role app_system (SYSTEM_DB_USER, SYSTEM_DB_PASSWORD)",
+      generateSecretString: { secretStringTemplate: JSON.stringify({ SYSTEM_DB_USER: "app_system" }), generateStringKey: "SYSTEM_DB_PASSWORD", passwordLength: 40, excludePunctuation: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
 
     // The app's own secrets. Created with ORIGIN_VERIFY only (CloudFront needs it at deploy time);
     // infra/cdk/scripts/put-secrets.mjs fills in the rest without printing any value. Never edit
@@ -251,6 +264,7 @@ export class DataStack extends Stack {
     });
     this.artifacts.grantRead(adminRole);
     this.dbSecret.grantRead(adminRole);
+    this.systemDbSecret.grantRead(adminRole);
     this.appSecret.grantRead(adminRole);
     this.adminHost = new ec2.Instance(this, "AdminHost", {
       instanceName: `${prefix}-admin`,

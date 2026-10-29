@@ -382,6 +382,19 @@ describe("the app stack", () => {
     }
   });
 
+  it("generates the system role's login (docs/system-database-role.md), for the cron's migrate action only", () => {
+    t.data.hasResourceProperties("AWS::SecretsManager::Secret", {
+      Name: "insights/production/db-system",
+      GenerateSecretString: { SecretStringTemplate: JSON.stringify({ SYSTEM_DB_USER: "app_system" }), GenerateStringKey: "SYSTEM_DB_PASSWORD", ExcludePunctuation: true },
+    });
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      expect(vars.SYSTEM_DB_SECRET_ARN).toBe(String(f.Properties.FunctionName).endsWith("-cron") ? "insights/production/db-system" : undefined);
+      expect(vars.SYSTEM_DB_PASSWORD).toBeUndefined();
+    }
+  });
+
   it("puts CloudFront (WAF, HTTPS only) in front of the function URL, with the origin secret", () => {
     t.app.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({

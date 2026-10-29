@@ -204,6 +204,7 @@ describe("secrets at cold start", () => {
       app: { SESSION_SECRET: "s", APP_RLS_PASSWORD: "p@ss/w:rd" },
       cognito: { COGNITO_CLIENT_SECRET: "c" },
       db: { username: "app", password: "m a&s" },
+      system: { SYSTEM_DB_USER: "app_system", SYSTEM_DB_PASSWORD: "sys" },
     };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
       const { SecretId } = JSON.parse(await new Request(input, init).text());
@@ -216,6 +217,7 @@ describe("secrets at cold start", () => {
       APP_SECRET_ARN: "app",
       COGNITO_WORKER_SECRET_ARN: "cognito",
       DB_SECRET_ARN: "db",
+      SYSTEM_DB_SECRET_ARN: "system",
       DB_HOST: "db.example",
       DB_NAME: "app",
       SESSION_SECRET: "already-set",
@@ -223,6 +225,8 @@ describe("secrets at cold start", () => {
     await loadSecrets(env, fetchImpl);
     expect(env.SESSION_SECRET).toBe("already-set");
     expect(env.COGNITO_CLIENT_SECRET).toBe("c");
+    // The system role's login, for the migrate action to make the role from.
+    expect(env.SYSTEM_DB_PASSWORD).toBe("sys");
     expect(env.DATABASE_URL).toBe("postgresql://app:m%20a%26s@db.example:5432/app?sslmode=verify-full");
     expect(env.APP_DATABASE_URL).toBe("postgresql://app_rls:p%40ss%2Fw%3Ard@db.example:5432/app?sslmode=verify-full");
   });
