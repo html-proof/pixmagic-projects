@@ -957,15 +957,16 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
 | GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
+| CloudWatch: 33 alarms (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
 | WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, on demand, 17.29; Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 |
-| **Total** | **~106.5** (~117 with GST) |
+| **Total** | **~107.3** (~118 with GST) |
 
-The figures in this paragraph leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
+The figures in this paragraph were worked out with CloudWatch at ~1.5, before the recount and the
+three alarms of 2026-10-29: add 0.80 (0.88 with GST) to each. They leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
 (on Fargate Spot, `whatsapp.spot` in config.ts, its task would be about 5). With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
 brings it to ~72.8 (~80 with GST): that was the only combination under the US$80 budget before the
 audit stack. The owner chose to keep Advanced RDS (2026-10-18). The admin host adds
@@ -1145,6 +1146,28 @@ What production does have, at no extra cost:
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
   and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
+- Alarms on what the logs say (log metric filters in `infra/cdk/lib/app-stack.ts`): bursts of error
+  lines per function, texts on hold, automated messages refused, WhatsApp's service not answering;
+  and, each counted over an hour (what to do: [RUNBOOK.md](RUNBOOK.md)):
+  - `sync-jobs-failed-for-good`: 10 or more sync-queue jobs ran out of attempts in an hour (the
+    jobs function's `"sync job failed"` line with `"final":true` and `"attempts"` 6 or more, core's
+    `MAX_ATTEMPTS`). A failure no retry helps is final on its first attempt and isn't counted: a
+    paused or closed shop, refused access and the like come back with every daily reconcile, which
+    starts all stores in the same tick, so a few such stores would set it off every day. Each
+    failure already reaches its merchant (an alert, or the ad account's card); one store's jobs make
+    a handful at most, so ten is more than one store's.
+  - `ad-connections-need-merchants`: 10 or more ad connections turned to Reconnect or permission in
+    an hour (`"ad connection needs the merchant"`, logged once per connection when it turns, from
+    any of the three functions). One merchant's sign-in ending turns the accounts connected with it,
+    one to a few per store, and each sign-in ends at a time of its own; ten in an hour is a break at
+    the platform or in bizinsights' app. A store that connected ten or more ad accounts with one
+    sign-in can set it off alone: the lines' `storeId` tells.
+  - `ad-figures-differ`: the cron's daily check of stored ad figures against the platform found one
+    outside its tolerance (`"ad figures differ from the platform"`; [ads-setup.md](ads-setup.md),
+    "Checked against the platform"). It clears the hour after and fires again with the next day's
+    check while the difference stays.
+  - Cost: US$0.10 a month each (the cost table); the three metrics they count are within CloudWatch's
+    ten free custom metrics.
 
 ## Security checks (Trusted Advisor)
 

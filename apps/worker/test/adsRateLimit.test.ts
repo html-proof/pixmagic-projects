@@ -10,14 +10,14 @@ import { consume, type QueueMessage } from "../src/index.js";
  * queue does with the error it throws.
  */
 
-const state = vi.hoisted(() => ({ err: null as unknown }));
+const state = vi.hoisted(() => ({ err: null as unknown, busy: false }));
 vi.mock("@app/core", async (importOriginal) => {
   const core = await importOriginal<typeof import("@app/core")>();
   return {
     ...core,
     syncAdConnection: vi.fn(async () => {
       if (state.err) throw state.err;
-      return { skipped: true, reason: "nothing" };
+      return { skipped: true, reason: state.busy ? "busy" : "nothing" };
     }),
   };
 });
@@ -35,9 +35,10 @@ afterAll(async () => disconnectDb());
 beforeEach(() => {
   queues.clear();
   state.err = null;
+  state.busy = false;
 });
 
-function message(body: AdsSyncData & { rateDeferral?: { count: number; since: number } }, attempts = 1) {
+function message(body: AdsSyncData & { rateDeferral?: { count: number; since: number }; busyDeferral?: { count: number; since: number } }, attempts = 1) {
   const m = { acked: false, retried: null as null | { delaySeconds?: number } };
   const msg: QueueMessage = { id: "m1", body, attempts, ack: () => (m.acked = true), retry: (o) => (m.retried = o ?? {}) };
   return { msg, m };
@@ -67,6 +68,33 @@ describe("an ad platform asking to wait", () => {
     const late = message({ ...job, rateDeferral: { count: 12, since: Date.now() - 7 * 3600_000 } });
     await consume("sync", late.msg, deps);
     expect(queues.sent.sync).toHaveLength(1);
+    expect(late.m.acked).toBe(false);
+    expect(late.m.retried).not.toBeNull();
+  });
+});
+
+describe("another sync of the same ad account running", () => {
+  it("is waited for a little longer each time, as a new message, spending no retry; a wait for the platform goes on with it", async () => {
+    state.busy = true;
+    const { msg, m } = message(job, 4);
+    await consume("sync", msg, deps);
+    expect(m).toEqual({ acked: true, retried: null });
+    expect(queues.sent.sync).toEqual([{ ...job, busyDeferral: { count: 1, since: expect.any(Number) } }]);
+    expect(queues.sentOpts.sync[0]!.delaySeconds).toBeLessThan(30);
+    // Later re-sends wait longer, up to five minutes, and keep the platform's count as it was.
+    const since = Date.now() - 600_000;
+    const rate = { count: 2, since: Date.now() - 900_000 };
+    await consume("sync", message({ ...job, rateDeferral: rate, busyDeferral: { count: 6, since } }).msg, deps);
+    expect(queues.sent.sync[1]).toEqual({ ...job, rateDeferral: rate, busyDeferral: { count: 7, since } });
+    expect(queues.sentOpts.sync[1]!.delaySeconds).toBeGreaterThanOrEqual(300);
+    expect(queues.sentOpts.sync[1]!.delaySeconds).toBeLessThan(315);
+  });
+
+  it("after two hours lets the ordinary retries take over", async () => {
+    state.busy = true;
+    const late = message({ ...job, busyDeferral: { count: 30, since: Date.now() - 2 * 3600_000 - 1 } });
+    await consume("sync", late.msg, deps);
+    expect(queues.sent.sync).toEqual([]);
     expect(late.m.acked).toBe(false);
     expect(late.m.retried).not.toBeNull();
   });

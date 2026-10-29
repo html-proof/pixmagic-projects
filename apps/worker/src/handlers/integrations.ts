@@ -3,16 +3,19 @@ import { systemDb } from "@app/db";
 import {
   logger,
   ADS_RECENT_DAYS,
+  AdSyncBusyError,
   checkAdLogins,
   classifyAdError,
   enqueueAdHistory,
   enqueueAdSync,
   googleAdsBudget,
   googleAdsBudgetAllows,
+  metaAdsPaused,
   nextHistoryWindow,
   recheckDays,
   sweepAdAlerts,
   syncAdConnection,
+  type AdSyncResult,
   type AdsSyncData,
   dispatchCampaign,
   processWebhookEvent,
@@ -61,11 +64,13 @@ export async function runSmsEvent(body: unknown, deps: WorkerDeps) {
  * Fetch one ad account's days. Access that has ended or was lost, an account the platform closed,
  * or a request it refuses won't get better by retrying: the connection is marked already (Settings and
  * the alerts word it), and the job stops. Outages throw on, so the queue retries with backoff; a
- * platform that asked to wait (AdsRateLimitedError) is waited for without spending a retry (consume).
+ * platform that asked to wait (AdsRateLimitedError), or another sync of the account still running
+ * (AdSyncBusyError), is waited for without spending a retry (consume).
  */
 export async function runAdsSync(data: AdsSyncData, deps: WorkerDeps) {
+  let res: AdSyncResult;
   try {
-    const res = await syncAdConnection(data.connectionId, data.since, data.until, deps.fetchImpl, {
+    res = await syncAdConnection(data.connectionId, data.since, data.until, deps.fetchImpl, {
       // Messages queued before triggers were kept were all asked for by someone or by the schedule; as requests they're never held back.
       trigger: data.trigger ?? "request",
       health: data.health,
@@ -73,14 +78,15 @@ export async function runAdsSync(data: AdsSyncData, deps: WorkerDeps) {
       queues: deps.queues,
       coord: deps.coord,
     });
-    if (res.skipped) logger.info({ connectionId: data.connectionId, reason: res.reason, trigger: data.trigger ?? "request" }, "ad account sync skipped");
-    else logger.info({ connectionId: data.connectionId, since: res.since, until: res.until, rows: res.stored, trigger: data.trigger ?? "request", continued: res.continued }, "ad account synced");
-    // Zapier's thresholds and daily summary for the store, on the figures just stored (docs/zapier.md). Never throws.
-    if (!res.skipped) await zapierAfterAdSync(data.connectionId, deps);
   } catch (err) {
     if (!classifyAdError(err).retryable) throw new UnrecoverableError("ad sync stopped: the connection is marked", { cause: err });
     throw err;
   }
+  if (res.skipped && res.reason === "busy") throw new AdSyncBusyError(data.connectionId);
+  if (res.skipped) logger.info({ connectionId: data.connectionId, reason: res.reason, trigger: data.trigger ?? "request" }, "ad account sync skipped");
+  else logger.info({ connectionId: data.connectionId, since: res.since, until: res.until, rows: res.stored, trigger: data.trigger ?? "request", continued: res.continued }, "ad account synced");
+  // Zapier's thresholds and daily summary for the store, on the figures just stored (docs/zapier.md). Never throws.
+  if (!res.skipped) await zapierAfterAdSync(data.connectionId, deps);
 }
 
 const MINUTE = 60_000;
@@ -121,7 +127,9 @@ function recentLeaseMs(c: { provider: string; consecutiveFailures: number }): nu
  * reconnect are left alone. History short of 25 months is walked back a window at a time.
  *
  * Google Ads syncs stop at 80% of the day's allowance (60% for history), so connecting accounts and
- * reports keep the rest, and pause altogether when Google says it is used up.
+ * reports keep the rest, and pause altogether when Google says it is used up. Meta Ads syncs aren't
+ * queued while Meta says bizinsights' app is over its hourly limit (the Meta pause in core's budget.ts):
+ * their leases stay free, so the first tick after the pause queues them.
  */
 export async function scheduleAdsSync(deps: WorkerDeps) {
   const now = Date.now();
@@ -141,12 +149,15 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
   // Google's daily allowance concerns real accounts only: a demo's figures are generated, not fetched.
   const google = conns.some((c) => c.provider === "google" && !c.isDemo) ? await googleAdsBudget(deps.coord) : null;
   if (google) logger.info({ googleAdsOperations: google.used, allowance: google.limit, paused: google.paused }, "google ads operations in the last 24 hours");
+  const metaPaused = conns.some((c) => c.provider === "meta") && (await metaAdsPaused(deps.coord));
+  if (metaPaused) logger.info({ metaAdsPaused: true }, "meta ads paused (bizinsights' app is over Meta's limit): no meta sync queued this tick");
   const spread = () => ({ delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
   let sent = 0;
   let historyStarts = 0;
   for (const c of conns) {
     if (!c.lastSyncedAt && c.createdAt.getTime() > now - ADS_NEW_GRACE_MS) continue;
     if (c.provider === "google" && !c.isDemo && google && !googleAdsBudgetAllows(google, "schedule")) continue;
+    if (c.provider === "meta" && metaPaused) continue;
     const wide = `ads-recheck:${c.id}`;
     // Nothing new to read: once a day, ask the platform whether the account is back.
     if (c.status === "permission" || c.status === "unavailable" || c.accountStatus === "closed") {

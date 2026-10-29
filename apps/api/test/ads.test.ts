@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withDb } from "@app/db";
-import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
+import { adAccessToken, metaAdsPaused, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
 import { addDays, adErrorMessage, LEGACY_GRANTS, localDay, META_OBJECT_FIELDS } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -788,6 +788,29 @@ describe("the Meta Ads report", () => {
     expect(calls).toEqual([]);
   });
 
+  it("Meta's limit on bizinsights' app: the report is Meta being busy, and while Meta Ads is paused for it Meta isn't asked", async () => {
+    const conn = await connectedMeta();
+    const calls: string[] = [];
+    ctx.setFetch(async (input) => {
+      if (new URL(String(input)).pathname.endsWith("/act_1/insights")) {
+        calls.push("insights");
+        return json({ error: { message: "(#4) Application request limit reached", code: 4 } }, 400);
+      }
+      return metaPlatform(input);
+    });
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("meta_busy");
+    expect(await metaAdsPaused(ctx.deps.coord)).toBe(true);
+    // Other dates, while paused: the same answer, without a call to Meta; the account stays as it was.
+    const asked = calls.length;
+    const held = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { from: "2026-08-01", to: "2026-08-30" }), headers });
+    expect(held.statusCode).toBe(503);
+    expect(held.json().error).toBe("meta_busy");
+    expect(calls).toHaveLength(asked);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+
   it("refuses dates that aren't a real range of up to a year, and levels it doesn't know", async () => {
     const conn = await connectedMeta();
     ctx.setFetch(reportPlatform([]));
@@ -1210,8 +1233,9 @@ describe("the AdSense report", () => {
     // Other sites chosen: another report, asked of AdSense again.
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { sites: ["shop.example.com", "blog.example.com"] } });
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers })).json()).toMatchObject({ cached: false, report: { sites: ["shop.example.com", "blog.example.com"] } });
-    // Country and device type are levels too; anything else isn't.
-    for (const level of ["country", "platform"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    // Country, device type and ad unit are levels too; anything else isn't.
+    for (const level of ["country", "platform", "ad_unit"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    expect(seen.at(-1)!.searchParams.getAll("dimensions")).toEqual(["AD_UNIT_ID", "AD_UNIT_NAME"]);
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).statusCode).toBe(400);
   });
 

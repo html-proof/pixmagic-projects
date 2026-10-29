@@ -31,6 +31,9 @@ import {
   previousRange,
   siteTotals,
   adErrorMessage,
+  ADSENSE_FINALIZED_BY_DAY,
+  adsenseFinalThrough,
+  adsenseReportRows,
   adsenseReportTotals,
   adStatusCode,
   adsVsSales,
@@ -440,12 +443,85 @@ describe("a connection's wording", () => {
 
 describe("the AdSense report's totals", () => {
   const headers = [{ name: "DOMAIN_CODE" }, { name: "ESTIMATED_EARNINGS" }, { name: "PAGE_VIEWS" }, { name: "IMPRESSIONS" }, { name: "CLICKS" }];
-  const rows = [{ earnings: 1, pageViews: 100, impressions: 200, clicks: 2, pageRpm: 10, perClick: 0.5, ctr: 0.01 }];
+  const rows = [{ earnings: 1, pageViews: 100, impressions: 200, clicks: 2, pageRpm: 10, perClick: 0.5, ctr: 0.01, adRequests: null, coverage: null, viewability: null }];
 
   it("are AdSense's totals row when it sent one, read by column name, else the rows added up", () => {
-    expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({ earnings: 12.5, pageViews: 5000, impressions: 8000, clicks: 25, pageRpm: 2.5, perClick: 0.5, ctr: 25 / 8000 });
+    expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({
+      earnings: 12.5,
+      pageViews: 5000,
+      impressions: 8000,
+      clicks: 25,
+      pageRpm: 2.5,
+      perClick: 0.5,
+      ctr: 25 / 8000,
+      // Not asked of AdSense (an answer without the columns): unknown, never 0.
+      adRequests: null,
+      coverage: null,
+      viewability: null,
+    });
     expect(adsenseReportTotals({ headers }, rows)).toMatchObject({ earnings: 1, pageViews: 100, impressions: 200, clicks: 2 });
-    expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null });
+    expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null, adRequests: null, coverage: null, viewability: null });
+  });
+
+  it("take ad requests, coverage and viewability as AdSense's totals row gives them, or add up what can be", () => {
+    const all = [...headers, { name: "AD_REQUESTS" }, { name: "AD_REQUESTS_COVERAGE" }, { name: "ACTIVE_VIEW_VIEWABILITY" }];
+    const totals = { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }, { value: "10000" }, { value: "0.8" }, { value: "0.62" }] };
+    expect(adsenseReportTotals({ headers: all, totals }, [])).toMatchObject({ adRequests: 10000, coverage: 0.8, viewability: 0.62 });
+    // Without one: requests add, coverage is worked back through them (600 + 100 of 1,000), viewability can't be.
+    const a = { ...rows[0]!, adRequests: 800, coverage: 0.75, viewability: 0.5 };
+    const b = { ...rows[0]!, adRequests: 200, coverage: 0.5, viewability: 0.9 };
+    expect(adsenseReportTotals({ headers: all }, [a, b])).toMatchObject({ adRequests: 1000, coverage: 0.7, viewability: null });
+    // One row's are its own; one row without requests leaves the sum unknown.
+    expect(adsenseReportTotals({ headers: all }, [a])).toMatchObject({ adRequests: 800, coverage: 0.75, viewability: 0.5 });
+    expect(adsenseReportTotals({ headers: all }, [a, { ...b, adRequests: null }])).toMatchObject({ adRequests: null, coverage: null });
+  });
+});
+
+describe("the AdSense report by ad unit", () => {
+  const headers = [
+    { name: "AD_UNIT_ID", type: "DIMENSION" },
+    { name: "AD_UNIT_NAME", type: "DIMENSION" },
+    { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" },
+    { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
+    { name: "IMPRESSIONS", type: "METRIC_TALLY" },
+    { name: "CLICKS", type: "METRIC_TALLY" },
+    { name: "AD_REQUESTS", type: "METRIC_TALLY" },
+    { name: "AD_REQUESTS_COVERAGE", type: "METRIC_RATIO" },
+    { name: "ACTIVE_VIEW_VIEWABILITY", type: "METRIC_RATIO" },
+  ];
+  const cells = (...v: string[]) => ({ cells: v.map((value) => ({ value })) });
+
+  it("names each ad unit as AdSense does, with its requests, coverage and viewability; a ratio AdSense left empty is unknown", () => {
+    const { rows, currency } = adsenseReportRows("ad_unit", {
+      headers,
+      rows: [cells("ca-pub-1:111", "Sidebar", "1.50", "300", "280", "2", "320", "0.875", "0.6"), cells("ca-pub-1:222", "Footer", "4.20", "900", "850", "5", "1000", "0.85", "")],
+    });
+    expect(currency).toBe("AUD");
+    expect(rows).toEqual([
+      { id: "ca-pub-1:222", name: "Footer", earnings: 4.2, pageViews: 900, impressions: 850, clicks: 5, pageRpm: 4.67, perClick: 0.84, ctr: 5 / 850, adRequests: 1000, coverage: 0.85, viewability: null },
+      { id: "ca-pub-1:111", name: "Sidebar", earnings: 1.5, pageViews: 300, impressions: 280, clicks: 2, pageRpm: 5, perClick: 0.75, ctr: 2 / 280, adRequests: 320, coverage: 0.875, viewability: 0.6 },
+    ]);
+    // An ad unit AdSense gives no name for goes by its id.
+    expect(adsenseReportRows("ad_unit", { headers, rows: [cells("ca-pub-1:333", "", "1", "1", "1", "0", "1", "1", "1")] }).rows[0]).toMatchObject({ id: "ca-pub-1:333", name: "ca-pub-1:333" });
+  });
+});
+
+describe("whether AdSense's figures are final", () => {
+  it("are final for every month that ended before the month before the read, and for that month too once it was past the 10th", () => {
+    expect(ADSENSE_FINALIZED_BY_DAY).toBe(10);
+    // Read on 5 Nov: October is still being finalized (and re-read daily); September is final.
+    expect(adsenseFinalThrough("2026-11-05")).toBe("2026-09-30");
+    expect(adsenseFinalThrough("2026-11-10")).toBe("2026-09-30");
+    // On the 11th the re-reads of October's first ten days are done.
+    expect(adsenseFinalThrough("2026-11-11")).toBe("2026-10-31");
+    expect(adsenseFinalThrough("2026-11-30")).toBe("2026-10-31");
+    // Across the year's turn, and February's short month.
+    expect(adsenseFinalThrough("2027-01-03")).toBe("2026-11-30");
+    expect(adsenseFinalThrough("2027-01-20")).toBe("2026-12-31");
+    expect(adsenseFinalThrough("2028-03-11")).toBe("2028-02-29");
+    // Never read: nothing is final.
+    expect(adsenseFinalThrough(null)).toBeNull();
+    expect(adsenseFinalThrough("not a day")).toBeNull();
   });
 });
 

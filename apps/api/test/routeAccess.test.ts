@@ -278,6 +278,13 @@ describe("every route of the API, deny by default", () => {
     expect([...all].filter((k) => /nango/i.test(k))).toEqual([]);
   });
 
+  it("places the integrations status: a store's read for View integration connection status, in no list above (every rule below holds for it), never public", () => {
+    const status = "GET /workspaces/:ws/stores/:storeId/integrations";
+    expect(new Set(ctx.routes.map(key)).has(status)).toBe(true);
+    expect(isWorkspaceRoute(status)).toBe(true);
+    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(status)).toBe(false);
+  });
+
   it("nobody signed in: 401 from every route behind a sign-in", async () => {
     const wrong: string[] = [];
     for (const r of ctx.routes.filter((r) => !PUBLIC.has(key(r)) && !CONFIG_FIRST.has(key(r)))) {

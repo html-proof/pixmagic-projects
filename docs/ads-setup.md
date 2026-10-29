@@ -35,7 +35,7 @@ the owner's steps that are still open are in "Leaving Nango".
    **Synchronizing** meanwhile.
 
 **Google AdSense** runs the other way: it is what the store's *site* earns from Google ads shown on it. Its
-estimated earnings, page views, ads shown and clicks go on a separate **Ad earnings** card and are never added
+estimated earnings, page views, ad impressions and clicks go on a separate **Ad earnings** card and are never added
 to ad spend. On Settings → Advertising the AdSense card lets the merchant pick which **sites** (AdSense domains)
 belong to this store; none picked means every site. Accounts that can't be split by site are read as daily
 totals for the whole account ("All sites").
@@ -111,8 +111,29 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
   month during the first 10 days of a month (when AdSense finalizes earnings). The same daily run reads each account's
   health. Accounts with nothing new to read (closed, or a login that lost them) are only asked once a day whether
   they're back; accounts waiting for a reconnect are left alone.
+- **One sync per account at a time**: a sync holds its connection's lock in the coordinator (`ads-sync:<id>`, 16
+  minutes, a little over the jobs function's 15, so a sync cut off there frees its account soon after). A Refresh,
+  the hourly recent days, the daily re-check, a history window and a long window's rest of the same account would
+  otherwise each call the platform at once. A sync that finds the lock taken calls nothing and is sent again
+  shortly (15 seconds, doubling to 5 minutes; after 2 hours the ordinary retries take over) **without spending a
+  retry**. A Refresh that waits this way keeps its card saying **Synchronizing** until its own days have landed: the
+  sync that was running ends only a wait it saw when it started. The daily look at an account with nothing new to
+  read (closed, or a login that lost it) takes no lock: it is one cheap read, with no days fetched or stored.
 - **Rate limits**: when a platform says "slow down", the job is sent again after the wait it names (or a backoff of 30
-  seconds to an hour) **without spending a retry**.
+  seconds to an hour) **without spending a retry**. Meta's throttling of one account or one person (Graph codes 17,
+  32, 613, and the business use case codes 80000-80099) stays with that account's job.
+- **Meta's limit on bizinsights' app** (Graph code 4, "Application request limit reached"): Meta counts the app's
+  calls across every merchant over a rolling hour, and over the limit refuses every call, whichever account it is
+  for. So the first Meta Ads call told so **pauses Meta Ads** for every account (`meta-ads-paused` in the
+  coordinator) for 15 minutes: Meta names no wait for this limit, and a quarter of the hour lets the oldest calls age
+  out. The failed call's usage headers are its account's, not the app's, so a longer wait there lengthens the pause
+  (never past the hour) and a shorter one leaves it as it is; a later call told the same never shortens a pause.
+  While it lasts the scheduler queues no Meta sync (their leases stay free, so the first tick after it queues them);
+  a Meta sync already queued calls nothing (a Refresh's marks the card `rate_limited`, "Meta asked bizinsights to
+  slow down for a while", without counting a failure against the account, as Google's used-up allowance counts none;
+  Refresh still answers as usual and the card shows why once its job has looked); the sync that met the limit waits
+  until the pause ends, without spending a retry; and the live Meta report answers "Meta is busy right now" without
+  calling Meta. Google Ads and AdSense carry on, and WhatsApp's own Graph calls aren't held back.
 - **Google Ads API operations budget**: the Cloud project may make a fixed number of operations a day across every
   merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance and
   history walks at 60%, leaving the rest to people connecting accounts and opening reports. When Google says the
@@ -120,6 +141,25 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
   `quota_exhausted`. Set `GOOGLE_ADS_DAILY_OPERATIONS` when Google grants a higher access level.
 - **Meta report jobs**: when Meta answers a big account's long range with "reduce the amount of data", the sync runs
   it as an asynchronous Insights report job.
+
+### Checked against the platform
+
+Once a day per account, the cron's reconcile sweep compares what is stored with what the platform reports
+(`packages/core/src/adConnections/verify.ts`): the totals of a settled week (the 7 days ending 8 days before the
+account's today, inside the days stored) against one account-level read of the same days, on the account's own
+calendar and in its currency. **Meta**: spend, impressions, clicks, link clicks, purchases and purchase value (the last
+three only when every stored day has them) from `ad_campaign_daily`, against one insights read of the account with
+each ad set's own attribution, as the sync reads it; by the 8th day back the longest attribution an ad set can have (7
+days after the click) has run out for every day of the week. **AdSense**: earnings, page views, impressions and clicks of every stored site (the store's choice of
+sites is for the dashboard, not for this) against the totals of one report of the week (by site, as the sync reads it; by
+platform for an account AdSense won't split by site). A figure matches within 1%
+of the platform's, or within what rounding can make (half a cent per rounded figure; one for counts); the stored
+rows' currency must be the account's. The result goes to the cron's log only: `ad figures match the platform`, or
+one `ad figures differ from the platform` per figure with both sides, which the alarm `ad-figures-differ` counts
+(RUNBOOK.md). Merchants are never told and nothing on the connection changes. Only accounts whose syncs work are
+checked; a platform that asks to wait skips the account until the next day, and each cron tick starts checks for a
+minute at most, three accounts at a time, each read given 30 seconds (accounts not reached wait for the next tick). **Google Ads isn't checked**: every read spends operations from the one daily
+allowance all merchants share.
 
 ## Alerts
 
@@ -131,6 +171,10 @@ the people who manage integrations, and closes it when the connection works agai
 - `ads_failing`: status `error` for 6 syncs in a row or more than 24 hours (never for codes that are bizinsights' to
   fix: those go to the operator's logs);
 - `ads_expiring`: a Meta sign-in that ends within 7 days.
+
+For the operator, a connection turning to `reconnect` or `permission` also logs `ad connection needs the merchant`
+once, when it turns (provider, code and ids, nothing it holds); ten in an hour across stores raise the alarm
+`ad-connections-need-merchants` (RUNBOOK.md).
 
 ## Disconnecting, and when access is given back
 
@@ -541,9 +585,32 @@ is no access level to request. A Google login with no AdSense account gets "That
 `account_not_ready` ("…AdSense account is closed"). Each case logs "ads: nothing to connect for this login"; the
 answers with a list add `diagnosis: {listed, closed}`.
 
-**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform&from=&to=`): estimated
-earnings, page views, ads shown and clicks by site, country or device type, limited to the store's chosen sites.
-Earnings are estimated until AdSense finalizes them after the month ends.
+**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform|ad_unit&from=&to=`):
+estimated earnings, page views, ad impressions (`IMPRESSIONS`: one for each ad request that got at least one ad, not
+each ad shown, which is `INDIVIDUAL_AD_IMPRESSIONS` and isn't read) and clicks, plus `AD_REQUESTS`,
+`AD_REQUESTS_COVERAGE` and `ACTIVE_VIEW_VIEWABILITY` (`ADSENSE_REPORT_METRICS` in `packages/shared/src/ads.ts`), by site,
+country, device type or ad unit (`AD_UNIT_ID` with `AD_UNIT_NAME`), limited to the store's chosen sites (an ad unit's
+row is its earnings on those sites). Asked of AdSense when the page opens and cached in the coordinator for 10 minutes
+(ranges including today) or an hour (`ads-sreport:<connection>:…`; DynamoDB deletes an expired item lazily, within a
+few days, and reads refuse it once expired; disconnecting doesn't delete these keys); the three extra metrics and the
+ad units are never stored with the days (`adsense_daily` keeps site, day, earnings, page views, impressions and clicks
+only). Google's reference doesn't say which dimensions the three extra metrics combine with, so when AdSense answers a
+level with them with a 400, `adsenseReport` asks again without them (`ADSENSE_REPORT_DAY_METRICS`) and they show as
+"—". Several rows of one id added up: ad requests add, coverage is worked back through the requests, viewability stays
+unknown (the impressions Active View measured aren't read).
+
+**Estimated or final**: AdSense finalizes a month's earnings in the first days of the next, and the daily re-check
+reads the whole month before again during days 1-10. `adsenseFigures` (`packages/core/src/reports/ads.ts`) gives
+each account `finalThrough` from its last sync that worked (`adsenseFinalThrough` in `@app/shared/ads`): every month
+that ended before the month before that sync's day, and that month too once the sync was after the 10th (the
+account's own days). The module's `finalThrough` is the earliest of the counted accounts', and `final` says whether
+every day of the figures given is on or before it; the pages say **Final** or **Estimated** from it. An account whose
+syncs stopped stays final only as far as it was when it last synced. A closed account is never read again, but its
+days after the ones it stored are zeros (`accountCoverage`): it is final through its today once every stored day was
+final by its last sync, and for figures that start after its stored days it never holds the others back. The live
+report is final when its last day is on
+or before `adsenseFinalThrough` of the day it was read. No payment is read: Final means AdSense's finalized earnings,
+not money paid.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 
