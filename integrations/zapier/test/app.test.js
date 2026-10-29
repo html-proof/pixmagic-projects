@@ -29,10 +29,34 @@ afterAll(() => nock.enableNetConnect());
 describe("the app definition", () => {
   it("is valid for Zapier's schema, with every trigger and search Zapier will list", () => {
     expect(validateApp(compileApp(App))).toEqual([]);
-    expect(Object.keys(App.triggers)).toEqual(["alert_raised", "ad_spend_threshold", "adsense_earnings_threshold", "ads_daily_summary", "whatsapp_message_failed"]);
+    expect(Object.keys(App.triggers)).toEqual([
+      "alert_raised",
+      "ad_spend_threshold",
+      "adsense_earnings_threshold",
+      "ads_daily_summary",
+      "whatsapp_message_failed",
+      "integration_connected",
+      "integration_disconnected",
+      "sync_completed",
+      "order_paid",
+    ]);
     expect(Object.keys(App.searches)).toEqual(["find_ad_performance", "find_adsense_earnings"]);
     expect(App.creates).toEqual({});
     for (const t of Object.values(App.triggers)) expect(t.operation.type).toBe("hook");
+  });
+
+  it("says which payload version every trigger's events and samples are", () => {
+    for (const t of Object.values(App.triggers)) {
+      expect(t.operation.sample.schema_version).toBe(1);
+      expect(t.operation.outputFields.map((f) => f.key)).toContain("schema_version");
+      // The sample is the trigger's own event.
+      expect(t.operation.sample.event).toBe(t.key);
+    }
+  });
+
+  it("never puts a customer's details in a paid order's sample", () => {
+    const sample = JSON.stringify(App.triggers.order_paid.operation.sample);
+    expect(sample).not.toMatch(/email|phone|address|customer|first_name|last_name|discount_code/i);
   });
 });
 
@@ -96,6 +120,30 @@ describe("the triggers (REST hooks)", () => {
     expect(sub).toEqual({ id: "hook_1", event: "ad_spend_threshold" });
     nock(BASE).delete("/api/zapier/hooks/hook_1").reply(200, { ok: true });
     expect(await appTester(App.triggers.ad_spend_threshold.operation.performUnsubscribe, { authData, subscribeData: sub })).toEqual({ ok: true });
+  });
+
+  it("subscribes AdSense's threshold with which way it is crossed: reached, or a finished period ended below it", async () => {
+    nock(BASE)
+      .post("/api/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "day", amount: 20, direction: "below" })
+      .reply(201, { id: "hook_2", event: "adsense_earnings_threshold" });
+    await appTester(App.triggers.adsense_earnings_threshold.operation.performSubscribe, { authData, targetUrl: HOOK, inputData: { period: "day", amount: "20", direction: "below" } });
+    // Anything but "below" is "above", the default.
+    nock(BASE)
+      .post("/api/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "month", amount: 300, direction: "above" })
+      .reply(201, { id: "hook_3", event: "adsense_earnings_threshold" });
+    await appTester(App.triggers.adsense_earnings_threshold.operation.performSubscribe, { authData, targetUrl: HOOK, inputData: { period: "month", amount: "300" } });
+    const direction = App.triggers.adsense_earnings_threshold.operation.inputFields.find((f) => f.key === "direction");
+    expect(direction).toMatchObject({ required: true, default: "above" });
+    expect(Object.keys(direction.choices)).toEqual(["above", "below"]);
+  });
+
+  it("subscribes the new triggers with their own event", async () => {
+    for (const key of ["integration_connected", "integration_disconnected", "sync_completed", "order_paid"]) {
+      nock(BASE).post("/api/zapier/hooks", { event: key, targetUrl: HOOK }).reply(201, { id: `hook_${key}`, event: key });
+      expect(await appTester(App.triggers[key].operation.performSubscribe, { authData, targetUrl: HOOK, inputData: {} })).toEqual({ id: `hook_${key}`, event: key });
+      nock(BASE).get(`/api/zapier/samples/${key}`).reply(200, []);
+      expect(await appTester(App.triggers[key].operation.performList, { authData })).toEqual([]);
+    }
   });
 
   it("passes on the event bizinsights posted, as it came", async () => {

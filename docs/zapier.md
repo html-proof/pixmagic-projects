@@ -27,9 +27,12 @@ advertising in a Google Sheet.
 | --- | --- | --- |
 | Trigger | `alert_raised` | Every bizinsights alert for the store, worded as the bell words it (`describeAlert`): a Shopify sync or webhook problem, an ad account that needs reconnecting, WhatsApp disconnected, an email account to reconnect... |
 | Trigger | `ad_spend_threshold` | Once per day or month (the trigger's choice) when the store's stored Meta, Google or combined ad spend reaches an amount |
-| Trigger | `adsense_earnings_threshold` | The same on AdSense's estimated earnings |
+| Trigger | `adsense_earnings_threshold` | The same on AdSense's estimated earnings; or, with "When" set to below, once a finished day or month ended under the amount |
 | Trigger | `ads_daily_summary` | Once a day: yesterday's spend, impressions, clicks, conversions and platform-attributed purchase value / ROAS per platform, AdSense's estimates, and Shopify's own sales for the day |
 | Trigger | `whatsapp_message_failed` | A WhatsApp message to a customer failed (number masked) |
+| Trigger | `integration_connected` / `integration_disconnected` | Meta Ads, Google Ads, AdSense, WhatsApp or Zapier connected to, or disconnected from, the store |
+| Trigger | `sync_completed` | An ad account's figures were read (at most once an hour per account), with the last day stored |
+| Trigger | `order_paid` | A Shopify order was paid: number, amounts, items; never who bought it |
 | Search | `find_ad_performance` | Meta / Google Ads totals for dates, from stored data, with the last sync's time |
 | Search | `find_adsense_earnings` | AdSense estimated earnings for dates |
 
@@ -49,7 +52,9 @@ trigger also stays within what the member who connected it may see (below).
  hooks.zapier.com/hooks/... ◄── POST event ── worker (sync queue, kind "zapier") ◄── zapier_deliveries ◄── zapier_events (outbox)
                                                                                                           ▲
    raiseAlert (core notify.ts) ── alert_raised ──────────────────────────────────────────────────────────┤
-   runAdsSync (worker) ── zapierAfterAdSync ── thresholds, daily summary ─────────────────────────────────┤
+   audit (core notify.ts) ── integration_connected / integration_disconnected ────────────────────────────┤
+   runAdsSync (worker) ── zapierAfterAdSync ── thresholds, daily summary, sync_completed ─────────────────┤
+   orders/paid webhook (worker handlers/webhooks.ts) ── order_paid ──────────────────────────────────────┤
    applyMessageStatus (core whatsapp/messages.ts) ── whatsapp_message_failed ─────────────────────────────┘
    cron */15 (last in the tick) ── sweepZapier: unqueued and due deliveries, stuck ones, summaries, retention
 ```
@@ -115,29 +120,39 @@ minutes. Exempt from the app-wide per-IP limit (Zapier calls for every merchant 
 | Route | What |
 | --- | --- |
 | `GET /zapier/me` | The connection test and its label: workspace, store (name, domain, currency, time zone), who connected it |
-| `POST /zapier/hooks` | Subscribe: `{ event, targetUrl, zapId?, platform?, period?, amount? }` → `{ id, event }`. `targetUrl` must be `https://hooks.zapier.com/hooks/…` (no other host, port, credentials or IP). At most 50 per connection. A trigger the member may not have: 403 `no_permission` |
+| `POST /zapier/hooks` | Subscribe: `{ event, targetUrl, zapId?, platform?, period?, amount?, direction? }` → `{ id, event }` (`direction`: AdSense's threshold only, `above` by default or `below`). `targetUrl` must be `https://hooks.zapier.com/hooks/…` (no other host, port, credentials or IP). At most 50 per connection. A trigger the member may not have: 403 `no_permission` |
 | `DELETE /zapier/hooks/:id` | Unsubscribe (this connection's triggers only; another's is a 404) |
-| `GET /zapier/samples/:event` | The store's last 3 real events of the kind as this member would receive them; with none sent yet, its latest alerts, failed WhatsApp messages or yesterday's stored advertising; thresholds: `[]` until one fires. Never made-up data |
+| `GET /zapier/samples/:event` | The store's last 3 real events of the kind as this member would receive them; with none sent yet, its latest alerts, failed WhatsApp messages, yesterday's stored advertising, integrations connected or disconnected (its audit log), ad accounts' last syncs or paid orders; thresholds: `[]` until one fires. Never made-up data |
 | `GET /zapier/search/ad-performance?platform&since&until` | Totals from stored data; `[]` without an ad account. Dates `YYYY-MM-DD`, default the 7 days to yesterday, at most 400 days |
 | `GET /zapier/search/adsense-earnings?since&until` | The same for AdSense |
 
 ## Events and payloads
 
 Every event is posted as one envelope; `id` is the happening's own key (the same for every Zap and
-every retry, which Zapier uses to tell items apart):
+every retry, which Zapier uses to tell items apart). `schema_version` is the envelope's shape
+(`ZAPIER_SCHEMA_VERSION`, now 1): raised only for a change that would break a Zap already mapping
+fields (a field renamed, removed or changing type), never for a field added. Events written before it
+existed go out as 1 too.
 
 ```json
-{ "id": "alert_raised:<alertId>:<storeId>", "event": "alert_raised", "occurred_at": "2026-10-28T09:00:00.000Z",
+{ "id": "alert_raised:<alertId>:<storeId>", "event": "alert_raised", "schema_version": 1, "occurred_at": "2026-10-28T09:00:00.000Z",
   "store": { "id": "…", "name": "Acme", "shop_domain": "acme.myshopify.com" }, "data": { … } }
 ```
+
+No event carries a customer's name, email, address, phone number (WhatsApp's is masked), customer id
+or discount code.
 
 | Event | `data` | Written by | Once per |
 | --- | --- | --- | --- |
 | `alert_raised` | `alert_id, severity, area, title, body, fix_url, raised_at`: `describeAlert`'s wording, never the internal message | `raiseAlert` (an alert about no store goes to every store's triggers in the workspace) | alert and store |
-| `ad_spend_threshold` | `trigger {platform, period, amount}, period, period_start, period_end, period_complete, spend, currency, accounts[], last_successful_sync_at, freshness_note` | `zapierAfterAdSync` (worker, after a successful ad sync), for that trigger only | trigger and period |
-| `adsense_earnings_threshold` | the same with `earnings_estimated` and `estimates_note` (Google's estimates, adjusted after the month) | the same | trigger and period |
+| `ad_spend_threshold` | `trigger {platform, period, amount, direction}, period, period_start, period_end, period_complete, spend, currency, accounts[], last_successful_sync_at, freshness_note` | `zapierAfterAdSync` (worker, after a successful ad sync), for that trigger only | trigger and period |
+| `adsense_earnings_threshold` | the same with `earnings_estimated`, each account's `data_through`, and `estimates_note` (Google's estimates, adjusted after the month); `trigger.direction` says whether it was reached or ended below | the same | trigger and period |
 | `ads_daily_summary` | `day, platforms[{platform, spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, accounts}], adsense, shopify {net_sales, total_sales, orders, currency}, accounts_without_the_day, freshness_note, attribution_note` | after an ad sync, and the cron sweep | store and day |
 | `whatsapp_message_failed` | `message_id, source, type, category, phone_masked, reason, reason_text, automation_id, campaign_id, failed_at, view_url` | `applyMessageStatus` when a customer's message becomes failed (not tests, codes or team alerts) | message |
+| `integration_connected` | `integration` (`meta_ads`, `google_ads`, `adsense`, `whatsapp`, `zapier`), `integration_name, accounts` (ad accounts connected, else null), `connected_at, settings_url`. Never who did it | `audit()` (core notify.ts), from the rows `ads.connected`, `whatsapp.connected`, `zapier.connected` (not the Google Ads demo, nor a sign-in still waiting for an ad account) | audit row |
+| `integration_disconnected` | the same with `disconnected_at`, from `ads.disconnected`, `whatsapp.disconnected`, `zapier.disconnected` | the same | audit row |
+| `sync_completed` | `integration, integration_name, connection_id, account_id, account_name, synced_at, data_through`. No figures: those are the advertising triggers' and searches' | `zapierAfterAdSync` after each successful sync of a real ad account | account and hour (UTC) |
+| `order_paid` | `order_id, order_name, currency, total_price, subtotal, total_discounts, total_tax, total_shipping, financial_status, items, line_items[{product_id, variant_id, sku, title, quantity, price}]` (first 100), `sales_channel, processed_at` | the worker's `orders/paid` webhook (not test orders) | order |
 
 - **Thresholds** are checked after each ad sync, for the store's current period and the one before
   (platforms report late) when that one ended after the trigger was made. Periods are the store's
@@ -145,13 +160,28 @@ every retry, which Zapier uses to tell items apart):
   figures are generated). Amounts in **different currencies are never added up**: such a trigger is
   not checked, and Settings says why (`check_note = mixed_currencies:AUD,USD`). A trigger made when
   the period's total is already over its amount fires at the next sync.
+- **Falls below** (AdSense, `direction: "below"`): a period still running can't have ended below an
+  amount, and one whose last days aren't stored would look lower than it was. So only the period
+  before the current one is checked (the day or month just finished, when it ended after the trigger
+  was made), and only once every connected AdSense account has `synced_through` on or after its last
+  day; until then the next sync looks again. A finished period that ends exactly at the amount is not
+  below it. One event per trigger and period, as above.
+- **Integrations**: the audit log is where every connect and disconnect is already written, so
+  `audit()` passes each row to `zapierAuditEvent`, which keeps only the six actions above. Written
+  without a queue (most come from API requests): the cron sweep sends them within 15 minutes.
+- **Ad account synced**: an account syncs every few minutes; a Zap hears of it once per account and
+  UTC hour (the first sync of the hour). A use: refresh a sheet with Find Ad Performance.
+- **Order paid**: from Shopify's `orders/paid` webhook, queued at once (the worker has its queue).
+  Shopify sends webhooks more than once: the order's key makes one event.
 - **Daily summary**: once every connected account has yesterday stored (`synced_through`), or from
   noon at the store with what there is (`accounts_without_the_day` lists the rest). Purchase value and
   ROAS are each platform's own attribution, never store revenue; Shopify's sales are beside them.
 - **Per person**: an alert goes only to triggers whose member could see it in the bell (`mayFixAlert`:
   ads → Manage integrations, WhatsApp → View campaigns, email → View integration status, staff →
-  attendance, privacy → audit log, Shopify and general → owners and admins). Ad triggers need
-  "View advertising analytics", WhatsApp's "View campaigns and their performance". The daily summary's
+  attendance, privacy → audit log, Shopify, Zapier's undelivered events and general → owners and
+  admins). Ad triggers need "View advertising analytics", WhatsApp's "View campaigns and their
+  performance", the integration and sync triggers "View integration connection status" (which every
+  member who may connect Zapier has), "Order paid" "View sales and revenue". The daily summary's
   `shopify` block is `null` for someone without "View sales and revenue". Checked when the event is
   written and again at delivery.
 
@@ -170,6 +200,16 @@ every retry, which Zapier uses to tell items apart):
   Retry-After is honoured) up to **8 attempts**, then failed. **3xx** (never followed) and other 4xx:
   failed at once. Retries later than 15 minutes are sent by the sweep.
 - A delivery left `delivering` for 5 minutes (the function stopped) is tried again by the sweep.
+- **Failed for good** (any reason): the store's owners and admins get the alert
+  `zapier_delivery_failed`, "Some events didn't reach Zapier" (bell, email; area `integrations`,
+  linking to Settings → Integrations), once while it is open. It is resolved once none of the store's
+  triggers has a failed delivery left: each was sent again with **Retry**, or its trigger is gone (the
+  Zap turned off, Zapier disconnected, the outbox's 30 days). Checked after each delivery that lands
+  and by the sweep. The alert is itself a "New alert" event, so another Zap (Slack, email) hears of it.
+- **Retry** (`POST …/zapier/deliveries/:id/retry`, owners and admins): a failed delivery whose trigger
+  is still there goes back to pending with its attempts at 0, and is queued at once; the member
+  behind the connection is checked again at delivery. 409 `not_failed` for one that isn't failed, 409
+  `trigger_gone` when its trigger is gone. Audit `zapier.delivery_retried`.
 - Retention: events (and their deliveries) after 30 days, expired tokens after a day, revoked grants
   after 90 days; once a day.
 
@@ -181,13 +221,19 @@ every retry, which Zapier uses to tell items apart):
   again before every attempt), and redirects are not followed.
 - Tokens and codes are random 256-bit values stored as hashes only; the client secret in Secrets
   Manager, compared in constant time; `zapier_tokens` unreadable by the tenant role.
+- Secret rotation: `ZAPIER_CLIENT_SECRET_PREVIOUS` (Secrets Manager) is accepted too while every
+  version of the Zapier app moves to the new secret; each request still using it is logged ("zapier
+  client used the previous secret"). Steps: [RUNBOOK](RUNBOOK.md#rotate-the-zapier-client-secret).
 - Revocation: Settings → Disconnect; removing the member (`removeMemberReleasingAds`); deleting the
   account; an unverified account taken over (`relinquishSetUp`); erasing or disconnecting the store
   (`purgeStoreData` deletes grants, triggers and outbox). Revoking cancels waiting deliveries and
   deletes the triggers; the tokens stop working at once. Revoked or lost permissions without removal
   (a membership revoked, "Manage integrations" taken away) make every request 401 and every delivery
   fail until restored.
-- Audit log: `zapier.connected`, `zapier.disconnected`, `zapier.revoked` (with the reason).
+- Audit log: `zapier.connected`, `zapier.disconnected`, `zapier.revoked` (with the reason),
+  `zapier.trigger_subscribed` and `zapier.trigger_unsubscribed` (a Zap turned on or off, as the member
+  who connected it; metadata: event, Zap id, connection; Zapier's 410 with no actor and
+  `reason: zapier_answered_410`), `zapier.delivery_retried`.
 - The route-access matrix (`apps/api/test/routeAccess.test.ts`) lists `/zapier/*` as bearer-only and
   checks owner cookies, shared links, API keys and made-up tokens all get 401 there.
 
@@ -203,7 +249,9 @@ from `GET /api/workspaces/:ws/stores/:storeId/zapier` ("View integration connect
   with who allowed it, when, its last use, its active triggers (a threshold that can't be checked says
   why), and **Disconnect** (`DELETE …/zapier/connections/:grantId`, "Manage integrations").
 - Recent deliveries (last 20) with their outcome: Delivered, Sending, Retrying (reason, next try),
-  Failed (reason and Zapier's HTTP status), Not sent.
+  Failed (reason and Zapier's HTTP status), Not sent. Owners and admins see **Retry** beside a failed
+  one whose trigger is still there (`retryable`).
+- An AdSense trigger watching for "below" reads "Estimated earnings ending a day below 20".
 - App Store workspaces don't see it (`APP_STORE_MODULES.zapier`).
 
 ## Owner setup
@@ -220,10 +268,15 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
    and warns when the client id is set without its secret.
 5. Try a Zap, then `ZAPIER_ENABLED = true` in `apps/web/src/lib/features.ts`.
 
+A new version of the Zapier app (new triggers, changed fields) goes out only after the bizinsights
+side it calls is live, through a staging version the owner tries first:
+[integrations/zapier/README.md](../integrations/zapier/README.md#a-new-version-staging-then-promote).
+
 | Setting | Where | What |
 | --- | --- | --- |
 | `ZAPIER_CLIENT_ID` | settings.ts | The OAuth client id, the same as the Zapier app's `CLIENT_ID` |
 | `ZAPIER_CLIENT_SECRET` | Secrets Manager | The same as the Zapier app's `CLIENT_SECRET` (put-secrets refuses fewer than 40 characters) |
+| `ZAPIER_CLIENT_SECRET_PREVIOUS` | Secrets Manager | Only during a rotation: the secret before it, still accepted. `put-secrets --set ZAPIER_CLIENT_SECRET` keeps the replaced one here; `--unset ZAPIER_CLIENT_SECRET_PREVIOUS` ends the rotation |
 | `ZAPIER_REDIRECT_URI` | settings.ts | Zapier's OAuth return for this app, exactly (https) |
 | `ZAPIER_INVITE_URL` | settings.ts | The app's invite link: what Connect opens |
 
@@ -238,21 +291,30 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
 | A trigger can't be set up: "can't see advertising figures" | The member lacks "View advertising analytics" (or "View campaigns" for WhatsApp). |
 | Events don't arrive | Settings → Integrations → Recent events: Failed with a reason, Retrying, or Not sent (the Zap was turned off: Zapier answered 410). Alerts raised outside a job reach Zapier within one cron tick (15 minutes). |
 | A threshold never fires | "Not checked: … report in AUD and USD": accounts in two currencies. Or no sync has run since the spend crossed it (thresholds are checked after syncs). |
+| An AdSense "below" trigger doesn't fire for a day that was low | Only the day (or month) just finished is checked, and only once every AdSense account has it stored (`synced_through` on or after its last day). A day that ended exactly at the amount isn't below it. A day finished before the trigger was made is skipped. |
+| "Some events didn't reach Zapier" in the bell | Settings → Integrations → Zapier → Recent events: the failed one says why. Fix that in Zapier (the Zap turned back on, the step that refused it), then Retry. The alert resolves once none is left failed. |
+| Logs: "zapier client used the previous secret" | A secret rotation isn't finished: a version of the Zapier app still has the old `CLIENT_SECRET` (`env:get` each version in use, without printing it: RUNBOOK). |
+| "Integration connected" arrives up to 15 minutes late | Written in the API request, which has no queue at hand: the cron sweep sends it. |
 | Everything answers `not_configured` | One of the three settings is missing; the config check names which. |
 
 ## Tests
 
 - `apps/api/test/zapier.test.ts`: the OAuth happy path, Basic and JSON, wrong redirect URI, code reuse,
-  expired code, refresh rotation and reuse detection, wrong client secret, not configured, a member who
-  loses the permission (401) or is removed, store deleted, cookies / links / `sk_` keys refused,
-  cross-tenant 404s, SSRF on subscribe, data permissions, alerts into the outbox, searches with mixed
-  currencies, the Settings card and Disconnect.
+  expired code, refresh rotation and reuse detection, wrong client secret, the previous secret during
+  a rotation and not after, not configured, a member who loses the permission (401) or is removed,
+  store deleted, cookies / links / `sk_` keys refused, cross-tenant 404s, SSRF on subscribe, data
+  permissions (the new triggers' too), AdSense's direction, trigger audit rows, the new triggers'
+  samples, alerts into the outbox, searches with mixed currencies, the Settings card, Disconnect and
+  Retry.
 - `apps/api/test/routeAccess.test.ts`: every new route classified; Zapier's bearer-only routes.
 - `apps/worker/test/zapier.test.ts`: delivered once, dedupe, 5xx backoff, max attempts, 410, refusals
   and redirects, lost access, the per-store cap, the sweep, redaction, thresholds (once per period,
-  mixed currencies, demo excluded, AdSense), the daily summary, WhatsApp failures.
-- `packages/shared/test/zapier.test.ts`: periods, currency totals, thresholds, hook URLs, backoff,
-  wording, `mayFixAlert`.
+  mixed currencies, demo excluded, AdSense, falls below), the daily summary, WhatsApp failures,
+  `schema_version` on old events, the failed-delivery alert and Retry, ad accounts synced, integrations
+  from audit rows, orders paid through the real `orders/paid` webhook (no customer details).
+- `packages/shared/test/zapier.test.ts`: periods, currency totals, thresholds (below too), hook URLs,
+  backoff, wording, permissions, `mayFixAlert`, the failed-delivery alert's wording.
+- `infra/cdk/test/put-secrets.test.ts`: the previous secret's shape, what `--set` keeps and `--unset` may remove.
 - `integrations/zapier`: `npm test` (Jest, appTester, nock, and Zapier's schema).
 
 ## Not built, and why
@@ -265,7 +327,14 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
 - **Actions (sending messages from a Zap)**: none in v1. TODO, once WhatsApp runs on Meta's Cloud API
   only: a "Send WhatsApp template message" action, with its own permission, consent and rate checks, and
   its own consent-page line. Not before: the WhatsApp module is being rewritten.
-- **Real-time alerts from API requests**: written without a queue, they wait for the next cron tick.
+- **Real-time alerts and integration events from API requests**: written without a queue, they wait
+  for the next cron tick.
+- **"Falls below" for ad spend**: only AdSense has it. Spend below a budget is rarely news in itself,
+  and a day's spend keeps arriving for days after it (platforms report late).
+- **Shopify syncs in "Ad account synced"**: only ad accounts; Shopify's own syncs are continuous
+  (webhooks), so there is no "finished" moment to report.
+- **A `zapier` module in `GET …/integrations`**: that route comes with PR #283, not on `main` when
+  this was built; add the module there once it lands.
 - **Not verified here**: a real Zapier account (registering, pushing, a live Zap), Zapier's own style
   checks (`zapier validate` against Zapier's servers), and the consent page in a browser against the
   deployed site.

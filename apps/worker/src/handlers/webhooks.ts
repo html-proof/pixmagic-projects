@@ -2,6 +2,7 @@
 import { systemDb, type Store } from "@app/db";
 import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, dropStoreInstance, disconnectStore, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
 import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
+import { zapierOrderPaid } from "@app/core/zapier";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
 import { readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
 
@@ -163,6 +164,8 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // cancelled, edited), not on every paid/fulfilled/tagged delivery.
         for (const d of await readSalesAfterWebhook(deps, store, o.shopifyId, o.salesKey, days)) days.add(d);
         await enqueueAggregate(deps, store.id, days);
+        // Zapier's "Order paid" (docs/zapier.md): once per order, never who bought it. Never throws.
+        if (data.topic === "orders/paid") await zapierOrderPaid(store, o, deps.queues);
         break;
       }
       case "orders/delete": {

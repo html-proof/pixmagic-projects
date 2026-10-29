@@ -13,11 +13,15 @@
  *   convention). 408, 429, 5xx, a timeout or no answer: tried again with exponential backoff and
  *   jitter, up to ZAPIER_MAX_ATTEMPTS, then failed. Any other answer: failed at once (a retry would
  *   meet the same answer). Every outcome stays on the row, which Settings → Integrations shows.
+ * - Failed for good: the store's owners and admins get the alert `zapier_delivery_failed` (once while
+ *   it is open), resolved once none of the store's triggers has a failed delivery left (sent again
+ *   with Retry, or its Zap gone).
  */
 import { systemDb } from "@app/db";
-import { isZapierHookUrl, ZAPIER_MAX_ATTEMPTS, zapierBackoffSeconds, type ZapierDeliveryError, type ZapierEvent } from "@app/shared/zapier";
+import { isZapierHookUrl, ZAPIER_MAX_ATTEMPTS, ZAPIER_SCHEMA_VERSION, zapierBackoffSeconds, type ZapierDeliveryError, type ZapierEvent } from "@app/shared/zapier";
 import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
+import { audit, raiseAlert, resolveAlerts, type Mailer } from "../notify.js";
 import type { Queues } from "../queues.js";
 import type { FetchLike } from "../shopify.js";
 import { authorizerAccess, eventDataAllowed, redactFor } from "./access.js";
@@ -28,6 +32,30 @@ export interface ZapierDeliveryDeps {
   fetchImpl: FetchLike;
   coord: Coord;
   queues: Pick<Queues, "sync">;
+  /** For the alert a delivery that failed for good raises. */
+  mailer: Mailer;
+}
+
+/** The alert an event Zapier never took raises (describeAlert words it). */
+export const ZAPIER_FAILED_ALERT = "zapier_delivery_failed";
+
+/** Raise the store's "Some events didn't reach Zapier" alert. Never throws: the delivery's outcome is recorded already. */
+async function alertFailed(d: { id: string; workspaceId: string; storeId: string }, errorCode: ZapierDeliveryError | null, deps: ZapierDeliveryDeps) {
+  try {
+    await raiseAlert({ workspaceId: d.workspaceId, storeId: d.storeId, severity: "warning", code: ZAPIER_FAILED_ALERT, message: `zapier delivery ${d.id} failed: ${errorCode ?? "unknown"}` }, deps.mailer, deps.fetchImpl, deps.queues);
+  } catch (err) {
+    logger.error({ err, deliveryId: d.id }, "zapier delivery failed; its alert could not be raised");
+  }
+}
+
+/**
+ * Resolve the store's "Some events didn't reach Zapier" once none of its triggers has a failed
+ * delivery left: each was sent again, or its trigger is gone (the Zap turned off, Zapier
+ * disconnected). Returns whether it was resolved.
+ */
+export async function settleZapierFailedAlert(storeId: string): Promise<boolean> {
+  const left = await systemDb.zapierDelivery.count({ where: { storeId, status: "failed", hookId: { not: null } } });
+  return left === 0 && (await resolveAlerts(storeId, [ZAPIER_FAILED_ALERT])) > 0;
 }
 
 /** Deliveries one store may have in flight at once. */
@@ -80,6 +108,7 @@ async function attempt(deliveryId: string, deps: ZapierDeliveryDeps, now: Date):
   const d = await systemDb.zapierDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { zapierEvent: true, hook: { include: { grant: true } } } });
   const finish = async (status: "delivered" | "failed" | "cancelled", errorCode: ZapierDeliveryError | null, responseStatus: number | null = null) => {
     await systemDb.zapierDelivery.update({ where: { id: d.id }, data: { status, errorCode, responseStatus, ...(status === "delivered" ? { deliveredAt: now } : {}) } });
+    if (status === "failed") await alertFailed(d, errorCode, deps);
     return status;
   };
   const hook = d.hook;
@@ -90,7 +119,8 @@ async function attempt(deliveryId: string, deps: ZapierDeliveryDeps, now: Date):
   const who = await authorizerAccess(hook.grant, now);
   if (!who || !eventDataAllowed(event, payload.data, who)) return finish("failed", "authorizer_no_access");
   if (!isZapierHookUrl(hook.targetUrl)) return finish("failed", "invalid_target");
-  const body: ZapierEnvelope = { ...payload, data: redactFor(event, payload.data, who) };
+  // Events written before the envelope had a version are version 1 too.
+  const body: ZapierEnvelope = { ...payload, schema_version: payload.schema_version ?? ZAPIER_SCHEMA_VERSION, data: redactFor(event, payload.data, who) };
 
   let res: Response | null = null;
   let failure: ZapierDeliveryError | null = null;
@@ -110,13 +140,23 @@ async function attempt(deliveryId: string, deps: ZapierDeliveryDeps, now: Date):
   const status = res?.status ?? null;
   if (status !== null && status >= 200 && status < 300) {
     await systemDb.zapierHook.updateMany({ where: { id: hook.id }, data: { lastDeliveredAt: now } });
-    return finish("delivered", null, status);
+    const delivered = await finish("delivered", null, status);
+    // A failed one sent again with Retry: the store's alert may have nothing left to say.
+    await settleZapierFailedAlert(d.storeId).catch((err: unknown) => logger.warn({ err, storeId: d.storeId }, "zapier failed-delivery alert not settled"));
+    return delivered;
   }
   if (status === 410) {
     // Zapier's word for "this Zap's trigger is gone": stop sending to it for good.
     await systemDb.zapierDelivery.updateMany({ where: { hookId: hook.id, status: { in: ["pending", "retrying"] } }, data: { status: "cancelled", errorCode: "hook_gone" } });
     await systemDb.zapierHook.deleteMany({ where: { id: hook.id } });
     logger.info({ hookId: hook.id, deliveryId: d.id }, "zapier answered 410: the trigger was deleted");
+    await audit({
+      workspaceId: hook.workspaceId,
+      action: "zapier.trigger_unsubscribed",
+      targetType: "zapier_hook",
+      targetId: hook.id,
+      metadata: { grantId: hook.grantId, storeId: hook.storeId, event: hook.event, zapId: hook.zapId, reason: "zapier_answered_410" },
+    });
     return finish("cancelled", "hook_gone", 410);
   }
   if (status !== null && status >= 300 && status < 400) return finish("failed", "redirect_refused", status);
@@ -156,6 +196,11 @@ export async function sweepZapier(deps: ZapierDeliveryDeps, now = new Date()) {
     logger.error({ err }, "zapier daily summaries failed; the next tick tries again");
     return 0;
   });
+  // Alerts whose failed deliveries are all gone another way (a trigger removed, Zapier disconnected, the outbox's retention).
+  const settled = await settleOpenFailedAlerts().catch((err: unknown) => {
+    logger.error({ err }, "zapier failed-delivery alerts not settled; the next tick tries again");
+    return 0;
+  });
   const due = await systemDb.zapierDelivery.findMany({
     where: {
       status: { in: ["pending", "retrying"] },
@@ -180,7 +225,14 @@ export async function sweepZapier(deps: ZapierDeliveryDeps, now = new Date()) {
     logger.error({ err }, "zapier retention failed; the next tick tries again");
     return null;
   });
-  return { unstuck: stuck.count, queued, summaries, pruned };
+  return { unstuck: stuck.count, queued, summaries, settled, pruned };
+}
+
+async function settleOpenFailedAlerts(): Promise<number> {
+  const open = await systemDb.alert.findMany({ where: { code: ZAPIER_FAILED_ALERT, resolvedAt: null, storeId: { not: null } }, select: { storeId: true }, distinct: ["storeId"] });
+  let settled = 0;
+  for (const a of open) if (await settleZapierFailedAlert(a.storeId!)) settled++;
+  return settled;
 }
 
 /** Once a day: events past their keeping (their deliveries go with them), tokens past expiry, grants revoked 90 days ago. */

@@ -6,7 +6,9 @@
  * - Thresholds ("Ad spend passed an amount", "AdSense earnings passed an amount"): checked after each
  *   ad sync (zapierAfterAdSync) for the store's current period and the one before (platforms report
  *   late), once per period per trigger. Amounts in different currencies are never added up: such a
- *   trigger isn't checked, and Settings says why.
+ *   trigger isn't checked, and Settings says why. An AdSense trigger can instead watch for earnings
+ *   that fell below the amount: only a finished period counts, once every account has its last day.
+ * - "Ad account synced": after an ad account's sync, at most once an hour per account.
  * - "Daily advertising summary": once a day per store, once yesterday's figures are in for every
  *   account (or at noon with what there is, saying which accounts it lacks).
  * - Periods and "yesterday" are the store's calendar days; each platform's rows are its account's
@@ -14,7 +16,17 @@
  */
 import { systemDb, toNumber } from "@app/db";
 import { addDays, adsenseSiteChosen, localDay, localTime } from "@app/shared";
-import { periodKey, periodRange, singleCurrencyTotal, thresholdReached, type ZapierPeriod, type ZapierSpendPlatform } from "@app/shared/zapier";
+import {
+  integrationOfProvider,
+  periodKey,
+  periodRange,
+  singleCurrencyTotal,
+  thresholdReached,
+  ZAPIER_INTEGRATIONS,
+  type ZapierDirection,
+  type ZapierPeriod,
+  type ZapierSpendPlatform,
+} from "@app/shared/zapier";
 import { logger } from "../logger.js";
 import type { Queues } from "../queues.js";
 import type { AuthorizerAccess } from "./access.js";
@@ -230,12 +242,18 @@ export interface ThresholdInputs {
   platform?: ZapierSpendPlatform;
   period: ZapierPeriod;
   amount: number;
+  /** AdSense only; absent (triggers made before it existed): "above". */
+  direction?: ZapierDirection;
 }
 
 /**
  * Check the store's threshold triggers against its stored figures: the current period, and the one
  * before when it ended after the trigger was made (late figures can still cross it). Each crossing is
  * one event for that trigger (its key names the trigger and the period). Returns how many fired.
+ *
+ * "Below" (AdSense): a period still running can't have ended below the amount, and one whose last
+ * days aren't stored yet would look lower than it was. So only the finished period is checked, once
+ * every account has data through its last day; until then the next sync looks again.
  */
 export async function checkZapierThresholds(storeId: string, queues?: Pick<Queues, "sync">, now = new Date()): Promise<number> {
   const hooks = await systemDb.zapierHook.findMany({ where: { storeId, event: { in: ["ad_spend_threshold", "adsense_earnings_threshold"] }, grant: { revokedAt: null } } });
@@ -247,9 +265,10 @@ export async function checkZapierThresholds(storeId: string, queues?: Pick<Queue
   for (const hook of hooks) {
     const inputs = hook.inputs as unknown as ThresholdInputs;
     if (!inputs || !(inputs.amount > 0) || (inputs.period !== "day" && inputs.period !== "month")) continue;
+    const below = hook.event === "adsense_earnings_threshold" && inputs.direction === "below";
     const current = periodKey(today, inputs.period);
     const previous = periodKey(inputs.period === "day" ? addDays(today, -1) : addDays(`${current}-01`, -1), inputs.period);
-    const keys = [current];
+    const keys = below ? [] : [current];
     // A period that ended before the trigger existed is no news to it.
     if (periodRange(previous).until >= localDay(hook.createdAt, store.timezone)) keys.unshift(previous);
     let note: string | null = null;
@@ -265,9 +284,16 @@ export async function checkZapierThresholds(storeId: string, queues?: Pick<Queue
         note = `mixed_currencies:${check.mixed.join(",")}`;
         continue;
       }
-      if (!thresholdReached(check.total, inputs.amount)) continue;
+      // Not all of the period is in yet: a total that low may only be days not synced.
+      if (below && check.accounts.some((a) => !a.data_through || a.data_through < range.until)) continue;
+      if (!thresholdReached(check.total, inputs.amount, below ? "below" : "above")) continue;
       const data = {
-        trigger: { platform: hook.event === "ad_spend_threshold" ? (inputs.platform ?? "any") : "adsense", period: inputs.period, amount: inputs.amount },
+        trigger: {
+          platform: hook.event === "ad_spend_threshold" ? (inputs.platform ?? "any") : "adsense",
+          period: inputs.period,
+          amount: inputs.amount,
+          direction: below ? "below" : "above",
+        },
         period: key,
         period_start: range.since,
         period_end: range.until,
@@ -286,7 +312,7 @@ export async function checkZapierThresholds(storeId: string, queues?: Pick<Queue
   return fired;
 }
 
-type Check = { total: number; currency: string | null; accounts: Array<{ last_synced_at: string | null }> } | { mixed: string[] } | null;
+type Check = { total: number; currency: string | null; accounts: Array<{ last_synced_at: string | null; data_through?: string | null }> } | { mixed: string[] } | null;
 
 async function spendCheck(storeId: string, platform: ZapierSpendPlatform, since: string, until: string): Promise<Check> {
   const accounts = await adSpendByAccount(storeId, providersOf(platform), since, until);
@@ -299,7 +325,9 @@ async function earningsCheck(storeId: string, since: string, until: string): Pro
   const accounts = await adsenseByAccount(storeId, since, until);
   if (!accounts.length) return null;
   const t = singleCurrencyTotal(accounts.map((a) => ({ currency: a.currency, amount: a.earnings_estimated })));
-  return "mixed" in t ? t : { ...t, accounts: accounts.map((a) => ({ account_id: a.account_id, account_name: a.account_name, earnings_estimated: a.earnings_estimated, currency: a.currency, last_synced_at: a.last_synced_at })) };
+  return "mixed" in t
+    ? t
+    : { ...t, accounts: accounts.map((a) => ({ account_id: a.account_id, account_name: a.account_name, earnings_estimated: a.earnings_estimated, currency: a.currency, last_synced_at: a.last_synced_at, data_through: a.data_through })) };
 }
 
 // ---------------------------------------------------------------------------
@@ -379,16 +407,48 @@ export async function sweepAdsDailySummaries(queues?: Pick<Queues, "sync">, now 
   return sent;
 }
 
+// ---------------------------------------------------------------------------
+// Ad account synced
+// ---------------------------------------------------------------------------
+
+type SyncedConnection = { id: string; provider: string; accountId: string; accountName: string | null; lastSyncedAt: Date | null; syncedThrough: string | null };
+
+/** "Ad account synced": which account, when, and the last of its days stored without a gap. No figures: those are the advertising triggers'. */
+export function syncCompletedData(c: SyncedConnection, at: Date): Record<string, unknown> | null {
+  const integration = integrationOfProvider(c.provider);
+  if (!integration) return null;
+  return {
+    integration,
+    integration_name: ZAPIER_INTEGRATIONS[integration],
+    connection_id: c.id,
+    account_id: c.accountId,
+    account_name: c.accountName,
+    synced_at: (c.lastSyncedAt ?? at).toISOString(),
+    data_through: c.syncedThrough,
+  };
+}
+
+/** One event per account and hour (UTC): accounts sync every few minutes, and a Zap needs to hear it once in a while, not every time. */
+export const syncCompletedKey = (connectionId: string, at: Date) => `sync_completed:${connectionId}:${at.toISOString().slice(0, 13)}`;
+
 /**
- * After an ad account's sync stored its figures (the worker's runAdsSync): its store's thresholds and
- * daily summary. Never throws: the sync itself worked, whatever Zapier's side of it does.
+ * After an ad account's sync stored its figures (the worker's runAdsSync): its store's thresholds,
+ * daily summary and "Ad account synced". Never throws: the sync itself worked, whatever Zapier's side
+ * of it does.
  */
 export async function zapierAfterAdSync(connectionId: string, deps: { queues: Pick<Queues, "sync"> }, now = new Date()): Promise<void> {
   try {
-    const conn = await systemDb.adConnection.findUnique({ where: { id: connectionId }, select: { storeId: true, isDemo: true } });
+    const conn = await systemDb.adConnection.findUnique({
+      where: { id: connectionId },
+      select: { id: true, workspaceId: true, storeId: true, isDemo: true, provider: true, accountId: true, accountName: true, lastSyncedAt: true, syncedThrough: true },
+    });
     if (!conn || conn.isDemo) return;
     await checkZapierThresholds(conn.storeId, deps.queues, now);
     await maybeSendAdsDailySummary(conn.storeId, deps.queues, now);
+    const synced = syncCompletedData(conn, now);
+    if (synced) {
+      await recordZapierEvent({ workspaceId: conn.workspaceId, storeId: conn.storeId, event: "sync_completed", dedupeKey: syncCompletedKey(conn.id, now), data: synced, occurredAt: now }, deps.queues, now);
+    }
   } catch (err) {
     logger.error({ err, connectionId }, "zapier checks after an ad sync failed");
   }

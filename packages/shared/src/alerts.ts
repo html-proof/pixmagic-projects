@@ -14,12 +14,13 @@ import { staffAccess, staffCan, type StaffRole } from "./staff/access";
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "general";
+export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "integrations" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
   shopify: "/settings/stores",
   ads: "/settings/ads",
+  integrations: "/settings/integrations",
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
   whatsapp: "/dashboard/whatsapp-automation",
@@ -186,6 +187,15 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   if (code === "sms_account_limit") {
     return { severity, area: "sms", title: "Texts are on hold: the SMS spending limit is reached", body: "The account's monthly SMS spending limit is reached, so texts wait until it is raised or the month ends. Contact support if this stays." };
   }
+  // Zapier (core zapier/delivery.ts): an event Zapier never took, after its tries. Worded from the code alone.
+  if (code === "zapier_delivery_failed") {
+    return {
+      severity,
+      area: "integrations",
+      title: "Some events didn't reach Zapier",
+      body: "Zapier refused one of this store's events, or didn't answer after several tries, so the Zap waiting for it didn't run. Settings → Integrations → Zapier shows which and why; an owner or admin can send it again with Retry.",
+    };
+  }
   return { severity, area: "general", title: "Something needs your attention", body: "If this keeps showing, contact support and we'll look into it." };
 }
 
@@ -193,7 +203,8 @@ export function describeAlert(alert: { code: string; severity: string; message: 
  * Whether a member may see (and fix) an alert of this area: the bell's rule (GET .../alerts), which
  * Zapier's "New alert" trigger follows for the person who connected it. Settings → Privacy requests
  * needs audit:read; Settings → Advertising, "Manage integrations"; WhatsApp, "View campaigns"; the
- * Shopify connection and the help page's alerts go to owners and admins.
+ * Shopify connection, Zapier's undelivered events (Retry is theirs) and the help page's alerts go to
+ * owners and admins.
  */
 export function mayFixAlert(area: AlertArea, access: MemberAccess, staffRole: StaffRole | null): boolean {
   switch (area) {
