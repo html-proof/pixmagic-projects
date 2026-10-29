@@ -179,7 +179,7 @@ describe("connecting ad accounts", () => {
       ["meta", "act_2", "EU ads", "EUR", true, "active"],
     ]);
     expect(JSON.stringify(rows)).not.toContain("META_LONG_SECRET");
-    // bizinsights' own sign-in: the token itself, sealed, one for both accounts of the sign-in; nothing at Nango.
+    // bizinsights' own sign-in: the token itself, sealed, one for both accounts of the sign-in.
     expect(rows.map((r) => [r.source, r.sourceLoginId, r.refreshTokenEnc])).toEqual([
       ["direct", null, null],
       ["direct", null, null],
@@ -198,8 +198,10 @@ describe("connecting ad accounts", () => {
     // The list the settings page shows: no tokens.
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
     expect(list.body).not.toContain("Enc");
-    expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active", source: "direct" });
+    expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active" });
     expect(list.json().connections[0].accessExpiresAt).toBeTruthy();
+    // Every account is read with bizinsights' own sign-in: the answer no longer says how.
+    expect(list.json().connections[0]).not.toHaveProperty("source");
   });
 
   it("Continue with Google: offline access, a manager's client reached through it", async () => {
@@ -1049,53 +1051,18 @@ describe("a choice is only for the store and person it was made for", () => {
   });
 });
 
-describe("what is left of the Nango sign-in (2026-10-22 to 2026-10-28)", () => {
-  it("an account choice the Nango release left waiting can't be used: it holds a Nango connection, not a token", async () => {
-    // Nothing may reach any platform or Nango.
-    ctx.setFetch(async (input) => {
-      throw new Error(`unexpected call to ${String(input)}`);
-    });
-    const me = await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } });
-    const nonce = "n".repeat(32);
-    const old = {
-      userId: me.id,
-      workspaceId: ws,
-      storeId,
-      provider: "meta",
-      accounts: [{ accountId: "act_1", name: "Shop ads", currency: "USD", timezone: "UTC" }],
-      accessTokenEnc: "v1.sealed-nango-credential",
-      refreshTokenEnc: null,
-      accessTokenExpiresAt: null,
-      source: "nango",
-      sourceLoginId: "conn-from-the-nango-release",
-      nangoIntegrationKey: "bizinsights-meta-ads",
-      externalUserId: "4242",
-      expiresAt: Date.now() + 600_000,
-    };
-    await ctx.deps.coord.put(`ads-pending:${nonce}`, JSON.stringify(old), 600);
-    const url = pendingUrl(nonce);
-    for (const res of [
-      await ctx.app.inject({ method: "GET", url, headers }),
-      await ctx.app.inject({ method: "POST", url, headers, payload: { accountIds: ["act_1"] } }),
-      await ctx.app.inject({ method: "DELETE", url, headers }),
-    ]) {
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).toEqual({ error: "pending_expired", message: "That choice has expired. Press the button to connect again." });
-    }
-    expect(await systemDb.adConnection.count()).toBe(0);
-  });
-
-  it("Nango's old callback address sends a browser coming back from it to press the button again", async () => {
+describe("Nango, which brokered the sign-ins from 2026-10-22 to 2026-10-28, is gone", () => {
+  it("its old callback address is no route any more: Not found, with or without a code", async () => {
     for (const query of ["", "?code=AQ-code&state=nango-state"]) {
       const back = await ctx.app.inject({ method: "GET", url: `/ads/nango/oauth-callback${query}`, headers: { cookie } });
-      expect(back.statusCode).toBe(302);
-      expect(back.headers.location).toBe("http://localhost:3001/settings/ads?error=state_expired");
+      expect(back.statusCode).toBe(404);
+      expect(back.json()).toEqual({ error: "not_found", message: "Not found" });
     }
     // "nango" was never a platform of the callback.
     expect((await ctx.app.inject({ method: "GET", url: "/ads/nango/callback?code=C&state=S", headers: { cookie } })).headers.location).toBe("http://localhost:3001/settings/ads?error=unknown_provider");
   });
 
-  it("Nango's webhooks and its session, finish and cancel routes are gone", async () => {
+  it("its webhooks and its session, finish and cancel routes are gone", async () => {
     expect((await ctx.app.inject({ method: "POST", url: "/webhooks/nango", headers: { "content-type": "application/json" }, payload: JSON.stringify({ type: "auth", operation: "creation", connectionId: "c" }) })).statusCode).toBe(404);
     for (const step of ["session", "finish", "cancel"]) {
       expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/nango/${step}`, headers, payload: {} })).statusCode).toBe(404);

@@ -7,7 +7,7 @@
  */
 export * from "./adConnections/config.js";
 // aad (the tokens' encryption context) and sameSignIn stay inside adConnections/.
-export { adAccessToken, AdsMovingOffNangoError, encryptAdTokens, isNangoConnection, learnAdPerson, nangoCredential, reencryptAdTokens } from "./adConnections/credentials.js";
+export { adAccessToken, encryptAdTokens, learnAdPerson, reencryptAdTokens } from "./adConnections/credentials.js";
 export * from "./adConnections/connect.js";
 export * from "./adConnections/sync.js";
 export * from "./adConnections/reports.js";
@@ -17,6 +17,5 @@ export * from "./adConnections/budget.js";
 export * from "./adConnections/metaCallbacks.js";
 export * from "./adConnections/demo.js";
 export * from "./adConnections/signIn.js";
-export * from "./adConnections/leaveNango.js";
 export * from "./adConnections/health.js";
 export * from "./adConnections/logins.js";

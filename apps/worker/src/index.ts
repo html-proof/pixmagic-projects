@@ -50,7 +50,6 @@ import {
   seedSalesRereads,
   sweepAdConnectionAlerts,
   checkWaitingAdLogins,
-  moveAdConnectionsOffNango,
   runZapierJob,
   sweepZapierDeliveries,
   UnrecoverableError,
@@ -433,11 +432,6 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "sales re-read sweep failed; the next tick tries again");
       return null;
     });
-    // Ad connections made through Nango: moved off it first, so the syncs scheduled next read with bizinsights' own tokens.
-    const adsMovedOffNango = await moveAdConnectionsOffNango(deps).catch((err: unknown) => {
-      logger.error({ err }, "moving ad connections off Nango failed; the next tick tries again");
-      return null;
-    });
     // Ad accounts on their own leases, after everything the store itself depends on.
     const adsSynced = await scheduleAdsSync(deps).catch((err: unknown) => {
       logger.error({ err }, "ad sync scheduling failed; the next tick tries again");
@@ -511,7 +505,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "zapier sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedOffNango, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};
