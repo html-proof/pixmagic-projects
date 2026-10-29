@@ -33,12 +33,12 @@ export const AUTOMATIONS_HUB: boolean = true;
 
 /**
  * The Zapier card on Settings → Integrations (docs/zapier.md): connect the store to the merchant's own
- * Zapier account through bizinsights' Zapier app. Off in production until the owner has registered
- * and pushed that app and set its ZAPIER_* settings (docs/zapier.md, "Owner setup"); on in
- * development (`next dev`) so it can be tried. The consent page Zapier opens (/connect/zapier) and the
- * API don't depend on it: they answer `not_configured` until the settings are there.
+ * Zapier account through bizinsights' Zapier app. On in production since 2026-10-29: the app is
+ * registered and its ZAPIER_* settings are live, and the first test Zap passed (docs/zapier.md,
+ * "Owner setup"). The consent page Zapier opens (/connect/zapier) and the API don't depend on it: they
+ * answer `not_configured` until the settings are there, and the card then says Zapier isn't set up yet.
  */
-export const ZAPIER_ENABLED: boolean = false;
+export const ZAPIER_ENABLED: boolean = true;
 export const ZAPIER_CARD: boolean = ZAPIER_ENABLED || process.env.NODE_ENV !== "production";
 
 /** The parts of the app beyond the Shopify dashboard, each built on another company's accounts. */

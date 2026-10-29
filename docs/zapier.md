@@ -193,7 +193,7 @@ every retry, which Zapier uses to tell items apart):
 
 ## Settings → Integrations
 
-`ZapierCard` (behind `ZAPIER_CARD`: on under `next dev`, off in production until `ZAPIER_ENABLED`),
+`ZapierCard` (behind `ZAPIER_CARD`: `ZAPIER_ENABLED`, on in production since 2026-10-29, or `next dev`),
 from `GET /api/workspaces/:ws/stores/:storeId/zapier` ("View integration connection status"):
 
 - Not set up (`configured: false`): "Zapier isn't set up for bizinsights yet" to people who may manage
@@ -223,7 +223,7 @@ The exact commands are in [integrations/zapier/README.md](../integrations/zapier
 Done for app 248720 (v1.0.0): live since release 130 (2026-10-29), and the first test Zap passed that
 day on the owner's Zapier account. That Zap connected store PixMagic, and its New Alert, Find Ad
 Performance and Find AdSense Earnings steps matched bizinsights' own figures. Turning it on and off
-added and removed its hook. `ZAPIER_ENABLED` is still off.
+added and removed its hook. The owner then turned `ZAPIER_ENABLED` on, so merchants see the card.
 
 | Setting | Where | What |
 | --- | --- | --- |
