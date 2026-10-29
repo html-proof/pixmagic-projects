@@ -1,5 +1,6 @@
 import { systemDb, type AuthIdentity, type Tx, type User } from "@app/db";
 import { env, logger, type Mailer } from "@app/core";
+import { revokeZapierGrants } from "@app/core/zapier";
 import { maskEmail } from "@app/shared/email";
 import type { CognitoAuth, IdentityClaims, SignInMethod } from "./cognito.js";
 import { HttpError } from "./context.js";
@@ -273,7 +274,9 @@ async function relinquishSetUp(tx: Tx, userId: string) {
   const invitations = await tx.invitation.updateMany({ where: { invitedById: userId, acceptedAt: null, revokedAt: null }, data: { revokedAt: now } });
   const members = await tx.membership.updateMany({ where: { invitedById: userId, revokedAt: null }, data: { revokedAt: now, accessChangedAt: now } });
   if (left.length) await tx.membership.deleteMany({ where: { userId, invitedById: null } });
-  return { revokedApiKeys: keys.count, revokedInvitations: invitations.count, revokedMembers: members.count, leftWorkspaces: left.map((m) => m.workspaceId) };
+  // Zapier connections it allowed, like its API keys (docs/zapier.md).
+  const zapier = await revokeZapierGrants({ userId }, "account_taken_over", tx, now);
+  return { revokedApiKeys: keys.count, revokedInvitations: invitations.count, revokedMembers: members.count, revokedZapierConnections: zapier, leftWorkspaces: left.map((m) => m.workspaceId) };
 }
 
 type PictureClaims = Pick<IdentityClaims, "method" | "email" | "picture">;

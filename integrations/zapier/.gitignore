@@ -1,0 +1,4 @@
+# The Zapier CLI's build (zapier build / push) and local test settings.
+build/
+*.zip
+.env

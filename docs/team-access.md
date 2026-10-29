@@ -55,6 +55,10 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - `GET …/export?section=` (CSV) needs "Export approved reports" plus the section's own permission,
   and holds only what the member sees. Customer lists are never exported.
 - Workspace API keys see what viewers saw before Team & Access (`LEGACY_GRANTS.viewer`), read-only.
+- Connecting the store to Zapier ([zapier.md](zapier.md)) needs "Manage integrations" and the
+  member's own sign-in. The connection acts as that member: every Zapier request and every event
+  sent re-checks their membership, and each trigger also needs its data permission ("View advertising
+  analytics", "View campaigns", the bell's rule for alerts). Removing the member revokes it.
 - The Inventory pages (`apps/web/src/app/(app)/inventory`, API `routes/inventory.ts`) have a module
   of their own: view, product information, costs and stock value, stock history, export, adjust
   stock, stock alerts, inventory settings (docs/inventory.md). Costs are left out of every answer

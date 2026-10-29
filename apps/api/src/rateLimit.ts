@@ -188,6 +188,22 @@ export const LIMITS = {
   /** Unsubscribe page loads and clicks, per IP. */
   emailUnsubscribeIp: { max: 60, windowSec: 600 },
 
+  // ---- Zapier (docs/zapier.md) ----
+  /** Allowing Zapier on the consent page, per user: each one issues an authorization code. */
+  zapierAuthorize: { max: 20, windowSec: 600 },
+  /**
+   * POST /oauth/token, per IP. Zapier's servers make every merchant's requests from a few addresses
+   * (each connection refreshes about once an hour), so this only caps a flood; secrets and codes are
+   * 256 bits, which no rate makes guessable.
+   */
+  zapierTokenIp: { max: 600, windowSec: 60 },
+  /** Zapier's API calls (subscribing triggers, samples, searches), per connection. */
+  zapierApi: { max: 300, windowSec: 60 },
+  /** Requests with a zat_ token bizinsights never issued (not merely expired), per IP: past it they're answered 429. */
+  zapierBadTokenIp: { max: 120, windowSec: 600 },
+  /** Disconnecting Zapier from Settings, per workspace. */
+  zapierManage: { max: 30, windowSec: 600 },
+
   // ---- Public ingest ----
   /** Web pixel, per IP (a storefront sends a batch per page or so). */
   pixelIp: { max: 600, windowSec: 60 },
