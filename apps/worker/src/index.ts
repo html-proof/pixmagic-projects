@@ -1,4 +1,4 @@
-import { dbReachable, systemDb, type StoreStatus } from "@app/db";
+import { crossTenant, dbReachable, systemDb, type StoreStatus } from "@app/db";
 import { SIGN_IN_ACTIVITY_DAYS, SIGN_IN_EVENT, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import {
   AdsRateLimitedError,
@@ -59,9 +59,11 @@ import {
 import type { ZapierJob } from "@app/core/zapier";
 import { runShopifyReports } from "./shopifyReports.js";
 
+import { inJobScope } from "./rowScope.js";
 import { failVerify, runVerify } from "./verify.js";
 
 export * from "./handlers.js";
+export { inJobScope, jobWorkspace } from "./rowScope.js";
 export { runVerify, startChecks } from "./verify.js";
 export { runShopifyReports } from "./shopifyReports.js";
 
@@ -131,9 +133,14 @@ const BUSY_DEFER_MAX_MS = 2 * 3600_000;
  * until MAX_ATTEMPTS (or immediately fails on UnrecoverableError), then records
  * the failure and raises an alert. A failure while the database is unreachable
  * is not the job's fault and spends none of that budget (see deferForDb). Never
- * throws, so one bad message does not redeliver the rest of its batch.
+ * throws, so one bad message does not redeliver the rest of its batch. `systemDb` sees only the
+ * job's own workspace (rowScope.ts).
  */
 export async function consume(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
+  return inJobScope(queue, msg.body, () => consumeInScope(queue, msg, deps));
+}
+
+async function consumeInScope(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
   // The deferral is consume's bookkeeping, not part of the job. Handlers re-enqueue
   // `{ ...data, ... }` (the next page, a halved page, the next bulk phase), so passing it through
   // would start every follow-up message part-way through an outage it never saw.
@@ -440,7 +447,12 @@ export async function pruneAdSyncRunsDaily(deps: Pick<WorkerDeps, "coord">) {
   }
 }
 
+/** One cron tick. Its sweeps work across every store, so `systemDb` sees every workspace (the `sweep` reason). */
 export async function runScheduled(cron: string, deps: WorkerDeps) {
+  return crossTenant("sweep", () => runSweeps(cron, deps));
+}
+
+async function runSweeps(cron: string, deps: WorkerDeps) {
   if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
   // job only needs noticing within the window it has already been stuck for.

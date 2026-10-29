@@ -183,6 +183,8 @@ export class AppStack extends Stack {
           ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
           // Only the cron makes the WhatsApp service's database role (its "evolution-db" action) and prunes its data.
           ...(name === "cron" ? { EVOLUTION_DB_SECRET_ARN: `insights/${cfg.name}/evolution-db` } : {}),
+          // The system role's login, by name like the one above: the cron's migrate action makes the role from it.
+          ...(name === "cron" ? { SYSTEM_DB_SECRET_ARN: `insights/${cfg.name}/db-system` } : {}),
         },
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
@@ -197,6 +199,7 @@ export class AppStack extends Stack {
       data.dbSecret.grantRead(f);
       data.evolutionSecret.grantRead(f);
       if (name === "cron") data.evolutionDbSecret.grantRead(f);
+      if (name === "cron") data.systemDbSecret.grantRead(f);
       data.coordTable.grantReadWriteData(f);
       data.payloads.grantReadWrite(f);
       for (const q of Object.values(queues)) q.grantSendMessages(f);

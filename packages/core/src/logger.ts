@@ -163,6 +163,11 @@ export function withLogContext<T>(fields: Record<string, unknown>, fn: () => T):
   return context.run({ ...context.getStore(), ...fields }, fn);
 }
 
+/** The current log context itself (the same object for the whole request, job or tick), if any. */
+export function currentLogContext(): Readonly<Record<string, unknown>> | undefined {
+  return context.getStore();
+}
+
 /** Add fields to the current log context, e.g. the user once a request has authenticated. */
 export function addLogContext(fields: Record<string, unknown>): void {
   const store = context.getStore();

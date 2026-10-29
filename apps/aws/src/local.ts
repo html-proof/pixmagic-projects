@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, type WorkerDeps } from "@app/worker";
-import { logger, mailpitMailer, memoryBlobs, memoryCoord, withTimeout, type Mailer } from "@app/core";
+import { logger, mailpitMailer, memoryBlobs, memoryCoord, reportUnscopedSystemQueries, withTimeout, type Mailer } from "@app/core";
 import { fakeSmsProvider, type FakeSent } from "@app/core/sms";
 import { disconnectDb } from "@app/db";
 import { apiDeps } from "./app.js";
@@ -182,6 +182,8 @@ function listen(server: Server, port: number, host: string): Promise<boolean> {
  * a client that tries the missing one first waits for that to fail on every connection.
  */
 export async function startLocal(opts: LocalOptions): Promise<{ close(): Promise<void> }> {
+  // As on AWS (index.ts): a system query that names no row scope is logged.
+  reportUnscopedSystemQueries();
   const { jobs, queues } = localDeps();
   const handle = localHandler(buildApp(apiDeps(jobs)), uiFiles(opts.assets), jobs);
   const servers: Server[] = [];

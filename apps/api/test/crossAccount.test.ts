@@ -193,9 +193,10 @@ describe("cross-account access in the database (the tenant role)", () => {
   });
 
   it("has every policy filter by the workspace in context, for reads and for writes", async () => {
+    // The system role's own policies (system_all, system_any) are systemRole.test.ts's to check.
     const policies = await systemDb.$queryRaw<Array<{ table: string; policy: string; cmd: string; qual: string | null; check: string | null }>>`
       SELECT tablename AS table, policyname AS policy, cmd, qual, with_check AS check
-      FROM pg_policies WHERE schemaname = 'public' ORDER BY tablename, policyname`;
+      FROM pg_policies WHERE schemaname = 'public' AND roles <> '{app_system}' ORDER BY tablename, policyname`;
     expect(policies.length).toBeGreaterThan(10);
     const names = (s: string | null) => !!s && s.includes("current_setting('app.workspace_id'");
     // USING decides what's visible; WITH CHECK (or USING, when it's absent) decides what may be written.
