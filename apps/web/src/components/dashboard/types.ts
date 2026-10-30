@@ -2,6 +2,7 @@
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
+import type { ExpenseTotals } from "@app/shared/expenses";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
@@ -621,7 +622,23 @@ export interface Overview {
     shopify_sessions?: ShopifySessionsModule;
     profit?: ProfitModule;
     shopify_check?: ShopifyCheckModule;
+    /** The owner's own costs (Settings → Costs) for the dates; needs finance.breakdown. */
+    expenses?: ExpensesModule;
   };
+}
+
+/** The store's own costs for the dates (core expensesModule), in the store's currency. */
+export interface ExpensesModule {
+  currency: string;
+  /** Every cost the store keeps, whether or not it falls in the dates. */
+  count: number;
+  current: ExpenseTotals;
+  previous: { total: number } | null;
+  delta: number | null;
+  /** From which day the owner says the list holds every cost; null: not said. */
+  completeFrom: string | null;
+  /** The list holds every cost for all of the dates. */
+  complete: boolean;
 }
 
 /** Customers who ordered in a range (the customers module): each once, however many orders. */

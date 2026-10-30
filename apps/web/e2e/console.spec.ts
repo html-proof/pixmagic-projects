@@ -166,6 +166,7 @@ test.describe("signed in", () => {
     ["/settings/members", /./],
     ["/settings/security", /./],
     ["/settings/profile", /Profile/],
+    ["/settings/costs", /Costs/],
     ["/staff", /./],
     ["/whatsapp", /./],
     ["/messaging", /./],
