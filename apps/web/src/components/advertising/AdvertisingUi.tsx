@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { Download } from "lucide-react";
+import { Download, Printer } from "lucide-react";
+import { hasFullAccess } from "@app/shared/access";
 import type { AdProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
-import { CompareDates, CompareSelect, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
+import { comparedWith, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
 import { fmtRange } from "@/components/dashboard/format";
 import type { Overview } from "@/components/dashboard/types";
 import { LoadError } from "@/components/LoadError";
@@ -58,8 +59,14 @@ export function DownloadCsv({ section, query, label = "Download CSV" }: { sectio
   );
 }
 
-/** The page's title and its question: the dates, what they're compared with, and (`actions`) the account and a download. */
+/**
+ * The page's title and its question: the dates, what they're compared with, and (`actions`) the
+ * account and a download. Printing (or saving as PDF, from the browser's print dialog) leaves the
+ * menus out and says the store and the dates in words instead, as the Shopping Funnel does.
+ */
 export function AdvertisingHeader({ title, icon, sub, r, shown, current, actions }: { title: string; icon?: ReactNode; sub: ReactNode; r: DateRangeState; shown: Shown; current: boolean; actions?: ReactNode }) {
+  const { store, access, allowed } = useApp();
+  const compared = comparedWith(shown);
   return (
     <div className="card animate-rise">
       <h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
@@ -67,16 +74,43 @@ export function AdvertisingHeader({ title, icon, sub, r, shown, current, actions
         {title}
       </h1>
       <p className="mt-1 max-w-3xl text-sm text-muted">{sub}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      {shown && (
+        <p className="mt-1 hidden text-sm print:block">
+          {store?.name ?? store?.shopDomain} · {fmtRange(shown.range.from, shown.range.to)}
+          {compared ? ` · ${compared}` : ""}
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-2 print:hidden">
         <DateRangeSelect r={r} shown={shown} id="ad-dates" label="Dates" size="sm" />
         <CompareSelect r={r} shown={shown} current={current} id="ad-compare" label="Compare with" size="sm" />
         {actions}
+        {(allowed("reports.export") || hasFullAccess(access.role)) && (
+          <button type="button" className="btn-secondary h-9 gap-2 px-3 text-sm" onClick={() => window.print()} data-testid="ad-print">
+            <Printer aria-hidden className="h-4 w-4" />
+            Print or save as PDF
+          </button>
+        )}
       </div>
-      <div className="mt-2 flex flex-wrap gap-2 empty:hidden">
+      <div className="mt-2 flex flex-wrap gap-2 empty:hidden print:hidden">
         <CustomDates r={r} />
         <CompareDates r={r} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Why the platforms' clicks and reach and the store's sessions never line up, and are never added
+ * together: each counts something else, the way it sees it (docs/kpis.md, "Ads").
+ */
+export function MeasuresDiffer() {
+  return (
+    <p className="card text-xs text-muted" data-testid="measures-differ">
+      <span className="font-medium text-text">Clicks, reach and visits count different things.</span> Reach is the people Meta showed an ad to;
+      impressions, clicks and landing page views are each platform&apos;s own count. Sessions and visitors are what Shopify counts on your store,
+      and tracked visits what the bizinsights pixel counts. A click doesn&apos;t always become a session, and one person can be reached, click and
+      visit more than once, so these figures are never added together or read as the same people.
+    </p>
   );
 }
 

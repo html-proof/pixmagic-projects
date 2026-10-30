@@ -130,7 +130,7 @@ export function AdvertisingReports() {
             {t.label}
           </h2>
           <p className="mt-0.5 text-xs text-muted">
-            {fmtRange(t.range.from, t.range.to)}, compared with {comparisonHelp(t.previous)}. {t.rows.length === 1 ? "1 row" : `${number.format(t.rows.length)} rows`}.
+            {fmtRange(t.range.from, t.range.to)}, compared with {comparisonHelp(t.previous, t.range)}. {t.rows.length === 1 ? "1 row" : `${number.format(t.rows.length)} rows`}.
           </p>
           {t.rows.length === 0 ? (
             <p className="mt-3 text-sm text-muted">Nothing to report for these dates.</p>

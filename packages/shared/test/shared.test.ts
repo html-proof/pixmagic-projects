@@ -27,6 +27,7 @@ import {
   pkcePair,
   resolveCapabilities,
   resolvePreset,
+  WEEK_STARTS_ON,
   saleValue,
   scopesForModule,
   signShopifyQuery,
@@ -251,6 +252,28 @@ describe("dates & time zones", () => {
     });
     // The store's own calendar: 1 Nov in Sydney is still October in UTC.
     expect(resolvePreset("lastmonth", new Date("2026-10-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2026-10-01", to: "2026-10-31" });
+  });
+
+  it("resolves this week and last week as Monday-to-Sunday weeks", () => {
+    // Thursday 29 Oct 2026, 4:44:12 pm in Melbourne.
+    const now = new Date("2026-10-29T05:44:12Z");
+    const tz = "Australia/Melbourne";
+    expect(WEEK_STARTS_ON).toBe(1);
+    // This week so far, against the same weekdays of the week before, up to the same time of day.
+    expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, previous: { from: "2026-10-19", to: "2026-10-22", until: "16:44:12" } });
+    expect(resolvePreset("wtd", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-10-26", to: "2025-10-29", until: "16:44:12" });
+    // Last week is over: the whole week, against the whole week before it.
+    expect(resolvePreset("lastweek", now, tz)).toEqual({ range: { from: "2026-10-19", to: "2026-10-25" }, previous: { from: "2026-10-12", to: "2026-10-18" } });
+    // On a Monday, this week is that one day, and last week is the Monday-to-Sunday just ended.
+    const monday = new Date("2026-10-26T01:00:00Z");
+    expect(resolvePreset("wtd", monday, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-26" }, previous: { from: "2026-10-19", to: "2026-10-19", until: "12:00:00" } });
+    expect(resolvePreset("lastweek", monday, tz).range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
+    // On a Sunday, still the week that began on the Monday before; across a year's end too.
+    expect(resolvePreset("wtd", new Date("2026-11-01T01:00:00Z"), tz).range).toEqual({ from: "2026-10-26", to: "2026-11-01" });
+    expect(resolvePreset("lastweek", new Date("2027-01-02T01:00:00Z"), tz).range).toEqual({ from: "2026-12-21", to: "2026-12-27" });
+    // The store's own calendar: Monday morning in Melbourne is still Sunday in UTC.
+    expect(resolvePreset("wtd", new Date("2026-10-25T20:00:00Z"), tz).range).toEqual({ from: "2026-10-26", to: "2026-10-26" });
+    expect(resolvePreset("wtd", new Date("2026-10-25T20:00:00Z"), "UTC").range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
   });
 
   it("resolves this year from 1 January, and last year as the whole calendar year against the year before it", () => {

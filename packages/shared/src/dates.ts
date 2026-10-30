@@ -35,6 +35,57 @@ export function addDays(day: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * The day every week begins on, everywhere bizinsights reports by the week: Monday (ISO 8601, as
+ * `getUTCDay` numbers it: 1). "This week", "Last week" and the weekly charts all count Monday to
+ * Sunday, whichever platform the figures come from; Meta and Google offer both, Monday included.
+ */
+export const WEEK_STARTS_ON = 1;
+
+/** The Monday of the week `day` is in (`WEEK_STARTS_ON`). */
+export function weekStart(day: string): string {
+  const wd = new Date(`${day}T00:00:00Z`).getUTCDay();
+  return addDays(day, -((wd - WEEK_STARTS_ON + 7) % 7));
+}
+
+/**
+ * How a trend chart groups its days: one column per day, per week (Monday to Sunday,
+ * `WEEK_STARTS_ON`) or per calendar month. The same on the dashboard, the Advertising area and the
+ * Google Ads analytics page.
+ */
+export const PERIOD_GRANULARITIES = ["day", "week", "month"] as const;
+export type PeriodGranularity = (typeof PERIOD_GRANULARITIES)[number];
+
+/** ISO week label, "2026-W42". */
+export function weekKey(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  // ISO weeks: the week with the year's first Thursday is week 1.
+  const target = new Date(d.getTime());
+  target.setUTCDate(target.getUTCDate() + 3 - ((target.getUTCDay() + 6) % 7));
+  const year = target.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(year, 0, 4));
+  const week = 1 + Math.round(((target.getTime() - firstThursday.getTime()) / 86_400_000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+const monthStart = (day: string) => `${day.slice(0, 7)}-01`;
+
+/** The periods of [from, to] at `g`: each with its first and last day inside the range. */
+export function periodsOf(range: DateRange, g: PeriodGranularity): Array<{ key: string; from: string; to: string }> {
+  if (range.from > range.to) return [];
+  if (g === "day") return eachDay(range.from, range.to).map((d) => ({ key: d, from: d, to: d }));
+  const out: Array<{ key: string; from: string; to: string }> = [];
+  let start = range.from;
+  while (start <= range.to) {
+    const periodStart = g === "week" ? weekStart(start) : monthStart(start);
+    const next = g === "week" ? addDays(periodStart, 7) : addDays(monthStart(addDays(periodStart, 31)), 0);
+    const end = addDays(next, -1);
+    out.push({ key: g === "week" ? weekKey(periodStart) : periodStart.slice(0, 7), from: start, to: end < range.to ? end : range.to });
+    start = next;
+  }
+  return out;
+}
+
 export function daysBetweenInclusive(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 }
@@ -42,9 +93,10 @@ export function daysBetweenInclusive(from: string, to: string): number {
 /**
  * The dates the dashboard can report on. `6m` and `12m` are the last 6 and 12 months up to today
  * (from the day after the same date 6 or 12 months earlier: 25 Apr – 24 Oct, 25 Oct 2025 – 24 Oct
- * 2026). No preset or custom range is longer than 12 months (`latestRangeEnd`).
+ * 2026). `wtd` and `lastweek` are calendar weeks, Monday to Sunday (`WEEK_STARTS_ON`). No preset or
+ * custom range is longer than 12 months (`latestRangeEnd`).
  */
-export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "6m", "12m", "mtd", "lastmonth", "ytd", "lastyear", "custom"] as const;
+export const DATE_PRESETS = ["today", "yesterday", "wtd", "lastweek", "7d", "30d", "90d", "6m", "12m", "mtd", "lastmonth", "ytd", "lastyear", "custom"] as const;
 export type DatePreset = (typeof DATE_PRESETS)[number];
 
 export interface DateRange {
@@ -228,6 +280,13 @@ function presetRange(preset: DatePreset, today: string, custom: DateRange | unde
       const y = addDays(today, -1);
       return { from: y, to: y };
     }
+    case "wtd":
+      return { from: weekStart(today), to: today };
+    case "lastweek": {
+      // The whole calendar week before this one, Monday to Sunday.
+      const monday = addDays(weekStart(today), -7);
+      return { from: monday, to: addDays(monday, 6) };
+    }
     case "7d":
       return { from: addDays(today, -6), to: today };
     case "30d":
@@ -278,6 +337,11 @@ function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareCh
       return clampCustomRange({ from: compare.from!, to: compare.to! }, today);
     }
     case "previous": {
+      if (preset === "wtd") {
+        // The same days of the week before, Monday on: Monday to Wednesday against Monday to
+        // Wednesday, never against the Friday to Sunday just before, whose trade is another kind.
+        return { from: addDays(range.from, -7), to: addDays(range.to, -7) };
+      }
       if (preset === "lastmonth") {
         // The whole month before, whatever its length.
         const prevLast = addDays(range.from, -1);

@@ -24,8 +24,13 @@ Try again in a minute." without asking Meta, as it does when Meta throttles one 
 
 - **Dates**: the dashboard's own address-bar state (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`), kept
   for the tab, so the dashboard and every Advertising page show the same dates. The presets are the
-  dashboard's: Today, Yesterday, Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year
-  (`lastyear`, compared with the whole year before), Custom (`@app/shared/dates`).
+  dashboard's: Today, Yesterday, This week (`wtd`, Monday to today) and Last week (`lastweek`, Monday to
+  Sunday), Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year (`lastyear`, compared
+  with the whole year before), Custom (`@app/shared/dates`). Weeks run Monday to Sunday everywhere.
+- **By day, week or month**: the overview's charts ("Ad charts group") and the Meta and Google pages'
+  trend ("Trend groups") add the days up per week or calendar month once the dates are long enough
+  (`groupSeries` in @app/shared/ads): a week or month missing any day's figures is left blank, and a
+  rate is worked out from the period's sums.
 - **Platform and account**: `?platform=meta|google|adsense` and `?account=<ad connection id>`, picked on
   the page and kept in the address too.
 - **Campaign and campaign status** (Campaign comparison): find a campaign by part of its name or its id,
@@ -43,6 +48,12 @@ Try again in a minute." without asking Meta, as it does when Meta throttles one 
   (`seesTopic(access, "ads", offers)`), the area's pages need "View advertising analytics" (and the
   campaign comparison "View campaigns", `PAGE_NEED` in apps/web/src/lib/access.ts), and the API leaves
   out what isn't granted.
+
+## Printing
+
+Every Advertising page has **Print or save as PDF** (for whoever may export reports, and owners and
+admins, as on the Shopping Funnel): the browser's print dialog, with the menus left out and the store
+and dates written under the title instead.
 
 ## Rules the pages keep
 
@@ -64,6 +75,8 @@ Try again in a minute." without asking Meta, as it does when Meta throttles one 
   Advertising; a working account's first sync stays "Fetching"), and the page asks again every 5 seconds until it
   lands. An account whose syncs fail says when it was last tried (`lastSyncAttemptAt`), and people who may manage
   integrations get a link to Settings → Advertising to try again, unless a retry is already on its way.
+- Clicks, reach and store visits are different counts: the overview says so under its figures, and
+  none is added to another (docs/kpis.md, "Ads").
 
 ## Reports and downloads
 

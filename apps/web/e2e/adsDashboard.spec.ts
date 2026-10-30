@@ -137,6 +137,65 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByTestId("download-ads_campaigns")).toHaveAttribute("href", new RegExp(`section=ads_campaigns&preset=custom&from=${day(-7)}&to=${day(-1)}`));
 });
 
+test("trend charts group by week and month, the week presets run Monday to Sunday, and the Advertising pages print", async ({ page }) => {
+  const email = uniqueEmail("ads-periods");
+  await signUp(page, email);
+  const ws = await createWorkspace(page, "Ads Periods Co");
+  const storeId = await insertStore(db, ws, `ads-periods-${Date.now()}.myshopify.com`);
+  const conn = await insertAdConnection(db, { workspaceId: ws, storeId, provider: "meta", accountId: "act_2", accountName: "Shop ads", historyFrom: day(-89), syncedThrough: day(0), lastSyncedAt: new Date() });
+  for (let n = -34; n <= -1; n++) {
+    await db.query(
+      `INSERT INTO ad_campaign_daily (workspace_id, store_id, connection_id, provider, account_id, campaign_id, campaign_name, day, spend, impressions, clicks, link_clicks, conversions, conversion_value, purchases, purchase_value, leads, currency, updated_at)
+       VALUES ($1, $2, $3, 'meta', 'act_2', '1', 'Autumn', $4, 10, 1000, 30, 20, 1, 40, 1, 40, 0, 'USD', now())`,
+      [ws, storeId, conn, day(n)],
+    );
+  }
+  await seedOrder(ws, storeId, "W1", day(-30), 50, null);
+  await seedOrder(ws, storeId, "W2", day(-10), 50, null);
+  // 34 days always reach into a second calendar month, so weeks and months are both offered.
+  const dates = `preset=custom&from=${day(-34)}&to=${day(-1)}`;
+
+  // The Advertising overview's charts: per day, then added up per week (Monday to Sunday) and per month.
+  await page.goto(`/advertising?${dates}`);
+  const money = page.getByTestId("ads-money-chart");
+  await expect(money).toContainText("Ad spend per day");
+  const group = page.getByRole("combobox", { name: "Ad charts group" });
+  await group.selectOption("week");
+  await expect(money).toContainText("Ad spend per week");
+  await expect(money).toContainText("Weeks run Monday to Sunday");
+  await expect(money.locator("[aria-label*='Ad spend per week']")).toBeVisible();
+  await group.selectOption("month");
+  await expect(money).toContainText("Ad spend per month");
+  // Clicks, reach and store visits are said to be different counts, never added together; the page prints.
+  await expect(page.getByTestId("measures-differ")).toContainText("never added together");
+  await expect(page.getByTestId("ad-print")).toBeVisible();
+
+  // The Meta Ads page's trend, by week.
+  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Meta Ads" }).click();
+  await page.getByRole("combobox", { name: "Trend groups" }).selectOption("week");
+  await expect(page.getByTestId("ads-trend").locator("[aria-label*='per week by platform']")).toBeVisible();
+
+  // The dashboard's sales chart, by week and by month.
+  await page.goto(`/dashboard?${dates}`);
+  const sales = page.getByTestId("trend-sales");
+  await expect(sales.getByRole("heading")).toContainText("daily");
+  const salesGroup = page.getByRole("combobox", { name: "Sales chart groups" });
+  await salesGroup.selectOption("week");
+  await expect(sales.getByRole("heading")).toContainText("weekly");
+  await expect(sales).toContainText("weeks run Monday to Sunday");
+  await salesGroup.selectOption("month");
+  await expect(sales.getByRole("heading")).toContainText("monthly");
+
+  // Last week and this week: calendar weeks from Monday, in the store's zone (UTC here). A week has
+  // nothing to group by week or month, so the chart is back to days.
+  await page.getByLabel("Dates").selectOption("lastweek");
+  await expect(page).toHaveURL(/preset=lastweek/);
+  await expect(sales.getByRole("heading")).toContainText("daily");
+  await expect(salesGroup).toHaveCount(0);
+  await page.getByLabel("Dates").selectOption("wtd");
+  await expect(page).toHaveURL(/preset=wtd/);
+});
+
 test("the AdSense page splits the earnings by country and device type from AdSense's live report", async ({ page }) => {
   const email = uniqueEmail("ads-adsense");
   await signUp(page, email);
