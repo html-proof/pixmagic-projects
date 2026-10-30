@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { REQUIRED_AD_SCOPE } from "../src/ads/common.js";
-import { APP_STORE_APPS, APP_WEBHOOK_TOPICS } from "../src/apps.js";
+import { APP_EXTRA_OPTIONAL_SCOPES, APP_STORE_APPS, APP_WEBHOOK_TOPICS } from "../src/apps.js";
 
 /**
  * Guards the one piece of configuration Shopify reads instead of us.
@@ -126,6 +126,8 @@ describe("Shopify app configuration", () => {
         const extras = declared.slice(ENV_OPTIONAL_SCOPES.length);
         expect(new Set(declared).size, "a scope declared twice").toBe(declared.length);
         for (const s of extras) expect(ALLOWED_EXTRA_OPTIONAL_SCOPES, `${path} declares ${s}`).toContain(s);
+        // What its stores may give back, offered or not (scopes.ts revocableOptionalScopesFor).
+        expect(extras, "APP_EXTRA_OPTIONAL_SCOPES in packages/core/src/apps.ts").toEqual([...(APP_EXTRA_OPTIONAL_SCOPES[APP_KEYS[path]!] ?? [])]);
       });
 
       it("declares every extra optional scope the shipped settings offer its stores", () => {

@@ -1,6 +1,6 @@
 import { systemDb, type Store } from "@app/db";
 import { normalizeShopDomain } from "@app/shared";
-import { APP_STORE_APP, previewShops, type StoreApp } from "./apps.js";
+import { APP_EXTRA_OPTIONAL_SCOPES, APP_STORE_APP, previewShops, type StoreApp } from "./apps.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
@@ -58,6 +58,19 @@ export function declaredOptionalScopes(appKey?: string | null): string[] {
  */
 export function optionalScopesFor(store: StoreApp): string[] {
   return declaredOptionalScopes(previewShops().has(store.shopDomain) ? APP_STORE_APP : store.shopifyAppKey);
+}
+
+/**
+ * The optional scopes one store's merchant may give back: everything its own app's toml declares as
+ * optional (`APP_EXTRA_OPTIONAL_SCOPES` on top of the common list), which can be more than it is
+ * offered. SHOPIFY_APP_OPTIONAL_SCOPES may lag the toml or be emptied again to stop offering a
+ * scope (docs/shopify-setup.md, "Shopify's reports"); a store that granted it then still holds an
+ * optional scope, and has to see it as one and be able to return it. The preview store is on the
+ * main app, so it may return what the main app declares too. `revocableScopes` keeps only the
+ * granted ones.
+ */
+export function revocableOptionalScopesFor(store: Pick<StoreApp, "shopifyAppKey">): string[] {
+  return [...new Set([...declaredOptionalScopes(store.shopifyAppKey), ...(APP_EXTRA_OPTIONAL_SCOPES[store.shopifyAppKey] ?? [])])];
 }
 
 /**
@@ -139,7 +152,7 @@ export function requestableScopes(wanted: string[], granted: string[] | string, 
  * can only revoke a handle that was actually granted, and revoking `write_X` is not the same
  * ask as revoking `read_X`.
  *
- * `optional`: what the store's app declares (`optionalScopesFor`); by default the common list.
+ * `optional`: what the store's app declares (`revocableOptionalScopesFor`); by default the common list.
  */
 export function revocableScopes(wanted: string[], granted: string[] | string, optional: string[] = declaredOptionalScopes()): string[] {
   const declared = new Set(optional);

@@ -271,6 +271,23 @@ describe("optional scope requests", () => {
       expect(profit.requestableScopes).toEqual(["read_reports"]);
     });
 
+    it("still lets a store give read_reports back once the setting stops offering it", async () => {
+      // docs/shopify-setup.md's off switch: the setting is emptied again, the toml still declares
+      // it, and the store keeps its grant. It stays optional, never "Required".
+      const store = await connectedStore(ws, ["read_orders", "read_products", "read_reports"]);
+      ctx.setEnv({ SHOPIFY_APP_OPTIONAL_SCOPES: "" });
+      const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers });
+      expect(list.json().stores.find((x: { id: string }) => x.id === store.id).revocableScopes).toEqual(["read_reports"]);
+
+      ctx.setFetch(revokeResponses({ revoked: ["read_reports"], after: ["read_orders", "read_products"] }).fetchImpl);
+      const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/revoke`, headers, payload: { scopes: ["read_reports"] } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().revoked).toEqual(["read_reports"]);
+      // Given back, and not offered again while the setting is empty.
+      const profit = (res.json().capabilities as Array<{ id: string; requestableScopes: string[] }>).find((x) => x.id === "profit")!;
+      expect(profit.requestableScopes).toEqual([]);
+    });
+
     it("lists nothing removable for a store whose app doesn't declare it", async () => {
       const store = await connectedStore(ws, ["read_orders", "read_products", "read_reports"]);
       await systemDb.store.update({ where: { id: store.id }, data: { shopifyAppKey: "appstore" } });

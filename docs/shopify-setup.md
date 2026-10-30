@@ -380,14 +380,15 @@ the Shopify CLI):
 
    ```powershell
    cd C:\Users\Seban\Videos\saas-project2.0\shopify-app
-   shopify app deploy
+   shopify app deploy --config shopify.app.toml
    shopify app deploy --config pixmagic --version pixmagic-<n>
    ```
 
-   The first is the main app (57e9ef75); `<n>` is the next number after PixMagic's live version
-   (Dev Dashboard → Versions; pixmagic-7 was live on 2026-10-16). Never `--config appstore` or
-   `--config public` for this. Check: each app's new active version lists `read_reports` under
-   optional scopes. Roll back in the Dev Dashboard (Versions → Release) if anything else changed.
+   The first is the main app (57e9ef75): always name its config, since a bare `shopify app deploy`
+   releases whichever config the CLI last used, which can be the App Store app under review. `<n>`
+   is the next number after PixMagic's live version (Dev Dashboard → Versions; pixmagic-7 was live
+   on 2026-10-16). Never `--config appstore` or `--config public` for this. Check: each app's new
+   active version lists `read_reports` under optional scopes. Roll back in the Dev Dashboard (Versions → Release) if anything else changed.
 2. **Level 2 fields for PixMagic.** Partner Dashboard (organization 5229240) → **Apps** → the
    PixMagic app "bizinsights" (client id bb0ea9e4…) → **API access requests** → **Protected customer
    data access** → **Request access**: select *Protected customer data* with the reason "Store
@@ -420,11 +421,15 @@ report for this store (some reports need a higher Shopify plan)" is `unsupported
 profit can be on lower Shopify plans while sessions still work. Never a 0 or an estimate.
 
 To stop offering it, empty the setting again (a pull request, as in step 3): stores that granted it
-keep it, and their cards keep working. The App Store apps get it only after App Store review has
-finished and Shopify has approved Level 2 for that app: then add `"read_reports"` to that toml's
-`optional_scopes`, run `shopify app deploy --config appstore`, and add `appstore:read_reports` to
-the setting, changing appConfig.test.ts's rule that App Store apps declare nothing extra in the same
-pull request.
+keep it, their cards keep working, and Settings → Stores still lists it as optional with **Remove**
+(what a store may give back comes from `APP_EXTRA_OPTIONAL_SCOPES` in `packages/core/src/apps.ts`,
+which mirrors the tomls, not from the setting).
+
+The App Store apps get it only after App Store review has finished and Shopify has approved Level 2
+for that app: then add `"read_reports"` to that toml's `optional_scopes` and to its entry in
+`APP_EXTRA_OPTIONAL_SCOPES`, run `shopify app deploy --config appstore`, and add
+`appstore:read_reports` to the setting, changing appConfig.test.ts's rule that App Store apps declare
+nothing extra in the same pull request.
 
 ## 3d. Troubleshooting installs
 

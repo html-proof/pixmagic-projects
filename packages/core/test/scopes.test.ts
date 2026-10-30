@@ -8,6 +8,7 @@ import {
   optionalScopesFor,
   requestableScopes,
   resetEnvCache,
+  revocableOptionalScopesFor,
   revocableScopes,
   revokeAccessScopes,
   ScopeRevokeError,
@@ -95,8 +96,20 @@ describe("optional scopes per app", () => {
       expect(requestableScopes(["read_reports"], ["read_orders", "read_reports"], pixmagic)).toEqual([]);
       // The default stays the common list, which has no read_reports.
       expect(requestableScopes(["read_reports"], ["read_orders"])).toEqual([]);
-      expect(revocableScopes(["read_reports"], ["read_orders", "read_reports"], pixmagic)).toEqual(["read_reports"]);
-      expect(revocableScopes(["read_reports"], ["read_orders", "read_reports"], appstore)).toEqual([]);
+      expect(revocableScopes(["read_reports"], ["read_orders", "read_reports"], revocableOptionalScopesFor({ shopifyAppKey: "pixmagic" }))).toEqual(["read_reports"]);
+      expect(revocableScopes(["read_reports"], ["read_orders", "read_reports"], revocableOptionalScopesFor({ shopifyAppKey: "appstore" }))).toEqual([]);
+    });
+  });
+
+  it("lets a store give back what its app's toml declares, though the setting no longer offers it", () => {
+    // The off switch in docs/shopify-setup.md: the setting emptied, the grant kept.
+    withEnv({ SHOPIFY_OPTIONAL_SCOPES: COMMON, SHOPIFY_APP_OPTIONAL_SCOPES: "", SHOPIFY_APP_STORE_PREVIEW_SHOPS: "review-store.myshopify.com" }, () => {
+      expect(optionalScopesFor({ shopifyAppKey: "default", shopDomain: "dev-store.myshopify.com" })).not.toContain("read_reports");
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "default" })).toEqual([...COMMON.split(","), "read_reports"]);
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "pixmagic" })).toContain("read_reports");
+      // An App Store app's toml declares nothing extra, and neither does an app we don't know.
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "appstore" })).toEqual(COMMON.split(","));
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "nope" })).toEqual(COMMON.split(","));
     });
   });
 });

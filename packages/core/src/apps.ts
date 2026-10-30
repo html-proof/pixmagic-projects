@@ -210,6 +210,18 @@ export const APP_WEBHOOK_TOPICS: Readonly<Record<string, readonly string[]>> = {
 /** The topics Shopify sends a store through its app's toml, or null when the app isn't one of those above. */
 export const appWebhookTopics = (appKey: string): readonly string[] | null => APP_WEBHOOK_TOPICS[appKey] ?? null;
 
+/**
+ * The optional scopes each of our apps declares in its toml after the common SHOPIFY_OPTIONAL_SCOPES:
+ * what a store connected through it may give back (scopes.ts `revocableOptionalScopesFor`), which
+ * can be more than it is offered, since SHOPIFY_APP_OPTIONAL_SCOPES may lag the toml or be emptied
+ * again. packages/core/test/appConfig.test.ts fails the build when a toml and this list differ. An
+ * app key not listed declares nothing extra.
+ */
+export const APP_EXTRA_OPTIONAL_SCOPES: Readonly<Record<string, readonly string[]>> = {
+  [DEFAULT_APP]: ["read_reports"],
+  pixmagic: ["read_reports"],
+};
+
 /** A store as far as choosing its app goes. */
 export interface StoreApp {
   shopDomain: string;

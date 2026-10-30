@@ -9,6 +9,7 @@ import {
   optionalScopeGrantUrl,
   optionalScopesFor,
   requestableScopes,
+  revocableOptionalScopesFor,
   revocableScopes,
   revokeAccessScopes,
   ScopeRevokeError,
@@ -192,7 +193,9 @@ export function scopeRoutes(app: App, deps: Deps) {
    * Nothing goes through the merchant here — unlike a request, a revoke is the app's own call
    * and takes effect immediately. Only scopes declared optional *and* currently granted are
    * sent on (`revocableScopes`); anything else is refused here rather than at Shopify, since a
-   * required scope can only be given up by uninstalling.
+   * required scope can only be given up by uninstalling. Optional means what the store's own
+   * app declares (`revocableOptionalScopesFor`), not only what it is still offered: a scope the
+   * owner stopped offering stays the merchant's to give back.
    *
    * The stored scopes are then reconciled from Shopify rather than edited locally, for the same
    * reason `refresh` exists: `grantedScopes` is a cache, and the authoritative answer is one
@@ -207,7 +210,7 @@ export function scopeRoutes(app: App, deps: Deps) {
     const wanted = input.scopes ?? (input.module ? scopesForModule(input.module as ModuleId) : []);
     if (!wanted.length) throw new HttpError(400, "Say which scopes to revoke", "invalid_scopes");
 
-    const optional = optionalScopesFor(store);
+    const optional = revocableOptionalScopesFor(store);
     const give = revocableScopes(wanted, store.grantedScopes, optional);
     if (!give.length) {
       // Either the store doesn't have them (nothing to do) or they aren't ours to revoke.
