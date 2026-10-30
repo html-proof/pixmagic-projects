@@ -4289,6 +4289,8 @@ model ZapierGrant {
   userId        String        @map("user_id")
   /// The OAuth client it was issued to (ZAPIER_CLIENT_ID at the time).
   clientId      String        @map("client_id")
+  /// What it may do beyond triggers and searches, as ticked on the consent page: whatsapp_send.
+  scopes        String[]      @default([])
   /// The last request Zapier made with it (at most once a minute).
   lastUsedAt    DateTime?     @map("last_used_at")
   revokedAt     DateTime?     @map("revoked_at")

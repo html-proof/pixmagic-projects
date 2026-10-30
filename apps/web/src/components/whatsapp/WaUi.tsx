@@ -129,6 +129,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   automation: "Automation",
   campaign: "Campaign",
   manual: "Sent from the dashboard",
+  zapier: "Zapier",
   test: "Test",
   verification: "Verification code",
   team_alert: "Team alert",

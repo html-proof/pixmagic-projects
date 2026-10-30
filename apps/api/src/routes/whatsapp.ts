@@ -174,7 +174,7 @@ function campaignView(c: WappCampaign, report?: Awaited<ReturnType<typeof campai
 const messageFilters = z.object({
   status: z.enum(["waiting", "sent", "delivered", "read", "failed", "not_sent", "received", ...WA_MESSAGE_STATUSES]).optional(),
   direction: z.enum(["out", "in"]).optional(),
-  source: z.enum(["automation", "campaign", "manual", "test", "verification", "team_alert", "reply", "inbound"]).optional(),
+  source: z.enum(["automation", "campaign", "manual", "zapier", "test", "verification", "team_alert", "reply", "inbound"]).optional(),
   automationId: idParam.optional(),
   campaignId: idParam.optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

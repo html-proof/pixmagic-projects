@@ -81,7 +81,7 @@ describe("connecting Zapier (OAuth 2.0, authorization code)", () => {
     const { owner, ws, store } = await business("owner-z", "owner@zap.test", "Zap Shop", "zap.myshopify.com");
     const page = await ctx.app.inject({ method: "GET", url: `/oauth/zapier/authorize?${authorizeQuery()}`, headers: owner.headers });
     expect(page.statusCode, page.body).toBe(200);
-    expect(page.json().workspaces).toEqual([{ id: ws, name: "Zap Shop", allowed: true, stores: [{ id: store.id, name: "Zap Shop", shopDomain: "zap.myshopify.com" }] }]);
+    expect(page.json().workspaces).toEqual([{ id: ws, name: "Zap Shop", allowed: true, scopes: ["whatsapp_send"], stores: [{ id: store.id, name: "Zap Shop", shopDomain: "zap.myshopify.com" }] }]);
     expect(new URL(page.json().cancelUrl).searchParams.get("error")).toBe("access_denied");
 
     const allowed = await allow(owner.headers, ws, store.id, { state: "a b&c=d/é" });

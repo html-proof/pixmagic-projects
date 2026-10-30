@@ -35,6 +35,8 @@ export async function zapierOverview(workspaceId: string, storeId: string, opts:
       authorizedBy: byId.get(g.userId) ? { email: byId.get(g.userId)!.email, name: byId.get(g.userId)!.displayName } : null,
       createdAt: g.createdAt.toISOString(),
       lastUsedAt: g.lastUsedAt?.toISOString() ?? null,
+      // What it may do beyond triggers and searches (whatsapp_send: the "Send WhatsApp Template Message" action).
+      scopes: g.scopes,
       triggers: g.hooks.map((h) => ({
         id: h.id,
         event: h.event,

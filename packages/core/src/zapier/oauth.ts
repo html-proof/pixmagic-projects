@@ -15,6 +15,7 @@
 import { systemDb, type Tx, type ZapierGrant } from "@app/db";
 import { randomToken, sha256Hex } from "@app/shared";
 import {
+  isZapierScope,
   ZAPIER_ACCESS_PREFIX,
   ZAPIER_ACCESS_TTL_S,
   ZAPIER_CODE_PREFIX,
@@ -79,6 +80,8 @@ interface CodeRecord {
   userId: string;
   workspaceId: string;
   storeId: string;
+  /** What the member ticked beyond triggers and searches (ZAPIER_SCOPES); absent in a code issued before scopes. */
+  scopes?: string[];
   /** Epoch ms. The coordinator expires it too; this is checked as well. */
   exp: number;
 }
@@ -150,11 +153,11 @@ export async function exchangeAuthorizationCode(coord: Coord, input: { code: str
   const who = await authorizerAccess(rec, now);
   if (!who) throw new ZapierOAuthError("invalid_grant", NO_ACCESS);
   const { grant, tokens } = await systemDb.$transaction(async (tx) => {
-    const grant = await tx.zapierGrant.create({ data: { workspaceId: rec.workspaceId, storeId: rec.storeId, userId: rec.userId, clientId: rec.clientId } });
+    const grant = await tx.zapierGrant.create({ data: { workspaceId: rec.workspaceId, storeId: rec.storeId, userId: rec.userId, clientId: rec.clientId, scopes: (rec.scopes ?? []).filter(isZapierScope) } });
     return { grant, tokens: await issueTokens(tx, grant, now) };
   });
   await coord.put(spentKey(input.code), grant.id, ZAPIER_CODE_TTL_S * 2).catch((err: unknown) => logger.warn({ err }, "could not note a spent zapier code"));
-  await audit({ workspaceId: grant.workspaceId, actorUserId: grant.userId, action: "zapier.connected", targetType: "zapier_grant", targetId: grant.id, metadata: { storeId: grant.storeId } });
+  await audit({ workspaceId: grant.workspaceId, actorUserId: grant.userId, action: "zapier.connected", targetType: "zapier_grant", targetId: grant.id, metadata: { storeId: grant.storeId, scopes: grant.scopes } });
   logger.info({ grantId: grant.id, workspaceId: grant.workspaceId, storeId: grant.storeId }, "zapier connected");
   return tokens;
 }

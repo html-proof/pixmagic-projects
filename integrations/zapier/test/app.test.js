@@ -1,5 +1,6 @@
 // The Zapier app against a faked bizinsights (nock): the OAuth flow's requests, the triggers'
-// subscriptions and samples, the searches, and bizinsights' refusals read into Zapier's errors.
+// subscriptions and samples, the searches, the WhatsApp action, and bizinsights' refusals read into
+// Zapier's errors.
 // Node's own test runner (`node --test`): no Jest, so none of its dependencies in this folder.
 const { describe, it, before, after, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
@@ -31,7 +32,7 @@ afterEach(() => {
 after(() => nock.enableNetConnect());
 
 describe("the app definition", () => {
-  it("is valid for Zapier's schema, with every trigger and search Zapier will list", () => {
+  it("is valid for Zapier's schema, with every trigger, search and action Zapier will list", () => {
     assert.deepEqual(validateApp(compileApp(App)), []);
     assert.deepEqual(Object.keys(App.triggers), [
       "alert_raised",
@@ -43,14 +44,19 @@ describe("the app definition", () => {
       "integration_disconnected",
       "sync_completed",
       "order_paid",
+      "whatsapp_templates",
     ]);
     assert.deepEqual(Object.keys(App.searches), ["find_ad_performance", "find_adsense_earnings"]);
-    assert.deepEqual(App.creates, {});
-    for (const t of Object.values(App.triggers)) assert.equal(t.operation.type, "hook");
+    assert.deepEqual(Object.keys(App.creates), ["send_whatsapp_template"]);
+    // Every listed trigger is instant; the template list only feeds the action's dropdown.
+    for (const t of Object.values(App.triggers)) if (!t.display.hidden) assert.equal(t.operation.type, "hook");
+    assert.equal(App.triggers.whatsapp_templates.display.hidden, true);
   });
 
   it("says which payload version every trigger's events and samples are", () => {
     for (const t of Object.values(App.triggers)) {
+      // The template list isn't an event: it only feeds the action's dropdown.
+      if (t.display.hidden) continue;
       assert.equal(t.operation.sample.schema_version, 1);
       assert.ok(t.operation.outputFields.map((f) => f.key).includes("schema_version"), t.key);
       // The sample is the trigger's own event.
@@ -192,5 +198,66 @@ describe("the searches", () => {
   it("find AdSense earnings, empty when no account is connected", async () => {
     nock(BASE).get("/api/zapier/search/adsense-earnings").reply(200, []);
     assert.deepEqual(await appTester(App.searches.find_adsense_earnings.operation.perform, { authData, inputData: {} }), []);
+  });
+});
+
+describe("the action: Send WhatsApp Template Message", () => {
+  const TEMPLATES = [
+    { id: "t1", name: "Thanks for your enquiry", category: "transactional", category_label: "Order update", language: "en", body: "Hi {{customer_first_name}}, {{store_name}} here: your quote {{order_number}} is ready.", variables: ["customer_first_name", "order_number"], automatic: ["store_name"] },
+  ];
+  const inputFields = () => App.creates.send_whatsapp_template.operation.inputFields;
+
+  it("lists the approved templates for the dropdown", async () => {
+    nock(BASE).get("/api/zapier/whatsapp/templates").matchHeader("authorization", "Bearer zat_access").reply(200, TEMPLATES);
+    assert.deepEqual(await appTester(App.triggers.whatsapp_templates.operation.perform, { authData }), TEMPLATES);
+    const { key, dynamic, altersDynamicFields } = inputFields()[0];
+    assert.deepEqual({ key, dynamic, altersDynamicFields }, { key: "template_id", dynamic: "whatsapp_templates.id.name", altersDynamicFields: true });
+  });
+
+  it("asks for the chosen template's own variables (its first name optional), with its text", async () => {
+    const dynamic = inputFields().find((f) => typeof f === "function");
+    assert.deepEqual(await appTester(dynamic, { authData, inputData: {} }), []);
+    nock(BASE).get("/api/zapier/whatsapp/templates").reply(200, TEMPLATES);
+    const fieldsFor = await appTester(dynamic, { authData, inputData: { template_id: "t1" } });
+    assert.deepEqual(fieldsFor.map((f) => [f.key, f.required ?? null]), [
+      ["template_text", null],
+      ["value_customer_first_name", false],
+      ["value_order_number", true],
+    ]);
+    assert.match(fieldsFor[0].helpText, /your quote \{\{order_number\}\} is ready/);
+    // The send-once key is required: Zapier doesn't give an action the trigger item's id.
+    assert.equal(inputFields().find((f) => f.key === "unique_key").required, true);
+  });
+
+  it("posts the message with the mapped values, the consent and the Zap's id, and answers what was queued", async () => {
+    const queued = { id: "m1", status: "queued", duplicate: false, phone_masked: "+61 4•• ••• 678", template: { id: "t1", name: "Thanks for your enquiry", category: "transactional" }, consent_recorded: true };
+    nock(BASE)
+      .post("/api/zapier/whatsapp/messages", {
+        template_id: "t1",
+        phone: "+61412345678",
+        values: { order_number: "Q-77" },
+        first_name: "Sam",
+        customer_agreed: true,
+        consent_note: "Meta lead form: WhatsApp box",
+        unique_key: "lead-123",
+        zap_id: 99,
+      })
+      .matchHeader("authorization", "Bearer zat_access")
+      .reply(201, queued);
+    const result = await appTester(App.creates.send_whatsapp_template.operation.perform, {
+      authData,
+      meta: { zap: { id: 99 } },
+      inputData: { template_id: "t1", phone: "+61412345678", value_order_number: "Q-77", value_customer_first_name: "", first_name: "Sam", customer_agreed: true, consent_note: "Meta lead form: WhatsApp box", unique_key: "lead-123" },
+    });
+    assert.deepEqual(result, queued);
+  });
+
+  it("shows bizinsights' words when the message can't go (no consent), and tries later when told to slow down", async () => {
+    nock(BASE)
+      .post("/api/zapier/whatsapp/messages")
+      .reply(409, { error: "not_allowed", message: "This message can't go to that number: The customer hasn't agreed to WhatsApp updates." });
+    await assert.rejects(appTester(App.creates.send_whatsapp_template.operation.perform, { authData, inputData: { template_id: "t1", phone: "+61412345678" } }), /hasn't agreed/);
+    nock(BASE).post("/api/zapier/whatsapp/messages").reply(429, { error: "rate_limited", message: "Too quickly." }, { "retry-after": "30" });
+    await assert.rejects(appTester(App.creates.send_whatsapp_template.operation.perform, { authData, inputData: { template_id: "t1", phone: "+61412345678" } }), { name: "ThrottledError" });
   });
 });

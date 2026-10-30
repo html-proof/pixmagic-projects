@@ -98,6 +98,8 @@ const ZAPIER_BEARER = new Set([
   "GET /zapier/samples/:event",
   "GET /zapier/search/ad-performance",
   "GET /zapier/search/adsense-earnings",
+  "GET /zapier/whatsapp/templates",
+  "POST /zapier/whatsapp/messages",
 ]);
 
 /** A shared link may still use this account route: who am I (that workspace only, read-only). */

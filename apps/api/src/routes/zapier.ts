@@ -13,6 +13,8 @@ import {
   zapierConfig,
   zapierOverview,
   zapierSamples,
+  zapierSendWhatsapp,
+  zapierWhatsappTemplates,
   type AuthorizerAccess,
 } from "@app/core/zapier";
 import { addDays, allows, hasFullAccess, isDay, localDay } from "@app/shared";
@@ -28,6 +30,7 @@ import { limit, LIMITS } from "../rateLimit.js";
  * other route reads cookies or sk_ keys only). Each request re-checks the member who connected it
  * (authenticateZapierToken): one who left, lost "Manage integrations" or whose access ended gets 401,
  * so Zapier asks for the connection again. The store is the connection's: no route takes one.
+ * Sending a WhatsApp message (the one action) also needs the scope ticked on the consent page.
  *
  * And Settings → Integrations' Zapier card (/workspaces/:ws/stores/:storeId/zapier): the store's
  * connections, triggers and recent deliveries; Disconnect; Retry a failed delivery (owners and admins).
@@ -98,6 +101,8 @@ export function zapierRoutes(app: App, deps: Deps) {
       workspace: { id: zc.grant.workspaceId, name: workspace?.name ?? null },
       store: { id: zc.who.store.id, name: storeName, shop_domain: zc.who.store.shopDomain, currency: zc.who.store.currency, timezone: zc.who.store.timezone },
       connected_by: user?.email ?? null,
+      // What it may do beyond triggers and searches, as ticked on bizinsights' consent page.
+      scopes: zc.grant.scopes,
       label: `${storeName} (${workspace?.name ?? "bizinsights"})`,
     });
   });
@@ -140,6 +145,19 @@ export function zapierRoutes(app: App, deps: Deps) {
     requireAds(zc);
     const { since, until } = rangeOf(searchRange.parse(c.req.query()), zc.who.store.timezone);
     return c.json(await findAdsenseEarnings(zc.grant.storeId, since, until));
+  });
+
+  /** The action's dropdown: the store's WhatsApp templates Meta approved (a connection allowed to send only). */
+  app.get("/zapier/whatsapp/templates", async (c) => {
+    const zc = await requireZapier(c, deps);
+    return c.json(await zapierWhatsappTemplates(zc.grant, zc.who));
+  });
+
+  /** "Send WhatsApp Template Message": queued through the store's WhatsApp, with every rule the WhatsApp page keeps. */
+  app.post("/zapier/whatsapp/messages", async (c) => {
+    const zc = await requireZapier(c, deps);
+    const sent = await zapierSendWhatsapp(deps, zc.grant, zc.who, await body(c));
+    return c.json(sent, sent.duplicate ? 200 : 201);
   });
 
   // ---------------- Settings → Integrations (the member's session) ----------------

@@ -34,7 +34,7 @@ type Delivery = {
   retryable: boolean;
 };
 type Trigger = { id: string; event: string; label: string; inputs: Record<string, unknown>; createdAt: string; lastDeliveredAt: string | null; mixedCurrencies: string[] | null };
-type Connection = { id: string; authorizedBy: { email: string; name: string | null } | null; createdAt: string; lastUsedAt: string | null; triggers: Trigger[] };
+type Connection = { id: string; authorizedBy: { email: string; name: string | null } | null; createdAt: string; lastUsedAt: string | null; scopes: string[]; triggers: Trigger[] };
 type Setup = { ZAPIER_CLIENT_ID: boolean; ZAPIER_CLIENT_SECRET: boolean; ZAPIER_REDIRECT_URI: boolean; ZAPIER_INVITE_URL: boolean };
 export type ZapierOverview = { configured: boolean; inviteUrl: string | null; setup: Setup | null; connections: Connection[]; deliveries: Delivery[] };
 
@@ -176,6 +176,11 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
                   </button>
                 )}
               </div>
+              {c.scopes.includes("whatsapp_send") && (
+                <p className="mt-1 text-muted" data-testid="zapier-whatsapp-send">
+                  Allowed to send WhatsApp template messages (approved templates only, to customers who agreed). See them on the WhatsApp page, under Messages, as sent by Zapier.
+                </p>
+              )}
               {c.triggers.length ? (
                 <ul className="mt-2 space-y-1" aria-label="Active triggers">
                   {c.triggers.map((t) => (
