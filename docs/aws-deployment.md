@@ -258,12 +258,15 @@ affect:
   `packages/shared`, the e2e stand-ins (`infra/cognito-local`, `infra/postgres`,
   `docker-compose.yml`), the dependencies or `ci.yml`, or has the label `e2e` (labels are read per
   push: add it, then push). A push to `main` always needs them before Deploy to AWS.
-- Each pull-request job that passes records the tree it tested: a commit status `ci/passed-<job>`
-  ("tree <tree>") on the pull request's head. The push to `main` that merges it looks these up first
-  (job "Already passed on a pull request?", about a minute) and skips each job that already passed
-  on exactly its tree. That holds
-  when `main` hasn't moved since the pull request's last run: of several pull requests merged back to
-  back, only the first saves anything.
+- Each pull-request job that passes records the code it tested: a commit status `ci/passed-<job>`
+  ("code <key>") on the pull request's head, where the key hashes the tested commit's files less
+  Markdown and `docs/` (`infra/runner/code-key.mjs`). Every run looks these up first (job "Already
+  passed on this code?", about a minute) and skips each job that already passed on the same code:
+  a pull request's run on its newest 30 commits, so a push that changed only Markdown or `docs/`
+  costs a minute; a push to `main` on the commits it was made from and the head of the pull request
+  it merged. That holds for `main` when its code hasn't moved since the pull request's last run: of
+  several pull requests merged back to back, only the first saves anything. Records made before
+  2026-10-29 name the exact tree ("tree <tree>") and still count.
 - The integration tests (`pnpm test:integration` and the migrations check, ~4 of the checks job's
   ~7.5 minutes) run only when something they read changed since a run where they passed. The checks
   job hashes the git ids of `apps/api`, `apps/worker`, `packages/`, `test-support/`,
@@ -281,11 +284,24 @@ affect:
   failed with "Artifact storage quota has been hit", no pass was recorded, and every push to `main`
   ran the whole ~45-minute suite. The only artifact left is the Playwright report of a failed e2e
   run (7 days).
-- A newer push cancels the older run on the same pull request. On `main` it waits: the run in
-  progress finishes and deploys, then the newest waiting push runs (older waiting ones are dropped).
-  So merges minutes apart still deploy, at most one run behind. Before 2026-10-18 `main` cancelled
-  too, and that day only 2 of 8 main runs reached Deploy. Re-run a failed job only when it is flaky,
-  not to retry a real failure.
+- A newer push waits for the run in progress on the same branch; then the newest waiting push runs
+  (GitHub drops older waiting ones, "Canceling since a higher priority waiting request ... exists":
+  those never started). On `main` the run in progress finishes and deploys, so merges minutes apart
+  still deploy, at most one run behind. Before 2026-10-18 `main` cancelled, and that day only 2 of 8
+  main runs reached Deploy. Making a pull request a draft is the one event that cancels its run in
+  progress (holding it, below).
+- On a pull request, the checks and e2e jobs start `infra/runner/stop-when-superseded.mjs`, which
+  asks GitHub every minute for the pull request's head. Once a newer push arrives it compares the
+  code the run tests (the pull request merged into `main`) with GitHub's merge of the newer head
+  into `main`, Markdown and `docs/` aside. The same code (a push of only docs, or `main` merged into
+  the branch by hand) lets the run finish, and the run for that push then skips what it passed.
+  Other code, or a push that conflicts with `main`, cancels the run within a minute; the job's last
+  step, "Newer pushes while this job ran", prints why, and the run's Annotations show it. Comparing
+  the two heads instead would stop a run whenever `main` is merged into the branch: that lists
+  every file `main` changed since the branch's last merge. Until 2026-10-29 every push
+  cancelled the pull request's run in progress: a merge of a docs-only `main` into #290 cancelled
+  its run 27 minutes into the checks, and the PC had to start over.
+- Re-run a failed job only when it is flaky, not to retry a real failure.
 
 Minutes used so far this month: GitHub → Settings → Billing and licensing → Usage, or
 `gh api users/html-proof/settings/billing/usage/summary` (after `gh auth refresh -s user` once).

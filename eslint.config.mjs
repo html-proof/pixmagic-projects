@@ -60,7 +60,7 @@ export default tseslint.config(
     // Node scripts and configs (ESM .mjs, CommonJS .cjs).
     files: ["**/*.{mjs,cjs,js}"],
     languageOptions: {
-      globals: { process: "readonly", console: "readonly", URL: "readonly", Buffer: "readonly", setTimeout: "readonly", clearTimeout: "readonly", fetch: "readonly", __dirname: "readonly", require: "readonly", module: "writable" },
+      globals: { process: "readonly", console: "readonly", URL: "readonly", Buffer: "readonly", setTimeout: "readonly", clearTimeout: "readonly", fetch: "readonly", AbortSignal: "readonly", __dirname: "readonly", require: "readonly", module: "writable" },
     },
   },
   {
