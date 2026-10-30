@@ -489,7 +489,24 @@ jobs:
             export NODE_OPTIONS="--import=file:///$(cygpath -m "$GITHUB_WORKSPACE")/apps/web/e2e/ipv4-only.mjs"
           fi
           pnpm --filter @app/web exec playwright install --with-deps chromium
-      - run: pnpm e2e
+      # Each failed test's page as it was when the test stopped (the snapshot in Playwright's
+      # error-context.md), in this step's log: `gh run view --log-failed` shows it with the error.
+      # No artifact: they count against the account's 500 MB of Actions storage (GitHub Free, all
+      # its private repositories), used up since 2026-10-19, and every upload then failed with a
+      # second error on the run and kept nothing.
+      - name: Run pnpm e2e
+        run: |
+          status=0
+          pnpm e2e || status=$?
+          shopt -s globstar nullglob
+          for f in apps/web/test-results/**/error-context.md; do
+            page=$(awk '/^# Page snapshot/ { p = 1 } /^# Test source/ { p = 0 } p' "$f")
+            [[ -n "$page" ]] || continue
+            echo "::group::Page when it failed: $(basename "$(dirname "$f")")"
+            printf '%s\n' "$page"
+            echo "::endgroup::"
+          done
+          exit $status
       # As in the checks job: the standbys and battery time that overlapped this job, in its log.
       - name: Did the PC sleep during this job? (self-hosted runner)
         if: always() && runner.os == 'Windows'
@@ -511,14 +528,3 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         continue-on-error: true
         run: cat "$RUNNER_TEMP/superseded.log" 2>/dev/null || true
-      # The failed tests' traces, for three days. This is the workflow's only artifact: they count against
-      # the account's 500 MB of Actions storage, and while that is used up the upload fails (the job
-      # has failed already; this step's failure adds nothing).
-      - if: failure()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: playwright-report
-          path: apps/web/test-results
-          retention-days: 3
-          compression-level: 9
