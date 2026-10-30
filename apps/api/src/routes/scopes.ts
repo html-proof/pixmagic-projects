@@ -2,6 +2,7 @@ import { z } from "zod";
 import { systemDb, withTenant, type Store } from "@app/db";
 import {
   audit,
+  customersFromChange,
   declaredScopes,
   fetchGrantedScopes,
   getAccessToken,
@@ -78,7 +79,9 @@ async function reconcileScopes(
   const newlyGranted = scopes.filter((s) => !store.grantedScopes.includes(s));
   const revoked = store.grantedScopes.filter((s) => !scopes.includes(s));
   if (newlyGranted.length || revoked.length) {
-    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: scopes } });
+    // With them, from when orders carry their customer: read_customers granted now (the re-read
+    // queued below moves it back once it is in) or given up.
+    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: scopes, ...customersFromChange(store.grantedScopes, scopes, new Date()) } });
     await audit({
       workspaceId: store.workspaceId,
       action: "store.scopes_updated",
@@ -271,7 +274,7 @@ export function scopeRoutes(app: App, deps: Deps) {
     } catch (err) {
       logger.warn({ err, shop: store.shopDomain, scopes: revoked }, "scopes revoked but the reconcile failed");
       scopes = store.grantedScopes.filter((s) => !revoked.includes(s));
-      await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: scopes } });
+      await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: scopes, ...customersFromChange(store.grantedScopes, scopes, new Date()) } });
     }
 
     const fresh = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });

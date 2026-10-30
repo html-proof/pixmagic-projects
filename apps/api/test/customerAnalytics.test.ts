@@ -244,6 +244,61 @@ describe("customer lifetime figures and cohorts (core customerAnalytics)", () =>
     expect(await report(ws, store, EVERYTHING, { from: "2026-06-01", to: "2026-09-30" })).toMatchObject({ customersFrom: "2026-08-20", customersLater: true, dates: { from: "2026-08-20", clamped: true } });
   });
 
+  /**
+   * stores.customers_from: from when every order carries its customer, recorded at the grant and
+   * moved back to the re-read's start once it is in. The tests above have none (a store that
+   * granted read_customers before it was recorded): the start is read from the orders.
+   */
+  it("counts from the recorded grant: the day after the re-read's start, whatever the orders suggest", async () => {
+    const { ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-06-01T00:00:00Z") } });
+    const days = [
+      await seedOrder(store, "old1", "2026-06-05", { customer: null, value: 10 }),
+      // Updated since the grant: it carries its customer, the others of its time don't.
+      await seedOrder(store, "updated", "2026-06-10", { customer: "L", value: 10 }),
+      await seedOrder(store, "old2", "2026-07-15", { customer: null, value: 10 }),
+      await seedOrder(store, "i1", "2026-08-25", { customer: "I", value: 10 }),
+      await seedOrder(store, "guest", "2026-08-28", { customer: null, value: 10 }),
+    ];
+    await settle(store, days);
+    const range = { from: "2026-06-01", to: "2026-09-30" };
+    // Read from the orders, the evidence of so few is too thin to skip the order linked out of turn.
+    expect(await report(ws, store, EVERYTHING, range)).toMatchObject({ customersFrom: "2026-06-10", dates: { figures: { customers: 2 }, withoutCustomer: 2 } });
+
+    // The re-read started at 10:00 on 19 August: the 20th is the first day whose orders all say who placed them.
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date("2026-08-19T10:00:00Z") } });
+    const r = await report(ws, store, EVERYTHING, range);
+    expect(r).toMatchObject({ customersFrom: "2026-08-20", historyFrom: "2026-06-01", customersLater: true });
+    expect(r.dates).toMatchObject({ from: "2026-08-20", to: "2026-09-30", clamped: true, figures: { customers: 1, repeatCustomers: 0, orders: 1 }, withoutCustomer: 1 });
+    expect(r.cohorts!.from).toBe("2026-08-20");
+    expect(r.cohorts!.items.map((c) => [c.month, c.customers, c.partial])).toEqual([
+      ["2026-10", 0, false],
+      ["2026-09", 0, false],
+      ["2026-08", 1, true],
+    ]);
+  });
+
+  it("has nothing to count until the grant's re-read is in: customers are known from the day after the grant", async () => {
+    const { ws, store } = await owner();
+    await history(store);
+    // Granted this morning; the orders re-read with their customer aren't all in yet.
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date("2026-10-20T03:00:00Z") } });
+    expect(await report(ws, store)).toMatchObject({ customersFrom: "2026-10-21", customersLater: true, dates: null, cohorts: null });
+  });
+
+  it("starts with the imported orders when the whole history was read with customers", async () => {
+    const { ws, store } = await owner();
+    await history(store);
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date(0) } });
+    const r = await report(ws, store);
+    expect(r).toMatchObject({ customersFrom: "2026-08-15", customersLater: false, dates: { figures: { customers: 4 } } });
+    expect(r.cohorts!.items.map((c) => [c.month, c.customers, c.partial])).toEqual([
+      ["2026-10", 0, false],
+      ["2026-09", 2, false],
+      ["2026-08", 1, true],
+    ]);
+  });
+
   it("has nothing to show before any order has a known customer", async () => {
     const { ws, store } = await owner();
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-08-14T10:00:00Z") } });

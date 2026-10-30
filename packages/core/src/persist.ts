@@ -983,8 +983,9 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     // Zapier: the store's connections (their tokens stop working), its Zaps' triggers and its outbox.
     ...purgeZapierStoreOps(storeId),
     // The orders and visits are gone, and where their history started with them: the next import
-    // and pixel record their own.
-    systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null } }),
+    // and pixel record their own. So is from when the orders carry their customer: the connect that
+    // brings the store back records it again (connectStore.ts).
+    systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null, customersFrom: null } }),
   ]);
   // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
   for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);

@@ -1,5 +1,5 @@
 import { systemDb, type Store } from "@app/db";
-import { normalizeShopDomain } from "@app/shared";
+import { expandScopes, normalizeShopDomain } from "@app/shared";
 import { APP_EXTRA_OPTIONAL_SCOPES, APP_STORE_APP, previewShops, type StoreApp } from "./apps.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
@@ -340,4 +340,23 @@ export async function seedScopeFollowUp(
     jobs.push(job);
   }
   return jobs;
+}
+
+/**
+ * What stores.customers_from becomes when a store's granted scopes go from `before` to `after`,
+ * written with them wherever they are saved (docs/customer-analytics.md "Where it starts").
+ *
+ * - read_customers newly held: `at`, the moment it was granted. Orders read from then on carry their
+ *   customer, the ones already stored don't. Take `at` before queueing the import the grant calls
+ *   for (`seedScopeFollowUp`): the worker moves the start back to that import's window once it is
+ *   in, for an import queued at `at` or after (stores.customers_from).
+ * - read_customers given up: null. Orders updated from then on lose their customer; a grant again
+ *   starts over.
+ * - Neither: nothing to write.
+ */
+export function customersFromChange(before: readonly string[], after: readonly string[], at: Date): { customersFrom: Date | null } | Record<string, never> {
+  const had = expandScopes([...before]).has("read_customers");
+  const has = expandScopes([...after]).has("read_customers");
+  if (had === has) return {};
+  return { customersFrom: has ? at : null };
 }

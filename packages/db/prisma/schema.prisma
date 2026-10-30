@@ -329,6 +329,12 @@ model Store {
   // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole
   // history was imported, null when no import has recorded it. Set by the worker's orders sync.
   ordersHistoryFrom     DateTime?   @map("orders_history_from")
+  // From when every stored order carries its customer (read_customers; docs/customer-analytics.md):
+  // the moment the store granted it (core `customersFromChange`), moved back to the start of the
+  // first full orders import queued since then once it is in (the epoch for the whole history; the
+  // worker's orders sync). Null without read_customers, and for a store that granted it before this
+  // column existed: the customer report then infers the day from the orders (`customersKnownDay`).
+  customersFrom         DateTime?   @map("customers_from")
   // When Shopify created the store (Shop.createdAt), read with its details by the "shop" sync job;
   // null until it has been. The dashboard's dates begin on its day, or an earlier order's
   // (storeStartDay in @app/shared/dates): the earliest day custom dates may start, the years offered.
