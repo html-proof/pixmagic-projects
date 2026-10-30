@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mayFixAlert } from "../src/alerts.js";
+import { ALERT_PATH, describeAlert, mayFixAlert } from "../src/alerts.js";
 import {
   deliveryOutcome,
+  integrationOfProvider,
   isZapierHookUrl,
   periodKey,
   periodRange,
@@ -9,6 +10,8 @@ import {
   thresholdReached,
   ZAPIER_EVENT_INFO,
   ZAPIER_EVENTS,
+  ZAPIER_INTEGRATIONS,
+  ZAPIER_SCHEMA_VERSION,
   zapierBackoffSeconds,
 } from "../src/zapier.js";
 
@@ -38,6 +41,14 @@ describe("Zapier thresholds", () => {
     expect(thresholdReached(499.99, 500)).toBe(false);
     expect(thresholdReached(500, 500)).toBe(true);
     expect(thresholdReached(500.01, 500)).toBe(true);
+    expect(thresholdReached(500, 500, "above")).toBe(true);
+  });
+
+  it("falls below only under the amount: ending a period at the amount is not below it", () => {
+    expect(thresholdReached(19.99, 20, "below")).toBe(true);
+    expect(thresholdReached(0, 20, "below")).toBe(true);
+    expect(thresholdReached(20, 20, "below")).toBe(false);
+    expect(thresholdReached(25, 20, "below")).toBe(false);
   });
 });
 
@@ -85,6 +96,35 @@ describe("Zapier deliveries", () => {
     expect(ZAPIER_EVENT_INFO.alert_raised.needs).toBeNull();
     expect(ZAPIER_EVENT_INFO.ad_spend_threshold.needs).toBe("marketing.ads");
     expect(ZAPIER_EVENT_INFO.whatsapp_message_failed.needs).toBe("marketing.campaigns");
+    // The connection's own state, which anyone who may connect Zapier sees; sales need their own permission.
+    expect(ZAPIER_EVENT_INFO.integration_connected.needs).toBe("integrations.status");
+    expect(ZAPIER_EVENT_INFO.integration_disconnected.needs).toBe("integrations.status");
+    expect(ZAPIER_EVENT_INFO.sync_completed.needs).toBe("integrations.status");
+    expect(ZAPIER_EVENT_INFO.order_paid.needs).toBe("analytics.sales");
+    expect(Object.keys(ZAPIER_EVENT_INFO).sort()).toEqual([...ZAPIER_EVENTS].sort());
+  });
+
+  it("puts the payload's version in every envelope: 1 until a change would break a Zap", () => {
+    expect(ZAPIER_SCHEMA_VERSION).toBe(1);
+  });
+
+  it("names the integrations by the ad platforms' providers", () => {
+    expect(integrationOfProvider("meta")).toBe("meta_ads");
+    expect(integrationOfProvider("google")).toBe("google_ads");
+    expect(integrationOfProvider("adsense")).toBe("adsense");
+    expect(integrationOfProvider("tiktok")).toBeNull();
+    expect(ZAPIER_INTEGRATIONS.adsense).toBe("Google AdSense");
+  });
+
+  it("words an event Zapier never took for owners and admins, with the page that has Retry", () => {
+    const w = describeAlert({ code: "zapier_delivery_failed", severity: "warning", message: "zapier delivery d1 failed: rejected" });
+    expect(w).toMatchObject({ severity: "warning", area: "integrations", title: "Some events didn't reach Zapier" });
+    // The internal message (ids, error codes) never shows.
+    expect(w.body).not.toContain("d1");
+    expect(w.body).toMatch(/Retry/);
+    expect(ALERT_PATH.integrations).toBe("/settings/integrations");
+    expect(mayFixAlert("integrations", { role: "admin", permissions: [] }, null)).toBe(true);
+    expect(mayFixAlert("integrations", { role: "manager", permissions: ["integrations.status", "integrations.manage"] }, null)).toBe(false);
   });
 });
 

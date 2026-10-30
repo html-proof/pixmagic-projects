@@ -20,7 +20,7 @@ const includeBearerToken = (request, z, bundle) => {
 
 /**
  * bizinsights' answers: 401 means the access token ran out or no longer stands (Zapier refreshes it,
- * and asks to reconnect if that fails too); any other refusal is shown with bizinsights' own message
+ * and asks to reconnect if that fails too); 429 asks Zapier to try later; any other refusal is shown with bizinsights' own message
  * ({ "error": code, "message": text }), which is written for the person setting up the Zap.
  */
 const handleErrors = (response, z) => {
@@ -29,6 +29,8 @@ const handleErrors = (response, z) => {
   if (response.status >= 400) {
     const data = response.data || {};
     const message = (data && data.message) || `bizinsights answered ${response.status}.`;
+    // Too many at once (a burst of leads): Zapier holds the task and tries again, instead of failing it.
+    if (response.status === 429) throw new z.errors.ThrottledError(message, Number(response.getHeader && response.getHeader("retry-after")) || 60);
     throw new z.errors.Error(message, (data && data.error) || "bizinsights_error", response.status);
   }
   return response;

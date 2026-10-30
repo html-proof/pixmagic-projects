@@ -1,7 +1,8 @@
-import { dbReachable, systemDb, type StoreStatus } from "@app/db";
+import { crossTenant, dbReachable, systemDb, type StoreStatus } from "@app/db";
 import { SIGN_IN_ACTIVITY_DAYS, SIGN_IN_EVENT, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import {
   AdsRateLimitedError,
+  AdSyncBusyError,
   backoffSeconds,
   flagStaleSessions,
   logger,
@@ -50,7 +51,6 @@ import {
   seedSalesRereads,
   sweepAdConnectionAlerts,
   checkWaitingAdLogins,
-  moveAdConnectionsOffNango,
   runZapierJob,
   sweepZapierDeliveries,
   UnrecoverableError,
@@ -59,9 +59,11 @@ import {
 import type { ZapierJob } from "@app/core/zapier";
 import { runShopifyReports } from "./shopifyReports.js";
 
+import { inJobScope } from "./rowScope.js";
 import { failVerify, runVerify } from "./verify.js";
 
 export * from "./handlers.js";
+export { inJobScope, jobWorkspace } from "./rowScope.js";
 export { runVerify, startChecks } from "./verify.js";
 export { runShopifyReports } from "./shopifyReports.js";
 
@@ -115,17 +117,34 @@ const RATE_DEFER_MAX_DELAY_S = 3600;
 const RATE_DEFER_MAX_MS = 6 * 3600_000;
 
 /**
+ * Shortest and longest wait between re-sends while another sync of the same ad account runs (see
+ * deferWhileBusy): a window takes seconds to a few minutes, a Meta report job longer.
+ */
+const BUSY_DEFER_MIN_DELAY_S = 15;
+const BUSY_DEFER_MAX_DELAY_S = 300;
+/**
+ * A sync holds its account for 16 minutes at most (ADS_SYNC_LOCK_MS): one still finding it taken after
+ * this long is a fault to see, so it is let through to the ordinary retries.
+ */
+const BUSY_DEFER_MAX_MS = 2 * 3600_000;
+
+/**
  * Process one message. Success acks; failure retries with exponential backoff
  * until MAX_ATTEMPTS (or immediately fails on UnrecoverableError), then records
  * the failure and raises an alert. A failure while the database is unreachable
  * is not the job's fault and spends none of that budget (see deferForDb). Never
- * throws, so one bad message does not redeliver the rest of its batch.
+ * throws, so one bad message does not redeliver the rest of its batch. `systemDb` sees only the
+ * job's own workspace (rowScope.ts).
  */
 export async function consume(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
+  return inJobScope(queue, msg.body, () => consumeInScope(queue, msg, deps));
+}
+
+async function consumeInScope(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
   // The deferral is consume's bookkeeping, not part of the job. Handlers re-enqueue
   // `{ ...data, ... }` (the next page, a halved page, the next bulk phase), so passing it through
   // would start every follow-up message part-way through an outage it never saw.
-  const { dbDeferral, rateDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral; rateDeferral?: RateDeferral };
+  const { dbDeferral, rateDeferral, busyDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral; rateDeferral?: RateDeferral; busyDeferral?: RateDeferral };
   // Ad platforms rate-limit per app: jitter keeps many accounts' retries from landing together.
   const jitter = queue === "sync" && (job as { kind?: string }).kind === "ads" ? Math.floor(Math.random() * 30) : 0;
   try {
@@ -151,6 +170,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
     if (queue === "sync" && (job as { kind?: string }).kind === "ads" && err instanceof AdsRateLimitedError && (await deferForRateLimit(msg, job, rateDeferral, err, deps))) return;
+    if (queue === "sync" && (job as { kind?: string }).kind === "ads" && err instanceof AdSyncBusyError && (await deferWhileBusy(msg, job, busyDeferral, rateDeferral, deps))) return;
     if (!(err instanceof UnrecoverableError) && !(await (deps.dbHealthy ?? dbReachable)())) {
       await deferForDb(queue, msg, job, dbDeferral, err, deps);
       return;
@@ -222,6 +242,29 @@ async function deferForRateLimit(msg: QueueMessage, job: object, prev: RateDefer
     await (deps.queues.sync as Producer<unknown>).send({ ...job, rateDeferral: { count: count + 1, since } }, { delaySeconds });
   } catch (sendErr) {
     logger.error({ err: sendErr, messageId: msg.id }, "re-sending a rate-limited ad sync failed");
+    return false;
+  }
+  msg.ack();
+  return true;
+}
+
+/**
+ * Another sync of the same ad account is running (AdSyncBusyError): this one read nothing, and comes
+ * again shortly, as a new message carrying its deferral like deferForRateLimit's, spending none of the
+ * job's retries. A wait for the platform the job had begun goes on with it, so waiting for another sync
+ * doesn't start that count again. False: it has waited long enough already; the ordinary retries take over.
+ */
+async function deferWhileBusy(msg: QueueMessage, job: object, prev: RateDeferral | undefined, rate: RateDeferral | undefined, deps: WorkerDeps): Promise<boolean> {
+  const now = Date.now();
+  const since = prev?.since ?? now;
+  const count = prev?.count ?? 0;
+  if (now - since >= BUSY_DEFER_MAX_MS) return false;
+  const delaySeconds = Math.min(BUSY_DEFER_MAX_DELAY_S, BUSY_DEFER_MIN_DELAY_S * 2 ** count) + Math.floor(Math.random() * 15);
+  logger.info({ connectionId: (job as AdsSyncData).connectionId, messageId: msg.id, deferrals: count, delaySeconds }, "ad sync waiting: another sync of this account is running");
+  try {
+    await (deps.queues.sync as Producer<unknown>).send({ ...job, ...(rate ? { rateDeferral: rate } : {}), busyDeferral: { count: count + 1, since } }, { delaySeconds });
+  } catch (sendErr) {
+    logger.error({ err: sendErr, messageId: msg.id }, "re-sending an ad sync that waits for another failed");
     return false;
   }
   msg.ack();
@@ -404,7 +447,12 @@ export async function pruneAdSyncRunsDaily(deps: Pick<WorkerDeps, "coord">) {
   }
 }
 
+/** One cron tick. Its sweeps work across every store, so `systemDb` sees every workspace (the `sweep` reason). */
 export async function runScheduled(cron: string, deps: WorkerDeps) {
+  return crossTenant("sweep", () => runSweeps(cron, deps));
+}
+
+async function runSweeps(cron: string, deps: WorkerDeps) {
   if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
   // job only needs noticing within the window it has already been stuck for.
@@ -431,11 +479,6 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
     // Orders whose sales records were never read (see seedSalesRereads); daily per store.
     const salesRereads = await seedSalesRereads(deps).catch((err: unknown) => {
       logger.error({ err }, "sales re-read sweep failed; the next tick tries again");
-      return null;
-    });
-    // Ad connections made through Nango: moved off it first, so the syncs scheduled next read with bizinsights' own tokens.
-    const adsMovedOffNango = await moveAdConnectionsOffNango(deps).catch((err: unknown) => {
-      logger.error({ err }, "moving ad connections off Nango failed; the next tick tries again");
       return null;
     });
     // Ad accounts on their own leases, after everything the store itself depends on.
@@ -511,7 +554,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "zapier sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsMovedOffNango, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

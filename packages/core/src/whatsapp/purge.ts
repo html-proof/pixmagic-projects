@@ -1,13 +1,9 @@
 /**
  * Erasing a store (shop/redact, a workspace deleted): every WhatsApp record of the store, as Prisma
- * operations for persist.ts purgeStoreData's one transaction, and the retired module's token at Nango.
- * Its own module, importing nothing but the database (and env and the logger), so persist.ts can use
- * it without importing the rest of WhatsApp.
+ * operations for persist.ts purgeStoreData's one transaction. Its own module, importing nothing but
+ * the database, so persist.ts can use it without importing the rest of WhatsApp.
  */
 import { systemDb } from "@app/db";
-import { env } from "../env.js";
-import { logger } from "../logger.js";
-import type { FetchLike } from "../shopify.js";
 
 /** Every WhatsApp Automation record of the store (the wapp_* tables). The provider's instance goes first (connection.ts dropStoreInstance). */
 export function purgeWhatsappStoreOps(storeId: string) {
@@ -54,24 +50,4 @@ export function purgeLegacyWhatsappOps(storeId: string) {
     systemDb.waSettings.deleteMany({ where: { storeId } }),
     systemDb.waConnection.deleteMany({ where: { storeId } }),
   ];
-}
-
-/**
- * Erasing a store: the retired module kept the store's Meta token at Nango (integration
- * `whatsapp-business`, connection `wa-<storeId>`); it goes too, best effort. Read before the rows go.
- */
-export async function deleteRetiredNangoToken(storeId: string, fetchImpl: FetchLike): Promise<void> {
-  const c = await systemDb.waConnection.findUnique({ where: { storeId }, select: { nangoConnectionId: true } });
-  const id = c?.nangoConnectionId;
-  const e = env();
-  if (!id || !e.NANGO_SECRET_KEY) return;
-  try {
-    const res = await fetchImpl(`${e.NANGO_API_URL.replace(/\/+$/, "")}/connections/${encodeURIComponent(id)}?provider_config_key=whatsapp-business`, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${e.NANGO_SECRET_KEY}` },
-    });
-    if (res.status >= 300 && res.status !== 404) logger.warn({ storeId, status: res.status }, "retired whatsapp token at Nango not deleted");
-  } catch (err) {
-    logger.warn({ err, storeId }, "retired whatsapp token at Nango not deleted");
-  }
 }

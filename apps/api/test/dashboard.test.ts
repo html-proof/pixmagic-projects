@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logger, recomputeDays } from "@app/core";
 import { systemDb, withTenant } from "@app/db";
-import { addDays, localDay, monthsEarlier, resolvePreset, yearEarlier } from "@app/shared";
+import { addDays, adsenseFinalThrough, localDay, monthsEarlier, resolvePreset, yearEarlier } from "@app/shared";
 import { storeOverview, syncProblem } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -921,6 +921,26 @@ describe("ad figures only for the days the accounts have stored", () => {
     expect(m.adsense).toMatchObject({ current: null, partial: null, soFar: null, vsSales: null, sites: [], sitesLeftOut: [] });
     expect(m.adsense.accounts[0]).toMatchObject({ unsplitThrough: today, coversRange: false, coverage: { from: null, through: null } });
     expect(m.adsense.series.every((x: { earnings: number | null }) => x.earnings === null)).toBe(true);
+  });
+
+  it("says whether AdSense's earnings are final, and that a refresh someone asked for is on its way", async () => {
+    const { a, ws, store } = await owner();
+    const asked = new Date();
+    const sense = await adAccount(store, "adsense", "pub-1", { syncRequestedAt: asked, lastSyncAttemptAt: asked });
+    await earnDays(store, sense, "", d(-89), today, 1);
+    // Synced today: final up to the end of last month after the 10th, of the month before by then.
+    const finalThrough = adsenseFinalThrough(today)!;
+    const monthStart = `${finalThrough.slice(0, 8)}01`;
+
+    const month = (await overview(a.headers, ws, store.id, `preset=custom&from=${monthStart}&to=${finalThrough}`)).json().modules.adsense;
+    expect(month).toMatchObject({ finalThrough, final: true, current: { earnings: Number(finalThrough.slice(8)) } });
+    expect(month.accounts[0]).toMatchObject({ finalThrough, syncRequestedAt: asked.toISOString(), lastSyncAttemptAt: asked.toISOString() });
+    // The last 7 days are AdSense's estimate still.
+    expect((await overview(a.headers, ws, store.id, "preset=7d")).json().modules.adsense).toMatchObject({ finalThrough, final: false });
+    // Every ad account says it, spend as well.
+    const meta = await adAccount(store, "meta", "act_1");
+    const ads = (await overview(a.headers, ws, store.id, "preset=7d")).json().modules.ads;
+    expect(ads.accounts.find((x: { id: string }) => x.id === meta.id)).toMatchObject({ syncRequestedAt: null, lastSyncAttemptAt: null });
   });
 });
 

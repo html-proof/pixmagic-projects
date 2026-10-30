@@ -1,7 +1,7 @@
 {
   "name": "bizinsights-zapier",
-  "version": "1.0.0",
-  "description": "bizinsights on Zapier: a store's alerts and advertising results as Zap triggers and searches.",
+  "version": "1.2.0",
+  "description": "bizinsights on Zapier: a store's alerts and advertising results as Zap triggers and searches, and WhatsApp template messages as an action.",
   "private": true,
   "main": "index.js",
   "scripts": {

@@ -5,8 +5,8 @@
  *  - 2026-10-25: wa_* (Meta Cloud API with the token kept at Nango).
  * Nothing sends from them or reads them for the page any more; they stay so a rollback to an
  * earlier release still finds them. Until they are dropped the store's and the customer's privacy
- * rights still reach them: customers/redact and shop/redact erase there too, a data request counts
- * what they hold, and erasing a store deletes the retired token at Nango.
+ * rights still reach them: customers/redact and shop/redact erase there too, and a data request counts
+ * what they hold.
  */
 import { systemDb, type Store } from "@app/db";
 import { normalizePhone } from "@app/shared";

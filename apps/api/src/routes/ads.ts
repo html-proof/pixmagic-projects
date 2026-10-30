@@ -37,7 +37,6 @@ import {
   holdAdLogin,
   holdPendingAdConnect,
   isDemoConnection,
-  isNangoConnection,
   logger,
   providerDetail,
   META_REPORT_JOB,
@@ -179,8 +178,6 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
   const adsense = provider === "adsense";
   // The Google Ads demo: simulated figures and no Google grant. Decided by the row alone, never by anything a browser sends.
   const demo = isDemoConnection(c);
-  // Made through Nango and not moved off it yet (core's leaveNango.ts): its token is still there for a few minutes.
-  const nango = isNangoConnection(c);
   return {
     id: c.id,
     provider: c.provider,
@@ -198,8 +195,6 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     lastSyncedAt: c.lastSyncedAt,
     /** When the last sync started, whatever came of it ("Last attempted"). */
     lastSyncAttemptAt: c.lastSyncAttemptAt,
-    /** How it is read: "direct" (bizinsights' own sign-in), or "nango" while a connection made through Nango is being moved off it. */
-    source: nango ? "nango" : "direct",
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
     historyFrom: c.historyFrom,
@@ -308,7 +303,7 @@ export async function connectAccounts(
     externalUserId?: string | null;
   },
 ) {
-  const saved = await saveAdConnections({ ...input, fetchImpl: deps.fetchImpl });
+  const saved = await saveAdConnections(input);
   for (const conn of saved) {
     if (conn.enabled) await enqueueAdCatchUp(deps.queues, conn, { interactive: true });
   }
@@ -345,9 +340,7 @@ async function queueRefresh(deps: Deps, conn: AdConnection): Promise<boolean> {
 /** A pending choice that belongs to this person, workspace and store, or a 404 that says it's gone. */
 async function ownPending(deps: Deps, nonce: string, userId: string | undefined, ws: string, storeId: string) {
   const p = await peekPendingAdConnect(deps.coord, nonce);
-  // A choice held through Nango before it was removed holds a Nango connection id, not a token: it can't be used.
-  const throughNango = !!p && "source" in p && p.source === "nango";
-  if (!p || throughNango || !userId || p.userId !== userId || p.workspaceId !== ws || p.storeId !== storeId) {
+  if (!p || !userId || p.userId !== userId || p.workspaceId !== ws || p.storeId !== storeId) {
     throw new HttpError(404, "That choice has expired. Press the button to connect again.", "pending_expired");
   }
   return p;
@@ -553,13 +546,6 @@ export function adsRoutes(app: App, deps: Deps) {
     setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
     return c.json({ url });
   });
-
-  /**
-   * Nango's old callback address (2026-10-22 to 2026-10-28), still registered with Meta and Google: a
-   * browser coming back from a sign-in started through Nango before it was removed lands on the
-   * integrations page, which asks to press the button again.
-   */
-  app.get("/ads/nango/oauth-callback", (c) => c.redirect(`${env().APP_URL}/settings/ads?${new URLSearchParams({ error: "state_expired" })}`));
 
   /** Step 2: the platform sends the browser back here with a code (or with the person's "no"). */
   app.get("/ads/:provider/callback", async (c) => {
@@ -884,7 +870,7 @@ export function adsRoutes(app: App, deps: Deps) {
       rangesOf(q),
       today,
       (r) => `ads-report:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
-      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline, ...(r.compare ? { statuses: false } : {}) }),
+      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, ...(r.compare ? { statuses: false } : {}) }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "meta", conn.id);
@@ -965,7 +951,10 @@ export function adsRoutes(app: App, deps: Deps) {
    * "Sync now" / "Refresh": bring every shown account up to date (or one platform's). An account this
    * login can't read now, or that the platform won't report on, is asked whether it is back (and
    * catches up if so). One waiting for a reconnect is left alone: only connecting again helps it.
-   * `queued`: the accounts sent off; one already on its way isn't sent again.
+   * `queued`: the accounts sent off; one already on its way isn't sent again. While a platform is paused
+   * for bizinsights' own limit there (Google's daily allowance, Meta's hourly app limit), its accounts
+   * are sent all the same: the job reads nothing and marks the card with why (quota_exhausted,
+   * rate_limited), so the answer and its "Synchronizing" mean what they always do.
    */
   app.post("/workspaces/:ws/stores/:storeId/ads/sync", async (c) => {
     const { ws, storeId } = c.req.param();

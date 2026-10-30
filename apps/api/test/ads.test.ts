@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withDb } from "@app/db";
-import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
+import { adAccessToken, metaAdsPaused, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
 import { addDays, adErrorMessage, LEGACY_GRANTS, localDay, META_OBJECT_FIELDS } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -179,7 +179,7 @@ describe("connecting ad accounts", () => {
       ["meta", "act_2", "EU ads", "EUR", true, "active"],
     ]);
     expect(JSON.stringify(rows)).not.toContain("META_LONG_SECRET");
-    // bizinsights' own sign-in: the token itself, sealed, one for both accounts of the sign-in; nothing at Nango.
+    // bizinsights' own sign-in: the token itself, sealed, one for both accounts of the sign-in.
     expect(rows.map((r) => [r.source, r.sourceLoginId, r.refreshTokenEnc])).toEqual([
       ["direct", null, null],
       ["direct", null, null],
@@ -198,8 +198,10 @@ describe("connecting ad accounts", () => {
     // The list the settings page shows: no tokens.
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
     expect(list.body).not.toContain("Enc");
-    expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active", source: "direct" });
+    expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active" });
     expect(list.json().connections[0].accessExpiresAt).toBeTruthy();
+    // Every account is read with bizinsights' own sign-in: the answer no longer says how.
+    expect(list.json().connections[0]).not.toHaveProperty("source");
   });
 
   it("Continue with Google: offline access, a manager's client reached through it", async () => {
@@ -786,6 +788,29 @@ describe("the Meta Ads report", () => {
     expect(calls).toEqual([]);
   });
 
+  it("Meta's limit on bizinsights' app: the report is Meta being busy, and while Meta Ads is paused for it Meta isn't asked", async () => {
+    const conn = await connectedMeta();
+    const calls: string[] = [];
+    ctx.setFetch(async (input) => {
+      if (new URL(String(input)).pathname.endsWith("/act_1/insights")) {
+        calls.push("insights");
+        return json({ error: { message: "(#4) Application request limit reached", code: 4 } }, 400);
+      }
+      return metaPlatform(input);
+    });
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("meta_busy");
+    expect(await metaAdsPaused(ctx.deps.coord)).toBe(true);
+    // Other dates, while paused: the same answer, without a call to Meta; the account stays as it was.
+    const asked = calls.length;
+    const held = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { from: "2026-08-01", to: "2026-08-30" }), headers });
+    expect(held.statusCode).toBe(503);
+    expect(held.json().error).toBe("meta_busy");
+    expect(calls).toHaveLength(asked);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+
   it("refuses dates that aren't a real range of up to a year, and levels it doesn't know", async () => {
     const conn = await connectedMeta();
     ctx.setFetch(reportPlatform([]));
@@ -1049,53 +1074,18 @@ describe("a choice is only for the store and person it was made for", () => {
   });
 });
 
-describe("what is left of the Nango sign-in (2026-10-22 to 2026-10-28)", () => {
-  it("an account choice the Nango release left waiting can't be used: it holds a Nango connection, not a token", async () => {
-    // Nothing may reach any platform or Nango.
-    ctx.setFetch(async (input) => {
-      throw new Error(`unexpected call to ${String(input)}`);
-    });
-    const me = await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } });
-    const nonce = "n".repeat(32);
-    const old = {
-      userId: me.id,
-      workspaceId: ws,
-      storeId,
-      provider: "meta",
-      accounts: [{ accountId: "act_1", name: "Shop ads", currency: "USD", timezone: "UTC" }],
-      accessTokenEnc: "v1.sealed-nango-credential",
-      refreshTokenEnc: null,
-      accessTokenExpiresAt: null,
-      source: "nango",
-      sourceLoginId: "conn-from-the-nango-release",
-      nangoIntegrationKey: "bizinsights-meta-ads",
-      externalUserId: "4242",
-      expiresAt: Date.now() + 600_000,
-    };
-    await ctx.deps.coord.put(`ads-pending:${nonce}`, JSON.stringify(old), 600);
-    const url = pendingUrl(nonce);
-    for (const res of [
-      await ctx.app.inject({ method: "GET", url, headers }),
-      await ctx.app.inject({ method: "POST", url, headers, payload: { accountIds: ["act_1"] } }),
-      await ctx.app.inject({ method: "DELETE", url, headers }),
-    ]) {
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).toEqual({ error: "pending_expired", message: "That choice has expired. Press the button to connect again." });
-    }
-    expect(await systemDb.adConnection.count()).toBe(0);
-  });
-
-  it("Nango's old callback address sends a browser coming back from it to press the button again", async () => {
+describe("Nango, which brokered the sign-ins from 2026-10-22 to 2026-10-28, is gone", () => {
+  it("its old callback address is no route any more: Not found, with or without a code", async () => {
     for (const query of ["", "?code=AQ-code&state=nango-state"]) {
       const back = await ctx.app.inject({ method: "GET", url: `/ads/nango/oauth-callback${query}`, headers: { cookie } });
-      expect(back.statusCode).toBe(302);
-      expect(back.headers.location).toBe("http://localhost:3001/settings/ads?error=state_expired");
+      expect(back.statusCode).toBe(404);
+      expect(back.json()).toEqual({ error: "not_found", message: "Not found" });
     }
     // "nango" was never a platform of the callback.
     expect((await ctx.app.inject({ method: "GET", url: "/ads/nango/callback?code=C&state=S", headers: { cookie } })).headers.location).toBe("http://localhost:3001/settings/ads?error=unknown_provider");
   });
 
-  it("Nango's webhooks and its session, finish and cancel routes are gone", async () => {
+  it("its webhooks and its session, finish and cancel routes are gone", async () => {
     expect((await ctx.app.inject({ method: "POST", url: "/webhooks/nango", headers: { "content-type": "application/json" }, payload: JSON.stringify({ type: "auth", operation: "creation", connectionId: "c" }) })).statusCode).toBe(404);
     for (const step of ["session", "finish", "cancel"]) {
       expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/nango/${step}`, headers, payload: {} })).statusCode).toBe(404);
@@ -1243,8 +1233,9 @@ describe("the AdSense report", () => {
     // Other sites chosen: another report, asked of AdSense again.
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { sites: ["shop.example.com", "blog.example.com"] } });
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers })).json()).toMatchObject({ cached: false, report: { sites: ["shop.example.com", "blog.example.com"] } });
-    // Country and device type are levels too; anything else isn't.
-    for (const level of ["country", "platform"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    // Country, device type and ad unit are levels too; anything else isn't.
+    for (const level of ["country", "platform", "ad_unit"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    expect(seen.at(-1)!.searchParams.getAll("dimensions")).toEqual(["AD_UNIT_ID", "AD_UNIT_NAME"]);
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).statusCode).toBe(400);
   });
 

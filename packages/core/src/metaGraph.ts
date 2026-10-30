@@ -1,7 +1,6 @@
 /**
  * The one transport to Meta's Graph API (graph.facebook.com), used by the ad accounts (ads/meta.ts)
- * and WhatsApp's Cloud API (whatsapp/cloud.ts: connecting; whatsapp/cloudApi.ts: messages, media,
- * templates) alike. It owns what every call must get right:
+ * and WhatsApp's Cloud API onboarding (whatsapp/cloud.ts, whatsapp/templates.ts) alike. It owns what every call must get right:
  *
  * - the access token travels in the Authorization header, never in a URL: URLs end up in logs,
  *   traces and error reports, headers don't;
@@ -45,12 +44,6 @@ export interface GraphFailure {
    * usage headers (X-Business-Use-Case-Usage, X-Ad-Account-Usage), not in the error body.
    */
   headers: Headers | null;
-  /**
-   * For "network": the error's own code when it says how far the request got (ECONNREFUSED,
-   * ENOTFOUND, UND_ERR_SOCKET, or the error's name for a timeout, TimeoutError / AbortError). A
-   * caller that must never repeat a call that may have arrived (a WhatsApp send) reads it.
-   */
-  networkCode?: string | null;
 }
 
 export interface GraphRequest {
@@ -72,8 +65,6 @@ export interface GraphRequest {
   form?: Record<string, string>;
   /** A JSON body, for a POST. */
   json?: unknown;
-  /** A multipart body (a file upload), for a POST: fetch sets its content type and boundary. */
-  multipart?: FormData;
   /** Ends the call early (a live report's time limit); without one, the fetch's own time limit applies. */
   signal?: AbortSignal;
 }
@@ -116,13 +107,6 @@ function graphUrl(req: GraphRequest): URL | null {
   return url;
 }
 
-/** The code a failed fetch carries (undici puts the socket's in `cause.code`), else the error's name. */
-function networkCodeOf(err: unknown): string | null {
-  const e = err as { cause?: { code?: unknown }; code?: unknown; name?: unknown } | null;
-  const code = e?.cause?.code ?? e?.code ?? e?.name;
-  return typeof code === "string" ? code.slice(0, 40) : null;
-}
-
 /**
  * Call the Graph API. Resolves with Meta's JSON (an empty object for an empty answer); any failure
  * is handed to `fail`, and what it returns is thrown.
@@ -132,10 +116,8 @@ export async function graphCall<T>(fetchImpl: FetchLike, req: GraphRequest, fail
   if (!url) throw fail(failure("bad_link", 502, `Meta returned a page link outside ${GRAPH_HOST}`));
   const headers: Record<string, string> = {};
   if (req.token) headers.authorization = `Bearer ${req.token}`;
-  let body: string | FormData | undefined;
-  if (req.multipart) {
-    body = req.multipart;
-  } else if (req.json !== undefined) {
+  let body: string | undefined;
+  if (req.json !== undefined) {
     headers["content-type"] = "application/json";
     body = JSON.stringify(req.json);
   } else if (req.form) {
@@ -151,7 +133,7 @@ export async function graphCall<T>(fetchImpl: FetchLike, req: GraphRequest, fail
     text = await res.text();
   } catch (err) {
     // No answer at all: Meta or the network is down, or the call timed out (withTimeout, or `signal`).
-    throw fail(failure("network", 0, err instanceof Error ? err.message : String(err), { networkCode: networkCodeOf(err) }));
+    throw fail(failure("network", 0, err instanceof Error ? err.message : String(err)));
   }
   let json: unknown = null;
   try {
