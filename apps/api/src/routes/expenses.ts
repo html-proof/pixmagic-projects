@@ -50,8 +50,8 @@ export function expenseRoutes(app: App, deps: Deps) {
   app.post("/workspaces/:ws/stores/:storeId/expenses", async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "stores:manage");
-    const input = expenseInput.parse(await body(c));
     await storeOf(ws, storeId);
+    const input = expenseInput.parse(await body(c));
     const saved = await withTenant(ws, (tx) => createExpense(tx, { ws, storeId }, input, a.user?.id ?? null));
     await record(c, ws, a.user?.id ?? null, "expense.added", saved.id, { storeId, ...terms(saved) });
     return c.json({ expense: saved }, 201);
@@ -61,8 +61,8 @@ export function expenseRoutes(app: App, deps: Deps) {
   app.put("/workspaces/:ws/stores/:storeId/expenses/settings", async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "stores:manage");
-    const input = expenseSettingsInput.parse(await body(c));
     await storeOf(ws, storeId);
+    const input = expenseSettingsInput.parse(await body(c));
     const { saved, before } = await withTenant(ws, (tx) => saveExpenseSettings(tx, { ws, storeId }, input, a.user?.id ?? null));
     await audit({
       workspaceId: ws,
@@ -79,8 +79,8 @@ export function expenseRoutes(app: App, deps: Deps) {
   app.put("/workspaces/:ws/stores/:storeId/expenses/:id", async (c) => {
     const { ws, storeId, id } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "stores:manage");
-    const input = expenseInput.parse(await body(c));
     await storeOf(ws, storeId);
+    const input = expenseInput.parse(await body(c));
     const changed = await withTenant(ws, (tx) => updateExpense(tx, { ws, storeId }, id, input, a.user?.id ?? null));
     if (!changed) throw new HttpError(404, "Not found", "not_found");
     await record(c, ws, a.user?.id ?? null, "expense.changed", id, { storeId, before: terms(changed.before), after: terms(changed.saved) });
