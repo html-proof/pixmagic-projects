@@ -42,6 +42,13 @@ describe("the demo source", () => {
     const ads = await src.report("ad", "2026-09-01", "2026-09-30", { campaign: "demo-c2", adGroup: "demo-c2-core" });
     expect(ads.rows.length).toBeGreaterThan(0);
     expect(ads.rows.every((r) => r.adGroupId === "demo-c2-core")).toBe(true);
+    // Keywords and search terms: generated as well, never asked of Google.
+    const keywords = await src.report("keyword", "2026-09-01", "2026-09-30");
+    expect(keywords.rows.length).toBeGreaterThan(0);
+    expect(keywords.rows.every((r) => r.matchType !== null && r.qualityScore !== null)).toBe(true);
+    const terms = await src.report("search_term", "2026-09-01", "2026-09-30", { campaign: "demo-c7" });
+    expect(terms.rows.length).toBeGreaterThan(0);
+    expect(terms.rows.every((r) => r.campaignId === "demo-c7" && r.channel === "PERFORMANCE_MAX")).toBe(true);
   });
 
   it("takes its epoch from the day the demo was connected, in the account's own zone", () => {

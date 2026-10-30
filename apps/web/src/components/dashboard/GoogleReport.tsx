@@ -1,7 +1,17 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { googleAdName, googleAdTypeLabel, isGoogleObjectId, type GoogleReportLevel, type GoogleReportMetrics, type GoogleReportRow } from "@app/shared/ads";
+import {
+  adErrorMessage,
+  googleAdName,
+  googleAdTypeLabel,
+  googleMatchTypeLabel,
+  isGoogleDetailLevel,
+  isGoogleObjectId,
+  type GoogleReportLevel,
+  type GoogleReportMetrics,
+  type GoogleReportRow,
+} from "@app/shared/ads";
 import { isDemoObjectId } from "@app/shared/adsDemo";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
@@ -21,7 +31,10 @@ import type { AdsModule, Overview } from "./types";
 // compared with (`comparison`), each row shows its change; the dates picked must have ended, so
 // a day still running is never set against whole days. A campaign opens to its ad groups (a
 // Performance Max campaign to its asset groups), an ad group to its ads (?campaign=&adgroup=,
-// ReportDrill), with those rows added up on top.
+// ReportDrill), with those rows added up on top. Keywords and search terms, for the account or
+// opened from a campaign or ad group, are asked of Google only when their tab is pressed (each read
+// counts against a daily cap per ad account), with the account's, campaign's or ad group's own
+// figures on top, which they add up to less than.
 // ---------------------------------------------------------------------------
 
 interface Report {
@@ -45,12 +58,40 @@ interface Answer {
 const LEVELS: Array<{ id: GoogleReportLevel; label: string }> = [
   { id: "campaign", label: "Campaigns" },
   { id: "ad_group", label: "Ad groups" },
+  { id: "keyword", label: "Keywords" },
+  { id: "search_term", label: "Search terms" },
   { id: "device", label: "Devices" },
   { id: "country", label: "Countries" },
 ];
 
 /** What one row is, at every level (asset groups and ads are only read down from a campaign or an ad group). */
-const ONE: Record<GoogleReportLevel, string> = { campaign: "Campaign", ad_group: "Ad group", device: "Device", country: "Country", asset_group: "Asset group", ad: "Ad" };
+const ONE: Record<GoogleReportLevel, string> = {
+  campaign: "Campaign",
+  ad_group: "Ad group",
+  device: "Device",
+  country: "Country",
+  asset_group: "Asset group",
+  ad: "Ad",
+  keyword: "Keyword",
+  search_term: "Search term",
+};
+
+/** What a campaign or ad group shows: its own rows (ad groups, asset groups, ads), its keywords, or its search terms. */
+type DrillView = "rows" | "keyword" | "search_term";
+/** Campaign types with keywords (keyword_view), and those Google gives search terms for (campaign_search_term_view). */
+const KEYWORD_CHANNELS = new Set(["SEARCH"]);
+const TERM_CHANNELS = new Set(["SEARCH", "SHOPPING", "PERFORMANCE_MAX"]);
+
+/**
+ * The keyword and search-term reports' own refusals (a daily cap per ad account, their share of the day's
+ * Google Ads allowance) and the allowance used up, in words: the page never gets a 503's own text.
+ */
+const REFUSED: Record<string, string> = {
+  google_detail_limit: "This ad account's keywords and search terms have been read from Google as often as they can be today. Those already read stay available; other dates can be read tomorrow.",
+  google_detail_paused:
+    "Keywords and search terms are paused for a few hours so your Google Ads figures keep syncing: bizinsights has used most of today's Google Ads allowance. Those already read stay available.",
+  quota_exhausted: adErrorMessage("quota_exhausted", "google") ?? "",
+};
 
 /** A campaign's or ad group's id the report takes: Google's own (digits), or the demo's. */
 const isGoogleId = (v: string): v is string => isGoogleObjectId(v) || isDemoObjectId(v);
@@ -101,6 +142,27 @@ function Cells({ m, money }: { m: GoogleReportMetrics; money: (n: number | null)
   );
 }
 
+/** A row of tabs: the whole account's levels, or what an opened campaign or ad group shows. */
+function Tabs<T extends string>({ label, tabs, value, onChange, testid }: { label: string; tabs: Array<{ id: T; label: string }>; value: T; onChange: (id: T) => void; testid: (id: T) => string }) {
+  return (
+    <div role="tablist" aria-label={label} className="mb-3 inline-flex flex-wrap rounded-lg border border-border p-0.5">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          className={`rounded-md px-3 py-1 text-sm ${value === t.id ? "bg-surface font-semibold shadow-sm" : "text-muted"}`}
+          onClick={() => onChange(t.id)}
+          data-testid={testid(t.id)}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Google's own column names where they differ from everyday words: its conversions count every
 // conversion action, so their value ÷ cost is "Conv. value / cost", not a return on purchases.
 const HEADINGS = ["Spent", "Impressions", "Clicks", "Click-through rate", "Per click", "Per 1,000 impressions", "Conversions (all actions)", "Conversion rate", "Per conversion", "Conversion value", "Conv. value / cost"];
@@ -135,10 +197,20 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const [channels, setChannels] = useState<Record<string, string | null>>({});
   const channel = drill.campaign ? channels[drill.campaign] : undefined;
   const lookingUp = drill.campaign !== null && drill.child === null && channel === undefined;
+  // What the opened campaign or ad group shows: its own rows, and its keywords and search terms where its
+  // type has them (a type not known, all of them). Kept for the place it was picked in only.
+  const place = `${drill.campaign ?? "-"}:${drill.child ?? "-"}`;
+  const views: Array<{ id: DrillView; label: string }> = [
+    { id: "rows", label: drill.child ? "Ads" : channel === "PERFORMANCE_MAX" ? "Asset groups" : "Ad groups" },
+    ...(channel == null || KEYWORD_CHANNELS.has(channel) ? [{ id: "keyword" as const, label: "Keywords" }] : []),
+    ...(!drill.child && (channel == null || TERM_CHANNELS.has(channel)) ? [{ id: "search_term" as const, label: "Search terms" }] : []),
+  ];
+  const [picked, setPicked] = useState<{ at: string; view: DrillView }>({ at: "", view: "rows" });
+  const view: DrillView = picked.at === place && views.some((v) => v.id === picked.view) ? picked.view : "rows";
   const asked: { level: GoogleReportLevel; campaign?: string; adGroup?: string } = drill.child
-    ? { level: "ad", ...(drill.campaign ? { campaign: drill.campaign } : {}), adGroup: drill.child }
+    ? { level: view === "keyword" ? "keyword" : "ad", ...(drill.campaign ? { campaign: drill.campaign } : {}), adGroup: drill.child }
     : drill.campaign && !lookingUp
-      ? { level: channel === "PERFORMANCE_MAX" ? "asset_group" : "ad_group", campaign: drill.campaign }
+      ? { level: view !== "rows" ? view : channel === "PERFORMANCE_MAX" ? "asset_group" : "ad_group", campaign: drill.campaign }
       : { level: lookingUp ? "campaign" : level };
   const drillKey = `${asked.campaign ?? "-"}:${asked.adGroup ?? "-"}`;
 
@@ -165,7 +237,8 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       .catch((e: unknown) => {
         if (!live) return;
         setAnswer(null);
-        setError({ message: actionError(e, "load the Google Ads report"), reconnect: e instanceof ApiError && e.code === "reconnect" });
+        const refused = e instanceof ApiError && Object.hasOwn(REFUSED, e.code) ? REFUSED[e.code] : null;
+        setError({ message: refused || actionError(e, "load the Google Ads report"), reconnect: e instanceof ApiError && e.code === "reconnect" });
       })
       .finally(() => live && setLoading(false));
     return () => {
@@ -210,6 +283,10 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
     return null;
   };
   const what = r?.level === "asset_group" ? "asset groups" : r?.level === "ad" ? "ads" : "ad groups";
+  // Keywords and search terms: the top row is the account's, campaign's or ad group's own, which they add up to less than.
+  const detail = !!r && isGoogleDetailLevel(r.level);
+  const scope = drill.child ? "ad group" : "campaign";
+  const topRow = !drill.open ? "Whole ad account" : detail ? `Whole ${scope}` : `All ${what} in this ${scope}`;
 
   return (
     <Panel
@@ -241,30 +318,27 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       }
     >
       {drill.open ? (
-        <DrillCrumbs
-          testid="google-report-crumbs"
-          steps={[
-            { label: "All campaigns", onClick: top },
-            ...(campaignName ? [{ label: campaignName, onClick: drill.up }] : []),
-            ...(adGroupName ? [{ label: adGroupName }] : []),
-          ]}
-        />
+        <>
+          <DrillCrumbs
+            testid="google-report-crumbs"
+            steps={[
+              { label: "All campaigns", onClick: top },
+              ...(campaignName ? [{ label: campaignName, onClick: drill.up }] : []),
+              ...(adGroupName ? [{ label: adGroupName }] : []),
+            ]}
+          />
+          {!lookingUp && views.length > 1 && (
+            <Tabs
+              label={`What this ${drill.child ? "ad group" : "campaign"} shows`}
+              tabs={views}
+              value={view}
+              onChange={(v) => setPicked({ at: place, view: v })}
+              testid={(v) => `google-report-view-${v}`}
+            />
+          )}
+        </>
       ) : (
-        <div role="tablist" aria-label="Report level" className="mb-3 inline-flex flex-wrap rounded-lg border border-border p-0.5">
-          {LEVELS.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              role="tab"
-              aria-selected={level === l.id}
-              className={`rounded-md px-3 py-1 text-sm ${level === l.id ? "bg-surface font-semibold shadow-sm" : "text-muted"}`}
-              onClick={() => setLevel(l.id)}
-              data-testid={`google-report-${l.id}`}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
+        <Tabs label="Report level" tabs={LEVELS} value={level} onChange={setLevel} testid={(l) => `google-report-${l}`} />
       )}
 
       {error ? (
@@ -299,8 +373,8 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
               </thead>
               <tbody>
                 <tr className="border-t border-border bg-surface font-medium" data-testid="google-report-whole">
-                  {/* Down from a campaign or an ad group: its rows added up, not Google's own row for it. */}
-                  <td className="px-2 py-2">{!drill.open ? "Whole ad account" : `All ${what} in this ${drill.child ? "ad group" : "campaign"}`}</td>
+                  {/* Down from a campaign or an ad group: its rows added up, not Google's own row for it (keywords and search terms: its own row). */}
+                  <td className="px-2 py-2">{topRow}</td>
                   <Cells m={r.totals} money={money} />
                   {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
                   {cmp && <ReportChange value={reportChange(r.totals.conversions, cmp.totals.conversions)} />}
@@ -319,9 +393,14 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                   const ownName = row.adType !== null && row.name !== googleAdName(null, row.adType, row.id);
                   const details = [
                     drill.open ? null : row.campaignName,
+                    // A keyword's ad group, unless it's the one opened.
+                    r.level === "keyword" && !drill.child ? row.adGroupName : null,
                     row.channel ? (CHANNEL[row.channel] ?? row.channel.toLowerCase().replace(/_/g, " ")) : null,
                     row.dailyBudget !== null ? `budget ${money(row.dailyBudget)} a day` : null,
                     ownName ? googleAdTypeLabel(row.adType) : null,
+                    // Rows cached before keywords were read have neither.
+                    googleMatchTypeLabel(row.matchType),
+                    row.qualityScore != null ? `Quality Score ${row.qualityScore}/10` : null,
                   ].filter(Boolean);
                   const was = before.get(row.id);
                   const open = opens(row);
@@ -352,18 +431,39 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
             </table>
           </div>
           {r.rows.length === 0 &&
-            (drill.open ? (
-              <p className="mt-2 text-sm text-muted">Nothing in this {drill.child ? "ad group" : "campaign"} was shown to anyone in these dates.</p>
-            ) : r.totals.impressions === 0 && r.totals.spend === 0 ? (
-              <p className="mt-2 text-sm text-muted">Nothing in this ad account was shown to anyone in these dates.</p>
+            (r.totals.impressions === 0 && r.totals.spend === 0 ? (
+              <p className="mt-2 text-sm text-muted">Nothing in this {drill.open ? scope : "ad account"} was shown to anyone in these dates.</p>
+            ) : r.level === "keyword" ? (
+              <p className="mt-2 text-sm text-muted">
+                No keywords had any activity in these dates. Keywords belong to Search campaigns: Shopping and Performance Max campaigns have none, so their spend is in the
+                top row but not here.
+              </p>
+            ) : r.level === "search_term" ? (
+              <p className="mt-2 text-sm text-muted">
+                Google listed no search terms for these dates. It leaves out terms too few people searched, and spend on Display, YouTube and other placements has no search
+                term.
+              </p>
+            ) : drill.open ? (
+              <p className="mt-2 text-sm text-muted">Nothing in this {scope} was shown to anyone in these dates.</p>
             ) : r.level === "ad_group" ? (
               <p className="mt-2 text-sm text-muted">No ad groups had any activity in these dates: Performance Max campaigns have no ad groups, so their spend is on the Campaigns tab.</p>
             ) : (
               <p className="mt-2 text-sm text-muted">Google has no split at this level for these dates; the account&apos;s activity is in the Whole ad account row above.</p>
             ))}
-          {r.truncated && <p className="mt-2 text-xs text-muted">Showing the {r.rows.length} that spent most{drill.open ? "; the top row adds up every one" : ""}.</p>}
+          {r.truncated && (
+            <p className="mt-2 text-xs text-muted">
+              Showing the {r.rows.length} that spent most{detail ? ", as Google listed them" : drill.open ? "; the top row adds up every one" : ""}.
+            </p>
+          )}
           <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted">
-            {drill.open ? (
+            {detail ? (
+              <li>
+                The top row is Google&apos;s own figures for the whole {drill.open ? scope : "ad account"}.{" "}
+                {r.level === "keyword"
+                  ? "Keywords belong to Search campaigns, so spend without a keyword (Shopping, Performance Max, Display, YouTube) is in the top row but in none of these rows."
+                  : "Google lists only the terms enough people searched (its privacy threshold), and Display, YouTube and other placements have none, so the terms add up to less than the top row."}
+              </li>
+            ) : drill.open ? (
               <li>
                 The top row adds up the {what} Google reported for these dates, asked of Google for exactly those dates. It isn&apos;t Google&apos;s own row for the{" "}
                 {drill.child ? "ad group" : "campaign"}, so it can differ a little from the {drill.child ? "ad group's" : "campaign's"} figures on the{" "}
@@ -371,10 +471,19 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
               </li>
             ) : (
               (r.level === "campaign" || r.level === "ad_group") && (
-                <li>Press {r.level === "campaign" ? "a campaign to see its ad groups (a Performance Max campaign's asset groups, which it has instead)" : "an ad group to see its ads"}.</li>
+                <li>
+                  Press{" "}
+                  {r.level === "campaign"
+                    ? "a campaign to see its ad groups (a Performance Max campaign's asset groups, which it has instead), and from there its keywords and search terms"
+                    : "an ad group to see its ads, and from there its keywords"}
+                  .
+                </li>
               )
             )}
             {r.level === "ad" && <li>An ad without a name of its own at Google (most kinds, responsive search ads among them) is named by its type and Google&apos;s id for it.</li>}
+            {r.level === "keyword" && <li>Quality Score is Google&apos;s rating of a keyword now (1 to 10), not for the dates picked; none shows where Google has too little data to give one.</li>}
+            {r.level === "search_term" && <li>Search terms are what people typed before your ad showed, by campaign: Search, Shopping and Performance Max campaigns alike.</li>}
+            {detail && cmp && <li>A {r.level === "keyword" ? "keyword" : "term"} that wasn&apos;t among the 200 that spent most before shows — for its change: not a rise from nothing.</li>}
             <li>
               Conversions and their value are Google&apos;s own count of every conversion action it&apos;s set to count (purchases, and also leads, sign-ups or calls),
               using each action&apos;s attribution settings. They are not your Shopify orders, they can overlap with what Meta claims, and they aren&apos;t added into your
@@ -387,7 +496,18 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
             ) : null}
             {r.level === "ad_group" && !drill.open && r.rows.length > 0 && <li>Performance Max campaigns have no ad groups, so their spend shows on the Campaigns tab but not here.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were, not the places your campaigns target.</li>}
-            {shown && (chosen.demo ? <li>Generated by bizinsights from the demo&apos;s seed: the same figures every time, and nothing fetched from Google.</li> : <li>{shown.cached ? "Fetched from Google in the last few minutes." : "Fetched from Google just now."}</li>)}
+            {shown &&
+              (chosen.demo ? (
+                <li>Generated by bizinsights from the demo&apos;s seed: the same figures every time, and nothing fetched from Google.</li>
+              ) : (
+                <li>
+                  {!shown.cached
+                    ? "Fetched from Google just now."
+                    : detail
+                      ? "Fetched from Google earlier: keywords and search terms are kept for 6 hours (30 minutes when the dates include today), as each read counts against a daily limit."
+                      : "Fetched from Google in the last few minutes."}
+                </li>
+              ))}
           </ul>
           <Definitions items={DEFINITIONS} />
         </>

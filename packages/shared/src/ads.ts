@@ -1168,11 +1168,22 @@ export function withGooglePurchases(rows: AdDayRow[], purchases: GooglePurchaseR
 // The Google Ads report: one date range at a time, asked of Google directly, by campaign (with its
 // status, type and budget), ad group, device or country; and down from one campaign to its ad groups
 // (a Performance Max campaign's asset groups, which it has instead), and from one ad group to its ads.
+// Keywords and search terms too, for the account, one campaign or (keywords) one ad group.
 // ---------------------------------------------------------------------------
 
 /** `asset_group` and `ad` are read only under a parent (googleParentFits): one campaign's, one ad group's. */
-export const GOOGLE_REPORT_LEVELS = ["campaign", "ad_group", "device", "country", "asset_group", "ad"] as const;
+export const GOOGLE_REPORT_LEVELS = ["campaign", "ad_group", "device", "country", "asset_group", "ad", "keyword", "search_term"] as const;
 export type GoogleReportLevel = (typeof GOOGLE_REPORT_LEVELS)[number];
+
+/**
+ * Keywords (Google's keyword_view) and the search terms people typed (campaign_search_term_view): long
+ * lists, read only when someone opens them, Google itself picking the biggest spenders, and each read held
+ * to its own share of bizinsights' daily Google Ads operations (the API's guards). Their top row is the
+ * account's, campaign's or ad group's own figures, which their rows add up to less than.
+ */
+export const GOOGLE_DETAIL_LEVELS = ["keyword", "search_term"] as const satisfies readonly GoogleReportLevel[];
+export type GoogleDetailLevel = (typeof GOOGLE_DETAIL_LEVELS)[number];
+export const isGoogleDetailLevel = (level: GoogleReportLevel): level is GoogleDetailLevel => (GOOGLE_DETAIL_LEVELS as readonly string[]).includes(level);
 
 /** A Google Ads campaign, ad group or ad id as the API writes it: digits only (an int64). */
 export const isGoogleObjectId = (v: unknown): v is string => typeof v === "string" && /^\d{1,20}$/.test(v);
@@ -1189,13 +1200,23 @@ export interface GoogleReportParent {
 
 /**
  * Whether `level` can be read under `parent`: ad groups for the whole account or one campaign, asset
- * groups for one campaign, ads for one ad group; campaigns, devices and countries for the whole account.
+ * groups for one campaign, ads for one ad group; keywords for the account, one campaign or one ad group;
+ * search terms for the account or one campaign (Google gives them by campaign, so that Performance Max's
+ * are among them); campaigns, devices and countries for the whole account.
  */
 export function googleParentFits(level: GoogleReportLevel, parent: GoogleReportParent): boolean {
   if (level === "ad") return parent.adGroup !== undefined;
   if (level === "asset_group") return parent.campaign !== undefined && parent.adGroup === undefined;
-  if (level === "ad_group") return parent.adGroup === undefined;
+  if (level === "keyword") return true;
+  if (level === "ad_group" || level === "search_term") return parent.adGroup === undefined;
   return parent.campaign === undefined && parent.adGroup === undefined;
+}
+
+/** "EXACT" → "Exact match": a keyword's match type in Google's own words. */
+export function googleMatchTypeLabel(type: string | null | undefined): string | null {
+  if (!type || type === "UNKNOWN" || type === "UNSPECIFIED") return null;
+  const words = type.replace(/_/g, " ").trim().toLowerCase();
+  return words ? `${words[0]!.toUpperCase()}${words.slice(1)} match` : null;
 }
 
 /** "RESPONSIVE_SEARCH_AD" → "Responsive search ad": Google's ad types in words. */
@@ -1240,17 +1261,24 @@ export interface GoogleReportRow extends GoogleReportMetrics {
   /** The campaign an ad group, asset group or ad is in, its id and name (null on other levels). */
   campaignId: string | null;
   campaignName: string | null;
-  /** The ad group an ad is in (null on other levels). */
+  /** The ad group an ad or keyword is in (null on other levels). */
   adGroupId: string | null;
   adGroupName: string | null;
   /** An ad's type (RESPONSIVE_SEARCH_AD, RESPONSIVE_DISPLAY_AD...; see googleAdTypeLabel); null on other levels. */
   adType: string | null;
-  /** ENABLED, PAUSED or REMOVED, for campaigns, ad groups, asset groups and ads. */
+  /** ENABLED, PAUSED or REMOVED, for campaigns, ad groups, asset groups, ads and keywords (a removed one is listed when it spent in the dates). */
   status: string | null;
-  /** SEARCH, SHOPPING, PERFORMANCE_MAX, DISPLAY, VIDEO... (campaigns). */
+  /** SEARCH, SHOPPING, PERFORMANCE_MAX, DISPLAY, VIDEO... (campaigns, and the campaign a search term is in). */
   channel: string | null;
   /** The campaign budget per day, in the account's currency (campaigns). */
   dailyBudget: number | null;
+  /** A keyword's match type: EXACT, PHRASE or BROAD (googleMatchTypeLabel); null on other levels. */
+  matchType: string | null;
+  /**
+   * A keyword's Quality Score, 1 to 10, as Google rates it now (not for the dates). Null when Google has
+   * too little data to give one, and on other levels.
+   */
+  qualityScore: number | null;
 }
 
 /** One result of googleAds:searchStream for a report query (JSON field names are camelCase). */
@@ -1262,6 +1290,10 @@ export interface GoogleReportApiRow {
   adGroupAd?: { status?: string; ad?: { id?: string | number; name?: string; type?: string } };
   /** Performance Max (FROM asset_group). */
   assetGroup?: { id?: string | number; name?: string; status?: string };
+  /** The keyword level (FROM keyword_view): the keyword's criterion id, status, text, match type and Quality Score. */
+  adGroupCriterion?: { criterionId?: string | number; status?: string; keyword?: { text?: string; matchType?: string }; qualityInfo?: { qualityScore?: string | number } };
+  /** The search-term level (FROM campaign_search_term_view): what was typed, by campaign. */
+  campaignSearchTermView?: { searchTerm?: string };
   segments?: { device?: string };
   userLocationView?: { countryCriterionId?: string | number };
   metrics?: { costMicros?: string | number; impressions?: string | number; clicks?: string | number; conversions?: string | number; conversionsValue?: string | number };
@@ -1300,16 +1332,24 @@ export function googleReportMetrics(m: GoogleReportApiRow["metrics"]): GoogleRep
   };
 }
 
+/** A Quality Score as Google gives it (1 to 10); anything else, Google's "too little data" included, is none. */
+const qualityScoreOf = (v: string | number | undefined): number | null => {
+  const n = Number(v);
+  return v !== undefined && v !== "" && Number.isInteger(n) && n >= 1 && n <= 10 ? n : null;
+};
+
 /**
  * Google's rows for one level, grouped (a country comes back once per targeting kind, a device
  * once per campaign...) and biggest spend first. `countries` maps a geo target id to its ISO code.
+ * A keyword is one per ad group (`<ad group id>~<criterion id>`), a search term one per campaign
+ * (`<campaign id>~<term>`), as Google's views key them.
  */
 export function googleReportRows(level: GoogleReportLevel, rows: GoogleReportApiRow[], countries: Map<string, string> = new Map()): GoogleReportRow[] {
   const groups = new Map<string, { row: Omit<GoogleReportRow, keyof GoogleReportMetrics>; sums: Required<NonNullable<GoogleReportApiRow["metrics"]>> }>();
   for (const r of rows) {
     let key: string;
     let head: Omit<GoogleReportRow, keyof GoogleReportMetrics>;
-    const blank = { campaignId: null, campaignName: null, adGroupId: null, adGroupName: null, adType: null, status: null, channel: null, dailyBudget: null };
+    const blank = { campaignId: null, campaignName: null, adGroupId: null, adGroupName: null, adType: null, status: null, channel: null, dailyBudget: null, matchType: null, qualityScore: null };
     const id = (v: string | number | undefined) => (v === undefined || v === null || v === "" ? null : String(v));
     const campaign = { campaignId: id(r.campaign?.id), campaignName: r.campaign?.name ?? null };
     if (level === "campaign") {
@@ -1342,14 +1382,38 @@ export function googleReportRows(level: GoogleReportLevel, rows: GoogleReportApi
         adType: type,
         status: r.adGroupAd?.status ?? null,
       };
+    } else if (level === "keyword") {
+      const k = r.adGroupCriterion;
+      const criterion = id(k?.criterionId) ?? "unknown";
+      key = `${id(r.adGroup?.id) ?? "unknown"}~${criterion}`;
+      head = {
+        ...blank,
+        ...campaign,
+        id: key,
+        name: k?.keyword?.text || `Keyword ${criterion}`,
+        adGroupId: id(r.adGroup?.id),
+        adGroupName: r.adGroup?.name ?? null,
+        status: k?.status ?? null,
+        matchType: k?.keyword?.matchType ?? null,
+        qualityScore: qualityScoreOf(k?.qualityInfo?.qualityScore),
+      };
+    } else if (level === "search_term") {
+      const term = r.campaignSearchTermView?.searchTerm ?? "";
+      key = `${id(r.campaign?.id) ?? "unknown"}~${term}`;
+      // The view has no status of its own (search_term_view's added/excluded is per ad group).
+      head = { ...blank, ...campaign, id: key, name: term || "Unknown search term", channel: r.campaign?.advertisingChannelType ?? null };
     } else if (level === "device") {
       key = r.segments?.device ?? "UNKNOWN";
       head = { ...blank, id: key, name: GOOGLE_DEVICE[key] ?? key };
-    } else {
+    } else if (level === "country") {
       const geo = String(r.userLocationView?.countryCriterionId ?? "");
       const code = countries.get(geo) ?? null;
       key = geo || "unknown";
       head = { ...blank, id: key, name: code ? countryName(code) : geo ? `Location ${geo}` : "Unknown" };
+    } else {
+      // Every level has its own branch: a new one must never be read as another's rows.
+      const unknown: never = level;
+      throw new Error(`No rows for Google Ads report level ${String(unknown)}`);
     }
     const g = groups.get(key) ?? { row: head, sums: { costMicros: 0, impressions: 0, clicks: 0, conversions: 0, conversionsValue: 0 } };
     const m = r.metrics ?? {};

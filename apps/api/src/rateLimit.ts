@@ -102,6 +102,12 @@ export const LIMITS = {
   adsDemo: { max: 10, windowSec: 600 },
   /** Meta, Google Ads and AdSense reports, per store and user: each one is a few platform calls (a cached answer doesn't count). */
   adsReport: { max: 30, windowSec: 600 },
+  /**
+   * Google Ads keyword and search-term reports asked of Google, per ad account a day (a cached answer
+   * doesn't count; the demo's never do): two operations each, four with a comparison, so one account
+   * spends at most about 100 of the 2,880 every merchant shares.
+   */
+  adsGoogleDetail: { max: 25, windowSec: 86_400 },
   /** The status page of a Meta data deletion request, per IP (a code is 80 random bits; this only slows guessing). */
   metaDeletionStatusIp: { max: 60, windowSec: 600 },
   /** Meta's callbacks refused (a signed_request that doesn't verify), per IP: past it they're answered 429 and no longer logged. Meta's own aren't counted. */

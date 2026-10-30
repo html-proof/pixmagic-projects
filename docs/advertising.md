@@ -10,7 +10,7 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 | --- | --- | --- |
 | Overview | `/advertising` | Every spend platform together: ad spend, the platforms' own purchases, purchase value and ROAS, the store's Shopify net sales per unit of spend (MER) and AdSense's estimated earnings on a tile of their own; then Shopify's sales against the spend, the platform cards, the daily charts and the platforms side by side. |
 | Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report, which opens a campaign to its ad sets and an ad set to its ads ("Down from a campaign", below). |
-| Google Ads | `/advertising/google` | The same for Google Ads (a campaign opens to its ad groups, a Performance Max campaign to its asset groups, an ad group to its ads), and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
+| Google Ads | `/advertising/google` | The same for Google Ads (a campaign opens to its ad groups, a Performance Max campaign to its asset groups, an ad group to its ads), with **Keywords** and **Search terms** tabs for the account and for an opened campaign or ad group ("Keywords and search terms", below), and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
 | AdSense | `/advertising/adsense` | AdSense's earnings by site from the stored days, each figure marked Estimated or Final; and AdSense's live report by country, device type or ad unit, with ad requests, coverage and Active View viewability (read when opened and cached briefly, never stored with the days). |
 | Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change; a campaign's name opens it in its platform's live report. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
@@ -64,7 +64,8 @@ row to what is under it, and that to its ads:
   `?adgroup=<id>` (Google), so a link reproduces it (`REPORT_DRILL_PARAMS` in `useAdvertising.ts`). The ids are
   the platform's own (digits; the Google Ads demo's `demo-…`); names come from the row clicked, else from the rows
   under it, else "Campaign <id>". A breadcrumb ("All campaigns › campaign › ad set") goes back up; the level tabs
-  hide while one is open. Picking another ad account, or another store, starts from all campaigns again.
+  hide while one is open (on Google Ads, the opened campaign's or ad group's own tabs show instead: its rows, its
+  keywords, its search terms). Picking another ad account, or another store, starts from all campaigns again.
 - A Google campaign opened from a link (Campaign comparison) is first looked up on the account's campaign list
   (usually cached) for its type, so a Performance Max campaign goes to its asset groups.
 - The rows are each platform's live figures for exactly the dates on screen, in the ad account's currency and own time
@@ -77,6 +78,29 @@ row to what is under it, and that to its ads:
   The demo makes no call at all ([ads-demo.md](ads-demo.md)).
 - Ads: Meta names every ad; most Google ad types have no name, so a Google ad reads as its type and id
   ("Responsive search ad 7001", `googleAdName`). Neither platform's ad text, images or links are read.
+
+## Keywords and search terms (Google Ads)
+
+The Google Ads report's **Keywords** and **Search terms** tabs: for the whole account, and, once a campaign or ad
+group is opened, beside its own rows (a campaign: "Ad groups / Keywords / Search terms", a Performance Max one
+"Asset groups / Search terms"; an ad group: "Ads / Keywords"). Keywords show only for Search campaigns (and a
+campaign whose type isn't known), search terms for Search, Shopping and Performance Max ones.
+
+- **Keywords**: each ad group's keywords with their match type (Exact, Phrase, Broad), status, Google's Quality Score
+  (1 to 10, its rating now rather than for the dates; none when Google gives none) and the report's usual figures.
+- **Search terms**: what people typed before an ad showed, by campaign, Performance Max's included.
+- **Top row**: "Whole ad account", "Whole campaign" or "Whole ad group": Google's own figures for it, which the rows
+  add up to less than. Spend with no keyword (Shopping, Performance Max, Display, YouTube) is in it and in no keyword
+  row; Google lists only the search terms enough people searched (its privacy threshold), and Display, YouTube and
+  other placements have none. The page says so under the table.
+- **The 200 that spent most**, as Google lists them, with "Showing the 200 that spent most" when there are more. A
+  comparison matches the same keyword or term: one that wasn't among the earlier dates' 200 shows "—".
+- Conversions are Google's own count, on every conversion action, as on the report's other tabs: not Shopify orders.
+- **Cost and limits**: read only when the tab is pressed, two Google Ads operations (four with a comparison), kept 6
+  hours (30 minutes when the dates include today). Each ad account may read them from Google 25 times a day, and
+  none are read once bizinsights has used 70% of the day's shared allowance, so the syncs keep the dashboard's figures
+  current; either case is said in words on the tab ([ads-setup.md](ads-setup.md), "Keywords and search terms"). The
+  demo's are generated ([ads-demo.md](ads-demo.md)) and never limited.
 
 ## Printing
 

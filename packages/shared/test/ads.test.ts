@@ -30,9 +30,12 @@ import {
   googleAdName,
   googleAdTypeLabel,
   googleCustomerId,
+  googleMatchTypeLabel,
   googleParentFits,
   googleReportRows,
   googleReportTotals,
+  GOOGLE_DETAIL_LEVELS,
+  isGoogleDetailLevel,
   isGoogleObjectId,
   isMetaObjectId,
   metaParentFits,
@@ -219,6 +222,63 @@ describe("the Google Ads report, down from a campaign", () => {
     }
     expect(isGoogleObjectId("12345678901")).toBe(true);
     for (const bad of ["1 OR 1=1", "1;", "demo-c1", "", "1".repeat(21)]) expect(isGoogleObjectId(bad)).toBe(false);
+  });
+});
+
+describe("the Google Ads report's keywords and search terms", () => {
+  it("reads keywords for the account, a campaign or an ad group, and search terms for the account or a campaign (Google gives them by campaign)", () => {
+    for (const parent of [{}, { campaign: "1" }, { adGroup: "2" }, { campaign: "1", adGroup: "2" }]) expect(googleParentFits("keyword", parent)).toBe(true);
+    expect(googleParentFits("search_term", {})).toBe(true);
+    expect(googleParentFits("search_term", { campaign: "1" })).toBe(true);
+    expect(googleParentFits("search_term", { adGroup: "2" })).toBe(false);
+    expect(googleParentFits("search_term", { campaign: "1", adGroup: "2" })).toBe(false);
+    expect([...GOOGLE_DETAIL_LEVELS]).toEqual(["keyword", "search_term"]);
+    expect(isGoogleDetailLevel("keyword")).toBe(true);
+    expect(isGoogleDetailLevel("search_term")).toBe(true);
+    for (const level of ["campaign", "ad_group", "device", "country", "asset_group", "ad"] as const) expect(isGoogleDetailLevel(level)).toBe(false);
+  });
+
+  it("a keyword is one per ad group, with its match type, status and Quality Score (none when Google gives none)", () => {
+    const rows = googleReportRows("keyword", [
+      {
+        campaign: { id: "11", name: "Brand" },
+        adGroup: { id: "55", name: "Shoes" },
+        adGroupCriterion: { criterionId: "9001", status: "ENABLED", keyword: { text: "running shoes", matchType: "EXACT" }, qualityInfo: { qualityScore: 7 } },
+        metrics: { costMicros: "5000000", impressions: "500", clicks: "25", conversions: 2, conversionsValue: 120 },
+      },
+      // The same words in another ad group: another keyword.
+      { campaign: { id: "11", name: "Brand" }, adGroup: { id: "56", name: "Boots" }, adGroupCriterion: { criterionId: "9001", status: "REMOVED", keyword: { text: "running shoes", matchType: "BROAD" } }, metrics: { costMicros: "1000000", impressions: "90" } },
+      { campaign: { id: "11" }, adGroup: { id: "55" }, adGroupCriterion: { criterionId: 9002, keyword: { matchType: "PHRASE" }, qualityInfo: { qualityScore: 0 } }, metrics: { costMicros: "250000", impressions: "10" } },
+    ]);
+    expect(rows.map((r) => [r.id, r.name, r.campaignId, r.adGroupId, r.adGroupName, r.status, r.matchType, r.qualityScore])).toEqual([
+      ["55~9001", "running shoes", "11", "55", "Shoes", "ENABLED", "EXACT", 7],
+      ["56~9001", "running shoes", "11", "56", "Boots", "REMOVED", "BROAD", null],
+      ["55~9002", "Keyword 9002", "11", "55", null, null, "PHRASE", null],
+    ]);
+    expect(rows[0]).toMatchObject({ spend: 5, ctr: 0.05, cpc: 0.2, conversions: 2, conversionValue: 120, roas: 24, adType: null, channel: null, dailyBudget: null });
+    expect(googleMatchTypeLabel("EXACT")).toBe("Exact match");
+    expect(googleMatchTypeLabel("PHRASE")).toBe("Phrase match");
+    expect(googleMatchTypeLabel("UNKNOWN")).toBeNull();
+    expect(googleMatchTypeLabel(null)).toBeNull();
+  });
+
+  it("a search term is one per campaign, with the campaign's type and no status of its own", () => {
+    const rows = googleReportRows("search_term", [
+      { campaign: { id: "12", name: "PMax", advertisingChannelType: "PERFORMANCE_MAX" }, campaignSearchTermView: { searchTerm: "trail shoes" }, metrics: { costMicros: "3000000", impressions: "300", clicks: "12" } },
+      { campaign: { id: "11", name: "Brand", advertisingChannelType: "SEARCH" }, campaignSearchTermView: { searchTerm: "trail shoes" }, metrics: { costMicros: "4000000", impressions: "200", clicks: "20" } },
+    ]);
+    expect(rows.map((r) => [r.id, r.name, r.campaignId, r.campaignName, r.channel, r.status, r.matchType, r.qualityScore, r.spend])).toEqual([
+      ["11~trail shoes", "trail shoes", "11", "Brand", "SEARCH", null, null, null, 4],
+      ["12~trail shoes", "trail shoes", "12", "PMax", "PERFORMANCE_MAX", null, null, null, 3],
+    ]);
+  });
+
+  it("every other level's rows carry none of a keyword's fields, and devices and countries read as before", () => {
+    const devices = googleReportRows("device", [{ segments: { device: "MOBILE" }, metrics: { costMicros: "1000000" } }]);
+    expect(devices[0]).toMatchObject({ id: "MOBILE", name: "Phones", matchType: null, qualityScore: null, adGroupName: null });
+    const countries = googleReportRows("country", [{ userLocationView: { countryCriterionId: "2840" }, metrics: { costMicros: "1000000" } }], new Map([["2840", "US"]]));
+    expect(countries[0]).toMatchObject({ id: "2840", name: "United States", matchType: null, qualityScore: null });
+    expect(googleReportRows("campaign", [{ campaign: { id: "1", name: "Brand" } }])[0]).toMatchObject({ matchType: null, qualityScore: null });
   });
 });
 

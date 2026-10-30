@@ -17,6 +17,7 @@ import {
   countryName,
   googleAdName,
   googleReportMetrics,
+  isGoogleDetailLevel,
   minorUnitsPerUnit,
   type AdDayRow,
   type GoogleReportLevel,
@@ -603,9 +604,10 @@ export function demoBreakdown(ctx: Pick<DemoContext, "seed" | "currency">, kind:
 // ---------------------------------------------------------------------------
 // The live report, as GET .../ads/google/report answers it for a real account: by campaign (with
 // status, type and budget), ad group, device or country, and down from one campaign to its ad groups
-// (a Performance Max campaign's asset groups) and from one ad group to its ads. Built from the same
-// generated days, and each level split from the one above it, so the report, its levels and the
-// stored figures agree to the cent.
+// (a Performance Max campaign's asset groups) and from one ad group to its ads; and the Search
+// campaigns' keywords and the search terms behind the Search, Shopping and Performance Max ones. Built
+// from the same generated days, and each level split from the one above it, so the report, its levels
+// and the stored figures agree to the cent (search terms carry only part of a campaign, as Google's do).
 // ---------------------------------------------------------------------------
 
 export interface DemoReport {
@@ -681,17 +683,130 @@ function adsOf(ctx: DemoContext, c: DemoCampaign, g: DemoGroup): Array<{ id: str
   });
 }
 
+interface DemoKeyword {
+  text: string;
+  matchType: "EXACT" | "PHRASE" | "BROAD";
+  /** Its share of its ad group, before the seed's jitter. */
+  weight: number;
+  /** What people typed when it matched: its own words first, then close variants (unique within the campaign). */
+  terms: string[];
+}
+
+/**
+ * The Search campaigns' keywords, per ad group ([Core, Broad], as adGroupsOf names them), for a store
+ * selling running shoes (Search Advertising) and booking shoe fittings (Lead Generation). No brands.
+ */
+const DEMO_KEYWORDS: Record<string, [DemoKeyword[], DemoKeyword[]]> = {
+  "demo-c2": [
+    [
+      { text: "running shoes", matchType: "EXACT", weight: 1, terms: ["running shoes", "running shoes online", "running shoes shop"] },
+      { text: "buy running shoes online", matchType: "PHRASE", weight: 0.7, terms: ["buy running shoes online", "where to buy running shoes online"] },
+      { text: "womens running shoes", matchType: "EXACT", weight: 0.6, terms: ["womens running shoes", "women's running shoes", "running shoes for women"] },
+      { text: "mens running shoes", matchType: "EXACT", weight: 0.55, terms: ["mens running shoes", "men's running shoes"] },
+      { text: "running shoes sale", matchType: "PHRASE", weight: 0.4, terms: ["running shoes sale", "cheap running shoes"] },
+    ],
+    [
+      { text: "trail running shoes", matchType: "BROAD", weight: 1, terms: ["trail running shoes", "waterproof trail shoes", "trail runners"] },
+      { text: "lightweight sneakers", matchType: "BROAD", weight: 0.6, terms: ["lightweight sneakers", "light sneakers for walking"] },
+      { text: "shoes for long distance running", matchType: "BROAD", weight: 0.45, terms: ["shoes for long distance running", "marathon shoes"] },
+      { text: "best jogging shoes", matchType: "PHRASE", weight: 0.4, terms: ["best jogging shoes", "best jogging shoes for beginners"] },
+    ],
+  ],
+  "demo-c5": [
+    [
+      { text: "custom shoe fitting", matchType: "EXACT", weight: 1, terms: ["custom shoe fitting", "shoe fitting"] },
+      { text: "gait analysis", matchType: "PHRASE", weight: 0.8, terms: ["gait analysis", "free gait analysis", "gait analysis for runners"] },
+      { text: "running shoe fitting service", matchType: "EXACT", weight: 0.5, terms: ["running shoe fitting service", "running shoe fitting"] },
+      { text: "orthotic insoles consultation", matchType: "PHRASE", weight: 0.35, terms: ["orthotic insoles consultation", "custom insoles appointment"] },
+    ],
+    [
+      { text: "shoe store near me", matchType: "BROAD", weight: 1, terms: ["shoe store near me", "running store near me", "sports shoe shop nearby"] },
+      { text: "foot pain when running", matchType: "BROAD", weight: 0.5, terms: ["foot pain when running", "shoes for flat feet running"] },
+      { text: "running shoe advice", matchType: "BROAD", weight: 0.45, terms: ["running shoe advice", "which running shoe is right for me"] },
+      { text: "book a shoe fitting", matchType: "PHRASE", weight: 0.4, terms: ["book a shoe fitting", "book shoe fitting appointment"] },
+    ],
+  ],
+};
+
+/** What people searched before a Shopping or Performance Max ad showed (those campaigns have no keywords), biggest first. */
+const DEMO_PRODUCT_TERMS: Partial<Record<DemoCampaignType, string[]>> = {
+  SHOPPING: ["running shoes", "trail running shoes", "womens running shoes size 8", "mens trail runners", "running socks", "waterproof running jacket", "running shoes sale"],
+  PERFORMANCE_MAX: ["running shoes", "sports shoes", "trail shoes", "running gear", "gym shoes", "running shorts", "lightweight running shoes", "sneakers"],
+};
+
+/**
+ * The share of a campaign's figures its listed search terms carry, at least and at most (the seed picks
+ * between). The rest has no term Google lists: terms too few people searched (Google's privacy
+ * threshold), and for Performance Max its Display, YouTube and Gmail placements, which have none.
+ */
+const DEMO_TERM_SHARE: Partial<Record<DemoCampaignType, [number, number]>> = { SEARCH: [0.75, 0.9], SHOPPING: [0.6, 0.8], PERFORMANCE_MAX: [0.35, 0.55] };
+
+/**
+ * An ad group's keywords and their share of it, exactly (whole numbers, cents), with each one's Quality
+ * Score (3 to 9) from the seed. Only Search campaigns have keywords, as at Google; the ids are shaped as
+ * Google's keyword_view keys them (`<ad group>~<criterion>`).
+ */
+function keywordsOf(ctx: DemoContext, c: DemoCampaign, g: DemoGroup): Array<DemoKeyword & { id: string; qualityScore: number; t: Sums }> {
+  const lists = DEMO_KEYWORDS[c.id];
+  if (c.type !== "SEARCH" || !lists) return [];
+  const list = g.id === `${c.id}-core` ? lists[0] : lists[1];
+  const r = demoRng(ctx.seed, `${g.id}:kw`);
+  const parts = splitSums(g.t, list.map((k) => k.weight * (0.8 + 0.4 * r())));
+  return list.map((k, i) => {
+    const id = `${g.id}~kw${i}`;
+    return { ...k, id, qualityScore: 3 + Math.floor(7 * demoRng(ctx.seed, `${id}:qs`)()), t: parts[i]! };
+  });
+}
+
+/**
+ * A campaign's search terms, in the shape of Google's campaign_search_term_view (one row per campaign and
+ * term, Search and Performance Max alike): a Search campaign's from its keywords (each keyword's figures
+ * over its terms), a Shopping or Performance Max campaign's product searches. Only part of the campaign's
+ * figures has a listed term (DEMO_TERM_SHARE), so the terms add up to less than the campaign, never more;
+ * Display and video campaigns have none.
+ */
+function searchTermsOf(ctx: DemoContext, c: DemoCampaign, t: Sums): Array<{ term: string; t: Sums }> {
+  const share = DEMO_TERM_SHARE[c.type];
+  if (!share) return [];
+  const r = demoRng(ctx.seed, `${c.id}:terms`);
+  const listed = (whole: Sums, weights: number[]) => {
+    const shown = share[0] + (share[1] - share[0]) * r();
+    const parts = splitSums(whole, [...weights.map((w) => w * shown), 1 - shown]);
+    return parts.slice(0, weights.length);
+  };
+  if (c.type === "SEARCH") {
+    return adGroupsOf(ctx, c, t).flatMap((g) =>
+      keywordsOf(ctx, c, g).flatMap((k) => {
+        const weights = k.terms.map((_, i) => (i === 0 ? 1 : 0.2 + 0.5 * r()));
+        const sum = weights.reduce((a, b) => a + b, 0);
+        return listed(k.t, weights.map((w) => w / sum)).map((part, i) => ({ term: k.terms[i]!, t: part }));
+      }),
+    );
+  }
+  const terms = DEMO_PRODUCT_TERMS[c.type] ?? [];
+  const weights = terms.map((_, i) => (1 / (i + 1)) * (0.75 + 0.5 * r()));
+  const sum = weights.reduce((a, b) => a + b, 0);
+  return listed(t, weights.map((w) => w / sum)).map((part, i) => ({ term: terms[i]!, t: part }));
+}
+
 /**
  * The live report for `level` and [since, until]. Under a parent (googleParentFits): one campaign's ad
  * groups or asset groups, one ad group's ads, with the totals those rows added up, as Google's report
- * gives them (googleReport in core).
+ * gives them (googleReport in core); keywords and search terms for the account, one campaign or (keywords)
+ * one ad group, with that scope's own figures on top, which they add up to less than.
  */
 export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): DemoReport {
   const rows = demoCampaignRows(ctx, since, until);
-  const blank = { campaignId: null, campaignName: null, adGroupId: null, adGroupName: null, adType: null, status: null, channel: null, dailyBudget: null };
+  const blank = { campaignId: null, campaignName: null, adGroupId: null, adGroupName: null, adType: null, status: null, channel: null, dailyBudget: null, matchType: null, qualityScore: null };
   const ofCampaign = (c: DemoCampaign) => sums(rows.filter((r) => r.campaignId === c.id));
   const picked = DEMO_CAMPAIGNS.filter((c) => parent.campaign === undefined || parent.campaign === c.id);
   const inCampaign = (c: DemoCampaign) => ({ campaignId: c.id, campaignName: c.name, status: c.status });
+  /** The campaigns' ad groups under the parent (Performance Max has none), each with its campaign. */
+  const groupsIn = () =>
+    picked
+      .filter((c) => c.type !== "PERFORMANCE_MAX")
+      .flatMap((c) => adGroupsOf(ctx, c, ofCampaign(c)).map((g) => ({ c, g })))
+      .filter(({ g }) => parent.adGroup === undefined || parent.adGroup === g.id);
   let out: GoogleReportRow[];
   if (level === "campaign") {
     out = DEMO_CAMPAIGNS.map((c) => {
@@ -704,21 +819,47 @@ export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: st
   } else if (level === "asset_group") {
     out = picked.filter((c) => c.type === "PERFORMANCE_MAX").flatMap((c) => assetGroupsOf(ctx, c, ofCampaign(c)).map((g) => ({ ...blank, ...inCampaign(c), id: g.id, name: g.name, ...demoReportMetrics(g.t) })));
   } else if (level === "ad") {
-    out = picked
-      .filter((c) => c.type !== "PERFORMANCE_MAX")
-      .flatMap((c) =>
-        adGroupsOf(ctx, c, ofCampaign(c))
-          .filter((g) => parent.adGroup === undefined || parent.adGroup === g.id)
-          .flatMap((g) => adsOf(ctx, c, g).map((a) => ({ ...blank, ...inCampaign(c), id: a.id, name: a.name, adGroupId: g.id, adGroupName: g.name, adType: a.type, ...demoReportMetrics(a.t) }))),
-      );
-  } else {
+    out = groupsIn().flatMap(({ c, g }) =>
+      adsOf(ctx, c, g).map((a) => ({ ...blank, ...inCampaign(c), id: a.id, name: a.name, adGroupId: g.id, adGroupName: g.name, adType: a.type, ...demoReportMetrics(a.t) })),
+    );
+  } else if (level === "keyword") {
+    // A keyword's status is its campaign's: none of the demo's is paused or removed on its own.
+    out = groupsIn().flatMap(({ c, g }) =>
+      keywordsOf(ctx, c, g).map((k) => ({
+        ...blank,
+        ...inCampaign(c),
+        id: k.id,
+        name: k.text,
+        adGroupId: g.id,
+        adGroupName: g.name,
+        matchType: k.matchType,
+        qualityScore: k.qualityScore,
+        ...demoReportMetrics(k.t),
+      })),
+    );
+  } else if (level === "search_term") {
+    out = picked.flatMap((c) =>
+      searchTermsOf(ctx, c, ofCampaign(c)).map((s) => ({ ...blank, campaignId: c.id, campaignName: c.name, channel: c.type, id: `${c.id}~${s.term}`, name: s.term, ...demoReportMetrics(s.t) })),
+    );
+  } else if (level === "device" || level === "country") {
     // Devices and countries, named as Google's report names them (country rows by Google's geo target id).
     const names: Record<string, string> = { MOBILE: "Phones", DESKTOP: "Computers", TABLET: "Tablets" };
-    out = demoBreakdown(ctx, level === "device" ? "device" : "country", rows).map(({ share: _share, ...row }) => ({ ...blank, ...row, name: names[row.id] ?? row.name }));
+    out = demoBreakdown(ctx, level, rows).map(({ share: _share, ...row }) => ({ ...blank, ...row, name: names[row.id] ?? row.name }));
+  } else {
+    // Every level has its own branch: a new one must never be generated as another's rows.
+    const unknown: never = level;
+    throw new Error(`No demo rows for Google Ads report level ${String(unknown)}`);
   }
   // The whole account's totals; under a parent, its rows' (what a real account's report gives there).
+  // Keywords and search terms: the account's, campaign's or ad group's own figures, as Google's report
+  // asks for them there (none for an id the demo hasn't).
   const drilled = parent.campaign !== undefined || parent.adGroup !== undefined;
-  const totals = demoReportMetrics(drilled ? sums(out) : sums(rows));
+  const scope = (): Sums => {
+    if (parent.adGroup !== undefined) return groupsIn()[0]?.g.t ?? sums([]);
+    if (parent.campaign !== undefined) return picked[0] ? ofCampaign(picked[0]) : sums([]);
+    return sums(rows);
+  };
+  const totals = demoReportMetrics(isGoogleDetailLevel(level) ? scope() : drilled ? sums(out) : sums(rows));
   // Only rows with any activity, biggest spend first, as Google's report lists them.
   const listed = out.filter((r) => r.impressions > 0 || r.spend > 0).sort((a, b) => b.spend - a.spend || b.impressions - a.impressions || a.name.localeCompare(b.name));
   return { level, since, until, totals, rows: listed, truncated: false };

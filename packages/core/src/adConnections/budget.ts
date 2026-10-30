@@ -9,7 +9,9 @@
  *
  * The syncs count what they spend here, in the coordinator, so the background ones can stop short of
  * the allowance and leave the rest to people connecting accounts and opening reports. When Google
- * says the allowance is used up anyway, Google Ads syncs pause for a while.
+ * says the allowance is used up anyway, Google Ads syncs pause for a while. Who stops first: history
+ * walks (60%), keyword and search-term reports (70%), scheduled syncs (80%); connects, Refresh and the
+ * other reports may use it all.
  *
  * Meta's application request limit: bizinsights' app may make so many Graph API calls over a rolling
  * hour, counted by Meta across every merchant's account
@@ -32,6 +34,11 @@ export const GOOGLE_ADS_DAILY_OPERATIONS = 2880;
 export const GOOGLE_ADS_SCHEDULED_SHARE = 0.8;
 /** Fetching older history waits for a quieter day: it stops at this share. */
 export const GOOGLE_ADS_HISTORY_SHARE = 0.6;
+/**
+ * The keyword and search-term reports (read only when someone opens them) stop at this share: before
+ * the scheduled syncs do, so they never hold back the figures the dashboard shows.
+ */
+export const GOOGLE_ADS_DETAIL_SHARE = 0.7;
 /** How long Google Ads syncs pause when Google says the allowance is used up and doesn't say for how long. */
 export const GOOGLE_ADS_PAUSE_S = 3600;
 
@@ -96,10 +103,14 @@ export async function googleAdsBudget(coord: Coord): Promise<GoogleAdsBudget> {
   return { paused, used, limit: googleAdsDailyOperations() };
 }
 
-/** Whether a background Google Ads sync may run now: scheduled ones up to 80% of the allowance, history up to 60%. */
-export function googleAdsBudgetAllows(b: GoogleAdsBudget, trigger: "schedule" | "history"): boolean {
+/**
+ * Whether a background Google Ads sync may run now, scheduled ones up to 80% of the allowance and history
+ * up to 60%; or (`detail`) a keyword or search-term report may be asked of Google, up to 70%.
+ */
+export function googleAdsBudgetAllows(b: GoogleAdsBudget, trigger: "schedule" | "history" | "detail"): boolean {
   if (b.paused) return false;
-  return b.used < b.limit * (trigger === "history" ? GOOGLE_ADS_HISTORY_SHARE : GOOGLE_ADS_SCHEDULED_SHARE);
+  const share = trigger === "history" ? GOOGLE_ADS_HISTORY_SHARE : trigger === "detail" ? GOOGLE_ADS_DETAIL_SHARE : GOOGLE_ADS_SCHEDULED_SHARE;
+  return b.used < b.limit * share;
 }
 
 /**

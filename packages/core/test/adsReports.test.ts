@@ -179,6 +179,30 @@ describe("live reports per connection", () => {
     expect(await googleAdsOperationsToday(coord)).toBe(3);
   });
 
+  it("Google: keywords and search terms are two counted operations wherever they're read; none while the allowance is used up; the demo's none at all", async () => {
+    const coord = memoryCoord();
+    const queries: string[] = [];
+    const google: FetchLike = async (_input, init) => {
+      queries.push((JSON.parse(String(init?.body)) as { query: string }).query);
+      return json([{ results: [{ campaign: { id: "11", name: "Brand" }, campaignSearchTermView: { searchTerm: "shoes" }, metrics: { costMicros: "1000000", impressions: "10", clicks: "1" } }] }]);
+    };
+    const account = conn({ provider: "google", accountId: "111" });
+    await googleReportForConnection(account, "keyword", "2026-10-01", "2026-10-07", google, { coord });
+    expect(await googleAdsOperationsToday(coord)).toBe(2);
+    // Under a campaign too: its own row and its terms.
+    const terms = await googleReportForConnection(account, "search_term", "2026-10-01", "2026-10-07", google, { coord, parent: { campaign: "11" } });
+    expect(terms.rows).toEqual([expect.objectContaining({ id: "11~shoes", name: "shoes" })]);
+    expect(queries.slice(2).map((q) => q.match(/FROM (\w+)/)![1])).toEqual(["campaign", "campaign_search_term_view"]);
+    expect(await googleAdsOperationsToday(coord)).toBe(4);
+    await pauseGoogleAds(coord, null);
+    await expect(googleReportForConnection(account, "keyword", "2026-10-01", "2026-10-07", google, { coord })).rejects.toMatchObject({ errorCode: "quota_exhausted" });
+    expect(queries).toHaveLength(4);
+    const demo = conn({ provider: "google", isDemo: true, accountId: "DEMO-ADS-001", demoSeed: 7, timezone: "UTC", createdAt: new Date("2026-10-20T00:00:00Z") });
+    expect((await googleReportForConnection(demo, "search_term", "2026-10-01", "2026-10-07", google, { coord })).rows.length).toBeGreaterThan(0);
+    expect(queries).toHaveLength(4);
+    expect(await googleAdsOperationsToday(coord)).toBe(4);
+  });
+
   it("Google and AdSense: a report ends by its deadline, as 'busy' (try again), and the operations it started are still counted", async () => {
     const coord = memoryCoord();
     let calls = 0;

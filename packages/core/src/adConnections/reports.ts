@@ -114,7 +114,9 @@ const googleAllowanceUsed = () => new AdsRateLimitedError("Google Ads API operat
  * Ads syncs are paused for it, and Google saying the allowance is used up pauses them. Its calls end by
  * `opts.deadline` (default AD_REPORT_BUDGET_MS from now); one cut off is an AdsRetryableError.
  * `opts.parent`: a drill-down, one campaign's ad groups or asset groups, one ad group's ads (one
- * operation, googleReport).
+ * operation, googleReport), or one campaign's or ad group's keywords and search terms (two). Keyword and
+ * search-term reports are guarded by the caller (their share of the allowance, a cap per account a day:
+ * the API's Google Ads report), and are never read by a sync.
  */
 export async function googleReportForConnection(
   conn: AdConnection,
