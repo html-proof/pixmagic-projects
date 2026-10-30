@@ -8,7 +8,7 @@ import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
-import { funnel, funnelDetail, type FunnelView } from "./funnel.js";
+import { funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
 import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
 import { productPerformance } from "./products.js";
@@ -60,7 +60,8 @@ export interface AdsView {
  *
  * `adsView` narrows the ad modules for the Advertising pages (AdsView). `funnelView`: the Shopping
  * Funnel page's question (its filter), which makes the funnel module the page's full report
- * (`funnelDetail`) instead of the dashboard's summary.
+ * (`funnelDetail`) instead of the dashboard's summary. `sheet.visitsByDay`: the Profit sheet's
+ * question, which adds the visits day by day to the funnel module.
  *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
@@ -72,6 +73,7 @@ export async function storeOverview(
   sees: (module: string) => boolean = () => true,
   adsView: AdsView = {},
   funnelView?: FunnelView,
+  sheet: { visitsByDay?: boolean } = {},
 ) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
@@ -187,7 +189,11 @@ export async function storeOverview(
 
   if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range, {}, now);
 
-  if (enabled.has("funnel")) modules.funnel = funnelView ? await funnelDetail(tx, scope, range, previous, store, funnelView) : await funnel(tx, scope, range, previous, store);
+  if (enabled.has("funnel")) {
+    const f = funnelView ? await funnelDetail(tx, scope, range, previous, store, funnelView) : await funnel(tx, scope, range, previous, store);
+    // The Profit sheet's visits day by day, counted as the funnel counts them.
+    modules.funnel = sheet.visitsByDay ? { ...f, visitsByDay: await visitsByDay(tx, scope, range, f.historyFrom) } : f;
+  }
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   type SalesFigures = { netSales?: number; orders?: number };

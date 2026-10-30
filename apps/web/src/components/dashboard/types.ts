@@ -103,11 +103,23 @@ export interface SalesOverview {
   };
   /**
    * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
-   * its `totalSales`: "View gross sales, discounts, tax and shipping". `units`: net items sold that
-   * day (absent from older answers).
+   * its `totalSales`: "View gross sales, discounts, tax and shipping"; its `newCustomerOrders` (orders
+   * that were a customer's first): "View returning vs new customers". `units`: net items sold that day;
+   * `orderValue`: what its orders sold for, which average order value divides (both absent from
+   * older answers).
    */
   series: Array<
-    Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number; units?: number }
+    Omit<SalesDay, "refunds" | "totalSales"> & {
+      refunds?: number;
+      totalSales?: number;
+      shipping?: number;
+      tax?: number;
+      duties?: number;
+      additionalFees?: number;
+      units?: number;
+      orderValue?: number;
+      newCustomerOrders?: number;
+    }
   >;
   /**
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
@@ -424,6 +436,8 @@ export interface FunnelModule extends JourneySummary {
   /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". `reached`: visits per step then. */
   previous: { visits: number | null; conversionRate: number | null; imported?: boolean; reached?: number[] | null };
   deltas: { visits: number | null; conversionRate: number | null };
+  /** The Profit sheet's answer (?parts=sheet) only: visits day by day, null on a day before they were counted. */
+  visitsByDay?: Array<{ day: string; visits: number | null }>;
 }
 
 /** One product page on the Shopping Funnel page (funnelDetail in packages/core/src/reports/funnel.ts). */
