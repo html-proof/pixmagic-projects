@@ -4,7 +4,7 @@ import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingF
 import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
 import { zapierOrderPaid } from "@app/core/zapier";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
-import { readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
+import { readProductCollections, readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
 
 /** Topics about the app installation itself (not store data). */
 const APP_SCOPED_TOPICS = new Set(["app/uninstalled", "app/scopes_update", "shop/redact", "app_subscriptions/update"]);
@@ -210,6 +210,18 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
             ? variants.map((v) => v.shopifyId)
             : [];
         if (keep.length) await pruneVariants(store, product.shopifyId, keep, product.updatedAt);
+        // REST payloads carry no collections: a new product's are read now, so what it sells before
+        // the nightly catalog read counts in its collections. Not on products/update, which Shopify
+        // also sends for every order of the product: the catalog read keeps those current.
+        if (data.topic === "products/create") {
+          try {
+            const collections = await readProductCollections(deps, store, { pendingMs: 0 }, `gid://shopify/Product/${product.shopifyId}`, null);
+            if (collections) await upsertProduct(store, { ...product, collections });
+          } catch (err) {
+            // The product is stored; its collections wait for the next catalog read.
+            logger.warn({ err, ...logIds, product: product.shopifyId }, "couldn't read a new product's collections");
+          }
+        }
         break;
       }
       case "products/delete": {

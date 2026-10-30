@@ -1692,6 +1692,84 @@ describe("catalog and stock pipeline", () => {
     expect(p.shopifyCreatedAt?.toISOString()).toBe("2025-06-01T00:00:00.000Z");
   });
 
+  const collection = (id: number) => ({ id: `gid://shopify/Collection/${id}`, title: `C${id}` });
+  const pageNode = (over: Record<string, unknown> = {}) => ({
+    id: "gid://shopify/Product/8",
+    title: "Tee",
+    status: "ACTIVE",
+    vendor: "Acme",
+    productType: "Shirts",
+    updatedAt: "2026-03-01T00:00:00Z",
+    handle: "tee",
+    ...over,
+  });
+
+  it("reads every collection of a product in more than its page holds, and keeps them when Shopify withholds them", async () => {
+    const store = await makeStore();
+    const calls: GqlBody[] = [];
+    fetchImpl = async (_u, init) => {
+      const body = gqlBody(init);
+      calls.push(body);
+      if (body.query.includes("query ProductCollections")) {
+        // 12 in all: the page held the first 10, then two more pages of one.
+        return body.variables.cursor === "c10"
+          ? gqlJson({ product: { collections: { pageInfo: { hasNextPage: true, endCursor: "c11" }, nodes: [collection(11)] } } })
+          : gqlJson({ product: { collections: { pageInfo: { hasNextPage: false, endCursor: "c12" }, nodes: [collection(12)] } } });
+      }
+      return gqlJson({
+        products: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            pageNode({ collections: { pageInfo: { hasNextPage: true, endCursor: "c10" }, nodes: Array.from({ length: 10 }, (_, i) => collection(i + 1)) } }),
+            pageNode({ id: "gid://shopify/Product/9", title: "Mug", collections: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }),
+          ],
+        },
+      });
+    };
+    await runSync({ storeId: store.id, kind: "products", syncJobId: (await makeJob(store, "products")).id }, deps);
+    expect(calls.filter((c) => c.query.includes("query ProductCollections")).map((c) => c.variables)).toEqual([
+      { id: "gid://shopify/Product/8", cursor: "c10" },
+      { id: "gid://shopify/Product/8", cursor: "c11" },
+    ]);
+    const tee = await systemDb.product.findFirstOrThrow({ where: { shopifyId: "8" } });
+    expect(tee.collections).toEqual(Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1), title: `C${i + 1}` })));
+    // In no collection: an empty list, not "never read".
+    expect((await systemDb.product.findFirstOrThrow({ where: { shopifyId: "9" } })).collections).toEqual([]);
+
+    // A later catalog read where Shopify withheld the collections (null): the stored ones stay.
+    fetchImpl = async () => gqlJson({ products: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [pageNode({ title: "Tee 2", updatedAt: "2026-03-02T00:00:00Z", collections: null })] } });
+    await runSync({ storeId: store.id, kind: "products", syncJobId: (await makeJob(store, "products")).id }, deps);
+    const kept = await systemDb.product.findFirstOrThrow({ where: { shopifyId: "8" } });
+    expect(kept.title).toBe("Tee 2");
+    expect(kept.collections).toHaveLength(12);
+  });
+
+  it("reads a new product's collections on products/create, and leaves them to the catalog read when Shopify can't say", async () => {
+    await makeStore();
+    const asked: GqlBody[] = [];
+    fetchImpl = async (_u, init) => {
+      asked.push(gqlBody(init));
+      return gqlJson({ product: { collections: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [collection(5)] } } });
+    };
+    await webhook("products/create", restProduct());
+    expect(asked.map((b) => b.variables)).toEqual([{ id: "gid://shopify/Product/8", cursor: null }]);
+    expect((await systemDb.product.findFirstOrThrow()).collections).toEqual([{ id: "5", title: "C5" }]);
+    // products/update (sent for every order of the product too) doesn't ask.
+    await webhook("products/update", restProduct({ updated_at: "2026-03-03T00:00:00Z" }));
+    expect(asked).toHaveLength(1);
+    expect((await systemDb.product.findFirstOrThrow()).collections).toEqual([{ id: "5", title: "C5" }]);
+
+    // Shopify failing the read: the product is stored all the same, its collections unknown.
+    await systemDb.product.deleteMany();
+    fetchImpl = async () =>
+      new Response(JSON.stringify({ errors: [{ message: "Internal error", extensions: { code: "INTERNAL_SERVER_ERROR" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    const { ev } = await webhook("products/create", restProduct({ id: 9, variants: [] }));
+    expect((await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).toBe("succeeded");
+    const p = await systemDb.product.findFirstOrThrow({ where: { shopifyId: "9" } });
+    expect(p.title).toBe("Tee");
+    expect(p.collections).toBeNull();
+  });
+
   it("syncs variants page by page with price, stock and unit cost", async () => {
     const store = await makeStore();
     const job = await makeJob(store, "variants");

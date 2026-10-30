@@ -450,6 +450,12 @@ export const graphqlOrderSchema = obj({
   agreements: obj({ pageInfo, nodes: z.array(graphqlAgreementSchema).nullish() }).nullish(),
 });
 
+/** A Collection node (PRODUCTS_QUERY, PRODUCT_COLLECTIONS_QUERY). */
+export const graphqlCollectionSchema = obj({ id: gid, title: str });
+
+/** A product's collections connection; `pageInfo` says whether there are more than the page held. */
+const productCollections = obj({ pageInfo, nodes: z.array(graphqlCollectionSchema) });
+
 export const graphqlProductSchema = obj({
   id: gid,
   title: str,
@@ -465,8 +471,12 @@ export const graphqlProductSchema = obj({
   description: str,
   category: obj({ fullName: str }).nullish().catch(null),
   featuredMedia: obj({ preview: obj({ image: obj({ url: str }).nullish() }).nullish() }).nullish().catch(null),
-  collections: obj({ nodes: z.array(obj({ id: gid, title: str })) }).nullish().catch(null),
+  // Withheld or not understood (null): the stored collections are kept (normalizeGraphqlProduct).
+  collections: productCollections.nullish().catch(null),
 });
+
+/** PRODUCT_COLLECTIONS_QUERY's answer; `product` is null when the product is gone. */
+export const graphqlProductCollectionsSchema = obj({ product: obj({ collections: productCollections }).nullish() });
 
 export const graphqlVariantSchema = obj({
   id: gid,
@@ -498,6 +508,7 @@ export const graphqlVariantSchema = obj({
 export type GraphqlMoney = z.output<typeof moneyBag>;
 export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;
 export type GraphqlProduct = z.output<typeof graphqlProductSchema>;
+export type GraphqlCollection = z.output<typeof graphqlCollectionSchema>;
 export type GraphqlVariant = z.output<typeof graphqlVariantSchema>;
 
 // ---------------------------------------------------------------- Inventory (core/inventory)

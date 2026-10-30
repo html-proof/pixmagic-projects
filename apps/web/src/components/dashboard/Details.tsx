@@ -1,9 +1,10 @@
 "use client";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { CompareMode } from "@app/shared/dates";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { TopProducts } from "./TopProducts";
+import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
 import { ContactsCard } from "./Contacts";
 import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
@@ -208,6 +209,14 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
+  // Top products narrowed to a collection, picked in Sales by collection or Top products' own list.
+  const [collection, setCollection] = useState<CollectionChoice | null>(null);
+  const collections = useCollectionSales(ov, !!ov.modules.top_products);
+  const choices = (collections.report?.items ?? []).map((c) => ({ id: c.collectionId, title: collectionName(c) }));
+  const pick = (c: CollectionChoice) => {
+    setCollection(c);
+    document.getElementById("d-top-products")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   return (
     <>
       <InShort>
@@ -227,7 +236,8 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
           <p>{ov.modules.top_products?.complete === false ? "Product rankings are waiting for complete sales data for these dates." : "No product sales in these dates yet."}</p>
         )}
       </InShort>
-      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} />}
+      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} collection={collection} collections={choices} onCollection={setCollection} />}
+      {ov.modules.top_products && <CollectionSales ov={ov} currency={currency} live={collections} onPick={pick} />}
       {ov.modules.catalog && <CatalogCard m={ov.modules.catalog} currency={currency} />}
     </>
   );
