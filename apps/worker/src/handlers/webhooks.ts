@@ -4,7 +4,7 @@ import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingF
 import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
 import { zapierOrderPaid } from "@app/core/zapier";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
-import { readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
+import { readProductCollections, readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
 
 /** Topics about the app installation itself (not store data). */
 const APP_SCOPED_TOPICS = new Set(["app/uninstalled", "app/scopes_update", "shop/redact", "app_subscriptions/update"]);
@@ -210,6 +210,18 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
             ? variants.map((v) => v.shopifyId)
             : [];
         if (keep.length) await pruneVariants(store, product.shopifyId, keep, product.updatedAt);
+        // REST payloads carry no collections: a new product's are read now, so what it sells before
+        // the nightly catalog read counts in its collections. Not on products/update, which Shopify
+        // also sends for every order of the product: the catalog read keeps those current.
+        if (data.topic === "products/create") {
+          try {
+            const collections = await readProductCollections(deps, store, { pendingMs: 0 }, `gid://shopify/Product/${product.shopifyId}`, null);
+            if (collections) await upsertProduct(store, { ...product, collections });
+          } catch (err) {
+            // The product is stored; its collections wait for the next catalog read.
+            logger.warn({ err, ...logIds, product: product.shopifyId }, "couldn't read a new product's collections");
+          }
+        }
         break;
       }
       case "products/delete": {
@@ -371,8 +383,22 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // It must name the customer or their orders (customersRedactSchema): who else to redact?
         const redact = parseShopify(customersRedactSchema, p, data.topic, logIds);
         if (!redact) throw unreadableGdprRequest(data.topic);
-        if (redact.customer?.id) {
-          await systemDb.order.updateMany({ where: { storeId: store.id, customerKey: customerKey(store, String(redact.customer.id)) }, data: { customerKey: null } });
+        // Their orders lose the hash that tied them to the customer: by the customer's id, and by the
+        // orders Shopify names (all of them carry the same customer's hash: theirs too, even when the
+        // payload names no customer id). Their days are counted again, so the day totals stop
+        // counting them as orders of a known (or returning) customer.
+        const keys = new Set<string>();
+        if (redact.customer?.id != null) keys.add(customerKey(store, String(redact.customer.id)));
+        const named = (redact.orders_to_redact ?? []).map(String);
+        if (named.length) {
+          const linked = await systemDb.order.findMany({ where: { storeId: store.id, shopifyId: { in: named }, customerKey: { not: null } }, select: { customerKey: true } });
+          for (const o of linked) keys.add(o.customerKey!);
+        }
+        if (keys.size) {
+          const where = { storeId: store.id, customerKey: { in: [...keys] } };
+          const days = await systemDb.order.findMany({ where, select: { localDay: true }, distinct: ["localDay"] });
+          await systemDb.order.updateMany({ where, data: { customerKey: null } });
+          await enqueueAggregate(deps, store.id, days.map((d) => d.localDay));
         }
         const whatsappRecords = await redactWhatsappCustomer(store, redact);
         // Email automations: the customer's events and the messages sent to them from this store.

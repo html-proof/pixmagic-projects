@@ -152,18 +152,22 @@ describe("Google's daily allowance", () => {
     expect(await googleAdsOperationsToday(coord, t)).toBe(403);
   });
 
-  it("holds background syncs back at 80% (history at 60%), and everything while Google says it is used up", async () => {
+  it("holds background syncs back at 80% (history at 60%, keyword and search-term reports at 70%), and everything while Google says it is used up", async () => {
     const at = (used: number) => ({ paused: false, used, limit: 2880 });
     expect(googleAdsBudgetAllows(at(2303), "schedule")).toBe(true);
     expect(googleAdsBudgetAllows(at(2304), "schedule")).toBe(false);
     expect(googleAdsBudgetAllows(at(1727), "history")).toBe(true);
     expect(googleAdsBudgetAllows(at(1728), "history")).toBe(false);
+    // Keyword and search-term reports stop at 70%: after history walks, before the scheduled syncs.
+    expect(googleAdsBudgetAllows(at(2015), "detail")).toBe(true);
+    expect(googleAdsBudgetAllows(at(2016), "detail")).toBe(false);
     const coord = memoryCoord();
     expect((await googleAdsBudget(coord)).paused).toBe(false);
     await pauseGoogleAds(coord, null);
     const b = await googleAdsBudget(coord);
     expect(b).toMatchObject({ paused: true, used: 0, limit: 2880 });
     expect(googleAdsBudgetAllows(b, "schedule")).toBe(false);
+    expect(googleAdsBudgetAllows(b, "detail")).toBe(false);
   });
 
   it("the allowance is GOOGLE_ADS_DAILY_OPERATIONS once set (a higher access level), else Explorer's; an empty setting is unset", async () => {

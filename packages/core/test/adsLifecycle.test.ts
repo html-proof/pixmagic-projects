@@ -339,8 +339,18 @@ describe("live reports", () => {
       return json([
         {
           results: [
-            { campaign: { id: "1", name: "Brand", status: "ENABLED", advertisingChannelType: "SEARCH" }, campaignBudget: { amountMicros: "20000000" }, metrics: { costMicros: "2500000", impressions: "200", clicks: "10", conversions: 0, conversionsValue: 0 } },
-            { campaign: { id: "2", name: "PMax", status: "PAUSED", advertisingChannelType: "PERFORMANCE_MAX" }, campaignBudget: { amountMicros: "50000000" }, metrics: { costMicros: "10000000", impressions: "800", clicks: "40", conversions: 2, conversionsValue: 100 } },
+            {
+              campaign: { id: "1", name: "Brand", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], advertisingChannelType: "SEARCH" },
+              campaignBudget: { period: "DAILY", amountMicros: "20000000" },
+              metrics: { costMicros: "2500000", impressions: "200", clicks: "10", conversions: 0, conversionsValue: 0 },
+            },
+            {
+              campaign: { id: "2", name: "PMax", status: "PAUSED", primaryStatus: "PAUSED", primaryStatusReasons: ["CAMPAIGN_PAUSED"], advertisingChannelType: "PERFORMANCE_MAX" },
+              campaignBudget: { period: "DAILY", amountMicros: "50000000" },
+              metrics: { costMicros: "10000000", impressions: "800", clicks: "40", conversions: 2, conversionsValue: 100 },
+            },
+            // A campaign total budget (CUSTOM_PERIOD): the whole amount, no daily one.
+            { campaign: { id: "3", name: "Launch", status: "ENABLED", primaryStatus: "ELIGIBLE", advertisingChannelType: "SEARCH" }, campaignBudget: { period: "CUSTOM_PERIOD", totalAmountMicros: "300000000" }, metrics: {} },
           ],
         },
       ]);
@@ -350,9 +360,21 @@ describe("live reports", () => {
     expect(r.rows.map((x) => [x.name, x.status, x.channel, x.dailyBudget, x.spend])).toEqual([
       ["PMax", "PAUSED", "PERFORMANCE_MAX", 50, 10],
       ["Brand", "ENABLED", "SEARCH", 20, 2.5],
+      ["Launch", "ENABLED", "SEARCH", null, 0],
+    ]);
+    expect(r.rows.map((x) => [x.name, x.primaryStatus, x.primaryStatusReasons, x.budgetPeriod, x.totalBudget])).toEqual([
+      ["PMax", "PAUSED", ["CAMPAIGN_PAUSED"], "DAILY", null],
+      ["Brand", "LIMITED", ["BUDGET_CONSTRAINED"], "DAILY", null],
+      ["Launch", "ELIGIBLE", [], "CUSTOM_PERIOD", 300],
     ]);
     expect(r.rows[1]!.costPerConversion).toBeNull();
     expect(queries.every((q) => q.includes("segments.date BETWEEN '2026-10-01' AND '2026-10-07'"))).toBe(true);
+    // The delivery status and both kinds of budget come with the campaigns, in the same query: two operations, as before.
+    expect(queries).toHaveLength(2);
+    const campaigns = queries.find((q) => q.includes("FROM campaign "))!;
+    for (const field of ["campaign.primary_status", "campaign.primary_status_reasons", "campaign_budget.period", "campaign_budget.amount_micros", "campaign_budget.total_amount_micros"]) {
+      expect(campaigns).toContain(`${field},`);
+    }
     await expect(googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "campaign", "2026-10-01' OR 1=1", "2026-10-07")).rejects.toThrow("Invalid date range");
   });
 
@@ -397,6 +419,150 @@ describe("live reports", () => {
     expect(d.totals.spend).toBe(0);
     const g = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "ad_group", "2026-10-01", "2026-10-01");
     expect(g.rows[0]).toMatchObject({ id: "55", name: "Shoes", campaignName: "Brand", status: "ENABLED", spend: 4 });
+  });
+
+  it("Google, down from a campaign: its ad groups, a Performance Max campaign's asset groups, an ad group's ads; one query each, the rows added up as the totals", async () => {
+    const queries: string[] = [];
+    const f = fake(async (_u, init) => {
+      const query = queryOf(init);
+      queries.push(query);
+      if (query.includes("FROM ad_group_ad")) {
+        return json([
+          {
+            results: [
+              { campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "ENABLED", ad: { id: "7001", type: "RESPONSIVE_SEARCH_AD" } }, metrics: { costMicros: "3000000", impressions: "300", clicks: "30" } },
+              { campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "PAUSED", ad: { id: "7002", type: "RESPONSIVE_SEARCH_AD" } }, metrics: { costMicros: "1000000", impressions: "100", clicks: "5" } },
+            ],
+          },
+        ]);
+      }
+      if (query.includes("FROM asset_group")) return json([{ results: [{ campaign: { id: "12", name: "PMax" }, assetGroup: { id: "901", name: "Summer", status: "ENABLED" }, metrics: { costMicros: "2500000", impressions: "50" } }] }]);
+      return json([{ results: [{ campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes", status: "ENABLED" }, metrics: { costMicros: "4000000", impressions: "400", clicks: "35" } }] }]);
+    });
+    const during = "segments.date BETWEEN '2026-10-01' AND '2026-10-07'";
+    const groups = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "ad_group", "2026-10-01", "2026-10-07", 200, { campaign: "11" });
+    expect(queries).toEqual([`SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group.status, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM ad_group WHERE ${during} AND campaign.id = 11`]);
+    expect(groups.rows[0]).toMatchObject({ id: "55", campaignId: "11", campaignName: "Brand" });
+    // Not the account's totals (no customer query): the campaign's ad groups added up.
+    expect(groups.totals).toMatchObject({ spend: 4, impressions: 400, clicks: 35 });
+
+    queries.length = 0;
+    const assets = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "asset_group", "2026-10-01", "2026-10-07", 200, { campaign: "12" });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("FROM asset_group WHERE");
+    expect(queries[0]).toContain("AND campaign.id = 12");
+    expect(assets.rows.map((r) => [r.id, r.name, r.campaignId])).toEqual([["901", "Summer", "12"]]);
+
+    queries.length = 0;
+    const ads = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "ad", "2026-10-01", "2026-10-07", 1, { campaign: "11", adGroup: "55" });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatch(/^SELECT campaign\.id, campaign\.name, ad_group\.id, ad_group\.name, ad_group_ad\.ad\.id, ad_group_ad\.ad\.name, ad_group_ad\.ad\.type, ad_group_ad\.status, metrics\./);
+    expect(queries[0]).toContain(`FROM ad_group_ad WHERE ${during} AND campaign.id = 11 AND ad_group.id = 55`);
+    // The ad's text and links are never asked for.
+    expect(queries[0]).not.toMatch(/headline|description|final_url/);
+    expect(ads.rows).toEqual([expect.objectContaining({ id: "7001", name: "Responsive search ad 7001", adGroupId: "55", adType: "RESPONSIVE_SEARCH_AD", status: "ENABLED" })]);
+    // One row shown of two: the totals still add up every one Google returned.
+    expect(ads.truncated).toBe(true);
+    expect(ads.totals).toMatchObject({ spend: 4, impressions: 400, clicks: 35 });
+  });
+
+  it("Google: an id that isn't Google's, or a level that can't be under it, is refused before any query", async () => {
+    const f = fake(async () => json([{ results: [] }]));
+    const asked: Array<[Parameters<typeof googleReport>[3], { campaign?: string; adGroup?: string }]> = [
+      ["ad_group", { campaign: "1 OR 1=1" }],
+      ["ad", { adGroup: "55) OR (1=1" }],
+      ["ad", { adGroup: "demo-c2-core" }],
+      ["ad", { campaign: "11" }],
+      ["asset_group", {}],
+      ["campaign", { campaign: "11" }],
+      ["device", { campaign: "11" }],
+      ["keyword", { campaign: "11 OR 1=1" }],
+      ["search_term", { adGroup: "55" }],
+      ["search_term", { campaign: "demo-c2" }],
+    ];
+    for (const [level, parent] of asked) {
+      await expect(googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, level, "2026-10-01", "2026-10-07", 200, parent)).rejects.toMatchObject({ status: 400 });
+    }
+    // The row count goes into the query text too.
+    await expect(googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "keyword", "2026-10-01", "2026-10-07", 1.5)).rejects.toMatchObject({ status: 400 });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it("Google keywords: keyword_view by spend, Google listing one more than shown; the account's own totals on top", async () => {
+    const queries: string[] = [];
+    const keyword = (i: number) => ({
+      campaign: { id: "11", name: "Brand" },
+      adGroup: { id: "55", name: "Shoes" },
+      adGroupCriterion: { criterionId: String(9000 + i), status: "ENABLED", keyword: { text: `kw ${i}`, matchType: "PHRASE" }, qualityInfo: { qualityScore: 6 } },
+      metrics: { costMicros: String((300 - i) * 10_000), impressions: "50", clicks: "2" },
+    });
+    const f = fake(async (_u, init) => {
+      const query = queryOf(init);
+      queries.push(query);
+      if (query.includes("FROM keyword_view")) return json([{ results: Array.from({ length: 201 }, (_, i) => keyword(i)) }]);
+      return json([{ results: [{ metrics: { costMicros: "90000000", impressions: "20000", clicks: "800", conversions: 12, conversionsValue: 600 } }] }]);
+    });
+    const r = await googleReport(google(f.fetchImpl), "AT", { accountId: "111", loginCustomerId: "222" }, "keyword", "2026-10-01", "2026-10-07");
+    const during = "segments.date BETWEEN '2026-10-01' AND '2026-10-07'";
+    expect(queries).toEqual([
+      `SELECT metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM customer WHERE ${during}`,
+      "SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group_criterion.criterion_id, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, " +
+        "ad_group_criterion.status, ad_group_criterion.quality_info.quality_score, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value " +
+        `FROM keyword_view WHERE ${during} AND metrics.impressions > 0 ORDER BY metrics.cost_micros DESC, metrics.impressions DESC LIMIT 201`,
+    ]);
+    // 201 back: 200 shown, and said there are more.
+    expect(r.rows).toHaveLength(200);
+    expect(r.truncated).toBe(true);
+    expect(r.rows[0]).toMatchObject({ id: "55~9000", name: "kw 0", adGroupName: "Shoes", matchType: "PHRASE", qualityScore: 6, spend: 3 });
+    // The account's own row, not the keywords added up.
+    expect(r.totals).toMatchObject({ spend: 90, impressions: 20000, conversions: 12 });
+    // Through a manager account like every other read.
+    expect(f.calls.every((c) => new Headers(c.init?.headers).get("login-customer-id") === "222")).toBe(true);
+    await expect(googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "keyword", "2026-10-01", "2026-10-07' OR 1=1")).rejects.toThrow("Invalid date range");
+
+    // Under an ad group: only its keywords, and its own row on top.
+    queries.length = 0;
+    const few = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "keyword", "2026-10-01", "2026-10-07", 300, { campaign: "11", adGroup: "55" });
+    expect(queries[0]).toBe(`SELECT metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM ad_group WHERE ${during} AND ad_group.id = 55 AND campaign.id = 11`);
+    expect(queries[1]).toContain(`FROM keyword_view WHERE ${during} AND campaign.id = 11 AND ad_group.id = 55 AND metrics.impressions > 0`);
+    expect(queries[1]).toMatch(/ LIMIT 301$/);
+    expect(few.truncated).toBe(false);
+    expect(few.rows).toHaveLength(201);
+  });
+
+  it("Google search terms: campaign_search_term_view (Performance Max's terms too), by spend, the campaign's own row on top under one", async () => {
+    const queries: string[] = [];
+    const f = fake(async (_u, init) => {
+      const query = queryOf(init);
+      queries.push(query);
+      if (query.includes("FROM campaign_search_term_view")) {
+        return json([
+          {
+            results: [
+              { campaign: { id: "12", name: "PMax", advertisingChannelType: "PERFORMANCE_MAX" }, campaignSearchTermView: { searchTerm: "trail shoes" }, metrics: { costMicros: "2000000", impressions: "100", clicks: "4" } },
+              { campaign: { id: "12", name: "PMax", advertisingChannelType: "PERFORMANCE_MAX" }, campaignSearchTermView: { searchTerm: "running shoes" }, metrics: { costMicros: "1000000", impressions: "80", clicks: "3" } },
+            ],
+          },
+        ]);
+      }
+      return json([{ results: [{ metrics: { costMicros: "9000000", impressions: "900", clicks: "30" } }] }]);
+    });
+    const during = "segments.date BETWEEN '2026-10-01' AND '2026-10-07'";
+    const r = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "search_term", "2026-10-01", "2026-10-07", 200, { campaign: "12" });
+    expect(queries).toEqual([
+      `SELECT metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE ${during} AND campaign.id = 12`,
+      "SELECT campaign.id, campaign.name, campaign.advertising_channel_type, campaign_search_term_view.search_term, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value " +
+        `FROM campaign_search_term_view WHERE ${during} AND campaign.id = 12 AND metrics.impressions > 0 ORDER BY metrics.cost_micros DESC, metrics.impressions DESC LIMIT 201`,
+    ]);
+    // No keyword segment: it would leave Performance Max out.
+    expect(queries[1]).not.toContain("segments.keyword");
+    expect(r.rows.map((x) => [x.id, x.name, x.channel, x.spend])).toEqual([
+      ["12~trail shoes", "trail shoes", "PERFORMANCE_MAX", 2],
+      ["12~running shoes", "running shoes", "PERFORMANCE_MAX", 1],
+    ]);
+    expect(r.truncated).toBe(false);
+    // The campaign's own figures: more than its listed terms add up to.
+    expect(r.totals).toMatchObject({ spend: 9, impressions: 900, clicks: 30 });
   });
 
   it("Meta: the whole account split by placement, device and country", async () => {

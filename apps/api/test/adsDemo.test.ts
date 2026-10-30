@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { syncAdConnection, type AdsSyncData } from "@app/core";
+import { googleAdsOperationsToday, syncAdConnection, type AdsSyncData } from "@app/core";
 import { addDays, DEMO_ACCOUNT_ID, DEMO_CAMPAIGNS, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -200,6 +200,57 @@ describe("the demo's figures", () => {
     expect(names).not.toContain("Website Traffic");
     expect(names).toHaveLength(DEMO_CAMPAIGNS.length - 1);
     expect(res.json().report.rows[0]).toHaveProperty("dailyBudget");
+    // A real account's campaign fields: Google's primary status and its reasons, and the budget's period.
+    const search = res.json().report.rows.find((r: { id: string }) => r.id === "demo-c2");
+    expect(search).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null });
+    expect(fetched).toEqual([]);
+  });
+
+  it("open a campaign's ad groups, a Performance Max campaign's asset groups and an ad group's ads, all without Google", async () => {
+    await connectAndSync();
+    const row = await demoRow();
+    const today = localDay(new Date(), "Australia/Melbourne");
+    const report = (q: Record<string, string>) => get(`/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection: row.id, from: addDays(today, -7), to: today, ...q })}`);
+    const campaign = (await report({ level: "campaign" })).json().report.rows.find((r: { id: string }) => r.id === "demo-c2");
+    const groups = await report({ level: "ad_group", campaign: "demo-c2" });
+    expect(groups.statusCode).toBe(200);
+    expect(groups.json().report.rows.map((r: { id: string }) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
+    // Split from the campaign: its ad groups add up to it.
+    expect(groups.json().report.totals.spend).toBeCloseTo(campaign.spend, 2);
+    const ads = await report({ level: "ad", campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.rows.length).toBeGreaterThanOrEqual(2);
+    expect(ads.json().report.rows.every((r: { adGroupId: string; adType: string }) => r.adGroupId === "demo-c2-core" && r.adType === "RESPONSIVE_SEARCH_AD")).toBe(true);
+    const assets = await report({ level: "asset_group", campaign: "demo-c7" });
+    expect(assets.json().report.rows).toHaveLength(2);
+    // The demo's ids only: a Google-shaped id isn't one of the demo's.
+    expect((await report({ level: "ad_group", campaign: "12345" })).statusCode).toBe(400);
+    expect(fetched).toEqual([]);
+  });
+
+  it("keywords and search terms, generated: no Google call, no operation spent, and no daily cap", async () => {
+    await connectAndSync();
+    const row = await demoRow();
+    const today = localDay(new Date(), "Australia/Melbourne");
+    const report = (q: Record<string, string>) => get(`/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection: row.id, from: addDays(today, -30), to: today, ...q })}`);
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    const keywords = await report({ level: "keyword" });
+    expect(keywords.statusCode).toBe(200);
+    const rows = keywords.json().report.rows as Array<{ campaignId: string; matchType: string; qualityScore: number }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(new Set(rows.map((r) => r.campaignId))).toEqual(new Set(["demo-c2", "demo-c5"]));
+    expect(rows.every((r) => ["EXACT", "PHRASE", "BROAD"].includes(r.matchType) && r.qualityScore >= 1 && r.qualityScore <= 10)).toBe(true);
+    const inGroup = await report({ level: "keyword", campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(inGroup.json().report.rows.every((r: { adGroupId: string }) => r.adGroupId === "demo-c2-core")).toBe(true);
+    const terms = await report({ level: "search_term", campaign: "demo-c7" });
+    expect(terms.statusCode).toBe(200);
+    expect(terms.json().report.rows.length).toBeGreaterThan(0);
+    // The campaign's own figures on top: more than its listed terms.
+    const listed = terms.json().report.rows.reduce((a: number, r: { spend: number }) => a + r.spend, 0);
+    expect(terms.json().report.totals.spend).toBeGreaterThan(listed);
+    // Past the 25 a day a real account may read from Google: the demo costs nothing, so nothing holds it back.
+    for (let i = 1; i <= 24; i++) expect((await report({ level: i % 2 ? "search_term" : "keyword", from: addDays(today, -30 - i) })).statusCode).toBe(200);
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before);
     expect(fetched).toEqual([]);
   });
 

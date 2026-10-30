@@ -19,6 +19,7 @@ import {
   type AdDayRow,
   type DemoContext,
   type GoogleReportLevel,
+  type GoogleReportParent,
 } from "@app/shared";
 import { AdsApiError, type AdAccountHealth } from "./common.js";
 import { googleAccountHealth, googleCampaignDays, googleReport, type GoogleConfig, type GoogleReport } from "./googleAds.js";
@@ -32,8 +33,8 @@ export interface GoogleAdsSource {
   campaignDays(since: string, until: string): Promise<AdDayRow[]>;
   /** The account's status, name, currency and time zone now. */
   accountHealth(): Promise<AdAccountHealth>;
-  /** The report by campaign, ad group, device or country for exactly one range. */
-  report(level: GoogleReportLevel, since: string, until: string): Promise<GoogleReport>;
+  /** The report by campaign, ad group, device or country for exactly one range; under a parent, one campaign's ad groups or asset groups, one ad group's ads. */
+  report(level: GoogleReportLevel, since: string, until: string, parent?: GoogleReportParent): Promise<GoogleReport>;
 }
 
 /** What the demo generator reads of a connection. */
@@ -70,8 +71,15 @@ export class GoogleAdsDemoProvider implements GoogleAdsSource {
   async accountHealth(): Promise<AdAccountHealth> {
     return { status: "active", detail: DEMO_ACCOUNT_STATUS_DETAIL, name: DEMO_ACCOUNT_NAME, currency: this.context.currency, timezone: this.conn.timezone ?? DEMO_DEFAULT_TIMEZONE };
   }
-  async report(level: GoogleReportLevel, since: string, until: string): Promise<GoogleReport> {
-    return demoReport(this.context, level, since, until);
+  async report(level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): Promise<GoogleReport> {
+    // A campaign's primary status is rated as of the account's today, as Google's is now.
+    let today: string;
+    try {
+      today = localDay(new Date(), this.conn.timezone || DEMO_DEFAULT_TIMEZONE);
+    } catch {
+      today = localDay(new Date(), "UTC");
+    }
+    return demoReport(this.context, level, since, until, parent, today);
   }
 }
 
@@ -89,8 +97,8 @@ export class GoogleAdsProductionProvider implements GoogleAdsSource {
   accountHealth(): Promise<AdAccountHealth> {
     return googleAccountHealth(this.cfg, this.accessToken, this.account);
   }
-  report(level: GoogleReportLevel, since: string, until: string): Promise<GoogleReport> {
-    return googleReport(this.cfg, this.accessToken, this.account, level, since, until);
+  report(level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): Promise<GoogleReport> {
+    return googleReport(this.cfg, this.accessToken, this.account, level, since, until, undefined, parent);
   }
 }
 

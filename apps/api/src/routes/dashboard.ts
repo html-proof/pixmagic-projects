@@ -6,6 +6,7 @@ import {
   latestReconciliation,
   logger,
   requestShopifyReports,
+  revocableOptionalScopesFor,
   revocableScopes,
   saveSalesCalculation,
   startReconciliation,
@@ -108,6 +109,7 @@ export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string, li
 export function publicStore(s: {
   id: string;
   shopDomain: string;
+  shopifyAppKey: string;
   name: string | null;
   timezone: string;
   currency: string;
@@ -126,7 +128,7 @@ export function publicStore(s: {
     currency: s.currency,
     status: s.status,
     grantedScopes: s.grantedScopes,
-    revocableScopes: revocableScopes(s.grantedScopes, s.grantedScopes),
+    revocableScopes: revocableScopes(s.grantedScopes, s.grantedScopes, revocableOptionalScopesFor(s)),
     pixelInstalled: s.pixelInstalled,
     lastSyncedAt: s.lastSyncedAt,
     installedAt: s.installedAt,

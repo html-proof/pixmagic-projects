@@ -50,12 +50,23 @@ export function useQueryParam<T extends string>(name: string, valid: (v: string)
 
 const isAccountId = (v: string): v is string => /^[A-Za-z0-9_-]{1,64}$/.test(v);
 
-/** The ad account picked; one belongs to a store, so picking another store starts from all its accounts. */
+/** A live report's drill-down in the address bar (dashboard/ReportDrill.tsx): the campaign opened, and its ad set or ad group. */
+export const REPORT_DRILL_PARAMS = ["campaign", "adset", "adgroup"] as const;
+
+/**
+ * The ad account picked; one belongs to a store, so picking another store starts from all its accounts,
+ * and from none of the other store's campaigns opened in a live report.
+ */
 function useAccountParam(storeId: string | undefined) {
   const [account, setAccount] = useQueryParam("account", isAccountId);
   const store = useRef(storeId);
   useEffect(() => {
-    if (store.current !== undefined && storeId !== store.current) setAccount(null);
+    if (store.current !== undefined && storeId !== store.current) {
+      setAccount(null);
+      const url = new URL(window.location.href);
+      for (const p of REPORT_DRILL_PARAMS) url.searchParams.delete(p);
+      if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url.href);
+    }
     store.current = storeId;
   }, [storeId, setAccount]);
   return [account, setAccount] as const;

@@ -615,6 +615,7 @@ export async function bulkUpsertProducts(store: Pick<Store, "id" | "workspaceId"
   for (const p of partial) await upsertProduct(store, p);
   const rows = all.filter((p) => p.handle !== undefined);
   if (!rows.length) return;
+  // Collections Shopify withheld (undefined, sent as NULL) keep the stored ones, as upsertProduct does.
   await systemDb.$executeRaw`
     INSERT INTO products (id, workspace_id, store_id, shopify_id, title, status, vendor, product_type, shopify_created_at, shopify_updated_at,
                           handle, description, tags, category, collections, image_url, online_store_url)
@@ -627,14 +628,14 @@ export async function bulkUpsertProducts(store: Pick<Store, "id" | "workspaceId"
       ${rows.map((p) => ts(p.createdAt))}::text[], ${rows.map((p) => ts(p.updatedAt))}::text[],
       ${rows.map((p) => p.handle ?? null)}::text[], ${rows.map((p) => p.description ?? null)}::text[],
       ${rows.map((p) => JSON.stringify(p.tags ?? []))}::text[], ${rows.map((p) => p.category ?? null)}::text[],
-      ${rows.map((p) => JSON.stringify(p.collections ?? []))}::text[], ${rows.map((p) => p.imageUrl ?? null)}::text[],
+      ${rows.map((p) => (p.collections === undefined ? null : JSON.stringify(p.collections)))}::text[], ${rows.map((p) => p.imageUrl ?? null)}::text[],
       ${rows.map((p) => p.onlineStoreUrl ?? null)}::text[]
     ) AS s(shopify_id, title, status, vendor, product_type, created_at, updated_at, handle, description, tags, category, collections, image_url, online_store_url)
     ON CONFLICT (store_id, shopify_id) DO UPDATE SET
       title = EXCLUDED.title, status = EXCLUDED.status, vendor = EXCLUDED.vendor,
       product_type = EXCLUDED.product_type, shopify_created_at = EXCLUDED.shopify_created_at,
       shopify_updated_at = EXCLUDED.shopify_updated_at, handle = EXCLUDED.handle, description = EXCLUDED.description,
-      tags = EXCLUDED.tags, category = EXCLUDED.category, collections = EXCLUDED.collections,
+      tags = EXCLUDED.tags, category = EXCLUDED.category, collections = COALESCE(EXCLUDED.collections, products.collections),
       image_url = EXCLUDED.image_url, online_store_url = EXCLUDED.online_store_url
     WHERE products.shopify_updated_at <= EXCLUDED.shopify_updated_at`;
 }

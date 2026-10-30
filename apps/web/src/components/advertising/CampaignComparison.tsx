@@ -1,6 +1,8 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
-import { CAMPAIGN_STATUS_GROUP_LABEL, CAMPAIGN_STATUS_GROUPS, type AdSpendProvider, type CampaignStatusGroup } from "@app/shared/ads";
+import { CAMPAIGN_STATUS_GROUP_LABEL, CAMPAIGN_STATUS_GROUPS, isGoogleObjectId, isMetaObjectId, type AdSpendProvider, type CampaignStatusGroup } from "@app/shared/ads";
+import { isDemoObjectId } from "@app/shared/adsDemo";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BEING_READ, ChangeNote, ComparedLine } from "@/components/dashboard/AdsCommon";
 import { shownFigures } from "@/components/dashboard/adFigures";
@@ -14,7 +16,8 @@ import { PLATFORM } from "./AdvertisingUi";
 // Every Meta and Google Ads campaign of the dates side by side, from their stored days, on the
 // measures that mean the same thing on both. Each campaign's change is the API's, on the same whole
 // days as the totals' (none when the totals have none). Purchases and ROAS are each platform's own
-// claim; Google's other conversions stay apart from purchases, and Meta has none of them.
+// claim; Google's other conversions stay apart from purchases, and Meta has none of them. A
+// campaign's name opens its ad sets or ad groups in its platform's live report.
 // ---------------------------------------------------------------------------
 
 type Campaign = NonNullable<AdsModule["campaigns"]>[number];
@@ -42,6 +45,19 @@ function matches(c: Campaign, query: string, status: StatusFilter) {
 
 /** The platform's own word, as a reader would write it (CAMPAIGN_PAUSED → "Campaign paused"). */
 const statusWords = (s: string) => s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
+
+/**
+ * Where a campaign's ad sets (Meta) or ad groups (Google) are: its platform's page, narrowed to its
+ * account, with the campaign opened in the live report (ReportDrill); the dates come along (kept for
+ * the tab). None for the "Other campaigns" row (what Meta's account spent beyond its listed campaigns)
+ * or an id the report doesn't take.
+ */
+function drillHref(c: Campaign, connectionId: string | undefined): string | null {
+  if (!connectionId) return null;
+  const known = c.provider === "meta" ? isMetaObjectId(c.campaignId) : isGoogleObjectId(c.campaignId) || isDemoObjectId(c.campaignId);
+  if (!known) return null;
+  return `/advertising/${c.provider}?${new URLSearchParams({ account: connectionId, campaign: c.campaignId })}`;
+}
 
 /** A figure not known yet (null) sorts last, whichever way. */
 function byKey(k: SortKey) {
@@ -76,7 +92,7 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
   const campaigns = a.campaigns ?? [];
   const money = (n: number) => fmtMoney(n, a.currency);
   const total = shownFigures(a).totals?.spend ?? null;
-  const names = new Map(a.accounts.map((acc) => [`${acc.provider}:${acc.accountId}`, { name: acc.name ?? acc.accountId, demo: !!acc.demo }]));
+  const names = new Map(a.accounts.map((acc) => [`${acc.provider}:${acc.accountId}`, { name: acc.name ?? acc.accountId, demo: !!acc.demo, connectionId: acc.id }]));
   const providers = [...new Set(campaigns.map((c) => c.provider))] as AdSpendProvider[];
   const rows = campaigns.filter((c) => matches(c, query, status)).sort(byKey(sort));
   const filtered = rows.length !== campaigns.length;
@@ -160,6 +176,7 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
               {rows.map((c) => {
                 const P = PLATFORM[c.provider];
                 const account = names.get(`${c.provider}:${c.accountId}`);
+                const href = drillHref(c, account?.connectionId);
                 return (
                   <tr
                     key={`${c.provider}:${c.accountId}:${c.campaignId}`}
@@ -171,7 +188,18 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
                     <td className="px-1 py-2">
                       <span className="inline-flex items-center gap-2">
                         <P.Icon size={14} />
-                        <span className="font-medium">{c.name}</span>
+                        {href ? (
+                          <Link
+                            className="font-medium text-accent underline-offset-2 hover:underline"
+                            href={href}
+                            title={`${c.name}: view its ${c.provider === "meta" ? "ad sets" : "ad groups"} in ${P.name}' live report`}
+                            data-testid="campaign-drill-link"
+                          >
+                            {c.name}
+                          </Link>
+                        ) : (
+                          <span className="font-medium">{c.name}</span>
+                        )}
                         {account?.demo && <DemoChip small />}
                       </span>
                       <span className="block text-xs text-muted">

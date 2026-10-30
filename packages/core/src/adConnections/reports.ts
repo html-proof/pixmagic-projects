@@ -3,7 +3,7 @@
  * of the platform for exactly one date range: a comparison asks for its own range with a second call.
  */
 import type { AdConnection } from "@app/db";
-import type { AdProvider, AdsenseReportLevel, AdsenseReportRow, AdsenseTotals, GoogleReportLevel, MetaReportView } from "@app/shared";
+import type { AdProvider, AdsenseReportLevel, AdsenseReportRow, AdsenseTotals, GoogleReportLevel, GoogleReportParent, MetaReportParent, MetaReportView } from "@app/shared";
 import {
   AdsApiError,
   AdsRateLimitedError,
@@ -68,7 +68,8 @@ const metaAppLimitReached = (seconds: number) => new AdsRateLimitedError("Meta A
  * still fit the request's time; the comparison's range is read without delivery statuses
  * (`statuses: false`), which only the report's own rows show. With `coord`, Meta isn't asked at all while
  * Meta Ads is paused for Meta's limit on bizinsights' app (the answer is an AdsRateLimitedError, as Meta's
- * own throttling is), and Meta saying the app is over it pauses the syncs too.
+ * own throttling is), and Meta saying the app is over it pauses the syncs too. `opts.parent`: a
+ * drill-down, one campaign's ad sets or ads, one ad set's ads (metaReport).
  */
 export async function metaReportForConnection(
   conn: AdConnection,
@@ -76,7 +77,7 @@ export async function metaReportForConnection(
   since: string,
   until: string,
   fetchImpl?: FetchLike,
-  opts: { coord?: Coord; deadline?: number; statuses?: boolean } = {},
+  opts: { coord?: Coord; deadline?: number; statuses?: boolean; parent?: MetaReportParent } = {},
 ): Promise<MetaReport> {
   const cfg = metaConfig(fetchImpl);
   if (!cfg) throw notSetUp("meta");
@@ -87,7 +88,12 @@ export async function metaReportForConnection(
     return await liveReport(conn, async () => {
       const token = await adAccessToken(conn, fetchImpl);
       try {
-        return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, { deadline, currency: conn.currency, ...(opts.statuses === false ? { statuses: false } : {}) });
+        return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, {
+          deadline,
+          currency: conn.currency,
+          ...(opts.statuses === false ? { statuses: false } : {}),
+          ...(opts.parent ? { parent: opts.parent } : {}),
+        });
       } catch (err) {
         throw await metaClassifyPermissionError(cfg, token, err);
       }
@@ -107,6 +113,10 @@ const googleAllowanceUsed = () => new AdsRateLimitedError("Google Ads API operat
  * its operations count against bizinsights' daily allowance like a sync's, none are made while Google
  * Ads syncs are paused for it, and Google saying the allowance is used up pauses them. Its calls end by
  * `opts.deadline` (default AD_REPORT_BUDGET_MS from now); one cut off is an AdsRetryableError.
+ * `opts.parent`: a drill-down, one campaign's ad groups or asset groups, one ad group's ads (one
+ * operation, googleReport), or one campaign's or ad group's keywords and search terms (two). Keyword and
+ * search-term reports are guarded by the caller (their share of the allowance, a cap per account a day:
+ * the API's Google Ads report), and are never read by a sync.
  */
 export async function googleReportForConnection(
   conn: AdConnection,
@@ -114,10 +124,11 @@ export async function googleReportForConnection(
   since: string,
   until: string,
   fetchImpl?: FetchLike,
-  opts: { coord?: Coord; deadline?: number } = {},
+  opts: { coord?: Coord; deadline?: number; parent?: GoogleReportParent } = {},
 ): Promise<GoogleReport> {
+  const parent = opts.parent ?? {};
   // A demo's report is generated, not fetched: no client, no token, none of Google's operations spent.
-  if (isDemoConnection(conn)) return liveReport(conn, () => googleAdsSource(conn, { cfg: null, accessToken: "" }).report(level, since, until));
+  if (isDemoConnection(conn)) return liveReport(conn, () => googleAdsSource(conn, { cfg: null, accessToken: "" }).report(level, since, until, parent));
   const cfg = googleClient(fetchImpl);
   if (!cfg) throw notSetUp("google");
   if (opts.coord && (await googleAdsPaused(opts.coord))) throw googleAllowanceUsed();
@@ -125,7 +136,7 @@ export async function googleReportForConnection(
   // Counted whatever happens, a call cut off by the deadline included (Google may have run it).
   const counter = countingGoogleAdsFetch(f);
   try {
-    return await liveReport(conn, async () => googleReport({ ...cfg, fetchImpl: counter.fetchImpl }, await adAccessToken(conn, f), conn, level, since, until));
+    return await liveReport(conn, async () => googleReport({ ...cfg, fetchImpl: counter.fetchImpl }, await adAccessToken(conn, f), conn, level, since, until, undefined, parent));
   } catch (err) {
     if (opts.coord && err instanceof AdsRateLimitedError && err.errorCode === "quota_exhausted") await pauseGoogleAds(opts.coord, err.retryAfterS).catch(() => undefined);
     throw err;

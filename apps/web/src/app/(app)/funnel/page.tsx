@@ -9,6 +9,7 @@ import { comparedWith, versusWords } from "@/components/dashboard/DateRange";
 import { fmtRange } from "@/components/dashboard/format";
 import { JourneyCard } from "@/components/dashboard/Funnel";
 import { ShopifySessionsCard } from "@/components/dashboard/ShopifyReports";
+import { AbandonedCheckoutsCard } from "@/components/funnel/AbandonedCheckouts";
 import { AboutFunnelData } from "@/components/funnel/AboutFunnelData";
 import { ActionChecklist } from "@/components/funnel/ActionChecklist";
 import { Breakdown } from "@/components/funnel/Breakdown";
@@ -30,7 +31,8 @@ import { friendlyError, isTransient } from "@/lib/api";
 /**
  * The Shopping Funnel: how tracked visits become customers, where they drop off, and what to do
  * about it, for the store and dates picked (components/funnel/, docs/kpis.md "Shopping Funnel page").
- * Every figure comes from the API (GET …/overview?parts=funnel); nothing here is estimated.
+ * Every figure comes from the API (GET …/overview?parts=funnel, and Shopify's own abandoned checkouts
+ * from GET …/abandoned-checkouts, which need no pixel); nothing here is estimated.
  */
 export default function FunnelPage() {
   const { storesStatus, stores, store, workspace } = useApp();
@@ -99,6 +101,7 @@ function FunnelView() {
         <>
           {ov.capabilities.some((c) => c.id === "funnel" && !c.enabled) && <LockedFunnel ov={ov} />}
           {ov.modules.shopify_sessions && <ShopifySessionsCard m={ov.modules.shopify_sessions} versus={versus} />}
+          <AbandonedCheckoutsCard qs={s.dates.asking?.qs ?? null} currency={ov.store.currency} versus={versus} />
           <AboutFunnelData f={null} ov={ov} />
         </>
       )}
@@ -139,6 +142,7 @@ function FunnelView() {
           )}
           <ActionChecklist f={f} />
           {ov.modules.shopify_sessions && <ShopifySessionsCard m={ov.modules.shopify_sessions} versus={versus} />}
+          <AbandonedCheckoutsCard qs={s.dates.asking?.qs ?? null} currency={ov.store.currency} versus={versus} />
           <AboutFunnelData f={f} ov={ov} />
         </>
       )}

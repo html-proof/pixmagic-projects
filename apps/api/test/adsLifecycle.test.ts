@@ -1,7 +1,19 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, AdsAuthError, checkAdLogins, encryptAdTokens, googleAdsOperationsToday, logger, metaDataDeletion, metaDeauthorized, pauseGoogleAds, type FetchLike } from "@app/core";
-import { adErrorMessage, pkceChallenge } from "@app/shared";
+import {
+  adAccessToken,
+  AdsAuthError,
+  checkAdLogins,
+  countGoogleAdsOperations,
+  encryptAdTokens,
+  googleAdsOperationsToday,
+  logger,
+  metaDataDeletion,
+  metaDeauthorized,
+  pauseGoogleAds,
+  type FetchLike,
+} from "@app/core";
+import { addDays, adErrorMessage, pkceChallenge } from "@app/shared";
 import { clean, createStore, createWorkspace, deletionCode, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -66,7 +78,44 @@ function googlePlatform(seen: GoogleSeen, opts: { refreshToken?: string | null; 
       if (query.endsWith("FROM customer")) return json([{ results: [{ customer: { id, descriptiveName: `Account ${id}`, currencyCode: "USD", timeZone: "UTC", manager: false } }] }]);
       seen.reportQueries.push(query);
       if (query.startsWith("SELECT metrics.")) return json([{ results: [{ metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 } }] }]);
-      return json([{ results: [{ campaign: { id: "7", name: "Search - brand", status: "ENABLED", advertisingChannelType: "SEARCH" }, campaignBudget: { amountMicros: "10000000" }, metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 } }] }]);
+      if (query.includes("FROM keyword_view")) {
+        return json([
+          {
+            results: [
+              {
+                campaign: { id: "7", name: "Search - brand" },
+                adGroup: { id: "55", name: "Shoes" },
+                adGroupCriterion: { criterionId: "9001", status: "ENABLED", keyword: { text: "running shoes", matchType: "EXACT" }, qualityInfo: { qualityScore: 8 } },
+                metrics: { costMicros: "12000000", impressions: "800", clicks: "30", conversions: 2, conversionsValue: 90 },
+              },
+            ],
+          },
+        ]);
+      }
+      if (query.includes("FROM campaign_search_term_view")) {
+        return json([
+          {
+            results: [
+              {
+                campaign: { id: "7", name: "Search - brand", advertisingChannelType: "SEARCH" },
+                campaignSearchTermView: { searchTerm: "running shoes online" },
+                metrics: { costMicros: "5000000", impressions: "300", clicks: "12", conversions: 1, conversionsValue: 40 },
+              },
+            ],
+          },
+        ]);
+      }
+      return json([
+        {
+          results: [
+            {
+              campaign: { id: "7", name: "Search - brand", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], advertisingChannelType: "SEARCH" },
+              campaignBudget: { period: "DAILY", amountMicros: "10000000" },
+              metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 },
+            },
+          ],
+        },
+      ]);
     }
     if (u.host === "adsense.googleapis.com" && u.pathname === "/v2/accounts") return json({ accounts: [{ name: "accounts/pub-77", displayName: "Shop site", timeZone: { id: "UTC" }, state: "READY" }] });
     return json({ error: { message: `unexpected ${u.host}${u.pathname}` } }, 400);
@@ -587,6 +636,9 @@ describe("the Google Ads report", () => {
     expect(body.account).toMatchObject({ accountId: "111", currency: "USD" });
     expect(body.report.totals).toMatchObject({ spend: 30, impressions: 3000, clicks: 60, conversions: 3, conversionValue: 150, roas: 5 });
     expect(body.report.rows).toEqual([expect.objectContaining({ id: "7", name: "Search - brand", status: "ENABLED", channel: "SEARCH", dailyBudget: 10, spend: 30, cpc: 0.5 })]);
+    // Why it isn't serving in full, and its budget's kind, Google's word now: from the same campaign query.
+    expect(body.report.rows[0]).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null });
+    expect(seen.reportQueries.find((q) => q.includes("FROM campaign "))).toContain("campaign.primary_status, campaign.primary_status_reasons");
     expect(seen.reportQueries.every((q) => q.includes("BETWEEN '2026-09-01' AND '2026-09-30'"))).toBe(true);
     expect(res.body).not.toContain("G_ACCESS");
     const again = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
@@ -605,13 +657,88 @@ describe("the Google Ads report", () => {
     expect(cross.statusCode).toBe(404);
     // Someone outside the workspace can't tell it exists.
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers: other.headers })).statusCode).toBe(404);
-    const bad: Array<Record<string, string>> = [{ level: "keyword" }, { from: "2026-09-30", to: "2026-09-01" }, { from: "2026-02-31" }];
+    const bad: Array<Record<string, string>> = [{ level: "keywords" }, { from: "2026-09-30", to: "2026-09-01" }, { from: "2026-02-31" }];
     for (const q of bad) {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    }
+    // Keywords and search terms of another workspace's account: not found either, before any check of what was asked.
+    for (const level of ["keyword", "search_term"]) {
+      expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${otherWs}/stores/${otherStore}/ads/google/report?connection=${conn.id}&level=${level}&from=2026-09-01&to=2026-09-30`, headers: other.headers })).statusCode).toBe(404);
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers: other.headers })).statusCode).toBe(404);
     }
     for (const level of ["ad_group", "device", "country"]) {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
     }
+  });
+
+  it("opens one campaign's ad groups and one ad group's ads: one operation each, cached apart, Google's own ids only", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const drill: string[] = [];
+    const google = googlePlatform(seen);
+    ctx.setFetch(async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("googleAds:searchStream")) {
+        const query = (JSON.parse(String(init?.body)) as { query: string }).query;
+        const metrics = (cost: string) => ({ costMicros: cost, impressions: "1000", clicks: "20", conversions: 1, conversionsValue: 50 });
+        if (query.includes("FROM ad_group_ad")) {
+          drill.push(query);
+          return json([{ results: [{ campaign: { id: "7", name: "Search - brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "ENABLED", ad: { id: "7001", type: "RESPONSIVE_SEARCH_AD" } }, metrics: metrics("20000000") }] }]);
+        }
+        if (query.includes("FROM ad_group")) {
+          drill.push(query);
+          if (!query.includes("campaign.id = 7")) return json([{ results: [] }]);
+          return json([
+            {
+              results: [
+                { campaign: { id: "7", name: "Search - brand" }, adGroup: { id: "55", name: "Shoes", status: "ENABLED" }, metrics: metrics("20000000") },
+                { campaign: { id: "7", name: "Search - brand" }, adGroup: { id: "56", name: "Boots", status: "PAUSED" }, metrics: metrics("10000000") },
+              ],
+            },
+          ]);
+        }
+      }
+      return google(input, init);
+    });
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad_group", campaign: "7" }), headers });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.report.rows.map((r: { id: string; campaignId: string; status: string }) => [r.id, r.campaignId, r.status])).toEqual([
+      ["55", "7", "ENABLED"],
+      ["56", "7", "PAUSED"],
+    ]);
+    // The ad groups added up, every one Google returned: no query for the account's totals.
+    expect(body.report.totals).toMatchObject({ spend: 30, impressions: 2000, clicks: 40, conversions: 2 });
+    expect(drill).toHaveLength(1);
+    expect(drill[0]).toContain("FROM ad_group WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7");
+    expect(seen.reportQueries).toEqual([]);
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 1);
+    // Asked again: from the cache. Another campaign: its own report, never the first one's.
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad_group", campaign: "7" }), headers })).json().cached).toBe(true);
+    const other = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad_group", campaign: "8" }), headers });
+    expect(other.json()).toMatchObject({ cached: false, report: { rows: [], totals: { spend: 0 } } });
+    expect(drill).toHaveLength(2);
+    // One ad group's ads, named as Google leaves them (type and id).
+    const ads = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad", campaign: "7", adGroup: "55" }), headers });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.rows).toEqual([expect.objectContaining({ id: "7001", name: "Responsive search ad 7001", adGroupId: "55", adType: "RESPONSIVE_SEARCH_AD", spend: 20 })]);
+    expect(drill[2]).toContain("FROM ad_group_ad WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7 AND ad_group.id = 55");
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 3);
+
+    // Ids that aren't Google's (the demo's included, on a real account), and levels that can't be under what's given: refused, Google not asked.
+    const bad: Array<Record<string, string>> = [
+      { level: "ad_group", campaign: "7 OR 1=1" },
+      { level: "ad", adGroup: "demo-c2-core" },
+      { level: "ad", campaign: "7" },
+      { level: "asset_group" },
+      { level: "campaign", campaign: "7" },
+      { level: "device", campaign: "7" },
+    ];
+    for (const q of bad) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    expect(drill).toHaveLength(3);
+    expect(seen.reportQueries).toEqual([]);
   });
 
   it("access Google took back marks the account 'reconnect' and says so, instead of showing old numbers", async () => {
@@ -824,6 +951,145 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
     expect(seen.reportQueries).toEqual([]);
     // bizinsights' limit, not the account's.
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+});
+
+describe("the Google Ads report's keywords and search terms", () => {
+  const reportUrl = (connection: string, q: Record<string, string> = {}) =>
+    `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
+
+  it("are asked of Google only when opened, two operations a range, cached apart and for longer, compared by id", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().report.rows).toEqual([
+      expect.objectContaining({ id: "55~9001", name: "running shoes", campaignId: "7", adGroupId: "55", adGroupName: "Shoes", status: "ENABLED", matchType: "EXACT", qualityScore: 8, spend: 12, conversions: 2 }),
+    ]);
+    // The account's own figures on top, not the keywords added up.
+    expect(res.json().report.totals).toMatchObject({ spend: 30, impressions: 3000 });
+    expect(seen.reportQueries).toHaveLength(2);
+    expect(seen.reportQueries[1]).toContain("FROM keyword_view WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND metrics.impressions > 0");
+    expect(seen.reportQueries[1]).toMatch(/ORDER BY metrics\.cost_micros DESC, metrics\.impressions DESC LIMIT 201$/);
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 2);
+    // Opened again: the cache, still there two hours later (a past range's keywords are kept 6 hours).
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).json().cached).toBe(true);
+    const now = Date.now();
+    const later = vi.spyOn(Date, "now").mockReturnValue(now + 2 * 3600_000);
+    try {
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).json().cached).toBe(true);
+    } finally {
+      later.mockRestore();
+    }
+    expect(seen.reportQueries).toHaveLength(2);
+
+    // One campaign's search terms: its own row on top, and the terms by campaign.
+    const terms = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "search_term", campaign: "7" }), headers });
+    expect(terms.statusCode).toBe(200);
+    expect(terms.json().report.rows).toEqual([expect.objectContaining({ id: "7~running shoes online", name: "running shoes online", channel: "SEARCH", status: null, spend: 5 })]);
+    expect(seen.reportQueries.slice(2)).toEqual([
+      expect.stringContaining("FROM campaign WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7"),
+      expect.stringContaining("FROM campaign_search_term_view WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7 AND metrics.impressions > 0"),
+    ]);
+
+    // Compared: the same keyword's figures before, by id.
+    const compared = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword", cfrom: "2026-08-01", cto: "2026-08-31" }), headers });
+    expect(compared.json().report.comparison).toMatchObject({ since: "2026-08-01", rows: [{ id: "55~9001", spend: 12, conversions: 2 }] });
+    // Only the comparison's range was read: the report's own came from the cache.
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 6);
+
+    // Search terms come by campaign, never by ad group; ids are Google's.
+    for (const q of [{ level: "search_term", adGroup: "55" }, { level: "keyword", campaign: "7 OR 1=1" }, { level: "keyword", adGroup: "demo-c2-core" }] as Array<Record<string, string>>) {
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    }
+    expect(seen.reportQueries).toHaveLength(6);
+  });
+
+  it("one ad account's are read from Google at most 25 times a day; cached ones and the other reports aren't held back", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const day = (i: number) => `2026-09-${String(i + 1).padStart(2, "0")}`;
+    for (let i = 0; i < 25; i++) {
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: i % 2 ? "search_term" : "keyword", to: day(i) }), headers })).statusCode).toBe(200);
+    }
+    const asked = seen.reportQueries.length;
+    const refused = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword", to: day(25) }), headers });
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json().error).toBe("google_detail_limit");
+    expect(refused.headers["retry-after"]).toBe("86400");
+    expect(seen.reportQueries).toHaveLength(asked);
+    // Read before: still there. The campaigns: not counted against it.
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword", to: day(0) }), headers })).json().cached).toBe(true);
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "campaign" }), headers })).statusCode).toBe(200);
+  });
+
+  it("past 70% of the day's operations they pause, asking Google nothing, while the rest of the report carries on", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const used = await googleAdsOperationsToday(ctx.deps.coord);
+    await countGoogleAdsOperations(ctx.deps.coord, 2016 - used);
+    for (const level of ["keyword", "search_term"]) {
+      const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe("google_detail_paused");
+      expect(res.headers["retry-after"]).toBe("3600");
+    }
+    expect(seen.reportQueries).toEqual([]);
+    const campaigns = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(campaigns.statusCode).toBe(200);
+    // Google saying the whole allowance is used up: the report's own wording, as for every level.
+    await pauseGoogleAds(ctx.deps.coord, null);
+    const exhausted = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword", to: "2026-09-29" }), headers });
+    expect(exhausted.statusCode).toBe(503);
+    expect(exhausted.json().error).toBe("quota_exhausted");
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+
+  it("while Google says the allowance is used up, asking for them uses none of the ad account's reads for the day", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    await pauseGoogleAds(ctx.deps.coord, null);
+    // More tries than the account's 25: each answers that the allowance is used up, never the account's cap.
+    for (let i = 0; i < 26; i++) {
+      const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: i % 2 ? "search_term" : "keyword" }), headers });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "quota_exhausted", message: adErrorMessage("quota_exhausted", "google") });
+    }
+    expect(seen.reportQueries).toEqual([]);
+    // The pause over: none of the account's reads was used.
+    await ctx.deps.coord.take("google-ads-paused");
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).statusCode).toBe(200);
+  });
+
+  it("dates ending yesterday are kept only as briefly as dates with today: Google may still be filling yesterday", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const first = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers });
+    const today = first.json().today as string;
+    const url = reportUrl(conn.id, { level: "keyword", from: addDays(today, -7), to: addDays(today, -1) });
+    expect((await ctx.app.inject({ method: "GET", url, headers })).json().cached).toBe(false);
+    const asked = seen.reportQueries.length;
+    // An hour later: read from Google again, where dates that ended earlier are still kept (6 hours).
+    const now = Date.now();
+    const later = vi.spyOn(Date, "now").mockReturnValue(now + 3600_000);
+    try {
+      expect((await ctx.app.inject({ method: "GET", url, headers })).json().cached).toBe(false);
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).json().cached).toBe(true);
+    } finally {
+      later.mockRestore();
+    }
+    expect(seen.reportQueries).toHaveLength(asked + 2);
   });
 });
 

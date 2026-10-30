@@ -49,8 +49,22 @@ a separate mode that never falls back to the demo.
   the 90-day trends are relative to the demo's **epoch**, the day it was connected (in its own time
   zone), so figures never shift as days pass. Also here: the splits by device, country (home country
   by currency, Google's geo target ids), age group and audience segment, each scaled to add up to the
-  totals exactly; the live report by campaign, ad group (two per campaign, none for Performance Max),
-  device and country; and the simulated store next to the demo (modeled attribution).
+  totals exactly; the live report by campaign (with the fields a real campaign row has: Google's primary
+  status and its reasons from `demoPrimaryStatus`, as of the account's today whatever the dates: Paused for
+  the paused one, Limited by budget where an ordinary day's clicks then (its base with its trends as of
+  today) would cost more than the daily budget, so its spend is held down, Eligible otherwise; and a `DAILY` budget, never a total), ad group (two per campaign, none for Performance Max),
+  device and country, and down from a campaign: its two ad groups, a Performance Max campaign's two
+  asset groups, an ad group's two or three ads (unnamed, as most Google ad types are, so named by
+  their type and a stable id from the seed), each level split from the one above so it adds up to it
+  to the cent; the **keywords** of the two Search campaigns (Search Advertising: running shoes; Lead
+  Generation: shoe fittings), four or five per ad group with a match type and a Quality Score from 3
+  to 9 (from the seed), adding up to their ad group exactly; the **search terms** in the shape of
+  Google's `campaign_search_term_view` (one per campaign and term): each Search keyword's own words
+  and a variant or two, and seven or eight product searches for the Shopping and Performance Max
+  campaigns, carrying only part of each campaign's figures (75-90% for Search, 60-80% Shopping,
+  35-55% Performance Max: the rest stands for terms below Google's privacy threshold and placements
+  with no search term), so the terms never add up to more than the campaign (no brand is named in
+  either); and the simulated store next to the demo (modeled attribution).
 - **Source adapter** (`packages/core/src/ads/googleAdsSource.ts`): `GoogleAdsSource` answers
   `campaignDays`, `accountHealth` and `report`; `GoogleAdsDemoProvider` from the generator,
   `GoogleAdsProductionProvider` from Google's API with the OAuth client and the person's token.
@@ -103,9 +117,14 @@ changes "Manage integrations" (`integrations.manage`).
 | `POST /demo/reset` (`{ seed? }`) | A new seed (or the one given), figures deleted and generated again. |
 | `GET /analytics` | Everything the analytics page shows, for `?connection=` (the demo by default) and the dashboard's date query (`preset`, `from`, `to`, `compare`, `cfrom`, `cto`). |
 | `GET /analytics/overview`, `/campaigns` (`q`, `status`, `type`, `sort`, `dir`, `page`, `pageSize`), `/performance`, `/conversions`, `/devices`, `/audience`, `/recommendations`, `/combined` | Slices of the same. Also under `/demo/…` (the brief's names). |
+| `GET /analytics/export?part=` | One section as CSV (`overview`, `campaigns`, `days`, `weeks`, `months`, `devices`, `audience`, `recommendations`, `combined`), with the same query as `/analytics`. Needs "Export approved reports" as well, in the audit log; a demo's file is named `…-demo-simulated-…` and its first row says the figures are simulated ([advertising.md](advertising.md), "Reports and downloads"). |
 
-The existing `GET …/ads/google/report` (campaign, ad group, device, country) answers for the demo
-too, generated instead of fetched.
+The existing `GET …/ads/google/report` (campaign, ad group, device, country, keyword, search term,
+and down from a campaign with `campaign=` / `adGroup=`, the demo's own ids such as `demo-c2` and
+`demo-c2-core`) answers for the demo too, generated instead of fetched: a Google-shaped id is refused
+there (400). Keywords and search terms have the account's, campaign's or ad group's own figures on
+top, as a real account's do; the demo's spend none of Google's operations, so neither of their guards
+(70% of the day's allowance, 25 reads per ad account a day: [ads-setup.md](ads-setup.md)) applies.
 
 A connect answer:
 

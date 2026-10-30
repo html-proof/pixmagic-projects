@@ -9,7 +9,7 @@ const PLATFORMS = [
       <>
         Google asks you to allow bizinsights to &ldquo;See, edit, create, and delete your Google Ads accounts and data&rdquo;. Google
         offers no read-only permission for the Google Ads API, and bizinsights uses this one only to read reports: account names and
-        IDs, currency and time zone; campaign and ad group names, status, type and budget; and daily spend, impressions, clicks,
+        IDs, currency and time zone; campaign, ad group, asset group and ad names, status, type and budget; and daily spend, impressions, clicks,
         conversions and conversion value by device and country.
       </>
     ),

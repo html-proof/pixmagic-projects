@@ -81,6 +81,13 @@ const schema = z.object({
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
   SHOPIFY_OPTIONAL_SCOPES: z.string().default(""),
+  /**
+   * Optional scopes only some of our apps declare, on top of SHOPIFY_OPTIONAL_SCOPES (which every
+   * app declares): `appKey:scope,scope;appKey:scope`, each mirroring that app's toml (scopes.ts
+   * `appOptionalScopes`). Not JSON, so packages/core/test/appConfig.test.ts can read it from
+   * apps/aws/src/settings.ts. Empty: no app declares more than the common list.
+   */
+  SHOPIFY_APP_OPTIONAL_SCOPES: z.string().optional().default(""),
   SHOPIFY_API_VERSION: z.string().default("2026-10"),
   /** Extra Shopify apps as JSON (see apps.ts); each one's secret is in SHOPIFY_APP_SECRET_<KEY>. */
   SHOPIFY_EXTRA_APPS: z.string().optional().default(""),

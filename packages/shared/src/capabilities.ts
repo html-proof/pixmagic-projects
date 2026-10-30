@@ -20,6 +20,7 @@ export type ModuleId =
   | "catalog"
   | "shopify_sessions"
   | "profit"
+  | "abandoned_checkouts"
   | "stock_levels"
   | "stock_adjustments";
 
@@ -60,7 +61,7 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
   {
     id: "customers",
     title: "New vs returning",
-    description: "Share of customers who had bought from you before.",
+    description: "Share of customers who had bought from you before, repeat purchases, and monthly cohorts of first-time buyers.",
     requiredScopes: ["read_orders", "read_customers"],
   },
   {
@@ -131,6 +132,14 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
     title: "Gross profit",
     description: "Shopify's gross profit and cost of goods sold, from the cost per item recorded with each sale.",
     requiredScopes: ["read_reports"],
+  },
+  // Shopify's own abandoned checkouts list, counted and added up (packages/core/src/shopifyCheckouts.ts):
+  // counts, money and dates only, never who the shoppers were.
+  {
+    id: "abandoned_checkouts",
+    title: "Abandoned checkouts (Shopify)",
+    description: "Checkouts where shoppers left an email or phone number and didn't pay, their value, and how many came back to buy.",
+    requiredScopes: ["read_orders"],
   },
   // The Inventory module (docs/inventory.md): stock per location and quantity state, kept in step
   // with Shopify by webhooks and a scheduled check; and changing stock in Shopify from bizinsights.
@@ -204,10 +213,14 @@ export function scopeLabel(scope: string): string {
 
 /**
  * The same labels named inside a sentence: "your orders", "visit tracking and storefront
- * visits". Lower case, because every caller puts this mid-sentence.
+ * visits". Only the first letter is lowered, because every caller puts this mid-sentence and a
+ * name inside a label keeps its capital: "your Shopify reports".
  */
 export function scopeList(scopes: string[]): string {
-  const names = scopes.map((s) => scopeLabel(s).toLowerCase());
+  const names = scopes.map((s) => {
+    const label = scopeLabel(s);
+    return label.charAt(0).toLowerCase() + label.slice(1);
+  });
   if (names.length <= 1) return names[0] ?? "";
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }

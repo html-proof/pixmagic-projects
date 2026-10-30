@@ -2,13 +2,14 @@ import { z } from "zod";
 import { systemDb, withTenant, type Store } from "@app/db";
 import {
   audit,
-  declaredOptionalScopes,
   declaredScopes,
   fetchGrantedScopes,
   getAccessToken,
   logger,
   optionalScopeGrantUrl,
+  optionalScopesFor,
   requestableScopes,
+  revocableOptionalScopesFor,
   revocableScopes,
   revokeAccessScopes,
   ScopeRevokeError,
@@ -112,10 +113,12 @@ export function scopeRoutes(app: App, deps: Deps) {
     const wanted = input.scopes ?? (input.module ? scopesForModule(input.module as ModuleId) : []);
     if (!wanted.length) throw new HttpError(400, "Say which scopes to request", "invalid_scopes");
 
-    const ask = requestableScopes(wanted, store.grantedScopes);
+    // What the store's own app declares: an App Store app may declare less than the others.
+    const optional = optionalScopesFor(store);
+    const ask = requestableScopes(wanted, store.grantedScopes, optional);
     if (!ask.length) {
       // Either the store already has them (nothing to do) or we may not ask for them at all.
-      const declared = new Set(declaredOptionalScopes());
+      const declared = new Set(optional);
       if (wanted.every((s) => !declared.has(s))) {
         throw new HttpError(
           409,
@@ -177,7 +180,7 @@ export function scopeRoutes(app: App, deps: Deps) {
       granted: result.newlyGranted,
       capabilities: resolveCapabilities(result.scopes, {
         pixelInstalled: fresh.pixelInstalled,
-        optionalScopes: declaredOptionalScopes(),
+        optionalScopes: optionalScopesFor(store),
         declaredScopes: declaredScopes(),
       }),
     });
@@ -190,7 +193,9 @@ export function scopeRoutes(app: App, deps: Deps) {
    * Nothing goes through the merchant here — unlike a request, a revoke is the app's own call
    * and takes effect immediately. Only scopes declared optional *and* currently granted are
    * sent on (`revocableScopes`); anything else is refused here rather than at Shopify, since a
-   * required scope can only be given up by uninstalling.
+   * required scope can only be given up by uninstalling. Optional means what the store's own
+   * app declares (`revocableOptionalScopesFor`), not only what it is still offered: a scope the
+   * owner stopped offering stays the merchant's to give back.
    *
    * The stored scopes are then reconciled from Shopify rather than edited locally, for the same
    * reason `refresh` exists: `grantedScopes` is a cache, and the authoritative answer is one
@@ -205,10 +210,11 @@ export function scopeRoutes(app: App, deps: Deps) {
     const wanted = input.scopes ?? (input.module ? scopesForModule(input.module as ModuleId) : []);
     if (!wanted.length) throw new HttpError(400, "Say which scopes to revoke", "invalid_scopes");
 
-    const give = revocableScopes(wanted, store.grantedScopes);
+    const optional = revocableOptionalScopesFor(store);
+    const give = revocableScopes(wanted, store.grantedScopes, optional);
     if (!give.length) {
       // Either the store doesn't have them (nothing to do) or they aren't ours to revoke.
-      const declared = new Set(declaredOptionalScopes());
+      const declared = new Set(optional);
       if (wanted.every((s) => !declared.has(s))) {
         throw new HttpError(
           409,
@@ -274,7 +280,7 @@ export function scopeRoutes(app: App, deps: Deps) {
       scopes,
       capabilities: resolveCapabilities(scopes, {
         pixelInstalled: fresh.pixelInstalled,
-        optionalScopes: declaredOptionalScopes(),
+        optionalScopes: optionalScopesFor(store),
         declaredScopes: declaredScopes(),
       }),
     });

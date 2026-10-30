@@ -3,7 +3,7 @@
  * products, the shop, the web pixel, billing), with the page sizes that keep each query's
  * requested cost under Shopify's limit. What comes back is read by normalize.ts.
  */
-import type { GraphqlOrder } from "./shopifyPayloads.js";
+import type { GraphqlOrder, GraphqlProduct } from "./shopifyPayloads.js";
 
 // Shopify rejects a query whose *requested* cost exceeds 1000 points (MAX_COST_EXCEEDED).
 // Requested cost model: scalar/enum = 0, object = 1, connection = 2 + first × (cost of one
@@ -281,8 +281,10 @@ export const ORDER_SALES_QUERY = orderSalesQuery(false);
 /**
  * Products page, with the product information the Inventory module shows (description, tags,
  * category, featured image, collections). Cost per Product node: 1 + category 1 + featuredMedia
- * (1 + preview 1 + image 1) 3 + collections(first: 10) (2 + 10 × 1) 12 = 17;
- * products(first: $first) = 2 + 1 (pageInfo) + $first × 17 → 50 → 853.
+ * (1 + preview 1 + image 1) 3 + collections(first: 10) (2 + 1 (pageInfo) + 10 × 1) 13 = 18;
+ * products(first: $first) = 2 + 1 (pageInfo) + $first × 18 → 50 → 903. That is close to the
+ * 1,000 a query may ask for: add nothing here. A product in more than 10 collections has the rest
+ * read with PRODUCT_COLLECTIONS_QUERY (productCollectionsOverflow), so none is left out.
  */
 export const PRODUCTS_QUERY = /* GraphQL */ `
   query Products($first: Int!, $cursor: String) {
@@ -293,10 +295,31 @@ export const PRODUCTS_QUERY = /* GraphQL */ `
         handle tags onlineStoreUrl description(truncateAt: 5000)
         category { fullName }
         featuredMedia { preview { image { url } } }
-        collections(first: 10) { nodes { id title } }
+        collections(first: 10) { pageInfo { hasNextPage endCursor } nodes { id title } }
       }
     }
   }`;
+
+/**
+ * One product's collections, 250 a page: the rest of them after PRODUCTS_QUERY's first 10, and a
+ * new product's (products/create payloads carry none). Cost: 1 (Product) + collections(first: 250)
+ * = 2 + 1 (pageInfo) + 250 × 1 → 254.
+ */
+export const PRODUCT_COLLECTIONS_QUERY = /* GraphQL */ `
+  query ProductCollections($id: ID!, $cursor: String) {
+    product(id: $id) {
+      collections(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id title }
+      }
+    }
+  }`;
+
+/** Where the rest of a products-page node's collections start (its page didn't hold them all), else null. */
+export function productCollectionsOverflow(p: Pick<GraphqlProduct, "collections">): string | null {
+  const info = p.collections?.pageInfo;
+  return info?.hasNextPage === true && info.endCursor ? info.endCursor : null;
+}
 
 /**
  * Variants page (price, stock, unit cost, and the inventory item and details the Inventory module

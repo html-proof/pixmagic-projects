@@ -671,6 +671,8 @@ describe("the Meta Ads report", () => {
         calls.push(`insights:${u.searchParams.get("level")}`);
         if (opts.revoked) return json({ error: { message: "Error validating access token: The user has not authorized application", code: 190 } }, 400);
         expect(u.searchParams.get("use_unified_attribution_setting")).toBe("true");
+        // Meta's count under each fixed window too, beside each ad set's own setting.
+        expect(JSON.parse(u.searchParams.get("action_attribution_windows")!)).toEqual(["1d_click", "7d_click", "1d_view"]);
         expect(JSON.parse(u.searchParams.get("time_range")!)).toEqual({ since: "2026-09-01", until: "2026-09-30" });
         expect(u.searchParams.get("time_increment")).toBeNull();
         const level = u.searchParams.get("level");
@@ -685,10 +687,10 @@ describe("the Meta Ads report", () => {
                 clicks: "300",
                 inline_link_clicks: "200",
                 actions: [
-                  { action_type: "omni_purchase", value: "6" },
+                  { action_type: "omni_purchase", value: "6", "1d_click": "4", "7d_click": "6" },
                   { action_type: "purchase", value: "6" },
                 ],
-                action_values: [{ action_type: "omni_purchase", value: "482" }],
+                action_values: [{ action_type: "omni_purchase", value: "482", "1d_click": "300", "7d_click": "482" }],
               },
             ],
           });
@@ -740,6 +742,12 @@ describe("the Meta Ads report", () => {
     // Reach for the account is Meta's own, de-duplicated figure: not 3500 + 900.
     expect(body.report.totals).toMatchObject({ spend: 120.5, impressions: 10000, reach: 4000, frequency: 2.5, linkClicks: 200, purchases: 6, purchaseValue: 482, cpm: 12.05, costPerLinkClick: 0.6 });
     expect(body.report.totals.roas).toBeCloseTo(4, 1);
+    // Each window's own count, from the same purchase action; one Meta left out counted none.
+    expect(body.report.totals.byWindow).toMatchObject({
+      "1d_click": { purchases: 4, purchaseValue: 300 },
+      "7d_click": { purchases: 6, purchaseValue: 482 },
+      "1d_view": { purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 },
+    });
     expect(body.report.rows.map((r: { id: string; name: string; status: string; spend: number }) => [r.id, r.name, r.status, r.spend])).toEqual([
       ["11", "Spring sale", "ACTIVE", 100],
       ["12", "Retarget", "CAMPAIGN_PAUSED", 20.5],
@@ -819,6 +827,92 @@ describe("the Meta Ads report", () => {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
     }
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad" }), headers })).statusCode).toBe(200);
+  });
+
+  it("opens one campaign's ad sets and one ad set's ads: the parent's own totals, each cached apart, Meta's own ids only", async () => {
+    const conn = await connectedMeta();
+    const asked: string[] = [];
+    ctx.setFetch(async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/act_1/insights")) {
+        const filtering = JSON.parse(u.searchParams.get("filtering") ?? "[]") as Array<{ field: string; value: string[] }>;
+        const campaign = filtering.find((f) => f.field === "campaign.id")?.value[0];
+        const adset = filtering.find((f) => f.field === "adset.id")?.value[0];
+        const level = u.searchParams.get("level");
+        asked.push(`${level}:${campaign ?? "-"}:${adset ?? "-"}`);
+        if (campaign !== "11") return json({ data: [] });
+        if (level === "campaign") return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", spend: "100", impressions: "8000", reach: "3500" }] });
+        if (level === "adset" && adset) return json({ data: [{ campaign_id: "11", adset_id: "21", adset_name: "Women", spend: "60", reach: "2000" }] });
+        if (level === "adset") {
+          return json({
+            data: [
+              { campaign_id: "11", campaign_name: "Spring sale", adset_id: "21", adset_name: "Women", spend: "60", reach: "2000" },
+              { campaign_id: "11", campaign_name: "Spring sale", adset_id: "22", adset_name: "Men", spend: "40", reach: "1800" },
+            ],
+          });
+        }
+        return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", adset_id: "21", adset_name: "Women", ad_id: "31", ad_name: "Carousel", spend: "60" }] });
+      }
+      // The statuses: from the campaign's or the ad set's own list, never the account's.
+      if (u.pathname.endsWith("/11/adsets")) {
+        asked.push("list:11/adsets");
+        return json({ data: [{ id: "21", effective_status: "ACTIVE" }, { id: "22", effective_status: "PAUSED" }] });
+      }
+      if (u.pathname.endsWith("/21/ads")) {
+        asked.push("list:21/ads");
+        return json({ data: [{ id: "31", effective_status: "ADSET_PAUSED" }] });
+      }
+      return metaPlatform(input);
+    });
+    const url = (q: Record<string, string>) => reportUrl(conn.id, q);
+    const res = await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "11" }), headers });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.cached).toBe(false);
+    // The campaign's own reach (each person once), not its ad sets' added up.
+    expect(body.report.totals).toMatchObject({ spend: 100, reach: 3500 });
+    expect(body.report.rows.map((r: { id: string; campaignId: string; campaignName: string; status: string }) => [r.id, r.campaignId, r.campaignName, r.status])).toEqual([
+      ["21", "11", "Spring sale", "ACTIVE"],
+      ["22", "11", "Spring sale", "PAUSED"],
+    ]);
+    expect(body.report.campaigns).toBeNull();
+    expect([...asked].sort()).toEqual(["adset:11:-", "campaign:11:-", "list:11/adsets"]);
+    // Asked again: from the cache.
+    expect((await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "11" }), headers })).json().cached).toBe(true);
+    expect(asked).toHaveLength(3);
+    // Another campaign is another report, never the first one's cache: nothing ran there, so nothing is listed.
+    const other = await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "12" }), headers });
+    expect(other.json()).toMatchObject({ cached: false, report: { rows: [], totals: { spend: 0 } } });
+    expect(asked).toHaveLength(5);
+    // One ad set's ads: the ad set's own totals, its ads' statuses from its own list.
+    const ads = await ctx.app.inject({ method: "GET", url: url({ level: "ad", campaign: "11", adset: "21" }), headers });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.totals).toMatchObject({ spend: 60, reach: 2000 });
+    expect(ads.json().report.rows).toEqual([expect.objectContaining({ id: "31", name: "Carousel", campaignId: "11", adsetId: "21", adsetName: "Women", status: "ADSET_PAUSED" })]);
+    expect(asked.slice(5).sort()).toEqual(["ad:11:21", "adset:11:21", "list:21/ads"]);
+
+    // Ids that aren't Meta's, and levels that can't be under what's given: refused, Meta not asked.
+    const bad: Array<Record<string, string>> = [
+      { level: "adset", campaign: "11 OR 1=1" },
+      { level: "ad", adset: "act_21" },
+      { level: "adset", campaign: "demo-c1" },
+      { level: "campaign", campaign: "11" },
+      { level: "adset", adset: "21" },
+      { level: "placement", campaign: "11" },
+    ];
+    for (const q of bad) expect((await ctx.app.inject({ method: "GET", url: url(q), headers })).statusCode).toBe(400);
+    expect(asked).toHaveLength(8);
+
+    // Someone outside the workspace: not told it exists, whatever they ask.
+    const outsider = await signIn(ctx, "ads-drill-other", "drill-other@y.com");
+    for (const q of [{ level: "adset", campaign: "11" }, { level: "adset", campaign: "not-an-id" }]) {
+      expect((await ctx.app.inject({ method: "GET", url: url(q), headers: outsider.headers })).statusCode).toBe(404);
+    }
+    // A member who may not view campaigns: refused.
+    const viewer = await signIn(ctx, "ads-drill-viewer", "drill-viewer@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: LEGACY_GRANTS.viewer.filter((p) => p !== "marketing.campaigns") } });
+    expect((await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "11" }), headers: viewer.headers })).statusCode).toBe(403);
+    expect(asked).toHaveLength(8);
   });
 });
 
@@ -1272,7 +1366,19 @@ describe("the Meta Ads report compared with other dates", () => {
       const range = JSON.parse(u.searchParams.get("time_range")!) as { since: string; until: string };
       asked.push(`${u.searchParams.get("level")}:${range.since}`);
       if (u.searchParams.get("level") === "account") return json({ data: [{ spend: spend[range.since], impressions: "1000", reach: "400" }] });
-      return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", spend: spend[range.since], impressions: "1000", reach: "400", inline_link_clicks: "10" }] });
+      return json({
+        data: [
+          {
+            campaign_id: "11",
+            campaign_name: "Spring sale",
+            spend: spend[range.since],
+            impressions: "1000",
+            reach: "400",
+            inline_link_clicks: "10",
+            actions: [{ action_type: "omni_purchase", value: "3", "1d_click": range.since === "2026-09-01" ? "2" : "1" }],
+          },
+        ],
+      });
     }
     if (u.pathname.endsWith("/act_1/campaigns")) {
       asked.push("statuses");
@@ -1294,6 +1400,11 @@ describe("the Meta Ads report compared with other dates", () => {
     expect(body.cached).toBe(false);
     expect(body.report).toMatchObject({ since: "2026-09-01", until: "2026-09-30", totals: { spend: 100 }, rows: [{ id: "11", name: "Spring sale", status: "ACTIVE", spend: 100 }] });
     expect(body.report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-30", totals: { spend: 80, reach: 400 }, rows: [{ id: "11", spend: 80, linkClicks: 10 }] });
+    // Each window's purchases are among the figures compared, so the window picked compares like with like.
+    expect(body.report.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 2 });
+    expect(body.report.comparison.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 1 });
+    // The account's row had no purchase: none under the window, as under each ad set's own setting.
+    expect(body.report.comparison.totals.byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
     // Only figures beside each id: no names or statuses again.
     expect(body.report.comparison.rows[0].name).toBeUndefined();
     // Delivery statuses are read for the report's own rows only (they're list calls on Meta's rate limit).

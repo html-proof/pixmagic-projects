@@ -135,8 +135,9 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
   until the pause ends, without spending a retry; and the live Meta report answers "Meta is busy right now" without
   calling Meta. Google Ads and AdSense carry on, and WhatsApp's own Graph calls aren't held back.
 - **Google Ads API operations budget**: the Cloud project may make a fixed number of operations a day across every
-  merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance and
-  history walks at 60%, leaving the rest to people connecting accounts and opening reports. When Google says the
+  merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance,
+  keyword and search-term reports at 70% and history walks at 60%, leaving the rest to people connecting accounts
+  and opening the other reports (`GOOGLE_ADS_*_SHARE` in `adConnections/budget.ts`). When Google says the
   allowance is used up, Google syncs pause (an hour unless Google says otherwise) and the account shows
   `quota_exhausted`. Set `GOOGLE_ADS_DAILY_OPERATIONS` when Google grants a higher access level.
 - **Meta report jobs**: when Meta answers a big account's long range with "reduce the amount of data", the sync runs
@@ -568,12 +569,63 @@ listed; bizinsights reads them through the manager (`login-customer-id`).
 
 ### The Google Ads report (dashboard → Ads → "Google Ads report")
 
-`GET /api/workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country&from=&to=`
-(add `cfrom=&cto=` to compare with another range): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
+`GET /api/workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country|asset_group|ad|keyword|search_term&from=&to=`
+(add `cfrom=&cto=` to compare with another range, `campaign=` / `adGroup=` to go down from one: below): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
 conversion, conversion value and ROAS, with the account's totals on top. Campaigns show status, type and daily budget;
 countries are where the viewers were (`user_location_view`). Asked of Google for exactly those dates, in the account's
 time zone and currency, counted against the operations budget, cached 10 minutes (ranges including today) or an hour,
 and limited to 30 reports per 10 minutes.
+
+**Down from a campaign** ([advertising.md](advertising.md), "Down from a campaign"): `level=ad_group&campaign=<id>`
+(its ad groups), `level=asset_group&campaign=<id>` (a Performance Max campaign's asset groups, `FROM asset_group`, which
+it has instead of ad groups: <https://developers.google.com/google-ads/api/performance-max/asset-group-reporting>) and
+`level=ad&adGroup=<id>` (with `campaign=` too when known; `FROM ad_group_ad`: each ad's id, name, type and status, never
+its text or final URLs). `asset_group` needs `campaign` and `ad` needs `adGroup`; campaigns, devices and countries take
+neither (400 otherwise, `googleParentFits`). The ids are Google's own (digits only: they go into the GAQL text, so
+anything else is refused before a query, as the dates are) or, on the demo, the demo's (`demo-…`). Such a report is
+**one operation**: the account's totals aren't asked for, and the top row is the rows added up (every one Google
+returned, the ones past the 200 listed too), labelled as such rather than as the campaign's own row. Cache keys are
+`ads-greport:v4:<connection>:<level>:<campaign|->:<adGroup|->:<from>:<to>`; v3 because the rows gained `campaignId`,
+`adGroupId`, `adGroupName` and `adType`, v4 `matchType` and `qualityScore`. Most ad types have no `ad.name` (responsive
+search ads among them): such an ad is named by its type and id ("Responsive search ad 7001").
+
+**Keywords and search terms** (`level=keyword`, for the account, `campaign=` or `adGroup=`; `level=search_term`, for the
+account or `campaign=`, never an ad group: 400 otherwise, `googleParentFits`). Read only when someone presses the tab,
+never by a sync, the worker, an export or Zapier, and nothing is stored.
+
+| Level | GAQL | One row is | Fields |
+| --- | --- | --- | --- |
+| `keyword` | `FROM keyword_view` (Google's "Search keywords" cookbook query, <https://developers.google.com/google-ads/api/docs/query/cookbook>) | an ad group's keyword (`<ad group id>~<criterion id>`) | `ad_group_criterion.keyword.text`, `.keyword.match_type` (Exact / Phrase / Broad match), `.status` (removed ones too when they spent in the dates), `.quality_info.quality_score` |
+| `search_term` | `FROM campaign_search_term_view` (v25 `resources/campaign_search_term_view.proto`) | a campaign's search term (`<campaign id>~<term>`) | `campaign_search_term_view.search_term`, `campaign.advertising_channel_type` |
+
+- Both: `WHERE segments.date BETWEEN … AND metrics.impressions > 0 ORDER BY metrics.cost_micros DESC, metrics.impressions
+  DESC LIMIT 201`: Google lists the 200 that spent most and one more, which only says there are more (`truncated`). The
+  metrics are the report's usual ones (spend, impressions, clicks, conversions and their value; Google's conversions,
+  on every conversion action).
+- Search terms come from `campaign_search_term_view`, by campaign, because it has Performance Max's terms, which the
+  ad-group `search_term_view` leaves out. No keyword segment is asked for: with one, Google drops Performance Max's
+  terms. So a term has no "added/excluded" status (that is `search_term_view`'s, per ad group) and no match type.
+- **Limits of the figures**: Google lists only the terms enough people searched (its privacy threshold), and spend on
+  Display, YouTube and other placements has no search term, so the terms add up to less than their campaign. Keywords
+  are Search campaigns' only: Shopping, Performance Max and Display spend has none. The Quality Score is Google's rating
+  now (1 to 10), not for the dates; Google gives none with too little data (shown as nothing, never a 0). A
+  comparison matches the same keyword or term by id: one not among the earlier range's 200 shows "—", not a change.
+- **Top row**: Google's own row for the scope, `FROM customer`, `FROM campaign WHERE campaign.id = …` or `FROM ad_group
+  WHERE ad_group.id = …` for the same dates, so a read is **two operations** (four with a comparison), wherever it is.
+- **Guards** (real accounts; the demo has none, it costs nothing): checked only when a range isn't cached, after the
+  usual 30 reports per 10 minutes. (1) Past **70%** of the day's allowance (`GOOGLE_ADS_DETAIL_SHARE`) the answer is
+  503 `google_detail_paused`, Google asked nothing, so these screens never hold back the scheduled syncs (80%); while
+  Google says the allowance is used up, the answer is the usual `quota_exhausted`, before (2) is counted. (2) **25 uncached reads per ad
+  account a day** (`LIMITS.adsGoogleDetail`, key `rl:ads-gdetail:<connection>`): 429 `google_detail_limit`, Retry-After
+  a day. One account spends at most about 100 operations a day here, under 4% of Explorer's 2,880.
+- **Cache**: 30 minutes when the range ends today or yesterday (Google may still be finishing yesterday just after
+  midnight), **6 hours** otherwise (other levels: 10 minutes / an hour), as
+  switching back to the tab on the same dates is the common case.
+- Explorer access allows these reads: its restrictions are on account creation, user management, Keyword Planner,
+  audience and reach planning and billing (<https://developers.google.com/google-ads/api/docs/api-policy/access-levels>).
+  Not yet checked on a live account with Search spend (none of bizinsights' own accounts has any): if Google refuses
+  conversions on `campaign_search_term_view`, the tab shows "Google Ads didn't return the report" with Google's reason,
+  and `search_term_view` (no Performance Max) is the fallback to switch to.
 
 ## 3. Google AdSense
 
@@ -614,7 +666,7 @@ not money paid.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 
-`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (and `cfrom=&cto=` to compare):
+`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (and `cfrom=&cto=` to compare; `campaign=` / `adset=` to go down from one: below):
 by **campaign, ad set or ad**, or the whole account split by **placement, device, country, age or gender**: spent,
 impressions, reach, frequency, link clicks, link click rate, cost per link click, CPM, purchases, cost per purchase,
 purchase value and ROAS, with each row's delivery status. Asked of Meta for exactly the dates picked (reach can't be
@@ -634,6 +686,19 @@ call on the others. A field list Meta refuses (a version that doesn't know one) 
 a list that can't be read in time leaves the settings and counts unknown, never the report broken. The table filters
 by delivery status (all, active, paused, other) and, on the campaign level, by objective, on the rows already read:
 the account's totals always cover every row.
+
+**Down from a campaign**: `level=adset&campaign=<id>` (its ad sets) and `level=ad&adset=<id>` (an ad set's ads; with
+`campaign=` too when known, and both must hold), Meta's own ids (digits); a campaign, or a split of the account, takes
+neither (400, `metaParentFits`). Still read from `act_<id>/insights`, with `filtering` holding `campaign.id` /
+`adset.id` (`IN`) next to the every-status filter, never from the campaign's own insights edge, so an id from another
+ad account the same login can read reports nothing here; rows Meta returned for another parent would be dropped too. A
+refused parameter drops the status filter and the sort, never the parent filter, so the account's rows are never shown
+as one campaign's (with the status filter dropped, Meta may leave out paused or archived ones, as on the account's own
+lists). The totals are the parent's own row (level campaign or ad set, filtered to it): its reach and frequency, still
+two insights reads. Statuses and settings come from the parent's own list (`GET /{campaign}/adsets`, `/{ad set}/ads`
+with every `effective_status`), read only when the account's insights returned rows under it; the account's campaigns
+aren't counted (`campaigns: null`). Rows now carry `campaignId` and `adsetId`; cache keys moved to
+`ads-report:v3:<connection>:<level>:<campaign|->:<adset|->:<from>:<to>[:figures]`.
 
 ## Next to the store's own sales (dashboard → Ads)
 

@@ -15,6 +15,10 @@
  *   (`reconcileSales`): our figures are added up from Shopify's sales records, so they should agree
  *   to the cent.
  *
+ * Kept the same way, though not ShopifyQL: **abandoned_checkouts**, Shopify's own abandoned
+ * checkouts (how many, their value, how many were recovered), read from the Admin API's checkout
+ * list with `read_orders` (shopifyCheckouts.ts). `REPORT_SCOPE` says which scope each dataset needs.
+ *
  * Each answer is for one store-local window (`ReportWindow`) and kept in `shopify_reports`, so the
  * dashboard's 15-second polls never wait on Shopify: the worker fetches (`fetchShopifyReports`),
  * the overview reads what is kept (reports/shopify.ts). Unique visitors don't add up across days,
@@ -26,10 +30,21 @@ import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { Producer, Queues } from "./queues.js";
 import { ShopifyGraphqlError, ShopifyHttpError, shopifyGraphqlWithCost, type FetchLike } from "./shopify.js";
+import { checkoutSearch, readAbandonedCheckouts, type CheckoutValues } from "./shopifyCheckouts.js";
 import { getAccessToken } from "./tokens.js";
 
-export type ReportDataset = "sales" | "profit" | "sessions";
-export const REPORT_DATASETS: readonly ReportDataset[] = ["sales", "profit", "sessions"];
+/** The datasets read with ShopifyQL (`read_reports`). */
+export type ShopifyqlDataset = "sales" | "profit" | "sessions";
+export type ReportDataset = ShopifyqlDataset | "abandoned_checkouts";
+export const REPORT_DATASETS: readonly ReportDataset[] = ["sales", "profit", "sessions", "abandoned_checkouts"];
+
+/** The scope Shopify needs for each dataset: the worker asks for nothing a store hasn't granted. */
+export const REPORT_SCOPE: Record<ReportDataset, string> = {
+  sales: "read_reports",
+  profit: "read_reports",
+  sessions: "read_reports",
+  abandoned_checkouts: "read_orders",
+};
 
 /**
  * Store-local days `from`..`to`, both whole, or `to` only up to `until` ("HH:MM:SS", store-local
@@ -72,9 +87,13 @@ export const REPORT_METRICS = {
     sessions_that_completed_checkout: "completedSessions",
     pageviews: "pageviews",
   },
-} as const satisfies Record<ReportDataset, Record<string, string>>;
+} as const satisfies Record<ShopifyqlDataset, Record<string, string>>;
 
+/** A ShopifyQL dataset's figures, in our names. */
 export type ReportValues = Record<string, number | null>;
+
+/** What Shopify answered for one dataset and window: its figures (ShopifyQL's, or the abandoned checkouts'), or why there are none. */
+export type ReportAnswer = { values: ReportValues | CheckoutValues } | { error: ReportError };
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^\d{2}:\d{2}:\d{2}$/;
@@ -96,7 +115,7 @@ function secondBefore(time: string): string {
  * time of day ends a second before it: ShopifyQL's UNTIL is inclusive, while the dashboard counts
  * what happened before that moment (dayTotals' `until`).
  */
-export function reportQuery(dataset: ReportDataset, w: ReportWindow): string {
+export function reportQuery(dataset: ShopifyqlDataset, w: ReportWindow): string {
   if (!DAY.test(w.from) || !DAY.test(w.to) || (w.until !== undefined && !TIME.test(w.until))) throw new Error(`Bad report window ${windowKey(w)}`);
   const show = Object.keys(REPORT_METRICS[dataset]).join(", ");
   const since = `SINCE ${w.from} UNTIL ${w.until ? `${w.to}T${secondBefore(w.until)}` : w.to}`;
@@ -130,7 +149,7 @@ const toNumber = (v: unknown): number | null => {
  * name; a row given as an array is read by the columns' order. A query that matched nothing has no
  * row: every figure is then 0, which is Shopify's answer, not a gap.
  */
-export function parseReport(dataset: ReportDataset, answer: ShopifyqlAnswer["shopifyqlQuery"]): ReportValues {
+export function parseReport(dataset: ShopifyqlDataset, answer: ShopifyqlAnswer["shopifyqlQuery"]): ReportValues {
   const names = REPORT_METRICS[dataset] as Record<string, string>;
   const columns = (answer?.tableData?.columns ?? []).map((c) => c?.name ?? "");
   const rows = Array.isArray(answer?.tableData?.rows) ? (answer!.tableData!.rows as unknown[]) : [];
@@ -158,23 +177,19 @@ export interface ReportRequest {
   window: ReportWindow;
 }
 
+type ReportStore = Pick<Store, "id" | "shopDomain" | "status" | "timezone">;
+
 /** Ask Shopify for one dataset and window. Never throws for Shopify's answers: they are kept as errors. */
-export async function fetchShopifyReport(
-  store: Pick<Store, "id" | "shopDomain" | "status">,
-  { dataset, window }: ReportRequest,
-  deps: ReportFetchDeps,
-): Promise<{ values: ReportValues } | { error: ReportError }> {
-  const query = reportQuery(dataset, window);
+export async function fetchShopifyReport(store: ReportStore, req: { dataset: ShopifyqlDataset; window: ReportWindow }, deps: ReportFetchDeps): Promise<{ values: ReportValues } | { error: ReportError }>;
+export async function fetchShopifyReport(store: ReportStore, req: ReportRequest, deps: ReportFetchDeps): Promise<ReportAnswer>;
+export async function fetchShopifyReport(store: ReportStore, { dataset, window }: ReportRequest, deps: ReportFetchDeps): Promise<ReportAnswer> {
+  // Checked before anything is asked: the dates go into Shopify's query text.
+  const query = dataset === "abandoned_checkouts" ? checkoutSearch(window, store.timezone) : reportQuery(dataset, window);
   try {
     const accessToken = await getAccessToken(store, deps.coord, deps.fetchImpl);
-    const { data } = await shopifyGraphqlWithCost<ShopifyqlAnswer>({
-      shop: store.shopDomain,
-      accessToken,
-      apiVersion: env().SHOPIFY_API_VERSION,
-      query: SHOPIFYQL_QUERY,
-      variables: { query },
-      fetchImpl: deps.fetchImpl,
-    });
+    const call = { shop: store.shopDomain, accessToken, apiVersion: env().SHOPIFY_API_VERSION, fetchImpl: deps.fetchImpl };
+    if (dataset === "abandoned_checkouts") return await readAbandonedCheckouts(call, window, store.timezone);
+    const { data } = await shopifyGraphqlWithCost<ShopifyqlAnswer>({ ...call, query: SHOPIFYQL_QUERY, variables: { query } });
     // Withheld (ACCESS_DENIED next to the data: the field needs a scope or protected data access).
     if (!data?.shopifyqlQuery) return { error: "access_denied" };
     const parseErrors = data.shopifyqlQuery.parseErrors;
@@ -191,16 +206,16 @@ export async function fetchShopifyReport(
     // Shopify refusing the query itself (a field this API version lacks, say) won't change by asking
     // again in 10 minutes; its own failures and throttling might.
     if (err instanceof ShopifyGraphqlError && err.codes.some((c) => c && !TRANSIENT_CODES.has(c))) {
-      logger.warn({ shop: store.shopDomain, dataset, codes: err.codes }, "shopifyql query refused");
+      logger.warn({ shop: store.shopDomain, dataset, codes: err.codes }, "shopify report query refused");
       return { error: "unsupported" };
     }
-    logger.warn({ err, shop: store.shopDomain, dataset }, "shopifyql query failed");
+    logger.warn({ err, shop: store.shopDomain, dataset }, "shopify report query failed");
     return { error: "failed" };
   }
 }
 
 /** Keep one answer (values or the error), replacing the window's earlier one. */
-export async function saveShopifyReport(store: Pick<Store, "id" | "workspaceId">, req: ReportRequest, answer: { values: ReportValues } | { error: ReportError }, at = new Date()) {
+export async function saveShopifyReport(store: Pick<Store, "id" | "workspaceId">, req: ReportRequest, answer: ReportAnswer, at = new Date()) {
   const window = windowKey(req.window);
   const values = "values" in answer ? (answer.values as Prisma.InputJsonValue) : Prisma.DbNull;
   const error = "error" in answer ? answer.error : null;
@@ -213,13 +228,14 @@ export async function saveShopifyReport(store: Pick<Store, "id" | "workspaceId">
 }
 
 /** Fetch and keep each requested report, one after another (Shopify paces the store's calls). */
-export async function fetchShopifyReports(store: Pick<Store, "id" | "workspaceId" | "shopDomain" | "status">, requests: ReportRequest[], deps: ReportFetchDeps) {
+export async function fetchShopifyReports(store: ReportStore & Pick<Store, "workspaceId">, requests: ReportRequest[], deps: ReportFetchDeps) {
   for (const req of requests) await saveShopifyReport(store, req, await fetchShopifyReport(store, req, deps));
 }
 
 export interface KeptReport {
   dataset: ReportDataset;
   window: string;
+  /** As kept: a ShopifyQL dataset's figures; the abandoned checkouts' are read back with checkoutValuesOf. */
   values: ReportValues | null;
   error: ReportError | null;
   fetchedAt: Date;

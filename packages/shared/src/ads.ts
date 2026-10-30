@@ -588,20 +588,51 @@ const META_LEAD = ["lead", "onsite_conversion.lead_grouped", "offsite_conversion
 /** A landing page loaded after a link click, as Meta counts it (the omni count first: they overlap). */
 const META_LANDING_PAGE_VIEW = ["omni_landing_page_view", "landing_page_view"];
 
-type MetaAction = { action_type: string; value: string | number };
+/**
+ * The fixed attribution windows the live report also asks Meta for (action_attribution_windows), beside
+ * each ad set's own setting: a purchase within 1 or 7 days of a click on the ad, or within 1 day of only
+ * seeing it. These are the windows Meta's insights still report on
+ * (https://developers.facebook.com/docs/marketing-api/insights/breakdowns, "Action metrics"); 7-day and
+ * 28-day view aren't among them. Each comes back as a key of that name on every action (AdsActionStats),
+ * beside `value`, which stays the ad set's own setting.
+ */
+export const META_ATTRIBUTION_WINDOWS = ["1d_click", "7d_click", "1d_view"] as const;
+export type MetaAttributionWindow = (typeof META_ATTRIBUTION_WINDOWS)[number];
+
+type MetaAction = { action_type: string; value: string | number } & { [W in MetaAttributionWindow]?: string | number };
 
 /**
  * Meta lists overlapping action types for one purchase (omni_purchase includes purchase, which
  * includes the pixel's own): take the first that's present, never the sum, or every sale counts
  * two or three times.
  */
-function firstAction(actions: MetaAction[] | undefined, types: string[]): number {
-  if (!actions) return 0;
+const pickAction = (actions: MetaAction[] | undefined, types: string[]): MetaAction | undefined => {
   for (const t of types) {
-    const a = actions.find((x) => x.action_type === t);
-    if (a) return Number(a.value) || 0;
+    const a = actions?.find((x) => x.action_type === t);
+    if (a) return a;
   }
-  return 0;
+  return undefined;
+};
+
+function firstAction(actions: MetaAction[] | undefined, types: string[]): number {
+  const a = pickAction(actions, types);
+  return a ? Number(a.value) || 0 : 0;
+}
+
+/**
+ * The same action's figure under one window (the window's key on the action firstAction picks, so every
+ * window counts the same thing). `asked`: Meta was asked for the windows and answered with them. It
+ * leaves out what it counted none of, an action as a window's key on one, so then a missing one is 0, as
+ * firstAction reads a missing action. Null (not reported, never taken for 0) when the windows weren't
+ * asked or were refused, or a figure Meta gave can't be read.
+ */
+function windowAction(actions: MetaAction[] | undefined, types: string[], window: MetaAttributionWindow, asked: boolean): number | null {
+  if (!asked) return null;
+  const v = pickAction(actions, types)?.[window];
+  if (v === undefined) return 0;
+  if (v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /** One row of GET /act_<id>/insights?level=campaign&time_increment=1. */
@@ -663,6 +694,28 @@ export const META_REPORT_VIEWS = [...META_REPORT_LEVELS, ...META_REPORT_BREAKDOW
 export type MetaReportView = (typeof META_REPORT_VIEWS)[number];
 
 export const isMetaBreakdown = (v: MetaReportView): v is MetaReportBreakdown => (META_REPORT_BREAKDOWNS as readonly string[]).includes(v);
+
+/** A Meta campaign, ad set or ad id as the Graph API writes it: digits only. */
+export const isMetaObjectId = (v: unknown): v is string => typeof v === "string" && /^\d{1,30}$/.test(v);
+
+/**
+ * A drill-down in the Meta Ads report: only the ad sets of one campaign, or only the ads of one ad set
+ * (or of one campaign). Meta's own ids (isMetaObjectId). Both given: the ad set must be in that campaign.
+ */
+export interface MetaReportParent {
+  campaign?: string;
+  adset?: string;
+}
+
+/**
+ * Whether `level` can be read under `parent`: a campaign's ad sets or ads, an ad set's ads. A campaign
+ * has no parent, and a split of the whole account (placement, device...) none either.
+ */
+export function metaParentFits(level: MetaReportView, parent: MetaReportParent): boolean {
+  if (parent.adset !== undefined) return level === "ad";
+  if (parent.campaign !== undefined) return level === "adset" || level === "ad";
+  return true;
+}
 
 /**
  * The Insights API `breakdowns` for each split. The device split asks for one of Meta's documented
@@ -728,13 +781,29 @@ export interface MetaReportMetrics {
    */
   landingPageViews: number;
   costPerLandingPageView: number | null;
-  /** Purchases Meta attributes to the ads (its own count, not the store's orders). */
+  /** Purchases Meta attributes to the ads (its own count, not the store's orders), by each ad set's own attribution setting. */
   purchases: number;
   purchaseValue: number;
   costPerPurchase: number | null;
   /** Purchase value per unit of spend. */
   roas: number | null;
   leads: number;
+  /**
+   * The same purchases under each fixed window (META_ATTRIBUTION_WINDOWS), whatever each ad set is set to:
+   * Meta's count under that window. Live reports only; absent from answers cached before they were read.
+   */
+  byWindow: Record<MetaAttributionWindow, MetaWindowPurchases>;
+}
+
+/**
+ * Purchases, their value, cost per purchase and ROAS under one attribution window. Each null when not
+ * reported: the windows weren't asked for or Meta refused them, or its figure couldn't be read.
+ */
+export interface MetaWindowPurchases {
+  purchases: number | null;
+  purchaseValue: number | null;
+  costPerPurchase: number | null;
+  roas: number | null;
 }
 
 /**
@@ -766,9 +835,11 @@ export interface MetaObjectDetails {
 export interface MetaReportRow extends MetaReportMetrics {
   id: string;
   name: string;
-  /** The campaign an ad set or ad is in (null on the campaign level). */
+  /** The campaign an ad set or ad is in, its id and name (null on the campaign level and in a split). */
+  campaignId: string | null;
   campaignName: string | null;
   /** The ad set an ad is in (null above the ad level). */
+  adsetId: string | null;
   adsetName: string | null;
   /** Meta's effective_status (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...), null when unknown. */
   status: string | null;
@@ -966,7 +1037,12 @@ const num = (s: string | undefined) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
+/**
+ * One range's figures from Meta's row. `windows`: the row was read with the fixed attribution windows
+ * (action_attribution_windows) and Meta answered with them, so a purchase missing under one is none, as it
+ * is under each ad set's own setting; without them, every window's figures are null (not reported).
+ */
+export function metaReportMetrics(r: MetaRangeInsight, windows = false): MetaReportMetrics {
   const spend = r2(num(r.spend));
   const impressions = Math.round(num(r.impressions));
   const linkClicks = Math.round(num(r.inline_link_clicks));
@@ -979,6 +1055,14 @@ export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
   const cpp = ratio(spend, purchases);
   const landingPageViews = Math.round(firstAction(r.actions, META_LANDING_PAGE_VIEW));
   const cplpv = ratio(spend, landingPageViews);
+  const byWindow = Object.fromEntries(
+    META_ATTRIBUTION_WINDOWS.map((w): [MetaAttributionWindow, MetaWindowPurchases] => {
+      const n = windowAction(r.actions, META_PURCHASE, w, windows);
+      const value = windowAction(r.action_values, META_PURCHASE, w, windows);
+      const cost = n === null ? null : ratio(spend, n);
+      return [w, { purchases: n, purchaseValue: value === null ? null : r2(value), costPerPurchase: cost === null ? null : r2(cost), roas: value === null ? null : ratio(r2(value), spend) }];
+    }),
+  ) as Record<MetaAttributionWindow, MetaWindowPurchases>;
   return {
     spend,
     impressions,
@@ -996,20 +1080,23 @@ export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
     costPerPurchase: cpp === null ? null : r2(cpp),
     roas: ratio(purchaseValue, spend),
     leads: Math.round(firstAction(r.actions, META_LEAD)),
+    byWindow,
   };
 }
 
-export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight): MetaReportRow {
+export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight, windows = false): MetaReportRow {
   const id = (level === "campaign" ? r.campaign_id : level === "adset" ? r.adset_id : r.ad_id) ?? "unknown";
   const name = (level === "campaign" ? r.campaign_name : level === "adset" ? r.adset_name : r.ad_name) ?? id;
   return {
     id,
     name,
+    campaignId: level === "campaign" ? null : (r.campaign_id ?? null),
     campaignName: level === "campaign" ? null : (r.campaign_name ?? null),
+    adsetId: level === "ad" ? (r.adset_id ?? null) : null,
     adsetName: level === "ad" ? (r.adset_name ?? null) : null,
     status: null,
     attribution: r.attribution_setting ?? null,
-    ...metaReportMetrics(r),
+    ...metaReportMetrics(r, windows),
   };
 }
 
@@ -1043,8 +1130,8 @@ export function countryName(code: string | null | undefined): string {
   }
 }
 
-/** One placement, device or country of a whole-account split. */
-export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: MetaRangeInsight): MetaReportRow {
+/** One placement, device or country of a whole-account split (`windows` as in metaReportMetrics). */
+export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: MetaRangeInsight, windows = false): MetaReportRow {
   let id: string;
   let name: string;
   if (breakdown === "placement") {
@@ -1065,7 +1152,7 @@ export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: Meta
     id = r.country ?? "unknown";
     name = r.country ? countryName(r.country) : "Unknown";
   }
-  return { id, name, campaignName: null, adsetName: null, status: null, attribution: r.attribution_setting ?? null, ...metaReportMetrics(r) };
+  return { id, name, campaignId: null, campaignName: null, adsetId: null, adsetName: null, status: null, attribution: r.attribution_setting ?? null, ...metaReportMetrics(r, windows) };
 }
 
 /** "7d_click_1d_view" → "7-day click, 1-day view"; anything unrecognised is shown as Meta wrote it. */
@@ -1140,11 +1227,96 @@ export function withGooglePurchases(rows: AdDayRow[], purchases: GooglePurchaseR
 
 // ---------------------------------------------------------------------------
 // The Google Ads report: one date range at a time, asked of Google directly, by campaign (with its
-// status, type and budget), ad group, device or country.
+// status, type and budget), ad group, device or country; and down from one campaign to its ad groups
+// (a Performance Max campaign's asset groups, which it has instead), and from one ad group to its ads.
+// Keywords and search terms too, for the account, one campaign or (keywords) one ad group.
 // ---------------------------------------------------------------------------
 
-export const GOOGLE_REPORT_LEVELS = ["campaign", "ad_group", "device", "country"] as const;
+/** `asset_group` and `ad` are read only under a parent (googleParentFits): one campaign's, one ad group's. */
+export const GOOGLE_REPORT_LEVELS = ["campaign", "ad_group", "device", "country", "asset_group", "ad", "keyword", "search_term"] as const;
 export type GoogleReportLevel = (typeof GOOGLE_REPORT_LEVELS)[number];
+
+/**
+ * Keywords (Google's keyword_view) and the search terms people typed (campaign_search_term_view): long
+ * lists, read only when someone opens them, Google itself picking the biggest spenders, and each read held
+ * to its own share of bizinsights' daily Google Ads operations (the API's guards). Their top row is the
+ * account's, campaign's or ad group's own figures, which their rows add up to less than.
+ */
+export const GOOGLE_DETAIL_LEVELS = ["keyword", "search_term"] as const satisfies readonly GoogleReportLevel[];
+export type GoogleDetailLevel = (typeof GOOGLE_DETAIL_LEVELS)[number];
+export const isGoogleDetailLevel = (level: GoogleReportLevel): level is GoogleDetailLevel => (GOOGLE_DETAIL_LEVELS as readonly string[]).includes(level);
+
+/** A Google Ads campaign, ad group or ad id as the API writes it: digits only (an int64). */
+export const isGoogleObjectId = (v: unknown): v is string => typeof v === "string" && /^\d{1,20}$/.test(v);
+
+/**
+ * A drill-down in the Google Ads report: one campaign's ad groups or asset groups, or one ad group's
+ * ads. Google's own ids (isGoogleObjectId), or the demo's own (isDemoObjectId in ./adsDemo) on a demo
+ * connection. Both given: the ad group must be in that campaign.
+ */
+export interface GoogleReportParent {
+  campaign?: string;
+  adGroup?: string;
+}
+
+/**
+ * Whether `level` can be read under `parent`: ad groups for the whole account or one campaign, asset
+ * groups for one campaign, ads for one ad group; keywords for the account, one campaign or one ad group;
+ * search terms for the account or one campaign (Google gives them by campaign, so that Performance Max's
+ * are among them); campaigns, devices and countries for the whole account.
+ */
+export function googleParentFits(level: GoogleReportLevel, parent: GoogleReportParent): boolean {
+  if (level === "ad") return parent.adGroup !== undefined;
+  if (level === "asset_group") return parent.campaign !== undefined && parent.adGroup === undefined;
+  if (level === "keyword") return true;
+  if (level === "ad_group" || level === "search_term") return parent.adGroup === undefined;
+  return parent.campaign === undefined && parent.adGroup === undefined;
+}
+
+/** "EXACT" → "Exact match": a keyword's match type in Google's own words. */
+export function googleMatchTypeLabel(type: string | null | undefined): string | null {
+  if (!type || type === "UNKNOWN" || type === "UNSPECIFIED") return null;
+  const words = type.replace(/_/g, " ").trim().toLowerCase();
+  return words ? `${words[0]!.toUpperCase()}${words.slice(1)} match` : null;
+}
+
+/** "RESPONSIVE_SEARCH_AD" → "Responsive search ad": Google's ad types in words. */
+export function googleAdTypeLabel(type: string | null | undefined): string {
+  if (!type || type === "UNKNOWN" || type === "UNSPECIFIED") return "Ad";
+  const words = type.replace(/_/g, " ").trim().toLowerCase();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : "Ad";
+}
+
+/** Google's campaign types (advertising_channel_type) in everyday words. */
+const GOOGLE_CHANNEL: Record<string, string> = {
+  SEARCH: "Search",
+  SHOPPING: "Shopping",
+  PERFORMANCE_MAX: "Performance Max",
+  DISPLAY: "Display",
+  VIDEO: "YouTube",
+  DEMAND_GEN: "Demand Gen",
+  DISCOVERY: "Discovery",
+  MULTI_CHANNEL: "App",
+  LOCAL: "Local",
+  SMART: "Smart",
+  HOTEL: "Hotel",
+  TRAVEL: "Travel",
+};
+
+/** "PERFORMANCE_MAX" → "Performance Max": a campaign's type in words (one not listed, Google's own in lower case). Null for none. */
+export function googleChannelLabel(channel: string | null | undefined): string | null {
+  if (!channel) return null;
+  return GOOGLE_CHANNEL[channel] ?? channel.toLowerCase().replace(/_/g, " ");
+}
+
+/**
+ * An ad's name as the report shows it: Google's own (ad.name), which most ad types don't have
+ * (responsive search ads, for one), else its type and id, so two unnamed ads never read alike.
+ */
+export function googleAdName(name: string | null | undefined, type: string | null | undefined, id: string): string {
+  const own = typeof name === "string" ? name.trim() : "";
+  return own || `${googleAdTypeLabel(type)} ${id}`;
+}
 
 export interface GoogleReportMetrics {
   spend: number;
@@ -1169,21 +1341,55 @@ export interface GoogleReportMetrics {
 export interface GoogleReportRow extends GoogleReportMetrics {
   id: string;
   name: string;
-  /** The campaign an ad group is in (null on other levels). */
+  /** The campaign an ad group, asset group or ad is in, its id and name (null on other levels). */
+  campaignId: string | null;
   campaignName: string | null;
-  /** ENABLED, PAUSED or REMOVED, for campaigns and ad groups. */
+  /** The ad group an ad or keyword is in (null on other levels). */
+  adGroupId: string | null;
+  adGroupName: string | null;
+  /** An ad's type (RESPONSIVE_SEARCH_AD, RESPONSIVE_DISPLAY_AD...; see googleAdTypeLabel); null on other levels. */
+  adType: string | null;
+  /** ENABLED, PAUSED or REMOVED, for campaigns, ad groups, asset groups, ads and keywords (a removed one is listed when it spent in the dates). */
   status: string | null;
-  /** SEARCH, SHOPPING, PERFORMANCE_MAX, DISPLAY, VIDEO... (campaigns). */
+  /** SEARCH, SHOPPING, PERFORMANCE_MAX, DISPLAY, VIDEO... (campaigns, and the campaign a search term is in). */
   channel: string | null;
-  /** The campaign budget per day, in the account's currency (campaigns). */
+  /**
+   * A campaign's delivery as Google rates it now, not for the dates (campaign.primary_status): ELIGIBLE,
+   * LIMITED, LEARNING, NOT_ELIGIBLE, PENDING, MISCONFIGURED, ENDED, PAUSED or REMOVED, in words by
+   * googleCampaignStatus. Null on other levels and when Google gives none.
+   */
+  primaryStatus: string | null;
+  /** Why, as Google says (campaign.primary_status_reasons: BUDGET_CONSTRAINED, BIDDING_STRATEGY_LEARNING...); empty when none, and on other levels. */
+  primaryStatusReasons: string[];
+  /** A campaign's budget: DAILY, or CUSTOM_PERIOD for one total over the campaign's own dates (campaign_budget.period); null on other levels. */
+  budgetPeriod: string | null;
+  /** A daily budget's amount per day, in the account's currency (campaigns; null for a total budget). */
   dailyBudget: number | null;
+  /** A CUSTOM_PERIOD budget's whole amount, for the campaign's own dates (campaign_budget.total_amount_micros); null otherwise. */
+  totalBudget: number | null;
+  /** A keyword's match type: EXACT, PHRASE or BROAD (googleMatchTypeLabel); null on other levels. */
+  matchType: string | null;
+  /**
+   * A keyword's Quality Score, 1 to 10, as Google rates it now (not for the dates). Null when Google has
+   * too little data to give one, and on other levels.
+   */
+  qualityScore: number | null;
 }
 
 /** One result of googleAds:searchStream for a report query (JSON field names are camelCase). */
 export interface GoogleReportApiRow {
-  campaign?: { id?: string | number; name?: string; status?: string; advertisingChannelType?: string };
-  campaignBudget?: { amountMicros?: string | number };
+  campaign?: { id?: string | number; name?: string; status?: string; advertisingChannelType?: string; primaryStatus?: string; primaryStatusReasons?: string[] };
+  /** amount_micros for a DAILY budget, total_amount_micros for a CUSTOM_PERIOD one (Google sets one or the other). */
+  campaignBudget?: { amountMicros?: string | number; totalAmountMicros?: string | number; period?: string };
   adGroup?: { id?: string | number; name?: string; status?: string };
+  /** The ad level (FROM ad_group_ad): the ad's own status, and the ad's id, name (most types have none) and type. */
+  adGroupAd?: { status?: string; ad?: { id?: string | number; name?: string; type?: string } };
+  /** Performance Max (FROM asset_group). */
+  assetGroup?: { id?: string | number; name?: string; status?: string };
+  /** The keyword level (FROM keyword_view): the keyword's criterion id, status, text, match type and Quality Score. */
+  adGroupCriterion?: { criterionId?: string | number; status?: string; keyword?: { text?: string; matchType?: string }; qualityInfo?: { qualityScore?: string | number } };
+  /** The search-term level (FROM campaign_search_term_view): what was typed, by campaign. */
+  campaignSearchTermView?: { searchTerm?: string };
   segments?: { device?: string };
   userLocationView?: { countryCriterionId?: string | number };
   metrics?: { costMicros?: string | number; impressions?: string | number; clicks?: string | number; conversions?: string | number; conversionsValue?: string | number };
@@ -1222,38 +1428,193 @@ export function googleReportMetrics(m: GoogleReportApiRow["metrics"]): GoogleRep
   };
 }
 
+/** What a report row is beyond its id, name and figures, before its level fills in its own: nothing (the demo's rows start from it too). */
+export const googleRowBlank = (): Omit<GoogleReportRow, keyof GoogleReportMetrics | "id" | "name"> => ({
+  campaignId: null,
+  campaignName: null,
+  adGroupId: null,
+  adGroupName: null,
+  adType: null,
+  status: null,
+  channel: null,
+  primaryStatus: null,
+  primaryStatusReasons: [],
+  budgetPeriod: null,
+  dailyBudget: null,
+  totalBudget: null,
+  matchType: null,
+  qualityScore: null,
+});
+
+/** One of Google's enum values that says something: UNKNOWN (a value newer than the API version) and UNSPECIFIED are none. */
+const googleEnum = (v: string | undefined): string | null => (v && v !== "UNKNOWN" && v !== "UNSPECIFIED" ? v : null);
+
+/** Google's campaign primary statuses (CampaignPrimaryStatus, v25) in words. */
+const GOOGLE_PRIMARY_STATUS: Record<string, string> = {
+  ELIGIBLE: "Eligible",
+  LIMITED: "Limited",
+  LEARNING: "Learning",
+  NOT_ELIGIBLE: "Not eligible",
+  PENDING: "Pending",
+  MISCONFIGURED: "Misconfigured",
+  ENDED: "Ended",
+  PAUSED: "Paused",
+  REMOVED: "Removed",
+};
+
+/**
+ * Why a campaign isn't serving, or not fully (CampaignPrimaryStatusReason, v25), in words, the most telling
+ * first: this order is the order they are shown in. CAMPAIGN_PAUSED, CAMPAIGN_REMOVED and CAMPAIGN_ENDED only
+ * say the status again, so they aren't. One not here (newer than this list) reads as Google words it.
+ */
+const GOOGLE_STATUS_REASON: Record<string, string> = {
+  BUDGET_CONSTRAINED: "limited by budget",
+  BUDGET_MISCONFIGURED: "budget settings need fixing",
+  BIDDING_STRATEGY_MISCONFIGURED: "bid strategy settings need fixing",
+  BIDDING_STRATEGY_LEARNING: "bid strategy learning",
+  BIDDING_STRATEGY_LIMITED: "bid strategy limited",
+  BIDDING_STRATEGY_CONSTRAINED: "limited by its target CPA or ROAS",
+  SEARCH_VOLUME_LIMITED: "missing some relevant searches",
+  CAMPAIGN_PENDING: "start date still to come",
+  CAMPAIGN_DRAFT: "a draft",
+  CAMPAIGN_NOT_BOOKED: "not booked",
+  BOOKING_CANCELLED: "booking cancelled",
+  BOOKING_HOLD_EXPIRED: "booking hold expired",
+  BOOKING_HOLD_EXPIRING: "booking hold expiring",
+  CAMPAIGN_GROUP_PAUSED: "campaign group paused",
+  CAMPAIGN_GROUP_ALL_GROUP_BUDGETS_ENDED: "campaign group's budgets ended",
+  NO_AD_GROUPS: "no ad groups that can run",
+  AD_GROUPS_PAUSED: "every ad group paused",
+  NO_ASSET_GROUPS: "no asset groups that can run",
+  ASSET_GROUPS_PAUSED: "every asset group paused",
+  NO_KEYWORDS: "no keywords that can run",
+  KEYWORDS_PAUSED: "every keyword paused",
+  NO_AD_GROUP_ADS: "no ads that can run",
+  AD_GROUP_ADS_PAUSED: "every ad paused",
+  HAS_ADS_DISAPPROVED: "some ads disapproved",
+  HAS_ASSET_GROUPS_DISAPPROVED: "some asset groups disapproved",
+  HAS_ADS_LIMITED_BY_POLICY: "some ads limited by policy",
+  HAS_ASSET_GROUPS_LIMITED_BY_POLICY: "some asset groups limited by policy",
+  MOST_ADS_UNDER_REVIEW: "most ads under review",
+  MOST_ASSET_GROUPS_UNDER_REVIEW: "most asset groups under review",
+  MISSING_LOCATION_TARGETING: "no location targeting",
+  MISSING_LEAD_FORM_EXTENSION: "lead form missing",
+  LEAD_FORM_EXTENSION_DISAPPROVED: "lead form disapproved",
+  LEAD_FORM_EXTENSION_UNDER_REVIEW: "lead form under review",
+  MISSING_CALL_EXTENSION: "call asset missing",
+  CALL_EXTENSION_DISAPPROVED: "call asset disapproved",
+  CALL_EXTENSION_UNDER_REVIEW: "call asset under review",
+  NO_MOBILE_APPLICATION_AD_GROUP_CRITERIA: "no app targeting that can run",
+  APP_NOT_RELEASED: "app not released in the countries targeted",
+  APP_PARTIALLY_RELEASED: "app released in only some of the countries targeted",
+};
+const GOOGLE_STATUS_SAID = new Set(["CAMPAIGN_PAUSED", "CAMPAIGN_REMOVED", "CAMPAIGN_ENDED"]);
+const GOOGLE_REASON_ORDER = Object.keys(GOOGLE_STATUS_REASON);
+
+/**
+ * A campaign's primary status and its reasons in words ("Limited", ["limited by budget"]), the most telling
+ * reason first. Null when Google gave no status (another level, or UNKNOWN), so the campaign's own status shows.
+ */
+export function googleCampaignStatus(status: string | null | undefined, reasons: readonly string[] | null | undefined): { label: string; reasons: string[] } | null {
+  const s = googleEnum(status ?? undefined);
+  if (!s) return null;
+  const rank = (r: string) => (GOOGLE_REASON_ORDER.includes(r) ? GOOGLE_REASON_ORDER.indexOf(r) : GOOGLE_REASON_ORDER.length);
+  const words = [...new Set(reasons ?? [])]
+    .filter((r) => googleEnum(r) !== null && !GOOGLE_STATUS_SAID.has(r))
+    .sort((a, b) => rank(a) - rank(b))
+    .map((r) => GOOGLE_STATUS_REASON[r] ?? r.toLowerCase().replace(/_/g, " "));
+  return { label: GOOGLE_PRIMARY_STATUS[s] ?? `${s[0]}${s.slice(1).toLowerCase().replace(/_/g, " ")}`, reasons: words };
+}
+
+/** A Quality Score as Google gives it (1 to 10); anything else, Google's "too little data" included, is none. */
+const qualityScoreOf = (v: string | number | undefined): number | null => {
+  const n = Number(v);
+  return v !== undefined && v !== "" && Number.isInteger(n) && n >= 1 && n <= 10 ? n : null;
+};
+
 /**
  * Google's rows for one level, grouped (a country comes back once per targeting kind, a device
  * once per campaign...) and biggest spend first. `countries` maps a geo target id to its ISO code.
+ * A keyword is one per ad group (`<ad group id>~<criterion id>`), a search term one per campaign
+ * (`<campaign id>~<term>`), as Google's views key them.
  */
 export function googleReportRows(level: GoogleReportLevel, rows: GoogleReportApiRow[], countries: Map<string, string> = new Map()): GoogleReportRow[] {
   const groups = new Map<string, { row: Omit<GoogleReportRow, keyof GoogleReportMetrics>; sums: Required<NonNullable<GoogleReportApiRow["metrics"]>> }>();
   for (const r of rows) {
     let key: string;
     let head: Omit<GoogleReportRow, keyof GoogleReportMetrics>;
-    const blank = { campaignName: null, status: null, channel: null, dailyBudget: null };
+    const blank = googleRowBlank();
+    const id = (v: string | number | undefined) => (v === undefined || v === null || v === "" ? null : String(v));
+    const campaign = { campaignId: id(r.campaign?.id), campaignName: r.campaign?.name ?? null };
     if (level === "campaign") {
       key = String(r.campaign?.id ?? "unknown");
-      const budget = r.campaignBudget?.amountMicros;
+      const b = r.campaignBudget;
+      const period = googleEnum(b?.period);
+      const micros = (v: string | number | undefined) => (v === undefined || v === "" ? null : r2(n0(v) / 1_000_000));
       head = {
         ...blank,
         id: key,
         name: r.campaign?.name ?? key,
         status: r.campaign?.status ?? null,
         channel: r.campaign?.advertisingChannelType ?? null,
-        dailyBudget: budget === undefined ? null : r2(n0(budget) / 1_000_000),
+        primaryStatus: googleEnum(r.campaign?.primaryStatus),
+        primaryStatusReasons: (r.campaign?.primaryStatusReasons ?? []).filter((x) => googleEnum(x) !== null),
+        budgetPeriod: period,
+        // Google sets one amount or the other, by the budget's period.
+        dailyBudget: period === "CUSTOM_PERIOD" ? null : micros(b?.amountMicros),
+        totalBudget: period === "DAILY" ? null : micros(b?.totalAmountMicros),
       };
     } else if (level === "ad_group") {
       key = String(r.adGroup?.id ?? "unknown");
-      head = { ...blank, id: key, name: r.adGroup?.name ?? key, campaignName: r.campaign?.name ?? null, status: r.adGroup?.status ?? null };
+      head = { ...blank, ...campaign, id: key, name: r.adGroup?.name ?? key, status: r.adGroup?.status ?? null };
+    } else if (level === "asset_group") {
+      key = String(r.assetGroup?.id ?? "unknown");
+      head = { ...blank, ...campaign, id: key, name: r.assetGroup?.name ?? key, status: r.assetGroup?.status ?? null };
+    } else if (level === "ad") {
+      key = String(r.adGroupAd?.ad?.id ?? "unknown");
+      const type = r.adGroupAd?.ad?.type ?? null;
+      head = {
+        ...blank,
+        ...campaign,
+        id: key,
+        name: googleAdName(r.adGroupAd?.ad?.name, type, key),
+        adGroupId: id(r.adGroup?.id),
+        adGroupName: r.adGroup?.name ?? null,
+        adType: type,
+        status: r.adGroupAd?.status ?? null,
+      };
+    } else if (level === "keyword") {
+      const k = r.adGroupCriterion;
+      const criterion = id(k?.criterionId) ?? "unknown";
+      key = `${id(r.adGroup?.id) ?? "unknown"}~${criterion}`;
+      head = {
+        ...blank,
+        ...campaign,
+        id: key,
+        name: k?.keyword?.text || `Keyword ${criterion}`,
+        adGroupId: id(r.adGroup?.id),
+        adGroupName: r.adGroup?.name ?? null,
+        status: k?.status ?? null,
+        matchType: k?.keyword?.matchType ?? null,
+        qualityScore: qualityScoreOf(k?.qualityInfo?.qualityScore),
+      };
+    } else if (level === "search_term") {
+      const term = r.campaignSearchTermView?.searchTerm ?? "";
+      key = `${id(r.campaign?.id) ?? "unknown"}~${term}`;
+      // The view has no status of its own (search_term_view's added/excluded is per ad group).
+      head = { ...blank, ...campaign, id: key, name: term || "Unknown search term", channel: r.campaign?.advertisingChannelType ?? null };
     } else if (level === "device") {
       key = r.segments?.device ?? "UNKNOWN";
       head = { ...blank, id: key, name: GOOGLE_DEVICE[key] ?? key };
-    } else {
+    } else if (level === "country") {
       const geo = String(r.userLocationView?.countryCriterionId ?? "");
       const code = countries.get(geo) ?? null;
       key = geo || "unknown";
       head = { ...blank, id: key, name: code ? countryName(code) : geo ? `Location ${geo}` : "Unknown" };
+    } else {
+      // Every level has its own branch: a new one must never be read as another's rows.
+      const unknown: never = level;
+      throw new Error(`No rows for Google Ads report level ${String(unknown)}`);
     }
     const g = groups.get(key) ?? { row: head, sums: { costMicros: 0, impressions: 0, clicks: 0, conversions: 0, conversionsValue: 0 } };
     const m = r.metrics ?? {};
@@ -1267,6 +1628,20 @@ export function googleReportRows(level: GoogleReportLevel, rows: GoogleReportApi
   return [...groups.values()]
     .map((g) => ({ ...g.row, ...googleReportMetrics(g.sums) }))
     .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions || a.name.localeCompare(b.name));
+}
+
+/** Every row's metrics added up as Google reports them (money in micros), the ratios worked out from the sums. */
+export function googleReportTotals(rows: GoogleReportApiRow[]): GoogleReportMetrics {
+  const s = { costMicros: 0, impressions: 0, clicks: 0, conversions: 0, conversionsValue: 0 };
+  for (const r of rows) {
+    const m = r.metrics ?? {};
+    s.costMicros += n0(m.costMicros);
+    s.impressions += n0(m.impressions);
+    s.clicks += n0(m.clicks);
+    s.conversions += n0(m.conversions);
+    s.conversionsValue += n0(m.conversionsValue);
+  }
+  return googleReportMetrics(s);
 }
 
 /** Google shows customer ids as 123-456-7890; the API wants the digits. */

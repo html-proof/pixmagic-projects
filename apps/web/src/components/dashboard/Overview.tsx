@@ -319,7 +319,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
                 {m.shopify_sessions?.current && (
-                  <Row label="Sessions (Shopify)" now={fmtNum(m.shopify_sessions.current.sessions ?? 0)} before={m.shopify_sessions.previous ? fmtNum(m.shopify_sessions.previous.sessions ?? 0) : null} change={<Change value={m.shopify_sessions.deltas.sessions} />} />
+                  <Row label="Sessions (Shopify)" now={m.shopify_sessions.current.sessions !== null ? fmtNum(m.shopify_sessions.current.sessions) : "—"} before={m.shopify_sessions.previous?.sessions != null ? fmtNum(m.shopify_sessions.previous.sessions) : null} change={<Change value={m.shopify_sessions.deltas.sessions} />} />
                 )}
                 {m.shopify_sessions?.current && (
                   <Row label="Conversion rate (Shopify)" now={fmtPct(m.shopify_sessions.current.conversionRate)} before={m.shopify_sessions.previous ? fmtPct(m.shopify_sessions.previous.conversionRate) : null} change={<Change value={m.shopify_sessions.deltas.conversionRate} />} />

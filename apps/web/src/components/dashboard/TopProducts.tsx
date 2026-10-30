@@ -2,10 +2,15 @@
 import { useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { fmtMoney, useLiveApi } from "@/lib/api";
+import type { CollectionChoice } from "./CollectionSales";
 import { Panel } from "./Primitives";
 import type { Overview, ProductPerformance } from "./types";
 
-export function TopProducts({ ov, currency }: { ov: Overview; currency: string }) {
+/**
+ * `collection` narrows the ranking to one collection's products (Sales by collection picks it, or
+ * the Collection list, whose `collections` are the ones that sold in these dates).
+ */
+export function TopProducts({ ov, currency, collection = null, collections = [], onCollection }: { ov: Overview; currency: string; collection?: CollectionChoice | null; collections?: CollectionChoice[]; onCollection?: (c: CollectionChoice | null) => void }) {
   const { workspace, allowed } = useApp();
   const [sort, setSort] = useState("units");
   const [direction, setDirection] = useState("desc");
@@ -13,10 +18,12 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
   const [size, setSize] = useState(10);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string | null>(null);
-  const params = new URLSearchParams({ dateFrom: ov.range.from, dateTo: ov.range.to, sortBy: sort, direction, search, limit: "100" });
+  const params = new URLSearchParams({ dateFrom: ov.range.from, dateTo: ov.range.to, sortBy: sort, direction, search, limit: "100", ...(collection ? { collectionId: collection.id } : {}) });
   const path = `/workspaces/${workspace.id}/stores/${ov.store.id}/analytics/products/top-selling?${params}`;
   const { data, dataPath, error, loading, failing } = useLiveApi<ProductPerformance>(path, 15000);
-  const report = dataPath === path ? data : sort === "units" && direction === "desc" && !search && !error ? ov.modules.top_products : null;
+  const report = dataPath === path ? data : sort === "units" && direction === "desc" && !search && !collection && !error ? ov.modules.top_products : null;
+  // The collection picked stays a choice while these dates' list doesn't hold it.
+  const choices = collection && !collections.some((c) => c.id === collection.id) ? [collection, ...collections] : collections;
   const items = report?.items ?? [];
   const currentPage = Math.min(page, Math.max(1, Math.ceil(items.length / size)));
   const detail = items.find(p => p.key === selected);
@@ -24,11 +31,13 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
   const synchronizedAt = ov.freshness?.asOf ?? report?.lastSyncedAt;
   const csv = () => {
     if (!allowed("reports.export")) return;
-    const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold"],
-      ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold])];
+    // Narrowed to a collection: every row and the file's name say so, so it is never read as the whole store's ranking.
+    const narrowed = collection ? [`${collection.title} (${collection.id})`] : [];
+    const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold", ...(collection ? ["Only products now in collection"] : [])],
+      ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold, ...narrowed])];
     const text = values.map(row => row.map(v => `"${(typeof v === "string" && /^\s*[=+\-@\t\r]/.test(v) ? "'" + v : String(v ?? "")).replaceAll('"', '""')}"`).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob(["\ufeff", text], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a"); a.href = url; a.download = `top-products-${ov.range.from}-${ov.range.to}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url; a.download = `top-products-${collection ? `collection-${collection.id.replace(/[^\w-]/g, "-")}-` : ""}${ov.range.from}-${ov.range.to}.csv`; a.click(); URL.revokeObjectURL(url);
   };
   return <Panel id="d-top-products" title="Top 100 products" help="Net units sold by default, with net revenue breaking ties. Returns and cancellations count on the date of their sales reversal. Growth compares the immediately preceding period, with the same elapsed time for a running day.">
     <div className="mb-4 flex flex-wrap gap-3">
@@ -37,6 +46,10 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
       </select></label>
       <label>Order <select aria-label="Order" value={direction} onChange={e => { setDirection(e.target.value); setPage(1); }}><option value="desc">Highest first</option><option value="asc">Lowest first</option></select></label>
       <label>Search <input className="rounded border bg-surface p-2" aria-label="Search" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Product, SKU or ID" /></label>
+      {onCollection && choices.length > 0 && <label>Collection <select className="rounded border bg-surface p-2" aria-label="Collection" value={collection?.id ?? ""} onChange={e => { onCollection(choices.find(c => c.id === e.target.value) ?? null); setPage(1); }}>
+        <option value="">All products</option>{choices.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+      </select></label>}
+      {collection && onCollection && <span className="inline-flex items-center gap-2 rounded-full bg-border/60 px-3 py-1 text-sm">Collection: {collection.title}<button type="button" aria-label={`Show all products, not only ${collection.title}`} onClick={() => { onCollection(null); setPage(1); }}>×</button></span>}
       {allowed("reports.export") && <button className="rounded border px-3" disabled={!items.length} onClick={csv}>Export CSV</button>}
     </div>
     {error && <p role="alert">Product sales could not be loaded: {error.message}</p>}
