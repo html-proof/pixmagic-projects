@@ -20,7 +20,11 @@ export function AppTokenConnect({ base, onConnected }: { base: string; onConnect
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
-  const ready = /^\d{5,25}$/.test(form.wabaId.trim()) && /^\d{5,25}$/.test(form.phoneNumberId.trim()) && form.accessToken.trim().length >= 20;
+  // Meta's user, business and system-user tokens all start with EA. Anything else in the field (a
+  // password a browser or password manager filled in) is never sent on to Meta.
+  const token = form.accessToken.trim();
+  const tokenShaped = /^EA[A-Za-z0-9]{40,}$/.test(token);
+  const ready = /^\d{5,25}$/.test(form.wabaId.trim()) && /^\d{5,25}$/.test(form.phoneNumberId.trim()) && tokenShaped;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -28,7 +32,7 @@ export function AppTokenConnect({ base, onConnected }: { base: string; onConnect
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ connection: WaConnection }>(`${base}/connection/cloud-token`, { method: "POST", body: { wabaId: form.wabaId.trim(), phoneNumberId: form.phoneNumberId.trim(), accessToken: form.accessToken.trim() } });
+      const r = await api<{ connection: WaConnection }>(`${base}/connection/cloud-token`, { method: "POST", body: { wabaId: form.wabaId.trim(), phoneNumberId: form.phoneNumberId.trim(), accessToken: token } });
       setForm({ wabaId: "", phoneNumberId: "", accessToken: "" });
       toast("success", `WhatsApp Business is connected${r.connection.phone ? `: ${r.connection.phone}` : ""}.`);
       onConnected(r.connection);
@@ -43,7 +47,9 @@ export function AppTokenConnect({ base, onConnected }: { base: string; onConnect
   return (
     <details className="rounded-lg border border-border bg-bg p-3" data-testid="wa-token-connect">
       <summary className="cursor-pointer text-sm font-semibold">bizinsights team: connect with the app&apos;s own token</summary>
-      <form className="mt-3 space-y-3" onSubmit={(e) => void submit(e)}>
+      {/* A password field makes browsers take this for a sign-in form and fill in the bizinsights login:
+          new-password (as the email settings' SMTP password) and off keep them out. */}
+      <form className="mt-3 space-y-3" autoComplete="off" onSubmit={(e) => void submit(e)}>
         <p className="max-w-2xl text-xs text-muted">
           For recording Meta&apos;s App Review before Meta approves bizinsights as a Tech Provider. In the Insights app&apos;s dashboard (WhatsApp → API Setup) copy the WhatsApp Business account ID and the phone number ID, and make a token with
           whatsapp_business_management and whatsapp_business_messaging (a system user&apos;s in Business settings, or API Setup&apos;s temporary one). bizinsights checks the token with Meta and keeps it encrypted.
@@ -66,7 +72,21 @@ export function AppTokenConnect({ base, onConnected }: { base: string; onConnect
           <label className="label" htmlFor={`${id}-token`}>
             Access token
           </label>
-          <input id={`${id}-token`} className="input" type="password" autoComplete="off" spellCheck={false} value={form.accessToken} onChange={(e) => set("accessToken", e.target.value)} />
+          <input
+            id={`${id}-token`}
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            aria-describedby={token && !tokenShaped ? `${id}-token-hint` : undefined}
+            value={form.accessToken}
+            onChange={(e) => set("accessToken", e.target.value)}
+          />
+          {token && !tokenShaped && (
+            <p id={`${id}-token-hint`} className="mt-1 text-xs text-danger">
+              That isn&apos;t a Meta access token: Meta&apos;s start with EA. Paste the token Meta made, not a password.
+            </p>
+          )}
         </div>
         <button type="submit" className="btn-primary" disabled={!ready || busy}>
           {busy ? "Checking with Meta…" : "Connect with this token"}
