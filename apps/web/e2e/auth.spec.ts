@@ -14,7 +14,7 @@ import { asNewVisitor, fillCode, fillSignUp, latestCode, latestMailCode, latestM
 const alert = (page: Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
 const section = (page: Page, heading: string) => page.locator("section", { has: page.getByRole("heading", { name: heading, exact: true }) });
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 const methodsOf = async (email: string) =>

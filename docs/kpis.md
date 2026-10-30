@@ -35,7 +35,8 @@ approval; until then the card says why it has no figure, never shows 0.
 | Sales channels, traffic sources | Sales by channel / by referrer | Orders + journey | Close | Shopify's last visit before the order; ads platforms attribute differently |
 | Sessions, visitors, conversion rate | Analytics: sessions, online store visitors, conversion rate | Reports (ShopifyQL) | Exact once granted | Bot sessions left out by Shopify. Without `read_reports` only the pixel's **tracked visits** exist, labelled as such and never called sessions |
 | Gross profit | Profit reports: gross profit | Reports (ShopifyQL) | Exact once granted | Uses the cost Shopify recorded at the time of sale, which the Admin API doesn't expose; never estimated from today's unit costs |
-| Net profit | none | | Not shown | No source holds the other costs (fees, postage, apps, staff, ads) |
+| Your costs | none (the owner's own figures) | Settings → Costs | Their own definition | Shopify plan, apps, staff, rent, shipping labels, fees...: each spread over the days it covers; never checked against anything |
+| Net profit | none | Profit report + ad platforms + your costs | Shown only when complete | Revenue − cost of goods − ad spend − your costs, and only for dates the owner marked the costs list complete for ("Costs and net profit") |
 | Checkout started, left at checkout, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits on the Shopping Funnel page (section "Shopping Funnel page"). Shopify's figures come with the sessions report |
 | Abandoned checkouts, recovered, their value | Orders → Abandoned checkouts | Shopify's checkout list (Admin API, `read_orders`) | Exact counts; value up to 2,000 a window | Last 60 days only; section "Abandoned checkouts (Shopify)" |
 | Payment success / failure | none in the reports | | Not shown | |
@@ -356,13 +357,15 @@ carries; nothing is estimated.
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
   in the store's currency and none is the Google Ads demo, as for MER.
 - **Business profit overview**: net sales less the costs bizinsights can see, Shopify's cost of
-  goods sold (its profit report, for the dates as a whole) and the ad spend for the whole range
-  (`ads.current`, null while a day is missing). It is **not net profit**: fees, postage, apps and
-  staff aren't known, and the panel says so; sales with no cost recorded in Shopify are named. Its
-  share of net sales is called a **margin** only when the cost of goods sold was taken off; with ad
-  spend alone it is "of net sales", since sales less ad spend is no margin.
-- **Expenses breakdown**: the same two costs as a ring (ad spend split by platform when there are
-  two). The mock's shipping, software and other expenses have no source, so they aren't drawn.
+  goods sold (its profit report, for the dates as a whole), the ad spend for the whole range
+  (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
+  **net profit** only when every input is known and the owner has marked the costs list complete for
+  the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
+  no cost recorded in Shopify are named. Its share is called a **margin** only when the cost of goods
+  sold was taken off; with ad spend alone it is "of net sales", since sales less ad spend is no margin.
+- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
+  the owner's costs by category). The mock's shipping, software and other expenses come only from
+  the owner's costs: nothing else holds them.
 - **Top products**: the top five of `top_products` by net revenue, each with its share of net sales;
   withheld while the period's sales aren't all imported (`complete` false), as the full list is.
 - **Recent orders**: the five latest, with one status word (cancelled, fulfilled, then payment).
@@ -685,6 +688,40 @@ visits in the same dates and filter, so no rate mixes two sources:
 - **Download**: `GET …/export?section=funnel` with the dates and filter: the dates, the filter, the
   funnel now and before, every transition, every day, every segment and the products (with quick
   adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
+
+## Costs and net profit
+
+Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
+`netProfit`), `packages/core/src/expenses.ts` and Settings → Costs (`/settings/costs`).
+
+What Shopify, its profit report and the ad platforms can't tell bizinsights (the Shopify plan and
+apps, staff, rent, shipping labels, payment fees, ads on platforms that aren't connected) comes only
+from the store's owner, as **costs** kept per store in the store's currency (`store_expenses`). Owners
+and admins add, change and remove them; members with "View gross sales, discounts, tax, shipping and
+total sales" (`finance.breakdown`) see them, on the page and as the dashboard's `expenses` module. Each
+change is in the audit log (`expense.added`, `expense.changed`, `expense.removed`; the note, free
+text, is never copied into it).
+
+| Figure | Formula | Notes |
+| --- | --- | --- |
+| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year) | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost |
+| Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
+| Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
+| **Net profit** | revenue − Shopify's cost of goods sold − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
+
+Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given only when:
+
+- Shopify's cost of goods sold is known for the dates (its profit report: `read_reports`) and every
+  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0);
+- the connected ad accounts' spend is known for every day, in the store's currency. With no ad
+  account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
+  ads gets no net profit, since it would give the spend away;
+- the owner has said the costs list holds every cost from a day on (`store_expense_settings.complete_from`,
+  "This list holds every cost from"), and the dates start on or after that day.
+
+Otherwise the card shows what is left of net sales after the costs it does know, says "Not net
+profit" with each missing input, and links owners and admins to Settings → Costs. The figures are the
+owner's own: bizinsights checks none of them against anything.
 
 ## Shopify's own reports (sessions, gross profit, the check)
 

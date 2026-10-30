@@ -12,7 +12,7 @@ import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail }
  * are written straight into ad_connections, one per state, and are worded as lib/adConnections.ts says.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** A verified owner with a workspace and a connected store. */

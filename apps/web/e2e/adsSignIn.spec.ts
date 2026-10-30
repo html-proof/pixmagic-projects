@@ -11,7 +11,7 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
  * redirect, so what is tested is what the pages do with each way back.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function ownerWithStore(page: Page, prefix: string) {

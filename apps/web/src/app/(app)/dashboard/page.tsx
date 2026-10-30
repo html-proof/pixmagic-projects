@@ -525,7 +525,7 @@ export default function DashboardPage() {
       {ov && s && (
         <div className="grid gap-4 xl:grid-cols-3">
           <SalesVsAdSpend ov={ov} currency={cur} adsOn={adsOn} manage={manage} />
-          <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} />
+          <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} adsOffered={offers("ads")} manageCosts={canManage(workspace.role)} />
         </div>
       )}
 
@@ -536,7 +536,7 @@ export default function DashboardPage() {
           {/* Not in a workspace that leaves advertising out (lib/features.ts), nor for a member not shown it. */}
           {adsOn && <AdvertisingPerformance ov={ov} manage={manage} />}
           {m?.top_products && <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} />}
-          {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} manage={manage} />}
+          {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} manage={manage} manageCosts={canManage(workspace.role)} />}
           {m?.recent_orders && <RecentOrdersHome ov={ov} currency={cur} onOpen={detail.open} />}
           <KeyInsights ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview", offers)} />
         </div>

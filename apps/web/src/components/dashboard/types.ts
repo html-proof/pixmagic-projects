@@ -2,6 +2,7 @@
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
+import type { ExpenseTotals } from "@app/shared/expenses";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
@@ -102,11 +103,23 @@ export interface SalesOverview {
   };
   /**
    * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
-   * its `totalSales`: "View gross sales, discounts, tax and shipping". `units`: net items sold that
-   * day (absent from older answers).
+   * its `totalSales`: "View gross sales, discounts, tax and shipping"; its `newCustomerOrders` (orders
+   * that were a customer's first): "View returning vs new customers". `units`: net items sold that day;
+   * `orderValue`: what its orders sold for, which average order value divides (both absent from
+   * older answers).
    */
   series: Array<
-    Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number; units?: number }
+    Omit<SalesDay, "refunds" | "totalSales"> & {
+      refunds?: number;
+      totalSales?: number;
+      shipping?: number;
+      tax?: number;
+      duties?: number;
+      additionalFees?: number;
+      units?: number;
+      orderValue?: number;
+      newCustomerOrders?: number;
+    }
   >;
   /**
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
@@ -423,6 +436,8 @@ export interface FunnelModule extends JourneySummary {
   /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". `reached`: visits per step then. */
   previous: { visits: number | null; conversionRate: number | null; imported?: boolean; reached?: number[] | null };
   deltas: { visits: number | null; conversionRate: number | null };
+  /** The Profit sheet's answer (?parts=sheet) only: visits day by day, null on a day before they were counted. */
+  visitsByDay?: Array<{ day: string; visits: number | null }>;
 }
 
 /** One product page on the Shopping Funnel page (funnelDetail in packages/core/src/reports/funnel.ts). */
@@ -621,7 +636,23 @@ export interface Overview {
     shopify_sessions?: ShopifySessionsModule;
     profit?: ProfitModule;
     shopify_check?: ShopifyCheckModule;
+    /** The owner's own costs (Settings → Costs) for the dates; needs finance.breakdown. */
+    expenses?: ExpensesModule;
   };
+}
+
+/** The store's own costs for the dates (core expensesModule), in the store's currency. */
+export interface ExpensesModule {
+  currency: string;
+  /** Every cost the store keeps, whether or not it falls in the dates. */
+  count: number;
+  current: ExpenseTotals;
+  previous: { total: number } | null;
+  delta: number | null;
+  /** From which day the owner says the list holds every cost; null: not said. */
+  completeFrom: string | null;
+  /** The list holds every cost for all of the dates. */
+  complete: boolean;
 }
 
 /** Customers who ordered in a range (the customers module): each once, however many orders. */
