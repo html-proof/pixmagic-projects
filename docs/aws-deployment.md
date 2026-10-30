@@ -282,8 +282,9 @@ affect:
   artifacts, which count against the account's Actions storage (GitHub Free: 500 MB for all its
   private repositories together, artifacts and Packages). Once that was used up, every upload
   failed with "Artifact storage quota has been hit", no pass was recorded, and every push to `main`
-  ran the whole ~45-minute suite. The only artifact left is the Playwright report of a failed e2e
-  run (7 days).
+  ran the whole ~45-minute suite. CI uploads no artifacts at all since 2026-10-30: a failed e2e
+  test's page snapshot (Playwright's error-context.md) is printed in the "Run pnpm e2e" log
+  instead, under "Page when it failed".
 - A newer push waits for the run in progress on the same branch; then the newest waiting push runs
   (GitHub drops older waiting ones, "Canceling since a higher priority waiting request ... exists":
   those never started). On `main` the run in progress finishes and deploys, so merges minutes apart
@@ -572,11 +573,12 @@ job signs in only with the OIDC deploy role and checks that it did.
   2026-10-29. On a draft, CI cancels the queued or running run and skips every job (ci.yml), so the
   checks are grey and GitHub won't merge it until it's marked ready: `gh pr ready <n>` runs
   everything.
-- "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
-  Actions storage is used up (see the CI list above). Only that report is lost; the pass records
-  are commit statuses. Storage per private repository:
+- "Artifact storage quota has been hit": the account's 500 MB of Actions storage is used up (see
+  the CI list above). CI no longer uploads any artifact, so only a run of an older `ci.yml` shows
+  it (its Playwright report step; that run's red comes from the failed test, named in the "Run pnpm
+  e2e" log). On 2026-10-30 the whole account held ~1.3 MB of artifacts and uploads were still
+  refused; GitHub's meter needs `gh auth refresh -s user` to read. Storage per private repository:
   `gh api repos/html-proof/<repo>/actions/artifacts --paginate --jq '.artifacts[].size_in_bytes'`.
-  Deleting artifacts frees it once GitHub recounts (it says every 6-12 hours).
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
   what one pull request's job leaves behind the next job on that runner runs with. With the runner
   for main that stops short of main's CI and the deploy; without it, they run with it too. Only
