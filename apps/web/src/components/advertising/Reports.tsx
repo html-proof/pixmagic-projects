@@ -62,7 +62,7 @@ export function AdvertisingReports() {
       <div className="card animate-rise">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold">Advertising reports</h1>
+            <h1 className="text-lg font-semibold">Ad reports</h1>
             <p className="mt-1 text-sm text-muted">Each report as it downloads, for the dates picked. The CSV holds exactly these rows.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">

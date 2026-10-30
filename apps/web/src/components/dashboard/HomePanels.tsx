@@ -1,16 +1,17 @@
 "use client";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight, CircleCheck, Info, Lightbulb, Megaphone, OctagonAlert, Package, Plus, ReceiptText, Rocket, Split, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, Split, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
 import type { AdSpendProvider } from "@app/shared/ads";
 import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
+import type { OrderOutcomes } from "@app/shared/orders";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { shownFigures, upToWords } from "./adFigures";
 import { Donut, type DonutSlice } from "./Charts";
-import { fmtDateTime, fmtMoneyCompact, fmtTimes, humanize } from "./format";
+import { fmtDateTime, fmtDay, fmtMoneyCompact, fmtTimes, humanize, plural } from "./format";
 import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
 import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
@@ -175,6 +176,143 @@ const STATE_WORDS: Record<"products" | "ads", Record<Exclude<CostState, "known">
   products: { loading: "Loading…", missing: "Not available", unavailable: "Not available" },
   ads: { loading: "Loading…", missing: "Not connected", unavailable: "Unavailable" },
 };
+
+// ---- Orders at a glance -------------------------------------------------------------------------
+
+/** Each outcome's colour, as the order status pills have them; checkouts and shipping their own. */
+const GLANCE_TONE = {
+  completed: { tile: "border-emerald-200/80 bg-emerald-50/70 dark:border-emerald-400/20 dark:bg-emerald-400/[0.08]", ink: "text-emerald-700 dark:text-emerald-300", bar: "bg-emerald-500 dark:bg-emerald-400" },
+  waiting: { tile: "border-amber-200/80 bg-amber-50/70 dark:border-amber-400/20 dark:bg-amber-400/[0.08]", ink: "text-amber-700 dark:text-amber-300", bar: "bg-amber-400 dark:bg-amber-300" },
+  failed: { tile: "border-red-200/80 bg-red-50/70 dark:border-red-400/20 dark:bg-red-400/[0.08]", ink: "text-red-700 dark:text-red-300", bar: "bg-red-500 dark:bg-red-400" },
+  checkout: { tile: "border-violet-200/80 bg-violet-50/70 dark:border-violet-400/20 dark:bg-violet-400/[0.08]", ink: "text-violet-700 dark:text-violet-300", bar: "" },
+  sent: { tile: "border-sky-200/80 bg-sky-50/70 dark:border-sky-400/20 dark:bg-sky-400/[0.08]", ink: "text-sky-700 dark:text-sky-300", bar: "" },
+} as const;
+
+/** One figure of the panel: what it is, the number, and a line saying what's in it. Opens its details when there are some. */
+function GlanceTile({ id, tone, icon: IconCmp, label, value, sub, onClick, className = "" }: { id: string; tone: keyof typeof GLANCE_TONE; icon: LucideIcon; label: string; value: ReactNode; sub: ReactNode; onClick?: () => void; className?: string }) {
+  const t = GLANCE_TONE[tone];
+  const body = (
+    <>
+      <span className="flex min-w-0 items-start gap-2 text-sm font-medium leading-tight text-text/80">
+        <IconCmp aria-hidden className={`h-4 w-4 shrink-0 ${t.ink}`} strokeWidth={2.25} />
+        <span className="min-w-0">{label}</span>
+      </span>
+      <span className="mt-1 block truncate text-2xl font-bold tabular-nums tracking-tight sm:text-[1.75rem] sm:leading-9">{value}</span>
+      <span className="mt-1 block text-xs text-muted">{sub}</span>
+    </>
+  );
+  const cls = `flex min-w-0 flex-col rounded-xl border p-3.5 text-left sm:p-4 ${t.tile} ${className}`;
+  return onClick ? (
+    <button type="button" onClick={onClick} className={`lift ${cls}`} data-testid={`glance-${id}`}>{body}</button>
+  ) : (
+    <div className={cls} data-testid={`glance-${id}`}>{body}</div>
+  );
+}
+
+/** "2 cancelled · 1 payment failed": the reasons there are, or that there are none. */
+function unsuccessfulWords(o: NonNullable<OrderOutcomes["outcome"]>): string {
+  const parts = [
+    o.cancelled ? `${fmtNum(o.cancelled)} cancelled` : null,
+    o.paymentFailed ? `${fmtNum(o.paymentFailed)} payment failed` : null,
+    o.refunded ? `${fmtNum(o.refunded)} refunded in full` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "None cancelled, failed or refunded";
+}
+
+/**
+ * How the orders placed in the dates went, in plain numbers (the owner, 2026-10-30: how many orders
+ * went through and how many didn't, how many people left at checkout, how much was sent). Completed,
+ * awaiting payment and unsuccessful add up to the Orders tile (`orderOutcome` in @app/shared/orders);
+ * checkouts left come from the storefront pixel; products sent are of the orders still on. A part this
+ * member may not see (Team & Access) isn't in the answer and isn't drawn.
+ */
+export function OrdersAtAGlance({ ov, period, onOpen }: { ov: Overview; period: string; onOpen: (t: Topic) => void }) {
+  const { orders, outcome, shipping, checkouts } = ov.modules.order_outcomes!;
+  // Each figure opens the details behind it, where this member has them.
+  const openOrders = ov.modules.recent_orders ? () => onOpen("orders") : undefined;
+  const openShipping = ov.modules.fulfillment ? () => onOpen("shipping") : undefined;
+  const openFunnel = ov.modules.funnel ? () => onOpen("shoppers") : undefined;
+  const share = (n: number) => (orders ? `${fmtPct(n / orders)} of orders` : "No orders yet");
+  const bar = outcome && orders
+    ? [
+        { key: "completed", n: outcome.completed, cls: GLANCE_TONE.completed.bar },
+        { key: "waiting", n: outcome.awaitingPayment, cls: GLANCE_TONE.waiting.bar },
+        { key: "failed", n: outcome.unsuccessful, cls: GLANCE_TONE.failed.bar },
+      ].filter((s) => s.n > 0)
+    : [];
+  // Two to a row on a phone: a last tile on its own takes the whole row.
+  const odd = ((outcome ? 3 : 0) + (checkouts !== undefined ? 1 : 0) + (shipping ? 1 : 0)) % 2 === 1;
+  return (
+    <HomeCard
+      id="orders-glance"
+      title="Orders at a glance"
+      sub={orders === undefined ? `How the orders placed ${period} went.` : orders === 0 ? `No orders placed ${period}.` : `How the ${plural(orders, "order")} placed ${period} went.`}
+      icon={<Disc icon={ClipboardCheck} className="bg-sky-600 text-white dark:bg-sky-500" />}
+      action={openOrders && <DetailsLink onClick={openOrders}>View orders</DetailsLink>}
+    >
+      {bar.length > 0 && (
+        <div
+          role="img"
+          aria-label={`${plural(outcome!.completed, "order")} completed, ${fmtNum(outcome!.awaitingPayment)} awaiting payment, ${fmtNum(outcome!.unsuccessful)} unsuccessful`}
+          className="mb-4 flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full bg-text/[0.06]"
+          data-testid="glance-bar"
+        >
+          {bar.map((s) => <span key={s.key} className={s.cls} style={{ flex: `${s.n} 1 0%` }} />)}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
+        {outcome && (
+          <>
+            <GlanceTile id="completed" tone="completed" icon={CircleCheck} label="Completed" value={fmtNum(outcome.completed)} sub={`Paid · ${share(outcome.completed)}`} onClick={openOrders} />
+            <GlanceTile id="awaiting" tone="waiting" icon={Clock} label="Awaiting payment" value={fmtNum(outcome.awaitingPayment)} sub="Not paid in full yet, such as cash on delivery" onClick={openOrders} />
+            <GlanceTile id="unsuccessful" tone="failed" icon={CircleX} label="Unsuccessful" value={fmtNum(outcome.unsuccessful)} sub={unsuccessfulWords(outcome)} onClick={openOrders} />
+          </>
+        )}
+        {checkouts !== undefined && (
+          <GlanceTile
+            id="checkouts"
+            tone="checkout"
+            icon={ShoppingCart}
+            label="Left at checkout"
+            value={checkouts ? fmtNum(checkouts.left) : <span className="text-base font-semibold text-muted sm:text-lg">Not tracked</span>}
+            sub={
+              checkouts
+                ? `Of ${plural(checkouts.started, "shopper")} who started checkout, ${fmtNum(checkouts.completed)} bought${checkouts.from ? ` · counted from ${fmtDay(checkouts.from)}` : ""}`
+                : "Counted once storefront tracking is on for these dates"
+            }
+            onClick={openFunnel}
+          />
+        )}
+        {shipping && (
+          <GlanceTile
+            id="sent"
+            tone="sent"
+            icon={PackageCheck}
+            label="Products sent"
+            className={odd ? "col-span-2 lg:col-span-1" : ""}
+            value={
+              <>
+                {fmtNum(shipping.itemsSent)} <span className="text-sm font-medium text-muted">{shipping.itemsSent === 1 ? "item" : "items"}</span>
+              </>
+            }
+            sub={
+              shipping.orders === 0
+                ? "Nothing to send yet"
+                : [
+                    `${fmtNum(shipping.sent)} of ${plural(shipping.orders, "order")} sent in full`,
+                    shipping.partlySent ? `${fmtNum(shipping.partlySent)} partly sent` : null,
+                    shipping.notSent ? `${fmtNum(shipping.notSent)} still to send` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+            }
+            onClick={openShipping}
+          />
+        )}
+      </div>
+    </HomeCard>
+  );
+}
 
 // ---- Sales vs ad spend --------------------------------------------------------------------------
 

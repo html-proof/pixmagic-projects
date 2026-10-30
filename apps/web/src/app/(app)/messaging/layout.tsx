@@ -21,7 +21,7 @@ const MAIN = [
  */
 const ADVANCED = [
   ["setup", "Setup guide"],
-  ["sender", "SMS Sender"],
+  ["sender", "Sender name"],
   ["consent", "Customer permissions"],
   ["billing", "Messaging costs"],
   ["templates", "Message templates"],
@@ -43,12 +43,12 @@ export default function MessagingLayout({ children }: { children: ReactNode }) {
   const items: SectionItem[] = [...MAIN.map(entry), { heading: manage ? "Advanced" : "More" }, ...advanced.map(entry)];
   return (
     <ToastProvider>
-      <SectionLayout title="Customer Messaging" icon={<MessageSquareText aria-hidden className="h-[18px] w-[18px] text-accent" strokeWidth={1.8} />} items={items}>
+      <SectionLayout title="Text messages" icon={<MessageSquareText aria-hidden className="h-[18px] w-[18px] text-accent" strokeWidth={1.8} />} items={items}>
         {storesStatus !== "ready" ? (
           <StoresPending />
         ) : !store ? (
           <div className="card">
-            <h1 className="text-lg font-semibold">Customer Messaging</h1>
+            <h1 className="text-lg font-semibold">Text messages</h1>
             <p className="mt-1 text-sm text-muted">Connect a Shopify store first: text messages are about a store&apos;s orders and customers, and only reach customers Shopify says may receive them.</p>
             {canManage(workspace.role) && (
               <Link href="/onboarding" className="btn-primary mt-3 inline-flex">

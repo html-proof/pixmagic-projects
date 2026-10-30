@@ -26,6 +26,8 @@ interface SeedOrder {
   id: string;
   createdAt: string | Date;
   cancelled?: boolean;
+  /** Shopify's payment state, lowercase; paid when not given. */
+  financial?: string | null;
   subtotal?: number;
   discounts?: number;
   tax?: number;
@@ -80,7 +82,7 @@ async function seedOrder(store: Store, o: SeedOrder) {
       shopifyCreatedAt: created,
       shopifyUpdatedAt: created,
       cancelledAt: o.cancelled ? created : null,
-      financialStatus: "paid",
+      financialStatus: o.financial === undefined ? "paid" : o.financial,
       subtotal,
       totalDiscounts: o.discounts ?? 0,
       totalTax: tax,
@@ -248,6 +250,56 @@ describe("order modules (store time zone, DST weekend)", () => {
     expect(typeof items[0].id).toBe("string");
   });
 
+  it("says how the dates' orders went: completed, awaiting payment, unsuccessful, what was sent, and checkouts left", async () => {
+    const { a, ws, store } = await owner([...ALL_SCOPES, "write_pixels", "read_customer_events"]);
+    await seedWeekend(store);
+    // Without the storefront pixel there is no count of checkouts left, which isn't the same as none.
+    const before = (await overview(a.headers, ws, store.id, RANGE)).json().modules.order_outcomes;
+    // The Orders tile's 5 orders: B, C, D and E paid, F cancelled (and left out of what is to send).
+    expect(before).toEqual({
+      orders: 5,
+      outcome: { completed: 4, awaitingPayment: 0, unsuccessful: 1, cancelled: 1, paymentFailed: 0, refunded: 0 },
+      // B sent (3 items), C partly, D still to send; E's status isn't known yet, so it is in none of the three.
+      shipping: { orders: 4, sent: 1, partlySent: 1, notSent: 1, items: 9, itemsSent: 3 },
+      checkouts: null,
+    });
+
+    // Monday 9 March (New York): cash on delivery not paid yet, a payment voided, an authorization run out, one refunded in full.
+    const monday = (id: string, financial: string, hour: number, fulfillment = "unfulfilled") =>
+      seedOrder(store, { id, createdAt: `2026-03-09T${hour}:00:00Z`, financial, subtotal: 10, fulfillment, lines: [{ product: "p1", qty: 2, price: 5 }] });
+    await monday("G", "pending", 14);
+    await monday("H", "voided", 15);
+    await monday("I", "expired", 16);
+    await monday("J", "refunded", 17, "restocked");
+    await monday("K", "authorized", 18, "fulfilled");
+    // An order of gift cards only isn't an order of the Orders tile.
+    await systemDb.order.create({
+      data: { workspaceId: ws, storeId: store.id, shopifyId: "GC", name: "#GC", currency: "USD", localDay: "2026-03-09", shopifyCreatedAt: new Date("2026-03-09T19:00:00Z"), shopifyUpdatedAt: new Date(), giftCardOnly: true, financialStatus: "pending", subtotal: 50, totalDiscounts: 0, totalTax: 0, totalShipping: 0, totalPrice: 50 },
+    });
+    // The pixel counted Monday in full: four shoppers started a checkout, one bought; one never got that far.
+    await systemDb.store.update({ where: { id: store.id }, data: { pixelInstalled: true, pixelInstalledAt: new Date("2026-03-08T12:00:00Z") } });
+    const visit = (day: string, visitor: string, step: number) => systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day, visitor, furthestStep: step } });
+    for (const [visitor, step] of [["v1", 3], ["v2", 3], ["v3", 4], ["v4", 2]] as const) await visit("2026-03-09", visitor, step);
+    await visit("2026-03-08", "v5", 3);
+    await recomputeDays(store, ["2026-03-09"]);
+
+    const res = (await overview(a.headers, ws, store.id, "preset=custom&from=2026-03-09&to=2026-03-09")).json();
+    // Monday's orders (D was Sunday night in New York), as the Orders tile counts them.
+    expect(res.modules.sales_overview.current.orders).toBe(7);
+    expect(res.modules.order_outcomes).toEqual({
+      orders: 7,
+      // E paid; G pending and K authorized wait on the money; F cancelled, H and I failed, J refunded.
+      outcome: { completed: 1, awaitingPayment: 2, unsuccessful: 4, cancelled: 1, paymentFailed: 2, refunded: 1 },
+      // E, G and K go ahead: K sent (2 items), G still to send, E's status not known yet.
+      shipping: { orders: 3, sent: 1, partlySent: 0, notSent: 1, items: 8, itemsSent: 2 },
+      checkouts: { started: 3, completed: 1, left: 2, from: null },
+    });
+    // The pixel began in the middle of Sunday: the weekend's checkouts count from Monday, and say so.
+    expect((await overview(a.headers, ws, store.id, RANGE)).json().modules.order_outcomes.checkouts).toEqual({ started: 3, completed: 1, left: 2, from: "2026-03-09" });
+    // Dates before the pixel: not counted.
+    expect((await overview(a.headers, ws, store.id, "preset=custom&from=2026-03-07&to=2026-03-07")).json().modules.order_outcomes.checkouts).toBeNull();
+  });
+
   it("returns empty, honest module values for a store without data", async () => {
     const { a, ws, store } = await owner();
     const res = await overview(a.headers, ws, store.id);
@@ -258,6 +310,12 @@ describe("order modules (store time zone, DST weekend)", () => {
     expect(m.fulfillment).toEqual({ current: { orders: 0, fulfilled: 0, partiallyFulfilled: 0, unfulfilled: 0, avgHoursToFulfill: null }, openNow: 0, oldestOpenDays: null });
     expect(m.discount_codes.items).toEqual([]);
     expect(m.recent_orders.items).toEqual([]);
+    expect(m.order_outcomes).toEqual({
+      orders: 0,
+      outcome: { completed: 0, awaitingPayment: 0, unsuccessful: 0, cancelled: 0, paymentFailed: 0, refunded: 0 },
+      shipping: { orders: 0, sent: 0, partlySent: 0, notSent: 0, items: 0, itemsSent: 0 },
+      checkouts: null,
+    });
     expect(m.inventory).toEqual({
       current: { trackedVariants: 0, unitsInStock: 0, stockValueAtCost: null, variantsWithCost: 0, retailValue: 0, outOfStock: 0, lowStock: 0 },
       lowStockItems: [],
@@ -1140,7 +1198,7 @@ describe("scopes and tenancy", () => {
 
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
     // The owner's own costs (Settings → Costs) go with the sales they're set against.
-    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
+    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
     expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null, history: { access: "awaiting_shopify", years: [] } });
 

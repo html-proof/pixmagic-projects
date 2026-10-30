@@ -55,7 +55,7 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
             <span aria-hidden className="grid size-9 place-items-center rounded-xl bg-accent/12 text-accent">
               <Funnel className="h-[18px] w-[18px]" />
             </span>
-            Shopping Funnel
+            Visitors
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">Understand how visitors become customers and identify where you lose potential sales.</p>
           {s.shown && (

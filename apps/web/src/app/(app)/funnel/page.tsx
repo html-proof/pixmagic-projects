@@ -29,7 +29,7 @@ import { Alert, EmptyState } from "@/components/ui";
 import { friendlyError, isTransient } from "@/lib/api";
 
 /**
- * The Shopping Funnel: how tracked visits become customers, where they drop off, and what to do
+ * Sales → Visitors (the shopping funnel): how tracked visits become customers, where they drop off, and what to do
  * about it, for the store and dates picked (components/funnel/, docs/kpis.md "Shopping Funnel page").
  * Every figure comes from the API (GET …/overview?parts=funnel, and Shopify's own abandoned checkouts
  * from GET …/abandoned-checkouts, which need no pixel); nothing here is estimated.

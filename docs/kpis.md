@@ -353,6 +353,30 @@ carries; nothing is estimated.
   (`series`; a day's `units` are its net items sold). Under Total sales: "Refunds −A$…", what
   refunds took off it in the dates (`sales_overview.current.totalRefunded`, Total refunded above),
   then the store's Custom sales when it shows them.
+- **Orders at a glance** (asked for by the owner on 2026-10-30, under the tiles; module
+  `order_outcomes`, `orderOutcomes` in core's reports/orders.ts): how the orders placed in the dates
+  went, the same orders as the Orders tile (by processed day, gift-card-only orders left out). Each
+  order is exactly one of these (`orderOutcome` in `@app/shared/orders`), so the three add up to the
+  Orders tile:
+  - **Completed**: not cancelled, paid (`paid`, `partially_refunded`, or no payment state read yet).
+  - **Awaiting payment**: `pending` (cash on delivery, bank transfer), `authorized` (to capture),
+    `partially_paid`.
+  - **Unsuccessful**: cancelled (whatever its payment says), payment failed (`voided`, `expired`),
+    or refunded in full (`refunded`).
+  - **Left at checkout**: shoppers who started a checkout in the dates and didn't buy, from the
+    storefront pixel's visits (one per shopper per day, as the funnel counts them; online store
+    only). Counted from the first day the pixel counted in full ("counted from …"); "Not tracked"
+    without the pixel or for dates before it. Not Shopify's abandoned checkouts list, which holds
+    only checkouts where the shopper left an email or phone.
+  - **Products sent**: of the completed and awaiting-payment orders, the items of those sent in full
+    (`fulfilled`), and how many were partly sent or are still to send (the fulfillment module's open
+    statuses). Shopify's per-line shipped quantities aren't stored, so a partly sent order's items
+    aren't split.
+
+  Team & Access: the panel shows with "View order list", "View fulfillment status" or "View checkout
+  abandonment"; completed / awaiting / unsuccessful need "View payment status" and "View
+  cancellations", products sent "View fulfillment status", left at checkout "View checkout
+  abandonment" (`redactOverview`).
 - **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
   in the store's currency and none is the Google Ads demo, as for MER.

@@ -303,7 +303,7 @@ export function ConsentSuppression() {
       )}
 
       {!contact ? (
-        <div className="card text-sm text-muted">Seeing customers&apos; numbers and consent needs &ldquo;View contact information&rdquo; in Team &amp; Access. Ask an owner or admin.</div>
+        <div className="card text-sm text-muted">Seeing customers&apos; numbers and consent needs &ldquo;View contact information&rdquo; in Settings → People &amp; access. Ask an owner or admin.</div>
       ) : (
         <>
           <section className="card" aria-labelledby="c-list-h">

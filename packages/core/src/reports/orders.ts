@@ -1,5 +1,20 @@
 import { Prisma, type Tx } from "@app/db";
-import { addDays, channelLabel, daysBetweenInclusive, TRAFFIC_LABEL, TRAFFIC_SOURCES, TRAFFIC_SPLIT_LABEL, TRAFFIC_SPLITS, trafficSplitOf, type DateRange, type TrafficSource, type TrafficSplit } from "@app/shared";
+import {
+  addDays,
+  channelLabel,
+  daysBetweenInclusive,
+  orderGoesAhead,
+  orderOutcome,
+  TRAFFIC_LABEL,
+  TRAFFIC_SOURCES,
+  TRAFFIC_SPLIT_LABEL,
+  TRAFFIC_SPLITS,
+  trafficSplitOf,
+  type DateRange,
+  type OrderOutcomes,
+  type TrafficSource,
+  type TrafficSplit,
+} from "@app/shared";
 import { argMax, localMoment, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
@@ -201,6 +216,51 @@ export async function fulfillment(tx: Tx, { ws, storeId }: Scope, r: DateRange, 
     openNow: num(open?.open_now),
     oldestOpenDays: open?.oldest_day ? Math.max(0, daysBetweenInclusive(open.oldest_day, today) - 1) : null,
   };
+}
+
+/**
+ * How the orders placed in the range went (`OrderOutcomes` in @app/shared, the dashboard's "Orders at
+ * a glance"): completed, awaiting payment or unsuccessful (`orderOutcome`), and of the orders still on,
+ * how many were sent. The same orders as the Orders tile: on the day Shopify processed them, gift-card-only
+ * orders left out. `checkouts` comes from the storefront pixel (`checkoutsLeft`), null without it.
+ */
+export async function orderOutcomes(tx: Tx, { ws, storeId }: Scope, r: DateRange, checkouts: OrderOutcomes["checkouts"]): Promise<OrderOutcomes> {
+  const rows = await tx.$queryRaw<Array<{ cancelled: boolean; financial_status: string | null; fulfillment_status: string | null; orders: number; items: number }>>`
+    SELECT (o.cancelled_at IS NOT NULL) AS cancelled, o.financial_status, o.fulfillment_status,
+           COUNT(*)::int AS orders, COALESCE(SUM(u.items), 0)::int AS items
+    FROM orders o
+    LEFT JOIN LATERAL (
+      SELECT SUM(li.quantity) AS items FROM order_line_items li
+      WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.order_id = o.id
+    ) u ON TRUE
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.local_day BETWEEN ${r.from} AND ${r.to} AND NOT o.gift_card_only
+    GROUP BY 1, 2, 3`;
+  const outcome = { completed: 0, awaitingPayment: 0, unsuccessful: 0, cancelled: 0, paymentFailed: 0, refunded: 0 };
+  const shipping = { orders: 0, sent: 0, partlySent: 0, notSent: 0, items: 0, itemsSent: 0 };
+  let orders = 0;
+  for (const x of rows) {
+    const n = num(x.orders);
+    const items = num(x.items);
+    orders += n;
+    const o = orderOutcome({ cancelled: Boolean(x.cancelled), financialStatus: x.financial_status });
+    if (o === "completed") outcome.completed += n;
+    else if (o === "awaiting_payment") outcome.awaitingPayment += n;
+    else {
+      outcome.unsuccessful += n;
+      if (o === "cancelled") outcome.cancelled += n;
+      else if (o === "payment_failed") outcome.paymentFailed += n;
+      else outcome.refunded += n;
+    }
+    if (!orderGoesAhead(o)) continue;
+    shipping.orders += n;
+    shipping.items += items;
+    if (x.fulfillment_status === "fulfilled") {
+      shipping.sent += n;
+      shipping.itemsSent += items;
+    } else if (x.fulfillment_status === "partially_fulfilled") shipping.partlySent += n;
+    else if (x.fulfillment_status && OPEN_FULFILLMENT_STATUSES.includes(x.fulfillment_status)) shipping.notSent += n;
+  }
+  return { orders, outcome, shipping, checkouts };
 }
 
 /**

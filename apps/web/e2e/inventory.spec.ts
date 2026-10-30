@@ -57,7 +57,7 @@ test("an owner opens Inventory: the figures from the stock held, a search, and a
   await page.goto("/dashboard");
   await dashboardPolled;
   const nav = page.getByRole("complementary").getByRole("navigation", { name: "App" });
-  await nav.getByRole("link", { name: "Inventory", exact: true }).click();
+  await nav.getByRole("link", { name: "Stock", exact: true }).click();
   await expect(page).toHaveURL(/\/inventory\/?$/);
 
   // 57 + 4 available; 60 + 4 on hand; the tote (4 ≤ 10) is low.
@@ -67,7 +67,7 @@ test("an owner opens Inventory: the figures from the stock held, a search, and a
   await expect(page.getByTestId("kpi-outOfStock")).toContainText("0");
   await expect(page.getByTestId("inventory-sync")).toContainText("In step with Shopify");
 
-  await page.getByRole("navigation", { name: "Inventory" }).getByRole("link", { name: "All stock" }).click();
+  await page.getByRole("navigation", { name: "Stock", exact: true }).getByRole("link", { name: "All stock" }).click();
   await page.getByTestId("stock-search").fill("TOTE");
   await expect(page.getByTestId("stock-row-21")).toBeVisible();
   await expect(page.getByTestId("stock-row-11")).toHaveCount(0);
@@ -92,7 +92,7 @@ test("a member without inventory access has no Inventory link", async ({ page, b
   await db.query(`INSERT INTO memberships (id, workspace_id, user_id, role, permissions, created_at) VALUES (gen_random_uuid()::text, $1, $2, 'custom', '{analytics.sales}', now())`, [ws, rows[0].id]);
   await other.goto("/dashboard");
   const nav = other.getByRole("complementary").getByRole("navigation", { name: "App" });
-  await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Inventory", exact: true })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Sales" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Stock", exact: true })).toHaveCount(0);
   await other.close();
 });

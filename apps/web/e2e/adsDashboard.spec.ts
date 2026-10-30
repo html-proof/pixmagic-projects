@@ -73,8 +73,10 @@ test("the Advertising area sets the store's sales against the spend, compares it
   const dates = `preset=custom&from=${day(-7)}&to=${day(-1)}`;
   await page.goto(`/dashboard?${dates}&view=ads`);
   await expect(page).toHaveURL(`/advertising?${dates}`);
+  // Ads is one of Sales' tabs: the sidebar lights up Sales, the tabs Ads.
   const nav = page.getByRole("complementary").getByRole("navigation", { name: "App" });
-  await expect(nav.getByRole("link", { name: "Advertising" })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("link", { name: "Sales" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("area-tabs-sales").getByRole("link", { name: "Ads", exact: true })).toHaveAttribute("aria-current", "page");
 
   // Spend against the week before: $70 now, $35 then, up 100%, and what was compared.
   const spend = page.getByTestId("kpi-spend");
@@ -100,7 +102,7 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(meta).toContainText("$280.00");
 
   // Meta Ads, from the area's menu: one figure over the days, by platform, picked from the list.
-  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Meta Ads" }).click();
+  await page.getByRole("navigation", { name: "Ads", exact: true }).getByRole("link", { name: "Meta Ads" }).click();
   await expect(page).toHaveURL(/\/advertising\/meta\?preset=custom/);
   const trend = page.getByTestId("ads-trend");
   await expect(trend).toHaveAttribute("data-metric", "spend");
@@ -113,7 +115,7 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByRole("region", { name: "Meta Ads report" })).toContainText("load the Meta Ads report");
 
   // Every campaign side by side, with its change on the same whole days.
-  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Campaign comparison" }).click();
+  await page.getByRole("navigation", { name: "Ads", exact: true }).getByRole("link", { name: "Campaign comparison" }).click();
   const row = page.getByTestId("campaign-row").filter({ hasText: "Spring" });
   await expect(row).toContainText("$70.00");
   await expect(row).toContainText("Shop ads");
@@ -134,7 +136,7 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await page.getByTestId("campaign-search").fill("");
 
   // Reports: the campaigns table as it downloads, and the download for the same question.
-  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Reports" }).click();
+  await page.getByRole("navigation", { name: "Ads", exact: true }).getByRole("link", { name: "Reports" }).click();
   await page.getByTestId("report-ads_campaigns").click();
   await expect(page.getByTestId("report-table")).toContainText("Ad campaigns");
   await expect(page.getByTestId("report-row").filter({ hasText: "Spring" })).toContainText("act_1");
@@ -234,7 +236,7 @@ test("trend charts group by week and month, the week presets run Monday to Sunda
   await expect(page.getByTestId("ad-print")).toBeVisible();
 
   // The Meta Ads page's trend, by week.
-  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Meta Ads" }).click();
+  await page.getByRole("navigation", { name: "Ads", exact: true }).getByRole("link", { name: "Meta Ads" }).click();
   await page.getByRole("combobox", { name: "Trend groups" }).selectOption("week");
   await expect(page.getByTestId("ads-trend").locator("[aria-label*='per week by platform']")).toBeVisible();
 
