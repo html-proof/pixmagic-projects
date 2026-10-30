@@ -1275,6 +1275,28 @@ export function googleAdTypeLabel(type: string | null | undefined): string {
   return words ? words[0]!.toUpperCase() + words.slice(1) : "Ad";
 }
 
+/** Google's campaign types (advertising_channel_type) in everyday words. */
+const GOOGLE_CHANNEL: Record<string, string> = {
+  SEARCH: "Search",
+  SHOPPING: "Shopping",
+  PERFORMANCE_MAX: "Performance Max",
+  DISPLAY: "Display",
+  VIDEO: "YouTube",
+  DEMAND_GEN: "Demand Gen",
+  DISCOVERY: "Discovery",
+  MULTI_CHANNEL: "App",
+  LOCAL: "Local",
+  SMART: "Smart",
+  HOTEL: "Hotel",
+  TRAVEL: "Travel",
+};
+
+/** "PERFORMANCE_MAX" → "Performance Max": a campaign's type in words (one not listed, Google's own in lower case). Null for none. */
+export function googleChannelLabel(channel: string | null | undefined): string | null {
+  if (!channel) return null;
+  return GOOGLE_CHANNEL[channel] ?? channel.toLowerCase().replace(/_/g, " ");
+}
+
 /**
  * An ad's name as the report shows it: Google's own (ad.name), which most ad types don't have
  * (responsive search ads, for one), else its type and id, so two unnamed ads never read alike.

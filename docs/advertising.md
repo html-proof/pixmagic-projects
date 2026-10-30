@@ -152,7 +152,8 @@ table (whose purchase headings name the window) and the "Purchases vs before" ch
 
 Every Advertising page has **Print or save as PDF** (for whoever may export reports, and owners and
 admins, as on the Shopping Funnel): the browser's print dialog, with the menus left out and the store
-and dates written under the title instead.
+and dates written under the title instead. Account analytics (`/advertising/google/analytics`) has the
+same header (`AdvertisingHeader`), with the demo's DEMO DATA badge and disclaimer kept on it.
 
 ## Rules the pages keep
 
@@ -184,6 +185,40 @@ Report sections in core's `EXPORT_SECTIONS` (packages/core/src/reports/export.ts
 `GET …/export/table?section=…` answers a section's rows as JSON for the Reports page, for a member who
 may see that section, not audited; `GET …/export?section=…` downloads the same rows as CSV, needs
 "Export approved reports" as well and is in the audit log with the platform and account asked.
+
+The area's own downloads (core's `reports/adsExport.ts`, sent by `sendCsv` in apps/api/src/routes/ads.ts):
+each needs "Export approved reports" besides what its page needs (checked before the store, the query or
+anything else is read), shares the dashboard downloads' allowance (`dashboardExports`, 30 in 10 minutes
+per person), and is in the audit log as `report.exported`.
+
+- **The Meta and Google Ads live reports** (**Download CSV** on `MetaReport.tsx` and `GoogleReport.tsx`):
+  `format=csv` on `GET …/ads/meta/report` and `GET …/ads/google/report`, with the page's own query, at every
+  level: campaigns, ad sets, ad groups, asset groups, ads, keywords, search terms and the splits, down from
+  a campaign or ad group too. Built from the answer the page shows, read back from the report's cache: the
+  platform is never asked for a download. An answer no longer kept (10 minutes to 6 hours, as above)
+  answers `409 report_expired`; the page then reads the report again, as a refresh would, shows it and
+  downloads that. The file holds every row of the answer whatever the page's filters show, with the top
+  row (**Whole ad account**, **Whole campaign**, **All ad groups in this campaign**...) and, with dates
+  compared, a **Before** row and each row's spend and purchases (Meta) or conversions (Google) then and
+  their change. Meta's file has purchases under each ad set's own setting and under each fixed window
+  side by side (**Not reported** where Meta gave none, as is reach Meta didn't give); a row the dates
+  compared with don't list says **Not listed for the dates compared**. Statuses, budgets and Google's
+  delivery and Quality Score are as the platform lists them now, labelled so; a keyword Google gives no
+  Quality Score reads **Not rated by Google**. The audit entry: `section: "ads_live_report"`, the
+  `platform`, `level`, `account` (the ad connection), the campaign, ad set or ad group opened, and the dates.
+- **Account analytics** (`/advertising/google/analytics`): a **Section** picked and **Download CSV**, `GET
+  …/ads/google/analytics/export?part=overview|campaigns|days|weeks|months|devices|audience|recommendations|combined`
+  with the page's dates and `connection`. The same answer as the page, from the stored days: a day, week
+  or month the account hasn't stored is **Not stored** (one partly stored says which days), the overview
+  with nothing stored says so and one whose dates compared with aren't all stored says **Not compared**,
+  never 0. The campaigns and recommendations need "View campaigns" too. A real account's devices and
+  audience read Google's splits as the page does; a split that couldn't be read says why. The audit entry:
+  `section: "google_ads_analytics"`, the `part`, `platform: "google"`, `account` and the dates.
+- **The demo** (Google Ads, [ads-demo.md](ads-demo.md)): its files are named `…-demo-simulated-…`, their
+  first row reads **Simulated data** with the demo's disclaimer, and the audit entry has `demo: true`.
+- Money columns name the ad account's currency ("Spend (USD)"); rates are percentages ("Link click rate
+  (%)"); purchases and conversions are each platform's own count, said in their headings, never Shopify
+  orders.
 
 ## Old addresses
 

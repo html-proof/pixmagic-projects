@@ -2,7 +2,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { StoresPending, useApp } from "@/components/AppContext";
-import { CompareDates, CompareSelect, CustomDates, DateRangeSelect, useDateRange, type Shown } from "@/components/dashboard/DateRange";
+import { AdvertisingHeader } from "@/components/advertising/AdvertisingUi";
+import { useDateRange, type Shown } from "@/components/dashboard/DateRange";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
@@ -14,6 +15,7 @@ import { OverviewSection } from "@/components/ads/google/Overview";
 import { RecommendationsSection } from "@/components/ads/google/Recommendations";
 import { SpendingSection } from "@/components/ads/google/Spending";
 import { AudienceSection, DevicesSection } from "@/components/ads/google/Splits";
+import { AnalyticsDownload } from "@/components/ads/google/Download";
 import { DemoDataBadge } from "@/components/ads/google/ui";
 import { api, useApi } from "@/lib/api";
 import type { GoogleAdsAnalytics, GoogleAdsStatus } from "@/lib/googleAds";
@@ -77,29 +79,33 @@ export default function GoogleAdsAnalyticsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-              <GoogleIcon size={20} />
-              Google Ads Analytics
-              {demo && <DemoDataBadge />}
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              {a
-                ? demo
-                  ? `${a.account.name ?? a.account.accountId} · ${a.account.accountId} · simulated by bizinsights, not verified by Google · in ${currency}`
-                  : `${a.account.name ?? a.account.accountId} · ${a.account.accountId} · in ${currency}`
-                : "Spend, clicks, conversions and campaigns for one Google Ads account."}
-              {a?.account.lastSyncedAt ? ` · figures updated ${fmtRelative(a.account.lastSyncedAt)}` : ""}
+      {/* The Advertising area's header: the dates and comparison, the account, a section's CSV, and Print or save as PDF. */}
+      <AdvertisingHeader
+        title="Google Ads Analytics"
+        icon={<GoogleIcon size={20} />}
+        badge={demo ? <DemoDataBadge /> : null}
+        sub={
+          <>
+            {a
+              ? demo
+                ? `${a.account.name ?? a.account.accountId} · ${a.account.accountId} · simulated by bizinsights, not verified by Google · in ${currency}`
+                : `${a.account.name ?? a.account.accountId} · ${a.account.accountId} · in ${currency}`
+              : "Spend, clicks, conversions and campaigns for one Google Ads account."}
+            {a?.account.lastSyncedAt ? ` · figures updated ${fmtRelative(a.account.lastSyncedAt)}` : ""}
+          </>
+        }
+        note={
+          a?.disclaimer ? (
+            <p className="mt-2 max-w-3xl rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn" data-testid="ga-disclaimer">
+              {a.disclaimer}
             </p>
-            {a?.disclaimer && (
-              <p className="mt-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn" data-testid="ga-disclaimer">
-                {a.disclaimer}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+          ) : null
+        }
+        r={r}
+        shown={shown}
+        current={!!a}
+        actions={
+          <>
             {choices.length > 1 && (
               <label className="flex items-center gap-2 text-xs text-muted">
                 Account
@@ -112,20 +118,17 @@ export default function GoogleAdsAnalyticsPage() {
                 </select>
               </label>
             )}
-            <DateRangeSelect r={r} shown={shown} id="ga-dates" label="Dates" size="sm" />
-            <CompareSelect r={r} shown={shown} current={!!a} id="ga-compare" label="Compare with" size="sm" />
+            {a && dates && chosen && (
+              <AnalyticsDownload base={base} query={`${dates}&connection=${encodeURIComponent(chosen)}`} campaigns={!!a.campaigns} demo={demo} disabled={analytics.loading} />
+            )}
             {manage && (
-              <Link className="btn-secondary h-9" href="/settings/ads">
+              <Link className="btn-secondary h-9 print:hidden" href="/settings/ads">
                 Manage
               </Link>
             )}
-          </div>
-        </div>
-        <div className="mt-2 flex flex-wrap justify-end gap-2">
-          <CustomDates r={r} />
-          <CompareDates r={r} />
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {status.error && !status.data ? (
         <LoadError what="your Google Ads accounts" error={status.error} onRetry={() => void status.reload()} busy={status.loading} />

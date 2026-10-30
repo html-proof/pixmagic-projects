@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isMetaObjectId,
   META_ATTRIBUTION_WINDOWS,
@@ -19,11 +19,13 @@ import {
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { saveApiFile } from "@/lib/download";
 import { Definitions } from "./AdsCommon";
 import { fmtDay, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Badge, Delta, NeutralDelta, Panel, type Tone } from "./Primitives";
 import { DrillCrumbs, OpenRow, useReportDrill } from "./ReportDrill";
 import { ReportChange, reportChange } from "./ReportCompare";
+import { CsvButton } from "./ReportDownload";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -367,6 +369,12 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
       ? { level: "adset", campaign: drill.campaign }
       : { level };
   const drillKey = `${drill.campaign ?? "-"}:${drill.child ?? "-"}`;
+  // The question asked of the API: the page's read, and its download (format=csv) of the same answer.
+  const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) })}` : null;
+  const asking = useRef(path);
+  useEffect(() => {
+    asking.current = path;
+  }, [path]);
   // Each list opened starts with every row shown: a filter picked on the campaigns isn't the ad sets'.
   useEffect(() => {
     setStatusFilter("all");
@@ -374,12 +382,11 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   }, [drillKey]);
 
   useEffect(() => {
-    if (!chosen || !drill.ready) return;
+    if (!path || !drill.ready) return;
     let live = true;
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) });
-    api<Answer>(`/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${qs}`)
+    api<Answer>(path)
       .then((a) => live && setAnswer({ drill: drillKey, a }))
       .catch((e: unknown) => {
         if (!live) return;
@@ -390,10 +397,25 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
     return () => {
       live = false;
     };
-    // The account's status changes on every poll; only a different question asks Meta again.
-  }, [workspace.id, ov.store.id, chosen?.id, drill.ready, asked.level, drillKey, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
+    // The account's status changes on every poll; only a different question (its path) asks Meta again.
+  }, [path, drill.ready, drillKey]);
 
-  if (!chosen) return null;
+  if (!chosen || !path) return null;
+  /**
+   * The answer on screen as CSV (every row and attribution window, whatever the filters show). Meta keeps
+   * an answer for a few minutes only: one no longer kept is read again, as a refresh would, shown, and
+   * then downloaded, so the file always holds what the page shows.
+   */
+  const download = async () => {
+    try {
+      await saveApiFile(`${path}&format=csv`);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.code === "report_expired")) throw e;
+      const a = await api<Answer>(path);
+      if (asking.current === path) setAnswer({ drill: drillKey, a });
+      await saveApiFile(`${path}&format=csv`);
+    }
+  };
   // Another campaign's or ad set's rows are never shown under this one's name while it loads.
   const r = answer?.drill === drillKey ? answer.a.report : undefined;
   const shown = r ? answer!.a : null;
@@ -539,6 +561,9 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                 ))}
               </select>
             </label>
+            <span className="sm:ml-auto">
+              <CsvButton download={download} disabled={loading} testid="meta-report-csv" />
+            </span>
           </div>
 
           <div className={`-mx-1 overflow-x-auto ${loading ? "opacity-60" : ""}`} aria-busy={loading}>

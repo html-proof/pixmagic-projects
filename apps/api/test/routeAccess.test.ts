@@ -287,6 +287,14 @@ describe("every route of the API, deny by default", () => {
     for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(status)).toBe(false);
   });
 
+  it("places the Advertising area's downloads: the Google Ads analytics page's sections are a store's read for Export approved reports, in no list above (every rule below holds for it), never public", () => {
+    // The live reports' downloads are no route of their own (format=csv on GET …/ads/meta/report and …/ads/google/report).
+    const download = "GET /workspaces/:ws/stores/:storeId/ads/google/analytics/export";
+    expect(new Set(ctx.routes.map(key)).has(download)).toBe(true);
+    expect(isWorkspaceRoute(download)).toBe(true);
+    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE, new Set(Object.keys(QUERY))]) expect(list.has(download)).toBe(false);
+  });
+
   it("nobody signed in: 401 from every route behind a sign-in", async () => {
     const wrong: string[] = [];
     for (const r of ctx.routes.filter((r) => !PUBLIC.has(key(r)) && !CONFIG_FIRST.has(key(r)))) {

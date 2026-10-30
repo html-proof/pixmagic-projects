@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   adErrorMessage,
   googleAdName,
   googleAdTypeLabel,
   googleCampaignStatus,
+  googleChannelLabel,
   googleMatchTypeLabel,
   isGoogleDetailLevel,
   isGoogleObjectId,
@@ -17,12 +18,14 @@ import { isDemoObjectId } from "@app/shared/adsDemo";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { saveApiFile } from "@/lib/download";
 import { DemoChip } from "./Advertising";
 import { Definitions } from "./AdsCommon";
 import { fmtRange, fmtSpan } from "./format";
 import { Badge, Panel, type Tone } from "./Primitives";
 import { DrillCrumbs, OpenRow, useReportDrill } from "./ReportDrill";
 import { ReportChange, reportChange } from "./ReportCompare";
+import { CsvButton } from "./ReportDownload";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -126,22 +129,6 @@ function budgetWords(row: GoogleReportRow, money: (n: number | null) => string):
   return row.dailyBudget !== null ? `budget ${money(row.dailyBudget)} a day` : null;
 }
 
-/** Google's campaign types in everyday words. */
-const CHANNEL: Record<string, string> = {
-  SEARCH: "Search",
-  SHOPPING: "Shopping",
-  PERFORMANCE_MAX: "Performance Max",
-  DISPLAY: "Display",
-  VIDEO: "YouTube",
-  DEMAND_GEN: "Demand Gen",
-  DISCOVERY: "Discovery",
-  MULTI_CHANNEL: "App",
-  LOCAL: "Local",
-  SMART: "Smart",
-  HOTEL: "Hotel",
-  TRAVEL: "Travel",
-};
-
 const NA = "—";
 const times = (n: number | null) => (n === null ? NA : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}×`);
 
@@ -235,14 +222,19 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       ? { level: view !== "rows" ? view : channel === "PERFORMANCE_MAX" ? "asset_group" : "ad_group", campaign: drill.campaign }
       : { level: lookingUp ? "campaign" : level };
   const drillKey = `${asked.campaign ?? "-"}:${asked.adGroup ?? "-"}`;
+  // The question asked of the API: the page's read, and its download (format=csv) of the same answer.
+  const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/google/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) })}` : null;
+  const asking = useRef(path);
+  useEffect(() => {
+    asking.current = path;
+  }, [path]);
 
   useEffect(() => {
-    if (!chosen || !drill.ready) return;
+    if (!path || !drill.ready) return;
     let live = true;
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) });
-    api<Answer>(`/workspaces/${workspace.id}/stores/${ov.store.id}/ads/google/report?${qs}`)
+    api<Answer>(path)
       .then((a) => {
         if (!live) return;
         setAnswer({ drill: drillKey, a });
@@ -266,10 +258,25 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
     return () => {
       live = false;
     };
-    // The account's status changes on every poll; only a different question asks Google again.
-  }, [workspace.id, ov.store.id, chosen?.id, drill.ready, asked.level, drillKey, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
+    // The account's status changes on every poll; only a different question (its path) asks Google again.
+  }, [path, drill.ready, drillKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!chosen) return null;
+  if (!chosen || !path) return null;
+  /**
+   * The answer on screen as CSV, whatever level or view it is. Google's answers are kept for a while
+   * only: one no longer kept is read again, as a refresh would, shown, and then downloaded, so the file
+   * always holds what the page shows.
+   */
+  const download = async () => {
+    try {
+      await saveApiFile(`${path}&format=csv`);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.code === "report_expired")) throw e;
+      const a = await api<Answer>(path);
+      if (asking.current === path) setAnswer({ drill: drillKey, a });
+      await saveApiFile(`${path}&format=csv`);
+    }
+  };
   // Another campaign's or ad group's rows are never shown under this one's name while it loads.
   const r = !lookingUp && answer?.drill === drillKey ? answer.a.report : undefined;
   const shown = r ? answer!.a : null;
@@ -376,9 +383,14 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
         <div className="skeleton h-40" aria-hidden="true" />
       ) : (
         <>
-          {includesToday && (
-            <p className="mb-2 text-xs text-muted">Today&apos;s numbers are still coming in: Google takes up to a few hours to report clicks and spend, and longer for conversions.</p>
-          )}
+          <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+            {includesToday ? (
+              <p className="text-xs text-muted">Today&apos;s numbers are still coming in: Google takes up to a few hours to report clicks and spend, and longer for conversions.</p>
+            ) : (
+              <span />
+            )}
+            <CsvButton download={download} disabled={loading} messages={REFUSED} testid="google-report-csv" />
+          </div>
           <div className={`-mx-1 overflow-x-auto ${loading ? "opacity-60" : ""}`} aria-busy={loading}>
             <table className="w-full min-w-[64rem] text-sm" data-testid="google-report-table">
               <thead className="text-left text-xs text-muted">
@@ -419,7 +431,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                     drill.open ? null : row.campaignName,
                     // A keyword's ad group, unless it's the one opened.
                     r.level === "keyword" && !drill.child ? row.adGroupName : null,
-                    row.channel ? (CHANNEL[row.channel] ?? row.channel.toLowerCase().replace(/_/g, " ")) : null,
+                    googleChannelLabel(row.channel),
                     budgetWords(row, money),
                     ownName ? googleAdTypeLabel(row.adType) : null,
                     // Rows cached before keywords were read have neither.

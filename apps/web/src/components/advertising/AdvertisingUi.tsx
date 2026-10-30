@@ -63,8 +63,29 @@ export function DownloadCsv({ section, query, label = "Download CSV" }: { sectio
  * The page's title and its question: the dates, what they're compared with, and (`actions`) the
  * account and a download. Printing (or saving as PDF, from the browser's print dialog) leaves the
  * menus out and says the store and the dates in words instead, as the Shopping Funnel does.
+ * `badge` follows the title (the demo's DEMO DATA), `note` the line under it (the demo's disclaimer).
  */
-export function AdvertisingHeader({ title, icon, sub, r, shown, current, actions }: { title: string; icon?: ReactNode; sub: ReactNode; r: DateRangeState; shown: Shown; current: boolean; actions?: ReactNode }) {
+export function AdvertisingHeader({
+  title,
+  icon,
+  badge,
+  sub,
+  note,
+  r,
+  shown,
+  current,
+  actions,
+}: {
+  title: string;
+  icon?: ReactNode;
+  badge?: ReactNode;
+  sub: ReactNode;
+  note?: ReactNode;
+  r: DateRangeState;
+  shown: Shown;
+  current: boolean;
+  actions?: ReactNode;
+}) {
   const { store, access, allowed } = useApp();
   const compared = comparedWith(shown);
   return (
@@ -72,8 +93,10 @@ export function AdvertisingHeader({ title, icon, sub, r, shown, current, actions
       <h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
         {icon}
         {title}
+        {badge}
       </h1>
       <p className="mt-1 max-w-3xl text-sm text-muted">{sub}</p>
+      {note}
       {shown && (
         <p className="mt-1 hidden text-sm print:block">
           {store?.name ?? store?.shopDomain} · {fmtRange(shown.range.from, shown.range.to)}

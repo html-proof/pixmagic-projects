@@ -117,6 +117,7 @@ changes "Manage integrations" (`integrations.manage`).
 | `POST /demo/reset` (`{ seed? }`) | A new seed (or the one given), figures deleted and generated again. |
 | `GET /analytics` | Everything the analytics page shows, for `?connection=` (the demo by default) and the dashboard's date query (`preset`, `from`, `to`, `compare`, `cfrom`, `cto`). |
 | `GET /analytics/overview`, `/campaigns` (`q`, `status`, `type`, `sort`, `dir`, `page`, `pageSize`), `/performance`, `/conversions`, `/devices`, `/audience`, `/recommendations`, `/combined` | Slices of the same. Also under `/demo/…` (the brief's names). |
+| `GET /analytics/export?part=` | One section as CSV (`overview`, `campaigns`, `days`, `weeks`, `months`, `devices`, `audience`, `recommendations`, `combined`), with the same query as `/analytics`. Needs "Export approved reports" as well, in the audit log; a demo's file is named `…-demo-simulated-…` and its first row says the figures are simulated ([advertising.md](advertising.md), "Reports and downloads"). |
 
 The existing `GET …/ads/google/report` (campaign, ad group, device, country, keyword, search term,
 and down from a campaign with `campaign=` / `adGroup=`, the demo's own ids such as `demo-c2` and

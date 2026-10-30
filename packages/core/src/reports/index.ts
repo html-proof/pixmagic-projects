@@ -12,3 +12,4 @@ export { quantizeUntil, reconcileSales, reportStale, reportWindows, shopifyModul
 export { CHECK_PERIODS, checkReportTable, shopifyCheckReport, type CheckReportPeriod, type CheckReportRow, type CheckStatus } from "./shopifyCheck.js";
 export { EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, type ExportSection } from "./export.js";
 export { googleAdsAnalytics, type AdsDeltas, type GoogleAdsAnalytics, type GoogleAdsAnalyticsOptions } from "./googleAdsAnalytics.js";
+export { GOOGLE_ANALYTICS_PART_IDS, GOOGLE_ANALYTICS_PARTS, googleAnalyticsTable, googleReportTable, metaReportTable, type CsvTable, type GoogleAnalyticsPart, type LiveReportCsvOptions } from "./adsExport.js";
