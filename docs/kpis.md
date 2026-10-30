@@ -712,6 +712,50 @@ visits in the same dates and filter, so no rate mixes two sources:
   funnel now and before, every transition, every day, every segment and the products (with quick
   adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
 
+## Profit sheet (/sheet)
+
+Every figure bizinsights has for the store laid out like the owner's own spreadsheet: a row per
+figure, the days shown added up first, then a column per day, week (Monday to Sunday) or calendar
+month (`?by=`; without it days up to 45 days, weeks up to 190, then months). Its data is the
+dashboard's own answer narrowed to it (`GET …/overview?parts=sheet`: `sales_overview`, `funnel` with
+`visitsByDay`, `ads`, `ad_connections`); `@app/shared/sheet` adds the days up. Nothing is estimated.
+Page access: "View sales and revenue" (`analytics.sales`); each row needs what its figure needs.
+
+| Row | Day by day from | Notes |
+| --- | --- | --- |
+| Total sales, Total sales ex tax, Tax (as a share of total sales ex tax) | `series[].totalSales`, `.tax` | "View gross sales, discounts, tax, shipping and total sales" |
+| Net sales | `series[].netSales` | Every ratio below is worked out on it, as the dashboard's are |
+| Orders, Items sold | `series[].orders`, `.units` | |
+| New customer orders, New customer % | `series[].newCustomerOrders` = orders with a customer − returning customers' orders | "View returning vs new customers". An order with no customer record is neither |
+| Store visits | `funnel.visitsByDay` (the pixel's visits, as the funnel counts them) | Blank before the pixel counted them |
+| Conversion rate, Sales per visit | orders ÷ visits, net sales ÷ visits | |
+| Items per order, Average order value | units ÷ orders, `series[].orderValue` ÷ orders | Weeks and months divide the sums, never average the averages |
+| Meta / Google ad spend, Total ad spend | `ads.seriesByProvider` | In the ad accounts' currency |
+| Ads as share of sales (marketing expense ratio), its 3 days, Sales per unit of ad spend (MER), Ad spend per visit / per order, Net sales less ad spend | spend against net sales, visits, orders | Only when the ads report in the store's currency and none is the Google Ads demo (as "Ads as share of sales"). The 3-day share is for day columns: the day and the two before it, whatever the filter, blank on a day whose two before aren't in the dates |
+
+A period one of whose days isn't known (visits before the pixel, a day an ad account has no figures
+for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit: product
+costs, shipping, fees and the owner's other costs aren't recorded, and the page says so.
+
+**Days shown** (`?days=`): every day, weekdays, weekends or any weekdays picked (`0,2,4`, Monday = 0).
+**Business events** (`?events=`): every day, the days with an event, those without, those with an
+event of a kind (`kind:sale`), or the days of one event (`event:<id>`). The total and every column add
+up only the days shown; a week or month column says how many of its days that is.
+
+**Business events** (`business_events`, `@app/shared/businessEvents`): a name, a kind (sale or
+discount, ad campaign, product launch, email or SMS sent, holiday or season, stock problem, website
+change, other), a first and last store-local day (up to 366 days) and a note; 1,000 per store.
+Notes only: no figure is worked out from them. `GET/POST …/business-events`, `PUT/DELETE
+…/business-events/:id`: anyone with "View sales and revenue" may read, add, change and remove them,
+as the team's shared calendar; a shared (view-only) dashboard and API keys may only read. Audited as
+`business_event.created` / `.updated` / `.deleted` (kind and days, never the note). They show under
+their days in the sheet (the pencil on a column marks one there) and in "Business events in these
+dates": a day with an event against a day without one (net sales and orders a day, conversion, ads'
+share), then each event's own days, with "Only its days" to narrow the sheet to them.
+
+**Download CSV** ("Export approved reports" permission): the sheet as on screen, built in the browser (the
+same figures the page shows), plain numbers, the events as a row. **Print** prints the page.
+
 ## Costs and net profit
 
 Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
