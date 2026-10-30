@@ -549,6 +549,13 @@ job signs in only with the OIDC deploy role and checks that it did.
   integration tests and the e2e suite 2-3 times slower too and can time a test out even plugged in
   and awake (2026-10-19 20:28Z): re-run the job once the PC is quiet.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
+- With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
+  land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
+  its run. A cancelled run shows as failing checks, and held pull requests read as broken: on
+  2026-10-28 five were closed as failed with their work unmerged, and #293 looked failed on
+  2026-10-29. On a draft, CI cancels the queued or running run and skips every job (ci.yml), so the
+  checks are grey and GitHub won't merge it until it's marked ready: `gh pr ready <n>` runs
+  everything.
 - "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
   Actions storage is used up (see the CI list above). Only that report is lost; the pass records
   are commit statuses. Storage per private repository:
