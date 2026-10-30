@@ -301,6 +301,13 @@ describe("every route of the API, deny by default", () => {
     for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(collections)).toBe(false);
   });
 
+  it("places customer lifetime figures and cohorts: a store's read for View returning vs new customers, in no list above (every rule below holds for it), never public", () => {
+    const customers = "GET /workspaces/:ws/stores/:storeId/analytics/customers";
+    expect(new Set(ctx.routes.map(key)).has(customers)).toBe(true);
+    expect(isWorkspaceRoute(customers)).toBe(true);
+    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(customers)).toBe(false);
+  });
+
   it("nobody signed in: 401 from every route behind a sign-in", async () => {
     const wrong: string[] = [];
     for (const r of ctx.routes.filter((r) => !PUBLIC.has(key(r)) && !CONFIG_FIRST.has(key(r)))) {

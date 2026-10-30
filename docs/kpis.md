@@ -841,3 +841,12 @@ briefly in either direction.
   (docs/shopify-setup.md), so until then no store can reach further back than its import window.
 - An edit reaches the dashboard through the `orders/updated` delivery it causes (`orders/edited` isn't subscribed): its totals change, so the order's sales are read again.
 - Days before the switch to Shopify's sales records keep their old totals until their orders are read again (the dashboard's refresh re-reads the 60-day import window once); older days than that keep them for good.
+
+## Repeat customers and monthly cohorts
+
+The Customers page's repeat purchase rate, orders and net sales per customer, and monthly
+first-order cohorts with month-by-month retention: definitions, where they start
+(`customersFrom`: the first whole day every order's customer is known) and who sees which figure
+are in [customer-analytics.md](customer-analytics.md). All of them come from the orders held, never
+estimated; a cohort month that began before customers are known is marked partial, and a month
+that hasn't come has no figure.

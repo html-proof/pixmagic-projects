@@ -23,6 +23,7 @@ import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { checkoutRoutes } from "./routes/checkouts.js";
 import { collectionRoutes } from "./routes/collections.js";
+import { customerAnalyticsRoutes } from "./routes/customerAnalytics.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
 import { integrationsRoutes } from "./routes/integrations.js";
@@ -231,6 +232,7 @@ export function buildApp(deps: Deps): App {
   contactRoutes(app, deps);
   checkoutRoutes(app, deps);
   collectionRoutes(app, deps);
+  customerAnalyticsRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
   integrationsRoutes(app, deps);

@@ -383,8 +383,22 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // It must name the customer or their orders (customersRedactSchema): who else to redact?
         const redact = parseShopify(customersRedactSchema, p, data.topic, logIds);
         if (!redact) throw unreadableGdprRequest(data.topic);
-        if (redact.customer?.id) {
-          await systemDb.order.updateMany({ where: { storeId: store.id, customerKey: customerKey(store, String(redact.customer.id)) }, data: { customerKey: null } });
+        // Their orders lose the hash that tied them to the customer: by the customer's id, and by the
+        // orders Shopify names (all of them carry the same customer's hash: theirs too, even when the
+        // payload names no customer id). Their days are counted again, so the day totals stop
+        // counting them as orders of a known (or returning) customer.
+        const keys = new Set<string>();
+        if (redact.customer?.id != null) keys.add(customerKey(store, String(redact.customer.id)));
+        const named = (redact.orders_to_redact ?? []).map(String);
+        if (named.length) {
+          const linked = await systemDb.order.findMany({ where: { storeId: store.id, shopifyId: { in: named }, customerKey: { not: null } }, select: { customerKey: true } });
+          for (const o of linked) keys.add(o.customerKey!);
+        }
+        if (keys.size) {
+          const where = { storeId: store.id, customerKey: { in: [...keys] } };
+          const days = await systemDb.order.findMany({ where, select: { localDay: true }, distinct: ["localDay"] });
+          await systemDb.order.updateMany({ where, data: { customerKey: null } });
+          await enqueueAggregate(deps, store.id, days.map((d) => d.localDay));
         }
         const whatsappRecords = await redactWhatsappCustomer(store, redact);
         // Email automations: the customer's events and the messages sent to them from this store.

@@ -61,7 +61,7 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
   {
     id: "customers",
     title: "New vs returning",
-    description: "Share of customers who had bought from you before.",
+    description: "Share of customers who had bought from you before, repeat purchases, and monthly cohorts of first-time buyers.",
     requiredScopes: ["read_orders", "read_customers"],
   },
   {

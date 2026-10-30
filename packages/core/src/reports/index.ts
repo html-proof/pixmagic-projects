@@ -6,6 +6,7 @@
 export { recentSyncJobs, storeOverview, syncProblem, workspaceStores, type AdsView } from "./overview.js";
 export { productPerformance, PRODUCT_SORTS } from "./products.js";
 export { COLLECTION_LIMIT, collectionSales, type CollectionFigures, type CollectionSalesRow } from "./collections.js";
+export { customerAnalytics, type CustomerAnalyticsView, type CustomerCohorts, type CustomerDates } from "./customers.js";
 export type { FunnelView } from "./funnel.js";
 export { storeLimits } from "./catalog.js";
 export { productCheck } from "./productCheck.js";

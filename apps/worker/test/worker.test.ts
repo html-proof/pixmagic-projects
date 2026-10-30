@@ -527,6 +527,30 @@ describe("webhook processing", () => {
     expect(await systemDb.auditLog.count({ where: { action: { startsWith: "gdpr." } } })).toBe(2);
   });
 
+  it("GDPR: customers/redact unlinks the orders it names without a customer id, every order of that customer, and counts their days again", async () => {
+    const store = await makeStore();
+    await claim(store.workspaceId);
+    await webhook("orders/create", order());
+    const line = (id: number) => [{ id, product_id: 50, title: "Tee", quantity: 1, price: "50.00", total_discount: "0" }];
+    await webhook("orders/create", order({ id: 1002, name: "#1002", created_at: "2026-03-02T15:00:00Z", updated_at: "2026-03-02T15:00:00Z", line_items: line(2) }));
+    await webhook("orders/create", order({ id: 1003, name: "#1003", customer: { id: 8 }, line_items: line(3) }));
+    await drainAggregates();
+    const day = (d: string) => systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: d } } });
+    expect(await day("2026-03-01")).toMatchObject({ orders: 2, ordersWithCustomer: 2 });
+    expect(await day("2026-03-02")).toMatchObject({ orders: 1, ordersWithCustomer: 1, returningCustomerOrders: 1 });
+
+    await webhook("customers/redact", { customer: { email: "pii@example.com" }, orders_to_redact: [1001] });
+    // #1002 wasn't named, but it is the same customer's: it goes too. Customer 8's order stays theirs.
+    expect((await systemDb.order.findMany({ orderBy: { shopifyId: "asc" } })).map((o) => [o.shopifyId, o.customerKey !== null])).toEqual([
+      ["1001", false],
+      ["1002", false],
+      ["1003", true],
+    ]);
+    await drainAggregates();
+    expect(await day("2026-03-01")).toMatchObject({ orders: 2, ordersWithCustomer: 1 });
+    expect(await day("2026-03-02")).toMatchObject({ orders: 1, ordersWithCustomer: 0, returningCustomerOrders: 0 });
+  });
+
   it("GDPR: shop/redact erases the store itself, so a later install can't join the old account", async () => {
     const store = await makeStore();
     await claim(store.workspaceId);

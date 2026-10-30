@@ -6,6 +6,7 @@ import { BarRow, StackedBar } from "./Charts";
 import { TopProducts } from "./TopProducts";
 import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
 import { ContactsCard } from "./Contacts";
+import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
 import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
@@ -414,10 +415,13 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean }) {
+function CustomersDetail({ ov, currency, contactsOn }: { ov: Overview; currency: string; contactsOn: boolean }) {
   const cu = ov.modules.customers;
   const rate = cu?.current.returningCustomerRate ?? null;
   const before = cu?.previous.returningCustomerRate ?? null;
+  // Repeat customers and cohorts: their own report, asked for only with the customers module.
+  const [months, setMonths] = useState(12);
+  const lifetime = useCustomerAnalytics(ov, !!cu, months);
   return (
     <>
       {cu && (
@@ -457,6 +461,8 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
               </div>
             )}
           </Panel>
+          <RepeatCustomers currency={currency} live={lifetime} />
+          <MonthlyCohorts currency={currency} live={lifetime} months={months} onMonths={setMonths} />
         </>
       )}
       {contactsOn && <ContactsCard key={ov.store.id} storeId={ov.store.id} storeName={ov.store.name ?? ov.store.shopDomain} shopDomain={ov.store.shopDomain} />}
@@ -516,7 +522,7 @@ export function TopicContents({
     : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />
     : topic === "stock" && m.inventory ? <StockDetail ov={ov} currency={currency} />
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
-    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} contactsOn={contactsOn} />
+    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} currency={currency} contactsOn={contactsOn} />
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
