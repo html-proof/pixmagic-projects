@@ -22,6 +22,7 @@ import {
 } from "../src/index.js";
 import { requestedCost } from "./queryCost.js";
 import { INVENTORY_LOCATION_QUERY, INVENTORY_LOCATIONS_QUERY, INVENTORY_PAGE_SIZE, ITEM_LEVEL_QUERY, LOCATION_LEVELS_QUERY, PRODUCT_MEDIA_QUERY } from "../src/inventory/queries.js";
+import { ABANDONED_PAGE_QUERY, CHECKOUTS_PAGE } from "../src/shopifyCheckouts.js";
 
 const MAX_COST = 1000;
 const m = (amount: string) => ({ shopMoney: { amount } });
@@ -134,6 +135,11 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
     expect(requestedCost(ITEM_LEVEL_QUERY)).toBe(3);
     expect(requestedCost(INVENTORY_LOCATION_QUERY)).toBe(2);
     expect(requestedCost(PRODUCT_MEDIA_QUERY)).toBe(39);
+  });
+
+  it("a page of Shopify's abandoned checkouts stays under the cap", () => {
+    expect(CHECKOUTS_PAGE).toBe(250);
+    expect(requestedCost(ABANDONED_PAGE_QUERY, { first: CHECKOUTS_PAGE })).toBe(753);
   });
 
   it("the estimator reproduces the old orders query being far over the cap", () => {

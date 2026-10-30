@@ -21,6 +21,7 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { workspaceRoutes } from "./routes/workspaces.js";
 import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
+import { checkoutRoutes } from "./routes/checkouts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
 import { integrationsRoutes } from "./routes/integrations.js";
@@ -227,6 +228,7 @@ export function buildApp(deps: Deps): App {
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
+  checkoutRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
   integrationsRoutes(app, deps);

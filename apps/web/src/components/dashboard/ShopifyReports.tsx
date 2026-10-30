@@ -27,7 +27,7 @@ function statusNote(status: ReportStatus): string | null {
 }
 
 /** "as of 4:40 pm" for a window cut at a time of day, or "updated 3 minutes ago". */
-function asOfWords(m: { asOf: string | null; until: string | null }): string | null {
+export function asOfWords(m: { asOf: string | null; until: string | null }): string | null {
   if (m.until) {
     const [h, min] = m.until.split(":").map(Number);
     const t = new Intl.DateTimeFormat(undefined, { timeZone: "UTC", hour: "numeric", minute: "2-digit" }).format(new Date(Date.UTC(2026, 0, 1, h ?? 0, min ?? 0)));

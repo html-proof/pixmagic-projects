@@ -36,7 +36,8 @@ approval; until then the card says why it has no figure, never shows 0.
 | Sessions, visitors, conversion rate | Analytics: sessions, online store visitors, conversion rate | Reports (ShopifyQL) | Exact once granted | Bot sessions left out by Shopify. Without `read_reports` only the pixel's **tracked visits** exist, labelled as such and never called sessions |
 | Gross profit | Profit reports: gross profit | Reports (ShopifyQL) | Exact once granted | Uses the cost Shopify recorded at the time of sale, which the Admin API doesn't expose; never estimated from today's unit costs |
 | Net profit | none | | Not shown | No source holds the other costs (fees, postage, apps, staff, ads) |
-| Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits on the Shopping Funnel page (section "Shopping Funnel page"). Shopify's figures come with the sessions report |
+| Checkout started, left at checkout, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits on the Shopping Funnel page (section "Shopping Funnel page"). Shopify's figures come with the sessions report |
+| Abandoned checkouts, recovered, their value | Orders → Abandoned checkouts | Shopify's checkout list (Admin API, `read_orders`) | Exact counts; value up to 2,000 a window | Last 60 days only; section "Abandoned checkouts (Shopify)" |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
 | Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own |
@@ -714,6 +715,55 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 - **Reconciliation report**: the same check for today, yesterday, the last 7/30/90 days, this month
   and last month at once, with Shopify's sessions against the pixel's tracked visits
   (`definition_mismatch`) and its gross profit (`shopifyCheckReport`, docs/RUNBOOK.md).
+
+## Abandoned checkouts (Shopify)
+
+Shopify's own abandoned checkouts list, counted and added up for the dates: the card "Abandoned
+checkouts (Shopify)" on the Shopping Funnel page (`GET …/abandoned-checkouts`,
+`packages/core/src/shopifyCheckouts.ts`). Read from the Admin API (`abandonedCheckoutsCount`,
+`abandonedCheckouts`) with `read_orders`: no ShopifyQL, so no `read_reports`. Counts, money and
+dates only: no name, email, phone or address is asked for or kept.
+
+| Figure | Definition |
+| --- | --- |
+| Abandoned checkouts | Shopify's count of the checkouts in its abandoned checkouts list created in the dates, on the store's days: the shopper gave an email or phone number and didn't pay. Recovered and archived ones included, as Shopify's list keeps both. Shown with a "+" when Shopify gives the count only as a lower bound (`precision: AT_LEAST`); it then has no change and no rate |
+| Recovered so far | Of them, the ones Shopify marks recovered (`recovery_state:recovered`): completed later |
+| Recovered rate | Recovered ÷ abandoned, both by the day the checkout was created. Keeps rising for recent dates as late recoveries come in, hence "so far": a range that just ended compares unfavourably with an older one |
+| Abandoned checkout value | Each checkout's total price added up (`totalPriceSet.shopMoney`: items after discounts, shipping and taxes) in the shop's currency, recovered ones included |
+| Recovered value | The total price of the ones completed later (`completedAt` set) |
+
+Not the same as two neighbouring figures, and never shown as them:
+
+- **Left at checkout**: the web pixel's tracked visits that started a checkout and didn't complete
+  it (consent-dependent, online store only), with no value and no recovery.
+- **Sessions that reached checkout**: Shopify Analytics' sessions (ShopifyQL), whether or not the
+  shopper ever gave contact details.
+
+Limits, each shown in words, never as 0:
+
+- **60 days.** Shopify puts `AbandonedCheckout` under `read_orders`, which covers what was created
+  in the last 60 days ("For older orders, add `read_all_orders`", shopify.dev access scopes).
+  Without `read_all_orders` (no bizinsights app asks for it yet) a window starting before the
+  store's today − 59 days is never asked for: the card says Shopify shares the last 60 days of
+  checkouts and from which day, and a comparison that old has no change. With `read_all_orders`
+  older windows are asked for; how long Shopify keeps abandoned checkouts isn't documented
+  (community posts say about three months), so an old comparison deserves care.
+- **Approval.** Abandoned checkouts are protected customer data (Shopify's "Orders" category);
+  without names or contact details that is Level 1, the same approval the orders import waits on.
+  An app Shopify hasn't approved yet (the App Store app on live stores) gets `ACCESS_DENIED`, kept
+  as `access_denied`: the card says bizinsights is waiting on Shopify's approval.
+- **Value up to 2,000 checkouts a window.** The counts are Shopify's own and complete. The value is
+  added up from the list, 250 a page (753 cost points) and 8 pages at most; with more checkouts
+  than that, prices in more than one currency, or a price Shopify withheld, the card says why
+  instead of a value, and the day-by-day chart is left out.
+- **Kept, not waited for.** Kept in `shopify_reports` (dataset `abandoned_checkouts`) like the
+  reports above: the same windows (5-minute marks while the range runs, the range and its
+  comparison cut at the same one), the same staleness and 14 days' keep. The worker asks only
+  stores that granted `read_orders` (`REPORT_SCOPE`).
+- **Search lag.** Shopify's search can lag a moment behind a checkout; the chart is added up from
+  the list, the totals are Shopify's counts.
+- **Who sees it.** View checkout abandonment (`analytics.abandonment`). Who the shoppers were is
+  "Customers to follow up" (`GET …/contacts`, its own permissions), read live and never stored.
 
 ## Checked against Shopify
 

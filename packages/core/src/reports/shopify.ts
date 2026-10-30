@@ -82,7 +82,7 @@ interface Answer {
   fetchedAt: Date | null;
 }
 
-const answerOf = (r: KeptReport | undefined): Answer => {
+export const answerOf = (r: KeptReport | undefined): Answer => {
   if (!r) return { status: "loading", values: null, fetchedAt: null };
   // An error kept next to earlier figures (a failed refresh) still shows the figures.
   if (r.values) return { status: "ready", values: r.values, fetchedAt: r.fetchedAt };

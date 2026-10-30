@@ -20,6 +20,7 @@ export type ModuleId =
   | "catalog"
   | "shopify_sessions"
   | "profit"
+  | "abandoned_checkouts"
   | "stock_levels"
   | "stock_adjustments";
 
@@ -131,6 +132,14 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
     title: "Gross profit",
     description: "Shopify's gross profit and cost of goods sold, from the cost per item recorded with each sale.",
     requiredScopes: ["read_reports"],
+  },
+  // Shopify's own abandoned checkouts list, counted and added up (packages/core/src/shopifyCheckouts.ts):
+  // counts, money and dates only, never who the shoppers were.
+  {
+    id: "abandoned_checkouts",
+    title: "Abandoned checkouts (Shopify)",
+    description: "Checkouts where shoppers left an email or phone number and didn't pay, their value, and how many came back to buy.",
+    requiredScopes: ["read_orders"],
   },
   // The Inventory module (docs/inventory.md): stock per location and quantity state, kept in step
   // with Shopify by webhooks and a scheduled check; and changing stock in Shopify from bizinsights.

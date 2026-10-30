@@ -131,7 +131,7 @@ describe("capabilities", () => {
   it("only enables modules backed by granted scopes", () => {
     const caps = resolveCapabilities(["read_orders"]);
     const on = caps.filter((c) => c.enabled).map((c) => c.id);
-    expect(on).toEqual(["sales_overview", "refunds", "channels", "order_timing", "fulfillment", "discount_codes", "recent_orders"]);
+    expect(on).toEqual(["sales_overview", "refunds", "channels", "order_timing", "fulfillment", "discount_codes", "recent_orders", "abandoned_checkouts"]);
     expect(caps.find((c) => c.id === "customers")?.missingScopes).toEqual(["read_customers"]);
     expect(caps.find((c) => c.id === "inventory")?.missingScopes).toEqual(["read_products"]);
   });
