@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { acquiredTotals, addMonths, cohortGrid, customerFigures, customerHistoryStart, customersKnownDay, monthIndex, monthsBetween, perCustomer, type CohortCount, type CustomerDay } from "../src/customers";
+import { addDays } from "../src/dates";
 
 describe("calendar months", () => {
   it("counts months across a year's end", () => {
@@ -80,6 +81,34 @@ describe("the day orders began to carry their customer", () => {
   it("has no start before an order with a customer", () => {
     expect(customersKnownDay(days(["2026-07-05", 3, 0]), "2026-07-03")).toBeNull();
     expect(customersKnownDay([], "2026-07-03")).toBeNull();
+  });
+
+  /** One day after another from `from`, each [orders, with a known customer] from `pattern`, round and round. */
+  const run = (from: string, count: number, pattern: Array<[number, number]>): CustomerDay[] =>
+    Array.from({ length: count }, (_, i) => ({ day: addDays(from, i), orders: pattern[i % pattern.length]![0], withCustomer: pattern[i % pattern.length]![1] }));
+
+  it("keeps the first day on a store whose days are mostly guests' all along", () => {
+    // One online order with its customer every third day, walk-ins without one otherwise: days with
+    // no customer outnumber the others, but no more after any day than before it.
+    const walkIns = run("2026-06-01", 150, [[1, 1], [1, 0], [1, 0]]);
+    expect(start(walkIns)).toBe("2026-06-01");
+    // Five sales a day, one of them with a customer, and some days with none at all.
+    const pos = run("2026-06-01", 150, [[5, 1], [4, 0], [6, 1], [3, 0], [5, 0]]);
+    expect(start(pos)).toBe("2026-06-01");
+  });
+
+  it("finds a late grant on a store with few customers, and isn't moved early by an order linked out of turn there", () => {
+    // 60 days read without customers, then a fifth of the orders with one (the grant's re-read from part way through 31 July).
+    const before = run("2026-06-01", 60, [[4, 0]]);
+    const after = run("2026-07-31", 60, [[5, 1], [4, 0], [5, 1], [6, 2], [4, 0]]);
+    expect(start([...before, ...after])).toBe("2026-08-01");
+    expect(start([...before.map((d) => (d.day === "2026-06-10" ? { ...d, withCustomer: 1 } : d)), ...after])).toBe("2026-08-01");
+  });
+
+  it("isn't moved later by first weeks with fewer customers by chance", () => {
+    const quiet = run("2026-06-01", 14, [[3, 1], [3, 1], [2, 0]]);
+    const busy = run("2026-06-15", 120, [[3, 2], [3, 1], [2, 1]]);
+    expect(start([...quiet, ...busy])).toBe("2026-06-01");
   });
 });
 

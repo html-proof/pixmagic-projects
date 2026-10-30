@@ -52,7 +52,7 @@ export const perCustomer = (total: number, customers: number): number | null => 
  * stay without a customer, and so may some of that day's. So once orders since `wholeFrom` went
  * without a customer, customers are known from the day they began to carry one, or the day after
  * when some of its orders have none. Guest checkouts have none either, so a store whose first days
- * had guest orders only starts a few days late: later, never earlier, than the truth.
+ * had guest orders only starts a few days late.
  */
 export function customerHistoryStart(wholeFrom: string | null, known: { day: string; unlinkedBefore: boolean; unlinkedOn: boolean; linkedBefore?: boolean } | null): string | null {
   if (wholeFrom === null || known === null) return null;
@@ -69,37 +69,61 @@ export interface CustomerDay {
   withCustomer: number;
 }
 
+/** How well one share of orders with a customer fits `k` of `n` (binomial log-likelihood at its own rate; 0 for none or all). */
+const shareFit = (k: number, n: number) => (k <= 0 || k >= n ? 0 : k * Math.log(k / n) + (n - k) * Math.log(1 - k / n));
+/** How much likelier (log) a start after the first day with a known customer must make the orders than that day does. */
+const LATER_START_EVIDENCE = 2;
+/** The orders before a start have at most this part of the share with a customer that the orders from it on have. */
+const BEFORE_START_SHARE = 1 / 3;
+
 /**
  * `customerHistoryStart`'s `known`, from the days with orders: the day orders began to carry their
- * customer, or null while none does. Not simply the first day an order has one: a single order
- * linked out of turn (an old order updated since the grant, or one Shopify dates by when it was
- * processed elsewhere, before it was created) would put the start before weeks of orders read
- * without their customer. So of the days since `wholeFrom`, the one with a known customer that best
- * splits days without one (before it) from days with one (from it on): the fewest days with a
- * customer before it plus days whose orders all lack one from it on, the earliest of equals. Guest
- * checkouts make days of the second kind too, but rarely all of a day's orders; days before
- * `wholeFrom` only say whether orders were linked before it (`linkedBefore`).
+ * customer, or null while none does.
+ *
+ * Not simply the first day an order has one: a single order linked out of turn (an old order updated
+ * since the grant, or one Shopify dates by when it was processed elsewhere, before it was created)
+ * would put the start before weeks of orders read without their customer. Nor the day that best
+ * splits days with a customer from days without: on a store whose sales are mostly guest checkouts or
+ * walk-ins with no customer, days of the second kind outnumber the others all along, and the start
+ * would go to its last days.
+ *
+ * So the orders since `wholeFrom` are read as two stretches, before the start and from it on, each with
+ * its own share of orders that have a customer, and the start is the day with a known customer that
+ * fits them best (the grant's re-read begins part way through a day: that day's orders without one
+ * count as before it), where the share before is at most a third of the share after
+ * (`BEFORE_START_SHARE`). A start later than the first day with a known customer has to fit clearly
+ * better (`LATER_START_EVIDENCE`): a store whose first weeks had fewer customers by chance keeps its
+ * first day. Days before `wholeFrom` only say whether orders were linked before it (`linkedBefore`).
  */
 export function customersKnownDay(days: readonly CustomerDay[], wholeFrom: string): { day: string; unlinkedBefore: boolean; unlinkedOn: boolean; linkedBefore: boolean } | null {
   const inWindow = days.filter((d) => d.day >= wholeFrom && d.orders > 0).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
-  const unlinked = inWindow.filter((d) => d.withCustomer <= 0).length;
+  const linkedOf = (d: CustomerDay) => Math.max(0, Math.min(d.withCustomer, d.orders));
+  const linked = inWindow.reduce((n, d) => n + linkedOf(d), 0);
+  const orders = inWindow.reduce((n, d) => n + d.orders, 0);
+  let first = -1;
+  let firstFit = 0;
   let best = -1;
-  let bestCost = Infinity;
+  let bestFit = -Infinity;
   let linkedSoFar = 0;
-  let unlinkedSoFar = 0;
+  let ordersSoFar = 0;
   for (let i = 0; i < inWindow.length; i++) {
     const d = inWindow[i]!;
-    if (d.withCustomer <= 0) {
-      unlinkedSoFar++;
-      continue;
+    const withCustomer = linkedOf(d);
+    if (withCustomer > 0) {
+      const before = ordersSoFar + d.orders - withCustomer;
+      const after = orders - before;
+      const fit = shareFit(linkedSoFar, before) + shareFit(linked - linkedSoFar, after);
+      if (first < 0) [first, firstFit] = [i, fit];
+      const fewerBefore = linkedSoFar === 0 || linkedSoFar / before <= BEFORE_START_SHARE * ((linked - linkedSoFar) / after);
+      if (fewerBefore && fit > bestFit) [best, bestFit] = [i, fit];
     }
-    const cost = linkedSoFar + (unlinked - unlinkedSoFar);
-    if (cost < bestCost) [best, bestCost] = [i, cost];
-    linkedSoFar++;
+    linkedSoFar += withCustomer;
+    ordersSoFar += d.orders;
   }
-  const d = inWindow[best];
-  if (!d) return null;
-  return { day: d.day, unlinkedBefore: best > 0, unlinkedOn: d.orders > d.withCustomer, linkedBefore: days.some((x) => x.day < wholeFrom && x.withCustomer > 0) };
+  if (first < 0) return null;
+  const pick = bestFit - firstFit > LATER_START_EVIDENCE ? best : first;
+  const d = inWindow[pick]!;
+  return { day: d.day, unlinkedBefore: pick > 0, unlinkedOn: d.orders > d.withCustomer, linkedBefore: days.some((x) => x.day < wholeFrom && x.withCustomer > 0) };
 }
 
 /** What a group of customers did, each customer once, from the report's queries. */

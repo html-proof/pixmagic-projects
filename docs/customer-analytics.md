@@ -76,13 +76,22 @@ Customers are counted from the first store-local day on which every order's cust
    re-reads Shopify's last 60 days, from a moment part way through a day; older orders stay without
    a customer. So when orders since that whole day went without a customer, customers start on the
    day orders began to carry one, or the day after when some of its orders have none. That day
-   (`customersKnownDay`, from `daily_store_metrics`) is the day with a known customer that best
-   splits the days since the whole day: the fewest days with a customer before it plus days whose
-   orders all lack one from it on. Not simply the first day with one: a single old order linked out
-   of turn (updated since the grant, or dated by when it was processed elsewhere) would otherwise
-   start the figures before weeks of orders that say nobody. Guest checkouts look the same as orders
-   read before the grant, so a store whose first days had guest orders only starts a few days late:
-   later, never earlier, than the truth.
+   (`customersKnownDay`, from `daily_store_metrics`) splits the orders since the whole day into two
+   stretches, each with its own share of orders that have a customer: it is the day with a known
+   customer that fits them best (binomial log-likelihood; that day's orders without one count as
+   before it), where the share before is at most a third of the share after. A start later than the
+   first day with a known customer must fit better by more than 2 (log): a store whose first weeks
+   had fewer customers by chance keeps its first day.
+   - Not simply the first day with a customer: a single old order linked out of turn (updated since
+     the grant, or dated by when it was processed elsewhere) would otherwise start the figures before
+     weeks of orders that say nobody.
+   - Not the day that best splits days with a customer from days without: on a store whose sales
+     are mostly guest checkouts or walk-ins with no customer, such days outnumber the others all
+     along, and the start would go to its last days.
+   - Guest checkouts look the same as orders read before the grant, so a store whose first days had
+     guest orders only starts a few days late. With orders linked out of turn on a store whose own
+     share of orders with a customer is small, the evidence can be too thin to skip them: then the
+     start is that early order's day, before orders without a customer.
 
 A store that gave `read_customers` back and granted it again more than 60 days later has orders
 without a customer in between: the cohorts of those months are smaller than they were, and their
