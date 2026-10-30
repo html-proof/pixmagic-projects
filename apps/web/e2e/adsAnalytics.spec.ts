@@ -17,7 +17,7 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
  * simulated. Meta's report needs a Meta stand-in and isn't covered here.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** The demo's default seed (DEMO_DEFAULT_SEED in @app/shared/adsDemo): the same figures every run, so a failure can be replayed. */

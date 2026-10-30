@@ -10,7 +10,7 @@ import { createWorkspace, insertStore, signUp, stubShopify, uniqueEmail } from "
  * Shopping Funnel page. Every store keeps UTC, so its days are the UTC days worked out here.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 const DAY_MS = 86_400_000;
