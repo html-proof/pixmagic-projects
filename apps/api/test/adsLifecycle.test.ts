@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, checkAdLogins, encryptAdTokens, googleAdsOperationsToday, logger, metaDataDeletion, metaDeauthorized, pauseGoogleAds, type FetchLike } from "@app/core";
+import { adAccessToken, AdsAuthError, checkAdLogins, encryptAdTokens, googleAdsOperationsToday, logger, metaDataDeletion, metaDeauthorized, pauseGoogleAds, type FetchLike } from "@app/core";
 import { adErrorMessage, pkceChallenge } from "@app/shared";
 import { clean, createStore, createWorkspace, deletionCode, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
  * "Continue with Google Ads" / "Continue with Meta Ads" beyond the first connect: PKCE, who signed
  * in, refresh tokens Google doesn't resend or replaces, giving access back on disconnect, a Meta login
- * kept connected while it reaches no ad account yet, the accounts the Nango release connected until
- * they are moved off it, and the live Google Ads report.
+ * kept connected while it reaches no ad account yet, a row that isn't bizinsights' own sign-in (none
+ * is left since the move off Nango), and the live Google Ads report.
  */
 
 let ctx: TestCtx;
@@ -22,8 +22,6 @@ const KEYS = {
   GOOGLE_ADS_CLIENT_SECRET: "g_secret",
   GOOGLE_ADS_ENABLED: "1",
   META_CONFIG_ID: "",
-  // Only the accounts the Nango release connected need its key (their own describe sets it).
-  NANGO_SECRET_KEY: "",
 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -433,9 +431,9 @@ describe("Continue with Meta Ads: a login with no ad account yet", () => {
     const first = await signInBack("meta");
     expect(first.pathname).toBe("/settings/ads");
     expect(Object.fromEntries(first.searchParams)).toEqual({ waiting: "no_ads_account", provider: "meta", store: storeId });
-    // The login holds bizinsights' own token, sealed like a connection's; nothing of Nango.
+    // The login holds bizinsights' own token, sealed like a connection's.
     const row = await systemDb.adLogin.findFirstOrThrow({ where: { storeId } });
-    expect(row).toMatchObject({ provider: "meta", reason: "no_ads_account", sourceLoginId: null, nangoIntegrationKey: null, externalUserId: "5550001", grantedScopes: ["ads_read"] });
+    expect(row).toMatchObject({ provider: "meta", reason: "no_ads_account", externalUserId: "5550001", grantedScopes: ["ads_read"] });
     expect(row.accessTokenEnc).toMatch(/^v\d+\./);
     expect(row.accessTokenEnc).not.toContain("META_LONG");
     expect(row.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 86_400_000);
@@ -447,7 +445,7 @@ describe("Continue with Meta Ads: a login with no ad account yet", () => {
     ctx.setFetch(metaWith(revoked, { granular: [{ scope: "ads_read", target_ids: [] }] }));
     const second = await signInBack("meta");
     expect(second.searchParams.get("waiting")).toBe("none_shared");
-    expect(await systemDb.adLogin.findMany({ where: { storeId } })).toEqual([expect.objectContaining({ id: row.id, reason: "none_shared", sourceLoginId: null, externalUserId: "5550001" })]);
+    expect(await systemDb.adLogin.findMany({ where: { storeId } })).toEqual([expect.objectContaining({ id: row.id, reason: "none_shared", externalUserId: "5550001" })]);
     expect(revoked).toEqual([]);
     expect(await systemDb.adConnection.count()).toBe(0);
   });
@@ -478,7 +476,7 @@ describe("Continue with Meta Ads: a login with no ad account yet", () => {
     expect(list.connections).toEqual([]);
     expect(list.logins).toEqual([expect.objectContaining({ provider: "meta", name: "Sebastian Thomas", reason: "no_ads_account", connectedBy: expect.objectContaining({ you: true }) })]);
     // Never a token or the platform's ids.
-    expect(JSON.stringify(list.logins)).not.toMatch(/5550001|sourceLoginId|nango|Enc|META_LONG/i);
+    expect(JSON.stringify(list.logins)).not.toMatch(/5550001|sourceLoginId|IntegrationKey|Enc|META_LONG/i);
     expect(await systemDb.adConnection.count()).toBe(0);
   });
 
@@ -932,100 +930,65 @@ describe("someone whose login powers ad accounts leaves", () => {
   });
 });
 
-describe("an account the Nango release connected, not moved off Nango yet", () => {
-  const NANGO_KEY = "nango-secret-0123456789abcdef0123456789";
-  const INTEGRATION = "bizinsights-meta-ads";
-  beforeEach(() => ctx.setEnv({ ...KEYS, NANGO_SECRET_KEY: NANGO_KEY }));
-
-  /** bizinsights' old Nango environment in front of `platform`: a connection's tokens (GET /connections/:id) and deleting it. */
-  function nangoIn(platform: FetchLike) {
-    const n = { held: new Map<string, string>(), reads: [] as Array<{ id: string; key: string | null; refreshToken: string | null }>, deleted: [] as string[] };
-    const fetchImpl: FetchLike = async (input, init) => {
-      const u = new URL(String(input));
-      if (u.host !== "api.nango.dev") return platform(input, init);
-      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${NANGO_KEY}`);
-      const id = decodeURIComponent(/^\/connections\/([^/]+)$/.exec(u.pathname)?.[1] ?? "");
-      const token = n.held.get(id);
-      if (!token || u.searchParams.get("provider_config_key") !== INTEGRATION) return json({ error: { code: "not_found", message: "Connection not found" } }, 404);
-      if (init?.method === "DELETE") {
-        n.deleted.push(id);
-        n.held.delete(id);
-        return json({ success: true });
-      }
-      n.reads.push({ id, key: u.searchParams.get("provider_config_key"), refreshToken: u.searchParams.get("refresh_token") });
-      return json({ connection_id: id, provider_config_key: INTEGRATION, credentials: { type: "OAUTH2", access_token: token, raw: {} } });
-    };
-    return { fetchImpl, n };
-  }
-
+describe("a row that isn't bizinsights' own sign-in (none is left since the move off Nango, 2026-10-28)", () => {
   /** A Meta account as the Nango release stored it: a sealed reference to its Nango connection, never a token. */
-  async function connectedThroughNango(accountId: string, connectionId: string, over: Record<string, unknown> = {}) {
+  async function notOwn(accountId: string, over: Record<string, unknown> = {}) {
     const owner = await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } });
-    const sealed = encryptAdTokens(storeId, "meta", { accessToken: JSON.stringify({ n: connectionId, k: INTEGRATION }), refreshToken: null, expiresAt: null });
+    const sealed = encryptAdTokens(storeId, "meta", { accessToken: JSON.stringify({ n: "conn-old", k: "bizinsights-meta-ads" }), refreshToken: null, expiresAt: null });
     return systemDb.adConnection.create({
-      data: { workspaceId: ws, storeId, provider: "meta", accountId, accountName: accountId, currency: "USD", timezone: "UTC", connectedByUserId: owner.id, externalUserId: "5550001", source: "nango", sourceLoginId: connectionId, ...sealed, ...over },
+      data: { workspaceId: ws, storeId, provider: "meta", accountId, accountName: accountId, currency: "USD", timezone: "UTC", connectedByUserId: owner.id, externalUserId: "5550001", source: "nango", sourceLoginId: "conn-old", ...sealed, ...over },
     });
   }
 
-  it("Settings says how it is read; disconnecting it gives the grant back with the token Nango held, then deletes the Nango connection", async () => {
-    const revoked: string[] = [];
-    const { fetchImpl, n } = nangoIn(metaPlatform(revoked));
-    n.held.set("conn-old", "META_AT_NANGO");
-    ctx.setFetch(fetchImpl);
-    const a = await connectedThroughNango("act_1", "conn-old");
-    const b = await connectedThroughNango("act_2", "conn-old");
-    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
-    expect(list.json().connections.map((c: { source: string }) => c.source)).toEqual(["nango", "nango"]);
-    expect(list.body).not.toContain("conn-old");
+  /** Every call to Meta or Google, refused: what such a row holds must never reach them. */
+  function platformCalls() {
+    const calls: string[] = [];
+    ctx.setFetch(async (input) => {
+      const u = new URL(String(input));
+      if (/facebook\.com|googleapis\.com/.test(u.host)) calls.push(`${u.host}${u.pathname}`);
+      return json({ error: { message: `unexpected ${u.host}${u.pathname}` } }, 400);
+    });
+    return calls;
+  }
 
-    // The other account still reads through the same Nango connection: nothing is given back or deleted.
-    expect((await disconnect(a.id)).json()).toEqual({ ok: true, revoked: "still_used" });
-    expect(n.reads).toEqual([]);
-    expect(n.deleted).toEqual([]);
-
-    expect((await disconnect(b.id)).json()).toEqual({ ok: true, revoked: "revoked" });
-    // Its tokens read once (the refresh token asked for too), the grant given back with them, then Nango's copy deleted.
-    expect(n.reads).toEqual([{ id: "conn-old", key: INTEGRATION, refreshToken: "true" }]);
-    expect(revoked).toEqual(["META_AT_NANGO"]);
-    expect(n.deleted).toEqual(["conn-old"]);
+  it("is never read: its token is refused as ended, and disconnecting it calls no platform", async () => {
+    const calls = platformCalls();
+    const a = await notOwn("act_1");
+    const refused = await adAccessToken(a).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(AdsAuthError);
+    expect(refused).toMatchObject({ errorCode: "auth_expired" });
+    expect((await disconnect(a.id)).json()).toEqual({ ok: true, revoked: "unknown_person" });
     expect(await systemDb.adConnection.count()).toBe(0);
+    expect(calls).toEqual([]);
   });
 
-  it("connecting the same account with bizinsights' own sign-in makes the row its own, and lets the Nango connection go without revoking the grant", async () => {
+  it("connecting the same account with bizinsights' own sign-in makes the row its own, keeping its days; nothing is revoked", async () => {
     const revoked: string[] = [];
-    const { fetchImpl, n } = nangoIn(metaPlatform(revoked));
-    n.held.set("conn-old", "META_AT_NANGO");
-    ctx.setFetch(fetchImpl);
-    const a = await connectedThroughNango("act_1", "conn-old");
-    const b = await connectedThroughNango("act_2", "conn-old", { status: "reconnect", errorCode: "auth_expired" });
+    ctx.setFetch(metaPlatform(revoked));
+    const a = await notOwn("act_1");
+    const b = await notOwn("act_2", { status: "reconnect", errorCode: "auth_expired" });
     await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: a.id, provider: "meta", accountId: "act_1", campaignId: "c", campaignName: "C", day: "2026-10-27", spend: 5 } });
 
     // Both accounts are known already: nothing to choose.
     expect((await connect("meta")).location.pathname).toBe("/dashboard");
     const rows = await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } });
-    // The same rows, with their days; bizinsights' own sealed token now, nothing at Nango.
+    // The same rows, with their days; bizinsights' own sealed token now.
     expect(rows.map((r) => [r.id, r.source, r.sourceLoginId, r.status])).toEqual([
       [a.id, "direct", null, "active"],
       [b.id, "direct", null, "active"],
     ]);
     expect(await adAccessToken(rows[0]!)).toBe("META_LONG");
     expect(await systemDb.adCampaignDaily.count({ where: { connectionId: a.id } })).toBe(1);
-    // The grant is the same person's, which the rows now hold: never revoked. Only Nango's copy goes.
     expect(revoked).toEqual([]);
-    expect(n.deleted).toEqual(["conn-old"]);
   });
 
-  it("someone removed from the workspace: an account they connected through Nango waits for a reconnect too, and its Nango connection goes with the grant", async () => {
+  it("someone removed from the workspace: the account they connected waits for a reconnect, and nothing is revoked with what it held", async () => {
     const admin = await signIn(ctx, "ads-life-admin4", "admin4@x.com");
     const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
-    const revoked: string[] = [];
-    const { fetchImpl, n } = nangoIn(metaPlatform(revoked));
-    n.held.set("conn-admin", "META_AT_NANGO");
-    ctx.setFetch(fetchImpl);
-    const row = await connectedThroughNango("act_1", "conn-admin", { connectedByUserId: admin.user.id });
+    const calls = platformCalls();
+    const row = await notOwn("act_1", { connectedByUserId: admin.user.id });
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
-    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", source: "nango" });
-    expect(revoked).toEqual(["META_AT_NANGO"]);
-    expect(n.deleted).toEqual(["conn-admin"]);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "" });
+    expect(calls).toEqual([]);
   });
 });

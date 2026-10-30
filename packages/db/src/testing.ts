@@ -13,6 +13,17 @@ export async function resetDb() {
   }
 }
 
+/** Run one statement on a connection of its own to `url`, outside @app/db's pools and row scopes (tests only). */
+export async function queryAs<T>(url: string, sql: string): Promise<T[]> {
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
+  try {
+    return (await client.query(sql)).rows as T[];
+  } finally {
+    await client.end();
+  }
+}
+
 /**
  * Take the integration-test lock for the database `databaseUrl` points at, and hold it until the
  * returned function is called.

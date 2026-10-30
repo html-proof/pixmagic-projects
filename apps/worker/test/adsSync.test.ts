@@ -143,6 +143,16 @@ describe("what a failed sync leaves on its connection", () => {
       status: "active", errorCode: null, lastError: null, consecutiveFailures: 0, syncRequestedAt: null, historyFrom: addDays(today(), -2), syncedThrough: today(),
     });
   });
+
+  it("a row that isn't bizinsights' own sign-in is never read: its sync asks no platform and puts it on Reconnect", async () => {
+    // None is left since the connections made through Nango were moved off it (2026-10-28): such a row held a
+    // sealed reference to its Nango connection, never a token. Every fetch throws (beforeEach).
+    const conn = await connection("meta", { source: "nango", sourceLoginId: "conn-old" }, { access: JSON.stringify({ n: "conn-old", k: "bizinsights-meta-ads" }), refresh: "" });
+    const m = await run({ kind: "ads", connectionId: conn.id, since: today(), until: today() });
+    expect(m).toMatchObject({ acked: true, retried: null });
+    expect(await row(conn.id)).toMatchObject({ status: "reconnect", errorCode: "auth_expired", consecutiveFailures: 1 });
+    expect(await systemDb.adSyncRun.findFirst({ where: { connectionId: conn.id } })).toMatchObject({ outcome: "failed", reason: "auth_expired" });
+  });
 });
 
 describe("storing an account's days", () => {

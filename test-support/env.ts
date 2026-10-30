@@ -16,6 +16,8 @@ export const testEnv = {
   API_URL: "http://localhost:4000",
   DATABASE_URL: `postgresql://app:${password}@127.0.0.1:${port}/${db}`,
   APP_DATABASE_URL: `postgresql://app_rls:app_rls@127.0.0.1:${port}/${db}`,
+  // The system role's login (infra/postgres/init.sql): systemRole.test.ts runs systemDb on it.
+  APP_SYSTEM_DATABASE_URL: `postgresql://app_system:app_system@127.0.0.1:${port}/${db}`,
   SESSION_SECRET: "test-session-secret-0123456789",
   TOKEN_ENCRYPTION_KEYS: "1:MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
   OTP_PEPPER: "test-pepper-123",
