@@ -1,15 +1,39 @@
 import pg from "pg";
 import { systemDb } from "./index.js";
 
-/** Truncate every application table (tests only). */
+/**
+ * Truncate every application table (tests only). On the owner's login when there is one
+ * (OWNER_DATABASE_URL): the system role may change rows, not empty tables.
+ */
 export async function resetDb() {
-  if (!/_test\b/.test(process.env.DATABASE_URL ?? "")) {
+  const owner = process.env.OWNER_DATABASE_URL;
+  const url = owner ?? process.env.DATABASE_URL ?? "";
+  if (!/_test\b/.test(url) || !/_test\b/.test(process.env.DATABASE_URL ?? "")) {
     throw new Error("resetDb refused: DATABASE_URL must point at a *_test database");
   }
-  const rows = await systemDb.$queryRaw<Array<{ tablename: string }>>`
-    SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
-  if (rows.length) {
-    await systemDb.$executeRawUnsafe(`TRUNCATE ${rows.map((r) => `"${r.tablename}"`).join(", ")} CASCADE`);
+  const sql = `DO $$ DECLARE t text; BEGIN
+    SELECT string_agg(format('%I', tablename), ', ') INTO t FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations';
+    IF t IS NOT NULL THEN EXECUTE 'TRUNCATE ' || t || ' CASCADE'; END IF;
+  END $$`;
+  if (!owner) {
+    await systemDb.$executeRawUnsafe(sql);
+    return;
+  }
+  // One connection for every reset of the file, closed once idle (lockTestDatabase looks for leftovers).
+  ownerPool ??= new pg.Pool({ connectionString: owner, max: 1, idleTimeoutMillis: 1_000, allowExitOnIdle: true });
+  await ownerPool.query(sql);
+}
+
+let ownerPool: pg.Pool | undefined;
+
+/** Run one statement on a connection of its own to `url`, outside @app/db's pools and row scopes (tests only). */
+export async function queryAs<T>(url: string, sql: string): Promise<T[]> {
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
+  try {
+    return (await client.query(sql)).rows as T[];
+  } finally {
+    await client.end();
   }
 }
 

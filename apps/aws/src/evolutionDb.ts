@@ -67,7 +67,7 @@ export async function pruneEvolutionData(databaseUrl: string, days: number): Pro
 export function evolutionDbUrl(env: NodeJS.ProcessEnv, as: "owner" | "master"): string | null {
   if (!env.DB_HOST || !env.EVOLUTION_DB_PASSWORD) return null;
   const port = env.DB_PORT ?? "5432";
-  if (as === "master") return env.DATABASE_URL ?? null;
+  if (as === "master") return env.OWNER_DATABASE_URL ?? null;
   const user = env.EVOLUTION_DB_USER || "evolution";
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(env.EVOLUTION_DB_PASSWORD)}@${env.DB_HOST}:${port}/evolution?sslmode=verify-full`;
 }

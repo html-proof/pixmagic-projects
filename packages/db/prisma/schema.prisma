@@ -348,6 +348,8 @@ model Store {
   salesCalculation      SalesCalculation?
   inventoryAlerts       InventoryAlert[]
   inventorySyncRuns     InventorySyncRun[]
+  expenses              StoreExpense[]
+  expenseSettings       StoreExpenseSettings?
 
   @@index([workspaceId])
   @@map("stores")
@@ -1001,6 +1003,52 @@ model SalesCalculation {
   @@map("sales_calculations")
 }
 
+// A cost the store's owner keeps in bizinsights (Settings → Costs, docs/kpis.md "Costs and net
+// profit"): what Shopify, its profit report and the ad platforms can't say (the Shopify plan, apps,
+// staff, rent, shipping labels, fees...). The dashboard spreads it over the days it covers
+// (expenseInRange in @app/shared/expenses); only the owner's own figure is kept.
+model StoreExpense {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  name            String
+  /// shopify_plan | shopify_apps | software | staff | rent | shipping | payment_fees | marketing | other (EXPENSE_CATEGORIES)
+  category        String
+  /// In the store's currency.
+  amount          Decimal  @db.Decimal(18, 2)
+  /// once | weekly | monthly | yearly (EXPENSE_CADENCES)
+  cadence         String
+  /// The store-local day it starts, YYYY-MM-DD (paid once: the day it was paid).
+  startsOn        String   @map("starts_on")
+  /// The last store-local day it applies to; null while it goes on.
+  endsOn          String?  @map("ends_on")
+  note            String?
+  createdByUserId String?  @map("created_by_user_id")
+  updatedByUserId String?  @map("updated_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([storeId])
+  @@map("store_expenses")
+}
+
+// Whether the store's costs list holds every cost, and from which day: net profit is given only for
+// dates from then on (expensesComplete in @app/shared/expenses). One row per store, once said.
+model StoreExpenseSettings {
+  storeId         String   @id @map("store_id")
+  workspaceId     String   @map("workspace_id")
+  /// The first store-local day the list holds every cost from; null: not said, or taken back.
+  completeFrom    String?  @map("complete_from")
+  updatedByUserId String?  @map("updated_by_user_id")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("store_expense_settings")
+}
+
 model FunnelDaily {
   workspaceId        String @map("workspace_id")
   storeId            String @map("store_id")
@@ -1157,10 +1205,11 @@ model AdConnection {
   isDemo               Boolean   @default(false) @map("is_demo")
   demoSeed             Int?      @map("demo_seed")
   /**
-   * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
-   * platform's) or "nango" (a sign-in made through Nango from 2026-10-22 to 2026-10-28 whose token is
-   * still there; sourceLoginId is the Nango connection's id) until leaveNango.ts moves it
-   * (docs/ads-setup.md, "Leaving Nango"). sourceLoginId is null for "direct".
+   * No longer used, dropped by a later migration (kept so a rollback still reads them): every row is
+   * bizinsights' own sign-in ("direct", sourceLoginId null) since the connections made through Nango
+   * (2026-10-22 to 2026-10-28) were moved off it (docs/ads-setup.md, "Leaving Nango"). Until then a
+   * connect writes "direct", syncs record it (ad_sync_runs.source), and a row with anything else is
+   * never read: it waits for a reconnect (adConnections/credentials.ts holdsOwnSignIn).
    * Added by migration 20261022120000 (the same rules as every other column).
    */
   source               String    @default("direct")
@@ -1185,16 +1234,19 @@ model AdConnection {
 // shared none on Facebook's screen, or Meta didn't list them in time). The card says who is connected;
 // the cron tick asks the platform again (adConnections/logins.ts) and connects the login's ad accounts
 // once it lists some, and then this row goes. One per store and platform. Added by migration
-// 20261026150000 (the same rules as ad_connections: tenant rows, nothing secret: Nango keeps the token).
+// 20261026150000 (the same rules as ad_connections: tenant rows); its token by 20261028100000.
 model AdLogin {
   id                   String    @id @default(cuid())
   workspaceId          String    @map("workspace_id")
   storeId              String    @map("store_id")
   provider             String // "meta"
-  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts); "" while it is still at Nango. */
+  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts). A login without one ends at its next check. */
   accessTokenEnc       String    @default("") @map("access_token_enc")
   tokenKeyVersion      Int?      @map("token_key_version")
-  /** A login made through Nango (2026-10-26 to 2026-10-28) not moved off it yet: its Nango connection and integration (leaveNango.ts). */
+  /**
+   * No longer used, dropped by a later migration (kept so a rollback still reads them): the Nango
+   * connection of a login made through Nango (2026-10-26 to 2026-10-28), emptied when it was moved off it.
+   */
   sourceLoginId        String?   @map("source_login_id")
   nangoIntegrationKey  String?   @map("nango_integration_key")
   /** The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned. */
@@ -1231,7 +1283,7 @@ model AdSyncRun {
   storeId      String   @map("store_id")
   connectionId String   @map("connection_id")
   provider     String
-  // direct | nango (ad_connections.source when it ran)
+  // ad_connections.source when it ran: "direct" (a run from before 2026-10-28 may hold the old value until pruned)
   source       String
   // request | schedule | history (AdsSyncTrigger)
   trigger      String
@@ -2259,33 +2311,31 @@ model WaCampaign {
 }
 
 // ---------------------------------------------------------------------------------------------
-// WhatsApp Automation (docs/whatsapp.md). Since 2026-10-28 each store's connection is one number on
-// Meta's WhatsApp Business Platform (Cloud API), connected through Embedded Signup; from 2026-10-26
-// it could also be a phone linked by QR code through bizinsights' Evolution API service, now
-// retired (those rows stay, disconnected, for their history). Every table carries workspace_id under
-// the tenant row-level-security policy. Customers' numbers, names and message texts are ENCRYPTED
-// (AES-256-GCM, AAD "wapp:<storeId>:<kind>"), found by a keyed hash and shown masked; message texts
-// are cleared after the store's retention. The business's Meta token is encrypted too and never
-// leaves the server.
+// WhatsApp Automation on Evolution API (docs/whatsapp.md, 2026-10-26). Each store's connection is
+// one instance on bizinsights' own Evolution API service (a phone linked by QR code, or Meta's
+// Cloud API). Every table carries workspace_id under the tenant row-level-security policy.
+// Customers' numbers, names and message texts are ENCRYPTED (AES-256-GCM, AAD "wapp:<storeId>:<kind>"),
+// found by a keyed hash and shown masked; message texts are cleared after the store's retention.
+// Instance keys and webhook keys are encrypted too and never leave the server.
 // ---------------------------------------------------------------------------------------------
 
-/// A store's WhatsApp connection (one number on Meta's WhatsApp Business Platform). One row per store, kept after a disconnect for the history.
+/// A store's WhatsApp connection (one Evolution API instance). One row per store, kept after a disconnect for the history.
 model WappConnection {
   id               String    @id @default(cuid())
   workspaceId      String    @map("workspace_id")
   storeId          String    @unique @map("store_id")
-  /// cloud_api (WA_PROVIDERS); qr: a phone linked with a QR code before 2026-10-28, retired (status_reason qr_linking_retired)
+  /// qr | cloud_api (WA_PROVIDERS)
   provider         String
   /// WA_CONNECTION_STATUSES: what the provider last reported, never assumed.
   status           String    @default("pairing")
   /// Why it is in that state: Baileys' close code ("close_401"), "qr_limit", "create_failed"... Never a provider's raw answer.
   statusReason     String?   @map("status_reason")
-  /// "meta" for a number connected since 2026-10-28; the Evolution API server (shard) that held an instance before.
+  /// The Evolution API server (shard) that holds the instance.
   shard            String
-  /// An Evolution API instance left from before 2026-10-28 (random name), until the QR cleanup deletes it; null for every connection since.
+  /// Evolution's instance name: random, never derived from the tenant; null once the instance is deleted.
   instanceName     String?   @unique @map("instance_name")
   instanceId       String?   @map("instance_id")
-  /// cloud_api: the business's Meta access token, encrypted (AAD kind "instance_token", the name it had when Evolution held it). qr: the instance's key, until it is deleted.
+  /// The instance's own API key (Evolution's per-instance token; Meta's access token for cloud_api), encrypted.
   instanceTokenEnc String?   @map("instance_token_enc")
   /// The key Evolution signs this instance's webhook JWTs with (HS256), encrypted.
   webhookKeyEnc    String?   @map("webhook_key_enc")
@@ -4287,6 +4337,8 @@ model ZapierGrant {
   userId        String        @map("user_id")
   /// The OAuth client it was issued to (ZAPIER_CLIENT_ID at the time).
   clientId      String        @map("client_id")
+  /// What it may do beyond triggers and searches, as ticked on the consent page: whatsapp_send.
+  scopes        String[]      @default([])
   /// The last request Zapier made with it (at most once a minute).
   lastUsedAt    DateTime?     @map("last_used_at")
   revokedAt     DateTime?     @map("revoked_at")

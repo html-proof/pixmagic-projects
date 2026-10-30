@@ -7,6 +7,7 @@ import {
   NET_SALES_MONTHS,
   niceRound,
   pastYearBreakdown,
+  periodBreakdown,
   SHOPIFY_STANDARD,
   splitTotal,
   tierOf,
@@ -104,6 +105,31 @@ describe("daily breakdown", () => {
     expect(b.best).toEqual({ day: "2026-06-29", value: 100 });
     // Two finished days are too few to grade.
     expect(b.tiers).toBeNull();
+  });
+
+  it("groups the days into Monday-to-Sunday weeks and calendar months, keeping what isn't whole apart", () => {
+    // Wednesday 30 Sep to Thursday 15 Oct; today is the 15th; orders imported from 1 Oct.
+    const days = eachDay("2026-09-30", "2026-10-15").map((d) => day(d, 10));
+    const range = { from: "2026-09-30", to: "2026-10-15" };
+    const b = dailyBreakdown(days, "2026-10-15", "2026-10-01");
+    const weeks = periodBreakdown(b, range, "week");
+    expect(weeks.map((w) => [w.key, w.from, w.to, w.status, w.clipped, w.value, w.cumulative])).toEqual([
+      // Wed 30 Sep – Sun 4 Oct: cut short by the dates, and its first day wasn't imported.
+      ["2026-W40", "2026-09-30", "2026-10-04", "partial", true, 40, 40],
+      ["2026-W41", "2026-10-05", "2026-10-11", "complete", false, 70, 110],
+      // Mon 12 – Thu 15 Oct: holds today.
+      ["2026-W42", "2026-10-12", "2026-10-15", "partial", true, 40, 150],
+    ]);
+    expect(weeks[1]!.orders).toBe(7);
+    const months = periodBreakdown(b, range, "month");
+    expect(months.map((m) => [m.key, m.status, m.clipped, m.value, m.cumulative])).toEqual([
+      // 30 Sep alone, never imported: not a $0 month.
+      ["2026-09", "not_imported", true, 0, null],
+      ["2026-10", "partial", true, 150, 150],
+    ]);
+    // A whole finished month is complete and not clipped.
+    const sept = eachDay("2026-09-01", "2026-09-30").map((d) => day(d, 1));
+    expect(periodBreakdown(dailyBreakdown(sept, "2026-10-15", null), { from: "2026-09-01", to: "2026-09-30" }, "month")).toMatchObject([{ status: "complete", clipped: false, value: 30, orders: 30 }]);
   });
 
   it("names the months it covers whole, but not the one still running or one not fully imported", () => {

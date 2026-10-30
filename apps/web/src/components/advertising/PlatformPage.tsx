@@ -17,7 +17,8 @@ import { useAccountChoices, useAdvertising } from "./useAdvertising";
 const ABOUT: Record<AdProvider, string> = {
   meta: "What Meta charged for your Facebook and Instagram ads, and what Meta credits to them. Purchases are Meta's own count, not your Shopify orders.",
   google: "What Google charged for your ads, and what Google credits to them: purchases, and its other conversions (leads, sign-ups, calls) apart from them.",
-  adsense: "What AdSense estimates the ads on your site earned: money in, never added to what you spend on ads. AdSense finalizes each month after it ends.",
+  adsense:
+    "What AdSense estimates the ads on your site earned: money in, never added to what you spend on ads. AdSense finalizes each month in the first days of the next: figures are marked Estimated until then, Final after.",
 };
 
 export function PlatformPage({ platform }: { platform: AdProvider }) {

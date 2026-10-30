@@ -4,7 +4,7 @@ import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Settings → Integrations (a card each for Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSense)
+ * Settings → Integrations (a card each for Google Ads, Shopify, WhatsApp, Meta Ads, Google AdSense and Zapier)
  * and Settings → Advertising (every ad account), through the real app. Google, Meta and AdSense can't run here and
  * e2e/server.env sets none of them up, so Meta and AdSense say Coming soon until an account is
  * connected, while Google Ads offers its demo instead (server.env sets GOOGLE_ADS_DEMO_ENABLED;
@@ -12,7 +12,7 @@ import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail }
  * are written straight into ad_connections, one per state, and are worded as lib/adConnections.ts says.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** A verified owner with a workspace and a connected store. */
@@ -41,15 +41,20 @@ async function apiSendsReasons(page: Page, ws: string, storeId: string): Promise
   }, [ws, storeId] as const);
 }
 
-test("Integrations shows Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSense; one not set up says Coming soon or offers its demo", async ({ page }) => {
+test("Integrations shows Google Ads, Shopify, WhatsApp, Meta Ads, Google AdSense and Zapier; one not set up says Coming soon or offers its demo", async ({ page }) => {
   await ownerWithStore(page, "hub");
   await quietMeta(page);
   await page.goto("/settings/integrations");
 
   await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
   const cards = page.locator('section[data-testid^="int-"]');
-  await expect(cards).toHaveCount(5);
-  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-google", "int-shopify", "int-whatsapp", "int-meta", "int-adsense"]);
+  await expect(cards).toHaveCount(6);
+  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-google", "int-shopify", "int-whatsapp", "int-meta", "int-adsense", "int-zapier"]);
+  // Zapier: server.env has no ZAPIER_CLIENT_SECRET, so it isn't set up here, and there is nothing to open.
+  const zapier = page.getByTestId("int-zapier");
+  await expect(zapier).toContainText("Not set up yet");
+  await expect(zapier).toContainText("Zapier isn't set up for bizinsights yet");
+  await expect(zapier.getByTestId("int-zapier-connect")).toHaveCount(0);
   // Signing in with Google is Settings → Security's, not one of the cards.
   await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
   // One Click Setup: Learn more says how, and folds away again.

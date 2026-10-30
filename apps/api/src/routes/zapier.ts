@@ -7,11 +7,14 @@ import {
   findAdPerformance,
   findAdsenseEarnings,
   hookInputSchema,
+  retryZapierDelivery,
   subscribeZapierHook,
   unsubscribeZapierHook,
   zapierConfig,
   zapierOverview,
   zapierSamples,
+  zapierSendWhatsapp,
+  zapierWhatsappTemplates,
   type AuthorizerAccess,
 } from "@app/core/zapier";
 import { addDays, allows, hasFullAccess, isDay, localDay } from "@app/shared";
@@ -27,9 +30,10 @@ import { limit, LIMITS } from "../rateLimit.js";
  * other route reads cookies or sk_ keys only). Each request re-checks the member who connected it
  * (authenticateZapierToken): one who left, lost "Manage integrations" or whose access ended gets 401,
  * so Zapier asks for the connection again. The store is the connection's: no route takes one.
+ * Sending a WhatsApp message (the one action) also needs the scope ticked on the consent page.
  *
  * And Settings → Integrations' Zapier card (/workspaces/:ws/stores/:storeId/zapier): the store's
- * connections, triggers and recent deliveries; Disconnect.
+ * connections, triggers and recent deliveries; Disconnect; Retry a failed delivery (owners and admins).
  */
 
 interface ZapierCtx {
@@ -97,6 +101,8 @@ export function zapierRoutes(app: App, deps: Deps) {
       workspace: { id: zc.grant.workspaceId, name: workspace?.name ?? null },
       store: { id: zc.who.store.id, name: storeName, shop_domain: zc.who.store.shopDomain, currency: zc.who.store.currency, timezone: zc.who.store.timezone },
       connected_by: user?.email ?? null,
+      // What it may do beyond triggers and searches, as ticked on bizinsights' consent page.
+      scopes: zc.grant.scopes,
       label: `${storeName} (${workspace?.name ?? "bizinsights"})`,
     });
   });
@@ -141,6 +147,19 @@ export function zapierRoutes(app: App, deps: Deps) {
     return c.json(await findAdsenseEarnings(zc.grant.storeId, since, until));
   });
 
+  /** The action's dropdown: the store's WhatsApp templates Meta approved (a connection allowed to send only). */
+  app.get("/zapier/whatsapp/templates", async (c) => {
+    const zc = await requireZapier(c, deps);
+    return c.json(await zapierWhatsappTemplates(zc.grant, zc.who));
+  });
+
+  /** "Send WhatsApp Template Message": queued through the store's WhatsApp, with every rule the WhatsApp page keeps. */
+  app.post("/zapier/whatsapp/messages", async (c) => {
+    const zc = await requireZapier(c, deps);
+    const sent = await zapierSendWhatsapp(deps, zc.grant, zc.who, await body(c));
+    return c.json(sent, sent.duplicate ? 200 : 201);
+  });
+
   // ---------------- Settings → Integrations (the member's session) ----------------
 
   const base = "/workspaces/:ws/stores/:storeId/zapier";
@@ -167,6 +186,22 @@ export function zapierRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:zapier:manage:${ws}`, LIMITS.zapierManage);
     if (!(await disconnectZapier(ws, storeId, grantId, { userId: a.user.id, ip: clientIp(c) }))) throw new HttpError(404, "Not found", "not_found");
     logger.info({ workspaceId: ws, storeId, grantId }, "zapier disconnected from settings");
+    return c.json({ ok: true });
+  });
+
+  /** Retry: send a failed delivery again. Owners and admins, who get the alert about it. */
+  app.post(`${base}/deliveries/:deliveryId/retry`, async (c) => {
+    const { ws, storeId, deliveryId } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "integrations.manage");
+    if (!a.user || a.link) throw new HttpError(403, "Sign in to your own account to send an event again.", "forbidden");
+    if (!hasFullAccess(a.access.role)) throw new HttpError(403, "Only owners and admins can send an event to Zapier again.", "forbidden");
+    await storeIn(ws, storeId);
+    await limit(deps.coord, `rl:zapier:manage:${ws}`, LIMITS.zapierManage);
+    const outcome = await retryZapierDelivery(ws, storeId, deliveryId, deps.queues, { userId: a.user.id, ip: clientIp(c) });
+    if (outcome === "not_found") throw new HttpError(404, "Not found", "not_found");
+    if (outcome === "not_failed") throw new HttpError(409, "Only an event that failed can be sent again: this one was sent, or is being sent.", "not_failed");
+    if (outcome === "trigger_gone") throw new HttpError(409, "The Zap's trigger is gone (the Zap was turned off, or Zapier disconnected), so there is nowhere to send it. Turn the Zap on again in Zapier.", "trigger_gone");
+    logger.info({ workspaceId: ws, storeId, deliveryId }, "zapier delivery sent again from settings");
     return c.json({ ok: true });
   });
 }

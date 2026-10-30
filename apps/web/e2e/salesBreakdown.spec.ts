@@ -10,7 +10,7 @@ import { signUp, uniqueEmail } from "./helpers";
  * and comes back on the next visit, and the card fits a phone.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function createWorkspace(page: Page, name: string) {

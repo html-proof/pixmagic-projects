@@ -236,7 +236,10 @@ be fixed before real merchants connect accounts.
 
 #### M6. The functions use the database's master login, and RLS silently falls away without one secret
 
-- **Status:** CONFIRMED (code); the live database was NOT TESTED.
+- **Status:** FIXED. The tenant pool fails closed in production; since 2026-10-30 the system paths log
+  in as `app_system` (no owner, no BYPASSRLS; [system-database-role.md](../system-database-role.md)),
+  and only the cron keeps the master secret, for migrations. Originally: CONFIRMED (code); the live
+  database was NOT TESTED.
 - **Component:** `infra/cdk/lib/data-stack.ts:129`, `apps/aws/src/secrets.ts:61-68`,
   `packages/db/src/index.ts:77`, `packages/core/src/env.ts`.
 - **Evidence:** `DATABASE_URL` is built from the RDS master secret (user `app`, a member of

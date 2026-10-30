@@ -1,6 +1,7 @@
 /** The cron sweeps: nightly reconcile, sales re-reads, stuck jobs, expiring tokens, and the one-off seeds after a move. */
 import { systemDb } from "@app/db";
 import {
+  checkAdFiguresDaily,
   failHistoryWindows,
   getAccessToken,
   logger,
@@ -187,7 +188,8 @@ export async function seedSalesRereads(deps: Pick<WorkerDeps, "queues" | "coord"
  * Daily safety net for missed webhooks and lost aggregates: re-pull recently updated orders
  * (see reconcileOrderDays) and, with read_products, the whole catalog and stock levels
  * (inventory changes don't always reach us as products/update webhooks); and recompute any day
- * in the backfill window whose daily totals are missing (see unaggregatedDays).
+ * in the backfill window whose daily totals are missing (see unaggregatedDays). Then the ad
+ * accounts' stored figures are checked against their platforms (core's checkAdFiguresDaily).
  *
  * Each store is gated by its own lease (RECONCILE_LEASE_MS), taken before anything is enqueued
  * and given back if enqueueing fails, so a run that stops part-way - the database dropping
@@ -202,45 +204,53 @@ export async function scheduleReconcile(deps: WorkerDeps) {
   });
   const now = Date.now();
   let reconciled = 0;
-  for (const s of stores) {
-    const lease = `reconcile:${s.id}`;
-    if (!(await deps.coord.acquire(lease, RECONCILE_LEASE_MS))) continue;
-    let failedDays: string | null = null;
-    try {
-      // Read before anything is sent, so a failure here leaves nothing behind for the retry to duplicate.
-      const unaggregated = await unaggregatedDays(s.id, localDay(new Date(now - BACKFILL_DAYS * 86400_000), s.timezone));
-      // Plus the days whose recompute ran out of attempts (rememberFailedAggregate).
-      failedDays = await deps.coord.take(failedAggregateKey(s.id));
-      const missing = [...new Set([...unaggregated, ...(failedDays ? (JSON.parse(failedDays) as string[]) : [])])].sort();
-      const sinceDays = reconcileOrderDays(s.lastSyncedAt, now);
-      if (sinceDays > RECONCILE_ORDER_DAYS) logger.info({ storeId: s.id, sinceDays, lastSyncedAt: s.lastSyncedAt }, "reconcile catching up on a gap");
-      const kinds: SyncKind[] = ["orders"];
-      if (expandScopes(s.grantedScopes).has("read_products")) kinds.push("products", "variants");
-      for (const kind of kinds) {
-        const job = await systemDb.syncJob.create({ data: { workspaceId: s.workspaceId, storeId: s.id, kind } });
-        await deps.queues.sync.send({ storeId: s.id, kind, syncJobId: job.id, ...(kind === "orders" ? { sinceDays } : {}) });
+  try {
+    for (const s of stores) {
+      const lease = `reconcile:${s.id}`;
+      if (!(await deps.coord.acquire(lease, RECONCILE_LEASE_MS))) continue;
+      let failedDays: string | null = null;
+      try {
+        // Read before anything is sent, so a failure here leaves nothing behind for the retry to duplicate.
+        const unaggregated = await unaggregatedDays(s.id, localDay(new Date(now - BACKFILL_DAYS * 86400_000), s.timezone));
+        // Plus the days whose recompute ran out of attempts (rememberFailedAggregate).
+        failedDays = await deps.coord.take(failedAggregateKey(s.id));
+        const missing = [...new Set([...unaggregated, ...(failedDays ? (JSON.parse(failedDays) as string[]) : [])])].sort();
+        const sinceDays = reconcileOrderDays(s.lastSyncedAt, now);
+        if (sinceDays > RECONCILE_ORDER_DAYS) logger.info({ storeId: s.id, sinceDays, lastSyncedAt: s.lastSyncedAt }, "reconcile catching up on a gap");
+        const kinds: SyncKind[] = ["orders"];
+        if (expandScopes(s.grantedScopes).has("read_products")) kinds.push("products", "variants");
+        for (const kind of kinds) {
+          const job = await systemDb.syncJob.create({ data: { workspaceId: s.workspaceId, storeId: s.id, kind } });
+          await deps.queues.sync.send({ storeId: s.id, kind, syncJobId: job.id, ...(kind === "orders" ? { sinceDays } : {}) });
+        }
+        if (missing.length) {
+          logger.warn({ storeId: s.id, days: missing.length }, "re-aggregating days that have orders but no daily totals");
+          await enqueueAggregate(deps, s.id, missing);
+        }
+        // Then the last 7 finished days are checked against Shopify, once that re-pull has had time
+        // to land (docs/kpis.md "Checked against Shopify"). A store whose sync is broken is left out:
+        // its check could only report what the sync problem already says.
+        if (s.status === "active") {
+          await startReconciliation(deps, s, "scheduled", { delaySeconds: VERIFY_AFTER_RECONCILE_S }).catch((err: unknown) =>
+            logger.warn({ err, storeId: s.id }, "couldn't start the daily check against Shopify"),
+          );
+        }
+      } catch (err) {
+        // Best-effort: the Coordinator does not need Postgres, but a failed release must not hide
+        // the error that matters. Unreleased, the store would wait out the lease instead.
+        await deps.coord.release(lease).catch(() => {});
+        // Put back the failed days taken above, so the run that retries this store still sees them.
+        if (failedDays) await deps.coord.put(failedAggregateKey(s.id), failedDays, FAILED_AGGREGATE_TTL_S).catch(() => {});
+        throw err;
       }
-      if (missing.length) {
-        logger.warn({ storeId: s.id, days: missing.length }, "re-aggregating days that have orders but no daily totals");
-        await enqueueAggregate(deps, s.id, missing);
-      }
-      // Then the last 7 finished days are checked against Shopify, once that re-pull has had time
-      // to land (docs/kpis.md "Checked against Shopify"). A store whose sync is broken is left out:
-      // its check could only report what the sync problem already says.
-      if (s.status === "active") {
-        await startReconciliation(deps, s, "scheduled", { delaySeconds: VERIFY_AFTER_RECONCILE_S }).catch((err: unknown) =>
-          logger.warn({ err, storeId: s.id }, "couldn't start the daily check against Shopify"),
-        );
-      }
-    } catch (err) {
-      // Best-effort: the Coordinator does not need Postgres, but a failed release must not hide
-      // the error that matters. Unreleased, the store would wait out the lease instead.
-      await deps.coord.release(lease).catch(() => {});
-      // Put back the failed days taken above, so the run that retries this store still sees them.
-      if (failedDays) await deps.coord.put(failedAggregateKey(s.id), failedDays, FAILED_AGGREGATE_TTL_S).catch(() => {});
-      throw err;
+      reconciled++;
     }
-    reconciled++;
+  } finally {
+    // Each ad account's settled week against what its platform reports, once a day per account on its
+    // own lease, a few at a time and within a time budget (docs/ads-setup.md, "Checked against the
+    // platform"). For the operator's logs only, and best effort: it runs whether or not a store above
+    // failed (one that keeps failing mustn't hold it up), and never changes what the reconcile throws.
+    await checkAdFiguresDaily(deps).catch((err: unknown) => logger.warn({ err }, "the daily check of stored ad figures failed; the next tick tries again"));
   }
   return reconciled;
 }

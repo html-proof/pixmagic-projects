@@ -5,8 +5,8 @@ is done and what is still open at Google, Meta and AWS is [integrations-readines
 paste-ready review material is [ads-review-packs.md](ads-review-packs.md). A simulated Google Ads account for development,
 demonstrations and tests, which needs none of what follows and never stands in for it: [ads-demo.md](ads-demo.md).
 bizinsights signs in with each platform itself and keeps the tokens itself ("How connecting works"). From 2026-10-22
-to 2026-10-28 the sign-ins went through Nango instead; the connections made then move off it by themselves, and the
-owner's steps after that are in "Leaving Nango".
+to 2026-10-28 the sign-ins went through Nango instead; the connections made then were moved off it on 2026-10-28, and
+the owner's steps that are still open are in "Leaving Nango".
 
 ## How a merchant uses it
 
@@ -35,7 +35,7 @@ owner's steps after that are in "Leaving Nango".
    **Synchronizing** meanwhile.
 
 **Google AdSense** runs the other way: it is what the store's *site* earns from Google ads shown on it. Its
-estimated earnings, page views, ads shown and clicks go on a separate **Ad earnings** card and are never added
+estimated earnings, page views, ad impressions and clicks go on a separate **Ad earnings** card and are never added
 to ad spend. On Settings → Advertising the AdSense card lets the merchant pick which **sites** (AdSense domains)
 belong to this store; none picked means every site. Accounts that can't be split by site are read as daily
 totals for the whole account ("All sites").
@@ -111,8 +111,29 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
   month during the first 10 days of a month (when AdSense finalizes earnings). The same daily run reads each account's
   health. Accounts with nothing new to read (closed, or a login that lost them) are only asked once a day whether
   they're back; accounts waiting for a reconnect are left alone.
+- **One sync per account at a time**: a sync holds its connection's lock in the coordinator (`ads-sync:<id>`, 16
+  minutes, a little over the jobs function's 15, so a sync cut off there frees its account soon after). A Refresh,
+  the hourly recent days, the daily re-check, a history window and a long window's rest of the same account would
+  otherwise each call the platform at once. A sync that finds the lock taken calls nothing and is sent again
+  shortly (15 seconds, doubling to 5 minutes; after 2 hours the ordinary retries take over) **without spending a
+  retry**. A Refresh that waits this way keeps its card saying **Synchronizing** until its own days have landed: the
+  sync that was running ends only a wait it saw when it started. The daily look at an account with nothing new to
+  read (closed, or a login that lost it) takes no lock: it is one cheap read, with no days fetched or stored.
 - **Rate limits**: when a platform says "slow down", the job is sent again after the wait it names (or a backoff of 30
-  seconds to an hour) **without spending a retry**.
+  seconds to an hour) **without spending a retry**. Meta's throttling of one account or one person (Graph codes 17,
+  32, 613, and the business use case codes 80000-80099) stays with that account's job.
+- **Meta's limit on bizinsights' app** (Graph code 4, "Application request limit reached"): Meta counts the app's
+  calls across every merchant over a rolling hour, and over the limit refuses every call, whichever account it is
+  for. So the first Meta Ads call told so **pauses Meta Ads** for every account (`meta-ads-paused` in the
+  coordinator) for 15 minutes: Meta names no wait for this limit, and a quarter of the hour lets the oldest calls age
+  out. The failed call's usage headers are its account's, not the app's, so a longer wait there lengthens the pause
+  (never past the hour) and a shorter one leaves it as it is; a later call told the same never shortens a pause.
+  While it lasts the scheduler queues no Meta sync (their leases stay free, so the first tick after it queues them);
+  a Meta sync already queued calls nothing (a Refresh's marks the card `rate_limited`, "Meta asked bizinsights to
+  slow down for a while", without counting a failure against the account, as Google's used-up allowance counts none;
+  Refresh still answers as usual and the card shows why once its job has looked); the sync that met the limit waits
+  until the pause ends, without spending a retry; and the live Meta report answers "Meta is busy right now" without
+  calling Meta. Google Ads and AdSense carry on, and WhatsApp's own Graph calls aren't held back.
 - **Google Ads API operations budget**: the Cloud project may make a fixed number of operations a day across every
   merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance and
   history walks at 60%, leaving the rest to people connecting accounts and opening reports. When Google says the
@@ -120,6 +141,25 @@ Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
   `quota_exhausted`. Set `GOOGLE_ADS_DAILY_OPERATIONS` when Google grants a higher access level.
 - **Meta report jobs**: when Meta answers a big account's long range with "reduce the amount of data", the sync runs
   it as an asynchronous Insights report job.
+
+### Checked against the platform
+
+Once a day per account, the cron's reconcile sweep compares what is stored with what the platform reports
+(`packages/core/src/adConnections/verify.ts`): the totals of a settled week (the 7 days ending 8 days before the
+account's today, inside the days stored) against one account-level read of the same days, on the account's own
+calendar and in its currency. **Meta**: spend, impressions, clicks, link clicks, purchases and purchase value (the last
+three only when every stored day has them) from `ad_campaign_daily`, against one insights read of the account with
+each ad set's own attribution, as the sync reads it; by the 8th day back the longest attribution an ad set can have (7
+days after the click) has run out for every day of the week. **AdSense**: earnings, page views, impressions and clicks of every stored site (the store's choice of
+sites is for the dashboard, not for this) against the totals of one report of the week (by site, as the sync reads it; by
+platform for an account AdSense won't split by site). A figure matches within 1%
+of the platform's, or within what rounding can make (half a cent per rounded figure; one for counts); the stored
+rows' currency must be the account's. The result goes to the cron's log only: `ad figures match the platform`, or
+one `ad figures differ from the platform` per figure with both sides, which the alarm `ad-figures-differ` counts
+(RUNBOOK.md). Merchants are never told and nothing on the connection changes. Only accounts whose syncs work are
+checked; a platform that asks to wait skips the account until the next day, and each cron tick starts checks for a
+minute at most, three accounts at a time, each read given 30 seconds (accounts not reached wait for the next tick). **Google Ads isn't checked**: every read spends operations from the one daily
+allowance all merchants share.
 
 ## Alerts
 
@@ -131,6 +171,10 @@ the people who manage integrations, and closes it when the connection works agai
 - `ads_failing`: status `error` for 6 syncs in a row or more than 24 hours (never for codes that are bizinsights' to
   fix: those go to the operator's logs);
 - `ads_expiring`: a Meta sign-in that ends within 7 days.
+
+For the operator, a connection turning to `reconnect` or `permission` also logs `ad connection needs the merchant`
+once, when it turns (provider, code and ids, nothing it holds); ten in an hour across stores raise the alarm
+`ad-connections-need-merchants` (RUNBOOK.md).
 
 ## Disconnecting, and when access is given back
 
@@ -254,7 +298,7 @@ offers the platform's screen again.
 | Code | What happened |
 | --- | --- |
 | `state_mismatch` | The browser came back without this sign-in in its cookie (another browser or tab, cookies cleared), or with another platform's. |
-| `state_expired` | More than 10 minutes passed, or the sign-in was used already. Also every return to Nango's old address, `/api/ads/nango/oauth-callback`. |
+| `state_expired` | More than 10 minutes passed, or the sign-in was used already. |
 | `denied` | The person pressed Cancel or "Not now" on the platform's screen. |
 | `missing_params` | The platform sent back no code. |
 | `session_mismatch` | The browser came back signed in to bizinsights as someone else, or not signed in. |
@@ -277,88 +321,56 @@ or `/settings/ads?waiting=<reason>&provider=meta` (a Facebook login connected wi
 
 From 2026-10-22 to 2026-10-28 every ad platform's sign-in went through Nango (https://app.nango.dev, bizinsights'
 **prod** environment). Nango exchanged the code and kept and renewed the tokens; the grant was to bizinsights' own
-Meta app and Google client all along, which Nango signed in with. A connection made then is an `ad_connections` row
-with `source = 'nango'` whose `access_token_enc` holds a sealed reference to its Nango connection (`{connection id,
-integration}`) instead of a token. A waiting login made then (2026-10-26 to 2026-10-28) names its Nango connection in
-`ad_logins.source_login_id` and `nango_integration_key`, with an empty `access_token_enc`.
+Meta app and Google client all along, which Nango signed in with. A connection made then was an `ad_connections` row
+with `source = 'nango'` whose `access_token_enc` held a sealed reference to its Nango connection instead of a token; a
+waiting login made then (2026-10-26 to 2026-10-28) named its Nango connection in `ad_logins.source_login_id` and
+`nango_integration_key`, with an empty `access_token_enc`.
 
-**What the move does.** `leaveNango` (`packages/core/src/adConnections/leaveNango.ts`) runs first in every */15 cron
-tick, before the syncs are scheduled: one run at a time, at most 25 Nango connections a run. Each Nango connection
-(every row and waiting login reading through it; one store and platform) is moved in one go:
+**The move (done).** Release 127 (pull request #274, live since 2026-10-28 16:47Z) signs in with bizinsights' own OAuth
+again, and its */15 cron tick moved those connections off Nango by themselves (`leaveNango.ts`): each Nango
+connection's tokens were read from Nango, tried without it (Google renewed with bizinsights' own client, Meta
+answered `/me`), sealed on its rows and waiting logins as bizinsights' own sign-in seals them (`source = 'direct'`),
+and the connection was deleted at Nango with its copy of the tokens. The grant didn't change: nothing was revoked, no
+one saw a consent screen again, and ids, settings, stored days and who granted the access were kept. Merchants had
+nothing to do. The 17:00Z tick logged `ad connections moved off Nango` with `moved: 4, failed: 0, waiting: 0, ended: 0,
+left: 0`: since then no row or waiting login reads through Nango.
 
-1. its tokens are read from Nango (`GET /connections/{id}`, the refresh token too for Google), with
-   `NANGO_SECRET_KEY`;
-2. they are tried without Nango: Google renews the access token with bizinsights' own client, and Meta answers `/me`
-   with the token, signed with bizinsights' app secret;
-3. the rows are rewritten, only over what was read (a disconnect or a reconnect meanwhile wins): the tokens sealed as
-   bizinsights' own sign-in seals them, `source = 'direct'`, no Nango connection id; a waiting login gets its token in
-   `access_token_enc` and its Nango columns emptied;
-4. the connection is deleted at Nango, with Nango's copy of the tokens (never the grant).
-
-Each workspace's audit log gets `ads.moved_off_nango`, and the cron logs `a Nango ad connection now holds
-bizinsights' own tokens` per connection.
-
-**What it doesn't do.** The grant doesn't change: nothing is revoked, and no one sees a consent screen again. Ids,
-settings (shown or hidden, AdSense sites), stored days and who granted the access are kept. Merchants have nothing to
-do. A connection that can't be moved this time (Nango or the platform not answering) stays as it is and is tried
-again an hour later; until then its accounts wait rather than sync (a sync asking for its token gets
-`AdsMovingOffNangoError`, which is retried, never Reconnect). One that Nango no longer has, or whose grant the
-platform refused, can never be read again: its accounts go to Reconnect required, as a sync would have said, and its
-waiting login goes. Nango refusing bizinsights' key, or slowing it down, stops the run; the next tick goes on. While a
-connection is being moved, the API shows it with `source: "nango"`. A browser coming back to Nango's old callback
-address, `/api/ads/nango/oauth-callback`, lands on Settings → Advertising with `state_expired` (press the button
-again); Nango's webhook route `/api/webhooks/nango` is gone.
-
-**Rollback.** Nothing to undo: releases from before read `source = 'direct'` rows as they always did, and migration
-`20261028100000_ad_logins_own_tokens` is additive (code from before still reads every row it wrote).
-
-**Watching it.** Each tick that finds something to move logs `ad connections moved off Nango` with `moved` (rows and
-waiting logins now holding bizinsights' own tokens), `failed` (connections that couldn't be moved this time),
-`waiting` (connections still waiting from an earlier failure), `ended` (accounts put on Reconnect) and `left` (rows
-and waiting logins still reading through Nango). CloudWatch Logs Insights on the cron function's log group,
-`/aws/lambda/insights-production-cron` (ap-southeast-2):
-
-```
-fields @timestamp, moved, failed, waiting, ended, left
-| filter msg = "ad connections moved off Nango"
-| sort @timestamp desc
-| limit 20
-```
-
-Wait for a line with `left: 0`. After it the line stops: a tick with nothing left to move logs nothing (no line at
-all since the deploy means there was nothing to move). A line `rows still read through Nango, but NANGO_SECRET_KEY
-isn't set: they can't be moved` means the key went too early.
-`pnpm --filter @app/worker ops:ad-health` (docs/RUNBOOK.md) says the same from the database: "Still to move off Nango:
-N" (0 when done) and whether the Nango key is still set.
+**After the move.** Step (a) below takes the move and every Nango branch out of the code. The columns that named Nango
+connections stay, unused, until a later migration drops them ([database/schema.md](database/schema.md)), so the
+release a failed deploy rolls back to still reads every row (its move finds nothing left). A row whose `source` isn't
+`direct` can't be made any more; were one there, it would never be read: it waits for a reconnect (`auth_expired`),
+which makes it bizinsights' own (`holdsOwnSignIn`, `packages/core/src/adConnections/credentials.ts`). Nango's old
+addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404.
 
 ### Owner's steps
 
-(e) is for now. (a) to (d) wait for `left: 0`, in that order.
+(e) is for now. `left: 0` came on 2026-10-28 at 17:00Z; (a) to (d) follow it, in that order.
 
-- [ ] **(a) Remove the move code** (a pull request; Claude, on your word). It takes out `leaveNango.ts`, what is left
-  of the Nango client (`packages/core/src/ads/nango.ts`) and every Nango branch (`adConnections/config.ts`,
-  `credentials.ts`, `connect.ts`, `logins.ts`, `health.ts`, `apps/api/src/routes/ads.ts`), the settings
-  `NANGO_SECRET_KEY` and `NANGO_API_URL` (`packages/core/src/env.ts`, `put-secrets.mjs`, `apps/aws/src/secrets.ts`),
-  and the old redirect `GET /api/ads/nango/oauth-callback`. The retired WhatsApp module's `deleteRetiredNangoToken`
-  (`packages/core/src/whatsapp/purge.ts`) reads the same key: no store connected through that design
-  (docs/whatsapp.md), so it can go in the same pull request. The columns that name Nango connections are dropped
-  later, by a migration of their own (migration `20261028100000_ad_logins_own_tokens` says so for `ad_logins`). Merge
+- [ ] **(a) Remove the move code**: the pull request that follows #274 and removes Nango's code. It takes out
+  `leaveNango.ts` and its cron step, what was left of the Nango client (`packages/core/src/ads/nango.ts`) and every
+  Nango branch (`adConnections/config.ts`, `credentials.ts`, `connect.ts`, `logins.ts`, `metaCallbacks.ts`,
+  `health.ts`, `apps/api/src/routes/ads.ts`, `ops:ad-health`), the settings `NANGO_SECRET_KEY` and `NANGO_API_URL`
+  (`packages/core/src/env.ts`, `put-secrets.mjs`, `apps/aws/src/secrets.ts`), the old redirect
+  `GET /api/ads/nango/oauth-callback`, and the retired WhatsApp module's `deleteRetiredNangoToken`
+  (`packages/core/src/whatsapp/purge.ts`), which read the same key for a design no store connected through
+  (docs/whatsapp.md). The columns that name Nango connections are dropped later, by a migration of their own. Merge
   it and confirm its Deploy to AWS run.
 - [ ] **(b) Delete the secrets** `NANGO_SECRET_KEY` and `NANGO_WEBHOOK_SECRET` from Secrets Manager
   `insights/production/app` (ap-southeast-2). `put-secrets.mjs` can't do it: it only sets or replaces keys and keeps
   every key it isn't given. In the AWS console: Secrets Manager → `insights/production/app` → **Retrieve secret
   value** → **Edit** → remove the two rows → **Save**. Then `node infra/cdk/scripts/put-secrets.mjs --dry-run` lists
-  the keys without them. Nothing has read `NANGO_WEBHOOK_SECRET` since bizinsights left Nango: its webhook route is
-  gone.
+  the keys without them. Once (a) is live nothing reads `NANGO_SECRET_KEY`, and nothing has read
+  `NANGO_WEBHOOK_SECRET` since bizinsights left Nango: its webhook route is gone.
 - [ ] **(c) Nango** (https://app.nango.dev, environment **prod**):
   1. **Connections**: none is left for `bizinsights-meta-ads`, `bizinsights-google-ads` or
-     `bizinsights-google-adsense` (the move deletes each one it moves; the cron logs `a moved Nango connection wasn't
-     deleted at Nango; delete it in Nango's dashboard` for one it couldn't). Only the retired `whatsapp-business`
-     integration may remain; it belongs to WhatsApp's 2026-10-25 design (docs/whatsapp.md, "The old tables").
+     `bizinsights-google-adsense` (the move deleted each one it moved; it logged `a moved Nango connection wasn't
+     deleted at Nango; delete it in Nango's dashboard` for one it couldn't). The retired `whatsapp-business`
+     integration (WhatsApp's 2026-10-25 design, docs/whatsapp.md, "The old tables") has none either: no store
+     connected through it, and nothing in bizinsights reads it any more.
   2. **Environment Settings**: remove the Callback URL (`https://bizinsights.io/api/ads/nango/oauth-callback`) and the
      Webhook URL (`https://bizinsights.io/api/webhooks/nango`) with its webhooks.
-  3. **Integrations**: delete `bizinsights-meta-ads`, `bizinsights-google-ads` and `bizinsights-google-adsense`. They
-     hold copies of bizinsights' Meta app secret and Google client secret.
+  3. **Integrations**: delete `bizinsights-meta-ads`, `bizinsights-google-ads`, `bizinsights-google-adsense` and
+     `whatsapp-business`. They hold copies of bizinsights' Meta app secret and Google client secret.
   4. **The account** (Aby Thomas, tangoenery2004@gmail.com): delete it once nothing else uses it.
 - [ ] **(d) The old redirect URI**, only after (a) is live, so that the release a failed deploy rolls back to never
   signs in through Nango: remove `https://bizinsights.io/api/ads/nango/oauth-callback` from Meta app 971575545351940 →
@@ -392,7 +404,6 @@ N" (0 when done) and whether the Nango key is still set.
 | `GOOGLE_ADS_OAUTH_VERIFIED` | `settings.ts`: `"1"` once Google verifies the `adwords` scope (removes the unverified-app note) | no |
 | `GOOGLE_ADS_DAILY_OPERATIONS` | `settings.ts`: empty = Explorer's 2,880; set when Google grants Basic or Standard | no |
 | `GOOGLE_ADS_API_VERSION` | `settings.ts`: `v25` | no |
-| `NANGO_SECRET_KEY` | Secrets Manager (stored 2026-10-22): read only by the move off Nango (and the retired WhatsApp module's erase); deleted after `left: 0` ("Leaving Nango", step (b)). `NANGO_API_URL` defaults to `https://api.nango.dev` | **yes** |
 
 Settings ship by merging to `main` (Deploy to AWS). Secrets go to Secrets Manager with `put-secrets.mjs`, which reads
 the clipboard and refuses a value of the wrong shape: a Meta app secret must be 32 hexadecimal characters, a Google
@@ -404,7 +415,7 @@ asks the cron function and puts a warning on the Deploy run for each provider wh
 secret is missing ("Meta Ads isn't set up", with the command to run). Details: [aws-deployment.md](aws-deployment.md),
 "Which provider secrets are there".
 
-**Which connections are in trouble?** `pnpm --filter @app/worker ops:ad-health` (docs/RUNBOOK.md, "Maintenance tasks") lists, for the whole server, the connections per platform, source and status, the ones that stopped syncing or keep failing, the last day's syncs, how many still wait to be moved off Nango, and whether the Nango key is still set, with ids and counts only.
+**Which connections are in trouble?** `pnpm --filter @app/worker ops:ad-health` (docs/RUNBOOK.md, "Maintenance tasks") lists, for the whole server, the connections per platform and status, the ones that stopped syncing or keep failing, the last day's syncs, and which platforms can be connected, with ids and counts only.
 
 ### Addresses to register at the platforms
 
@@ -419,8 +430,8 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 
 The old `d2mr8m2p1qkh58.cloudfront.net` and Cloudflare Worker (workers.dev) callbacks are never sent; remove them
 (Google's branding verification accepts only verified domains). Nango's old callback,
-`https://bizinsights.io/api/ads/nango/oauth-callback`, is still registered at both; it goes once the move off Nango is
-done ("Leaving Nango", step (d)).
+`https://bizinsights.io/api/ads/nango/oauth-callback`, is still registered at both; bizinsights no longer answers it
+(404), and it goes from both once that release is live ("Leaving Nango", step (d)).
 
 In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields are token lists: type the value, then
 **click the suggestion that appears under the field**, then Save Changes. Pressing Enter shows a chip and a "Changes
@@ -492,8 +503,8 @@ their catch-up is queued, and the `ad_logins` row goes. The login holds the pers
 sealed like a connection's (`access_token_enc`, re-sealed on key rotation by `reencryptAdLoginTokens`), and the
 person's grant: Disconnect (`DELETE …/ads/logins/:id`), the token ending (about 60 days), the person removing
 bizinsights on Facebook or asking for their data to be deleted, the store going, and its connector leaving all let it
-go, giving the grant back unless something else relies on it. A login made through Nango (2026-10-26 to 2026-10-28)
-gets its token when it is moved off Nango ("Leaving Nango").
+go, giving the grant back unless something else relies on it. A login without a token (none is left: the logins made
+through Nango got theirs when they were moved off it, "Leaving Nango") is let go at its next check.
 
 No code change can make Meta list an ad account the profile has no access to: the card only waits for it.
 
@@ -574,9 +585,32 @@ is no access level to request. A Google login with no AdSense account gets "That
 `account_not_ready` ("…AdSense account is closed"). Each case logs "ads: nothing to connect for this login"; the
 answers with a list add `diagnosis: {listed, closed}`.
 
-**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform&from=&to=`): estimated
-earnings, page views, ads shown and clicks by site, country or device type, limited to the store's chosen sites.
-Earnings are estimated until AdSense finalizes them after the month ends.
+**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform|ad_unit&from=&to=`):
+estimated earnings, page views, ad impressions (`IMPRESSIONS`: one for each ad request that got at least one ad, not
+each ad shown, which is `INDIVIDUAL_AD_IMPRESSIONS` and isn't read) and clicks, plus `AD_REQUESTS`,
+`AD_REQUESTS_COVERAGE` and `ACTIVE_VIEW_VIEWABILITY` (`ADSENSE_REPORT_METRICS` in `packages/shared/src/ads.ts`), by site,
+country, device type or ad unit (`AD_UNIT_ID` with `AD_UNIT_NAME`), limited to the store's chosen sites (an ad unit's
+row is its earnings on those sites). Asked of AdSense when the page opens and cached in the coordinator for 10 minutes
+(ranges including today) or an hour (`ads-sreport:<connection>:…`; DynamoDB deletes an expired item lazily, within a
+few days, and reads refuse it once expired; disconnecting doesn't delete these keys); the three extra metrics and the
+ad units are never stored with the days (`adsense_daily` keeps site, day, earnings, page views, impressions and clicks
+only). Google's reference doesn't say which dimensions the three extra metrics combine with, so when AdSense answers a
+level with them with a 400, `adsenseReport` asks again without them (`ADSENSE_REPORT_DAY_METRICS`) and they show as
+"—". Several rows of one id added up: ad requests add, coverage is worked back through the requests, viewability stays
+unknown (the impressions Active View measured aren't read).
+
+**Estimated or final**: AdSense finalizes a month's earnings in the first days of the next, and the daily re-check
+reads the whole month before again during days 1-10. `adsenseFigures` (`packages/core/src/reports/ads.ts`) gives
+each account `finalThrough` from its last sync that worked (`adsenseFinalThrough` in `@app/shared/ads`): every month
+that ended before the month before that sync's day, and that month too once the sync was after the 10th (the
+account's own days). The module's `finalThrough` is the earliest of the counted accounts', and `final` says whether
+every day of the figures given is on or before it; the pages say **Final** or **Estimated** from it. An account whose
+syncs stopped stays final only as far as it was when it last synced. A closed account is never read again, but its
+days after the ones it stored are zeros (`accountCoverage`): it is final through its today once every stored day was
+final by its last sync, and for figures that start after its stored days it never holds the others back. The live
+report is final when its last day is on
+or before `adsenseFinalThrough` of the day it was read. No payment is read: Final means AdSense's finalized earnings,
+not money paid.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 
@@ -640,5 +674,6 @@ Migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily`, `202610
 health, sites, coverage), `20261020150000_ad_connection_demo`, `20261022120000_ad_connection_source_sync_runs`
 (`source`, `source_login_id`, `last_sync_attempt_at`, `ad_sync_runs`), `20261024120000_ad_campaigns`,
 `20261026150000_ad_logins` and `20261028100000_ad_logins_own_tokens` (a waiting login holds its own sealed token,
-`access_token_enc` and `token_key_version`; its Nango columns are nullable until they are dropped). The Deploy to AWS
-workflow applies them.
+`access_token_enc` and `token_key_version`). The columns that named Nango connections (`ad_connections.source` and
+`source_login_id`, `ad_logins.source_login_id` and `nango_integration_key`) are no longer used and are dropped by a
+later migration ([database/schema.md](database/schema.md)). The Deploy to AWS workflow applies them.

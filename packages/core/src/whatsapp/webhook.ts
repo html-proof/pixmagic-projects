@@ -1,10 +1,5 @@
 /**
- * Evolution API's webhooks (docs/whatsapp.md, "Removing Evolution"), for phones linked with a QR
- * code until 2026-10-28, while they last. Nothing creates instances or sets webhooks any more; what an
- * instance not yet deleted still posts is taken so that nothing a customer said is lost: their replies
- * (a STOP above all, which goes on the store's do-not-message list whatever number the store connects
- * next) and the delivery reports of messages sent before. Connection events change nothing now: the
- * connection is retired (retireQr.ts). Release 2 removes this with the service.
+ * Evolution API's webhooks (docs/whatsapp.md, "Webhooks and security").
  *
  * Evolution API 2.3.7 doesn't sign a webhook's body. What it can do (webhook.controller.ts): turn a
  * `jwt_key` header in an instance's webhook settings into `Authorization: Bearer <JWT>`, an HS256
@@ -21,16 +16,17 @@
  * window, each body stored once by its SHA-256 (a replay inside the window is a duplicate), schema
  * checks, and the instance's events being limited to what bizinsights asked for.
  *
- * Message events are stored encrypted and applied by the worker (the whatsapp queue's wapp_event
- * job), which retries and finally sets an event aside.
+ * Connection events (small, no customer data) are applied at once, so the page sees "connected"
+ * the moment WhatsApp says so. Message events are stored encrypted and applied by the worker
+ * (the whatsapp queue's wapp_event job), which retries and finally sets an event aside.
  */
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { systemDb, type WappConnection } from "@app/db";
-import { WA_QR_RETIRED } from "@app/shared";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { parsePayload } from "../payloads.js";
 import { waDecrypt, waEncrypt, waQueue, type WaDeps } from "./common.js";
+import { applyConnectionEvent, type ConnectionEvent } from "./connection.js";
 import { applyInbound, textOf } from "./inbound.js";
 import { applyMessageStatus } from "./messages.js";
 
@@ -74,6 +70,10 @@ const envelopeSchema = z
   })
   .passthrough();
 
+const connectionDataSchema = z
+  .object({ state: z.string().max(20).optional().nullable(), statusReason: z.number().optional().nullable(), wuid: z.string().max(100).optional().nullable(), profileName: z.string().max(200).optional().nullable() })
+  .passthrough();
+const qrDataSchema = z.object({ message: z.string().max(300).optional().nullable(), statusCode: z.number().optional().nullable() }).passthrough();
 const upsertDataSchema = z
   .object({
     key: z.object({ id: z.string().min(1).max(200), remoteJid: z.string().max(200), fromMe: z.boolean() }).passthrough(),
@@ -96,7 +96,7 @@ const parseTime = (s: string | null | undefined): Date | null => {
 export type WebhookAnswer = { status: 200 | 400 | 401 | 413 | 429; outcome: string };
 
 /** One webhook from Evolution: authenticated, checked, and applied or stored. */
-export async function receiveEvolutionWebhook(deps: Pick<WaDeps, "queues" | "coord">, input: { instanceName: string; authorization: string | null | undefined; rawBody: string }): Promise<WebhookAnswer> {
+export async function receiveEvolutionWebhook(deps: Pick<WaDeps, "queues" | "fetchImpl" | "mailer" | "coord">, input: { instanceName: string; authorization: string | null | undefined; rawBody: string }): Promise<WebhookAnswer> {
   if (Buffer.byteLength(input.rawBody, "utf8") > WEBHOOK_MAX_BYTES) return { status: 413, outcome: "too_large" };
   const conn = /^bi_[0-9a-f]{24}$/.test(input.instanceName) ? await systemDb.wappConnection.findUnique({ where: { instanceName: input.instanceName } }) : null;
   const token = /^Bearer\s+(\S+)$/i.exec(input.authorization ?? "")?.[1] ?? null;
@@ -115,9 +115,32 @@ export async function receiveEvolutionWebhook(deps: Pick<WaDeps, "queues" | "coo
   const env = parsePayload("Evolution", envelopeSchema, raw, "webhook", { connectionId: conn.id });
   if (!env || env.instance !== conn.instanceName) return { status: 400, outcome: "invalid" };
   const event = eventName(env.event);
-  // Customers' messages and delivery reports only: connection events (the phone, its QR codes) change nothing now.
-  if (event !== "MESSAGES_UPSERT" && event !== "MESSAGES_UPDATE") return { status: 200, outcome: "ignored" };
-  return storeEvent(deps, conn, event, parseTime(env.date_time), input.rawBody);
+  const at = parseTime(env.date_time);
+
+  switch (event) {
+    case "CONNECTION_UPDATE": {
+      const d = parsePayload("Evolution", connectionDataSchema, env.data ?? {}, event, { connectionId: conn.id });
+      if (!d) return { status: 200, outcome: "ignored" };
+      await applyConnectionEvent(deps, conn, { event, at, state: d.state ?? null, statusReason: d.statusReason ?? null, wuid: d.wuid ?? null, profileName: d.profileName ?? null });
+      return { status: 200, outcome: "applied" };
+    }
+    case "QRCODE_UPDATED": {
+      // The QR code itself is never stored or logged: the page reads the current one from Evolution.
+      const d = qrDataSchema.safeParse(env.data ?? {});
+      const qrLimit = d.success && !!d.data.message && /limit/i.test(d.data.message);
+      await applyConnectionEvent(deps, conn, { event, at, qrLimit });
+      return { status: 200, outcome: "applied" };
+    }
+    case "LOGOUT_INSTANCE":
+    case "REMOVE_INSTANCE":
+      await applyConnectionEvent(deps, conn, { event, at } as ConnectionEvent);
+      return { status: 200, outcome: "applied" };
+    case "MESSAGES_UPSERT":
+    case "MESSAGES_UPDATE":
+      return storeEvent(deps, conn, event, at, input.rawBody);
+    default:
+      return { status: 200, outcome: "ignored" };
+  }
 }
 
 async function storeEvent(deps: Pick<WaDeps, "queues">, conn: WappConnection, event: string, at: Date | null, rawBody: string): Promise<WebhookAnswer> {
@@ -145,8 +168,7 @@ export async function processWebhookEvent(deps: Pick<WaDeps, "queues">, eventId:
   const conn = await systemDb.wappConnection.findUnique({ where: { id: ev.connectionId } });
   const done = (status: "processed" | "ignored", outcome: string, lastError: string | null = null) =>
     systemDb.wappWebhookEvent.update({ where: { id: ev.id }, data: { status, processedAt: new Date(), bodyEnc: null, lastError } }).then(() => outcome);
-  // A retired QR link's events still apply: a customer's STOP to it is kept.
-  if (!conn || (conn.status === "disconnected" && conn.statusReason !== WA_QR_RETIRED)) return done("ignored", "no_connection");
+  if (!conn || conn.status === "disconnected") return done("ignored", "no_connection");
   const body = JSON.parse(waDecrypt(ev.storeId, "webhook", ev.bodyEnc)) as { data?: unknown };
   const at = ev.providerAt ?? ev.receivedAt;
   if (ev.event === "MESSAGES_UPDATE") {

@@ -1,5 +1,5 @@
 /** What the Zapier modules share: their error, the delivery job and the payload's envelope. */
-import type { ZapierEvent } from "@app/shared/zapier";
+import type { ZAPIER_SCHEMA_VERSION, ZapierEvent } from "@app/shared/zapier";
 import { AppError } from "../errors.js";
 import type { Producer, Queues } from "../queues.js";
 
@@ -21,11 +21,13 @@ export const zapierQueue = (queues: Pick<Queues, "sync">) => queues.sync as unkn
 
 /**
  * What a Zap receives for every trigger. `id` is the happening's own key (the same for every Zap it
- * goes to, and for a retried delivery), which Zapier uses to tell items apart.
+ * goes to, and for a retried delivery), which Zapier uses to tell items apart. `schema_version` is
+ * the envelope's shape (ZAPIER_SCHEMA_VERSION), so a Zap can tell a change that would break it.
  */
 export interface ZapierEnvelope {
   id: string;
   event: ZapierEvent;
+  schema_version: typeof ZAPIER_SCHEMA_VERSION;
   occurred_at: string;
   store: { id: string; name: string; shop_domain: string };
   data: Record<string, unknown>;

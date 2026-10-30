@@ -35,7 +35,8 @@ approval; until then the card says why it has no figure, never shows 0.
 | Sales channels, traffic sources | Sales by channel / by referrer | Orders + journey | Close | Shopify's last visit before the order; ads platforms attribute differently |
 | Sessions, visitors, conversion rate | Analytics: sessions, online store visitors, conversion rate | Reports (ShopifyQL) | Exact once granted | Bot sessions left out by Shopify. Without `read_reports` only the pixel's **tracked visits** exist, labelled as such and never called sessions |
 | Gross profit | Profit reports: gross profit | Reports (ShopifyQL) | Exact once granted | Uses the cost Shopify recorded at the time of sale, which the Admin API doesn't expose; never estimated from today's unit costs |
-| Net profit | none | | Not shown | No source holds the other costs (fees, postage, apps, staff, ads) |
+| Your costs | none (the owner's own figures) | Settings → Costs | Their own definition | Shopify plan, apps, staff, rent, shipping labels, fees...: each spread over the days it covers; never checked against anything |
+| Net profit | none | Profit report + ad platforms + your costs | Shown only when complete | Revenue − cost of goods − ad spend − your costs, and only for dates the owner marked the costs list complete for ("Costs and net profit") |
 | Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits on the Shopping Funnel page (section "Shopping Funnel page"). Shopify's figures come with the sessions report |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
@@ -95,7 +96,12 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
 - **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
-- **Presets:** Today, Yesterday, Last 7 / 30 / 90 days, **Last 6 months** and **Last 12 months**
+- **Weeks** run **Monday to Sunday** everywhere (`WEEK_STARTS_ON` in packages/shared/src/dates.ts,
+  ISO 8601), whichever platform the figures come from: the week presets, the charts grouped by week,
+  and the Google Ads analytics page. Meta and Google both offer Monday weeks in their own screens; pick
+  them there when comparing.
+- **Presets:** Today, Yesterday, **This week** (`wtd`: Monday to today) and **Last week** (`lastweek`:
+  the Monday-to-Sunday week before this one), Last 7 / 30 / 90 days, **Last 6 months** and **Last 12 months**
   (`6m`, `12m`: from the day after the same date 6 or 12 months earlier, up to today: on 24 Oct 2026,
   25 Apr – 24 Oct and 25 Oct 2025 – 24 Oct 2026), This month, Last month, This year, Last year, and
   every **calendar year** of the store under "Calendar years" in the same menu (1 January to
@@ -120,7 +126,9 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   Analytics' second date chip (`compare` in the overview and export query; `resolvePreset` in
   packages/shared/src/dates.ts):
   - **Previous period** (the default, `compare=previous` or absent): the same number of days
-    immediately before the selected range (after that clamp); last month against the whole month
+    immediately before the selected range (after that clamp); this week so far against the same
+    weekdays of the week before (Monday to Wednesday against Monday to Wednesday, up to the same time
+    of day), never against the days just before it; last month against the whole month
     before it, whatever its length; last year, or any calendar year picked (1 Jan – 31 Dec), against
     the whole calendar year before it, leap or not.
   - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
@@ -372,11 +380,15 @@ carries; nothing is estimated.
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
   in the store's currency and none is the Google Ads demo, as for MER.
 - **Business profit overview**: net sales less the costs bizinsights can see, Shopify's cost of
-  goods sold (its profit report, for the dates as a whole) and the ad spend for the whole range
-  (`ads.current`, null while a day is missing). It is **not net profit**: fees, postage, apps and
-  staff aren't known, and the panel says so; sales with no cost recorded in Shopify are named.
-- **Expenses breakdown**: the same two costs as a ring (ad spend split by platform when there are
-  two). The mock's shipping, software and other expenses have no source, so they aren't drawn.
+  goods sold (its profit report, for the dates as a whole), the ad spend for the whole range
+  (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
+  **net profit** only when every input is known and the owner has marked the costs list complete for
+  the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
+  no cost recorded in Shopify are named. Its share is called a **margin** only when the cost of goods
+  sold was taken off; with ad spend alone it is "of net sales", since sales less ad spend is no margin.
+- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
+  the owner's costs by category). The mock's shipping, software and other expenses come only from
+  the owner's costs: nothing else holds them.
 - **Top products**: the top five of `top_products` by net revenue, each with its share of net sales;
   withheld while the period's sales aren't all imported (`complete` false), as the full list is.
 - **Recent orders**: the five latest, with one status word (cancelled, fulfilled, then payment).
@@ -399,6 +411,11 @@ cards above keep the running total in a strip of its own.
   tiers above (best green, strong yellow, the rest cyan); today is light cyan (not over yet). Each
   column carries its figure when every figure fits, otherwise only the best day's and today's;
   weekend dates are in orange. Finished days with nothing are named in the line under the total.
+  "Sales chart groups" adds the days up **by week** (Monday to Sunday) once the dates hold more than a
+  week, and **by month** once they reach into a second month and run past a month (`periodBreakdown`
+  in packages/shared/src/sales.ts). A week or month that the dates picked cut short (a range starting
+  on a Wednesday) is named with the days it holds; one holding today, or with days not imported, is
+  lighter and "partial"; one with no day imported has no column, never $0. Day tiers are for days only.
 - **Monthly comparison** (this calendar year, January to the current month): each month beside the
   same month of the two years before, **whole** (`pastYearBreakdown`: August last year is all of
   August, while this August is so far), so a year's columns read as the month to beat. Total sales
@@ -511,8 +528,33 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   and a store day the account hasn't reached yet is missing, not 0.
 - **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
+- **Clicks, reach and visits are different counts, never added together.** Meta's reach is people Meta
+  showed an ad to; impressions, clicks and Meta's landing page views are each platform's own count; Shopify's
+  sessions and visitors are counted on the store, and tracked visits by the bizinsights pixel. A click
+  doesn't always become a session, and one person can be reached, click and visit more than once. The
+  Advertising overview says so under its figures.
+- **By week, by month:** the Advertising charts ("Ad charts group", and the Meta and Google pages' "Trend
+  groups") add the days up per Monday-to-Sunday week or calendar month (`groupSeries` in
+  packages/shared/src/ads.ts): each figure is the sum of its days, a rate is worked out from the sums
+  (never an average of daily rates), and a week or month missing any day's figures is left blank, as a
+  missing day is.
 - **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days. An account whose stored history falls short of those 90 days (its first sync failed and a later one worked, or it was connected before `history_from` was recorded) gets the whole 90 days in its daily re-check instead, until they are in (`recheckDays` in packages/core/src/adConnections/sync.ts).
 - **No earlier data:** comparisons go back only to where every counted account's figures start (see Conventions).
+
+### Live reports: figures read for the dates picked
+
+The Meta Ads and Google Ads pages' live reports (`GET .../ads/meta/report`, `.../ads/google/report`)
+ask the platform for exactly the dates picked, at the level picked, and carry figures not stored per day:
+
+| Figure | Formula | Notes |
+| --- | --- | --- |
+| Reach, frequency (Meta) | Meta's `reach`; impressions ÷ reach | People, counted once over the whole range: never added up over days |
+| Landing page views (Meta) | the first of `omni_landing_page_view`, `landing_page_view` in `actions` (never their sum) | Link clicks after which the page loaded, as Meta's pixel saw it: Meta's count, not the store's sessions |
+| Cost per landing page view (Meta) | spend ÷ landing page views | |
+| Conversion rate (Google) | `metrics.conversions` ÷ `metrics.clicks` | Google's "conv. rate", on every conversion action; not the store's conversion rate |
+
+The reports are cached briefly (10 minutes while they include today, an hour otherwise) under a
+versioned key (`ads-report:v2:`, `ads-greport:v2:`), moved whenever a report gains figures.
 
 ## Ad earnings (Google AdSense)
 
@@ -669,6 +711,40 @@ visits in the same dates and filter, so no rate mixes two sources:
 - **Download**: `GET …/export?section=funnel` with the dates and filter: the dates, the filter, the
   funnel now and before, every transition, every day, every segment and the products (with quick
   adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
+
+## Costs and net profit
+
+Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
+`netProfit`), `packages/core/src/expenses.ts` and Settings → Costs (`/settings/costs`).
+
+What Shopify, its profit report and the ad platforms can't tell bizinsights (the Shopify plan and
+apps, staff, rent, shipping labels, payment fees, ads on platforms that aren't connected) comes only
+from the store's owner, as **costs** kept per store in the store's currency (`store_expenses`). Owners
+and admins add, change and remove them; members with "View gross sales, discounts, tax, shipping and
+total sales" (`finance.breakdown`) see them, on the page and as the dashboard's `expenses` module. Each
+change is in the audit log (`expense.added`, `expense.changed`, `expense.removed`; the note, free
+text, is never copied into it).
+
+| Figure | Formula | Notes |
+| --- | --- | --- |
+| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year) | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost |
+| Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
+| Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
+| **Net profit** | revenue − Shopify's cost of goods sold − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
+
+Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given only when:
+
+- Shopify's cost of goods sold is known for the dates (its profit report: `read_reports`) and every
+  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0);
+- the connected ad accounts' spend is known for every day, in the store's currency. With no ad
+  account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
+  ads gets no net profit, since it would give the spend away;
+- the owner has said the costs list holds every cost from a day on (`store_expense_settings.complete_from`,
+  "This list holds every cost from"), and the dates start on or after that day.
+
+Otherwise the card shows what is left of net sales after the costs it does know, says "Not net
+profit" with each missing input, and links owners and admins to Settings → Costs. The figures are the
+owner's own: bizinsights checks none of them against anything.
 
 ## Shopify's own reports (sessions, gross profit, the check)
 

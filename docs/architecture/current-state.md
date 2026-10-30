@@ -35,7 +35,7 @@ No critical findings. 6 high, about 40 medium, many low (below).
 | Validation | Zod 3.25 (API input, config) | everywhere |
 | Database | PostgreSQL 17 (Docker on the owner's PC, reached through Cloudflare Tunnel + Workers VPC + Hyperdrive) | `docker-compose.yml`, `wrangler.jsonc` |
 | ORM | Prisma 7.10 (`prisma-client` generator, `workerd` runtime, `@prisma/adapter-pg`), raw tagged-template SQL for reports | `packages/db` |
-| Tenancy | Two DB roles: owner (`systemDb`) and `app_rls` (`tenantDb`, RLS on `app.workspace_id`) | `packages/db/src/index.ts`, `migrations/*_rls` |
+| Tenancy | Two runtime DB roles, both bound by RLS: `app_system` (`systemDb`, in the row scope its entry point names) and `app_rls` (`tenantDb`, RLS on `app.workspace_id`); the owner `app` runs migrations only ([system-database-role.md](../system-database-role.md)) | `packages/db/src/index.ts`, `infra/postgres/init.sql`, `migrations/*_rls` |
 | Authentication | Firebase Auth (Google, Apple, email + password) verified server-side over the Identity Toolkit REST API + `jose`; emailed one-time codes; session cookies (httpOnly, SameSite=Lax) | `apps/api/src/authProvider.ts`, `routes/auth.ts` |
 | Authorization | Role matrix owner / admin / analyst / viewer; read-only API keys | `packages/shared/src/roles.ts`, `apps/api/src/context.ts` |
 | Background work | Cloudflare Queues (`insights-sync`, `insights-webhooks`, `insights-aggregate`, DLQ `insights-dlq`), Cron (`*/15`, `03:15`) | `apps/worker`, `wrangler.jsonc` |

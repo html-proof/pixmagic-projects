@@ -7,7 +7,7 @@ import type { FetchLike } from "./shopify.js";
 import { fromHeader, type EmailPurpose } from "./mail/senders.js";
 import type { MailReceipt } from "./mail/types.js";
 import type { Queues } from "./queues.js";
-import { zapierAlertRaised } from "./zapier/events.js";
+import { zapierAlertRaised, zapierAuditEvent } from "./zapier/events.js";
 
 export interface MailOptions {
   /**
@@ -217,6 +217,9 @@ export async function resolveAlerts(storeId: string, codes: string[]): Promise<n
  * it after the change it records has been committed, so failing here would turn that success into
  * an error (a 500 the client retries, repeating the change; a queue job retried for work already
  * done). A failure is logged, with what was being recorded, instead.
+ *
+ * A row that is an integration connected or disconnected (an ad platform, WhatsApp, Zapier) is also
+ * Zapier's "Integration connected / disconnected" event for the store (zapier/events.ts).
  */
 export async function audit(input: {
   workspaceId: string;
@@ -228,7 +231,7 @@ export async function audit(input: {
   ip?: string;
 }) {
   try {
-    await systemDb.auditLog.create({
+    const row = await systemDb.auditLog.create({
       data: {
         workspaceId: input.workspaceId,
         actorUserId: input.actorUserId ?? null,
@@ -239,6 +242,8 @@ export async function audit(input: {
         ip: input.ip,
       },
     });
+    // Never throws (recordZapierEvent logs its own failures); without a queue here, the cron sweep sends it.
+    await zapierAuditEvent(row);
   } catch (err) {
     logger.error({ err, workspaceId: input.workspaceId, action: input.action, targetType: input.targetType, targetId: input.targetId }, "audit log write failed");
   }

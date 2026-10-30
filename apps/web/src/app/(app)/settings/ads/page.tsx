@@ -171,6 +171,10 @@ export default function AdAccountsPage() {
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>For each ad campaign and day: what was spent, impressions, clicks, and the conversions and their value the platform counts.</li>
           <li>From AdSense, for each site and day: estimated earnings, page views, impressions and clicks.</li>
+          <li>
+            In AdSense&apos;s report on its Advertising page, read when it&apos;s opened, cached briefly and not kept with the daily figures: the same
+            by country, device type or ad unit, with ad requests, coverage and Active View viewability.
+          </li>
           <li>Account names, currencies, time zones and status, so days and money line up and a closed or paused account is shown as such.</li>
           <li>Nothing about the people who saw your ads, and nothing is ever changed in your accounts.</li>
           <li>Access is stored encrypted on the server and never sent to your browser. Disconnecting deletes it and every number fetched with it.</li>

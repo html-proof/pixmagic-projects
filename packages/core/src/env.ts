@@ -160,15 +160,6 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * The secret API key of bizinsights' old Nango environment, a secret (Secrets Manager), kept only
-   * while the connections made through Nango (2026-10-22 to 2026-10-28) are moved off it
-   * (adConnections/leaveNango.ts; docs/ads-setup.md, "Leaving Nango"). Nothing connects through Nango
-   * any more; once the move logs `left: 0` the secret is deleted and this setting goes.
-   */
-  NANGO_SECRET_KEY: z.string().optional().default(""),
-  /** Nango's API. */
-  NANGO_API_URL: z.string().default("https://api.nango.dev"),
-  /**
    * WhatsApp Automation on Evolution API (docs/whatsapp.md): bizinsights' own Evolution API service.
    * Its internal base URL (in AWS the ECS service's private DNS name, reachable only from the
    * functions; locally the docker-compose service), its global API key (a secret, used only to
@@ -183,11 +174,11 @@ const schema = z.object({
   /** Each call to Evolution API gives up after this long (ms). */
   EVOLUTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
   /**
-   * WhatsApp's one way to connect, Meta's WhatsApp Business Platform (Embedded Signup; bizinsights
-   * then calls Meta's Graph API with the business's token): the Meta app's id and secret (the ad
-   * accounts' Meta app when these are empty), the Facebook Login for Business configuration id of
-   * its WhatsApp Embedded Signup variation, and the verify token of Meta's webhook. Without them the
-   * page offers nothing to connect, and says why.
+   * The Cloud API way to connect (Meta's Embedded Signup, then Evolution API's WHATSAPP-BUSINESS
+   * integration sends through it): the Meta app's id and secret (the ad accounts' Meta app when
+   * these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
+   * Signup variation, and the verify token of Meta's webhook. Without them the page offers only the
+   * linked phone, and says why.
    */
   WHATSAPP_APP_ID: z.string().optional().default(""),
   WHATSAPP_APP_SECRET: z.string().optional().default(""),
@@ -291,9 +282,12 @@ const schema = z.object({
    * OAuth v2), matched exactly. Until all three are set, every Zapier endpoint answers 503
    * `not_configured` and Settings → Integrations says Zapier isn't set up yet. The invite URL (the
    * Zapier app's invite link, or its public page once Zapier lists it) is what Connect opens.
+   * ZAPIER_CLIENT_SECRET_PREVIOUS: the secret before a rotation, accepted too until every version of
+   * the Zapier app has the new one (docs/RUNBOOK.md); empty otherwise.
    */
   ZAPIER_CLIENT_ID: z.string().optional().default(""),
   ZAPIER_CLIENT_SECRET: z.string().optional().default(""),
+  ZAPIER_CLIENT_SECRET_PREVIOUS: z.string().optional().default(""),
   ZAPIER_REDIRECT_URI: z.union([z.literal(""), z.string().url()]).default(""),
   ZAPIER_INVITE_URL: z.union([z.literal(""), z.string().url()]).default(""),
 });
@@ -320,7 +314,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {

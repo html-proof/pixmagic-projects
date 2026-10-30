@@ -15,8 +15,7 @@ import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import { resolveAdAlerts } from "./alerts.js";
-import { dropPendingAdConnectsOf, releaseNangoConnectionIfUnused } from "./connect.js";
-import { isNangoConnection, nangoCredential } from "./credentials.js";
+import { dropPendingAdConnectsOf } from "./connect.js";
 import { releaseAdLoginsWhere } from "./logins.js";
 
 /** How old a signed request may be (its issued_at), and how far ahead of this server's clock. */
@@ -82,7 +81,7 @@ export async function metaDeauthorized(userId: string, coord?: Coord): Promise<n
   if (logins) logger.info({ logins }, "meta: bizinsights removed on Facebook; the person's waiting logins let go");
   const rows = await systemDb.adConnection.findMany({
     where: { provider: "meta", externalUserId: userId, accessTokenEnc: { not: "" } },
-    select: { id: true, workspaceId: true, storeId: true, provider: true, accountId: true, source: true, sourceLoginId: true, accessTokenEnc: true },
+    select: { id: true, workspaceId: true, storeId: true, accountId: true },
   });
   if (!rows.length) return 0;
   const { count } = await systemDb.adConnection.updateMany({
@@ -91,7 +90,6 @@ export async function metaDeauthorized(userId: string, coord?: Coord): Promise<n
     data: { status: "reconnect", errorCode: "auth_expired", lastError: null, accessTokenEnc: "", refreshTokenEnc: null, accessTokenExpiresAt: null, syncRequestedAt: null },
   });
   await auditByStore(rows, "ads.access_removed", "meta_deauthorize");
-  await releaseNangoConnections(rows, userId);
   logger.info({ connections: count }, "meta: bizinsights removed on Facebook; its ad connections wait for a reconnect");
   return count;
 }
@@ -114,8 +112,6 @@ export async function metaDataDeletion(userId: string, coord?: Coord): Promise<{
   const { count } = rows.length ? await systemDb.adConnection.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } }) : { count: 0 };
   for (const r of rows) await resolveAdAlerts(r).catch((err: unknown) => logger.warn({ err, connectionId: r.id }, "ad alerts not resolved"));
   await auditByStore(rows, "ads.disconnected", "meta_data_deletion");
-  // A connection not moved off Nango yet: the person's token Nango kept goes too.
-  await releaseNangoConnections(rows, userId);
   const confirmationCode = randomBytes(10).toString("hex");
   await systemDb.authEvent.create({ data: { type: META_DELETION_EVENT, userId: null, ip: null, metadata: { code: confirmationCode, deleted: count, logins } } });
   logger.info({ connections: count, logins }, "meta: data deletion request; the person's ad connections and figures deleted");
@@ -128,24 +124,4 @@ export async function metaDataDeletionStatus(code: string): Promise<{ status: "d
   // user_id NULL (as they are stored) puts the look-up on the (user_id, created_at) index, not every sign-in event ever kept.
   const row = await systemDb.authEvent.findFirst({ where: { userId: null, type: META_DELETION_EVENT, metadata: { path: ["code"], equals: code } }, select: { createdAt: true } });
   return row ? { status: "done", at: row.createdAt.toISOString() } : { status: "unknown" };
-}
-
-/**
- * The Nango connections (rows not moved off Nango yet, leaveNango.ts) a deauthorize or data deletion
- * request left with nothing reading through them: deleted at Nango, with the token Nango kept for the
- * person. Rows as they were before the callback cleared or deleted them. Best effort; never throws.
- */
-async function releaseNangoConnections(rows: Array<{ id: string; storeId: string; provider: string; source: string; sourceLoginId: string | null; accessTokenEnc: string }>, userId: string) {
-  const done = new Set<string>();
-  for (const r of rows) {
-    if (!isNangoConnection(r) || !r.accessTokenEnc) continue;
-    try {
-      const cred = nangoCredential(r);
-      if (done.has(cred.connectionId)) continue;
-      done.add(cred.connectionId);
-      await releaseNangoConnectionIfUnused({ provider: "meta", ...cred, externalUserId: userId });
-    } catch (err) {
-      logger.warn({ err, connectionId: r.id }, "meta callback: nango connection not released");
-    }
-  }
 }
