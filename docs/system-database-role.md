@@ -118,7 +118,8 @@ The order matters because Deploy runs `cdk deploy` (new function code) *before* 
 would create the role). If one PR both created the role and switched to it, requests would fail
 until migrate finished. So there are three PRs:
 
-1. **Role and scopes, still running as `app`.**
+1. **Role and scopes, still running as `app`.** Live since 2026-10-30 (release 131: #287, landed
+   with five other pull requests in #290).
    - CDK makes a generated secret `insights/<env>/db-system` that nobody sees.
    - The migrate action creates `app_system` (or resets its password) before `init.sql` runs, so in
      production the role never has a default password.
@@ -142,7 +143,7 @@ until migrate finished. So there are three PRs:
      another workspace, before it is taken back, and the refresh token they gave before, use
      `ad_grants`.
    - Rollback: Deploy's automatic rollback, or revert the PR.
-3. **Fail closed** after seven days with no "unscoped system query" warning in CloudWatch Logs
+3. **Fail closed** after seven days with no "system query in no row scope" warning in CloudWatch Logs
    (each warning is fixed by scoping its entry point).
    - An unscoped `systemDb` query throws instead of seeing everything.
    - The role's own default (`ALTER ROLE app_system SET app.scope = ''`) means a raw `pg` client on

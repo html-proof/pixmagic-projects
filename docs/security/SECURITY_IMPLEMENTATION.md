@@ -75,7 +75,7 @@ Everything else is uncommitted in the working tree.
 **Remaining risk.**
 - System paths (webhooks, jobs, auth bootstrap) log in as `app_system`, which RLS binds; a sweep or
   a webhook still reads across workspaces where its reason on the reviewed list says so
-  ([system-database-role.md](../system-database-role.md); finding 5 of the 2026-10-10 audit, fixed 2026-10-29).
+  ([system-database-role.md](../system-database-role.md); finding 5 of the 2026-10-10 audit, fixed 2026-10-30).
 - `app_rls` can still SELECT encrypted token columns in its own workspace. Column-level grants are
   not done.
 

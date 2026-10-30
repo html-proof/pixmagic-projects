@@ -236,7 +236,7 @@ be fixed before real merchants connect accounts.
 
 #### M6. The functions use the database's master login, and RLS silently falls away without one secret
 
-- **Status:** FIXED. The tenant pool fails closed in production; since 2026-10-29 the system paths log
+- **Status:** FIXED. The tenant pool fails closed in production; since 2026-10-30 the system paths log
   in as `app_system` (no owner, no BYPASSRLS; [system-database-role.md](../system-database-role.md)),
   and only the cron keeps the master secret, for migrations. Originally: CONFIRMED (code); the live
   database was NOT TESTED.
