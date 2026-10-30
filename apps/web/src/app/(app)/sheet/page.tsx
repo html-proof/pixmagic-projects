@@ -136,7 +136,9 @@ function Notes({ s }: { s: SheetState }) {
   if (!sheet.visitsTracked) notes.push("Store visits, and the rates worked out on them, need the bizinsights storefront pixel (Visitors), which this store doesn't share with you yet.");
   if (!sheet.ads && allowed("marketing.ads")) notes.push("Connect Meta Ads or Google Ads in Settings → Connections to see your ad spend day by day beside your sales.");
   else if (sheet.ads && !sheet.comparable) notes.push(sheet.ads.demo ? "The Google Ads demo's figures are simulated, so they aren't set against your sales." : `Your ad accounts report in ${sheet.ads.currency}, not the store's ${s.ov!.store.currency}, so the spend isn't set against your sales.`);
-  notes.push("Product costs, shipping, fees and your other costs aren't recorded in bizinsights, so the sheet stops at net sales less ad spend: it never calls that profit.");
+  // Shopify's cost of goods sold comes for the dates whole, never by day; the owner's costs (Settings →
+  // Costs) are taken off on the dashboard, not here.
+  notes.push("The sheet stops at net sales less ad spend and never calls that profit: Shopify gives product costs only for the dates as a whole, not day by day, and your costs aren't taken off here. Business profit overview on the dashboard takes off the costs bizinsights knows.");
   return (
     <ul className="space-y-1 px-1 text-xs text-muted" data-testid="sheet-notes">
       {notes.map((n) => (

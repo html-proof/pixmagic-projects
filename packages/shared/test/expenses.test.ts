@@ -82,6 +82,12 @@ describe("net profit", () => {
     expect(netProfit({ ...known, adSpend: "hidden" })).toEqual({ value: null, gaps: ["ads_hidden"] });
   });
 
+  it("never takes Shopify's 0 for the cost of goods when no sale had a cost recorded", () => {
+    // Shopify counts a sale with no cost per item at no cost: a store that records none gets 0.
+    expect(netProfit({ ...known, productCosts: "not_recorded", uncosted: 10_000 })).toEqual({ value: null, gaps: ["no_cost_recorded"] });
+    expect(netProfit({ ...known, productCosts: "not_recorded", uncosted: 10_000, complete: false })).toEqual({ value: null, gaps: ["no_cost_recorded", "costs_not_complete"] });
+  });
+
   it("counts the costs list complete only for dates from the day the owner said so", () => {
     expect(expensesComplete("2026-10-01", range)).toBe(true);
     expect(expensesComplete("2026-10-02", range)).toBe(false);

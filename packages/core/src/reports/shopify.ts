@@ -39,7 +39,7 @@ export function reportWindows(range: DateRange, previous: Comparison): { current
  * Whether a kept answer should be asked for again. A running window's answer is replaced at each
  * mark (its key changes); days that just ended keep changing for a while (late refunds, Shopify's
  * own processing); older ones hardly ever. A failed call is tried again after 10 minutes; Shopify
- * refusing (no access, a report it can't run here) after 6 hours, or as soon as the scopes change.
+ * refusing (no access, a report it can't run here) after 6 hours, a running range's too (keptAnswers).
  * A sales answer kept before a figure was asked for (duties and additional fees, 2026-10-19) is
  * asked again at once: its missing lines would read as differences.
  */
@@ -52,6 +52,23 @@ export function reportStale(r: KeptReport | undefined, w: ReportWindow, today: s
   if (w.to >= today) return age > 10 * 60_000;
   if (w.to >= addDays(today, -2)) return age > 30 * 60_000;
   return age > 6 * 3600_000;
+}
+
+/**
+ * The kept answers that decide whether each of a dataset's windows is asked for again (reportStale):
+ * their own. A running range's keys change at each mark, so a new mark has none; when the answer
+ * still shown for the range (pickAnswers' latest mark that every window has) is Shopify refusing, it
+ * stands in for every window, so they are asked again together after its 6 hours instead of every
+ * 5 minutes, and pickAnswers keeps showing it meanwhile. Decided for the windows together, never one
+ * by one: a window held back alone would never share a newer mark with the others, and pickAnswers
+ * would stop at the last one they share. Figures don't hold anything back: each mark's are asked for.
+ */
+export function keptAnswers(kept: KeptReport[], dataset: ReportDataset, wins: ReportWindow[]): Array<KeptReport | undefined> {
+  const own = wins.map((w) => kept.find((k) => k.dataset === dataset && k.window === windowKey(w)));
+  if (own.some(Boolean) || !wins[0]?.until) return own;
+  const shown = pickAnswers(kept, dataset, wins);
+  const range = shown.until !== wins[0].until ? shown.reports[0] : undefined;
+  return range?.error === "access_denied" || range?.error === "unsupported" ? wins.map(() => range) : own;
 }
 
 /**
@@ -182,16 +199,15 @@ export async function shopifyModules(
   if (!want.sessions && !want.profit && !want.check) return { modules, refresh: [] };
   const w = reportWindows(dates.range, dates.previous);
   const kept = await keptReports(tx, store, [w.current, w.previous]);
-  const find = (dataset: ReportDataset, win: ReportWindow) => kept.find((k) => k.dataset === dataset && k.window === windowKey(win));
   const refresh: ReportRequest[] = [];
-  const need = (dataset: ReportDataset, win: ReportWindow) => {
-    if (reportStale(find(dataset, win), win, ctx.today, ctx.now)) refresh.push({ dataset, window: win });
-  };
+  const need = (dataset: ReportDataset, wins: ReportWindow[]) =>
+    keptAnswers(kept, dataset, wins).forEach((k, i) => {
+      if (reportStale(k, wins[i]!, ctx.today, ctx.now)) refresh.push({ dataset, window: wins[i]! });
+    });
   const asOf = (a: Answer) => (a.fetchedAt ? a.fetchedAt.toISOString() : null);
 
   if (want.sessions) {
-    need("sessions", w.current);
-    need("sessions", w.previous);
+    need("sessions", [w.current, w.previous]);
     const picked = pickAnswers(kept, "sessions", [w.current, w.previous]);
     const until = picked.until;
     const now = answerOf(picked.reports[0]);
@@ -213,8 +229,7 @@ export async function shopifyModules(
   }
 
   if (want.profit) {
-    need("profit", w.current);
-    need("profit", w.previous);
+    need("profit", [w.current, w.previous]);
     const picked = pickAnswers(kept, "profit", [w.current, w.previous]);
     const until = picked.until;
     const now = answerOf(picked.reports[0]);
@@ -232,7 +247,7 @@ export async function shopifyModules(
   }
 
   if (want.check) {
-    need("sales", w.current);
+    need("sales", [w.current]);
     const picked = pickAnswers(kept, "sales", [w.current]);
     const until = picked.until;
     const now = answerOf(picked.reports[0]);

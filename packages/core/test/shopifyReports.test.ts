@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Tx } from "@app/db";
 import { summarize } from "@app/shared";
-import { parseReport, reportQuery, windowKey } from "../src/shopifyReports.js";
-import { pickAnswers, quantizeUntil, reconcileSales, reportStale, reportWindows } from "../src/reports/shopify.js";
+import { memoryCoord } from "../src/coord.js";
+import { memoryQueues, type Queues } from "../src/queues.js";
+import { parseReport, REPORT_QUEUED_MS, reportQuery, requestShopifyReports, windowKey, type ReportRequest, type ShopifyReportsJob } from "../src/shopifyReports.js";
+import { pickAnswers, quantizeUntil, reconcileSales, reportStale, reportWindows, shopifyModules } from "../src/reports/shopify.js";
 
 describe("ShopifyQL for Shopify's own report figures", () => {
   it("asks for whole days, or up to a time of day while the window runs", () => {
@@ -141,5 +144,108 @@ describe("answers while the next mark is fetched", () => {
     expect(now).toMatchObject({ until: "16:40:00", reports: [{ values: { sessions: 5 } }, { values: { sessions: 6 } }] });
     // Nothing earlier either: still asking Shopify.
     expect(pickAnswers([], "sessions", [today, yesterday]).reports).toEqual([undefined, undefined]);
+  });
+});
+
+describe("Shopify refusing a running range", () => {
+  // The 16:47 poll: today up to 16:45 against yesterday up to 16:45.
+  const now = new Date("2026-10-30T05:47:00Z");
+  const today = "2026-10-30";
+  const store = { id: "s1", workspaceId: "w1", timezone: "Australia/Melbourne" };
+  const running = { range: { from: today, to: today }, previous: { from: "2026-10-29", to: "2026-10-29", until: "16:47:30" } };
+  const ctx = { today, now, rangeRows: [], dataAsOf: null, waiting: 0 };
+  const want = { sessions: true, profit: true, check: false };
+  type Row = { dataset: string; window: string; values: unknown; error: string | null; fetchedAt: Date };
+  /** Both windows' answers for one dataset at an earlier mark, `min` minutes ago. */
+  const at = (dataset: string, mark: string, error: string | null, min: number): Row[] =>
+    [today, "2026-10-29"].map((day) => ({ dataset, window: `${day}|${day}|${mark}`, values: error ? null : { sessions: 5 }, error, fetchedAt: new Date(now.getTime() - min * 60_000) }));
+  /** A transaction holding these kept answers (keptReports' query is the one thing it is asked). */
+  const tx = (rows: Row[]) => ({ shopifyReport: { findMany: async () => rows } }) as unknown as Tx;
+  const asked = async (rows: Row[]) => (await shopifyModules(tx(rows), store, running, ctx, want)).refresh.map((r) => `${r.dataset}@${windowKey(r.window)}`);
+
+  it("doesn't ask again at each new mark while the refusal is under 6 hours old, and keeps showing it", async () => {
+    const rows = [...at("sessions", "16:40:00", "access_denied", 7), ...at("profit", "11:00:00", "unsupported", 347)];
+    const { modules, refresh } = await shopifyModules(tx(rows), store, running, ctx, want);
+    expect(refresh).toEqual([]);
+    expect(modules.shopify_sessions).toMatchObject({ status: "access_denied", current: null });
+    expect(modules.profit).toMatchObject({ status: "unsupported", current: null });
+  });
+
+  it("asks again after 6 hours, and at each mark for figures, a failed call, or figures since the refusal", async () => {
+    const both = (dataset: string) => [`${dataset}@${today}|${today}|16:45:00`, `${dataset}@2026-10-29|2026-10-29|16:45:00`];
+    expect(await asked(at("sessions", "10:40:00", "access_denied", 367))).toEqual([...both("sessions"), ...both("profit")]);
+    expect(await asked(at("sessions", "16:40:00", null, 7))).toEqual([...both("sessions"), ...both("profit")]);
+    expect(await asked(at("sessions", "16:40:00", "failed", 7))).toEqual([...both("sessions"), ...both("profit")]);
+    expect(await asked([...at("sessions", "16:30:00", "access_denied", 17), ...at("sessions", "16:40:00", null, 7)])).toEqual([...both("sessions"), ...both("profit")]);
+  });
+
+  it("holds the range and its comparison back together, from the answers still shown", async () => {
+    const one = (day: string, mark: string, error: string | null, min: number): Row => ({ dataset: "sessions", window: `${day}|${day}|${mark}`, values: error ? null : { sessions: 5 }, error, fetchedAt: new Date(now.getTime() - min * 60_000) });
+    const sessions = async (rows: Row[]) => {
+      const { modules, refresh } = await shopifyModules(tx(rows), store, running, ctx, { sessions: true, profit: false, check: false });
+      return { asked: refresh.map((r) => windowKey(r.window)), status: (modules.shopify_sessions as { status: string }).status };
+    };
+    const both = [`${today}|${today}|16:45:00`, "2026-10-29|2026-10-29|16:45:00"];
+    // Yesterday viewed a moment ago and refused as a whole day: no mark the two windows share, so
+    // both are asked at this one; once they are refused at a mark, nothing is asked and the refusal shows.
+    const wholeDay = one("2026-10-29", "", "access_denied", 5);
+    expect(await sessions([wholeDay])).toEqual({ asked: both, status: "loading" });
+    expect(await sessions([wholeDay, ...at("sessions", "16:40:00", "access_denied", 7)])).toEqual({ asked: [], status: "access_denied" });
+    // Only the range refused: the card shows the refusal, held back with its comparison.
+    expect(await sessions([one(today, "16:40:00", "access_denied", 7), one("2026-10-29", "16:40:00", null, 7)])).toEqual({ asked: [], status: "access_denied" });
+    // Only the comparison refused: the range's figures show, so both are asked at the new mark.
+    expect(await sessions([one(today, "16:40:00", null, 7), one("2026-10-29", "16:40:00", "access_denied", 7)])).toEqual({ asked: both, status: "ready" });
+    // A refusal that came late for an earlier mark doesn't hold back the figures shown from a later one.
+    expect(await sessions([...at("sessions", "16:40:00", null, 6), ...at("sessions", "16:35:00", "access_denied", 1)])).toEqual({ asked: both, status: "ready" });
+  });
+});
+
+describe("queueing a fetch of Shopify's reports", () => {
+  const store = { id: "s1" };
+  const today = (dataset: ReportRequest["dataset"]): ReportRequest => ({ dataset, window: { from: "2026-10-30", to: "2026-10-30", until: "16:45:00" } });
+  const asked = [today("sessions"), today("profit"), today("sales")];
+
+  it("queues each report once while it waits behind other jobs or runs, however many polls ask", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = Date.parse("2026-10-30T05:46:00Z");
+      vi.setSystemTime(start);
+      const deps = { queues: memoryQueues(), coord: memoryCoord() };
+      const jobs = () => deps.queues.sent.sync as unknown as ShopifyReportsJob[];
+      expect(await requestShopifyReports(deps, store, asked)).toBe(true);
+      // The sync queue is busy for minutes: a poll still finds nothing kept, and one while the
+      // fetch is half done (its sessions kept) asks for the rest. Neither queues them again.
+      vi.setSystemTime(start + 4 * 60_000);
+      expect(await requestShopifyReports(deps, store, asked)).toBe(false);
+      expect(await requestShopifyReports(deps, store, asked.slice(1))).toBe(false);
+      // A report not on its way yet is queued alone.
+      const abandoned: ReportRequest = { dataset: "abandoned_checkouts", window: asked[0]!.window };
+      expect(await requestShopifyReports(deps, store, [...asked, abandoned])).toBe(true);
+      expect(jobs().map((j) => j.requests.map((r) => r.dataset))).toEqual([["sessions", "profit", "sales"], ["abandoned_checkouts"]]);
+      // A fetch that never ran is queued again in time.
+      vi.setSystemTime(start + REPORT_QUEUED_MS + 1000);
+      expect(await requestShopifyReports(deps, store, asked)).toBe(true);
+      expect(jobs()).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks again at the next poll when the fetch couldn't be queued", async () => {
+    const coord = memoryCoord();
+    const sent: unknown[] = [];
+    let down = true;
+    const queues = {
+      sync: {
+        send: async (job: unknown) => {
+          if (down) throw new Error("queue unavailable");
+          sent.push(job);
+        },
+      },
+    } as unknown as Queues;
+    await expect(requestShopifyReports({ queues, coord }, store, asked)).rejects.toThrow("queue unavailable");
+    down = false;
+    expect(await requestShopifyReports({ queues, coord }, store, asked)).toBe(true);
+    expect(sent).toHaveLength(1);
   });
 });

@@ -11,8 +11,8 @@
 import type { Store, Tx } from "@app/db";
 import { delta, expandScopes, type Comparison, type DateRange } from "@app/shared";
 import { checkoutsVisible, checkoutValuesOf, firstVisibleDay, type CheckoutValues } from "../shopifyCheckouts.js";
-import { keptReports, windowKey, type ReportRequest, type ReportWindow } from "../shopifyReports.js";
-import { answerOf, pickAnswers, reportStale, reportWindows, type ReportStatus } from "./shopify.js";
+import { keptReports, type ReportRequest, type ReportWindow } from "../shopifyReports.js";
+import { answerOf, keptAnswers, pickAnswers, reportStale, reportWindows, type ReportStatus } from "./shopify.js";
 
 const DATASET = "abandoned_checkouts";
 
@@ -66,9 +66,8 @@ export async function abandonedCheckoutsModule(
   const wins: ReportWindow[] = [...(visible.current ? [w.current] : []), ...(visible.previous ? [w.previous] : [])];
   // A kept answer that isn't this dataset's shape (kept before a figure was added) counts as missing: it is asked for again.
   const kept = (await keptReports(tx, store, wins)).filter((k) => k.dataset === DATASET && (k.values === null || checkoutValuesOf(k.values) !== null));
-  const refresh: ReportRequest[] = wins
-    .filter((win) => reportStale(kept.find((k) => k.window === windowKey(win)), win, ctx.today, ctx.now))
-    .map((win) => ({ dataset: DATASET, window: win }));
+  const stale = keptAnswers(kept, DATASET, wins).map((k, i) => reportStale(k, wins[i]!, ctx.today, ctx.now));
+  const refresh: ReportRequest[] = wins.filter((_, i) => stale[i]).map((win) => ({ dataset: DATASET, window: win }));
 
   const picked = pickAnswers(kept, DATASET, wins);
   const answer = (win: ReportWindow, shared: boolean) => {

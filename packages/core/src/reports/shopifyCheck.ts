@@ -16,6 +16,7 @@
 import { Prisma, type Store, type Tx } from "@app/db";
 import { DATE_PRESETS, historyStart, resolvePreset, summarize, type DatePreset } from "@app/shared";
 import { env } from "../env.js";
+import { fetchUntil } from "../http.js";
 import { fetchShopifyReport, type ReportFetchDeps, type ReportValues, type ReportWindow } from "../shopifyReports.js";
 import { localMoment } from "./common.js";
 import { dataFreshness } from "./overview.js";
@@ -25,6 +26,20 @@ import { reconcileSales } from "./shopify.js";
 export const CHECK_PERIODS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth"] as const satisfies readonly DatePreset[];
 
 export type CheckStatus = "match" | "difference" | "sync_delay" | "definition_mismatch" | "not_verifiable";
+
+/**
+ * How long the route's calls to Shopify may take in all (up to 21 of them), so the report comes
+ * within the API's time limit: as long as a live ad report's reads get (AD_REPORT_BUDGET_MS). A
+ * call it cuts off is one Shopify didn't answer; none starts after it.
+ */
+export const SHOPIFY_CHECK_BUDGET_MS = 40_000;
+
+/**
+ * Where the report reads our figures: each time in a short tenant transaction (the API's route), or
+ * straight from systemDb (the cron). Shopify is asked between reads, never inside one: its calls
+ * take seconds each, and a transaction expires after 20 (TX_TIMEOUT_MS in @app/db).
+ */
+export type CheckReads = <T>(read: (tx: Tx) => Promise<T>) => Promise<T>;
 
 export interface CheckReportRow {
   metric: string;
@@ -74,6 +89,7 @@ const REFUSED: Record<string, string> = {
   unsupported: "Shopify can't run this report for this store (plan or report).",
   failed: "Shopify's reports didn't answer.",
   not_granted: "The store hasn't granted bizinsights its Shopify reports (read_reports).",
+  out_of_time: "Not asked: Shopify's reports were slow to answer, so the check stopped. Try again in a few minutes.",
 };
 
 /** Store-local tracked visits (the web pixel's) in a window, cut at the same time of day while it runs. */
@@ -88,29 +104,39 @@ async function trackedVisits(tx: Tx, store: Pick<Store, "id" | "workspaceId" | "
 
 /**
  * Every figure of every period, ours against Shopify's. Shopify is asked for each period's exact
- * window (to the second while it runs), one call after another.
+ * window (to the second while it runs), one call after another, and none after `opts.deadline`
+ * (epoch ms) when there is one.
  */
 export async function shopifyCheckReport(
-  tx: Tx,
+  reads: CheckReads,
   store: Store,
   deps: ReportFetchDeps,
-  opts: { periods?: readonly DatePreset[]; now?: Date } = {},
+  opts: { periods?: readonly DatePreset[]; now?: Date; deadline?: number } = {},
 ): Promise<{ shop: string; timezone: string; currency: string; apiVersion: string; generatedAt: string; historyFrom: string | null; periods: CheckReportPeriod[] }> {
   const now = opts.now ?? new Date();
   const periods = (opts.periods ?? CHECK_PERIODS).filter((p) => p !== "custom" && (DATE_PRESETS as readonly string[]).includes(p));
   const granted = store.grantedScopes.includes("read_reports");
-  const [oldest] = await tx.$queryRaw<Array<{ day: string | null }>>`SELECT MIN(local_day) AS day FROM orders WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id}`;
-  const historyFrom = historyStart(store.ordersHistoryFrom, store.timezone, oldest?.day ?? null);
-  const freshness = await dataFreshness(tx, { ws: store.workspaceId, storeId: store.id }, store, now);
-  const ask = async (dataset: "sales" | "sessions" | "profit", window: ReportWindow) =>
-    granted ? fetchShopifyReport(store, { dataset, window }, deps) : ({ error: "not_granted" } as const);
+  const { historyFrom, freshness } = await reads(async (tx) => {
+    const [oldest] = await tx.$queryRaw<Array<{ day: string | null }>>`SELECT MIN(local_day) AS day FROM orders WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id}`;
+    return { historyFrom: historyStart(store.ordersHistoryFrom, store.timezone, oldest?.day ?? null), freshness: await dataFreshness(tx, { ws: store.workspaceId, storeId: store.id }, store, now) };
+  });
+  const { deadline } = opts;
+  const calls = deadline === undefined ? deps : { ...deps, fetchImpl: fetchUntil(deps.fetchImpl, deadline) };
+  const ask = async (dataset: "sales" | "sessions" | "profit", window: ReportWindow) => {
+    if (!granted) return { error: "not_granted" } as const;
+    if (deadline !== undefined && Date.now() >= deadline) return { error: "out_of_time" } as const;
+    return fetchShopifyReport(store, { dataset, window }, calls);
+  };
 
   const out: CheckReportPeriod[] = [];
   for (const preset of periods) {
     const { range, previous } = resolvePreset(preset, now, store.timezone);
     const until = previous.until ?? null;
     const window: ReportWindow = { from: range.from, to: range.to, ...(until ? { until } : {}) };
-    const ourRows = until ? await comparisonRows(tx, store.workspaceId, store.id, { ...range, until }, store.timezone) : await dailyRows(tx, store.workspaceId, store.id, range);
+    const { ourRows, tracked } = await reads(async (tx) => ({
+      ourRows: until ? await comparisonRows(tx, store.workspaceId, store.id, { ...range, until }, store.timezone) : await dailyRows(tx, store.workspaceId, store.id, range),
+      tracked: await trackedVisits(tx, store, window),
+    }));
     const ours = summarize(ourRows);
     const covered = historyFrom !== null && range.from >= historyFrom;
     const [sales, sessions, profit] = [await ask("sales", window), await ask("sessions", window), await ask("profit", window)];
@@ -146,7 +172,6 @@ export async function shopifyCheckReport(
     }
 
     // Sessions: only Shopify counts them; the pixel's tracked visits are another measure.
-    const tracked = await trackedVisits(tx, store, window);
     const sv = "values" in sessions ? sessions.values : null;
     const sSessions = val(sv, "sessions");
     const sCompleted = val(sv, "completedSessions");

@@ -7,12 +7,8 @@ import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError } from "@/lib/api";
 import { fmtDateTime, fmtRelative } from "@/components/dashboard/format";
+import { revokeWords } from "@/components/settings/scopeRevoke";
 import { CAPABILITIES, SCOPE_LABELS, expandScopes, scopeLabel, scopeList } from "@app/shared/capabilities";
-
-/** The modules that stop working without `scope`, so a confirm can name them. */
-function modulesNeeding(scope: string): string[] {
-  return CAPABILITIES.filter((c) => c.requiredScopes.includes(scope)).map((c) => c.title);
-}
 
 /** Plain words for a status a merchant has no reason to know the internal name of. */
 function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { text: string; tone: string } {
@@ -108,7 +104,7 @@ export default function StoresPage() {
       await api(`/workspaces/${workspace.id}/stores/${id}/scopes/revoke`, { method: "POST", body: { scopes: [scope] } });
       await reloadStores();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : `We couldn't remove ${scopeLabel(scope).toLowerCase()}. Please try again.`);
+      setError(e instanceof ApiError ? e.message : revokeWords(scope, domain).failed);
     } finally {
       setRevoking(null);
     }
@@ -197,7 +193,7 @@ export default function StoresPage() {
                             type="button"
                             className="shrink-0 text-xs text-muted underline hover:text-danger disabled:opacity-50"
                             data-testid={`revoke-${scope}`}
-                            aria-label={`Remove ${scopeLabel(scope).toLowerCase()} permission for ${s.shopDomain}`}
+                            aria-label={revokeWords(scope, s.shopDomain).button}
                             disabled={busy}
                             onClick={() => setAsk({ id: s.id, domain: s.shopDomain, scope })}
                           >
@@ -283,7 +279,7 @@ export default function StoresPage() {
       })}
       <ConfirmDialog
         open={!!ask}
-        title={ask?.scope ? `Stop letting bizinsights read ${scopeLabel(ask.scope).toLowerCase()}?` : `Disconnect ${ask?.domain}?`}
+        title={ask?.scope ? revokeWords(ask.scope, ask.domain).title : `Disconnect ${ask?.domain}?`}
         confirmLabel={ask?.scope ? "Remove" : "Disconnect"}
         danger
         onCancel={() => setAsk(null)}
@@ -294,10 +290,7 @@ export default function StoresPage() {
         }}
       >
         {ask?.scope ? (
-          <p>
-            For {ask.domain}.{" "}
-            {modulesNeeding(ask.scope).length ? `${modulesNeeding(ask.scope).join(", ")} will stop working until you grant it again.` : "Nothing on your dashboard uses it today."}
-          </p>
+          <p>{revokeWords(ask.scope, ask.domain).body}</p>
         ) : (
           // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
           // they uninstall it there, so say so rather than imply Shopify access ends here.

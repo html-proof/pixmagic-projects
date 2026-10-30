@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { systemDb, type Store } from "@app/db";
-import { encryptTokenFields } from "@app/core";
-import { reportWindows } from "@app/core/reports";
+import { systemDb, withTenant, type Store } from "@app/db";
+import { queryAs } from "@app/db/testing";
+import { encryptTokenFields, type FetchLike } from "@app/core";
+import { reportWindows, shopifyCheckReport } from "@app/core/reports";
 import { resolvePreset } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -156,6 +157,49 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
     expect(csv.statusCode).toBe(200);
     expect(csv.headers["content-type"]).toMatch(/text\/csv/);
     expect(csv.body).toContain("Net sales");
+  });
+
+  /** The store with an access token, so Shopify is asked. */
+  const withToken = (store: Store) =>
+    systemDb.store.update({ where: { id: store.id }, data: encryptTokenFields(store.id, { accessToken: "shpat_x", scopes: SCOPES, accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }) });
+  const nothing = () => new Response(JSON.stringify({ data: { shopifyqlQuery: { tableData: { columns: [], rows: [] }, parseErrors: [] } } }), { status: 200 });
+
+  it("asks Shopify outside any database transaction: its calls take seconds, a transaction expires after 20", async () => {
+    const { a, ws, store } = await owner();
+    await withToken(store);
+    // Transactions open on the test database, as its owner sees them (every role's sessions).
+    const open = async () =>
+      (await queryAs<{ n: number }>(process.env.OWNER_DATABASE_URL!, "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%'"))[0]!.n;
+    expect(await withTenant(ws, () => open())).toBe(1);
+    const during: number[] = [];
+    ctx.setFetch(async () => {
+      during.push(await open());
+      return nothing();
+    });
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/shopify-check`, headers: a.headers });
+    expect(res.statusCode).toBe(200);
+    expect(during).toHaveLength(21);
+    expect(Math.max(...during)).toBe(0);
+  });
+
+  it("stops asking Shopify at its deadline, and shows what it didn't ask as not verifiable, never as 0", async () => {
+    const { ws, store } = await owner();
+    const s = await withToken(store);
+    let calls = 0;
+    // Shopify doesn't answer: the call waits until it is cut off.
+    const silent: FetchLike = (_url, init) => {
+      calls++;
+      return new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+    };
+    const started = Date.now();
+    const report = await shopifyCheckReport((read) => withTenant(ws, read), s, { coord: ctx.deps.coord, fetchImpl: silent }, { periods: ["yesterday", "7d"], deadline: Date.now() + 300 });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(calls).toBe(1);
+    const row = (preset: string, metric: string) => report.periods.find((p) => p.preset === preset)!.rows.find((r) => r.metric === metric)!;
+    expect(row("yesterday", "Net sales")).toMatchObject({ shopify: null, status: "not_verifiable", note: "Shopify's reports didn't answer." });
+    for (const [preset, metric] of [["yesterday", "Sessions"], ["yesterday", "Gross profit"], ["7d", "Net sales"], ["7d", "Visitors"]] as const) {
+      expect(row(preset, metric), `${preset} ${metric}`).toMatchObject({ shopify: null, status: "not_verifiable", note: expect.stringMatching(/^Not asked/) });
+    }
   });
 
   it("another workspace naming the store can't use up the store's own allowance", async () => {

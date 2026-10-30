@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
 import type { AdSpendProvider } from "@app/shared/ads";
-import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
+import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
 import type { OrderOutcomes } from "@app/shared/orders";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -16,8 +16,9 @@ import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
 import { OrderName } from "./Modules";
 import { businessHealth } from "./Overview";
+import { comparableAds, costsOf, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
 import type { Topic } from "./topics";
-import type { AdsModule, Overview, RecentOrder } from "./types";
+import type { Overview, RecentOrder } from "./types";
 
 // ---------------------------------------------------------------------------
 // The dashboard under its four headline numbers, in the owner's design (2026-10-24): sales against
@@ -105,77 +106,17 @@ function LegendRow({ color, label, value, share, sub = false }: { color?: string
   );
 }
 
-// ---- What the costs are -------------------------------------------------------------------------
-
-type CostState = "known" | "loading" | "missing" | "unavailable";
-
-interface Costs {
-  /** Shopify's cost of goods sold for the dates (its profit report), from the cost per item recorded with each sale. */
-  productCosts: number | null;
-  productState: CostState;
-  /** Sales with no cost recorded in Shopify: their cost isn't in `productCosts`. */
-  uncosted: number | null;
-  /** Ad spend for the whole range, in the store's currency; null while any account lacks a day of it. */
-  adSpend: number | null;
-  adState: CostState;
-  byProvider: Array<{ provider: AdSpendProvider; spend: number }>;
-  /** The owner's own costs for the dates (Settings → Costs); null when this member isn't shown them. */
-  yourCosts: number | null;
-  /** Their categories, biggest first. */
-  yourByCategory: Array<{ label: string; amount: number }>;
-}
-
-/**
- * Ads whose spend can be set against the store's sales: the same currency, and no demo account
- * among them (the demo's spend is simulated). Null otherwise.
- */
-export function comparableAds(ov: Overview, currency: string): AdsModule | null {
-  const ads = ov.modules.ads;
-  return ads && ads.accounts.length > 0 && ads.currency === currency && !ads.demo ? ads : null;
-}
-
-function costsOf(ov: Overview, ads: AdsModule | null, adsOn: boolean): Costs {
-  const p = ov.modules.profit;
-  const c = p?.status === "ready" ? p.current : null;
-  const productCosts = c?.costOfGoodsSold ?? null;
-  const productState: CostState = productCosts !== null ? "known" : p?.status === "loading" ? "loading" : p ? "unavailable" : "missing";
-  const adSpend = ads?.current ? ads.current.spend : null;
-  const adState: CostState = !adsOn ? "missing" : !ads ? (ov.modules.ads ? "unavailable" : "missing") : adSpend !== null ? "known" : "unavailable";
-  return {
-    productCosts,
-    productState,
-    uncosted: c?.netSalesWithoutCost ?? null,
-    adSpend,
-    adState,
-    byProvider: ads && adSpend !== null ? ads.byProvider.filter((b) => b.current).map((b) => ({ provider: b.provider, spend: b.current!.spend })) : [],
-    yourCosts: ov.modules.expenses?.current.total ?? null,
-    yourByCategory: ov.modules.expenses?.current.byCategory.map((c) => ({ label: EXPENSE_CATEGORY_LABEL[c.category], amount: c.amount })) ?? [],
-  };
-}
+// ---- What the costs are (./profitFigures.ts) ----------------------------------------------------
 
 /** "product costs, ads and your costs". */
 const listOf = (items: string[]) => new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
 
 /**
- * Net profit for the dates (`netProfit` in @app/shared/expenses), or why not. Revenue is total sales
- * less taxes and duties: net sales, shipping and additional fees, the lines a member who may see the
- * owner's costs is shown too. Ad spend: none connected is 0 (other ads are the owner's costs); a
- * member not shown the ads gets no net profit, which would give the spend away.
+ * A cost with no figure, in words: product costs need Shopify's reports and a cost per item on the
+ * products sold, ad spend an ad account.
  */
-function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown: boolean }): { value: number | null; gaps: ProfitGap[]; revenue: number } | null {
-  const e = ov.modules.expenses;
-  const c = ov.modules.sales_overview?.current;
-  if (!e || !c || c.shipping === undefined || c.additionalFees === undefined) return null;
-  const revenue = Math.round((c.netSales + c.shipping + c.additionalFees) * 100) / 100;
-  const adSpend = !ads.offered ? 0 : !ads.shown ? "hidden" : k.adState === "missing" ? 0 : k.adSpend;
-  return { ...netProfit({ revenue, productCosts: k.productCosts, uncosted: k.uncosted, adSpend, yourCosts: e.current.total, complete: e.complete }), revenue };
-}
-
-/** A cost with no figure, in words: product costs need Shopify's reports, ad spend an ad account. */
-const STATE_WORDS: Record<"products" | "ads", Record<Exclude<CostState, "known">, string>> = {
-  products: { loading: "Loading…", missing: "Not available", unavailable: "Not available" },
-  ads: { loading: "Loading…", missing: "Not connected", unavailable: "Unavailable" },
-};
+const PRODUCT_WORDS: Record<Exclude<ProductCostState, "known">, string> = { loading: "Loading…", missing: "Not available", unavailable: "Not available", not_recorded: "Not recorded in Shopify" };
+const AD_WORDS: Record<Exclude<CostState, "known">, string> = { loading: "Loading…", missing: "Not connected", unavailable: "Unavailable" };
 
 // ---- Orders at a glance -------------------------------------------------------------------------
 
@@ -370,14 +311,16 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
 // ---- Profit overview ----------------------------------------------------------------------------
 
 /**
- * What is left of net sales after the costs bizinsights can see: Shopify's cost of goods sold, the
- * ad spend and the owner's own costs (Settings → Costs). It is called net profit only when every
- * one is known and the owner has said the costs list is complete for the dates (`profitOf`); then
- * it is worked out from revenue (net sales, shipping and fees). Otherwise it says what is missing.
+ * What is left of net sales after the costs bizinsights can see: Shopify's cost of goods sold (once
+ * it recorded a cost for some of the sales: its 0 for a store that keeps none is "Not recorded in
+ * Shopify"), the ad spend and the owner's own costs (Settings → Costs). It is called net profit only
+ * when every one is known and the owner has said the costs list is complete for the dates
+ * (`profitOf`); then it is worked out from revenue (net sales, shipping and fees). Otherwise it says
+ * what is missing.
  */
 export function ProfitOverview({ ov, currency, adsOn, adsOffered, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; adsOffered: boolean; manageCosts: boolean }) {
   const net = ov.modules.sales_overview!.current.netSales;
-  const k = costsOf(ov, adsOn ? comparableAds(ov, currency) : null, adsOn);
+  const k = costsOf(ov, currency, adsOn);
   const profit = profitOf(ov, k, { offered: adsOffered, shown: adsOn });
   const isNet = profit?.value !== null && profit?.value !== undefined;
   const money = (n: number) => fmtMoney(n, currency);
@@ -403,8 +346,8 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, manageCosts }:
           <Donut slices={slices} label={`${what}: ${money(left)}${base > 0 ? `, ${fmtPct(left / base)} of ${isNet ? "revenue" : "net sales"}` : ""}`}>
             <span className={`text-lg font-bold tabular-nums tracking-tight ${left < 0 ? "text-danger" : ""}`} data-testid="profit-left">{money(left)}</span>
             <span className="text-[11px] leading-tight text-muted" data-testid="profit-what">{what}</span>
-            {/* A margin needs the cost of what was sold: ad spend alone taken off sales isn't one. */}
-            {base > 0 && taken > 0 && (k.productCosts !== null ? (
+            {/* A margin needs the cost of what was sold (`marginKnown`): ad spend alone taken off sales isn't one. */}
+            {base > 0 && taken > 0 && (marginKnown(k) ? (
               <span className="mt-0.5 text-[11px] font-semibold text-good">{fmtPct(left / base)} {isNet ? "net " : ""}margin</span>
             ) : (
               <span className="mt-0.5 text-[11px] text-muted">{fmtPct(left / base)} of net sales</span>
@@ -419,8 +362,8 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, manageCosts }:
             ) : (
               <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />
             )}
-            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : STATE_WORDS.products[k.productState as Exclude<CostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
-            {adsOn && <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : STATE_WORDS.ads[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />}
+            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
+            {adsOn && <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />}
             {k.yourCosts !== null && <LegendRow color={YOUR_COSTS} label="Your costs" value={money(k.yourCosts)} share={share(k.yourCosts)} />}
             <LegendRow color={SALES} label={isNet ? "Net profit" : "Left after these costs"} value={money(left)} share={share(left)} />
           </ul>
@@ -630,7 +573,7 @@ export function TopProductsHome({ ov, currency, onOpen }: { ov: Overview; curren
 // ---- Expenses breakdown -------------------------------------------------------------------------
 
 export function ExpensesBreakdown({ ov, currency, adsOn, manage, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; manage: boolean; manageCosts: boolean }) {
-  const k = costsOf(ov, adsOn ? comparableAds(ov, currency) : null, adsOn);
+  const k = costsOf(ov, currency, adsOn);
   const money = (n: number) => fmtMoney(n, currency);
   const total = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
   const share = (n: number) => (total > 0 ? fmtPct(n / total) : null);
@@ -658,10 +601,10 @@ export function ExpensesBreakdown({ ov, currency, adsOn, manage, manageCosts }: 
             <span className="text-[11px] leading-tight text-muted">Costs we can see</span>
           </Donut>
           <ul className="w-full min-w-0 flex-1 space-y-2.5">
-            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : STATE_WORDS.products[k.productState as Exclude<CostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
+            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
             {adsOn && (
               <>
-                <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : STATE_WORDS.ads[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />
+                <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />
                 {k.byProvider.length > 1 && k.byProvider.map((b) => <LegendRow key={b.provider} sub label={PROVIDER[b.provider].name} value={money(b.spend)} share={share(b.spend)} />)}
               </>
             )}

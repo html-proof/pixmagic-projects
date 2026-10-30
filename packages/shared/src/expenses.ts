@@ -147,6 +147,8 @@ export const expensesComplete = (completeFrom: string | null, range: DateRange) 
 export type ProfitGap =
   /** Shopify's cost of goods sold isn't known (its profit report needs access to Shopify's reports). */
   | "product_costs"
+  /** Shopify's profit report answered, but no sale in the dates had a cost recorded: its 0 isn't the cost. */
+  | "no_cost_recorded"
   /** Some sales have no cost recorded in Shopify, so the cost of goods is short of the truth. */
   | "uncosted_sales"
   /** A connected ad account's spend isn't known for every day, or isn't in the store's currency. */
@@ -159,8 +161,11 @@ export type ProfitGap =
 export interface NetProfitInputs {
   /** What the store kept from its sales: total sales less taxes and duties (net sales + shipping + additional fees). */
   revenue: number;
-  /** Shopify's cost of goods sold for the dates; null when not known. */
-  productCosts: number | null;
+  /**
+   * Shopify's cost of goods sold for the dates; null when not known, "not_recorded" when its profit
+   * report answered but no sale had a cost recorded (it counts those at no cost, so its 0 isn't one).
+   */
+  productCosts: number | null | "not_recorded";
   /** Sales with no cost recorded in Shopify (their cost isn't in productCosts); null when not known. */
   uncosted: number | null;
   /**
@@ -182,18 +187,20 @@ export interface NetProfitInputs {
 export function netProfit(i: NetProfitInputs): { value: number | null; gaps: ProfitGap[] } {
   const gaps: ProfitGap[] = [];
   if (i.productCosts === null) gaps.push("product_costs");
+  else if (i.productCosts === "not_recorded") gaps.push("no_cost_recorded");
   else if (i.uncosted !== null && i.uncosted > 0) gaps.push("uncosted_sales");
   if (i.adSpend === "hidden") gaps.push("ads_hidden");
   else if (i.adSpend === null) gaps.push("ad_spend");
   if (!i.complete) gaps.push("costs_not_complete");
   if (gaps.length) return { value: null, gaps };
-  const cents = Math.round(i.revenue * 100) - Math.round(i.productCosts! * 100) - Math.round((i.adSpend as number) * 100) - Math.round(i.yourCosts * 100);
+  const cents = Math.round(i.revenue * 100) - Math.round((i.productCosts as number) * 100) - Math.round((i.adSpend as number) * 100) - Math.round(i.yourCosts * 100);
   return { value: cents / 100, gaps };
 }
 
 /** Each gap in a sentence, for under the profit card. */
 export const PROFIT_GAP_WORDS: Record<ProfitGap, string> = {
   product_costs: "Product costs come from Shopify's profit report, which isn't available for this store yet.",
+  no_cost_recorded: "No sale in these dates has a cost recorded in Shopify (each product's cost per item).",
   uncosted_sales: "Some sales have no cost recorded in Shopify, so the cost of goods sold is short.",
   ad_spend: "A connected ad account's spend isn't known for every day of these dates, or isn't in the store's currency.",
   ads_hidden: "Net profit includes the ad spend, which you aren't shown.",

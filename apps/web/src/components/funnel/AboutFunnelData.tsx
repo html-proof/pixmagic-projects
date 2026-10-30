@@ -26,6 +26,11 @@ export function AboutFunnelData({ f, ov }: { f: FunnelPageModule | null; ov: Ove
   const capability = ov.capabilities.find((c) => c.id === "shopify_sessions");
   // One consent away (the store's app declares read_reports): the dashboard's Enable asks Shopify.
   const requestable = !!capability && capability.reconnectableScopes.length === 0 && capability.missingScopes.length > 0 && capability.requestableScopes.length === capability.missingScopes.length;
+  const sessionsCard = (
+    <a href="#shopify-sessions" className="underline underline-offset-2">
+      Sessions and visitors (Shopify)
+    </a>
+  );
   return (
     <FunnelSection id="about" title="About these numbers" sub="Where every figure on this page comes from, how it is calculated, and what it can't tell you.">
       <div className="grid gap-6 lg:grid-cols-2">
@@ -91,14 +96,20 @@ export function AboutFunnelData({ f, ov }: { f: FunnelPageModule | null; ov: Ove
           </div>
           <div>
             <h3 className="font-semibold">Shopify&apos;s own session count</h3>
+            {/* The Shopify card sits above this section, on both of the page's layouts (funnel/page.tsx). */}
             <p className="mt-1 text-muted">
-              {sessions?.status === "ready"
-                ? "Shopify's own sessions and conversion rate are shown below. Shopify counts every session (ending one after 30 minutes idle, bots left out), so its figures differ from tracked visits."
-                : capability && !capability.enabled && requestable
-                  ? "Shopify Analytics' own sessions need your permission to read your Shopify reports. A workspace owner or admin can turn on “Sessions and visitors (Shopify)” under More insights you can unlock on the dashboard, and Shopify asks them to approve it. Until then only tracked visits are shown, and they are never called sessions."
-                  : capability && !capability.enabled
-                    ? "Shopify Analytics' own sessions need access to your Shopify reports, which bizinsights is waiting on Shopify to approve. Until then only tracked visits are shown, and they are never called sessions."
-                    : "Shopify Analytics' own sessions appear below once Shopify answers."}
+              {sessions?.status === "ready" ? (
+                <>Shopify&apos;s own sessions and conversion rate are in {sessionsCard} above. Shopify counts every session (ending one after 30 minutes idle, bots left out), so its figures differ from tracked visits.</>
+              ) : sessions ? (
+                <>Shopify Analytics&apos; own sessions show in {sessionsCard} above once Shopify shares them; the card says why when it doesn&apos;t.</>
+              ) : capability && !capability.enabled && requestable ? (
+                "Shopify Analytics' own sessions need your permission to read your Shopify reports. A workspace owner or admin can turn on “Sessions and visitors (Shopify)” under More insights you can unlock on the dashboard, and Shopify asks them to approve it. Until then only tracked visits are shown, and they are never called sessions."
+              ) : capability && !capability.enabled ? (
+                "Shopify Analytics' own sessions need access to your Shopify reports, which bizinsights is waiting on Shopify to approve. Until then only tracked visits are shown, and they are never called sessions."
+              ) : (
+                // Granted, but Team & Access doesn't show this member Shopify's sessions: there is no card.
+                "Shopify Analytics' own sessions aren't shared with you, so only tracked visits are shown, and they are never called sessions."
+              )}
             </p>
           </div>
         </div>

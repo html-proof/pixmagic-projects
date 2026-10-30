@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
 import { audit, logger, toCsv } from "@app/core";
-import { checkReportTable, EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, shopifyCheckReport, storeLimits, storeOverview, type ExportSection } from "@app/core/reports";
+import { checkReportTable, EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, SHOPIFY_CHECK_BUDGET_MS, shopifyCheckReport, storeLimits, storeOverview, type ExportSection } from "@app/core/reports";
 import { allows, redactOverview, seesModule, type MemberAccess } from "@app/shared";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -102,11 +102,11 @@ export function exportRoutes(app: App, deps: Deps) {
     // Keyed by workspace too: the store isn't checked to be this workspace's yet, and another
     // workspace naming it must not use up the store's own allowance.
     await limit(deps.coord, `rl:shopify-check:${ws}:${storeId}`, LIMITS.shopifyCheck, "Checked against Shopify a moment ago. Wait a few minutes and try again.");
-    const report = await withTenant(ws, async (tx) => {
-      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
-      if (!store) throw new HttpError(404, "Not found", "not_found");
-      return shopifyCheckReport(tx, store, { coord: deps.coord, fetchImpl: deps.fetchImpl });
-    });
+    const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
+    if (!store) throw new HttpError(404, "Not found", "not_found");
+    // Our figures in short transactions with Shopify's calls between them, never inside one, and
+    // all of those within one deadline, so the answer comes within the API's time limit.
+    const report = await shopifyCheckReport((read) => withTenant(ws, read), store, { coord: deps.coord, fetchImpl: deps.fetchImpl }, { deadline: Date.now() + SHOPIFY_CHECK_BUDGET_MS });
     await audit({ workspaceId: ws, actorUserId: a.user?.id ?? null, action: "report.exported", targetType: "store", targetId: storeId, metadata: { section: "shopify_check" }, ip: clientIp(c) }).catch(
       (err: unknown) => logger.warn({ err }, "audit failed"),
     );
