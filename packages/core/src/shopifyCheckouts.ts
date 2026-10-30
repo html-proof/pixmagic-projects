@@ -151,6 +151,10 @@ export async function readAbandonedCheckouts(call: CheckoutCall, w: ReportWindow
   let value = 0;
   let recoveredValue = 0;
   const byDay = new Map<string, CheckoutDay>(eachDay(w.from, w.to).map((day) => [day, { day, abandoned: 0, recovered: 0, value: 0 }]));
+  // More than the pages can hold: the value would never be added up, so no page is read for it (each
+  // costs 753 points, and the counts are already Shopify's). A list that grows past them while it
+  // is read still stops at the limit below.
+  if (counts.all.count > CHECKOUTS_PAGE * CHECKOUTS_MAX_PAGES) gap = "too_many";
   // No checkouts: nothing to add up (Shopify's answer is none, worth 0). Otherwise every one, page by
   // page, paced by Shopify's cost budget, up to CHECKOUTS_MAX_PAGES.
   for (let page = 0; counts.all.count > 0 && !gap; page++) {

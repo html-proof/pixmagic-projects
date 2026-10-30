@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { LineChart, type LineSeries } from "@/components/dashboard/LineChart";
-import { Delta, Empty, NeutralDelta, Panel, Stat } from "@/components/dashboard/Primitives";
+import { Empty, NeutralDelta, Panel, Stat } from "@/components/dashboard/Primitives";
 import { asOfWords } from "@/components/dashboard/ShopifyReports";
 import { fmtDay } from "@/components/dashboard/format";
 import { fmtMoney, fmtNum, fmtPct, friendlyError } from "@/lib/api";
@@ -97,9 +97,14 @@ function Figures({ m, c, currency, versus }: { m: AbandonedCheckoutsModule; c: C
           value={`${fmtNum(c.recovered)}${c.recoveredExact ? "" : "+"}`}
           tone="good"
           note={
+            // Not toned good or bad: the dates compared with have had longer for their checkouts to be
+            // recovered, so a fall is often only timing (docs/kpis.md).
             <>
               {c.recoveredRate !== null ? `${fmtPct(c.recoveredRate)} of them · ` : ""}
-              <Delta value={m.deltas.recoveredRate} label={versus} />
+              <NeutralDelta value={m.deltas.recoveredRate} label={versus} />
+              {m.deltas.recoveredRate !== null && (
+                <span className="mt-1 block text-xs text-muted">Recent checkouts can still be recovered, so the newer dates&apos; rate can still rise.</span>
+              )}
             </>
           }
         />

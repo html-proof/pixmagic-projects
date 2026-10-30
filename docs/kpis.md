@@ -728,7 +728,7 @@ dates only: no name, email, phone or address is asked for or kept.
 | --- | --- |
 | Abandoned checkouts | Shopify's count of the checkouts in its abandoned checkouts list created in the dates, on the store's days: the shopper gave an email or phone number and didn't pay. Recovered and archived ones included, as Shopify's list keeps both. Shown with a "+" when Shopify gives the count only as a lower bound (`precision: AT_LEAST`); it then has no change and no rate |
 | Recovered so far | Of them, the ones Shopify marks recovered (`recovery_state:recovered`): completed later |
-| Recovered rate | Recovered ÷ abandoned, both by the day the checkout was created. Keeps rising for recent dates as late recoveries come in, hence "so far": a range that just ended compares unfavourably with an older one |
+| Recovered rate | Recovered ÷ abandoned, both by the day the checkout was created. Keeps rising for recent dates as late recoveries come in, hence "so far": a range that just ended compares unfavourably with an older one, so its change is shown uncoloured, never as better or worse |
 | Abandoned checkout value | Each checkout's total price added up (`totalPriceSet.shopMoney`: items after discounts, shipping and taxes) in the shop's currency, recovered ones included |
 | Recovered value | The total price of the ones completed later (`completedAt` set) |
 

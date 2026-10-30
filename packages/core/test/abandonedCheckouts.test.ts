@@ -4,6 +4,7 @@ import {
   ABANDONED_COUNTS_QUERY,
   ABANDONED_PAGE_QUERY,
   CHECKOUTS_MAX_PAGES,
+  CHECKOUTS_PAGE,
   checkoutSearch,
   checkoutsVisible,
   checkoutValuesOf,
@@ -110,11 +111,18 @@ describe("reading a window's abandoned checkouts", () => {
     expect(answer).toMatchObject({ values: { abandoned: 0, recovered: 0, value: 0, recoveredValue: 0, valueGap: null, currency: null } });
   });
 
-  it("stops after the page limit: the counts stay Shopify's, the value isn't added up", async () => {
-    const s = shopify({ all: 9000, recovered: 400, endless: true });
+  it("reads no page when the count is more than the pages hold: the counts stay Shopify's, the value isn't added up", async () => {
+    const s = shopify({ all: CHECKOUTS_PAGE * CHECKOUTS_MAX_PAGES + 1, recovered: 400, endless: true });
+    const answer = await readAbandonedCheckouts(s.call, window, MELBOURNE);
+    expect(s.asked).toEqual([]);
+    expect(answer).toMatchObject({ values: { abandoned: CHECKOUTS_PAGE * CHECKOUTS_MAX_PAGES + 1, recovered: 400, value: null, recoveredValue: null, valueGap: "too_many", days: null } });
+  });
+
+  it("stops after the page limit when the list outgrows the count while it is read", async () => {
+    const s = shopify({ all: CHECKOUTS_PAGE * CHECKOUTS_MAX_PAGES, recovered: 400, endless: true });
     const answer = await readAbandonedCheckouts(s.call, window, MELBOURNE);
     expect(s.asked).toHaveLength(CHECKOUTS_MAX_PAGES);
-    expect(answer).toMatchObject({ values: { abandoned: 9000, recovered: 400, value: null, recoveredValue: null, valueGap: "too_many", days: null } });
+    expect(answer).toMatchObject({ values: { value: null, recoveredValue: null, valueGap: "too_many", days: null } });
   });
 
   it("never adds up prices in different currencies, or ones Shopify withheld", async () => {
@@ -126,7 +134,8 @@ describe("reading a window's abandoned checkouts", () => {
 
   it("says when a count is only a lower bound", async () => {
     const s = shopify({ all: 10_000, recovered: 50, precision: "AT_LEAST", endless: true });
-    expect(await readAbandonedCheckouts(s.call, window, MELBOURNE)).toMatchObject({ values: { abandoned: 10_000, abandonedExact: false } });
+    expect(await readAbandonedCheckouts(s.call, window, MELBOURNE)).toMatchObject({ values: { abandoned: 10_000, abandonedExact: false, valueGap: "too_many" } });
+    expect(s.asked).toEqual([]);
   });
 
   it("is access_denied, never 0, when Shopify withholds the counts (protected customer data not approved)", async () => {
