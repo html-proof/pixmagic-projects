@@ -204,7 +204,7 @@ describe("secrets at cold start", () => {
       app: { SESSION_SECRET: "s", APP_RLS_PASSWORD: "p@ss/w:rd" },
       cognito: { COGNITO_CLIENT_SECRET: "c" },
       db: { username: "app", password: "m a&s" },
-      system: { SYSTEM_DB_USER: "app_system", SYSTEM_DB_PASSWORD: "sys" },
+      system: { SYSTEM_DB_USER: "app_system", SYSTEM_DB_PASSWORD: "sy s&" },
     };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
       const { SecretId } = JSON.parse(await new Request(input, init).text());
@@ -225,9 +225,24 @@ describe("secrets at cold start", () => {
     await loadSecrets(env, fetchImpl);
     expect(env.SESSION_SECRET).toBe("already-set");
     expect(env.COGNITO_CLIENT_SECRET).toBe("c");
-    // The system role's login, for the migrate action to make the role from.
-    expect(env.SYSTEM_DB_PASSWORD).toBe("sys");
-    expect(env.DATABASE_URL).toBe("postgresql://app:m%20a%26s@db.example:5432/app?sslmode=verify-full");
+    // systemDb logs in as the system role (docs/system-database-role.md); the owner's login is the
+    // cron's alone, for migrate and the other maintenance actions.
+    expect(env.DATABASE_URL).toBe("postgresql://app_system:sy%20s%26@db.example:5432/app?sslmode=verify-full");
+    expect(env.OWNER_DATABASE_URL).toBe("postgresql://app:m%20a%26s@db.example:5432/app?sslmode=verify-full");
     expect(env.APP_DATABASE_URL).toBe("postgresql://app_rls:p%40ss%2Fw%3Ard@db.example:5432/app?sslmode=verify-full");
+  });
+
+  it("gives the api and jobs functions, which have no owner's secret, no owner's login", async () => {
+    const asked: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const { SecretId } = JSON.parse(await new Request(input, init).text());
+      asked.push(SecretId);
+      return new Response(JSON.stringify({ SecretString: JSON.stringify({ SYSTEM_DB_PASSWORD: "sys" }) }));
+    }) as typeof fetch;
+    const env: NodeJS.ProcessEnv = { AWS_REGION: "ap-southeast-2", AWS_ACCESS_KEY_ID: "AKIA", AWS_SECRET_ACCESS_KEY: "s", SYSTEM_DB_SECRET_ARN: "system", DB_HOST: "db.example", DB_NAME: "app" };
+    await loadSecrets(env, fetchImpl);
+    expect(asked).toEqual(["system"]);
+    expect(env.DATABASE_URL).toBe("postgresql://app_system:sys@db.example:5432/app?sslmode=verify-full");
+    expect(env.OWNER_DATABASE_URL).toBeUndefined();
   });
 });

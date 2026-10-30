@@ -118,10 +118,26 @@ describe("readiness", () => {
 
   it("says not ready when the tenant connection's role isn't bound by row-level security", async () => {
     // The owner's login (a superuser here, rds_superuser on AWS) where app_rls belongs.
-    const owner = process.env.DATABASE_URL!;
-    const r = await withDb({ system: owner, tenant: owner }, () => ctx.app.inject({ method: "GET", url: "/readyz" }));
+    const owner = process.env.OWNER_DATABASE_URL!;
+    const r = await withDb({ system: process.env.DATABASE_URL!, tenant: owner }, () => ctx.app.inject({ method: "GET", url: "/readyz" }));
     expect(r.statusCode).toBe(503);
     expect(r.json().checks).toEqual({ db: true, coord: true, tenantDb: false });
+  });
+
+  it("in production, says not ready when the system connection is the tables' owner (docs/system-database-role.md)", async () => {
+    const owner = process.env.OWNER_DATABASE_URL!;
+    const was = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const onOwner = await withDb({ system: owner, tenant: process.env.APP_DATABASE_URL }, () => ctx.app.inject({ method: "GET", url: "/readyz" }));
+      expect(onOwner.statusCode).toBe(503);
+      expect(onOwner.json().checks).toEqual({ db: false, coord: true, tenantDb: true });
+      // On the system role: ready.
+      const onSystem = await ctx.app.inject({ method: "GET", url: "/readyz" });
+      expect(onSystem.json().checks).toEqual({ db: true, coord: true, tenantDb: true });
+    } finally {
+      process.env.NODE_ENV = was;
+    }
   });
 
   it("in production, fails tenant queries rather than run them on the owner's login when APP_DATABASE_URL is missing", async () => {

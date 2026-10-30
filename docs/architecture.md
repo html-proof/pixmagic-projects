@@ -73,8 +73,12 @@ Where a new piece of code goes:
   `allowed(need)` (`useApp()`) for the same thing to decide what to show; `can(role, …)` is for owner
   and admin rights only and is false for every other role.
 - **Reads** go through `withTenant(workspaceId, tx => ...)` (Postgres RLS as a second guard);
-  `systemDb` bypasses RLS and is for auth bootstrap, webhooks, jobs and writes that already scoped
-  by workspace and store.
+  `systemDb` is for auth bootstrap, webhooks, jobs and writes that already scoped by workspace and
+  store. RLS binds it too, in the row scope its entry point names (`forTenant` for every
+  `/workspaces/:ws` route and each job; `crossTenant(reason)` only for a reason on the list in
+  `packages/db/src/crossTenant.ts`): [system-database-role.md](system-database-role.md). A new path
+  outside `/workspaces/:ws` goes in `apps/api/src/rowScope.ts`; a new job kind, in
+  `apps/worker/src/rowScope.ts`.
 - **Input**: `z.object(...).parse(await body(c))` for JSON, the same for `c.req.query()`. A Zod
   failure becomes a 400 `validation` response automatically.
 - **Errors**: throw `HttpError(status, message, code)` for anything the client should be told; the

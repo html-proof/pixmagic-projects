@@ -12,7 +12,7 @@ import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail }
  * campaign. Meta itself can't run in e2e: the live report says so and nothing else waits on it.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Today (UTC, the store's zone here) plus `n` days, as YYYY-MM-DD. */

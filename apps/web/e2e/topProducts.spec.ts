@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 test("top products ranks real sales before paging, sorts, searches, exports and shows variant details", async ({page}, testInfo) => {
