@@ -1135,6 +1135,31 @@ model FunnelActionCheck {
   @@map("funnel_action_checks")
 }
 
+// A business event the team marked on the Profit sheet (/sheet; packages/shared/src/businessEvents.ts):
+// a sale, an ad campaign, a product launch... from one store-local day to another (YYYY-MM-DD, both
+// included). The sheet shows it on its days and filters days by it. A note only: no figure is
+// worked out from it.
+model BusinessEvent {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  kind            String
+  title           String
+  startsOn        String   @map("starts_on")
+  endsOn          String   @map("ends_on")
+  note            String?
+  // Who added it and who changed it last (user ids; kept if they leave).
+  createdByUserId String?  @map("created_by_user_id")
+  updatedByUserId String?  @map("updated_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([storeId, startsOn])
+  @@map("business_events")
+}
+
 // An ad account (Meta Ads, Google Ads, or a Google AdSense account) connected to a store with
 // "Continue with Meta/Google Ads/Google AdSense". One row per account. The token belongs to the
 // person who connected: every account they connected in one go shares it, encrypted with the same

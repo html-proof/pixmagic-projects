@@ -195,6 +195,20 @@ function topCountries(list: SegmentFunnel[]): SegmentFunnel[] {
 }
 
 /**
+ * The store's visits day by day (the Profit sheet: GET …/overview?parts=sheet), every visit as the
+ * funnel counts them; null on a day before visits were counted (`historyFrom`), which isn't the same
+ * as none.
+ */
+export async function visitsByDay(tx: Tx, { ws, storeId }: Scope, range: DateRange, historyFrom: string | null) {
+  const rows = await tx.$queryRaw<Array<{ day: string; visits: number }>>`
+    SELECT v.day, COUNT(*)::int AS visits FROM funnel_visits v
+    WHERE v.workspace_id = ${ws} AND v.store_id = ${storeId} AND v.day BETWEEN ${range.from} AND ${range.to}
+    GROUP BY v.day`;
+  const by = new Map(rows.map((r) => [r.day, r.visits]));
+  return eachDay(range.from, range.to).map((day) => ({ day, visits: historyFrom && day >= historyFrom ? (by.get(day) ?? 0) : null }));
+}
+
+/**
  * Everything the Shopping Funnel page shows from the pixel's visits, for these dates and the
  * filter: the dashboard's funnel (above), the comparison step by step, every transition, day by
  * day, funnels per device, country, landing page, new or returning visitor and traffic source,

@@ -142,7 +142,7 @@ const report = () => ({
       current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, totalRefunded: 12, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
       previous: { grossSales: 90, netSales: 80, totalSales: 90, tax: 4, shipping: 6, duties: 0, additionalFees: 0, orders: 2, units: 2, averageOrderValue: 40 },
       deltas: { netSales: 0.25, totalSales: 0.24, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
-      series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33 }],
+      series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33, newCustomerOrders: 2 }],
       year: {
         year: 2026,
         months: [
@@ -216,6 +216,7 @@ describe("redactOverview", () => {
     expect(s).not.toHaveProperty("year");
     // The store's own calculation is drawn from those lines, so it goes with them.
     expect(s).not.toHaveProperty("calculation");
+    // Which orders were a customer's first is customer analytics.
     expect(s.series[0]).toEqual({ day: "2026-10-01", netSales: 100, orders: 3, averageOrderValue: 33 });
     expect(out.modules.inventory.current).not.toHaveProperty("stockValueAtCost");
     expect(out.modules.inventory.current).not.toHaveProperty("retailValue");
@@ -315,7 +316,7 @@ describe("redactOverview", () => {
     expect(out.modules.sales_overview.current.grossSales).toBe(120);
     expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 115, totalRefunded: 12, returns: 10, duties: 2, additionalFees: 1 });
     expect(out.modules.sales_overview.previous).toMatchObject({ tax: 4, shipping: 6 });
-    expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2 });
+    expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2, newCustomerOrders: 2 });
     expect(out.modules.sales_overview.calculation.applyToDashboard).toBe(true);
     expect(out.modules.sales_overview.year.months[0]).toMatchObject({ taxes: 5, totalSales: 115, comparedLines: { shipping: 6 } });
     expect(out.modules.inventory.current.retailValue).toBe(200);

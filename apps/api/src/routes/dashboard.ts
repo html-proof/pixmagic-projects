@@ -78,10 +78,13 @@ export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
  * and traffic they're set against), with every campaign; the rest of the dashboard isn't computed.
  * `parts=funnel`: only what the Shopping Funnel page shows (the funnel in full, narrowed by
  * `funnelQuery`, and the orders, Shopify sessions and traffic sources beside it).
+ * `parts=sheet`: only what the Profit sheet shows (/sheet): the sales day by day, the visits day by
+ * day beside the funnel's summary, and the ad spend day by day.
  */
 const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "sales_overview", "channels", "traffic"]);
 const FUNNEL_MODULES: ReadonlySet<string> = new Set(["funnel", "shopify_sessions", "sales_overview", "channels", "traffic"]);
-const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery, parts: z.enum(["advertising", "funnel"]).optional() });
+const SHEET_MODULES: ReadonlySet<string> = new Set(["sales_overview", "funnel", "ads", "ad_connections"]);
+const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery, parts: z.enum(["advertising", "funnel", "sheet"]).optional() });
 
 /**
  * The dates in the store's zone, at most 12 months at a time, within the store's `limits`
@@ -188,7 +191,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
     const q = overviewQuery.parse(c.req.query());
     const advertising = q.parts === "advertising";
     const adsView: AdsView = advertising ? { platform: q.platform, account: q.account, allCampaigns: true } : {};
-    const only = advertising ? ADVERTISING_MODULES : q.parts === "funnel" ? FUNNEL_MODULES : null;
+    const only = advertising ? ADVERTISING_MODULES : q.parts === "funnel" ? FUNNEL_MODULES : q.parts === "sheet" ? SHEET_MODULES : null;
     const sees = (m: string) => (!only || only.has(m)) && seesModule(access, m);
     const funnelView = q.parts === "funnel" ? funnelViewOf(q, access) : undefined;
 
@@ -200,7 +203,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       polled = store;
       const now = new Date();
       const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
-      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView), access);
+      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView, { visitsByDay: q.parts === "sheet" }), access);
       reports = report.shopifyRefresh;
       return {
         store: publicStore(store),

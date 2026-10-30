@@ -171,6 +171,7 @@ test.describe("signed in", () => {
     ["/whatsapp", /./],
     ["/messaging", /./],
     ["/automations", /./],
+    ["/sheet", /Profit sheet/],
     // A new email template: its live preview renders before it has a name.
     ["/settings/email/templates/edit", /./],
   ];

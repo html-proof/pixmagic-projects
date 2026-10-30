@@ -119,7 +119,7 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
   const byDay = new Map(rows.map((x) => [x.day, x]));
   return eachDay(r.from, r.to).map((day) => {
     const x = byDay.get(day);
-    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, units: 0, refunds: 0, averageOrderValue: null };
+    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, units: 0, refunds: 0, averageOrderValue: null, orderValue: 0, newCustomerOrders: 0 };
     const beforeRefunds = r2(x.grossSales - x.discounts);
     return {
       day,
@@ -133,6 +133,11 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
       units: x.units,
       refunds: r2(x.refunds),
       averageOrderValue: x.orders > 0 ? r2(x.orderValue / x.orders) : null,
+      // What average order value divides: the day's orders' items after discounts, before tax (the
+      // Profit sheet adds it up over weeks and months, where averaging the averages would be wrong).
+      orderValue: r2(x.orderValue),
+      // Orders of customers buying for the first time: of the orders with a customer, the ones not returning.
+      newCustomerOrders: x.ordersWithCustomer - x.returningCustomerOrders,
     };
   });
 }

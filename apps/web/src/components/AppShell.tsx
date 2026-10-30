@@ -29,6 +29,7 @@ import {
   ReceiptText,
   Search,
   Settings,
+  Sheet,
   ShieldCheck,
   UserCog,
   ShoppingBag,
@@ -155,6 +156,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const main: NavItem[] = [
     ...(showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : []),
     ...topic("overview", "Business Overview", Gauge),
+    // The Profit sheet: every figure a column per day, week or month, with the business events (/sheet).
+    ...(allowed("analytics.sales") ? [area("/sheet", "Profit sheet", Sheet)] : []),
     ...topic("sales", "Sales & Orders", ShoppingBag),
     ...topic("products", "Products", Package),
     // The Inventory section (stock per location, alerts, changes). It takes the place of the
@@ -709,6 +712,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null, !!me.shared, offers);
     return [
       ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
+      ...(allowed("analytics.sales")
+        ? [{ id: "sheet", label: "Profit sheet", group: "Insights", icon: Sheet, keywords: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer", go: go("/sheet") }]
+        : []),
       ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
         (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
       ),

@@ -598,6 +598,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
       if (s.year !== undefined) s.year = omitFromMonths(s.year, ["refunds"]);
     }
+    // Which orders were a customer's first: the customers module's figure (new and returning customers), day by day too.
+    if (!g.has("customers.analytics") && Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["newCustomerOrders"]));
     out.sales_overview = s;
   }
   const inv = out.inventory;

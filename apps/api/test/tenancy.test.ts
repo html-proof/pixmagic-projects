@@ -113,8 +113,7 @@ describe("capability-driven dashboard", () => {
     const resA = await ctx.app.inject({ method: "GET", url: `/workspaces/${wsA}/stores/${storeA.id}/overview?preset=7d`, headers: a.headers });
     expect(resA.statusCode).toBe(200);
     const body = resA.json();
-    expect(Object.keys(body.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
-    expect(Object.keys(body.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
+    expect(Object.keys(body.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(body.modules.sales_overview.current).toMatchObject({ grossSales: 150, netSales: 150, orders: 2, averageOrderValue: 75 });
     expect(body.capabilities.find((c: { id: string }) => c.id === "top_products").missingScopes).toEqual(["read_products"]);
     expect(body.range.to).toBe(today);
@@ -124,7 +123,7 @@ describe("capability-driven dashboard", () => {
     const mb = resB.json();
     expect(Object.keys(mb.modules).sort()).toEqual([
       "catalog", "channels", "customers", "discount_codes", "expenses", "fulfillment", "inventory",
-      "order_timing", "recent_orders", "refunds", "sales_overview", "top_products", "traffic",
+      "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "top_products", "traffic",
     ]);
     expect(mb.hasData).toBe(false);
     expect(mb.modules.sales_overview.current.averageOrderValue).toBeNull();

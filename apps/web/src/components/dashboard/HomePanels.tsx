@@ -5,6 +5,7 @@ import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, 
 import type { Health } from "@app/shared/health";
 import type { AdSpendProvider } from "@app/shared/ads";
 import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
+import type { OrderOutcomes } from "@app/shared/orders";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
