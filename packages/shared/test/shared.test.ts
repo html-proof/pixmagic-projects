@@ -29,6 +29,7 @@ import {
   resolvePreset,
   WEEK_STARTS_ON,
   saleValue,
+  scopeList,
   scopesForModule,
   signShopifyQuery,
   signWebhookBody,
@@ -179,6 +180,16 @@ describe("capabilities", () => {
   it("maps a module back to the scopes a grant request must ask for", () => {
     expect(scopesForModule("funnel")).toEqual(["write_pixels", "read_customer_events"]);
     expect(scopesForModule("customers")).toEqual(["read_orders", "read_customers"]);
+  });
+
+  it("names scopes mid-sentence without lowering the Shopify name", () => {
+    // "Needs your permission in Shopify to read your Shopify reports", not "your shopify reports".
+    expect(scopeList(["read_reports"])).toBe("your Shopify reports");
+    expect(scopeList(["write_pixels", "read_customer_events"])).toBe("visit tracking and storefront visits");
+    expect(scopeList(["read_orders", "read_all_orders", "read_customers"])).toBe("your orders, orders older than 60 days and your customers");
+    // A scope without a label keeps its raw name.
+    expect(scopeList(["read_themes"])).toBe("read_themes");
+    expect(scopeList([])).toBe("");
   });
 
   it("labels Shopify sales channels in plain language", () => {

@@ -31,12 +31,12 @@ This pushes, as one versioned config:
 | App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified: authorizes a store we hold no working token for, otherwise opens it) |
 | Redirect URL | `https://APP_DOMAIN/api/shopify/callback` |
 | Scopes | `read_orders,read_products` (required) |
-| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; `read_inventory`, `read_locations`, `write_inventory` (Inventory, [inventory.md](inventory.md)) since 2026-10-19; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
+| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; `read_inventory`, `read_locations`, `write_inventory` (Inventory, [inventory.md](inventory.md)) since 2026-10-19; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install). Per app on top of those: `read_reports` in `shopify.app.toml` and `shopify.app.pixmagic.toml` only, offered once listed in `SHOPIFY_APP_OPTIONAL_SCOPES` (see [Shopify's reports](#shopifys-reports-read_reports-sessions-visitors-gross-profit-the-check)) |
 | Webhooks | see [webhooks.md](webhooks.md), delivered to `https://APP_DOMAIN/api/webhooks/shopify` |
 | Compliance webhooks | `customers/data_request`, `customers/redact`, `shop/redact` |
 | Web pixel extension | `extensions/insights-pixel` |
 
-`SHOPIFY_SCOPES` / `SHOPIFY_OPTIONAL_SCOPES` in the API env must match the toml.
+`SHOPIFY_SCOPES` / `SHOPIFY_OPTIONAL_SCOPES` in the API env must match the toml; `SHOPIFY_APP_OPTIONAL_SCOPES` may only name scopes that app's own toml adds.
 
 ### Scope → feature map (least privilege)
 
@@ -48,6 +48,7 @@ This pushes, as one versioned config:
 | `write_pixels`, `read_customer_events` (optional) | Shopping funnel | Install the web pixel and receive storefront events |
 | `read_inventory`, `read_locations` (optional, once declared) | Inventory: stock per location and quantity state | docs/inventory.md, "Turning on stock levels and stock changes" |
 | `write_inventory` (optional, once declared) | Inventory: changing stock from bizinsights | Only when a person with `inventory.adjust` asks; each change confirmed by Shopify |
+| `read_reports` (optional, main and PixMagic apps only) | Sessions and visitors (Shopify), Gross profit, Checked against Shopify | ShopifyQL report totals only; also needs Level 2 protected customer data selected for the app, though no customer data is read |
 
 The dashboard reads the scopes **actually granted** (from the token response and `app/scopes_update`) and hides any module whose scopes are missing.
 
@@ -268,6 +269,7 @@ being stuck with whatever the install screen asked for:
 | --- | --- | --- |
 | `read_customers` | repeat-customer share | `customers` ("New vs returning") |
 | `write_pixels` + `read_customer_events` | storefront sessions and conversion | `funnel` ("Shopping funnel") |
+| `read_reports` (main and PixMagic apps only, declared 2026-10-30, offered once listed per app) | Shopify's own sessions, online store visitors, gross profit and the sales check | `shopify_sessions`, `profit` ([Shopify's reports](#shopifys-reports-read_reports-sessions-visitors-gross-profit-the-check)) |
 
 Everything else — sales, refunds, top products, channels, order timing, fulfillment, discount
 codes, recent orders, inventory, catalog — needs only `read_orders` / `read_products` and is
@@ -336,32 +338,93 @@ What a revoke does *not* do: it does not delete data the scope let us import, an
 
 `packages/core/test/appConfig.test.ts` fails the build if the tomls and `settings.ts` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
 
+**One app's own optional scopes.** `SHOPIFY_OPTIONAL_SCOPES` is what *every* app declares; a scope only some apps may declare (today `read_reports`) goes after it in those apps' tomls and in `SHOPIFY_APP_OPTIONAL_SCOPES` as `appKey:scope,scope;appKey:scope` (`appOptionalScopes`, packages/core/src/scopes.ts). A store is offered what the app it is connected through declares (`optionalScopesFor`: the dashboard's **Enable**, `scopes/request`, `scopes/revoke` and Settings → Stores' **Remove** all use it), except a store in `SHOPIFY_APP_STORE_PREVIEW_SHOPS` (the App Store reviewer's test store, on the main app), which is offered only what the App Store app declares. appConfig.test.ts checks that every toml starts with the common list, adds only allowed scopes, declares everything its app's entry offers (the setting may lag the toml, never lead it), and that the App Store apps add nothing. An entry the API can't read is logged and offered to no app.
+
 Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-scope-back) above.
 
 ### Shopify's reports (`read_reports`): sessions, visitors, gross profit, the check
 
-**Current state (2026-10-17): built, not offered yet.** The dashboard can show Shopify Analytics'
-own sessions, visitors and conversion rate, its gross profit, and a line-by-line check of our sales
-figures against its sales report (docs/kpis.md, "Shopify's own reports"). They come from ShopifyQL
-(`shopifyqlQuery`), which needs the `read_reports` scope **and Level 2 protected customer data
-access** (name, email, phone, address), even though none of that data is read. Until both are in
-place the cards "Sessions and visitors (Shopify)" and "Gross profit" say bizinsights is waiting on
-Shopify, and nothing calls ShopifyQL. To turn them on, per app (PixMagic first: it is the store
-compared with Shopify):
+**Current state (2026-10-30): declared by the main and PixMagic apps, offered to no store yet.**
+The dashboard can show Shopify Analytics' own sessions, online store visitors and conversion rate,
+its gross profit, and a line-by-line check of our sales figures against its sales report
+(docs/kpis.md, "Shopify's own reports"). They come from ShopifyQL
+([`shopifyqlQuery`](https://shopify.dev/docs/api/admin-graphql/latest/queries/shopifyqlQuery)),
+which needs the `read_reports` scope **and Level 2 protected customer data** (the name, email,
+phone and address fields), even though no customer's details are read: only report totals. Until a
+store has granted `read_reports` the cards "Sessions and visitors (Shopify)" and "Gross profit" stay
+locked, and nothing calls ShopifyQL for it (the worker skips the store).
 
-1. Dev Dashboard → the app → **API access → Protected customer data access**: request the
-   customer data fields name, email, phone and address (Level 2), with "Store analytics" as the
-   reason. A custom-distribution app is granted as soon as the form is filled in; the App Store app
-   (`appstore`) needs Shopify's review.
-2. Add `"read_reports"` to `optional_scopes` in every toml and to `SHOPIFY_OPTIONAL_SCOPES` in
-   `apps/aws/src/settings.ts` (appConfig.test.ts checks they agree), `shopify app deploy` each
-   app (`--config pixmagic`, `--config appstore`, `--config public`), and merge to `main`.
-3. In the dashboard, **Enable** on either card takes the merchant to Shopify to grant it. The next
-   poll asks Shopify; the figures fill in within a minute.
+Where each app stands:
 
-Check: `aws lambda invoke --function-name insights-production-cron:live --payload
-'{"action":"shopify-check","shop":"<shop>.myshopify.com"}'` (docs/RUNBOOK.md) lists every figure
-with its status; rows say "hasn't granted" until step 3, "didn't let bizinsights read" until step 1.
+| App | `read_reports` in its toml | Offered (`SHOPIFY_APP_OPTIONAL_SCOPES`) | Level 2 |
+| --- | --- | --- | --- |
+| Main (`default`, 57e9ef75) | yes (`optional_scopes`, after the common list) | not yet | development stores: no review |
+| PixMagic (`pixmagic`, bb0ea9e4) | yes | not yet | custom distribution: "always available", but the fields must be selected (step 2) |
+| App Store (`appstore`, cf5c717d) | no | no | needs Shopify's review, which can't be asked for while the app is in App Store review |
+| First App Store app (`public`, 658431ae) | no | no | as `appstore`; never to be submitted |
+
+The setting is the switch, and it ships empty because Shopify grants an optional scope only once the
+app's **released** version declares it: offering **Enable** before `shopify app deploy` has released
+the toml sends the merchant to a Shopify error. Declaring a scope that nobody requests is harmless.
+The App Store reviewer's test store (`SHOPIFY_APP_STORE_PREVIEW_SHOPS`, on the main app) is never
+offered it, because the app under review doesn't declare it (`optionalScopesFor`).
+
+**Owner steps, in this order** (the CLI and the dashboards need the owner's own sign-in; CI never runs
+the Shopify CLI):
+
+1. **Release the two tomls.** From an up-to-date `main`, first compare what a deploy would release
+   with what is live: Dev Dashboard → the app → **Versions** → the active version, against
+   `shopify-app/shopify.app.toml` (or `.pixmagic.toml`) and `shopify-app/extensions/`. A deploy
+   releases the whole config, so the current insights-pixel extension and webhooks go out too.
+   Then, in PowerShell:
+
+   ```powershell
+   cd C:\Users\Seban\Videos\saas-project2.0\shopify-app
+   shopify app deploy
+   shopify app deploy --config pixmagic --version pixmagic-<n>
+   ```
+
+   The first is the main app (57e9ef75); `<n>` is the next number after PixMagic's live version
+   (Dev Dashboard → Versions; pixmagic-7 was live on 2026-10-16). Never `--config appstore` or
+   `--config public` for this. Check: each app's new active version lists `read_reports` under
+   optional scopes. Roll back in the Dev Dashboard (Versions → Release) if anything else changed.
+2. **Level 2 fields for PixMagic.** Partner Dashboard (organization 5229240) → **Apps** → the
+   PixMagic app "bizinsights" (client id bb0ea9e4…) → **API access requests** → **Protected customer
+   data access** → **Request access**: select *Protected customer data* with the reason "Store
+   analytics", then the fields **Name, Email, Phone and Address**, each with the reason "Shopify's
+   reports API (ShopifyQL) requires them; bizinsights reads only report totals, no customer's
+   details", answer the data protection questions and **Save**. A custom-distribution app needs no
+   review. The main app's stores are development stores, which need no review either; if its
+   dashboard offers the same page, select the same fields there.
+3. **Offer it: a one-line pull request.** In `apps/aws/src/settings.ts` set
+   `"SHOPIFY_APP_OPTIONAL_SCOPES": "default:read_reports;pixmagic:read_reports"` (or
+   `"default:read_reports"` alone while step 2 waits). Open the pull request, merge it once CI is
+   green, and confirm its **Deploy to AWS** run succeeded and `https://bizinsights.io/api/version`
+   names the merge commit. appConfig.test.ts refuses an app whose toml lacks the scope, and any
+   App Store app.
+4. **Try it on a development store of the main app** (not Insights Test, the reviewer's store,
+   which is never offered it): Dashboard → **More insights you can unlock** → "Gross profit" or
+   "Sessions and visitors (Shopify)" → **Enable**, and approve on Shopify's screen. Back on the
+   dashboard the cards fill in on a later poll, within about a minute. Then run the check against
+   Shopify's own reports for that store (docs/RUNBOOK.md, "Dashboard numbers look wrong", step 2):
+   `aws lambda invoke --region ap-southeast-2 --function-name insights-production-cron:live
+   --cli-binary-format raw-in-base64-out --payload '{"action":"shopify-check","shop":"<store>.myshopify.com"}' check.json`.
+   Its rows say the store "hasn't granted bizinsights its Shopify reports" before the grant, and
+   "Shopify didn't let bizinsights read this report" while Level 2 is missing.
+5. **PixMagic's owner clicks Enable** on either card and approves on Shopify. Nobody else can grant
+   it for that store.
+
+What the cards say instead of a figure: "Shopify didn't let bizinsights read its reports…" is
+`access_denied` (Level 2 not selected yet; asked again after 6 hours); "Shopify can't run this
+report for this store (some reports need a higher Shopify plan)" is `unsupported`, which gross
+profit can be on lower Shopify plans while sessions still work. Never a 0 or an estimate.
+
+To stop offering it, empty the setting again (a pull request, as in step 3): stores that granted it
+keep it, and their cards keep working. The App Store apps get it only after App Store review has
+finished and Shopify has approved Level 2 for that app: then add `"read_reports"` to that toml's
+`optional_scopes`, run `shopify app deploy --config appstore`, and add `appstore:read_reports` to
+the setting, changing appConfig.test.ts's rule that App Store apps declare nothing extra in the same
+pull request.
 
 ## 3d. Troubleshooting installs
 

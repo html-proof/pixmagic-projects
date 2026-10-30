@@ -33,6 +33,10 @@ scopes = "read_orders,read_products"
 # SHOPIFY_OPTIONAL_SCOPES, and redeploy both. See docs/shopify-setup.md "Optional scopes".
 # The Inventory module's stock levels, locations and stock changes (docs/inventory.md); none of
 # them is protected customer data.
+# No read_reports (Shopify's reports, ShopifyQL), unlike the main and PixMagic apps: as an App
+# Store app it needs Shopify to approve Level 2 protected customer data first. Then add it here
+# and to this app's SHOPIFY_APP_OPTIONAL_SCOPES, and `shopify app deploy --config public`
+# (docs/shopify-setup.md, "Shopify's reports").
 optional_scopes = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"]
 use_legacy_install_flow = false
 

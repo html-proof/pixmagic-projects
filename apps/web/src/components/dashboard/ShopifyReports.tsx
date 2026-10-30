@@ -45,16 +45,16 @@ export function ShopifySessionsCard({ m, versus }: { m: ShopifySessionsModule; v
     <Panel
       id="shopify-sessions"
       title="Sessions and visitors (Shopify)"
-      help={`Shopify Analytics' own figures: online store sessions (one ends after 30 minutes idle), unique visitors and its conversion rate, bot sessions left out by Shopify's own classification.${when ? ` ${when[0]!.toUpperCase()}${when.slice(1)}.` : ""}`}
+      help={`Shopify Analytics' own figures: online store sessions (one ends after 30 minutes idle), online store visitors (the different shoppers over the whole dates, as Shopify counts them: people, not sessions, and never a sum of the days) and its conversion rate, bot sessions left out by Shopify's own classification.${when ? ` ${when[0]!.toUpperCase()}${when.slice(1)}.` : ""}`}
     >
       {!c ? (
         <Empty>{note}</Empty>
       ) : (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Sessions" value={c.sessions === null ? "—" : fmtNum(c.sessions)} note={<Delta value={m.deltas.sessions} label={versus} />} />
-          <Stat label="Visitors" value={c.visitors === null ? "—" : fmtNum(c.visitors)} note={<Delta value={m.deltas.visitors} label={versus} />} />
+          <Stat label="Online store visitors" value={c.visitors === null ? "—" : fmtNum(c.visitors)} note={<Delta value={m.deltas.visitors} label={versus} />} />
           <Stat label="Conversion rate" value={fmtPct(c.conversionRate)} note={<Delta value={m.deltas.conversionRate} label={versus} />} />
-          <Stat label="Pageviews" value={c.pageviews === null ? "—" : fmtNum(c.pageviews)} note={c.sessions ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format((c.pageviews ?? 0) / c.sessions)} per session` : undefined} />
+          <Stat label="Pageviews" value={c.pageviews === null ? "—" : fmtNum(c.pageviews)} note={c.sessions && c.pageviews !== null ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.pageviews / c.sessions)} per session` : undefined} />
           <Stat label="Added to cart" value={c.cartSessions === null ? "—" : fmtNum(c.cartSessions)} note="Sessions" />
           <Stat label="Reached checkout" value={c.checkoutSessions === null ? "—" : fmtNum(c.checkoutSessions)} note="Sessions" />
           <Stat label="Completed checkout" value={c.completedSessions === null ? "—" : fmtNum(c.completedSessions)} tone="good" note="Sessions" />

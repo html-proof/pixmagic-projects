@@ -1,6 +1,8 @@
 import { systemDb, type Store } from "@app/db";
 import { normalizeShopDomain } from "@app/shared";
+import { APP_STORE_APP, previewShops, type StoreApp } from "./apps.js";
 import { env } from "./env.js";
+import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
 import { shopifyGraphql } from "./shopify.js";
 import type { Queues, SyncKind } from "./queues.js";
@@ -20,9 +22,10 @@ import type { Queues, SyncKind } from "./queues.js";
  *  - a scope we HAVE declared is subject to Shopify's protected customer data review before
  *    the grant will actually stick.
  *
- * So the feature stays dormant until `optional_scopes` is uncommented in the tomls and
- * mirrored into `SHOPIFY_OPTIONAL_SCOPES` — `declaredOptionalScopes` is empty until then, and
- * every entry point below refuses rather than sending a merchant somewhere that cannot work.
+ * So a scope stays dormant until it is in `optional_scopes` in the tomls and mirrored into
+ * `SHOPIFY_OPTIONAL_SCOPES` (every app) or `SHOPIFY_APP_OPTIONAL_SCOPES` (one app's own) —
+ * `declaredOptionalScopes` leaves it out until then, and every entry point below refuses rather
+ * than sending a merchant somewhere that cannot work.
  * See docs/shopify-setup.md "Optional scopes".
  */
 
@@ -34,14 +37,61 @@ export function storeHandle(shop: string): string {
 }
 
 /**
- * Scopes the deployed app declares as optional, from `SHOPIFY_OPTIONAL_SCOPES`.
+ * Scopes the deployed app declares as optional: `SHOPIFY_OPTIONAL_SCOPES`, which every app
+ * declares, plus what `appKey`'s own toml adds (`appOptionalScopes`). No key: the common list.
  *
- * This env var mirrors `optional_scopes` in the toml and cannot substitute for it: Shopify
+ * These env vars mirror `optional_scopes` in the tomls and cannot substitute for them: Shopify
  * reads the toml (via `shopify app deploy`), never our env. `packages/core/test/appConfig.test.ts`
- * fails the build if the two drift apart, which is what makes reading the env safe here.
+ * fails the build if they drift apart, which is what makes reading the env safe here.
  */
-export function declaredOptionalScopes(): string[] {
-  return splitScopes(env().SHOPIFY_OPTIONAL_SCOPES);
+export function declaredOptionalScopes(appKey?: string | null): string[] {
+  const common = splitScopes(env().SHOPIFY_OPTIONAL_SCOPES);
+  const extra = appKey ? (appOptionalScopes()[appKey] ?? []) : [];
+  return [...new Set([...common, ...extra])];
+}
+
+/**
+ * The optional scopes one store's merchant may be offered: what the app it is connected through
+ * declares. A store in SHOPIFY_APP_STORE_PREVIEW_SHOPS (the App Store reviewer's test store, on
+ * the main app) is offered only what the App Store app declares, so the reviewer never sees a
+ * permission the app under review doesn't ask for.
+ */
+export function optionalScopesFor(store: StoreApp): string[] {
+  return declaredOptionalScopes(previewShops().has(store.shopDomain) ? APP_STORE_APP : store.shopifyAppKey);
+}
+
+/**
+ * `SHOPIFY_APP_OPTIONAL_SCOPES` ("default:read_reports;pixmagic:read_reports") as app key →
+ * scopes: the optional scopes only some apps declare, such as `read_reports` on the apps whose
+ * ShopifyQL access is set up, and not on an App Store app while Shopify reviews it.
+ *
+ * Fails closed, like SHOPIFY_EXTRA_APPS: an entry that can't be read is logged and left out, so a
+ * typo offers a scope to no app rather than to every app.
+ */
+export function appOptionalScopes(): Record<string, string[]> {
+  const raw = env().SHOPIFY_APP_OPTIONAL_SCOPES.trim();
+  if (parsedAppScopes?.raw !== raw) parsedAppScopes = { raw, byApp: parseAppScopes(raw) };
+  return parsedAppScopes.byApp;
+}
+
+/** Parsed once per value: every request reads it, and a bad entry should be logged once. */
+let parsedAppScopes: { raw: string; byApp: Record<string, string[]> } | undefined;
+
+const APP_SCOPES_ENTRY = /^([a-z0-9_]{1,32})\s*:\s*([a-z_]{1,64}(?:\s*,\s*[a-z_]{1,64})*)$/;
+
+function parseAppScopes(raw: string): Record<string, string[]> {
+  const byApp: Record<string, string[]> = {};
+  for (const part of raw.split(";")) {
+    const entry = part.trim();
+    if (!entry) continue;
+    const m = APP_SCOPES_ENTRY.exec(entry);
+    if (!m) {
+      logger.error({ entry }, "SHOPIFY_APP_OPTIONAL_SCOPES entry is not appKey:scope,scope; ignored");
+      continue;
+    }
+    byApp[m[1]!] = [...new Set([...(byApp[m[1]!] ?? []), ...splitScopes(m[2]!)])];
+  }
+  return byApp;
 }
 
 /**
@@ -66,9 +116,10 @@ const splitScopes = (raw: string): string[] =>
  * Of `wanted`, the scopes we can actually ask this store's merchant for: declared as optional
  * and not already granted. Anything else is dropped — asking for an undeclared scope lands the
  * merchant on a Shopify error, and asking for one they already have is a pointless prompt.
+ * `optional`: what the store's app declares (`optionalScopesFor`); by default the common list.
  */
-export function requestableScopes(wanted: string[], granted: string[] | string): string[] {
-  const declared = new Set(declaredOptionalScopes());
+export function requestableScopes(wanted: string[], granted: string[] | string, optional: string[] = declaredOptionalScopes()): string[] {
+  const declared = new Set(optional);
   const have = new Set(Array.isArray(granted) ? granted : granted.split(",").map((s) => s.trim()));
   // Shopify's write_X implies read_X, so a granted write_ covers the matching read_ request.
   for (const s of [...have]) if (s.startsWith("write_")) have.add(`read_${s.slice(6)}`);
@@ -87,9 +138,11 @@ export function requestableScopes(wanted: string[], granted: string[] | string):
  * Unlike `requestableScopes` this does NOT treat a granted `write_X` as covering `read_X`: you
  * can only revoke a handle that was actually granted, and revoking `write_X` is not the same
  * ask as revoking `read_X`.
+ *
+ * `optional`: what the store's app declares (`optionalScopesFor`); by default the common list.
  */
-export function revocableScopes(wanted: string[], granted: string[] | string): string[] {
-  const declared = new Set(declaredOptionalScopes());
+export function revocableScopes(wanted: string[], granted: string[] | string, optional: string[] = declaredOptionalScopes()): string[] {
+  const declared = new Set(optional);
   const have = new Set(Array.isArray(granted) ? granted : granted.split(",").map((s) => s.trim()));
   return [...new Set(wanted)].filter((s) => declared.has(s) && have.has(s));
 }

@@ -694,7 +694,7 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 | Figure | ShopifyQL | Notes |
 | --- | --- | --- |
 | Sessions | `FROM sessions SHOW sessions`, human sessions only | Shopify ends a session after 30 minutes idle; bot sessions are left out (`human_or_bot_session = 'human'`, Shopify's own classification) |
-| Visitors | `online_store_visitors` | Unique over the whole range: asked for the range whole, never summed from days |
+| Online store visitors | `online_store_visitors` | Shopify's own name and count of the different shoppers: unique over the whole range, asked for the range whole, never summed from days; people, not sessions, and not Meta's reach |
 | Conversion rate | `sessions_that_completed_checkout ÷ sessions` | Shopify's formula; the funnel steps (`sessions_with_cart_additions`, `sessions_that_reached_checkout`) and `pageviews` are shown too |
 | Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known. Not net profit: bizinsights knows none of the other costs |
 | The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |

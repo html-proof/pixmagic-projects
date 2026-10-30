@@ -204,10 +204,14 @@ export function scopeLabel(scope: string): string {
 
 /**
  * The same labels named inside a sentence: "your orders", "visit tracking and storefront
- * visits". Lower case, because every caller puts this mid-sentence.
+ * visits". Only the first letter is lowered, because every caller puts this mid-sentence and a
+ * name inside a label keeps its capital: "your Shopify reports".
  */
 export function scopeList(scopes: string[]): string {
-  const names = scopes.map((s) => scopeLabel(s).toLowerCase());
+  const names = scopes.map((s) => {
+    const label = scopeLabel(s);
+    return label.charAt(0).toLowerCase() + label.slice(1);
+  });
   if (names.length <= 1) return names[0] ?? "";
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }

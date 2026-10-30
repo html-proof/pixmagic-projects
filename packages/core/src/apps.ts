@@ -226,13 +226,21 @@ export interface StoreApp {
  */
 export function appStoreWorkspace(stores: readonly StoreApp[]): boolean {
   if (!stores.length) return false;
-  const preview = new Set(
+  const preview = previewShops();
+  return stores.every((s) => APP_STORE_APPS.includes(s.shopifyAppKey) || preview.has(s.shopDomain));
+}
+
+/**
+ * SHOPIFY_APP_STORE_PREVIEW_SHOPS: stores treated as App Store installs though they are connected
+ * through another app (the App Store reviewer's test store). Unreadable entries are dropped.
+ */
+export function previewShops(): Set<string> {
+  return new Set(
     env()
       .SHOPIFY_APP_STORE_PREVIEW_SHOPS.split(",")
       .map((s) => normalizeShopDomain(s.trim()))
-      .filter(Boolean),
+      .filter((s): s is string => !!s),
   );
-  return stores.every((s) => APP_STORE_APPS.includes(s.shopifyAppKey) || preview.has(s.shopDomain));
 }
 
 /**

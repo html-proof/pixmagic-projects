@@ -1,7 +1,7 @@
 import { Prisma, type Store, type Tx } from "@app/db";
 import { dailyRate, historyAccess, historyStart, localDay, MIN_HISTORY_DAYS, storeRangeLimits, storeStartDay, type DateRange, type RangeLimits } from "@app/shared";
 import { orderHistoryStatus } from "../orderHistory.js";
-import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
+import { declaredScopes, optionalScopesFor } from "../scopes.js";
 import { salesDays, soldCte, STATUS, stockScope, variantStockCte } from "../inventory/stock.js";
 import { num, numOrNull, r1, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 
@@ -122,7 +122,7 @@ export async function storeLimits(tx: Tx, { ws, storeId }: Scope, store: Pick<St
  * how the orders older than Shopify's 60 days can be had (`historyAccess`) and, once they can, how
  * far their import has got, a year at a time (`orderHistoryStatus`). Not a module: always present.
  */
-export async function importedData(tx: Tx, scope: Scope, store: Pick<Store, "ordersHistoryFrom" | "timezone" | "shopCreatedAt" | "grantedScopes">) {
+export async function importedData(tx: Tx, scope: Scope, store: Pick<Store, "ordersHistoryFrom" | "timezone" | "shopCreatedAt" | "grantedScopes" | "shopDomain" | "shopifyAppKey">) {
   const { ws, storeId } = scope;
   const [row] = await tx.$queryRaw<Array<{ orders: number; oldest_day: string | null; newest_day: string | null; products: number; variants: number }>>`
     SELECT o.orders, o.oldest_day, o.newest_day,
@@ -133,7 +133,7 @@ export async function importedData(tx: Tx, scope: Scope, store: Pick<Store, "ord
       FROM orders
       WHERE workspace_id = ${ws} AND store_id = ${storeId}
     ) o`;
-  const access = historyAccess(store.grantedScopes, { optionalScopes: declaredOptionalScopes(), declaredScopes: declaredScopes() });
+  const access = historyAccess(store.grantedScopes, { optionalScopes: optionalScopesFor(store), declaredScopes: declaredScopes() });
   return {
     orders: num(row?.orders),
     products: num(row?.products),
