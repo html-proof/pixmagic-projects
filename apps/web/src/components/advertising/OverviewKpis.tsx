@@ -133,7 +133,7 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
         )}
         {sense && (
           <FigureTile<AdsenseTotals>
-            label="AdSense estimated earnings"
+            label={sense.final ? "AdSense earnings (final)" : "AdSense estimated earnings"}
             source={`Money in, not ad spend · ${sense.currency}`}
             fig={sense}
             accounts={sense.accounts.filter((acc) => acc.counted)}

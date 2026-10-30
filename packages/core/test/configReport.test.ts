@@ -22,7 +22,6 @@ const KEYS = [
   "GOOGLE_ADS_CLIENT_SECRET",
   "GOOGLE_ADS_ENABLED",
   "GOOGLE_ADS_OAUTH_VERIFIED",
-  "NANGO_SECRET_KEY",
   "WHATSAPP_APP_ID",
   "WHATSAPP_APP_SECRET",
   "WHATSAPP_CONFIG_ID",
@@ -84,7 +83,6 @@ const EVERYTHING = {
   GOOGLE_ADS_CLIENT_ID: "public-google-6666.apps.googleusercontent.com",
   GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-secret-google-7777",
   GOOGLE_ADS_ENABLED: "1",
-  NANGO_SECRET_KEY: "secret-nango-9191919191919191919191919191",
   WHATSAPP_APP_ID: "1799660384680551",
   WHATSAPP_APP_SECRET: "secret-whatsapp-8888",
   WHATSAPP_CONFIG_ID: "public-wa-config-9999",
@@ -235,17 +233,16 @@ describe("the configuration report", () => {
   });
 
   it("names what the Cloud API way still lacks, exactly when it is off", () => {
-    const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" };
+    const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", EVOLUTION_API_URL: "u", EVOLUTION_API_KEY: "k" };
     const cases: Array<[Record<string, string>, string[]]> = [
-      [{}, ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"]],
+      [{}, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"]],
       // Production today: the app is picked, its configuration and secret aren't there.
       [{ WHATSAPP_APP_ID: "1799660384680551", ...ready }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", ...ready }, ["WHATSAPP_CONFIG_ID"]],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m", ...ready }, ["WHATSAPP_APP_SECRET"]],
       [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
       [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
-      // Evolution API (only retiring QR linking now) isn't needed to connect.
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", EVOLUTION_API_URL: "", EVOLUTION_API_KEY: "" }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" }, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"]],
     ];
     for (const [vars, needs] of cases) {
       setEnv(vars);

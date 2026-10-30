@@ -51,6 +51,7 @@ export function LineChart({
   grid = false,
   floor = 0,
   bars = false,
+  periods,
 }: {
   days: string[];
   series: LineSeries[];
@@ -72,6 +73,8 @@ export function LineChart({
   floor?: number;
   /** A column per day instead of a line (`area` is ignored). Today's column is lighter: the day isn't over. */
   bars?: boolean;
+  /** When each point is a week or month, not a day: its words under the axis and in the tooltip (`fmtPeriod`). */
+  periods?: Array<{ tick: string; long: string }>;
 }) {
   const [ref, width] = useWidth();
   const [hover, setAt] = useState<number | null>(null);
@@ -116,7 +119,9 @@ export function LineChart({
     } else if (e.key === "Escape") setAt(null);
   };
 
-  const describe = (i: number) => `${fmtLongDay(days[i]!)}${days[i] === today ? " (today so far)" : ""}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
+  // A grouped chart names its weeks or months; today is a day, so it is only marked on a daily one.
+  const longName = (i: number) => periods?.[i]?.long ?? `${fmtLongDay(days[i]!)}${days[i] === today ? " · today so far" : ""}`;
+  const describe = (i: number) => `${longName(i)}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
 
   return (
     <div className="min-w-0">
@@ -165,7 +170,7 @@ export function LineChart({
             ))}
             {xTicks.map(({ d, i }) => (
               <text key={d} x={tickX(i)} y={height - 6} textAnchor={n <= 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={11} fill="var(--muted)">
-                {d === today ? "Today" : fmtDay(d, { year: false })}
+                {periods?.[i]?.tick ?? (d === today ? "Today" : fmtDay(d, { year: false }))}
               </text>
             ))}
             {bars &&
@@ -244,7 +249,7 @@ export function LineChart({
             className="pointer-events-none absolute z-10 min-w-[10rem] rounded-lg border border-border bg-surface px-3 py-2 text-xs shadow-lg"
             style={{ top: MARGIN.top, left: Math.min(Math.max(0, x(at) + 12), Math.max(0, width - 176)) }}
           >
-            <div className="text-muted">{fmtLongDay(days[at]!)}{days[at] === today ? " · today so far" : ""}</div>
+            <div className="text-muted">{longName(at)}</div>
             {series.map((s) => (
               <div key={s.key} className="mt-1 flex items-center gap-2">
                 <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
@@ -264,7 +269,7 @@ export function LineChart({
           <caption>{label}</caption>
           <thead>
             <tr>
-              <th scope="col">Day</th>
+              <th scope="col">{periods ? "Period" : "Day"}</th>
               {series.map((s) => (
                 <th key={s.key} scope="col">{s.label}</th>
               ))}
@@ -273,7 +278,7 @@ export function LineChart({
           <tbody>
             {days.map((d, i) => (
               <tr key={d}>
-                <th scope="row">{fmtLongDay(d)}</th>
+                <th scope="row">{periods?.[i]?.long ?? fmtLongDay(d)}</th>
                 {series.map((s) => (
                   <td key={s.key}>{show(s.values[i])}</td>
                 ))}

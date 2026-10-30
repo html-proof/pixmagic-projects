@@ -41,7 +41,7 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Shopify app configuration | [docs/shopify-setup.md](docs/shopify-setup.md) |
 | Single test store, no publishing | [docs/test-store.md](docs/test-store.md) |
 | Webhooks | [docs/webhooks.md](docs/webhooks.md) |
-| WhatsApp Automation (Meta's WhatsApp Business Platform, Embedded Signup): setup, automations, data, removing Evolution | [docs/whatsapp.md](docs/whatsapp.md) |
+| WhatsApp Automation (Evolution API: a phone linked by QR code, or Meta's Cloud API): setup, automations, data | [docs/whatsapp.md](docs/whatsapp.md) |
 | Staff Management, attendance and payroll | [docs/staff.md](docs/staff.md) |
 | Email integrations and automation (Gmail, Microsoft 365, SMTP) | [docs/email.md](docs/email.md) · API: [docs/email-api.yaml](docs/email-api.yaml) |
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |

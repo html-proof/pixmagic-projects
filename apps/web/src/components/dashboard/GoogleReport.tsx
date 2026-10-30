@@ -82,6 +82,7 @@ function Cells({ m, money }: { m: GoogleReportMetrics; money: (n: number | null)
       <td className={td}>{money(m.cpc)}</td>
       <td className={td}>{money(m.cpm)}</td>
       <td className={td}>{fmtNum(m.conversions)}</td>
+      <td className={td}>{m.conversionRate === null ? NA : fmtPct(m.conversionRate)}</td>
       <td className={td}>{money(m.costPerConversion)}</td>
       <td className={td}>{money(m.conversionValue)}</td>
       <td className={td}>{times(m.roas)}</td>
@@ -91,13 +92,14 @@ function Cells({ m, money }: { m: GoogleReportMetrics; money: (n: number | null)
 
 // Google's own column names where they differ from everyday words: its conversions count every
 // conversion action, so their value ÷ cost is "Conv. value / cost", not a return on purchases.
-const HEADINGS = ["Spent", "Impressions", "Clicks", "Click-through rate", "Per click", "Per 1,000 impressions", "Conversions (all actions)", "Per conversion", "Conversion value", "Conv. value / cost"];
+const HEADINGS = ["Spent", "Impressions", "Clicks", "Click-through rate", "Per click", "Per 1,000 impressions", "Conversions (all actions)", "Conversion rate", "Per conversion", "Conversion value", "Conv. value / cost"];
 
 const DEFINITIONS: Array<[string, string]> = [
   ["Click-through rate", "Clicks ÷ impressions."],
   ["Per click", "Spend ÷ clicks (Google's average CPC)."],
   ["Per 1,000 impressions", "Spend × 1,000 ÷ impressions (CPM)."],
   ["Conversions (all actions)", "Google's own count of every conversion action set to count: purchases, and also leads, sign-ups, calls. Not your Shopify orders."],
+  ["Conversion rate", "Conversions ÷ clicks (Google's conv. rate), on every conversion action. Not your store's conversion rate, which divides orders by Shopify's sessions."],
   ["Per conversion", "Spend ÷ conversions."],
   ["Conv. value / cost", "Conversion value ÷ spend, on every conversion action. The Google Ads card's ROAS is on purchases only."],
 ];

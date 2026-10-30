@@ -4,6 +4,7 @@
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { env } from "../env.js";
+import { logger } from "../logger.js";
 
 export interface ZapierConfig {
   /** All three OAuth settings are set: the consent page and the token endpoint work. */
@@ -49,12 +50,20 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb) && a.length === b.length;
 }
 
-/** Whether a request names bizinsights' Zapier client and its secret. */
+/**
+ * Whether a request names bizinsights' Zapier client and its secret: the current one, or during a
+ * rotation the one before it (ZAPIER_CLIENT_SECRET_PREVIOUS), until every version of the Zapier app
+ * has the new one. A request still using the previous one is logged, so the owner can tell when
+ * none does any more and remove it (docs/RUNBOOK.md, "Rotate the Zapier client secret").
+ */
 export function zapierClientValid(clientId: string, secret: string): boolean {
   const c = zapierConfig();
   if (!c.configured) return false;
-  // Both compared, whatever the first says, so a wrong id answers as fast as a wrong secret.
+  const e = env();
+  // Every one compared, whatever the others say, so a wrong id answers as fast as a wrong secret.
   const idOk = constantTimeEqual(clientId, c.clientId);
-  const secretOk = constantTimeEqual(secret, env().ZAPIER_CLIENT_SECRET);
-  return idOk && secretOk;
+  const currentOk = constantTimeEqual(secret, e.ZAPIER_CLIENT_SECRET);
+  const previousOk = constantTimeEqual(secret, e.ZAPIER_CLIENT_SECRET_PREVIOUS) && !!e.ZAPIER_CLIENT_SECRET_PREVIOUS;
+  if (idOk && previousOk && !currentOk) logger.warn({}, "zapier client used the previous secret: a version of the Zapier app still has the old CLIENT_SECRET");
+  return idOk && (currentOk || previousOk);
 }

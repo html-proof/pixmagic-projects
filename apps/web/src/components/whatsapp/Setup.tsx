@@ -1,26 +1,27 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useId, useRef, useState } from "react";
-import { CheckCircle2, Circle, ShieldCheck } from "lucide-react";
-import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaSetupStep } from "@app/shared/whatsapp";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { CheckCircle2, Circle, QrCode, ShieldCheck, Smartphone } from "lucide-react";
+import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaProvider, type WaSetupStep } from "@app/shared/whatsapp";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import { AppTokenConnect } from "./AppTokenConnect";
 import { CloudSignup } from "./CloudSignup";
 import { SettingsForm } from "./SettingsForm";
-import type { WaMessage, WaMessageEvent, WaOverview, WaTemplatesResponse } from "./types";
-import { CONNECTION_TONE, MessageStatus, waHref, useWaAction } from "./WaUi";
+import type { WaMessage, WaMessageEvent, WaOverview, WaPairing, WaTemplatesResponse } from "./types";
+import { CONNECTION_TONE, MessageStatus, waError, waHref, WhatsappIcon, useWaAction } from "./WaUi";
 
 // ---------------------------------------------------------------------------
-// The four-step setup: 1 Connect (Meta's Embedded Signup, the one way to connect), 2 Authorize (what
-// bizinsights then checked with Meta), 3 Configure, 4 Test and activate. Every state shown comes from
-// the API, which asks Meta: nothing here says "connected" before Meta did.
+// The four-step setup: 1 Connect (choose how), 2 Authorize (scan WhatsApp's own QR code, type the
+// pairing code, or sign in with Meta), 3 Configure, 4 Test and activate. Every state shown comes from
+// the API, which asks the provider: nothing here says "connected" before WhatsApp did.
 // ---------------------------------------------------------------------------
 
 export function Setup({ base, overview, reload }: { base: string; overview: WaOverview; reload: () => void }) {
   const firstOpen = overview.setup.current ?? "test";
   const [step, setStep] = useState<WaSetupStep>(firstOpen);
+  const [provider, setProvider] = useState<WaProvider | null>(overview.connection && overview.connection.status !== "disconnected" ? overview.connection.provider : null);
   const done = overview.setup.done;
   const all = WA_SETUP_STEPS.every((s) => done[s]);
   const go = (s: WaSetupStep) => setStep(s);
@@ -52,19 +53,12 @@ export function Setup({ base, overview, reload }: { base: string; overview: WaOv
         })}
       </ol>
 
-      {step === "connect" && (
-        <ConnectStep
-          base={base}
-          overview={overview}
-          onConnected={() => {
-            reload();
-            go("authorize");
-          }}
-        />
-      )}
+      {step === "connect" && <ConnectStep overview={overview} provider={provider} setProvider={setProvider} next={() => go("authorize")} />}
       {step === "authorize" && (
         <AuthorizeStep
+          base={base}
           overview={overview}
+          provider={provider}
           back={() => go("connect")}
           onConnected={() => {
             reload();
@@ -92,90 +86,114 @@ export function Setup({ base, overview, reload }: { base: string; overview: WaOv
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: Meta's Embedded Signup, the one way to connect
+// Step 1
 // ---------------------------------------------------------------------------
 
-function ConnectStep({ base, overview, onConnected }: { base: string; overview: WaOverview; onConnected: () => void }) {
+function ConnectStep({ overview, provider, setProvider, next }: { overview: WaOverview; provider: WaProvider | null; setProvider: (p: WaProvider) => void; next: () => void }) {
   const conn = overview.connection;
-  const live = conn && conn.status !== "disconnected" ? conn : null;
-  const info = PROVIDER_INFO.cloud_api;
-  const missing = overview.platform.cloudApi.missing;
+  const live = conn && conn.status !== "disconnected";
+  const [understood, setUnderstood] = useState(false);
+  const cloudReady = !!overview.cloudSignup;
+  if (!overview.platform.evolution) {
+    return (
+      <div className="card space-y-2">
+        <h2 className="text-base font-semibold">1. Connect</h2>
+        <Alert kind="info">WhatsApp connections aren&apos;t set up on bizinsights yet, so nothing can be connected and nothing is sent. Nothing needs changing in your accounts.</Alert>
+      </div>
+    );
+  }
+  if (live) {
+    return (
+      <div className="card space-y-3">
+        <h2 className="text-base font-semibold">1. Connect</h2>
+        <p className="text-sm">
+          This store connects with <strong>{PROVIDER_INFO[conn.provider].label}</strong>.{" "}
+          <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>
+        </p>
+        <p className="text-sm text-muted">To switch to the other way, disconnect first (Settings tab).</p>
+        <button type="button" className="btn-primary" onClick={next}>
+          Continue
+        </button>
+      </div>
+    );
+  }
+  const options: WaProvider[] = ["cloud_api", "qr"];
   return (
     <div className="card space-y-4">
       <div>
-        <h2 className="flex items-center gap-2 text-base font-semibold">
-          <ShieldCheck size={18} aria-hidden /> 1. Connect WhatsApp Business
-        </h2>
-        <p className="mt-1 text-sm text-muted">
-          {info.short} You sign in with Facebook in Meta&apos;s own window and pick your business, its WhatsApp Business account and the number; bizinsights never sees your Facebook password.
-        </p>
+        <h2 className="text-base font-semibold">1. Choose how to connect</h2>
+        <p className="mt-1 text-sm text-muted">Pick one. Read what each means first: they are different kinds of connection.</p>
       </div>
-      {conn?.reasonCode === "qr_linking_retired" && (
-        <Alert kind="info">
-          <span className="font-medium">QR-code linking was retired.</span> {conn.reason}
-        </Alert>
-      )}
-      {live?.status === "connected" ? (
-        <>
-          <p className="text-sm">
-            Connected{live.phone ? ` as ${live.phone}` : ""}
-            {live.profileName ? ` (${live.profileName})` : ""} through {info.label}. <Badge tone={CONNECTION_TONE[live.status] ?? "neutral"}>{live.statusLabel}</Badge>
-          </p>
-          <p className="text-sm text-muted">To use another number, disconnect first (Settings tab).</p>
-          <button type="button" className="btn-primary" onClick={onConnected}>
-            Continue
-          </button>
-        </>
-      ) : (
-        <>
-          {live?.reason && <Alert kind="info">{live.reason}</Alert>}
-          <div className="grid gap-3 lg:grid-cols-2">
-            <ul className="list-disc space-y-1 pl-5 text-sm text-muted">
-              {info.good.map((g) => (
-                <li key={g}>{g}</li>
-              ))}
-            </ul>
-            <div className="rounded-lg border border-border bg-bg p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Know before you connect</p>
-              <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-muted">
-                {info.limits.map((l) => (
-                  <li key={l}>{l}</li>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {options.map((p) => {
+          const info = PROVIDER_INFO[p];
+          const unavailable = p === "cloud_api" && !cloudReady;
+          const chosen = provider === p;
+          return (
+            <label key={p} className={`flex cursor-pointer flex-col gap-3 rounded-xl border p-4 text-sm transition ${chosen ? "border-accent bg-accent/5" : "border-border"} ${unavailable ? "opacity-70" : ""}`}>
+              <span className="flex items-start gap-3">
+                <input type="radio" name="wa-provider" className="mt-1" checked={chosen} disabled={unavailable} onChange={() => setProvider(p)} />
+                <span>
+                  <span className="flex items-center gap-2 font-semibold">
+                    {p === "cloud_api" ? <ShieldCheck size={17} aria-hidden /> : <QrCode size={17} aria-hidden />}
+                    {info.label}
+                  </span>
+                  <span className="mt-1 block text-muted">{info.short}</span>
+                </span>
+              </span>
+              <ul className="ml-7 list-disc space-y-1 text-muted">
+                {info.good.map((g) => (
+                  <li key={g}>{g}</li>
                 ))}
               </ul>
-            </div>
-          </div>
-          {!overview.can.connect ? (
-            <p className="text-sm text-muted">Only people who may manage integrations can connect WhatsApp.</p>
-          ) : !overview.cloudSignup ? (
-            <Alert kind="info">
-              Connecting WhatsApp isn&apos;t available on bizinsights yet: its Meta app isn&apos;t set up{missing.length ? ` (missing ${missing.join(", ")})` : ""}. Nothing is connected and nothing is sent. bizinsights&apos; administrator sets these up; nothing
-              needs changing in your accounts.
-            </Alert>
-          ) : (
-            <>
-              <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} />
-              {overview.tokenConnect && <AppTokenConnect base={base} onConnected={onConnected} />}
-            </>
-          )}
-        </>
+              <div className="ml-7 rounded-lg border border-border bg-bg p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Know before you choose</p>
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-muted">
+                  {info.limits.map((l) => (
+                    <li key={l}>{l}</li>
+                  ))}
+                </ul>
+              </div>
+              {unavailable && (
+                <p className="ml-7 text-xs text-warn">
+                  Not available yet: bizinsights&apos; Meta app isn&apos;t set up for it
+                  {overview.can.connect && overview.platform.cloudApi.missing.length ? ` (missing ${overview.platform.cloudApi.missing.join(", ")})` : ""}, and Meta must approve bizinsights as a Tech Provider before it can onboard businesses.
+                </p>
+              )}
+            </label>
+          );
+        })}
+      </div>
+      {provider === "qr" && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+          <span>I understand this links my WhatsApp app the way WhatsApp Web does. It is not Meta&apos;s official business API, and WhatsApp may restrict a number that sends unwanted or bulk messages.</span>
+        </label>
+      )}
+      {!overview.can.connect ? (
+        <p className="text-sm text-muted">Only people who may manage integrations can connect WhatsApp.</p>
+      ) : (
+        <button type="button" className="btn-primary" disabled={!provider || (provider === "qr" && !understood)} onClick={next}>
+          Continue
+        </button>
       )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: what Meta confirmed
+// Step 2
 // ---------------------------------------------------------------------------
 
-function AuthorizeStep({ overview, back, onConnected }: { overview: WaOverview; back: () => void; onConnected: () => void }) {
+function AuthorizeStep({ base, overview, provider, back, onConnected }: { base: string; overview: WaOverview; provider: WaProvider | null; back: () => void; onConnected: () => void }) {
   const conn = overview.connection;
   if (conn && conn.status === "connected") {
     return (
       <div className="card space-y-3">
         <h2 className="text-base font-semibold">2. Authorize</h2>
         <Alert kind="success">
-          Meta confirmed that bizinsights may send for {conn.phone ?? "your number"}
-          {conn.profileName ? ` (${conn.profileName})` : ""}: both WhatsApp permissions for your account, the number in it, its webhooks and its registration.
+          Connected{conn.phone ? ` as ${conn.phone}` : ""}
+          {conn.profileName ? ` (${conn.profileName})` : ""}. WhatsApp confirmed the connection.
         </Alert>
         <button type="button" className="btn-primary" onClick={onConnected}>
           Continue to settings
@@ -183,13 +201,176 @@ function AuthorizeStep({ overview, back, onConnected }: { overview: WaOverview; 
       </div>
     );
   }
+  if (!provider) {
+    return (
+      <div className="card space-y-3">
+        <h2 className="text-base font-semibold">2. Authorize</h2>
+        <p className="text-sm text-muted">Choose how to connect first.</p>
+        <button type="button" className="btn-secondary" onClick={back}>
+          Back to step 1
+        </button>
+      </div>
+    );
+  }
+  if (!overview.can.connect) {
+    return (
+      <div className="card">
+        <p className="text-sm text-muted">Only people who may manage integrations can connect WhatsApp.</p>
+      </div>
+    );
+  }
+  if (provider === "cloud_api") {
+    return (
+      <div className="card space-y-3">
+        <h2 className="text-base font-semibold">2. Sign in with Meta</h2>
+        <p className="text-sm text-muted">
+          Meta&apos;s own window opens. Sign in with Facebook, pick or create your business portfolio and WhatsApp Business account, and add or pick the phone number. bizinsights then checks with Meta that it may send for you, and registers the number.
+        </p>
+        {overview.cloudSignup ? <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} /> : <Alert kind="info">The Cloud API isn&apos;t available on bizinsights yet.</Alert>}
+        {overview.cloudSignup && overview.tokenConnect && <AppTokenConnect base={base} onConnected={onConnected} />}
+        <button type="button" className="btn-secondary" onClick={back}>
+          Back
+        </button>
+      </div>
+    );
+  }
+  return <QrPairing base={base} overview={overview} back={back} onConnected={onConnected} />;
+}
+
+function QrPairing({ base, overview, back, onConnected }: { base: string; overview: WaOverview; back: () => void; onConnected: () => void }) {
+  const id = useId();
+  const { busy, run } = useWaAction();
+  const [method, setMethod] = useState<"qr" | "code">(overview.connection?.pairingMethod ?? "qr");
+  const [phone, setPhone] = useState("");
+  const [pairing, setPairing] = useState<WaPairing | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const latest = useRef(0);
+  const connectedOnce = useRef(false);
+
+  const start = () =>
+    run("start", "start connecting WhatsApp", async () => {
+      const r = await api<{ pairing: WaPairing }>(`${base}/connection`, { method: "POST", body: { method, phone: method === "code" ? phone : null } });
+      setPairing(r.pairing);
+      setPollError(null);
+    });
+
+  const poll = useCallback(async () => {
+    const request = ++latest.current;
+    try {
+      const r = await api<{ pairing: WaPairing }>(`${base}/connection/pairing`);
+      if (request !== latest.current) return;
+      setPairing(r.pairing);
+      setPollError(null);
+    } catch (e) {
+      if (request === latest.current) setPollError(waError(e, "check the connection"));
+    }
+  }, [base]);
+
+  // While pairing: ask every 3 seconds (each answer is the provider's current code or state).
+  const pairingNow = pairing?.status === "pairing" || (!pairing && overview.connection?.status === "pairing");
+  useEffect(() => {
+    if (!pairingNow) return;
+    void poll();
+    const t = window.setInterval(() => void poll(), 3000);
+    return () => window.clearInterval(t);
+  }, [pairingNow, poll]);
+
+  useEffect(() => {
+    if (pairing?.status === "connected" && !connectedOnce.current) {
+      connectedOnce.current = true;
+      const t = window.setTimeout(onConnected, 1200);
+      return () => window.clearTimeout(t);
+    }
+  }, [pairing?.status, onConnected]);
+
+  const status = pairing?.status ?? overview.connection?.status ?? null;
+  // Always on the page, so a screen reader announces what appears after the button that started it went.
+  const announcement =
+    status === "connected"
+      ? "Linked: the phone is connected. Taking you to the settings."
+      : status === "pairing" && pairing?.pairingCode
+        ? `Pairing code ${pairing.pairingCode.split("").join(" ")}. Type it on the phone, under Linked devices.`
+        : status === "pairing" && pairing?.qr
+          ? "QR code shown. Scan it with the phone, under Linked devices."
+          : "";
   return (
-    <div className="card space-y-3">
-      <h2 className="text-base font-semibold">2. Authorize</h2>
-      <p className="text-sm text-muted">This step is done once Meta confirms what you allowed in its window. Connect WhatsApp Business in step 1 first.</p>
-      <button type="button" className="btn-secondary" onClick={back}>
-        Back to step 1
-      </button>
+    <div className="card space-y-4">
+      <h2 className="text-base font-semibold">2. Link your phone</h2>
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
+      {status === "connected" ? (
+        <Alert kind="success">
+          WhatsApp confirmed the link{pairing?.phone ? ` for ${pairing.phone}` : ""}
+          {pairing?.profileName ? ` (${pairing.profileName})` : ""}. Taking you to the settings…
+        </Alert>
+      ) : status === "pairing" && pairing ? (
+        <div className="grid items-start gap-6 md:grid-cols-[auto_1fr]">
+          <div className="flex flex-col items-center gap-2">
+            {pairing.qr ? (
+              // A data URL from the provider: WhatsApp's own code, never one made here.
+              <img src={pairing.qr} alt="QR code to link WhatsApp" width={264} height={264} className="rounded-lg border border-border bg-white p-2" data-testid="wa-qr" />
+            ) : pairing.pairingCode ? (
+              <p className="rounded-lg border border-border bg-bg px-5 py-4 font-mono text-3xl font-semibold tracking-[0.3em]" data-testid="wa-pairing-code">
+                <span aria-hidden>{pairing.pairingCode}</span>
+                <span className="sr-only">Pairing code {pairing.pairingCode.split("").join(" ")}</span>
+              </p>
+            ) : (
+              <div className="skeleton h-[264px] w-[264px] rounded-lg" aria-label="Waiting for WhatsApp's code" />
+            )}
+            <p className="text-xs text-muted" aria-live="polite">
+              {pairing.qrCount ? `Code ${pairing.qrCount} of 6: it changes about every 20 seconds.` : "Waiting for WhatsApp…"}
+            </p>
+          </div>
+          <div className="space-y-3 text-sm">
+            <p className="font-medium">On the phone with your business&apos;s WhatsApp:</p>
+            <ol className="list-decimal space-y-1 pl-5 text-muted">
+              <li>Open WhatsApp (or WhatsApp Business).</li>
+              <li>Tap Settings (iPhone) or the ⋮ menu (Android), then Linked devices.</li>
+              <li>Tap Link a device.</li>
+              {pairing.pairingCode ? <li>Tap &quot;Link with phone number instead&quot; and type the code shown here.</li> : <li>Point the phone at this code.</li>}
+            </ol>
+            <p className="text-muted">The page changes by itself once WhatsApp confirms. The phone shows &quot;bizinsights&quot; under Linked devices; removing it there disconnects.</p>
+            {pollError && (
+              <p className="text-danger" role="alert">
+                {pollError}
+              </p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {(status === "failed" || status === "logged_out") && overview.connection?.reason && <Alert kind="info">{pairing?.reason ?? overview.connection.reason}</Alert>}
+          <fieldset className="space-y-2">
+            <legend className="label">How to link</legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" name={`${id}-m`} checked={method === "qr"} onChange={() => setMethod("qr")} />
+              <QrCode size={16} aria-hidden /> Scan a QR code (this page on a computer, the phone in your hand)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" name={`${id}-m`} checked={method === "code"} onChange={() => setMethod("code")} />
+              <Smartphone size={16} aria-hidden /> Type a pairing code on the phone (when this page is on that phone)
+            </label>
+          </fieldset>
+          {method === "code" && (
+            <div className="max-w-sm">
+              <label className="label" htmlFor={`${id}-phone`}>
+                The WhatsApp number on that phone
+              </label>
+              <input id={`${id}-phone`} className="input" inputMode="tel" autoComplete="tel" placeholder="+61 412 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              <p className="mt-1 text-xs text-muted">With its country code. WhatsApp sends the code for this number.</p>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60" disabled={busy === "start" || (method === "code" && phone.trim().length < 8)} onClick={() => void start()} data-testid="wa-start-pairing">
+              <WhatsappIcon size={20} /> {busy === "start" ? "Asking WhatsApp…" : status === "failed" || status === "logged_out" ? "Get a new code" : method === "qr" ? "Show QR code" : "Get pairing code"}
+            </button>
+            <button type="button" className="btn-secondary h-11" onClick={back}>
+              Back
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -224,11 +405,13 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
       <div className="card space-y-3">
         <h2 className="text-base font-semibold">4a. Verify your own number</h2>
         <p className="text-sm text-muted">
-          Tests only ever go to a number you prove is yours: bizinsights sends it a 6-digit code from your WhatsApp Business number{overview.connection?.phone ? ` (${overview.connection.phone})` : ""}. Meta delivers it only to a phone that
-          wrote to your business number in the last 24 hours, so first send that number any WhatsApp message from your phone.
+          Tests only ever go to a number you prove is yours: bizinsights sends it a 6-digit code over WhatsApp. The number your WhatsApp is linked with needs no code.
         </p>
         {s.testVerifiedAt ? (
-          <Alert kind="success">Verified: {s.testPhone}. Tests go to this number.</Alert>
+          <Alert kind="success">
+            Verified: {s.testPhone}. Tests go to this number.
+            {s.testIsLinkedNumber && " It's the number your WhatsApp is linked with, so WhatsApp puts them in your chat with yourself (“Message yourself”), without a notification."}
+          </Alert>
         ) : !manage ? (
           <p className="text-sm text-muted">Only the store&apos;s owners and admins can verify a test number.</p>
         ) : (
@@ -244,7 +427,11 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
                 disabled={busy === "code" || phone.trim().length < 8}
                 onClick={() =>
                   void run("code", "send the code", async () => {
-                    const r = await api<{ expiresAt: string | null; phone: string }>(`${base}/test-number`, { method: "POST", body: { phone } });
+                    const r = await api<{ expiresAt: string | null; phone: string; linkedNumber?: boolean }>(`${base}/test-number`, { method: "POST", body: { phone } });
+                    if (r.linkedNumber) {
+                      reload();
+                      return `${r.phone} is the number your WhatsApp is linked with: verified, no code needed.`;
+                    }
                     setSentCode(r.expiresAt);
                     return `Code sent to ${r.phone} on WhatsApp.`;
                   })
@@ -375,7 +562,7 @@ function LiveStatusDetails({ m, gaveUp }: { m: { message: WaMessage; events: WaM
           </li>
         ))}
       </ul>
-      {m.message.status === "accepted" && <p className="text-xs text-muted">Meta has the message; it reports sent, delivered and read as they happen.</p>}
+      {m.message.status === "accepted" && <p className="text-xs text-muted">WhatsApp has the message; it reports sent, delivered and read as they happen.</p>}
       {m.message.errorDetail && <p className="text-xs text-danger">{m.message.errorDetail}</p>}
       {m.message.reasonLabel && m.message.status !== "accepted" && <p className="text-xs text-muted">{m.message.reasonLabel}</p>}
       {gaveUp && <p className="text-xs text-muted">No more reports in two minutes. The message history shows anything that comes later.</p>}

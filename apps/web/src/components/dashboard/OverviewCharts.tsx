@@ -1,18 +1,19 @@
 "use client";
 import { useState, type ReactNode } from "react";
 import { ChartColumn, type LucideIcon } from "lucide-react";
-import { customSalesMonths, dailyBreakdown, NET_SALES_MONTHS, TOTAL_SALES_MONTHS, weekdayOf, yearFigures } from "@app/shared/sales";
+import type { PeriodGranularity } from "@app/shared/dates";
+import { customSalesMonths, dailyBreakdown, NET_SALES_MONTHS, periodBreakdown, TOTAL_SALES_MONTHS, weekdayOf, yearFigures } from "@app/shared/sales";
 import { customSales } from "@app/shared/salesCalculation";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { ComboChart, type ComboBar, type ComboGroup } from "./ComboChart";
-import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, plural } from "./format";
+import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtPeriod, fmtSpan, fmtWeekday, periodChoices, plural } from "./format";
 import { ChartChoice } from "./Primitives";
 import { appliedCustom, asSalesDays, dayLinesOf, hasMonthLines, showsRefunds, showsTotalSales } from "./redacted";
 import type { Overview, YearMonth, YearOf } from "./types";
 
 // ---------------------------------------------------------------------------
-// The overview's sales panels, in the owner's design: the dates picked day by day, and this year
-// month by month beside the same months of the two years before. Each has its columns' total in
+// The overview's sales panels, in the owner's design: the dates picked day by day (or week by week,
+// month by month), and this year month by month beside the same months of the two years before. Each has its columns' total in
 // large type, one line on what is in it, a key, and the running total drawn over the columns.
 // ---------------------------------------------------------------------------
 
@@ -82,11 +83,18 @@ const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: "com
 
 type DayView = "sales" | "custom" | "net" | "orders" | "refunds";
 
-/** The dates picked, day by day: columns graded against the store's own average day, and the running total. */
+/**
+ * The dates picked, day by day: columns graded against the store's own average day, and the running
+ * total. Or week by week, month by month: each period adds up its days (`periodBreakdown`), and one
+ * not all there (today's, or one whose days weren't all imported) is drawn lighter and says so.
+ */
 function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
   const s = ov.modules.sales_overview!;
   // Until one is picked: Custom sales when the store shows it on the dashboard, else total sales.
   const [picked, setPicked] = useState<DayView | null>(null);
+  const [pickedBy, setBy] = useState<PeriodGranularity>("day");
+  const byOptions = periodChoices(ov.range);
+  const by = byOptions.some(([g]) => g === pickedBy) ? pickedBy : "day";
   const custom = appliedCustom(s);
   // Refunds and total sales per day only for someone who may see them (Team & Access).
   const refundsShown = showsRefunds(s.series);
@@ -120,7 +128,9 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
     d.status === "today" ? partial : tiers && d.tier === 3 ? "var(--viz-day-best)" : tiers && d.tier === 2 ? "var(--viz-day-strong)" : plain;
 
   const n = b.days.length;
-  const groups: ComboGroup[] = b.days.map((d) => {
+  const periods = by === "day" ? null : periodBreakdown(b, ov.range, by);
+  const per = by;
+  const dayGroups: ComboGroup[] = b.days.map((d) => {
     const missing = d.status === "not_imported";
     return {
       key: d.day,
@@ -137,6 +147,25 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
       keepLabel: d.day === b.best?.day || d.status === "today",
     };
   });
+  const groups: ComboGroup[] = periods
+    ? periods.map((p, i) => {
+        const missing = p.status === "not_imported";
+        const newYear = i === 0 || p.from.slice(0, 4) !== periods[i - 1]!.from.slice(0, 4);
+        return {
+          key: p.key,
+          bars: [{ value: missing ? null : p.value, fill: p.status === "partial" ? partial : plain, label: !missing && p.value !== 0 ? whole(p.value) : undefined, quiet: p.status === "partial" }],
+          running: p.cumulative,
+          tick: {
+            top: fmtPeriod(p, by === "month" ? "month" : "week", "tick"),
+            bottom: by === "month" && newYear ? p.from.slice(0, 4) : undefined,
+            strong: p.from <= ov.today && ov.today <= p.to,
+            // Many weeks label the first week of each month.
+            major: periods.length <= 16 || by === "month" || Number(p.from.slice(8, 10)) <= 7,
+          },
+          keepLabel: i === periods.length - 1,
+        };
+      })
+    : dayGroups;
 
   const complete = b.days.filter((d) => d.status === "complete");
   const hasToday = b.days.some((d) => d.status === "today");
@@ -144,8 +173,11 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
   // Days with nothing in them say so: a store's quiet day is worth knowing (not so for returns).
   const quiet = view === "refunds" ? [] : complete.filter((d) => d.value === 0);
   const none = view === "orders" ? "no orders" : "no sales";
+  const clipped = periods?.filter((p) => p.clipped) ?? [];
   const notes = [
     view === "custom" && custom ? `Custom sales · ${custom.name}, not Shopify's figure` : null,
+    by === "week" ? "weeks run Monday to Sunday" : null,
+    clipped.length === 1 ? `${fmtSpan(clipped[0]!.from, clipped[0]!.to)} is only part of its ${per}` : clipped.length ? `${listOf(clipped.map((p) => fmtSpan(p.from, p.to)))} are only part of their ${per}s` : null,
     hasToday && complete.length ? `${fmtSpan(complete[0]!.day, complete.at(-1)!.day)} complete` : null,
     quiet.length && quiet.length <= 3 ? `${listOf(quiet.map((d) => fmtDay(d.day, { year: false })))} ${none}` : quiet.length ? `${quiet.length} days with ${none}` : null,
     hasToday ? `${fmtDay(ov.today, { year: false })} is today (partial)` : null,
@@ -158,7 +190,31 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
   // Every day before the orders Shopify shared: nothing is known about them, which isn't zero.
   const noneImported = b.days.length > 0 && b.days.every((d) => d.status === "not_imported");
 
+  const periodName = (p: NonNullable<typeof periods>[number]) => fmtPeriod(p, by === "month" ? "month" : "week", "long");
+  const periodTip = (p: NonNullable<typeof periods>[number]) => {
+    const head = `${periodName(p)}${p.status === "partial" ? " (partial)" : ""}`;
+    if (p.status === "not_imported") {
+      return (
+        <>
+          <TipTitle>{head}</TipTitle>
+          <div className="text-muted">Not imported: Shopify shared orders from {fmtDay(historyFrom)} on.</div>
+        </>
+      );
+    }
+    const notIn = p.days.filter((d) => d.status === "not_imported").length;
+    return (
+      <>
+        <TipTitle>{head}</TipTitle>
+        <TipRow color={p.status === "partial" ? partial : plain}>{by === "month" ? "Month" : "Week"}: <b>{full(p.value)}</b></TipRow>
+        <TipRow color="var(--viz-running)" line>Running: <b>{full(p.cumulative ?? 0)}</b></TipRow>
+        {view !== "orders" && <div className="mt-1 text-muted">{plural(p.orders, "order")}</div>}
+        {notIn > 0 && <div className="mt-1 text-muted">{plural(notIn, "day")} not imported, so not counted.</div>}
+        {p.days.some((d) => d.status === "today") && <div className="mt-1 text-muted">Includes today so far.</div>}
+      </>
+    );
+  };
   const tip = (i: number) => {
+    if (periods) return periodTip(periods[i]!);
     const d = b.days[i]!;
     const head = `${fmtDay(d.day, { year: false })} · ${fmtWeekday(d.day)}${d.status === "today" ? " (partial)" : ""}`;
     if (d.status === "not_imported") {
@@ -184,6 +240,11 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
     );
   };
   const describe = (i: number) => {
+    if (periods) {
+      const p = periods[i]!;
+      if (p.status === "not_imported") return `${periodName(p)}: not imported.`;
+      return `${periodName(p)}${p.status === "partial" ? ", partial" : ""}: ${full(p.value)} ${name}. ${full(p.cumulative ?? 0)} so far in these dates.`;
+    }
     const d = b.days[i]!;
     if (d.status === "not_imported") return `${fmtLongDay(d.day)}: not imported.`;
     return `${fmtLongDay(d.day)}${d.status === "today" ? ", today so far" : ""}: ${full(d.value)} ${name}. ${full(d.cumulative ?? 0)} so far in these dates.`;
@@ -194,11 +255,13 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
       id="trend-sales-h"
       testId="trend-sales"
       i={0}
-      title={`${fmtSpan(ov.range.from, ov.range.to)} · daily`}
+      title={`${fmtSpan(ov.range.from, ov.range.to)} · ${by === "day" ? "daily" : by === "week" ? "weekly" : "monthly"}`}
       total={full(b.total)}
-      sub={notes.length ? notes.join(" · ") : `${name} per day, with the running total`}
+      sub={notes.length ? notes.join(" · ") : `${name} per ${per}, with the running total`}
       aside={
-        <ChartChoice<DayView>
+        <div className="flex flex-wrap gap-2">
+          {byOptions.length > 1 && <ChartChoice<PeriodGranularity> label="Sales chart groups" value={by} onChange={setBy} options={byOptions} />}
+          <ChartChoice<DayView>
           label="Sales chart shows"
           value={view}
           onChange={setPicked}
@@ -209,20 +272,21 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
             ["orders", "Orders"],
             ...(refundsShown ? [["refunds", "Returns"] as [DayView, string]] : []),
           ]}
-        />
+          />
+        </div>
       }
       legend={
         <>
-          {tiers ? (
+          {tiers && !periods ? (
             <>
               {tiers.best !== null && <Key color="var(--viz-day-best)">≥ {whole(tiers.best)}</Key>}
               <Key color="var(--viz-day-strong)">≥ {whole(tiers.strong)}</Key>
               <Key color="var(--viz-day)">&lt; {whole(tiers.strong)}</Key>
             </>
           ) : (
-            <Key color={plain}>{name} per day</Key>
+            <Key color={plain}>{name} per {per}</Key>
           )}
-          {hasToday && <Key color={partial}>Today (partial)</Key>}
+          {periods ? periods.some((p) => p.status === "partial") && <Key color={partial}>Partial {per}</Key> : hasToday && <Key color={partial}>Today (partial)</Key>}
           <Key color="var(--viz-running)" line>Cumulative</Key>
         </>
       }
@@ -230,7 +294,7 @@ function DailyPanel({ ov, currency }: { ov: Overview; currency: string }) {
       <div className="relative">
         <ComboChart
           groups={groups}
-          label={`${name} per day, ${fmtSpan(ov.range.from, ov.range.to)}, with the running total`}
+          label={`${name} per ${per}, ${fmtSpan(ov.range.from, ov.range.to)}, with the running total`}
           fmtAxis={(v) => (money ? fmtMoneyCompact(v, currency) : fmtNum(v))}
           fmtRunning={(v) => (money ? fmtMoneyCompact(v, currency) : compact(v))}
           tooltip={tip}

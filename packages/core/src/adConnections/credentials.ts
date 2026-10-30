@@ -1,11 +1,7 @@
-/**
- * A connection's tokens: encrypted at rest, refreshed when they expire, re-encrypted on key rotation.
- * A row made through Nango (`source` "nango", 2026-10-22 to 2026-10-28) holds only a sealed reference
- * to its Nango connection until leaveNango.ts moves its tokens onto it.
- */
+/** A connection's tokens: encrypted at rest, refreshed when they expire, re-encrypted on key rotation. */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, encrypt, keyVersionOf, type AdProvider } from "@app/shared";
-import { AdsApiError, AdsAuthError, AdsRetryableError, googleRefresh, googleUserId, isNangoConnectionId, metaUserId, REQUIRED_AD_SCOPE, type TokenSet } from "../ads.js";
+import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, metaUserId, REQUIRED_AD_SCOPE, type TokenSet } from "../ads.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
@@ -26,37 +22,13 @@ export function encryptAdTokens(storeId: string, provider: AdProvider, t: TokenS
 }
 
 /**
- * A connection made through Nango that hasn't been moved off it yet (leaveNango.ts): the grant is to
- * bizinsights' own Meta app or Google client, but its tokens are still at Nango.
+ * Whether the row holds bizinsights' own sign-in with the platform (`source` "direct"), as every row
+ * has since 2026-10-28, when the last connections signed in through a broker were moved onto
+ * bizinsights' own tokens. One that didn't would hold no token of bizinsights': it is never read, and
+ * waits for a reconnect, which makes it one (saveAdConnections). The column goes with a later
+ * migration (docs/database/schema.md).
  */
-export const isNangoConnection = (conn: Pick<AdConnection, "source">): boolean => conn.source === "nango";
-
-/** A Nango connection's address at Nango: its id and the integration it belongs to. */
-export interface NangoCredential {
-  connectionId: string;
-  integrationKey: string;
-}
-
-/**
- * The credential back from a Nango row (sealed in access_token_enc like a token, same AAD): which
- * connection to read its tokens from. One that can't be read means connecting again.
- */
-export function nangoCredential(conn: Pick<AdConnection, "storeId" | "provider" | "accessTokenEnc">): NangoCredential {
-  if (!conn.accessTokenEnc) throw new AdsAuthError("The Nango connection holds no credential");
-  const raw = JSON.parse(decrypt(conn.accessTokenEnc, keyring(), aad(conn.storeId, conn.provider, "access"))) as { n?: unknown; k?: unknown };
-  if (!isNangoConnectionId(raw.n) || typeof raw.k !== "string" || !raw.k) throw new AdsAuthError("The Nango credential is incomplete");
-  return { connectionId: raw.n, integrationKey: raw.k };
-}
-
-/**
- * A Nango row asked for a token before leaveNango.ts moved it (it runs first in every cron tick): tried
- * again later, never "reconnect", since the grant itself is fine.
- */
-export class AdsMovingOffNangoError extends AdsRetryableError {
-  constructor() {
-    super("This connection's sign-in is being moved off Nango; it is read again in a few minutes");
-  }
-}
+export const holdsOwnSignIn = (conn: Pick<AdConnection, "source">): boolean => conn.source === "direct";
 
 /** The Google OAuth client a Google Ads or AdSense connection refreshes through. */
 const googleOAuthFor = (provider: string, fetchImpl?: FetchLike) => (provider === "adsense" ? adsenseConfig(fetchImpl) : googleClient(fetchImpl));
@@ -88,8 +60,8 @@ export async function accessTokenAndPerson(conn: AdConnection, fetchImpl?: Fetch
   const k = keyring();
   const soon = Date.now() + 5 * 60_000;
   const access = () => decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access"));
-  // Its tokens are still at Nango until leaveNango.ts moves them here.
-  if (isNangoConnection(conn)) throw new AdsMovingOffNangoError();
+  // Not a sign-in of bizinsights' own (holdsOwnSignIn): never read, Reconnect.
+  if (!holdsOwnSignIn(conn)) throw new AdsAuthError("This connection holds no sign-in of bizinsights' own");
   if (conn.provider === "meta") {
     if (conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("Meta access has expired");
     return { token: access() };

@@ -110,6 +110,8 @@ function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) =
       <td className={td}>{m.linkCtr === null ? NA : fmtPct(m.linkCtr)}</td>
       <td className={td}>{money(m.costPerLinkClick)}</td>
       <td className={td}>{money(m.cpm)}</td>
+      <td className={td}>{fmtNum(m.landingPageViews)}</td>
+      <td className={td}>{money(m.costPerLandingPageView)}</td>
       <td className={td}>{fmtNum(m.purchases)}</td>
       <td className={td}>{money(m.costPerPurchase)}</td>
       <td className={td}>{money(m.purchaseValue)}</td>
@@ -118,7 +120,7 @@ function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) =
   );
 }
 
-const HEADINGS = ["Spent", "Impressions", "Reach", "Frequency", "Link clicks", "Link click rate", "Per link click", "Per 1,000 impressions", "Purchases", "Per purchase", "Purchase value", "Purchase ROAS"];
+const HEADINGS = ["Spent", "Impressions", "Reach", "Frequency", "Link clicks", "Link click rate", "Per link click", "Per 1,000 impressions", "Landing page views", "Per landing page view", "Purchases", "Per purchase", "Purchase value", "Purchase ROAS"];
 
 const DEFINITIONS: Array<[string, string]> = [
   ["Reach", "People who saw an ad at least once in these dates, each counted once."],
@@ -127,6 +129,8 @@ const DEFINITIONS: Array<[string, string]> = [
   ["Link click rate", "Link clicks ÷ impressions (CTR)."],
   ["Per link click", "Spend ÷ link clicks (CPC)."],
   ["Per 1,000 impressions", "Spend × 1,000 ÷ impressions (CPM)."],
+  ["Landing page views", "Link clicks after which your page loaded, as Meta's pixel saw it. Meta's count, not your store's sessions or visitors: a visit Meta can't see isn't counted, and one person can land twice."],
+  ["Per landing page view", "Spend ÷ landing page views."],
   ["Purchases", "Purchases Meta credits to these ads, by each ad set's own attribution setting: Meta's count, not your Shopify orders."],
   ["Per purchase", "Spend ÷ the purchases Meta credits to the ads (cost per result, when the result is a purchase)."],
   ["Purchase ROAS", "Purchase value ÷ spend: Meta's own return on ad spend."],
@@ -152,6 +156,7 @@ const KPIS: Array<{ key: keyof MetaReportMetrics; label: string; kind: "money" |
   { key: "linkCtr", label: "Link click rate", kind: "rate" },
   { key: "costPerLinkClick", label: "Per link click", kind: "money", invert: true },
   { key: "cpm", label: "Per 1,000 impressions", kind: "money", invert: true },
+  { key: "landingPageViews", label: "Landing page views (Meta's count)", kind: "count" },
   { key: "purchases", label: "Purchases (Meta's count)", kind: "count" },
   { key: "purchaseValue", label: "Purchase value (Meta's count)", kind: "money" },
   { key: "roas", label: "Purchase ROAS", kind: "times" },

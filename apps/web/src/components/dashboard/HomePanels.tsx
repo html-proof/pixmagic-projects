@@ -228,7 +228,12 @@ export function ProfitOverview({ ov, currency, adsOn }: { ov: Overview; currency
           <Donut slices={slices} label={`${what}: ${money(left)}${net > 0 ? `, ${fmtPct(left / net)} of net sales` : ""}`}>
             <span className={`text-lg font-bold tabular-nums tracking-tight ${left < 0 ? "text-danger" : ""}`}>{money(left)}</span>
             <span className="text-[11px] leading-tight text-muted">{what}</span>
-            {net > 0 && taken > 0 && <span className="mt-0.5 text-[11px] font-semibold text-good">{fmtPct(left / net)} margin</span>}
+            {/* A margin needs the cost of what was sold: ad spend alone taken off sales isn't one. */}
+            {net > 0 && taken > 0 && (k.productCosts !== null ? (
+              <span className="mt-0.5 text-[11px] font-semibold text-good">{fmtPct(left / net)} margin</span>
+            ) : (
+              <span className="mt-0.5 text-[11px] text-muted">{fmtPct(left / net)} of net sales</span>
+            ))}
           </Donut>
           <ul className="w-full min-w-0 flex-1 space-y-2.5">
             <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />

@@ -138,7 +138,9 @@ until migrate finished. So there are three PRs:
    - The paths the tests found reading across workspaces from inside one workspace's scope now say
      so. Connecting a store (is the shop live elsewhere, does it move, where does a member land)
      uses `shopify_install`. A WhatsApp number already connected to another store uses
-     `already_connected`.
+     `already_connected`. Whether a person's Google or Meta grant still powers a connection in
+     another workspace, before it is taken back, and the refresh token they gave before, use
+     `ad_grants`.
    - Rollback: Deploy's automatic rollback, or revert the PR.
 3. **Fail closed** after seven days with no "unscoped system query" warning in CloudWatch Logs
    (each warning is fixed by scoping its entry point).
@@ -192,10 +194,12 @@ After step 3: an unscoped `systemDb` query throws.
 
 ## Sequencing with open pull requests
 
-- **#284 first.** The functions' environment is at Lambda's 4 KB limit. Every Deploy from `main`
-  fails until #284 lands, and step 2's new variable needs the room it frees.
-- **#279, #282 and #283** change `apps/worker/src/index.ts`, `apps/api/src/app.ts`,
-  `apps/aws/src/secrets.ts` and `docs/security.md`, which step 1 also touches. Step 1 is rebased on
-  whichever of them are merged. None of them touches `packages/db` or `init.sql`, and this design
-  leaves the module files (`whatsapp/*`, `adConnections/*`, …) alone.
-- Sessions adding routes or sweeps after step 1 wrap them in `forTenant` / `crossTenant`.
+- **#284 first.** The functions' environment was at Lambda's 4 KB limit, so every Deploy from `main`
+  failed until #284 landed. Step 1 therefore gives its new variable to the cron alone, and step 2
+  swaps `DB_SECRET_ARN` for the shorter `SYSTEM_DB_SECRET_ARN` in the shared environment.
+- **Step 1 (#287) landed together with #279, #280, #282, #283 and #285** in one combined pull
+  request and one Deploy. Step 2 is merged on top of that. Its conflicts were with #282's restored
+  WhatsApp code (the number check moved, the shared-account release is gone) and #279's Nango
+  removal (the grant check lost its source filter).
+- Sessions adding routes, jobs or sweeps after step 1 wrap them in `forTenant` / `crossTenant`.
+  `systemRole.test.ts` fails for a route with no scope.

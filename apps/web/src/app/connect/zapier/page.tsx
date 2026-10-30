@@ -2,7 +2,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Check, X } from "lucide-react";
-import { ZAPIER_CANNOT, ZAPIER_EVENT_INFO, ZAPIER_SEARCHES } from "@app/shared/zapier";
+import { ZAPIER_ACTIONS, ZAPIER_EVENT_INFO, ZAPIER_SCOPE_INFO, ZAPIER_SEARCHES, zapierCannot, type ZapierScope } from "@app/shared/zapier";
 import { api, ApiError, friendlyError, isTransient, keepRetrying } from "@/lib/api";
 import { setReturnTo } from "@/lib/returnTo";
 import { Alert } from "@/components/ui";
@@ -12,7 +12,8 @@ import { BrandLogo } from "@/components/Brand";
 type Consent = {
   client: { name: string };
   account: { email: string };
-  workspaces: Array<{ id: string; name: string; allowed: boolean; stores: Array<{ id: string; name: string; shopDomain: string }> }>;
+  /** `scopes`: what this person may also let Zapier do there (sending WhatsApp messages: owners and admins). */
+  workspaces: Array<{ id: string; name: string; allowed: boolean; scopes: ZapierScope[]; stores: Array<{ id: string; name: string; shopDomain: string }> }>;
   cancelUrl: string;
 };
 type Who = { user: { email: string } | null };
@@ -20,7 +21,8 @@ type Who = { user: { email: string } | null };
 /**
  * Zapier's "Connect bizinsights" opens this page (bizinsights is the OAuth provider of its Zapier app,
  * docs/zapier.md). The signed-in member chooses the workspace and store Zapier may reach, sees what it
- * will be able to do and what it won't, and allows it or cancels. The request itself (client, the exact
+ * will be able to do and what it won't, ticks sending WhatsApp messages if they want it (unticked by
+ * default, offered only to those who may send), and allows it or cancels. The request itself (client, the exact
  * redirect URI, response_type, state) is checked by the API: a wrong one is never redirected to, and
  * the state goes back to Zapier exactly as it came. Signed out, the visitor signs in and comes back
  * here (returnTo keeps the whole address, query included).
@@ -39,6 +41,8 @@ function ConnectZapier() {
   const [loadError, setLoadError] = useState<unknown>(null);
   const [workspaceId, setWorkspaceId] = useState("");
   const [storeId, setStoreId] = useState("");
+  /** Sending WhatsApp messages from Zaps: off until ticked. */
+  const [whatsappSend, setWhatsappSend] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -86,13 +90,15 @@ function ConnectZapier() {
   const workspace = consent?.workspaces.find((w) => w.id === workspaceId) ?? null;
   const allowedWorkspaces = consent?.workspaces.filter((w) => w.allowed && w.stores.length) ?? [];
   const others = consent?.workspaces.filter((w) => !w.allowed) ?? [];
+  const mayOfferSend = !!workspace?.scopes.includes("whatsapp_send");
+  const scopes: ZapierScope[] = whatsappSend && mayOfferSend ? ["whatsapp_send"] : [];
 
   async function allow() {
     if (!workspace || !storeId) return;
     setBusy(true);
     setError(null);
     try {
-      const body = Object.fromEntries(new URLSearchParams(query));
+      const body = { ...Object.fromEntries(new URLSearchParams(query)), scopes };
       const r = await api<{ redirect: string }>(`/workspaces/${encodeURIComponent(workspace.id)}/stores/${encodeURIComponent(storeId)}/zapier/authorize`, { method: "POST", body });
       // Back to Zapier, with the code and the state it sent.
       window.location.assign(r.redirect);
@@ -212,16 +218,35 @@ function ConnectZapier() {
                     </span>
                   </li>
                 ))}
+                {ZAPIER_ACTIONS.filter((x) => scopes.includes(x.scope)).map((x) => (
+                  <li key={x.key} className="flex items-start gap-2">
+                    <Check size={16} className="mt-0.5 shrink-0 text-good" aria-hidden />
+                    <span>
+                      <span className="font-medium">{x.label}</span>
+                      <span className="text-muted">: {x.description}</span>
+                    </span>
+                  </li>
+                ))}
               </ul>
               <p className="text-xs text-muted">Each one only within what your own permissions let you see in bizinsights, and only while you keep them.</p>
             </section>
+
+            {mayOfferSend && (
+              <label className="flex items-start gap-2 rounded-xl border border-border p-3 text-sm">
+                <input type="checkbox" className="mt-1" checked={whatsappSend} onChange={(e) => setWhatsappSend(e.target.checked)} data-testid="zapier-whatsapp-send" />
+                <span>
+                  <span className="font-medium">Also let Zapier {ZAPIER_SCOPE_INFO.whatsapp_send.label.charAt(0).toLowerCase() + ZAPIER_SCOPE_INFO.whatsapp_send.label.slice(1)}</span>
+                  <span className="block text-muted">{ZAPIER_SCOPE_INFO.whatsapp_send.description}</span>
+                </span>
+              </label>
+            )}
 
             <section aria-labelledby="zapier-cannot" className="space-y-2 text-sm">
               <h2 id="zapier-cannot" className="font-medium">
                 Zapier won&apos;t be able to
               </h2>
               <ul className="space-y-1.5">
-                {ZAPIER_CANNOT.map((t) => (
+                {zapierCannot(scopes).map((t) => (
                   <li key={t} className="flex items-start gap-2">
                     <X size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden />
                     <span className="text-muted">{t}</span>

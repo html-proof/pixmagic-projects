@@ -112,27 +112,39 @@ describe("AdSense accounts and their state", () => {
 });
 
 describe("the AdSense report", () => {
-  const report = (level: "site" | "country" | "platform", totalMatchedRows?: string) => ({
+  /** As reports:generate answers: the dimensions asked, then the metrics in the order asked (ADSENSE_REPORT_METRICS). */
+  const report = (level: "site" | "country" | "platform" | "ad_unit", totalMatchedRows?: string) => ({
     headers: [
-      ...(level === "site" ? [{ name: "DOMAIN_CODE", type: "DIMENSION" }] : level === "country" ? [{ name: "COUNTRY_CODE", type: "DIMENSION" }, { name: "COUNTRY_NAME", type: "DIMENSION" }] : [{ name: "PLATFORM_TYPE_CODE", type: "DIMENSION" }, { name: "PLATFORM_TYPE_NAME", type: "DIMENSION" }]),
+      ...(level === "site"
+        ? [{ name: "DOMAIN_CODE", type: "DIMENSION" }]
+        : level === "country"
+          ? [{ name: "COUNTRY_CODE", type: "DIMENSION" }, { name: "COUNTRY_NAME", type: "DIMENSION" }]
+          : level === "platform"
+            ? [{ name: "PLATFORM_TYPE_CODE", type: "DIMENSION" }, { name: "PLATFORM_TYPE_NAME", type: "DIMENSION" }]
+            : [{ name: "AD_UNIT_ID", type: "DIMENSION" }, { name: "AD_UNIT_NAME", type: "DIMENSION" }]),
       { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" },
       { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
       { name: "IMPRESSIONS", type: "METRIC_TALLY" },
       { name: "CLICKS", type: "METRIC_TALLY" },
+      { name: "AD_REQUESTS", type: "METRIC_TALLY" },
+      { name: "AD_REQUESTS_COVERAGE", type: "METRIC_RATIO" },
+      { name: "ACTIVE_VIEW_VIEWABILITY", type: "METRIC_RATIO" },
     ],
     rows:
       level === "site"
-        ? [{ cells: [{ value: "shop.example.com" }, { value: "4.20" }, { value: "900" }, { value: "1200" }, { value: "3" }] }]
+        ? [{ cells: [{ value: "shop.example.com" }, { value: "4.20" }, { value: "900" }, { value: "1200" }, { value: "3" }, { value: "1500" }, { value: "0.8" }, { value: "0.55" }] }]
         : level === "country"
-          ? [{ cells: [{ value: "AU" }, { value: "Australia" }, { value: "2" }, { value: "100" }, { value: "150" }, { value: "1" }] }]
-          : [{ cells: [{ value: "HighEndMobile" }, { value: "High-end mobile devices" }, { value: "1" }, { value: "50" }, { value: "70" }, { value: "0" }] }],
+          ? [{ cells: [{ value: "AU" }, { value: "Australia" }, { value: "2" }, { value: "100" }, { value: "150" }, { value: "1" }, { value: "200" }, { value: "0.75" }, { value: "0.6" }] }]
+          : level === "platform"
+            ? [{ cells: [{ value: "HighEndMobile" }, { value: "High-end mobile devices" }, { value: "1" }, { value: "50" }, { value: "70" }, { value: "0" }, { value: "90" }, { value: "0.78" }, { value: "0.7" }] }]
+            : [{ cells: [{ value: "ca-pub-1:4455" }, { value: "Article footer" }, { value: "3.30" }, { value: "700" }, { value: "640" }, { value: "2" }, { value: "800" }, { value: "0.8" }, { value: "0.66" }] }],
     ...(totalMatchedRows ? { totalMatchedRows } : {}),
   });
 
   it("limits the report to the store's sites with AdSense's filter syntax, biggest earners first", async () => {
     const f = fake((u) => json(report(u.searchParams.getAll("dimensions").includes("DOMAIN_CODE") ? "site" : u.searchParams.getAll("dimensions").includes("COUNTRY_CODE") ? "country" : "platform")));
     const r = await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["shop.example.com", "www.shop.example.com"]);
-    expect(r).toMatchObject({ currency: "AUD", truncated: false, rows: [{ id: "shop.example.com", earnings: 4.2, pageViews: 900, impressions: 1200, clicks: 3 }] });
+    expect(r).toMatchObject({ currency: "AUD", truncated: false, rows: [{ id: "shop.example.com", earnings: 4.2, pageViews: 900, impressions: 1200, clicks: 3, adRequests: 1500, coverage: 0.8, viewability: 0.55 }] });
     const q = f.calls[0]!.url.searchParams;
     // One filters parameter, a comma for OR (several filters parameters would mean AND).
     expect(q.getAll("filters")).toEqual(["DOMAIN_CODE==shop.example.com,DOMAIN_CODE==www.shop.example.com"]);
@@ -148,13 +160,52 @@ describe("the AdSense report", () => {
     expect(f.calls[1]!.url.searchParams.has("filters")).toBe(false);
   });
 
+  it("splits by ad unit, by AdSense's id and name, with ad requests, coverage and viewability asked for every level", async () => {
+    const f = fake((u) => json(report(u.searchParams.getAll("dimensions").includes("AD_UNIT_ID") ? "ad_unit" : "site")));
+    const r = await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "ad_unit", "2026-10-01", "2026-10-07", ["shop.example.com"]);
+    expect(r.rows).toEqual([
+      { id: "ca-pub-1:4455", name: "Article footer", earnings: 3.3, pageViews: 700, impressions: 640, clicks: 2, pageRpm: 4.71, perClick: 1.65, ctr: 2 / 640, adRequests: 800, coverage: 0.8, viewability: 0.66 },
+    ]);
+    const q = f.calls[0]!.url.searchParams;
+    expect(q.getAll("dimensions")).toEqual(["AD_UNIT_ID", "AD_UNIT_NAME"]);
+    // The metric names of AdSense Management API v2 (reference/rest/v2/Metric), the same for every level.
+    expect(q.getAll("metrics")).toEqual(["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS", "AD_REQUESTS", "AD_REQUESTS_COVERAGE", "ACTIVE_VIEW_VIEWABILITY"]);
+    // An ad unit's earnings on the store's sites only, as every other level.
+    expect(q.getAll("filters")).toEqual(["DOMAIN_CODE==shop.example.com"]);
+    await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07");
+    expect(f.calls[1]!.url.searchParams.getAll("metrics")).toEqual(q.getAll("metrics"));
+  });
+
+  it("a level AdSense won't give ad requests, coverage or viewability for is read again without them: those unknown, never 0", async () => {
+    const f = fake((u) => {
+      if (u.searchParams.getAll("metrics").includes("AD_REQUESTS")) return json({ error: { code: 400, message: "Invalid metric/dimension combination.", status: "INVALID_ARGUMENT" } }, 400);
+      // As AdSense answers the stored days' measures alone: their columns only.
+      const r = report("country");
+      return json({ ...r, headers: r.headers.slice(0, 6), rows: r.rows.map((x) => ({ cells: x.cells.slice(0, 6) })) });
+    });
+    const r = await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "country", "2026-10-01", "2026-10-07", ["shop.example.com"]);
+    expect(r.rows).toEqual([{ id: "AU", name: "Australia", earnings: 2, pageViews: 100, impressions: 150, clicks: 1, pageRpm: 20, perClick: 2, ctr: 1 / 150, adRequests: null, coverage: null, viewability: null }]);
+    expect(r.totals).toMatchObject({ earnings: 2, adRequests: null, coverage: null, viewability: null });
+    expect(f.calls.map((x) => x.url.searchParams.getAll("metrics"))).toEqual([
+      ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS", "AD_REQUESTS", "AD_REQUESTS_COVERAGE", "ACTIVE_VIEW_VIEWABILITY"],
+      ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"],
+    ]);
+    // The second asks the same of AdSense otherwise: the level, the dates, the store's sites.
+    expect(f.calls[1]!.url.searchParams.getAll("dimensions")).toEqual(["COUNTRY_CODE", "COUNTRY_NAME"]);
+    expect(f.calls[1]!.url.searchParams.getAll("filters")).toEqual(["DOMAIN_CODE==shop.example.com"]);
+    // Anything else AdSense refuses isn't asked twice.
+    const lost = fake(() => json({ error: { code: 403, message: "The caller does not have permission", status: "PERMISSION_DENIED" } }, 403));
+    await expect(adsenseReport(adsense(lost.fetchImpl), "AT", "pub-1", "country", "2026-10-01", "2026-10-07")).rejects.toBeInstanceOf(AdsPermissionError);
+    expect(lost.calls).toHaveLength(1);
+  });
+
   it("a store whose sites AdSense can't match gets nothing, never every site's earnings; a cut-off report says so", async () => {
     const f = fake(() => json(report("site", "1500")));
     expect(await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["bad,host", "a\\b"])).toEqual({
       rows: [],
       currency: null,
       truncated: false,
-      totals: { earnings: 0, pageViews: 0, impressions: 0, clicks: 0, pageRpm: null, perClick: null, ctr: null },
+      totals: { earnings: 0, pageViews: 0, impressions: 0, clicks: 0, pageRpm: null, perClick: null, ctr: null, adRequests: null, coverage: null, viewability: null },
     });
     expect(f.calls).toHaveLength(0);
     expect((await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["bad,host", "shop.example.com"])).truncated).toBe(true);
@@ -164,12 +215,15 @@ describe("the AdSense report", () => {
 
   it("the totals are AdSense's own (the rows a cut-off report leaves out included), else the rows added up", async () => {
     // Its totals row: as long as the others, the dimension's cell empty.
-    const cut = fake(() => json({ ...report("site", "1500"), totals: { cells: [{}, { value: "250.40" }, { value: "90000" }, { value: "120000" }, { value: "300" }] } }));
+    const cut = fake(() =>
+      json({ ...report("site", "1500"), totals: { cells: [{}, { value: "250.40" }, { value: "90000" }, { value: "120000" }, { value: "300" }, { value: "150000" }, { value: "0.8" }, { value: "0.61" }] } }),
+    );
     const r = await adsenseReport(adsense(cut.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07");
     expect(r.truncated).toBe(true);
-    expect(r.totals).toEqual({ earnings: 250.4, pageViews: 90000, impressions: 120000, clicks: 300, pageRpm: 2.78, perClick: 0.83, ctr: 300 / 120000 });
+    // Its ratios too are AdSense's, over every matched row.
+    expect(r.totals).toEqual({ earnings: 250.4, pageViews: 90000, impressions: 120000, clicks: 300, pageRpm: 2.78, perClick: 0.83, ctr: 300 / 120000, adRequests: 150000, coverage: 0.8, viewability: 0.61 });
     // No totals row: the rows read.
     const plain = await adsenseReport(adsense(fake(() => json(report("site"))).fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07");
-    expect(plain.totals).toMatchObject({ earnings: 4.2, pageViews: 900, impressions: 1200, clicks: 3 });
+    expect(plain.totals).toMatchObject({ earnings: 4.2, pageViews: 900, impressions: 1200, clicks: 3, adRequests: 1500, coverage: 0.8, viewability: 0.55 });
   });
 });

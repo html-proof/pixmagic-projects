@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, type Store } from "@app/db";
 import {
   accountStatusKey,
@@ -53,6 +53,7 @@ beforeEach(async () => {
   sms.accountInfo = { tier: "PRODUCTION", sandbox: false, spendLimitUsd: 100, spendLimitMaxUsd: 100 };
   ctx.setEnv(LIVE);
 });
+afterEach(() => vi.useRealTimers());
 
 type Owner = Awaited<ReturnType<typeof owner>>;
 
@@ -303,10 +304,13 @@ describe("sending", () => {
     expect(jobs[3]!.sendAfter.getTime() - jobs[0]!.sendAfter.getTime()).toBeGreaterThanOrEqual(1400);
     expect(ctx.deps.queues.sentOpts.sync.map((x) => x?.delaySeconds ?? 0).every((d) => d <= 2)).toBe(true);
     // All four due at once: the sender's pace lets two go this second and puts the others off.
+    // The pace is counted per clock second, so the clock stands still while they're tried: on a
+    // busy machine four sends can take over a second and the last two would land in the next one.
+    vi.useFakeTimers({ toFake: ["Date"] });
     await systemDb.smsMessageJob.updateMany({ where: { storeId: o.store.id }, data: { sendAfter: new Date() } });
     expect(await drain()).toEqual(["accepted", "accepted", "later", "later"]);
     expect(sms.sent).toHaveLength(2);
-    await new Promise((r) => setTimeout(r, 1100));
+    vi.setSystemTime(Date.now() + 1100);
     await systemDb.smsMessageJob.updateMany({ where: { storeId: o.store.id, status: "scheduled" }, data: { sendAfter: new Date() } });
     expect(await drain()).toEqual(["accepted", "accepted"]);
     expect(new Set(sms.sent.map((m) => m.destination)).size).toBe(4);

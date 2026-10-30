@@ -56,8 +56,6 @@ const PUBLIC = new Set([
   "POST /auth/logout",
   // OAuth returns, checked against the state they started with (bizinsights' own ad sign-in: core's adConnections/signIn.ts).
   "GET /ads/:provider/callback",
-  // Nango's old callback address (2026-10-22 to 2026-10-28): only a redirect to Settings, which asks to connect again.
-  "GET /ads/nango/oauth-callback",
   "GET /email/oauth/:provider/callback",
   "GET /shopify/callback",
   "GET /shopify/launch",
@@ -100,6 +98,8 @@ const ZAPIER_BEARER = new Set([
   "GET /zapier/samples/:event",
   "GET /zapier/search/ad-performance",
   "GET /zapier/search/adsense-earnings",
+  "GET /zapier/whatsapp/templates",
+  "POST /zapier/whatsapp/messages",
 ]);
 
 /** A shared link may still use this account route: who am I (that workspace only, read-only). */
@@ -268,18 +268,23 @@ describe("every route of the API, deny by default", () => {
     expect(ctx.routes.filter((r) => isWorkspaceRoute(r.path)).length).toBeGreaterThan(250);
   });
 
-  it("places the ad sign-in: starting it is a workspace's (integrations.manage), its return is public by design, and nothing else of Nango is left", () => {
+  it("places the ad sign-in: starting it is a workspace's (integrations.manage), its return is public by design, and nothing of Nango is left", () => {
     const all = new Set(ctx.routes.map(key));
     const start = "POST /workspaces/:ws/stores/:storeId/ads/:provider/connect";
     expect(all.has(start)).toBe(true);
     expect(isWorkspaceRoute(start)).toBe(true);
     expect(PUBLIC.has(start)).toBe(false);
-    for (const r of ["GET /ads/:provider/callback", "GET /ads/nango/oauth-callback"]) {
-      expect(all.has(r)).toBe(true);
-      expect(PUBLIC.has(r)).toBe(true);
-    }
-    // Nango's sign-in routes and its webhooks went with it.
-    expect([...all].filter((k) => /nango/i.test(k))).toEqual(["GET /ads/nango/oauth-callback"]);
+    expect(all.has("GET /ads/:provider/callback")).toBe(true);
+    expect(PUBLIC.has("GET /ads/:provider/callback")).toBe(true);
+    // Nango's sign-in routes, its webhooks and its old callback address went with it.
+    expect([...all].filter((k) => /nango/i.test(k))).toEqual([]);
+  });
+
+  it("places the integrations status: a store's read for View integration connection status, in no list above (every rule below holds for it), never public", () => {
+    const status = "GET /workspaces/:ws/stores/:storeId/integrations";
+    expect(new Set(ctx.routes.map(key)).has(status)).toBe(true);
+    expect(isWorkspaceRoute(status)).toBe(true);
+    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(status)).toBe(false);
   });
 
   it("nobody signed in: 401 from every route behind a sign-in", async () => {

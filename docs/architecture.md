@@ -100,17 +100,33 @@ Where a new piece of code goes:
   a new code needs its wording there. The Slack post carries the code and the alert's id, which
   finds the "alert raised" log line with the message.
 
+## Integration status
+
+Where every connection of a store stands is worked out once, on the server:
+`GET /workspaces/:ws/stores/:storeId/integrations` (`routes/integrations.ts`) answers each module
+(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, email) on one scale of six statuses:
+connected, pending, reauthorization_required, syncing, error, disconnected. The scale, each
+provider's states mapped onto it, and the ad cards' own states (`connectionState`, `platformState`,
+which `apps/web/src/lib/adConnections.ts` re-exports) are pure functions in
+`@app/shared/integrations`; core's `integrations/status.ts` composes what each module already says
+about itself (the store's status and `syncProblem`, the ad rows and waiting sign-ins,
+`waConnectionView`, the Automations hub's SMS and email cards) and decides nothing again. A new
+provider adds its mapping in shared and its module in core, and no page needs logic of its own; the
+Zapier app (PR #275) adds its module once it merges. Every caller is told the same statuses; a
+channel's accounts and reasons stay with whoever may open its own page (the SMS sender with View
+campaigns, and neither SMS's nor email's with an API key). The answer's shape, the mappings and who
+is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
+
 ## Worker conventions (`apps/worker`)
 
 - A queue message is processed by `consume()`; a job that throws is retried with backoff up to
   `MAX_ATTEMPTS` (the SQS queues' `maxReceiveCount` in infra/cdk stays above it), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and SQS both deliver at least once.
-- What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, the WhatsApp webhooks)
-  is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts` (`parseShopify`,
-  `parseShopifyList` for a page), `core/whatsapp/cloud.ts` (Meta's WhatsApp webhook) and
-  `core/whatsapp/cloudApi.ts` (Meta's answers to WhatsApp's calls); until release 2 removes it,
-  `core/whatsapp/webhook.ts` for what a QR-linked phone's Evolution API instance still posts.
+- What Shopify, Meta and Evolution API send (webhook payloads, GraphQL pages, bulk JSONL, the
+  WhatsApp webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
+  (`parseShopify`, `parseShopifyList` for a page), `core/whatsapp/webhook.ts` (Evolution API's
+  deliveries) and `core/whatsapp/cloud.ts` (Meta's, for Cloud API numbers).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
   meet the same payload again. The WhatsApp and email automations read an order or checkout only
   once they are about to act on it, so a store that doesn't use them logs nothing about it. The
@@ -219,7 +235,7 @@ leaves 7–8 ms per frame:
 
 | Setting | Lives in | Read by |
 | --- | --- | --- |
-| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (the CDK puts them in the functions' environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
+| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the functions' package, put in `process.env` at cold start by `apps/aws/src/index.ts`; not in the 4 KB environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
 | Secrets (session, encryption keys, client secrets) | Secrets Manager `insights/production/*`, set with `infra/cdk/scripts/put-secrets.mjs` ([aws-deployment.md](aws-deployment.md)); locally `apps/aws/.env` (from `.env.example`) | `apps/aws/src/secrets.ts` at cold start, into `process.env`, then `env()` |
 | Services (queues, coordinator, payload store, mail) | infra/cdk (queue URLs, table, bucket, SES region in the functions' environment) | `apps/aws/src/index.ts` (AWS) or `local.ts` (local), passed as `Deps` |
 | Sign-in (Amazon Cognito: pool, client, domain; the client secret) | the Auth stack (`infra/aws/cognito.yaml` via infra/cdk), into the runtime parameter and a secret ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |

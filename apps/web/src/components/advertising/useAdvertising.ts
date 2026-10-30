@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AdProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
+import { refreshing } from "@/components/dashboard/AdsCommon";
 import { useDateRange, type Shown } from "@/components/dashboard/DateRange";
 import type { Overview } from "@/components/dashboard/types";
 import { useApi, useLiveApi } from "@/lib/api";
@@ -14,7 +15,10 @@ import { useApi, useLiveApi } from "@/lib/api";
 // dashboard's: worked out by the API, never here.
 // ---------------------------------------------------------------------------
 
-/** The pages look again this often (the dashboard, every 15 s); while an account fetches its first days, more often. */
+/**
+ * The pages look again this often (the dashboard, every 15 s); while an account fetches its first days,
+ * or a refresh someone asked for is on its way (`refreshing`), more often.
+ */
 const LIVE_EVERY_MS = 30_000;
 const FETCHING_EVERY_MS = 5_000;
 
@@ -78,7 +82,7 @@ export function useAdvertising(platform?: AdProvider | null) {
   const live = useLiveApi<Overview>(path, every);
   // Never one store's figures under another store's name while switching.
   const ov = live.data && store && live.data.store.id === store.id ? live.data : null;
-  const fetching = !!ov && [...(ov.modules.ads?.accounts ?? []), ...(ov.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
+  const fetching = !!ov && [...(ov.modules.ads?.accounts ?? []), ...(ov.modules.adsense?.accounts ?? [])].some((a) => (a.status === "active" && !a.lastSyncedAt) || refreshing(a));
   useEffect(() => setEvery(fetching ? FETCHING_EVERY_MS : LIVE_EVERY_MS), [fetching]);
   const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
   return {
