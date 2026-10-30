@@ -10,8 +10,8 @@ const INFO: Record<Topic, { title: string; icon: IconName }> = {
   sales: { title: "Sales", icon: "chart" },
   ads: { title: "Ads", icon: "megaphone" },
   adsense: { title: "Ad earnings", icon: "coins" },
-  products: { title: "Best sellers", icon: "trophy" },
-  shoppers: { title: "Shopping funnel", icon: "eye" },
+  products: { title: "Top products", icon: "trophy" },
+  shoppers: { title: "Visitors", icon: "eye" },
   timing: { title: "Busiest times", icon: "clock" },
   channels: { title: "Sales channels", icon: "store" },
   shipping: { title: "Shipping", icon: "truck" },
@@ -64,6 +64,17 @@ export function openView(t: Topic) {
   url.searchParams.set("view", t);
   window.history.pushState(window.history.state, "", url.href);
   pushedView = true;
+  window.dispatchEvent(new Event(VIEW_EVENT));
+}
+
+/**
+ * Move an open panel to another topic (its tabs): in the same history entry, so closing the panel,
+ * or the phone's back button, leaves the panel rather than stepping back through every tab.
+ */
+export function switchView(t: Topic) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", t);
+  window.history.replaceState(window.history.state, "", url.href);
   window.dispatchEvent(new Event(VIEW_EVENT));
 }
 

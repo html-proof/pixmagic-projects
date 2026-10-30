@@ -37,7 +37,7 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
     return (
       <div className="card animate-rise">
         <h2 className="text-base font-semibold">Customers</h2>
-        <p className="mt-1 text-sm text-muted">You don&apos;t have permission to see customers&apos; contact details. Ask an owner or admin for &quot;View contact information&quot; in Team &amp; Access.</p>
+        <p className="mt-1 text-sm text-muted">You don&apos;t have permission to see customers&apos; contact details. Ask an owner or admin for &quot;View contact information&quot; in Settings → People &amp; access.</p>
       </div>
     );
   }
