@@ -31,5 +31,6 @@ export * from "./reconcile.js";
 export * from "./configReport.js";
 export * from "./inventory/index.js";
 export * from "./salesCalculation.js";
+export * from "./businessEvents.js";
 export * from "./expenses.js";
 export * from "./orderHistory.js";
