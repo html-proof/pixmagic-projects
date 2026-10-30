@@ -174,7 +174,7 @@ const report = () => ({
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
     inventory: { current: { trackedVariants: 1, unitsInStock: 2, stockValueAtCost: 80, variantsWithCost: 1, retailValue: 200, outOfStock: 0, lowStock: 1 }, lowStockItems: [] },
     recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }], cancelledInRange: 2 },
-    traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
+    traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], split: [{ id: "paid", label: "Paid ads", orders: 1, sales: 10, share: 1 }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
     ads: { currency: "USD", campaigns: [{ name: "c" }], current: { spend: 1 }, sales: { netSales: 10, orders: 1 }, sourced: [{ provider: "meta", orders: 1, sales: 10, salesPerSpend: 10 }] },
@@ -219,6 +219,7 @@ describe("redactOverview", () => {
     expect(out.modules.recent_orders).not.toHaveProperty("cancelledInRange");
     expect(out.modules.traffic).not.toHaveProperty("campaigns");
     expect(out.modules.traffic).not.toHaveProperty("paid");
+    expect(out.modules.traffic).not.toHaveProperty("split");
     expect(out.modules.traffic.items[0]).not.toHaveProperty("paidSales");
     expect(out.modules.discount_codes.items[0]).toEqual({ code: "SAVE", orders: 2 });
     expect(out.modules.ads).not.toHaveProperty("campaigns");

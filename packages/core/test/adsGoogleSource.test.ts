@@ -30,6 +30,8 @@ describe("the demo source", () => {
     const rows = await src.campaignDays("2026-09-01", "2026-09-07");
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.accountId === DEMO_ACCOUNT_ID && r.day >= "2026-09-01" && r.day <= "2026-09-07")).toBe(true);
+    // Each row carries its campaign's facts, as Google's campaign query does a real account's: the sync stores them.
+    expect(rows.every((r) => r.campaignFacts?.budgetPeriod === "DAILY" && r.campaignFacts.budgetAmount! > 0 && r.campaignFacts.channelType !== null && r.campaignFacts.primaryStatus !== null)).toBe(true);
     const health = await src.accountHealth();
     expect(health).toMatchObject({ status: "active", currency: "AUD", timezone: "Australia/Melbourne" });
     expect(health.detail).toContain("not verified by Google");

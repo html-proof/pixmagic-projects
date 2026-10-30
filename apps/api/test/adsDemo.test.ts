@@ -286,7 +286,54 @@ describe("the demo's figures", () => {
     expect(a.combined.note).toContain("Not your Shopify sales");
     // Compared with the 30 days before, which the demo has as well.
     expect(a.overview.previous).not.toBeNull();
+    // Its campaigns' types, statuses and budgets are the generator's; the sync stored the same facts, as it does a real account's.
+    expect(a.campaignSettings).toEqual({ source: "generated", asOf: null });
+    expect(a.campaigns.every((c: { primaryStatus: string | null; budgetPeriod: string | null }) => c.primaryStatus !== null && c.budgetPeriod === "DAILY")).toBe(true);
+    const stored = await systemDb.adCampaign.findFirstOrThrow({ where: { connectionId: (await demoRow()).id, campaignId: "demo-c2" } });
+    expect(stored).toMatchObject({ channelType: expect.any(String), primaryStatus: expect.any(String), budgetPeriod: "DAILY" });
+    expect(Number(stored.budgetAmount)).toBe(a.campaigns.find((c: { id: string }) => c.id === "demo-c2").dailyBudget);
     expect(fetched).toEqual([]);
+  });
+
+  it("a real account's analytics: each campaign's type, status and budget as its last sync stored them, never made up", async () => {
+    const real = await systemDb.adConnection.create({
+      data: { workspaceId: ws, storeId, provider: "google", accountId: "1234567890", accountName: "Real", currency: "AUD", timezone: "UTC", accessTokenEnc: "v1.real", tokenKeyVersion: 1, historyFrom: "2026-01-01", syncedThrough: localDay(new Date(), "UTC") },
+    });
+    const today = localDay(new Date(), "UTC");
+    const [from, to] = [addDays(today, -3), addDays(today, -1)];
+    const at = { workspaceId: ws, storeId, connectionId: real.id, provider: "google", accountId: "1234567890" };
+    for (const day of [from, addDays(from, 1), to]) {
+      for (const [campaignId, spend] of [["7", 8], ["8", 20], ["9", 1]] as const) {
+        await systemDb.adCampaignDaily.create({ data: { ...at, campaignId, campaignName: `Campaign ${campaignId}`, day, spend, impressions: 100, clicks: 4 } });
+      }
+    }
+    const read = new Date("2026-10-30T06:00:00Z");
+    await systemDb.adCampaign.createMany({
+      data: [
+        { ...at, campaignId: "7", name: "Search - brand", status: "ENABLED", channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 10, checkedAt: read },
+        { ...at, campaignId: "8", name: "PMax launch", status: "ENABLED", channelType: "PERFORMANCE_MAX", primaryStatus: "ELIGIBLE", budgetPeriod: "CUSTOM_PERIOD", budgetAmount: 500, checkedAt: new Date("2026-10-30T05:00:00Z") },
+        // Read before its facts were: its status only.
+        { ...at, campaignId: "9", name: "Old", status: "PAUSED", checkedAt: new Date("2026-10-29T05:00:00Z") },
+        // No figures in the dates: not listed at zero.
+        { ...at, campaignId: "10", name: "Idle", status: "ENABLED", channelType: "DISPLAY", budgetPeriod: "DAILY", budgetAmount: 3, checkedAt: read },
+      ],
+    });
+    const res = await get(`${base}/analytics?preset=custom&from=${from}&to=${to}&connection=${real.id}`);
+    expect(res.statusCode).toBe(200);
+    const a = res.json();
+    expect(a.account).toMatchObject({ demo: false, connectionType: "production" });
+    expect(a.campaignSettings).toEqual({ source: "synced", asOf: read.toISOString() });
+    const by = Object.fromEntries(a.campaigns.map((c: Record<string, unknown>) => [c.id, c]));
+    expect(Object.keys(by).sort()).toEqual(["7", "8", "9"]);
+    // A daily budget: today's, paced over the days the campaign ran in the dates (3 × $10 = $30, $24 of it spent).
+    expect(by["7"]).toMatchObject({ name: "Search - brand", type: "SEARCH", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", dailyBudget: 10, totalBudget: null, activeDays: 3, budget: 30, budgetUse: 0.8 });
+    // A campaign total budget covers its own dates, not these: stated, never paced.
+    expect(by["8"]).toMatchObject({ type: "PERFORMANCE_MAX", primaryStatus: "ELIGIBLE", budgetPeriod: "CUSTOM_PERIOD", totalBudget: 500, dailyBudget: null, budget: null, budgetUse: null });
+    // Not read yet: nothing in their place.
+    expect(by["9"]).toMatchObject({ type: null, status: "PAUSED", primaryStatus: null, primaryStatusReasons: [], budgetPeriod: null, dailyBudget: null, budget: null });
+    // A paused campaign gets no recommendation; the table filters by the stored type.
+    const searchOnly = await get(`${base}/analytics/campaigns?preset=custom&from=${from}&to=${to}&connection=${real.id}&type=SEARCH`);
+    expect(searchOnly.json().rows.map((c: { id: string }) => c.id)).toEqual(["7"]);
   });
 
   it("the campaign table: search, filters, sorting, pages and dates", async () => {

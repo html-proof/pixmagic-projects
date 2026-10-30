@@ -471,6 +471,14 @@ describe("what the dates are compared with", () => {
     expect(m.ads.sales.deltas.costPerOrder).toBeCloseTo(-0.3335, 3);
     // Shopify credits the order from the Facebook ad to Meta: $100 of sales for Meta's $40. The Instagram post carried no ad tag, and the direct order isn't anyone's.
     expect(m.ads.sourced).toEqual([{ provider: "meta", orders: 1, sales: 100, salesPerSpend: 2.5 }]);
+    // Paid vs organic, by the same visits (last click): the tagged Facebook ad paid, the untagged Instagram post organic, the typed address direct.
+    expect(m.traffic.split).toEqual([
+      { id: "paid", label: "Paid ads", orders: 1, sales: 100, share: 0.5 },
+      { id: "organic", label: "Organic", orders: 1, sales: 40, share: 0.2 },
+      { id: "email", label: "Email and messages", orders: 0, sales: 0, share: 0 },
+      { id: "direct", label: "Direct", orders: 1, sales: 60, share: 0.3 },
+      { id: "unknown", label: "Not recorded", orders: 0, sales: 0, share: 0 },
+    ]);
     // Today in the dates: the ads' change stops at yesterday, so the store's whole-range figures aren't compared.
     const running = (await overview(a.headers, ws, store.id, "preset=30d")).json().modules;
     expect(running.ads.sales).toMatchObject({ netSales: 250, orders: 4, previous: null, deltas: { salesPerSpend: null, costPerOrder: null } });
@@ -748,6 +756,30 @@ describe("ad figures only for the days the accounts have stored", () => {
     await systemDb.adCampaign.create({ data: { workspaceId: otherWs, storeId: otherStore.id, connectionId: theirs.id, provider: "google", accountId: "123", campaignId: "1", name: "Spring", status: "ENABLED", checkedAt: new Date() } });
     const again = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Array<{ provider: string; status: string | null }>;
     expect(again.find((c) => c.provider === "google")!.status).toBeNull();
+  });
+
+  it("gives each campaign Google's type, primary status and budget, and Meta's budget, as the last sync stored them; unread stays null", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const google = await adAccount(store, "google", "123");
+    await spendDays(store, meta, d(-6), today, 10);
+    await spendDays(store, google, d(-6), today, 5);
+    const at = { workspaceId: ws, storeId: store.id, campaignId: "1", name: "Spring", checkedAt: new Date() };
+    await systemDb.adCampaign.create({ data: { ...at, connectionId: meta.id, provider: "meta", accountId: "act_1", status: "ACTIVE", budgetPeriod: "LIFETIME", budgetAmount: 900 } });
+    await systemDb.adCampaign.create({
+      data: { ...at, connectionId: google.id, provider: "google", accountId: "123", status: "ENABLED", channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+    });
+    type Row = { provider: string; channelType: string | null; primaryStatus: string | null; primaryStatusReasons: string[]; budgetPeriod: string | null; budgetAmount: number | null };
+    const campaigns = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Row[];
+    const by = Object.fromEntries(campaigns.map(({ provider, channelType, primaryStatus, primaryStatusReasons, budgetPeriod, budgetAmount }) => [provider, { channelType, primaryStatus, primaryStatusReasons, budgetPeriod, budgetAmount }]));
+    expect(by).toEqual({
+      meta: { channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: "LIFETIME", budgetAmount: 900 },
+      google: { channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+    });
+    // The download carries them too, in the platform's own words.
+    const table = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export/table?section=ads_campaigns&preset=7d&platform=google`, headers: a.headers });
+    expect(table.statusCode).toBe(200);
+    expect(table.json().rows[0].slice(3, 9)).toEqual(["ENABLED", "LIMITED", "BUDGET_CONSTRAINED", "SEARCH", 40, "DAILY"]);
   });
 
   it("never shows 0 for an account whose access ended or that was never read, and keeps a healthy platform's figures", async () => {

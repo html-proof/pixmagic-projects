@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight, CircleCheck, Info, Lightbulb, Megaphone, OctagonAlert, Package, Plus, ReceiptText, Rocket, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowRight, ChevronRight, CircleCheck, Info, Lightbulb, Megaphone, OctagonAlert, Package, Plus, ReceiptText, Rocket, Split, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
 import type { AdSpendProvider } from "@app/shared/ads";
 import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
@@ -13,7 +13,7 @@ import { Donut, type DonutSlice } from "./Charts";
 import { fmtDateTime, fmtMoneyCompact, fmtTimes, humanize } from "./format";
 import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
-import { OrderName } from "./Modules";
+import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
 import type { Topic } from "./topics";
 import type { AdsModule, Overview, RecentOrder } from "./types";
@@ -434,6 +434,53 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
           fmtAxis={(v) => fmtMoneyCompact(v, ads.currency)}
         />
       </div>
+    </HomeCard>
+  );
+}
+
+// ---- Paid vs organic ----------------------------------------------------------------------------
+
+/**
+ * The store's sales by how each order's last visit came (the traffic module's split): paid ads against
+ * organic search, social and other websites, then email, direct and not recorded. Shopify's own record
+ * of the visit (last click), so it needs no ad account and never mixes in what a platform claims.
+ */
+export function PaidVsOrganic({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+  const t = ov.modules.traffic!;
+  const split = t.split!;
+  const paid = split.find((p) => p.id === "paid");
+  const organic = split.find((p) => p.id === "organic");
+  const any = split.some((p) => p.orders > 0 || p.sales !== 0);
+  const money = (n: number) => fmtMoney(n, currency);
+  return (
+    <HomeCard
+      id="paid-organic"
+      title="Paid vs organic sales"
+      sub="Net sales by the visit Shopify recorded before each order: an ad, or a search, post or website."
+      icon={<Disc icon={Split} className="bg-emerald-600 text-white dark:bg-emerald-500" />}
+      action={<DetailsLink onClick={() => onOpen("channels")} />}
+    >
+      {any ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 divide-x divide-border">
+            <Figure label="From paid ads" value={fmtPct(paid?.share ?? null)} change={<span className="text-xs tabular-nums text-muted">{paid ? money(paid.sales) : "—"}</span>} />
+            <div className="pl-3">
+              <Figure label="Organic" value={fmtPct(organic?.share ?? null)} change={<span className="text-xs tabular-nums text-muted">{organic ? money(organic.sales) : "—"}</span>} />
+            </div>
+          </div>
+          <div className="mt-4">
+            <TrafficSplitBar split={split} currency={currency} />
+          </div>
+        </>
+      ) : (
+        <p className="text-sm text-muted">{t.pending > 0 ? "Where these orders came from is still being read from Shopify." : "No sales with a recorded visit in these dates."}</p>
+      )}
+      {t.pending > 0 && any && (
+        <p className="mt-2 text-xs text-muted">
+          {fmtNum(t.pending)} more {t.pending === 1 ? "order is" : "orders are"} still being read from Shopify, and {t.pending === 1 ? "isn't" : "aren't"} in these figures yet.
+        </p>
+      )}
+      <TrafficSplitNote />
     </HomeCard>
   );
 }

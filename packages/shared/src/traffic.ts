@@ -142,3 +142,39 @@ export function restVisit(o: { landing_site?: unknown; referring_site?: unknown 
   if (!landing && !referrer) return null;
   return { landingPage: landing, referrerUrl: referrer };
 }
+
+/**
+ * Paid vs organic: each order by how its last visit came, as Shopify recorded it (last click, from the
+ * order's customer journey), never what an ad platform credits to its ads. "paid": a link tagged as an
+ * ad (TrafficMedium "paid"; an ad whose links carry no tags reads as organic); "organic": from a search
+ * engine, a social network or another website without an ad tag ("unpaid", "referral"); "email": email
+ * and messages; "direct": a typed or bookmarked address; "unknown": Shopify recorded no visit (POS,
+ * draft orders, apps).
+ */
+export const TRAFFIC_SPLITS = ["paid", "organic", "email", "direct", "unknown"] as const;
+export type TrafficSplit = (typeof TRAFFIC_SPLITS)[number];
+
+export const TRAFFIC_SPLIT_LABEL: Record<TrafficSplit, string> = {
+  paid: "Paid ads",
+  organic: "Organic",
+  email: "Email and messages",
+  direct: "Direct",
+  unknown: "Not recorded",
+};
+
+/** The split an order's traffic_medium belongs to; anything not known as a medium is "unknown". */
+export function trafficSplitOf(medium: string | null | undefined): TrafficSplit {
+  switch (medium) {
+    case "paid":
+      return "paid";
+    case "unpaid":
+    case "referral":
+      return "organic";
+    case "email":
+      return "email";
+    case "direct":
+      return "direct";
+    default:
+      return "unknown";
+  }
+}

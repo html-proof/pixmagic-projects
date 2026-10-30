@@ -623,7 +623,7 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   const traffic = out.traffic;
   if (isObj(traffic) && !g.has("marketing.attribution")) {
     out.traffic = {
-      ...(omit(traffic, ["paid", "campaigns"]) as Obj),
+      ...(omit(traffic, ["paid", "campaigns", "split"]) as Obj),
       items: Array.isArray(traffic.items) ? traffic.items.map((i: unknown) => omit(i, ["paidOrders", "paidSales"])) : traffic.items,
     };
   }

@@ -58,9 +58,10 @@ test("the Advertising area sets the store's sales against the spend, compares it
       [ws, storeId, conn, day(n), n >= -7 ? 10 : 5],
     );
   }
-  // As the last sync read it at Meta: running.
+  // As the last sync read it at Meta: running, on a budget of its own of $10 a day.
   await db.query(
-    `INSERT INTO ad_campaigns (workspace_id, store_id, connection_id, provider, account_id, campaign_id, name, status, checked_at) VALUES ($1, $2, $3, 'meta', 'act_1', '1', 'Spring', 'ACTIVE', now())`,
+    `INSERT INTO ad_campaigns (workspace_id, store_id, connection_id, provider, account_id, campaign_id, name, status, budget_period, budget_amount, checked_at)
+     VALUES ($1, $2, $3, 'meta', 'act_1', '1', 'Spring', 'ACTIVE', 'DAILY', 10, now())`,
     [ws, storeId, conn],
   );
   // The dates picked (the last seven whole days): an order from a Facebook ad and a direct one. The seven before: one direct order.
@@ -118,6 +119,9 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(row).toContainText("Shop ads");
   await expect(row).toContainText("▲ 100%");
   await expect(row).toContainText("Active");
+  // Its budget as the last sync stored it; Meta has no campaign type.
+  await expect(row.getByTestId("campaign-budget")).toHaveText("$10.00 a day");
+  await expect(row.getByTestId("campaign-type")).toHaveText("—");
   // Filtered by status and by name: none paused; found by part of its name; back to every campaign.
   await page.getByRole("combobox", { name: "Campaign status" }).selectOption("paused");
   await expect(page.getByTestId("campaign-row")).toHaveCount(0);
@@ -135,6 +139,65 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByTestId("report-table")).toContainText("Ad campaigns");
   await expect(page.getByTestId("report-row").filter({ hasText: "Spring" })).toContainText("act_1");
   await expect(page.getByTestId("download-ads_campaigns")).toHaveAttribute("href", new RegExp(`section=ads_campaigns&preset=custom&from=${day(-7)}&to=${day(-1)}`));
+
+  // The dashboard: paid vs organic from the same orders' last visits, $100 from the tagged Facebook ad and $60 direct.
+  await page.goto(`/dashboard?${dates}`);
+  const split = page.getByTestId("home-paid-organic");
+  await expect(split).toContainText("62.5%");
+  await expect(split.getByTestId("traffic-split-paid")).toContainText("$100.00");
+  await expect(split.getByTestId("traffic-split-direct")).toContainText("$60.00");
+  await expect(split.getByTestId("traffic-split-organic")).toContainText("$0.00");
+  await expect(split).toContainText("Last click");
+});
+
+test("a real Google Ads account's campaigns show Google's type, delivery and budget as the last sync stored them, on Campaign comparison and Account analytics", async ({ page }) => {
+  const email = uniqueEmail("ads-facts");
+  await signUp(page, email);
+  const ws = await createWorkspace(page, "Ads Facts Co");
+  const storeId = await insertStore(db, ws, `ads-facts-${Date.now()}.myshopify.com`);
+  const conn = await insertAdConnection(db, { workspaceId: ws, storeId, provider: "google", accountId: "1234567890", accountName: "Real Google", historyFrom: day(-89), syncedThrough: day(0), lastSyncedAt: new Date() });
+  for (let n = -7; n <= -1; n++) {
+    for (const [id, name, spend] of [["7", "Search - brand", 8], ["8", "PMax launch", 20]] as const) {
+      await db.query(
+        `INSERT INTO ad_campaign_daily (workspace_id, store_id, connection_id, provider, account_id, campaign_id, campaign_name, day, spend, impressions, clicks, link_clicks, conversions, conversion_value, purchases, purchase_value, leads, currency, updated_at)
+         VALUES ($1, $2, $3, 'google', '1234567890', $4, $5, $6, $7, 500, 20, 20, 1, 30, 0, 0, 0, 'USD', now())`,
+        [ws, storeId, conn, id, name, day(n), spend],
+      );
+    }
+  }
+  // As the last sync stored them: a Search campaign held back by its $10 daily budget, a Performance Max one on a $500 campaign total.
+  await db.query(
+    `INSERT INTO ad_campaigns (workspace_id, store_id, connection_id, provider, account_id, campaign_id, name, status, channel_type, primary_status, primary_status_reasons, budget_period, budget_amount, checked_at) VALUES
+       ($1, $2, $3, 'google', '1234567890', '7', 'Search - brand', 'ENABLED', 'SEARCH', 'LIMITED', ARRAY['BUDGET_CONSTRAINED'], 'DAILY', 10, now()),
+       ($1, $2, $3, 'google', '1234567890', '8', 'PMax launch', 'ENABLED', 'PERFORMANCE_MAX', 'ELIGIBLE', ARRAY[]::text[], 'CUSTOM_PERIOD', 500, now())`,
+    [ws, storeId, conn],
+  );
+  const dates = `preset=custom&from=${day(-7)}&to=${day(-1)}`;
+
+  await page.goto(`/advertising/campaigns?${dates}`);
+  const search = page.getByTestId("campaign-row").filter({ hasText: "Search - brand" });
+  await expect(search.getByTestId("campaign-primary-status")).toHaveText("Limited");
+  await expect(search).toContainText("limited by budget");
+  await expect(search.getByTestId("campaign-type")).toHaveText("Search");
+  await expect(search.getByTestId("campaign-budget")).toHaveText("$10.00 a day");
+  const pmax = page.getByTestId("campaign-row").filter({ hasText: "PMax launch" });
+  await expect(pmax.getByTestId("campaign-primary-status")).toHaveText("Eligible");
+  await expect(pmax.getByTestId("campaign-type")).toHaveText("Performance Max");
+  await expect(pmax.getByTestId("campaign-budget")).toHaveText("$500.00 total");
+
+  // Account analytics for the same account: the table's delivery and budget, and spend against today's daily budget ($56 of 7 × $10).
+  await page.goto(`/advertising/google/analytics?${dates}&connection=${conn}`);
+  const row = page.getByTestId("ga-campaign-row").filter({ hasText: "Search - brand" });
+  await expect(row).toContainText("Limited");
+  await expect(row).toContainText("limited by budget");
+  await expect(row).toContainText("budget $10.00 a day");
+  await expect(page.getByTestId("ga-campaign-row").filter({ hasText: "PMax launch" })).toContainText("budget $500.00 total");
+  const budgets = page.getByTestId("ga-budget-table");
+  await expect(budgets).toContainText("$70.00");
+  await expect(budgets).toContainText("80%");
+  // A campaign total covers the campaign's own dates: stated, never paced over these.
+  await expect(budgets).not.toContainText("PMax launch");
+  await expect(page.getByTestId("ga-budget-note")).toContainText("as Google states it now");
 });
 
 test("trend charts group by week and month, the week presets run Monday to Sunday, and the Advertising pages print", async ({ page }) => {

@@ -1,5 +1,6 @@
 "use client";
 import { gradeCover, gradeShipping, type Grade } from "@app/shared/health";
+import type { TrafficSplit } from "@app/shared/traffic";
 import Link from "next/link";
 import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -47,6 +48,56 @@ export function ChannelsCard({ m, currency }: { m: ChannelsModule; currency: str
   );
 }
 
+/** One colour per split, the same wherever it is drawn: paid in the ad-spend colour, organic in the sales colour (HomePanels). */
+const SPLIT_COLOR: Record<TrafficSplit, string> = { paid: "var(--viz-cat-2)", organic: "var(--viz-cat-3)", email: "var(--viz-cat-1)", direct: "var(--muted)", unknown: "var(--border)" };
+
+/**
+ * Paid vs organic (TrafficModule.split): one part-to-whole bar and its legend, each split's sales, share
+ * and orders. A split whose sales come to nothing or less (returns) has no width in the bar; its figure
+ * is still written as it is.
+ */
+export function TrafficSplitBar({ split, currency }: { split: NonNullable<TrafficModule["split"]>; currency: string }) {
+  return (
+    <figure className="min-w-0" data-testid="traffic-split">
+      <div
+        className="animate-grow-x flex h-3 gap-[2px] overflow-hidden rounded-full bg-bg"
+        role="img"
+        aria-label={`Sales by how the last visit came: ${split.map((p) => `${p.label} ${fmtMoney(p.sales, currency)}`).join(", ")}`}
+      >
+        {split
+          .filter((p) => p.sales > 0)
+          .map((p) => (
+            <div key={p.id} className="h-full" style={{ flexGrow: p.sales, flexBasis: 0, minWidth: 4, background: SPLIT_COLOR[p.id] }} title={`${p.label}: ${fmtMoney(p.sales, currency)} (${fmtPct(p.share)})`} />
+          ))}
+      </div>
+      <ul className="mt-3 space-y-1.5 text-sm">
+        {split.map((p) => (
+          <li key={p.id} className="flex min-w-0 items-center gap-2" data-testid={`traffic-split-${p.id}`}>
+            <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: SPLIT_COLOR[p.id] }} />
+            <span className="min-w-0 flex-1 truncate">
+              {p.label} <span className="text-xs text-muted">· {plural(p.orders, "order")}</span>
+            </span>
+            <span className="font-medium tabular-nums">{fmtMoney(p.sales, currency)}</span>
+            <span className="w-12 text-right text-xs tabular-nums text-muted">{fmtPct(p.share)}</span>
+          </li>
+        ))}
+      </ul>
+    </figure>
+  );
+}
+
+/** What the paid vs organic split is, said wherever it is shown: last click, from Shopify's record, not the platforms' attribution. */
+export function TrafficSplitNote() {
+  return (
+    <p className="mt-3 text-xs text-muted">
+      Last click: the visit Shopify recorded just before each order, not what Meta or Google credit to their ads (they also count earlier clicks and views).
+      &ldquo;Paid&rdquo; is a link tagged as an ad: Google adds its click id by itself; for Facebook and Instagram, add URL parameters such as utm_medium=paid, or their
+      sales count as organic. Organic is search, social posts and other websites; orders without a recorded visit (point of sale, draft orders, apps) are &ldquo;Not
+      recorded&rdquo;.
+    </p>
+  );
+}
+
 /**
  * Where sales came from: the visit Shopify recorded before each order (an ad, a post, a search, an
  * email, a typed address). The store's own view, so it needs no ad account, and it is never mixed
@@ -65,6 +116,12 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
         <p className="mb-3 text-xs text-muted">
           Reading from Shopify where {plural(m.pending, "older order")} came from; {m.pending === 1 ? "it appears" : "they appear"} here within a few minutes.
         </p>
+      )}
+      {m.split && m.items.length > 0 && (
+        <div className="mb-5">
+          <h3 className="mb-2 text-sm font-medium">Paid vs organic</h3>
+          <TrafficSplitBar split={m.split} currency={currency} />
+        </div>
       )}
       {m.items.length === 0 ? (
         <Empty>{m.pending > 0 ? "Sources are being read from Shopify." : "No sales to show for these dates."}</Empty>

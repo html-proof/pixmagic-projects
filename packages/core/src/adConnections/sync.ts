@@ -9,7 +9,7 @@
  * dashboard says "No earlier data" rather than counting those days as nothing spent.
  */
 import { Prisma, systemDb, type AdConnection } from "@app/db";
-import { addDays, daysBetweenInclusive, localDay, type AdDayRow, type AdProvider, type AdsenseDayRow } from "@app/shared";
+import { addDays, daysBetweenInclusive, localDay, metaCampaignFacts, type AdDayRow, type AdProvider, type AdsenseDayRow } from "@app/shared";
 import {
   AdsApiError,
   AdsAuthError,
@@ -21,7 +21,7 @@ import {
   metaAccountHealth,
   metaCampaignDays,
   metaGrantedPermissions,
-  metaStatuses,
+  metaListed,
   type AdAccountHealth,
   type AdFailure,
   type MetaConfig,
@@ -43,6 +43,7 @@ import {
   pauseGoogleAds,
   pauseMetaAds,
 } from "./budget.js";
+import { campaignFactsReady } from "./campaigns.js";
 import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig } from "./config.js";
 import { accessTokenAndPerson, adAccessToken, learnAdPerson } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
@@ -137,16 +138,24 @@ export async function storeAdDays(conn: AdConnection, since: string, until: stri
 const META_STATUS_BUDGET_MS = 20_000;
 
 /**
- * Meta's insights don't carry a campaign's delivery status: read from the account's campaign list
- * (metaStatuses: stops once every campaign is found). Best effort: without it the days are stored all
- * the same and the statuses stay as last read.
+ * Meta's insights don't carry a campaign's delivery status or budget: both are read from the account's
+ * campaign list (metaListed: stops once every campaign is found), one call for the two. A budget is
+ * the campaign's own (Advantage campaign budget), daily or lifetime, in the account's currency; a
+ * campaign without one has its budgets on its ad sets, which aren't read. Best effort: without the list
+ * the days are stored all the same and the statuses and budgets stay as last read; a list Meta gave
+ * without its settings' fields, or an account whose currency isn't known yet (Meta's budgets are in its
+ * minor units: cents, or whole yen), leaves the budgets as last read.
  */
-async function withMetaStatuses(cfg: MetaConfig, token: string, accountId: string, rows: AdDayRow[], coord?: Coord): Promise<AdDayRow[]> {
+async function withMetaStatuses(cfg: MetaConfig, token: string, conn: Pick<AdConnection, "accountId" | "currency">, rows: AdDayRow[], coord?: Coord): Promise<AdDayRow[]> {
   const ids = [...new Set(rows.map((r) => r.campaignId))];
   if (!ids.length) return rows;
+  const accountId = conn.accountId;
   try {
-    const statuses = await metaStatuses(cfg, token, accountId, "campaign", ids, { deadline: Date.now() + META_STATUS_BUDGET_MS });
-    return rows.map((r) => (statuses.has(r.campaignId) ? { ...r, campaignStatus: statuses.get(r.campaignId)! } : r));
+    const { objects, detailed } = await metaListed(cfg, token, accountId, "campaign", ids, { deadline: Date.now() + META_STATUS_BUDGET_MS, currency: conn.currency });
+    return rows.map((r) => {
+      const o = objects.get(r.campaignId);
+      return o ? { ...r, campaignStatus: o.status, ...(detailed && conn.currency ? { campaignFacts: metaCampaignFacts(o.details) } : {}) } : r;
+    });
   } catch (err) {
     if (coord && isMetaAppLimit(err)) await pauseMetaAds(coord, err.retryAfterS);
     logger.info({ err, accountId }, "meta: campaign statuses not read this sync");
@@ -156,24 +165,40 @@ async function withMetaStatuses(cfg: MetaConfig, token: string, accountId: strin
 
 /**
  * Keep each campaign the platform reported as it last described it (ad_campaigns): the name of its
- * latest day, and its status when this sync read one (an unread status leaves the one stored).
+ * latest day, its status when this sync read one (an unread status leaves the one stored), and its
+ * facts (channel type, primary status, budget) when this sync read them, likewise. The facts are left
+ * out while their columns don't exist yet (campaignFactsReady), and only the key is returned, so the
+ * upsert names no column a database a migration behind lacks.
  */
 async function storeCampaigns(conn: AdConnection, rows: AdDayRow[]) {
   const latest = new Map<string, AdDayRow>();
   for (const r of rows) {
     const before = latest.get(r.campaignId);
-    if (!before || r.day >= before.day) latest.set(r.campaignId, { ...r, campaignStatus: r.campaignStatus ?? before?.campaignStatus });
+    if (!before || r.day >= before.day) latest.set(r.campaignId, { ...r, campaignStatus: r.campaignStatus ?? before?.campaignStatus, campaignFacts: r.campaignFacts ?? before?.campaignFacts });
   }
   if (!latest.size) return;
   const now = new Date();
+  const withFacts = [...latest.values()].some((r) => r.campaignFacts) && (await campaignFactsReady(systemDb));
   await systemDb.$transaction(
     [...latest.values()].map((r) => {
       const name = r.campaignName.slice(0, 500);
       const status = r.campaignStatus === undefined ? undefined : (r.campaignStatus?.slice(0, 64) ?? null);
+      const f = withFacts ? r.campaignFacts : undefined;
+      const facts = f
+        ? {
+            channelType: f.channelType?.slice(0, 64) ?? null,
+            primaryStatus: f.primaryStatus?.slice(0, 64) ?? null,
+            primaryStatusReasons: f.primaryStatusReasons.slice(0, 20).map((x) => x.slice(0, 64)),
+            budgetPeriod: f.budgetPeriod?.slice(0, 32) ?? null,
+            budgetAmount: f.budgetAmount,
+          }
+        : {};
+      const read = status !== undefined || f ? { checkedAt: now } : {};
       return systemDb.adCampaign.upsert({
         where: { connectionId_campaignId: { connectionId: conn.id, campaignId: r.campaignId } },
-        create: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: conn.provider, accountId: conn.accountId, campaignId: r.campaignId, name, status: status ?? null, checkedAt: now },
-        update: { name, ...(status !== undefined ? { status, checkedAt: now } : {}) },
+        create: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: conn.provider, accountId: conn.accountId, campaignId: r.campaignId, name, status: status ?? null, checkedAt: now, ...facts },
+        update: { name, ...(status !== undefined ? { status } : {}), ...facts, ...read },
+        select: { campaignId: true },
       });
     }),
   );
@@ -352,7 +377,7 @@ async function fetchAndStore(conn: AdConnection, token: string, since: string, u
     } catch (err) {
       throw await metaPermissionProblem(cfg, token, err);
     }
-    return storeAdDays(conn, since, until, rows, (stored) => withMetaStatuses(cfg, token, conn.accountId, stored, coord));
+    return storeAdDays(conn, since, until, rows, (stored) => withMetaStatuses(cfg, token, conn, stored, coord));
   }
   if (conn.provider === "google") {
     // A demo connection reads bizinsights' generator; a real one Google, through the OAuth client (ads/googleAdsSource.ts).

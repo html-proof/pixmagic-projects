@@ -1,12 +1,28 @@
 "use client";
 import { useEffect, useState } from "react";
-import { CAMPAIGN_SORTS, type CampaignSort } from "@app/shared/adsAnalytics";
-import { Badge } from "@/components/dashboard/Primitives";
+import { campaignBudgetWords, googleCampaignStatus } from "@app/shared/ads";
+import { CAMPAIGN_SORTS, type CampaignAnalytics, type CampaignSort } from "@app/shared/adsAnalytics";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { fmtDay } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { friendlyError, useApi } from "@/lib/api";
 import { campaignStatusLabel, campaignTypeLabel, type CampaignsAnswer } from "@/lib/googleAds";
 import { METRIC_COLUMNS, Section, figureWriters, writeMetric } from "./ui";
+
+/** How worried to be about a campaign's primary status (GoogleReport's scale): serving in full, held back, or not serving at all. */
+const DELIVERY_TONE: Record<string, Tone> = { ELIGIBLE: "good", LIMITED: "warn", MISCONFIGURED: "warn", NOT_ELIGIBLE: "danger" };
+
+/** Google's primary status in words, with why, when it is known; otherwise the campaign's own status. */
+function CampaignDelivery({ c }: { c: CampaignAnalytics }) {
+  const d = googleCampaignStatus(c.primaryStatus, c.primaryStatusReasons);
+  if (!d) return <Badge tone={c.status === "ENABLED" ? "good" : "neutral"}>{campaignStatusLabel(c.status)}</Badge>;
+  return (
+    <>
+      <Badge tone={DELIVERY_TONE[c.primaryStatus ?? ""] ?? "neutral"}>{d.label}</Badge>
+      {d.reasons.length > 0 && <span className="mt-0.5 block text-xs text-muted">{d.reasons.join(", ")}</span>}
+    </>
+  );
+}
 
 /** Section 2: the campaign table, searched, filtered, sorted and paged by the API (GET .../analytics/campaigns). */
 export function CampaignsSection({ base, dates, currency, demo, types, statuses }: { base: string; dates: string; currency: string; demo: boolean; types: string[]; statuses: string[] }) {
@@ -118,28 +134,30 @@ export function CampaignsSection({ base, dates, currency, demo, types, statuses 
                 </tr>
               </thead>
               <tbody>
-                {a.rows.map((c) => (
-                  <tr key={c.id} className="border-t border-border" data-testid="ga-campaign-row" data-campaign={c.id}>
-                    <td className="max-w-[16rem] px-2 py-2">
-                      <span className="block truncate font-medium" title={c.name}>
-                        {c.name}
-                      </span>
-                      <span className="block text-xs text-muted">
-                        {c.startDay ? `since ${fmtDay(c.startDay)}` : ""}
-                        {c.dailyBudget !== null ? ` · budget ${w.money(c.dailyBudget)} a day` : ""}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2">{campaignTypeLabel(c.type)}</td>
-                    <td className="px-2 py-2">
-                      <Badge tone={c.status === "ENABLED" ? "good" : "neutral"}>{campaignStatusLabel(c.status)}</Badge>
-                    </td>
-                    {METRIC_COLUMNS.filter((m) => (CAMPAIGN_SORTS as readonly string[]).includes(m.key)).map((m) => (
-                      <td key={m.key} className="px-2 py-2 text-right tabular-nums">
-                        {writeMetric(w, m.kind, c[m.key])}
+                {a.rows.map((c) => {
+                  const budget = campaignBudgetWords(c.budgetPeriod, c.budgetPeriod === "CUSTOM_PERIOD" ? c.totalBudget : c.dailyBudget, w.money);
+                  return (
+                    <tr key={c.id} className="border-t border-border" data-testid="ga-campaign-row" data-campaign={c.id}>
+                      <td className="max-w-[16rem] px-2 py-2">
+                        <span className="block truncate font-medium" title={c.name}>
+                          {c.name}
+                        </span>
+                        <span className="block text-xs text-muted">
+                          {[c.startDay ? `since ${fmtDay(c.startDay)}` : null, budget ? `budget ${budget}` : null].filter(Boolean).join(" · ")}
+                        </span>
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      <td className="px-2 py-2">{campaignTypeLabel(c.type)}</td>
+                      <td className="max-w-[14rem] px-2 py-2" data-testid="ga-campaign-status-cell">
+                        <CampaignDelivery c={c} />
+                      </td>
+                      {METRIC_COLUMNS.filter((m) => (CAMPAIGN_SORTS as readonly string[]).includes(m.key)).map((m) => (
+                        <td key={m.key} className="px-2 py-2 text-right tabular-nums">
+                          {writeMetric(w, m.kind, c[m.key])}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

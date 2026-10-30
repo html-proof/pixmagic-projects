@@ -11,6 +11,7 @@ export * from "./adConnections/config.js";
 export { adAccessToken, encryptAdTokens, learnAdPerson, reencryptAdTokens } from "./adConnections/credentials.js";
 export * from "./adConnections/connect.js";
 export * from "./adConnections/sync.js";
+export * from "./adConnections/campaigns.js";
 export * from "./adConnections/reports.js";
 export * from "./adConnections/status.js";
 export * from "./adConnections/alerts.js";

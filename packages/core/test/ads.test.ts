@@ -145,7 +145,11 @@ describe("Google", () => {
       { accountId: "444", name: "Client", currency: "USD", timezone: "America/New_York", loginCustomerId: "222", status: null },
     ]);
     const rows = await googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-01");
-    expect(rows).toEqual([{ provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, linkClicks: 3, conversions: 2, conversionValue: 55, purchases: 1, purchaseValue: 40, leads: 0, campaignStatus: "ENABLED" }]);
+    // Google gave none of the campaign's facts (type, primary status, budget): read, and none, never made up.
+    const noFacts = { channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: null, budgetAmount: null };
+    expect(rows).toEqual([
+      { provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, linkClicks: 3, conversions: 2, conversionValue: 55, purchases: 1, purchaseValue: 40, leads: 0, campaignStatus: "ENABLED", campaignFacts: noFacts },
+    ]);
     await expect(googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01' OR 1=1 --", "2026-10-01")).rejects.toThrow("Invalid date range");
   });
 });
