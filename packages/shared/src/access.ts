@@ -528,6 +528,8 @@ export const OVERVIEW_MODULE_ACCESS = {
   shopify_sessions: ["analytics.conversion"],
   profit: ["finance.breakdown"],
   shopify_check: ["finance.breakdown"],
+  // The owner's own costs (Settings → Costs): money figures as sensitive as the cost of goods beside them.
+  expenses: ["finance.breakdown"],
   // Not a module of the overview: the live customer lists (GET .../contacts), named here so the
   // dashboard's capability list can say whether this member gets them at all.
   contacts: ["customers.list", "analytics.abandonment"],
@@ -593,6 +595,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
       if (s.year !== undefined) s.year = omitFromMonths(s.year, ["refunds"]);
     }
+    // Which orders were a customer's first: the customers module's figure (new and returning customers), day by day too.
+    if (!g.has("customers.analytics") && Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["newCustomerOrders"]));
     out.sales_overview = s;
   }
   const inv = out.inventory;

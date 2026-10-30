@@ -12,7 +12,7 @@ import { insertStore, signUp, uniqueEmail } from "./helpers";
  * and drives them. The test plays the phone and WhatsApp through the stub's /__control.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function control<T = unknown>(path: string, body?: unknown): Promise<T> {

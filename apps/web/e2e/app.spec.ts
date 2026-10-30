@@ -6,7 +6,7 @@ import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, signedL
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Onboarding creates the workspace when the user clicks connect; tests that skip Shopify create it directly. */

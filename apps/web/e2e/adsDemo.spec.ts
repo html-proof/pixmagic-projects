@@ -10,7 +10,7 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
  * no Google credentials, so the real sign-in isn't offered, and nothing here reaches Google.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 const quietMeta = (page: Page) => page.route("https://connect.facebook.net/**", (route) => route.fulfill({ status: 200, contentType: "text/javascript", body: "" }));

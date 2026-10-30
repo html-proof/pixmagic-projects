@@ -280,15 +280,16 @@ describe("date ranges", () => {
     expect(res.statusCode).toBe(200);
     const s = res.json().modules.sales_overview;
     // Only the 6th and 8th have daily rows; the chart used to be just those two points.
-    // Each day carries the lines of its total sales too (here none besides net sales).
+    // Each day carries the lines of its total sales too (here none besides net sales), what its
+    // orders sold for, and how many were a customer's first (none here: no customer on them).
     const lines = { shipping: 0, tax: 0, duties: 0, additionalFees: 0 };
-    const quiet = { netSales: 0, totalSales: 0, ...lines, orders: 0, units: 0, refunds: 0, averageOrderValue: null };
+    const quiet = { netSales: 0, totalSales: 0, ...lines, orders: 0, units: 0, refunds: 0, averageOrderValue: null, orderValue: 0, newCustomerOrders: 0 };
     expect(s.series).toEqual([
       { day: "2026-03-05", ...quiet },
-      { day: "2026-03-06", netSales: 40, totalSales: 40, ...lines, orders: 1, units: 1, refunds: 0, averageOrderValue: 40 },
+      { day: "2026-03-06", netSales: 40, totalSales: 40, ...lines, orders: 1, units: 1, refunds: 0, averageOrderValue: 40, orderValue: 40, newCustomerOrders: 0 },
       { day: "2026-03-07", ...quiet },
       // C was cancelled the same day: an order of the day, and its 99 a return, as in Shopify's reports.
-      { day: "2026-03-08", netSales: 55, totalSales: 55, ...lines, orders: 2, units: 2, refunds: 99, averageOrderValue: 77 },
+      { day: "2026-03-08", netSales: 55, totalSales: 55, ...lines, orders: 2, units: 2, refunds: 99, averageOrderValue: 77, orderValue: 154, newCustomerOrders: 0 },
       { day: "2026-03-09", ...quiet },
     ]);
     expect(s.current).toMatchObject({ netSales: 95, totalSales: 95, orders: 3 });
@@ -1106,7 +1107,8 @@ describe("scopes and tenancy", () => {
     await seedVariant(productsOnly, "p1", "v1", { qty: 4, price: 10 });
 
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
-    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
+    // The owner's own costs (Settings → Costs) go with the sales they're set against.
+    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
     expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null, history: { access: "awaiting_shopify", years: [] } });
 

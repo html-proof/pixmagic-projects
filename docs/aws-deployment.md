@@ -25,7 +25,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito,evolution-api,evolution-db}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -282,8 +282,9 @@ affect:
   artifacts, which count against the account's Actions storage (GitHub Free: 500 MB for all its
   private repositories together, artifacts and Packages). Once that was used up, every upload
   failed with "Artifact storage quota has been hit", no pass was recorded, and every push to `main`
-  ran the whole ~45-minute suite. The only artifact left is the Playwright report of a failed e2e
-  run (7 days).
+  ran the whole ~45-minute suite. CI uploads no artifacts at all since 2026-10-30: a failed e2e
+  test's page snapshot (Playwright's error-context.md) is printed in the "Run pnpm e2e" log
+  instead, under "Page when it failed".
 - A newer push waits for the run in progress on the same branch; then the newest waiting push runs
   (GitHub drops older waiting ones, "Canceling since a higher priority waiting request ... exists":
   those never started). On `main` the run in progress finishes and deploys, so merges minutes apart
@@ -572,11 +573,12 @@ job signs in only with the OIDC deploy role and checks that it did.
   2026-10-29. On a draft, CI cancels the queued or running run and skips every job (ci.yml), so the
   checks are grey and GitHub won't merge it until it's marked ready: `gh pr ready <n>` runs
   everything.
-- "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
-  Actions storage is used up (see the CI list above). Only that report is lost; the pass records
-  are commit statuses. Storage per private repository:
+- "Artifact storage quota has been hit": the account's 500 MB of Actions storage is used up (see
+  the CI list above). CI no longer uploads any artifact, so only a run of an older `ci.yml` shows
+  it (its Playwright report step; that run's red comes from the failed test, named in the "Run pnpm
+  e2e" log). On 2026-10-30 the whole account held ~1.3 MB of artifacts and uploads were still
+  refused; GitHub's meter needs `gh auth refresh -s user` to read. Storage per private repository:
   `gh api repos/html-proof/<repo>/actions/artifacts --paginate --jq '.artifacts[].size_in_bytes'`.
-  Deleting artifacts frees it once GitHub recounts (it says every 6-12 hours).
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
   what one pull request's job leaves behind the next job on that runner runs with. With the runner
   for main that stops short of main's CI and the deploy; without it, they run with it too. Only

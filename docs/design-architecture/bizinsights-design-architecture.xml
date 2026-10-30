@@ -32,7 +32,7 @@
 
   <overview>
     <what-it-is>Plain-language analytics and marketing for Shopify stores: sales and profit, shopping funnel, advertising (Meta, Google, AdSense), inventory, customer messaging (WhatsApp, SMS, email) with automations, staff and payroll, team access.</what-it-is>
-    <counts areas="13" pages="112" screenshots="135" sidebar-items-owner="22" area-menus="7" automation-builders="6" template-editors="3" message-histories="4"/>
+    <counts areas="13" pages="114" screenshots="135" sidebar-items-owner="22" area-menus="7" automation-builders="6" template-editors="3" message-histories="4"/>
     <codebase ui="apps/web (Next.js App Router, static export)" routes="apps/web/src/app" components="apps/web/src/components" shell="apps/web/src/components/AppShell.tsx" flags="apps/web/src/lib/features.ts"/>
     <owner-brief>"Right now it's so confusing and so mysterious… make all the information visible by a single tab and every part of the information more simple for a non-tech person… the automation stuffs have to be done automatically."</owner-brief>
   </overview>
@@ -112,7 +112,7 @@
       <group name="(no title)" note="Six areas, one name each, the same in the sidebar, the search and the page titles. An area shows only when the member has at least one place in it (Team &amp; Access, and what the workspace offers); it links to its first place.">
         <item label="Home" route="/dashboard" icon="LayoutDashboard" shownWhen="owner or admin, or a member with 2+ dashboard areas"/>
         <item label="Sales" route="its first tab (normally /dashboard?view=sales)" icon="ChartColumn" shownWhen="any Sales tab">
-          <tabs shownAs="a row of tabs inside the detail panel (switching tabs keeps one history entry, so Close leaves the panel) and over /funnel and /advertising/*; hidden when the member has one tab">Sales · Top products · Customers · Recent orders · Shipping · Sales channels · Discount codes · Busiest times · Visitors (/funnel) · Ads (/advertising) · Business overview</tabs>
+          <tabs shownAs="a row of tabs inside the detail panel (switching tabs keeps one history entry, so Close leaves the panel) and over /funnel, /advertising/* and /sheet; hidden when the member has one tab">Sales · Top products · Customers · Recent orders · Shipping · Sales channels · Discount codes · Busiest times · Visitors (/funnel) · Ads (/advertising) · Business overview · Profit sheet (/sheet, analytics.sales)</tabs>
         </item>
         <item label="Marketing" route="its first tab (normally /automations)" icon="Megaphone" shownWhen="any Marketing tab">
           <tabs shownAs="a row of tabs over each channel's pages; each channel keeps its own menu below">Automations · WhatsApp (/dashboard/whatsapp-automation) · Text messages (/messaging) · Email (/settings/email, out of the settings frame)</tabs>
@@ -436,6 +436,12 @@
             screenshot-desktop="screenshots/03-dashboard/view-timing--desktop.jpg">
         <purpose>Which weekdays and hours customers order.</purpose>
         <complexity level="low">Not in the sidebar at all — reachable only from the palette or a Key-insights row.</complexity>
+      </page>
+
+      <page id="sheet" route="/sheet" file="apps/web/src/app/(app)/sheet/page.tsx (components/sheet/*)" frame="app-shell" title="Profit sheet" access="analytics.sales" added="after the map (#297); no screenshot yet">
+        <purpose>Every figure for the store, a column per day, week or month, with the team's business events on their days; show only some weekdays or only the event days, and set them against the rest.</purpose>
+        <layout>Sales tabs on top; a header card with the store, dates, Days/Weeks/Months, which days, refresh, download CSV, print and "Add business event"; the sheet table; the events panel.</layout>
+        <complexity level="high">A spreadsheet of every figure: powerful for the owner, a lot for a non-technical merchant.</complexity>
       </page>
     </area>
 
@@ -1028,21 +1034,19 @@
     </area>
 
     <area id="settings" name="Settings" order="12">
-      <subnav file="apps/web/src/app/(app)/settings/layout.tsx + lib/settingsNav.ts">
-        <item label="Profile" route="/settings/profile"/>
-        <item label="Security" route="/settings/security"/>
-        <item label="Workspace" route="/settings/workspace" shownWhen="members:manage"/>
-        <item label="Integrations" route="/settings/integrations" shownWhen="integrations.status"/>
-        <item label="Shopify" route="/settings/stores" shownWhen="integrations.status"/>
-        <item label="Advertising" route="/settings/ads" shownWhen="integrations.status and ads module"/>
-        <item label="Email integrations" route="/settings/email" shownWhen="email:read"/>
-        <item label="Team &amp; Access" route="/team" shownWhen="members:manage (leaves the settings layout)"/>
+      <subnav file="apps/web/src/app/(app)/settings/layout.tsx + lib/settingsNav.ts" changed="redesign phase 1">
+        <item label="Connections" route="/settings/integrations" shownWhen="integrations.status" note="Shopify stores (/settings/stores) and Ad accounts (/settings/ads) open from it and keep it lit; they left the menu."/>
+        <item label="Business details" route="/settings/workspace" shownWhen="members:manage"/>
+        <item label="Costs" route="/settings/costs" shownWhen="finance.breakdown" note="Added by #299 after the map was drawn: the store's own costs, for net profit."/>
+        <item label="People &amp; access" route="/team" shownWhen="members:manage (leaves the settings layout)"/>
         <item label="Notifications" route="/settings/notifications"/>
+        <item label="Profile" route="/settings/profile"/>
+        <item label="Sign-in &amp; security" route="/settings/security"/>
         <item label="API keys" route="/settings/api-keys" shownWhen="flag API_KEYS_ENABLED (off → hidden)"/>
         <item label="Billing" route="/settings/billing" shownWhen="flag BILLING_PAGE (off outside tests → hidden)"/>
         <item label="Privacy requests" route="/settings/privacy" shownWhen="audit:read"/>
         <item label="Audit log" route="/settings/audit" shownWhen="audit:read"/>
-        <note>Under the menu on desktop: an "Account security" summary card. /settings itself redirects to /settings/profile (no settings home). /settings/members redirects to /team.</note>
+        <note>Email (/settings/email) moved to Marketing and renders outside the settings frame. Under the menu on desktop: an "Account security" summary card. /settings itself redirects to /settings/profile (no settings home). /settings/members redirects to /team. Before phase 1 the menu was Profile, Security, Workspace, Integrations, Shopify, Advertising, Email integrations, Team &amp; Access, Notifications, API keys, Billing, Privacy requests, Audit log.</note>
       </subnav>
 
       <page id="settings-integrations" route="/settings/integrations" file="apps/web/src/app/(app)/settings/integrations/page.tsx (components/integrations/*)" frame="section-layout" title="Connections" title-before="Integrations" access="integrations.status"
@@ -1090,6 +1094,10 @@
             screenshot-desktop="screenshots/13-settings/settings-workspace--desktop.jpg">
         <purpose>Rename the workspace or create another one.</purpose>
         <complexity level="low">"Workspace" is never explained; shows the raw role word.</complexity>
+      </page>
+
+      <page id="settings-costs" route="/settings/costs" file="apps/web/src/app/(app)/settings/costs/page.tsx" frame="section-layout" title="Costs" access="finance.breakdown (owners and admins change them)" added="after the map (#299); no screenshot yet">
+        <purpose>The store's own costs that neither Shopify nor the ad accounts know (apps, plan, staff, rent, fees), and from which day the list is complete; the dashboard gives net profit only for those dates.</purpose>
       </page>
 
       <page id="settings-notifications" route="/settings/notifications" file="apps/web/src/app/(app)/settings/notifications/page.tsx" frame="section-layout" title="Notifications" access="any member"

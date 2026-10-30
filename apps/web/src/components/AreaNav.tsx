@@ -16,6 +16,7 @@ import {
   Package,
   ReceiptText,
   Settings,
+  Sheet,
   ShoppingBag,
   Store,
   Truck,
@@ -34,7 +35,7 @@ import { staffAccess } from "@app/shared/staff";
 // ---------------------------------------------------------------------------
 // The six areas of the app (docs/design-architecture, redesign phase 1): Home, Sales, Marketing,
 // Stock, Staff and Settings. The sidebar lists the areas. Sales and Marketing gather several places
-// each (Sales: the dashboard's detail panels, the Visitors page and Ads; Marketing: automations,
+// each (Sales: the dashboard's detail panels, the Visitors page, Ads and the Profit sheet; Marketing: automations,
 // WhatsApp, text messages and email), shown as one row of tabs at the top of each of their pages and
 // inside the detail panel. Each member gets only the places they were given (Team & Access) of what
 // the workspace offers; the API refuses the rest whatever these show.
@@ -79,7 +80,7 @@ export const TOPIC_ICON: Record<Topic, LucideIcon> = {
   orders: ReceiptText,
 };
 
-/** The Sales tabs, in order: the dashboard's panels, then the pages of their own, the whole-business report last. */
+/** The Sales tabs, in order: the dashboard's panels, then the pages of their own, the whole-business report last (the Profit sheet follows it). */
 const SALES_TOPICS: Topic[] = ["sales", "products", "customers", "orders", "shipping", "channels", "discounts", "timing", "shoppers", "ads", "overview"];
 
 /** The Marketing channels' pages, by path prefix. */
@@ -92,7 +93,7 @@ export function areaOf(path: string, view: Topic | null): AreaId | null {
   const p = path.replace(/\/$/, "") || "/";
   if (p === "/dashboard") return view === null ? "home" : view === "stock" ? "stock" : "sales";
   if (MARKETING_PATHS.some((m) => under(p, m))) return "marketing";
-  if (under(p, "/funnel") || under(p, "/advertising") || under(p, "/ads")) return "sales";
+  if (under(p, "/funnel") || under(p, "/advertising") || under(p, "/ads") || under(p, "/sheet")) return "sales";
   if (under(p, "/inventory")) return "stock";
   if (under(p, "/staff")) return "staff";
   if (under(p, "/settings") || under(p, "/team")) return "settings";
@@ -112,6 +113,7 @@ const WORDS: Record<string, string> = {
   "topic-shoppers": "shopping funnel analytics visits sessions conversion",
   "topic-ads": "advertising marketing meta google campaigns spend",
   "topic-stock": "inventory low sold out",
+  sheet: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer",
   automations: "workflow trigger sms email whatsapp message history delivery",
   whatsapp: "messages campaigns templates",
   sms: "sms customer messaging campaigns automations templates opt-out",
@@ -144,7 +146,11 @@ export function useAreas(): Area[] {
     const first = settings.find((s) => s.id === "settings-integrations") ?? settings.find((s) => s.id === "settings-profile");
     return [
       ...area("home", "Home", LayoutDashboard, showsDashboardHome(access) ? [{ id: "home", label: "Home", href: "/dashboard", icon: LayoutDashboard }] : []),
-      ...area("sales", "Sales", ChartColumn, SALES_TOPICS.filter((t) => seesTopic(access, t, offers)).map(topicPlace)),
+      ...area("sales", "Sales", ChartColumn, [
+        ...SALES_TOPICS.filter((t) => seesTopic(access, t, offers)).map(topicPlace),
+        // The Profit sheet: every figure a column per day, week or month, with the business events.
+        ...(allowed("analytics.sales") ? [{ id: "sheet", label: "Profit sheet", href: "/sheet", icon: Sheet }] : []),
+      ]),
       ...area("marketing", "Marketing", Megaphone, [
         // Automations: one setup and one message history over SMS and email.
         ...(AUTOMATIONS_HUB && ((offers("sms") && campaigns) || (offers("email") && allowed("integrations.status")))
