@@ -1,10 +1,10 @@
 /** The sync queue's store jobs: the first import (and later ones), products and customers, and the pixel's registration. */
 import { runBulkOrders } from "../bulkOrders.js";
 import { systemDb } from "@app/db";
-import { env, logger, normalizeGraphqlOrder, normalizeGraphqlProduct, normalizeGraphqlVariant, ordersQuery, PAGE_SIZE, parseShopifyList, PRODUCTS_QUERY, resolveAlerts, graphqlOrderSchema, graphqlProductSchema, graphqlVariantSchema, SHOP_QUERY, upsertOrder, VARIANTS_QUERY, WEB_PIXEL_CREATE, WEB_PIXEL_QUERY, WEB_PIXEL_UPDATE, bulkUpsertProducts, bulkUpsertVariants, settleReturningCustomers, startReconciliation, backfillDays, finishHistoryWindow, historyWindowSearch, OLDEST_ORDER_QUERY, recordHistoryExport, startHistoryWindow, startOrderHistory, type SyncJobData } from "@app/core";
+import { env, logger, normalizeGraphqlOrder, normalizeGraphqlProduct, normalizeGraphqlVariant, ordersQuery, PAGE_SIZE, parseShopifyList, productCollectionsOverflow, PRODUCTS_QUERY, resolveAlerts, graphqlOrderSchema, graphqlProductSchema, graphqlVariantSchema, SHOP_QUERY, upsertOrder, VARIANTS_QUERY, WEB_PIXEL_CREATE, WEB_PIXEL_QUERY, WEB_PIXEL_UPDATE, bulkUpsertProducts, bulkUpsertVariants, settleReturningCustomers, startReconciliation, backfillDays, finishHistoryWindow, historyWindowSearch, OLDEST_ORDER_QUERY, recordHistoryExport, startHistoryWindow, startOrderHistory, type SyncJobData } from "@app/core";
 import { expandScopes } from "@app/shared";
 import { enqueueAggregate, type WorkerDeps } from "./common.js";
-import { completeOrder, fetchPage, gql, MAX_PACE_DELAY_S, type Pace, type Page } from "./shopifyRead.js";
+import { completeOrder, fetchPage, gql, MAX_PACE_DELAY_S, readProductCollections, type Pace, type Page } from "./shopifyRead.js";
 import { runInventoryStep } from "./inventory.js";
 
 /** Shopify only exposes the last 60 days of orders without read_all_orders. */
@@ -127,8 +127,14 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
     case "products": {
       const d = await fetchPage<{ products: Page<unknown> }>(deps, store, pace, data, PRODUCTS_QUERY, PAGE_SIZE.products);
       if (!d) return halved;
-      const products = parseShopifyList(graphqlProductSchema, d.products.nodes, "GraphQL product", { storeId: store.id });
-      await bulkUpsertProducts(store, products.map(normalizeGraphqlProduct));
+      const nodes = parseShopifyList(graphqlProductSchema, d.products.nodes, "GraphQL product", { storeId: store.id });
+      const products = nodes.map(normalizeGraphqlProduct);
+      // A product in more collections than its page holds has the rest read before it is stored.
+      for (const [i, node] of nodes.entries()) {
+        const after = productCollectionsOverflow(node);
+        if (after) products[i]!.collections = await readProductCollections(deps, store, pace, node.id, after, products[i]!.collections);
+      }
+      await bulkUpsertProducts(store, products);
       const n = (data.progress ?? 0) + d.products.nodes.length;
       await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: { progress: n, lastActivityAt: new Date() } });
       if (d.products.pageInfo.hasNextPage && d.products.pageInfo.endCursor) {

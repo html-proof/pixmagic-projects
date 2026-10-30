@@ -5,13 +5,21 @@ import { encryptTokenFields, memoryBlobs, memoryCoord, memoryMailer, memoryQueue
 import { runShopifyReports } from "../src/shopifyReports.js";
 import type { WorkerDeps } from "../src/handlers.js";
 
-/** The worker's fetch of Shopify's own report figures (ShopifyQL), against a fake Admin API. */
+/** The worker's fetch of Shopify's own report figures (ShopifyQL, and its abandoned checkouts), against a fake Admin API. */
 
 let answer: (shopifyql: string) => Response | Promise<Response>;
+let checkouts: (query: string, variables: Record<string, unknown>) => Response | Promise<Response> = () => {
+  throw new Error("abandoned checkouts asked for");
+};
 const asked: string[] = [];
 const fetchImpl: FetchLike = async (url, init) => {
-  const body = JSON.parse(String(init?.body)) as { query: string; variables: { query: string } };
-  if (!String(url).includes("/graphql.json") || !body.query.includes("shopifyqlQuery")) throw new Error(`unexpected fetch ${String(url)}`);
+  const body = JSON.parse(String(init?.body)) as { query: string; variables: { query: string; q?: string } };
+  if (!String(url).includes("/graphql.json")) throw new Error(`unexpected fetch ${String(url)}`);
+  if (body.query.includes("abandonedCheckouts")) {
+    asked.push(`checkouts ${body.variables.q}`);
+    return checkouts(body.query, body.variables);
+  }
+  if (!body.query.includes("shopifyqlQuery")) throw new Error(`unexpected query ${body.query.slice(0, 80)}`);
   asked.push(body.variables.query);
   return answer(body.variables.query);
 };
@@ -91,5 +99,54 @@ describe("Shopify reports", () => {
     expect(await runShopifyReports({ kind: "shopify_reports", storeId: store.id, requests: [today] }, deps)).toEqual({ skipped: true });
     expect(await runShopifyReports({ kind: "shopify_reports", storeId: "nope", requests: [today] }, deps)).toEqual({ skipped: true });
     expect(asked).toEqual([]);
+  });
+
+  it("reads the abandoned checkouts with the orders scope alone, and skips the reports it needs Shopify's reports for", async () => {
+    const store = await makeStore(["read_orders"]);
+    const october: ReportRequest = { dataset: "abandoned_checkouts", window: { from: "2026-10-01", to: "2026-10-02" } };
+    answer = () => table({ sessions: 1 });
+    checkouts = (query) =>
+      query.includes("abandonedCheckoutsCount")
+        ? json({ all: { count: 2, precision: "EXACT" }, recovered: { count: 1, precision: "EXACT" } })
+        : json({
+            abandonedCheckouts: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                { createdAt: "2026-10-01T01:00:00Z", completedAt: "2026-10-02T01:00:00Z", totalPriceSet: { shopMoney: { amount: "40.00", currencyCode: "AUD" } } },
+                { createdAt: "2026-10-02T01:00:00Z", completedAt: null, totalPriceSet: { shopMoney: { amount: "12.50", currencyCode: "AUD" } } },
+              ],
+            },
+          });
+    expect(await runShopifyReports({ kind: "shopify_reports", storeId: store.id, requests: [today, october] }, deps)).toEqual({ fetched: 1 });
+    // Melbourne's 1 October began at 14:00 UTC the day before (UTC+10).
+    const search = "created_at:>='2026-09-30T14:00:00.000Z' created_at:<'2026-10-02T14:00:00.000Z'";
+    expect(asked).toEqual([`checkouts ${search}`, `checkouts ${search}`]);
+    expect((await kept(store.id, october)).values).toEqual({
+      abandoned: 2,
+      abandonedExact: true,
+      recovered: 1,
+      recoveredExact: true,
+      value: 52.5,
+      recoveredValue: 40,
+      valueGap: null,
+      currency: "AUD",
+      days: [
+        { day: "2026-10-01", abandoned: 1, recovered: 1, value: 40 },
+        { day: "2026-10-02", abandoned: 1, recovered: 0, value: 12.5 },
+      ],
+    });
+    expect(await systemDb.shopifyReport.count({ where: { storeId: store.id, dataset: "sessions" } })).toBe(0);
+  });
+
+  it("keeps Shopify refusing the checkouts as access_denied, never as 0", async () => {
+    const store = await makeStore(["read_orders"]);
+    const october: ReportRequest = { dataset: "abandoned_checkouts", window: { from: "2026-10-01", to: "2026-10-02" } };
+    // Withheld next to the data (protected customer data not approved), or refused outright.
+    checkouts = () => json({ all: null, recovered: null }, [{ message: "Access denied for abandonedCheckoutsCount field.", extensions: { code: "ACCESS_DENIED" } }]);
+    await runShopifyReports({ kind: "shopify_reports", storeId: store.id, requests: [october] }, deps);
+    expect(await kept(store.id, october)).toMatchObject({ error: "access_denied", values: null });
+    checkouts = () => new Response(JSON.stringify({ errors: [{ message: "Access denied", extensions: { code: "ACCESS_DENIED" } }] }), { status: 200 });
+    await runShopifyReports({ kind: "shopify_reports", storeId: store.id, requests: [october] }, deps);
+    expect(await kept(store.id, october)).toMatchObject({ error: "access_denied", values: null });
   });
 });

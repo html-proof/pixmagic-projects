@@ -3,7 +3,7 @@ import { comparisonImported, delta, localDay, pastYearBreakdown, resolveCapabili
 import { adsConfigured } from "../adConnections.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
-import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
+import { declaredScopes, optionalScopesFor } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
@@ -83,7 +83,7 @@ export async function storeOverview(
   // must never offer an action that cannot work — see apps/api/src/routes/scopes.ts.
   const capabilities = resolveCapabilities(store.grantedScopes, {
     pixelInstalled: store.pixelInstalled,
-    optionalScopes: declaredOptionalScopes(),
+    optionalScopes: optionalScopesFor(store),
     declaredScopes: declaredScopes(),
   });
   const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));

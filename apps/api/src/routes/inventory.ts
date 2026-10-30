@@ -5,7 +5,6 @@ import {
   adjustmentView,
   adjustStock,
   audit,
-  declaredOptionalScopes,
   declaredScopes,
   evaluateStockAlerts,
   inventoryOverview,
@@ -17,6 +16,7 @@ import {
   logger,
   maskNumber,
   movementList,
+  optionalScopesFor,
   PRODUCT_MEDIA_QUERY,
   productDetail,
   productGid,
@@ -83,7 +83,7 @@ export function inventoryRoutes(app: App, deps: Deps) {
       await withTenant(ws, async (tx) => {
         const store = await loadStore(tx, ws, storeId);
         const [scope, settings] = await Promise.all([stockScope(store), inventorySettings(store.id)]);
-        const caps = resolveCapabilities(store.grantedScopes, { optionalScopes: declaredOptionalScopes(), declaredScopes: declaredScopes() }).filter((x) => x.area === "inventory");
+        const caps = resolveCapabilities(store.grantedScopes, { optionalScopes: optionalScopesFor(store), declaredScopes: declaredScopes() }).filter((x) => x.area === "inventory");
         return {
           store: { id: store.id, name: store.name ?? store.shopDomain, currency: store.currency, timezone: store.timezone, status: store.status, shopDomain: store.shopDomain },
           status: await inventoryStatus(tx, store, scope, settings),

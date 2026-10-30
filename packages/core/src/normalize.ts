@@ -7,7 +7,7 @@
  * (`parseShopify`), so the ids and timestamps a row needs are there and valid.
  */
 import { classifyVisit, restVisit, type Traffic } from "@app/shared";
-import { journeySummarySchema, parseShopify, type GraphqlMoney, type GraphqlOrder, type GraphqlProduct, type GraphqlVariant, type RestOrder, type RestProduct, type RestVariant } from "./shopifyPayloads.js";
+import { journeySummarySchema, parseShopify, type GraphqlCollection, type GraphqlMoney, type GraphqlOrder, type GraphqlProduct, type GraphqlVariant, type RestOrder, type RestProduct, type RestVariant } from "./shopifyPayloads.js";
 
 export interface NormalizedLineItem {
   shopifyId: string;
@@ -461,6 +461,14 @@ const scalarBool = (v: string | number | boolean | null | undefined): boolean | 
 /** REST's weight units as GraphQL names them (WeightUnit). */
 const REST_WEIGHT_UNIT: Record<string, string> = { g: "GRAMS", kg: "KILOGRAMS", oz: "OUNCES", lb: "POUNDS" };
 
+/** A collection as products.collections keeps it: Shopify's numeric id and its title. */
+export const normalizeGraphqlCollection = (c: GraphqlCollection): ProductCollection => ({ id: gidToId(c.id)!, title: c.title ?? "" });
+
+/**
+ * A products-page node. Its `collections` are the page's first ones (the worker reads the rest,
+ * productCollectionsOverflow); undefined when Shopify withheld them or they couldn't be read, so
+ * the stored ones are kept rather than replaced with "in no collection".
+ */
 export function normalizeGraphqlProduct(p: GraphqlProduct): NormalizedProduct {
   return {
     shopifyId: gidToId(p.id)!,
@@ -474,7 +482,7 @@ export function normalizeGraphqlProduct(p: GraphqlProduct): NormalizedProduct {
     description: p.description ? p.description.slice(0, DESCRIPTION_LIMIT) || null : null,
     tags: p.tags ?? [],
     category: text(p.category?.fullName),
-    collections: (p.collections?.nodes ?? []).map((c) => ({ id: gidToId(c.id)!, title: c.title ?? "" })),
+    collections: p.collections ? p.collections.nodes.map(normalizeGraphqlCollection) : undefined,
     imageUrl: text(p.featuredMedia?.preview?.image?.url),
     onlineStoreUrl: text(p.onlineStoreUrl),
   };

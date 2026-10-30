@@ -78,7 +78,7 @@ describe("optional scope requests", () => {
     ws = await createWorkspace(ctx, headers);
   });
 
-  afterEach(() => ctx.setEnv({ SHOPIFY_OPTIONAL_SCOPES: "" }));
+  afterEach(() => ctx.setEnv({ SHOPIFY_OPTIONAL_SCOPES: "", SHOPIFY_APP_OPTIONAL_SCOPES: "", SHOPIFY_APP_STORE_PREVIEW_SHOPS: "" }));
 
   describe("while the app declares no optional scopes (the shipped configuration)", () => {
     it("refuses the request instead of handing the merchant a dead Shopify link", async () => {
@@ -204,6 +204,95 @@ describe("optional scope requests", () => {
         payload: { module: "customers" },
       });
       expect(res.statusCode).toBe(403);
+    });
+  });
+
+  /**
+   * read_reports (Shopify's reports: its sessions and visitors, gross profit, the sales check) is
+   * declared only by some apps' tomls (SHOPIFY_APP_OPTIONAL_SCOPES), never by an App Store app
+   * while Shopify reviews it. Shipped empty, so this turns it on for the main app.
+   */
+  describe("an app that declares read_reports", () => {
+    beforeEach(() => ctx.setEnv({ SHOPIFY_APP_OPTIONAL_SCOPES: "default:read_reports" }));
+
+    const caps = async (storeId: string) => {
+      const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/overview?preset=30d`, headers });
+      expect(res.statusCode).toBe(200);
+      return res.json().capabilities as Array<{ id: string; missingScopes: string[]; requestableScopes: string[] }>;
+    };
+    const ask = (storeId: string, module: string) =>
+      ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/scopes/request`, headers, payload: { module } });
+
+    it("offers Shopify's reports to a store on that app", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_products"]);
+      const c = await caps(store.id);
+      expect(c.find((x) => x.id === "profit")!.requestableScopes).toEqual(["read_reports"]);
+      expect(c.find((x) => x.id === "shopify_sessions")!.requestableScopes).toEqual(["read_reports"]);
+    });
+
+    it("sends the merchant to that app's grant screen for read_reports", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_products"]);
+      const res = await ask(store.id, "profit");
+      expect(res.statusCode).toBe(200);
+      const url = new URL(res.json().url);
+      expect(url.searchParams.get("client_id")).toBe("test_key");
+      expect(url.searchParams.get("optional_scopes")).toBe("read_reports");
+    });
+
+    it("offers nothing to a store on an App Store app, which doesn't declare it", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_products"]);
+      await systemDb.store.update({ where: { id: store.id }, data: { shopifyAppKey: "appstore" } });
+      expect((await caps(store.id)).find((x) => x.id === "profit")!.requestableScopes).toEqual([]);
+      const res = await ask(store.id, "profit");
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("scope_unavailable");
+    });
+
+    it("offers nothing to the App Store reviewer's test store, though it is on the main app", async () => {
+      ctx.setEnv({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: SHOP });
+      const store = await connectedStore(ws, ["read_orders", "read_products"]);
+      expect((await caps(store.id)).find((x) => x.id === "shopify_sessions")!.requestableScopes).toEqual([]);
+      const res = await ask(store.id, "shopify_sessions");
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("scope_unavailable");
+    });
+
+    it("lists read_reports as removable once granted, and gives it back", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_products", "read_reports"]);
+      const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers });
+      expect(list.json().stores.find((x: { id: string }) => x.id === store.id).revocableScopes).toEqual(["read_reports"]);
+
+      ctx.setFetch(revokeResponses({ revoked: ["read_reports"], after: ["read_orders", "read_products"] }).fetchImpl);
+      const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/revoke`, headers, payload: { module: "profit" } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().revoked).toEqual(["read_reports"]);
+      // The module is one consent away again.
+      const profit = (res.json().capabilities as Array<{ id: string; requestableScopes: string[] }>).find((x) => x.id === "profit")!;
+      expect(profit.requestableScopes).toEqual(["read_reports"]);
+    });
+
+    it("still lets a store give read_reports back once the setting stops offering it", async () => {
+      // docs/shopify-setup.md's off switch: the setting is emptied again, the toml still declares
+      // it, and the store keeps its grant. It stays optional, never "Required".
+      const store = await connectedStore(ws, ["read_orders", "read_products", "read_reports"]);
+      ctx.setEnv({ SHOPIFY_APP_OPTIONAL_SCOPES: "" });
+      const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers });
+      expect(list.json().stores.find((x: { id: string }) => x.id === store.id).revocableScopes).toEqual(["read_reports"]);
+
+      ctx.setFetch(revokeResponses({ revoked: ["read_reports"], after: ["read_orders", "read_products"] }).fetchImpl);
+      const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/revoke`, headers, payload: { scopes: ["read_reports"] } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().revoked).toEqual(["read_reports"]);
+      // Given back, and not offered again while the setting is empty.
+      const profit = (res.json().capabilities as Array<{ id: string; requestableScopes: string[] }>).find((x) => x.id === "profit")!;
+      expect(profit.requestableScopes).toEqual([]);
+    });
+
+    it("lists nothing removable for a store whose app doesn't declare it", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_products", "read_reports"]);
+      await systemDb.store.update({ where: { id: store.id }, data: { shopifyAppKey: "appstore" } });
+      const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers });
+      expect(list.json().stores.find((x: { id: string }) => x.id === store.id).revocableScopes).toEqual([]);
     });
   });
 

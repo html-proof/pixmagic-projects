@@ -16,8 +16,19 @@ scopes = "read_orders,read_products"
 # `scopes` above; these are requested afterwards, one feature at a time, when the merchant
 # clicks "Enable" on a locked dashboard module (packages/core/src/scopes.ts,
 # apps/api/src/routes/scopes.ts). Declaring them here is what makes them requestable at all -
-# `declaredOptionalScopes` reads SHOPIFY_OPTIONAL_SCOPES, which must mirror this list exactly,
-# and an undeclared scope can never be granted however often we ask.
+# `declaredOptionalScopes` reads SHOPIFY_OPTIONAL_SCOPES (the ones every app declares, listed
+# first here) plus this app's entry in SHOPIFY_APP_OPTIONAL_SCOPES (apps/aws/src/settings.ts),
+# and an undeclared scope can never be granted however often we ask. appConfig.test.ts checks the
+# settings never offer a scope this list lacks.
+#
+# read_reports (this app and PixMagic's only, never the App Store apps while Shopify reviews
+# them): Shopify's own reports through ShopifyQL - its sessions, online store visitors, gross
+# profit and the "Checked against Shopify" sales check. ShopifyQL also needs Level 2 protected
+# customer data (name, email, phone, address fields) selected for the app, though none of it is
+# read; development stores need no review. Declared here (and in APP_EXTRA_OPTIONAL_SCOPES) but
+# offered to no store until it is added to this app's SHOPIFY_APP_OPTIONAL_SCOPES, after
+# `shopify app deploy --config shopify.app.toml` has released it (docs/shopify-setup.md,
+# "Shopify's reports").
 #
 # These three are protected customer data. Enabling them before "Protected customer data
 # access" is approved makes Shopify refuse *new installs on live merchant stores*; development
@@ -28,7 +39,7 @@ scopes = "read_orders,read_products"
 # SHOPIFY_OPTIONAL_SCOPES, and redeploy both. See docs/shopify-setup.md "Optional scopes".
 # The Inventory module's stock levels, locations and stock changes (docs/inventory.md); none of
 # them is protected customer data.
-optional_scopes = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"]
+optional_scopes = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory", "read_reports"]
 use_legacy_install_flow = false
 
 [auth]

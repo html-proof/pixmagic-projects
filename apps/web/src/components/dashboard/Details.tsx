@@ -1,10 +1,12 @@
 "use client";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { CompareMode } from "@app/shared/dates";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { TopProducts } from "./TopProducts";
+import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
 import { ContactsCard } from "./Contacts";
+import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
 import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
@@ -208,6 +210,14 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
+  // Top products narrowed to a collection, picked in Sales by collection or Top products' own list.
+  const [collection, setCollection] = useState<CollectionChoice | null>(null);
+  const collections = useCollectionSales(ov, !!ov.modules.top_products);
+  const choices = (collections.report?.items ?? []).map((c) => ({ id: c.collectionId, title: collectionName(c) }));
+  const pick = (c: CollectionChoice) => {
+    setCollection(c);
+    document.getElementById("d-top-products")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   return (
     <>
       <InShort>
@@ -227,7 +237,8 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
           <p>{ov.modules.top_products?.complete === false ? "Product rankings are waiting for complete sales data for these dates." : "No product sales in these dates yet."}</p>
         )}
       </InShort>
-      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} />}
+      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} collection={collection} collections={choices} onCollection={setCollection} />}
+      {ov.modules.top_products && <CollectionSales ov={ov} currency={currency} live={collections} onPick={pick} />}
       {ov.modules.catalog && <CatalogCard m={ov.modules.catalog} currency={currency} />}
     </>
   );
@@ -404,10 +415,13 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean }) {
+function CustomersDetail({ ov, currency, contactsOn }: { ov: Overview; currency: string; contactsOn: boolean }) {
   const cu = ov.modules.customers;
   const rate = cu?.current.returningCustomerRate ?? null;
   const before = cu?.previous.returningCustomerRate ?? null;
+  // Repeat customers and cohorts: their own report, asked for only with the customers module.
+  const [months, setMonths] = useState(12);
+  const lifetime = useCustomerAnalytics(ov, !!cu, months);
   return (
     <>
       {cu && (
@@ -447,6 +461,8 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
               </div>
             )}
           </Panel>
+          <RepeatCustomers currency={currency} live={lifetime} />
+          <MonthlyCohorts currency={currency} live={lifetime} months={months} onMonths={setMonths} />
         </>
       )}
       {contactsOn && <ContactsCard key={ov.store.id} storeId={ov.store.id} storeName={ov.store.name ?? ov.store.shopDomain} shopDomain={ov.store.shopDomain} />}
@@ -506,7 +522,7 @@ export function TopicContents({
     : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />
     : topic === "stock" && m.inventory ? <StockDetail ov={ov} currency={currency} />
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
-    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} contactsOn={contactsOn} />
+    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} currency={currency} contactsOn={contactsOn} />
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (

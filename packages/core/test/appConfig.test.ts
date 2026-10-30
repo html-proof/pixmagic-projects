@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { REQUIRED_AD_SCOPE } from "../src/ads/common.js";
-import { APP_WEBHOOK_TOPICS } from "../src/apps.js";
+import { APP_EXTRA_OPTIONAL_SCOPES, APP_STORE_APPS, APP_WEBHOOK_TOPICS } from "../src/apps.js";
 
 /**
  * Guards the one piece of configuration Shopify reads instead of us.
@@ -52,14 +52,41 @@ const APP_CONFIGS = [
   "shopify-app/shopify.app.public.toml",
   "shopify-app/shopify.app.appstore.toml",
 ];
+/** Each toml's app key in the backend (SHOPIFY_EXTRA_APPS, stores.shopify_app_key). */
+const APP_KEYS: Record<string, string> = {
+  "shopify-app/shopify.app.toml": "default",
+  "shopify-app/shopify.app.pixmagic.toml": "pixmagic",
+  "shopify-app/shopify.app.public.toml": "public",
+  "shopify-app/shopify.app.appstore.toml": "appstore",
+};
 /** Mirrors the default in packages/core/src/env.ts. */
 const ENV_SCOPES = "read_orders,read_products";
 /**
  * The optional (post-install) scopes every app declares. Only these can be requested: a
- * dashboard "Enable" button is built from `declaredOptionalScopes`, so this list, the
- * `optional_scopes` in both tomls and the shipped env must agree exactly.
+ * dashboard "Enable" button is built from `declaredOptionalScopes`, so this list, the start of
+ * `optional_scopes` in every toml and the shipped env must agree exactly.
  */
 const ENV_OPTIONAL_SCOPES = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"];
+/**
+ * The optional scopes an app may declare beyond those, in its toml after the common ones and in
+ * its entry of SHOPIFY_APP_OPTIONAL_SCOPES: read_reports, Shopify's reports (ShopifyQL), which
+ * also needs Level 2 protected customer data set up for the app. A new one belongs here only once
+ * the code that uses it handles a store without it.
+ */
+const ALLOWED_EXTRA_OPTIONAL_SCOPES = ["read_reports"];
+
+/** SHOPIFY_APP_OPTIONAL_SCOPES ("default:read_reports;pixmagic:read_reports"), read strictly: a malformed entry fails here rather than being skipped at runtime. */
+function appExtras(raw: string): Record<string, string[]> {
+  const byApp: Record<string, string[]> = {};
+  for (const part of raw.split(";").map((p) => p.trim()).filter(Boolean)) {
+    const m = /^([a-z0-9_]+):([a-z_]+(?:,[a-z_]+)*)$/.exec(part);
+    if (!m) throw new Error(`SHOPIFY_APP_OPTIONAL_SCOPES entry "${part}" is not appKey:scope,scope`);
+    if (byApp[m[1]!]) throw new Error(`SHOPIFY_APP_OPTIONAL_SCOPES names "${m[1]}" twice`);
+    byApp[m[1]!] = m[2]!.split(",");
+  }
+  return byApp;
+}
+const shippedAppExtras = () => appExtras(envValue(read("apps/aws/src/settings.ts"), "SHOPIFY_APP_OPTIONAL_SCOPES") ?? "");
 
 describe("Shopify app configuration", () => {
   for (const path of APP_CONFIGS) {
@@ -87,14 +114,39 @@ describe("Shopify app configuration", () => {
         expect(tomlString(toml, "scopes")).toBe(ENV_SCOPES);
       });
 
-      it("declares exactly the optional scopes the app knows how to request", () => {
+      it("declares the optional scopes every app declares, then only allowed extras of its own", () => {
         // Enabled 2026-10-04 so merchants can unlock the customers and funnel modules
         // themselves. The guard that matters is no longer "declare nothing" but "declare the
         // same thing everywhere": a scope in the env that the toml does not declare offers an
         // "Enable" button that lands the merchant on a Shopify error, which is the drift that
-        // caused the outage described at the top of this file. Both apps must match.
-        expect(tomlArray(toml, "optional_scopes")).toEqual(ENV_OPTIONAL_SCOPES);
+        // caused the outage described at the top of this file. Every app declares the common
+        // list; an app may add extras (read_reports), always after it and always allowed.
+        const declared = tomlArray(toml, "optional_scopes")!;
+        expect(declared.slice(0, ENV_OPTIONAL_SCOPES.length)).toEqual(ENV_OPTIONAL_SCOPES);
+        const extras = declared.slice(ENV_OPTIONAL_SCOPES.length);
+        expect(new Set(declared).size, "a scope declared twice").toBe(declared.length);
+        for (const s of extras) expect(ALLOWED_EXTRA_OPTIONAL_SCOPES, `${path} declares ${s}`).toContain(s);
+        // What its stores may give back, offered or not (scopes.ts revocableOptionalScopesFor).
+        expect(extras, "APP_EXTRA_OPTIONAL_SCOPES in packages/core/src/apps.ts").toEqual([...(APP_EXTRA_OPTIONAL_SCOPES[APP_KEYS[path]!] ?? [])]);
       });
+
+      it("declares every extra optional scope the shipped settings offer its stores", () => {
+        // SHOPIFY_APP_OPTIONAL_SCOPES may lag the toml (a scope declared and released before any
+        // store is offered it, which is harmless), never lead it: a scope offered here that the
+        // toml lacks is the "Enable" button that ends on a Shopify error.
+        const declared = tomlArray(toml, "optional_scopes")!;
+        for (const s of shippedAppExtras()[APP_KEYS[path]!] ?? []) expect(declared, `${APP_KEYS[path]} is offered ${s}`).toContain(s);
+      });
+
+      if (APP_STORE_APPS.includes(APP_KEYS[path]!)) {
+        it("declares no extra optional scope while it is an App Store app", () => {
+          // The App Store apps get read_reports only after App Store review and Shopify's Level 2
+          // protected customer data approval for them (docs/shopify-setup.md, "Shopify's
+          // reports"); changing the config of an app under review isn't possible anyway.
+          expect(tomlArray(toml, "optional_scopes")).toEqual(ENV_OPTIONAL_SCOPES);
+          expect(shippedAppExtras()[APP_KEYS[path]!] ?? []).toEqual([]);
+        });
+      }
 
       it("points every Shopify callback at one host", () => {
         const appUrl = tomlString(toml, "application_url")!;
@@ -114,14 +166,13 @@ describe("Shopify app configuration", () => {
    * list a toml's subscriptions. A topic added to or dropped from a toml must be changed there too.
    */
   it("lists each app's toml webhook topics in APP_WEBHOOK_TOPICS", () => {
-    const keys: Record<string, string> = { "shopify-app/shopify.app.toml": "default", "shopify-app/shopify.app.pixmagic.toml": "pixmagic", "shopify-app/shopify.app.public.toml": "public", "shopify-app/shopify.app.appstore.toml": "appstore" };
     for (const path of APP_CONFIGS) {
       const toml = read(path)
         .split("\n")
         .filter((l) => !l.trim().startsWith("#"))
         .join("\n");
       const topics = [...toml.matchAll(/^\s*topics\s*=\s*\[([^\]]*)\]/gm)].flatMap((m) => [...m[1]!.matchAll(/"([^"]*)"/g)].map((x) => x[1]!));
-      expect([...topics].sort(), path).toEqual([...(APP_WEBHOOK_TOPICS[keys[path]!] ?? [])].sort());
+      expect([...topics].sort(), path).toEqual([...(APP_WEBHOOK_TOPICS[APP_KEYS[path]!] ?? [])].sort());
     }
   });
 
@@ -158,11 +209,34 @@ describe("Shopify app configuration", () => {
         // `declaredOptionalScopes` reads this var to decide what the dashboard may offer, while
         // Shopify grants only what the toml declares. An entry here the toml lacks would offer
         // merchants an "Enable" button that lands them on a Shopify error; an entry in the toml
-        // missing here would hide a feature the app could actually unlock. Hence exact mirror.
+        // missing here would hide a feature the app could actually unlock. Hence exact mirror
+        // of the common list, which every toml starts with.
         expect(envValue(text, "SHOPIFY_OPTIONAL_SCOPES")).toBe(ENV_OPTIONAL_SCOPES.join(","));
-        expect(tomlArray(read(APP_CONFIGS[0]!), "optional_scopes")).toEqual(ENV_OPTIONAL_SCOPES);
+        expect(tomlArray(read(APP_CONFIGS[0]!), "optional_scopes")!.slice(0, ENV_OPTIONAL_SCOPES.length)).toEqual(ENV_OPTIONAL_SCOPES);
+      });
+
+      it(`${path} offers each app only extra optional scopes that are allowed and its own toml declares`, () => {
+        // Present, so a value written in a form envValue can't read (escaped JSON) isn't taken for "none".
+        expect(envValue(text, "SHOPIFY_APP_OPTIONAL_SCOPES")).not.toBeNull();
+        const extras = shippedAppExtras();
+        for (const [key, scopes] of Object.entries(extras)) {
+          expect(Object.values(APP_KEYS), `SHOPIFY_APP_OPTIONAL_SCOPES names an app with no toml: ${key}`).toContain(key);
+          for (const s of scopes) {
+            expect(ALLOWED_EXTRA_OPTIONAL_SCOPES, `${key}: ${s}`).toContain(s);
+            expect(ENV_OPTIONAL_SCOPES, `${key}: ${s} is already in SHOPIFY_OPTIONAL_SCOPES`).not.toContain(s);
+          }
+        }
+        // settings ⊆ toml is checked per toml above; App Store apps get none.
+        for (const key of APP_STORE_APPS) expect(extras[key] ?? [], key).toEqual([]);
       });
     }
+
+    it("reads SHOPIFY_APP_OPTIONAL_SCOPES strictly", () => {
+      expect(appExtras("")).toEqual({});
+      expect(appExtras("default:read_reports; pixmagic:read_reports,read_x")).toEqual({ default: ["read_reports"], pixmagic: ["read_reports", "read_x"] });
+      expect(() => appExtras("default=read_reports")).toThrow(/not appKey:scope/);
+      expect(() => appExtras("default:read_reports;default:read_x")).toThrow(/twice/);
+    });
 
     /**
      * Shopify matches `redirect_uri` against its allowlist exactly, and we build that URI at
