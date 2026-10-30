@@ -144,6 +144,7 @@ describe("customer lifetime figures and cohorts (core customerAnalytics)", () =>
       clamped: false,
       withoutCustomer: 2,
       salesPending: 0,
+      salesUnread: 0,
       figures: {
         customers: 4,
         repeatCustomers: 1,
@@ -226,6 +227,23 @@ describe("customer lifetime figures and cohorts (core customerAnalytics)", () =>
     expect((await report(ws, store, EVERYTHING, { from: "2026-06-01", to: "2026-07-31" })).dates).toBeNull();
   });
 
+  it("isn't started earlier by an old order that has its customer out of turn", async () => {
+    const { ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-06-01T00:00:00Z") } });
+    const days = [
+      // Old orders updated since the grant (a refund, say): they carry their customer, the others of their time don't.
+      await seedOrder(store, "early", "2026-05-20", { customer: "K", value: 10 }),
+      await seedOrder(store, "old1", "2026-06-05", { customer: null, value: 10 }),
+      await seedOrder(store, "updated", "2026-06-10", { customer: "L", value: 10 }),
+      await seedOrder(store, "old2", "2026-07-15", { customer: null, value: 10 }),
+      await seedOrder(store, "old3", "2026-08-01", { customer: null, value: 10 }),
+      await seedOrder(store, "h1", "2026-08-20", { customer: "H", value: 10 }),
+      await seedOrder(store, "i1", "2026-08-25", { customer: "I", value: 10 }),
+    ];
+    await settle(store, days);
+    expect(await report(ws, store, EVERYTHING, { from: "2026-06-01", to: "2026-09-30" })).toMatchObject({ customersFrom: "2026-08-20", customersLater: true, dates: { from: "2026-08-20", clamped: true } });
+  });
+
   it("has nothing to show before any order has a known customer", async () => {
     const { ws, store } = await owner();
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-08-14T10:00:00Z") } });
@@ -243,8 +261,27 @@ describe("customer lifetime figures and cohorts (core customerAnalytics)", () =>
     expect(r.dates!.figures).toMatchObject({ customers: 4, repeatCustomers: 2, netSales: null, netSalesPerCustomer: null });
     expect(r.cohorts!.acquired.netSalesPerCustomer).toBeNull();
     expect(r.cohorts!.items[1]!.cells.map((c) => c.netSalesPerCustomerToDate)).toEqual([null, null]);
-    // The retention figures don't wait for sales.
+    // The retention figures don't wait for sales, and nor does a cohort none of whose orders waits.
     expect(r.cohorts!.items[1]!.cells.map((c) => c.returned)).toEqual([2, 1]);
+    expect(r.cohorts!.items[2]!.cells.map((c) => c.netSalesPerCustomerToDate)).toEqual([70, 70, 85]);
+    expect(r.cohorts!.salesUnread).toBe(0);
+  });
+
+  it("tells sales never to be read (older than the re-read's 60 days) from sales still to come, and keeps the other cohorts' net sales", async () => {
+    const { ws, store } = await owner();
+    await history(store);
+    // Stored before bizinsights read Shopify's sales records, and created before the 60 days it reads again.
+    await settle(store, [await seedOrder(store, "old", "2026-08-16", { customer: "J", value: 45, pending: true })]);
+    const r = await report(ws, store, EVERYTHING, { from: "2026-08-15", to: "2026-09-30" });
+    expect(r.dates).toMatchObject({ salesPending: 0, salesUnread: 1, figures: { netSales: null, netSalesPerCustomer: null } });
+    expect(r.cohorts).toMatchObject({ salesPending: 0, salesUnread: 1, acquired: { netSalesPerCustomer: null } });
+    const [, sep, aug] = r.cohorts!.items;
+    // August holds J's order: no net sales, never a sum that leaves it out. September's are all read.
+    expect(aug!.netSalesPerCustomer).toBeNull();
+    expect(aug!.cells.map((c) => c.netSalesPerCustomerToDate)).toEqual([null, null, null]);
+    expect(sep).toMatchObject({ customers: 2, netSalesPerCustomer: 65 });
+    // September's dates alone have nothing unread.
+    expect((await report(ws, store)).dates).toMatchObject({ salesUnread: 0, figures: { netSalesPerCustomer: 48.75 } });
   });
 
   it("leaves order counts and net sales out unless asked for", async () => {
@@ -271,7 +308,11 @@ describe("GET .../analytics/customers", () => {
     expect(body.dates.figures).toMatchObject({ customers: 4, repeatCustomers: 1, ordersPerCustomer: 1.25, netSalesPerCustomer: 48.75 });
     expect(body.dates.withoutCustomer).toBe(2);
     expect(Array.isArray(body.cohorts.items)).toBe(true);
-    expect((await get(a.headers, ws, store.id, `${SEPTEMBER}&months=3`)).json().cohorts.items.length).toBeLessThanOrEqual(3);
+    // The months asked for reach core: two, so August's first buyer (E) counts as from before.
+    const two = (await get(a.headers, ws, store.id, `${SEPTEMBER}&months=2`)).json();
+    expect(two.months).toBe(2);
+    expect(two.cohorts.items.map((c: { month: string }) => c.month)).toEqual(["2026-10", "2026-09"]);
+    expect(two.cohorts.returningFromBefore).toBe(3);
   });
 
   it("shows a member with only View returning vs new customers the customers, not the store's orders or sales", async () => {

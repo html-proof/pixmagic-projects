@@ -16,7 +16,7 @@ Nothing here is a forecast; "lifetime" means "so far".
 
 | Needs | Gets |
 | --- | --- |
-| "View returning vs new customers" (`customers.analytics`), and a store that granted orders and customers (the `customers` capability: `read_orders` + `read_customers`) | Customers, repeat customers, repeat purchase rate, cohort sizes and month-by-month retention, where customers start (`customersFrom`) |
+| "View returning vs new customers" (`customers.analytics`), and a store that granted orders and customers (the `customers` capability: `read_orders` + `read_customers`) | Customers, repeat customers, repeat purchase rate, cohort sizes and month-by-month retention, where customers start (`customersFrom`: every figure here is counted from it, so it is shown, though it tells within a day or so where the orders bizinsights holds begin) |
 | ... and "View sales and revenue" or "View order list" | Orders per customer, orders without a known customer, where the imported orders begin and how older ones can be had (`historyFrom`, `historyAccess`, `customersLater`), as the dashboard's own `data` is cut (`redactOverview`) |
 | ... and "View sales and revenue" | Net sales per customer (otherwise customers × net sales per customer would be the store's net sales) |
 
@@ -48,9 +48,13 @@ the returning-customer flag does.
 adjustment sales lines, after discounts and returns, before tax and shipping, with returns made
 since taken off (counted in the month of the order, not of the return). Shopify's cohort report
 offers "amount spent per customer", which includes tax and shipping: ours is labelled net sales and
-differs from it by those. Net sales per customer is withheld (null, with the number of orders it is
-waiting for, `salesPending`) while any counted order's sales haven't been read from Shopify yet,
-rather than shown from a partial sum.
+differs from it by those. Net sales per customer is withheld (null) while a counted order's sales
+haven't been read from Shopify, rather than shown from a partial sum: the dates' figure and
+everyone's together while any order's aren't, and a cohort's while one of its own isn't (the other
+cohorts keep theirs). Two kinds, each counted: `salesPending`, orders created in the last 60 days,
+which the re-reads still read (`seedSalesRereads`, `needsReread`); and `salesUnread`, older ones
+(stored before bizinsights read Shopify's sales records, 2026-10-16), which are never read again, so
+those figures stay unknown and the page says so instead of "waiting".
 
 **First purchase.** An order is a customer's first purchase when Shopify counts it so:
 `orders.is_returning_customer` false, settled by `settleReturningCustomers` (core `persist.ts`) from
@@ -70,11 +74,15 @@ Customers are counted from the first store-local day on which every order's cust
    (`firstWholeDay` of `stores.orders_history_from`); with the full history, the first order's day.
 2. Orders say who placed them only once the store granted `read_customers`. Granting it later
    re-reads Shopify's last 60 days, from a moment part way through a day; older orders stay without
-   a customer. So when orders since that whole day went without a customer
-   (`daily_store_metrics.orders = 0` with customers before the first day with
-   `orders_with_customer > 0`), customers start on that first day, or the day after when some of its
-   orders have none. Guest checkouts look the same, so a store whose first days had guest orders
-   only starts a few days late: later, never earlier, than the truth.
+   a customer. So when orders since that whole day went without a customer, customers start on the
+   day orders began to carry one, or the day after when some of its orders have none. That day
+   (`customersKnownDay`, from `daily_store_metrics`) is the day with a known customer that best
+   splits the days since the whole day: the fewest days with a customer before it plus days whose
+   orders all lack one from it on. Not simply the first day with one: a single old order linked out
+   of turn (updated since the grant, or dated by when it was processed elsewhere) would otherwise
+   start the figures before weeks of orders that say nobody. Guest checkouts look the same as orders
+   read before the grant, so a store whose first days had guest orders only starts a few days late:
+   later, never earlier, than the truth.
 
 A store that gave `read_customers` back and granted it again more than 60 days later has orders
 without a customer in between: the cohorts of those months are smaller than they were, and their

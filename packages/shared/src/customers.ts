@@ -42,21 +42,64 @@ export const perCustomer = (total: number, customers: number): number | null => 
  * - `wholeFrom`: the first day whose orders were all imported (the day after the one the import
  *   window started on, `firstWholeDay` of stores.orders_history_from; the store's own history start
  *   when that isn't recorded).
- * - `known`: the first day an order has a known customer (daily_store_metrics.orders_with_customer
- *   above 0), whether an order of an earlier day since `wholeFrom` has none (`unlinkedBefore`), and
- *   whether one of that day itself has none (`unlinkedOn`).
+ * - `known`: the day orders began to carry their customer (`customersKnownDay`), whether orders
+ *   of an earlier day since `wholeFrom` are there (`unlinkedBefore`), whether one of that day itself
+ *   has none (`unlinkedOn`), and whether an order before `wholeFrom` has one (`linkedBefore`: the
+ *   import window's partial first day, say).
  *
  * Orders are linked to their customer only once the store grants read_customers. Granting it later
  * re-reads the last 60 days of orders, from a moment part way through a day: the orders before that
  * stay without a customer, and so may some of that day's. So once orders since `wholeFrom` went
- * without a customer, customers are known from the first day an order has one, or the day after
+ * without a customer, customers are known from the day they began to carry one, or the day after
  * when some of its orders have none. Guest checkouts have none either, so a store whose first days
  * had guest orders only starts a few days late: later, never earlier, than the truth.
  */
-export function customerHistoryStart(wholeFrom: string | null, known: { day: string; unlinkedBefore: boolean; unlinkedOn: boolean } | null): string | null {
+export function customerHistoryStart(wholeFrom: string | null, known: { day: string; unlinkedBefore: boolean; unlinkedOn: boolean; linkedBefore?: boolean } | null): string | null {
   if (wholeFrom === null || known === null) return null;
-  if (known.day <= wholeFrom || (!known.unlinkedBefore && !known.unlinkedOn)) return wholeFrom;
+  // Nothing without a customer before it: linked from the start (that day's own unlinked orders are
+  // guests when orders were linked before the window's first whole day too).
+  if (known.day <= wholeFrom || (!known.unlinkedBefore && (!known.unlinkedOn || known.linkedBefore))) return wholeFrom;
   return known.unlinkedOn ? addDays(known.day, 1) : known.day;
+}
+
+/** One store-local day's orders (daily_store_metrics, gift cards only left out) and how many of them have a known customer. */
+export interface CustomerDay {
+  day: string;
+  orders: number;
+  withCustomer: number;
+}
+
+/**
+ * `customerHistoryStart`'s `known`, from the days with orders: the day orders began to carry their
+ * customer, or null while none does. Not simply the first day an order has one: a single order
+ * linked out of turn (an old order updated since the grant, or one Shopify dates by when it was
+ * processed elsewhere, before it was created) would put the start before weeks of orders read
+ * without their customer. So of the days since `wholeFrom`, the one with a known customer that best
+ * splits days without one (before it) from days with one (from it on): the fewest days with a
+ * customer before it plus days whose orders all lack one from it on, the earliest of equals. Guest
+ * checkouts make days of the second kind too, but rarely all of a day's orders; days before
+ * `wholeFrom` only say whether orders were linked before it (`linkedBefore`).
+ */
+export function customersKnownDay(days: readonly CustomerDay[], wholeFrom: string): { day: string; unlinkedBefore: boolean; unlinkedOn: boolean; linkedBefore: boolean } | null {
+  const inWindow = days.filter((d) => d.day >= wholeFrom && d.orders > 0).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+  const unlinked = inWindow.filter((d) => d.withCustomer <= 0).length;
+  let best = -1;
+  let bestCost = Infinity;
+  let linkedSoFar = 0;
+  let unlinkedSoFar = 0;
+  for (let i = 0; i < inWindow.length; i++) {
+    const d = inWindow[i]!;
+    if (d.withCustomer <= 0) {
+      unlinkedSoFar++;
+      continue;
+    }
+    const cost = linkedSoFar + (unlinked - unlinkedSoFar);
+    if (cost < bestCost) [best, bestCost] = [i, cost];
+    linkedSoFar++;
+  }
+  const d = inWindow[best];
+  if (!d) return null;
+  return { day: d.day, unlinkedBefore: best > 0, unlinkedOn: d.orders > d.withCustomer, linkedBefore: days.some((x) => x.day < wholeFrom && x.withCustomer > 0) };
 }
 
 /** What a group of customers did, each customer once, from the report's queries. */
@@ -121,6 +164,8 @@ export interface CohortCount {
   orders: number;
   /** Net sales of those orders, when asked for. */
   netSales?: number;
+  /** Of those orders, the ones whose sales aren't read from Shopify (yet, or ever): the cohort's net sales are withheld while it has any. */
+  unreadSales?: number;
 }
 
 export interface CohortCell {
@@ -164,7 +209,8 @@ export interface Cohort {
  * the cohort query read) to the store's current month (`today`), `months` at most. Every row has a
  * cell from month 0 to the current month and none after; a month with no repeat order is a real 0
  * (the orders of every month after `from` are all in). Each customer is in one cohort only, so the
- * cohorts' totals add up (`acquiredTotals`).
+ * cohorts' totals add up (`acquiredTotals`). Net sales (`money: "shown"`) are withheld cohort by
+ * cohort: only a cohort with orders whose sales aren't read (`unreadSales`) has none.
  */
 export function cohortGrid(rows: CohortCount[], o: FigureOptions & { today: string; from: string; customersFrom: string; months?: number }): Cohort[] {
   const current = o.today.slice(0, 7);
@@ -181,7 +227,8 @@ export function cohortGrid(rows: CohortCount[], o: FigureOptions & { today: stri
     const month = addMonths(current, -i);
     const t = whole.get(month);
     const customers = t?.firstBuyers ?? 0;
-    const f = customerFigures({ customers, repeatCustomers: t?.returned ?? 0, orders: t?.orders ?? 0, netSales: t?.netSales ?? 0 }, o);
+    const money = o.money === "shown" && (t?.unreadSales ?? 0) > 0 ? "withheld" : o.money;
+    const f = customerFigures({ customers, repeatCustomers: t?.returned ?? 0, orders: t?.orders ?? 0, netSales: t?.netSales ?? 0 }, { ...o, money });
     let toDate = 0;
     const cells: CohortCell[] = [];
     for (let n = 0; n <= monthsBetween(month, current); n++) {
@@ -189,11 +236,11 @@ export function cohortGrid(rows: CohortCount[], o: FigureOptions & { today: stri
       const c = cell.get(`${month}|${at}`);
       const returned = c?.returned ?? 0;
       const x: CohortCell = { n, month: at, returned, rate: perCustomer(returned, customers), running: at === current };
-      if (o.money === "shown") {
+      if (money === "shown") {
         toDate += c?.netSales ?? 0;
         const each = perCustomer(toDate, customers);
         x.netSalesPerCustomerToDate = each === null ? null : cents(each);
-      } else if (o.money === "withheld") x.netSalesPerCustomerToDate = null;
+      } else if (money === "withheld") x.netSalesPerCustomerToDate = null;
       cells.push(x);
     }
     out.push({

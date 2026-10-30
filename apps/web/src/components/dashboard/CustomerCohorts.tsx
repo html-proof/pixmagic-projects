@@ -11,7 +11,7 @@ import type { Overview } from "./types";
 // apps/api/src/routes/customerAnalytics.ts; packages/core/src/reports/customers.ts; the arithmetic
 // in @app/shared/customers; docs/customer-analytics.md). Its types are its own: the dashboard's
 // answer doesn't carry it. Fields marked "orders" or "money" are absent for a member who may not
-// see the store's order counts or sales; a money field is null while it can't be known yet.
+// see the store's order counts or sales; a money field is null while it can't be known (yet).
 // ---------------------------------------------------------------------------
 
 export interface CustomerFigures {
@@ -67,7 +67,10 @@ export interface CustomerAnalytics {
     clamped: boolean;
     figures: CustomerFigures;
     withoutCustomer?: number;
+    /** money: orders whose sales are still to be read from Shopify. */
     salesPending?: number;
+    /** money: orders whose sales were never read and won't be (older than the 60 days read again). */
+    salesUnread?: number;
   } | null;
   cohorts: {
     from: string;
@@ -75,6 +78,7 @@ export interface CustomerAnalytics {
     acquired: CustomerFigures;
     returningFromBefore: number;
     salesPending?: number;
+    salesUnread?: number;
   } | null;
 }
 
@@ -98,10 +102,17 @@ export function useCustomerAnalytics(ov: Overview, shown: boolean, months: numbe
 type Live = ReturnType<typeof useCustomerAnalytics>;
 
 const fmtEach = (n: number | null | undefined) => (n === null || n === undefined ? "—" : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n));
-const waiting = (n: number | undefined) => (n ? `Waiting for the sales of ${plural(n, "order")} to be read from Shopify.` : null);
+/** Why net sales are missing, in words: orders whose sales are still to be read, or never will be. */
+function unreadSalesNote(s: { salesPending?: number; salesUnread?: number }): string | null {
+  const notes = [
+    s.salesUnread ? `The sales of ${plural(s.salesUnread, "order")} were never read from Shopify, and they're older than the 60 days bizinsights reads again: net sales including them can't be worked out.` : null,
+    s.salesPending ? `Waiting for the sales of ${plural(s.salesPending, "order")} to be read from Shopify.` : null,
+  ].filter(Boolean);
+  return notes.length ? notes.join(" ") : null;
+}
 
 /** The figures of a group of customers, each only when this member gets it. */
-function FigureStats({ f, currency, repeatNote, salesPending, ordersNote }: { f: CustomerFigures; currency: string; repeatNote: string; salesPending?: number; ordersNote: string }) {
+function FigureStats({ f, currency, repeatNote, sales, ordersNote }: { f: CustomerFigures; currency: string; repeatNote: string; sales?: { salesPending?: number; salesUnread?: number }; ordersNote: string }) {
   return (
     <>
       <Stat label="Repeat purchase rate" value={fmtPct(f.repeatRate)} note={`${repeatNote} ${fmtNum(f.repeatCustomers)} of ${plural(f.customers, "customer")}.`} />
@@ -110,7 +121,7 @@ function FigureStats({ f, currency, repeatNote, salesPending, ordersNote }: { f:
         <Stat
           label="Net sales per customer"
           value={f.netSalesPerCustomer === null ? "—" : fmtMoney(f.netSalesPerCustomer, currency)}
-          note={waiting(salesPending) ?? (f.customers ? "After discounts and returns, before tax and shipping." : "No customers to divide by.")}
+          note={(f.netSalesPerCustomer === null && sales ? unreadSalesNote(sales) : null) ?? (f.customers ? "After discounts and returns, before tax and shipping." : "No customers to divide by.")}
         />
       )}
     </>
@@ -176,7 +187,7 @@ export function RepeatCustomers({ currency, live }: { currency: string; live: Li
               <>
                 {d.clamped && <p className="mb-2 text-xs text-muted">Counted from {fmtDay(d.from)}: earlier orders in these dates don&apos;t say who placed them.</p>}
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <FigureStats f={d.figures} currency={currency} repeatNote="Ordered twice or more in these dates:" salesPending={d.salesPending} ordersNote="Their orders in these dates ÷ customers." />
+                  <FigureStats f={d.figures} currency={currency} repeatNote="Ordered twice or more in these dates:" sales={d} ordersNote="Their orders in these dates ÷ customers." />
                   {d.withoutCustomer !== undefined && (
                     <Stat label="Orders without a known customer" value={fmtNum(d.withoutCustomer)} note="Guest checkouts, and deleted or redacted customers: in no figure here." />
                   )}
@@ -189,7 +200,7 @@ export function RepeatCustomers({ currency, live }: { currency: string; live: Li
               <h3 id="d-customer-value-acquired" className="mb-2 text-sm font-medium">Customers who first bought since {fmtDay(c.from)}</h3>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <Stat label="Customers" value={fmtNum(c.acquired.customers)} note="Their first purchase ever was since then." />
-                <FigureStats f={c.acquired} currency={currency} repeatNote="Bought again since:" salesPending={c.salesPending} ordersNote="All their orders so far ÷ customers." />
+                <FigureStats f={c.acquired} currency={currency} repeatNote="Bought again since:" sales={c} ordersNote="All their orders so far ÷ customers." />
               </div>
               {c.returningFromBefore > 0 && (
                 <p className="mt-2 text-xs text-muted">
@@ -220,21 +231,24 @@ export function MonthlyCohorts({ currency, live, months, onMonths }: { currency:
   const width = items.reduce((a, c) => Math.max(a, c.cells.length), 0);
   const valueOf = (x: CohortCell) => (showValue ? x.netSalesPerCustomerToDate : x.rate);
   const max = items.reduce((a, c) => c.cells.reduce((b, x) => Math.max(b, valueOf(x) ?? 0), a), 0);
-  const pending = r?.cohorts?.salesPending ?? 0;
+  const unreadNote = r?.cohorts ? unreadSalesNote(r.cohorts) : null;
   const csv = () => {
     if (!allowed("reports.export") || !r?.cohorts) return;
-    const head = ["First order month", "Customers", "Partial", "Repeat purchase rate", ...Array.from({ length: width }, (_, n) => `Month ${n} retention`), ...(money ? Array.from({ length: width }, (_, n) => `Month ${n} net sales per customer to date`) : [])];
+    // As on screen: the month still running ("so far"), where a partial cohort's customers start, and the currency.
+    const head = ["First order month", "Customers", "Partial: customers known from", "Repeat purchase rate", ...Array.from({ length: width }, (_, n) => `Month ${n} retention`), ...(money ? Array.from({ length: width }, (_, n) => `Month ${n} net sales per customer to date (${currency})`) : []), "Still running (so far)"];
     const values = [
       head,
       ...items.map((c) => {
         const at = (n: number) => c.cells.find((x) => x.n === n);
+        const now = c.cells.find((x) => x.running);
         return [
           c.month,
           c.customers,
-          c.partial ? "yes" : "no",
+          c.partial ? r.customersFrom : "",
           c.repeatRate,
           ...Array.from({ length: width }, (_, n) => at(n)?.rate ?? null),
           ...(money ? Array.from({ length: width }, (_, n) => at(n)?.netSalesPerCustomerToDate ?? null) : []),
+          now ? `Month ${now.n} (${now.month})` : "",
         ];
       }),
     ];
@@ -266,7 +280,11 @@ export function MonthlyCohorts({ currency, live, months, onMonths }: { currency:
         <p className="text-sm">No cohorts yet: they start with the first month whose orders say who placed them.</p>
       ) : (
         <>
-          {showValue && pending > 0 && <p role="status" className="mb-3 text-sm">{waiting(pending)} Net sales per customer show once they are.</p>}
+          {showValue && unreadNote && (
+            <p role="status" className="mb-3 text-sm">
+              {unreadNote} A cohort with any of them shows — for net sales per customer; the others are complete.
+            </p>
+          )}
           <div className="max-h-[620px] overflow-auto" data-testid="cohort-table">
             <table className="w-full whitespace-nowrap text-left text-sm tabular-nums">
               <caption className="sr-only">{showValue ? "Net sales per customer so far, by month of first purchase" : "Share of each month's first-time customers who ordered again, month by month"}</caption>

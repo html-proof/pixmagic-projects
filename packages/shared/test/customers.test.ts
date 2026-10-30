@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acquiredTotals, addMonths, cohortGrid, customerFigures, customerHistoryStart, monthIndex, monthsBetween, perCustomer, type CohortCount } from "../src/customers";
+import { acquiredTotals, addMonths, cohortGrid, customerFigures, customerHistoryStart, customersKnownDay, monthIndex, monthsBetween, perCustomer, type CohortCount, type CustomerDay } from "../src/customers";
 
 describe("calendar months", () => {
   it("counts months across a year's end", () => {
@@ -41,6 +41,45 @@ describe("from when customers are known", () => {
   it("is unknown without imported days or without a known customer", () => {
     expect(customerHistoryStart(null, known("2026-08-14"))).toBeNull();
     expect(customerHistoryStart("2026-03-01", null)).toBeNull();
+  });
+
+  it("takes a quiet start's first day with a guest among its orders as linked when the window's partial day was", () => {
+    expect(customerHistoryStart("2026-07-03", { ...known("2026-07-06", false, true), linkedBefore: true })).toBe("2026-07-03");
+    expect(customerHistoryStart("2026-07-03", known("2026-07-06", false, true))).toBe("2026-07-07");
+    // Orders without a customer in between still decide.
+    expect(customerHistoryStart("2026-07-03", { ...known("2026-07-06", true, true), linkedBefore: true })).toBe("2026-07-07");
+  });
+});
+
+describe("the day orders began to carry their customer", () => {
+  /** Days as daily_store_metrics has them: [day, orders, with a known customer]. */
+  const days = (...d: Array<[string, number, number]>): CustomerDay[] => d.map(([day, orders, withCustomer]) => ({ day, orders, withCustomer }));
+  /** Read before the grant: every order of 1 June to 19 August without a customer; re-read from part way through 20 August. */
+  const granted = days(["2026-06-05", 3, 0], ["2026-06-20", 2, 0], ["2026-07-15", 4, 0], ["2026-08-01", 1, 0], ["2026-08-20", 3, 1], ["2026-08-25", 2, 2], ["2026-09-02", 5, 4], ["2026-09-10", 1, 0], ["2026-09-12", 2, 2]);
+  const start = (d: CustomerDay[], wholeFrom = "2026-06-01") => customerHistoryStart(wholeFrom, customersKnownDay(d, wholeFrom));
+
+  it("starts where the orders began to carry one, and a guest-only day after that doesn't move it", () => {
+    expect(customersKnownDay(granted, "2026-06-01")).toEqual({ day: "2026-08-20", unlinkedBefore: true, unlinkedOn: true, linkedBefore: false });
+    expect(start(granted)).toBe("2026-08-21");
+  });
+
+  it("isn't moved earlier by one order linked out of turn, inside the window or before it", () => {
+    // An old order updated since the grant (or dated by when it was processed elsewhere) has its customer.
+    expect(start([...granted, ...days(["2026-06-25", 1, 1])])).toBe("2026-08-21");
+    expect(start([...granted, ...days(["2026-05-10", 1, 1])])).toBe("2026-08-21");
+  });
+
+  it("starts with the window when orders carried customers from the start", () => {
+    const linked = days(["2026-07-02", 2, 2], ["2026-07-06", 3, 2], ["2026-07-07", 1, 0], ["2026-07-09", 2, 2]);
+    // The window began part way through 2 July; a quiet start, then a guest among the first day's orders.
+    expect(start(linked, "2026-07-03")).toBe("2026-07-03");
+    // With nothing before the window to say so, that guest is read as the grant's starting moment: a day late, never early.
+    expect(start(linked.slice(1), "2026-07-03")).toBe("2026-07-07");
+  });
+
+  it("has no start before an order with a customer", () => {
+    expect(customersKnownDay(days(["2026-07-05", 3, 0]), "2026-07-03")).toBeNull();
+    expect(customersKnownDay([], "2026-07-03")).toBeNull();
   });
 });
 
@@ -121,6 +160,15 @@ describe("monthly first-order cohorts", () => {
     const withheld = cohortGrid(rows, { ...at, money: "withheld" })[2]!;
     expect(withheld.netSalesPerCustomer).toBeNull();
     expect(withheld.cells.map((c) => c.netSalesPerCustomerToDate)).toEqual([null, null, null]);
+  });
+
+  it("withholds net sales only of a cohort with orders whose sales aren't read", () => {
+    const unread = rows.map((r) => (r.cohort === "2026-11" && r.month === null ? { ...r, unreadSales: 1 } : r));
+    const [, dec, nov] = cohortGrid(unread, { ...at, money: "shown" });
+    expect(nov!.netSalesPerCustomer).toBeNull();
+    expect(nov!.cells.map((c) => c.netSalesPerCustomerToDate)).toEqual([null, null, null]);
+    expect(dec!.netSalesPerCustomer).toBe(30);
+    expect(dec!.cells.map((c) => c.netSalesPerCustomerToDate)).toEqual([20, 30]);
   });
 
   it("lists at most the months asked for, and never more than 24", () => {
