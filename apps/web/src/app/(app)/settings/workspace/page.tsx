@@ -49,7 +49,7 @@ export default function WorkspacePage() {
   return (
     <>
       <section className="card space-y-3">
-        <h1 className="text-lg font-semibold">Business details</h1>
+        <h1 className="text-lg font-semibold">Workspace</h1>
         {msg && <Alert kind="info">{msg}</Alert>}
         <form onSubmit={rename} className="space-y-3">
           <label className="label" htmlFor="ws-name">Name</label>

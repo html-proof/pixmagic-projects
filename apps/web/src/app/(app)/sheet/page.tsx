@@ -78,7 +78,7 @@ function SheetView() {
       {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your orders. The sheet fills in over the next few minutes.</Alert>}
       {ov && ov.store.status === "error" && <Alert kind="info">Syncing this store&apos;s orders has stopped, so its figures may be out of date. The dashboard says why and what fixes it.</Alert>}
 
-      {ov && !sheet && <EmptyState title="Your sales aren't shared with you" body="The profit sheet is built on the store's sales. Ask an owner or admin for “View sales and revenue” in Settings → People & access." />}
+      {ov && !sheet && <EmptyState title="Your sales aren't shared with you" body="The profit sheet is built on the store's sales. Ask an owner or admin for “View sales and revenue” in Team & Access." />}
 
       {ov && sheet && (
         <>
@@ -133,8 +133,8 @@ function Notes({ s }: { s: SheetState }) {
   const { allowed } = useApp();
   const sheet = s.sheet!;
   const notes: string[] = [];
-  if (!sheet.visitsTracked) notes.push("Store visits, and the rates worked out on them, need the bizinsights storefront pixel (Visitors), which this store doesn't share with you yet.");
-  if (!sheet.ads && allowed("marketing.ads")) notes.push("Connect Meta Ads or Google Ads in Settings → Connections to see your ad spend day by day beside your sales.");
+  if (!sheet.visitsTracked) notes.push("Store visits, and the rates worked out on them, need the bizinsights storefront pixel (Shopping Funnel), which this store doesn't share with you yet.");
+  if (!sheet.ads && allowed("marketing.ads")) notes.push("Connect Meta Ads or Google Ads in Settings → Integrations to see your ad spend day by day beside your sales.");
   else if (sheet.ads && !sheet.comparable) notes.push(sheet.ads.demo ? "The Google Ads demo's figures are simulated, so they aren't set against your sales." : `Your ad accounts report in ${sheet.ads.currency}, not the store's ${s.ov!.store.currency}, so the spend isn't set against your sales.`);
   notes.push("Product costs, shipping, fees and your other costs aren't recorded in bizinsights, so the sheet stops at net sales less ad spend: it never calls that profit.");
   return (

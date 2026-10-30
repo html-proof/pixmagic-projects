@@ -42,7 +42,7 @@ test("shows the shopping funnel, explains a stage, filters it and keeps the chec
   await db.query(`INSERT INTO products (id, workspace_id, store_id, shopify_id, handle, title, shopify_updated_at) VALUES (gen_random_uuid()::text, $1, $2, '501', 'linen-shirt', 'Linen Shirt', now())`, [ws, storeId]);
 
   await page.goto(`/funnel?preset=custom&from=${DAY}&to=${DAY}`);
-  await expect(page.getByRole("heading", { name: "Visitors", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Shopping Funnel", level: 1 })).toBeVisible();
   await expect(page.getByTestId("funnel-kpi-visited")).toContainText("from 6 browsers");
   // 6 visits against 2: +200%.
   await expect(page.getByTestId("funnel-kpi-visited")).toContainText("200%");

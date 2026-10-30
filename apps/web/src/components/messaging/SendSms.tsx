@@ -860,7 +860,7 @@ export function SendSms() {
       {!manage ? (
         <div className="card text-sm text-muted">Only owners and admins can send texts. You can see what was sent in Message History.</div>
       ) : !contact ? (
-        <div className="card text-sm text-muted">Sending to customers needs &ldquo;View contact information&rdquo; in Settings → People &amp; access, since it shows their (masked) numbers.</div>
+        <div className="card text-sm text-muted">Sending to customers needs &ldquo;View contact information&rdquo; in Team &amp; Access, since it shows their (masked) numbers.</div>
       ) : (
         <>
           <SendWizard base={base} templates={templates.data.templates} timeZone={timeZone} sender={senderOf(overview.data)} onSent={() => setVersion((v) => v + 1)} />

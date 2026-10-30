@@ -84,7 +84,7 @@ function MessageDetail({ base, id, templates, onClose }: { base: string; id: str
             {m.text ? (
               <TextBubble>{m.text}</TextBubble>
             ) : (
-              <p className="text-sm text-muted">{contact ? "Not kept: texts are kept for 30 days after their outcome." : "Hidden: seeing texts needs “View contact information” in Settings → People & access."}</p>
+              <p className="text-sm text-muted">{contact ? "Not kept: texts are kept for 30 days after their outcome." : "Hidden: seeing texts needs “View contact information” in Team & Access."}</p>
             )}
           </section>
           <section className="card p-4 text-sm">

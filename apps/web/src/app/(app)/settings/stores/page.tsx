@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
 import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
-import { ConfirmDialog } from "@/components/AppUi";
 import { ShopifyConnect } from "@/components/ShopifyConnect";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
@@ -47,8 +46,6 @@ export default function StoresPage() {
   const [synced, setSynced] = useState<string | null>(null);
   /** Just back from Shopify with a store connected (`?connected=<store id>`). */
   const [connected, setConnected] = useState<string | null>(null);
-  /** The disconnect, or the permission removal, waiting for a yes. */
-  const [ask, setAsk] = useState<{ id: string; domain: string; scope?: string } | null>(null);
 
   // Shopify's answer to a connect started here comes back to this page: ?connected= or ?error=.
   // Read once, then dropped from the address so a refresh doesn't announce it again.
@@ -69,6 +66,11 @@ export default function StoresPage() {
   const justConnected = connected ? stores.find((s) => s.id === connected) : undefined;
 
   async function disconnect(id: string, domain: string) {
+    // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
+    // they uninstall it there, so say so rather than imply Shopify access ends here.
+    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from bizinsights. You can reconnect later.
+
+To stop bizinsights' access in Shopify too, uninstall the app from your Shopify admin.`)) return;
     setError(null);
     try {
       await api(`/workspaces/${workspace.id}/stores/${id}`, { method: "DELETE" });
@@ -102,6 +104,11 @@ export default function StoresPage() {
    * until they do, and the confirm says which ones rather than naming the scope alone.
    */
   async function revoke(id: string, domain: string, scope: string) {
+    const affected = modulesNeeding(scope);
+    const consequence = affected.length
+      ? `${affected.join(", ")} will stop working until you grant it again.`
+      : "Nothing on your dashboard uses it today.";
+    if (!confirm(`Stop letting bizinsights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
     setRevoking(`${id}:${scope}`);
     setError(null);
     try {
@@ -199,7 +206,7 @@ export default function StoresPage() {
                             data-testid={`revoke-${scope}`}
                             aria-label={`Remove ${scopeLabel(scope).toLowerCase()} permission for ${s.shopDomain}`}
                             disabled={busy}
-                            onClick={() => setAsk({ id: s.id, domain: s.shopDomain, scope })}
+                            onClick={() => revoke(s.id, s.shopDomain, scope)}
                           >
                             {busy ? "Removing…" : "Remove"}
                           </button>
@@ -274,39 +281,13 @@ export default function StoresPage() {
                       {syncing === s.id ? "Starting…" : "Sync now"}
                     </button>
                   )}
-                  <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => setAsk({ id: s.id, domain: s.shopDomain })}>Disconnect</button>
+                  <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
                 </div>
               )}
             </div>
           </div>
         );
       })}
-      <ConfirmDialog
-        open={!!ask}
-        title={ask?.scope ? `Stop letting bizinsights read ${scopeLabel(ask.scope).toLowerCase()}?` : `Disconnect ${ask?.domain}?`}
-        confirmLabel={ask?.scope ? "Remove" : "Disconnect"}
-        danger
-        onCancel={() => setAsk(null)}
-        onConfirm={() => {
-          if (!ask) return;
-          setAsk(null);
-          void (ask.scope ? revoke(ask.id, ask.domain, ask.scope) : disconnect(ask.id, ask.domain));
-        }}
-      >
-        {ask?.scope ? (
-          <p>
-            For {ask.domain}.{" "}
-            {modulesNeeding(ask.scope).length ? `${modulesNeeding(ask.scope).join(", ")} will stop working until you grant it again.` : "Nothing on your dashboard uses it today."}
-          </p>
-        ) : (
-          // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
-          // they uninstall it there, so say so rather than imply Shopify access ends here.
-          <>
-            <p>Its synced data will be deleted from bizinsights. You can reconnect later.</p>
-            <p>To stop bizinsights&apos; access in Shopify too, uninstall the app from your Shopify admin.</p>
-          </>
-        )}
-      </ConfirmDialog>
     </section>
   );
 }
