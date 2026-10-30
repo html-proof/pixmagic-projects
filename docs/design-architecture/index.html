@@ -1,0 +1,1889 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>bizinsights Design Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a working document. Sticky bar with four views; Screens = area rail + card grid + a detail sheet with the screenshot.
+   Palette and type come from the bizinsights app itself (apps/web/src/app/globals.css, Geist). */
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --sunken: #efefeb; --border: #e4e4e0; --text: #1b1b18; --muted: #6b6b63;
+  --accent: #18794e; --accent-ink: #ffffff; --accent-soft: #e3f1e9; --nav: #0f1c2e; --nav-text: #e7edf5;
+  --low: #1f7a46; --low-fill: #22a05b; --med: #a15c07; --med-fill: #f5b40a; --high: #b42318; --high-fill: #e5484d;
+  --shadow: 0 1px 2px rgb(15 28 46 / .06), 0 8px 24px rgb(15 28 46 / .08);
+  --display: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --body: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121211; --surface: #1b1b19; --sunken: #161615; --border: #2e2e2a; --text: #ecece8; --muted: #a3a39a;
+  --accent: #6fbf94; --accent-ink: #0d1f15; --accent-soft: #1d2e24; --nav: #0c1522; --nav-text: #e7edf5;
+  --low: #6fcf97; --low-fill: #3dbb77; --med: #f0b048; --med-fill: #f0b429; --high: #f97066; --high-fill: #f2555a;
+  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 8px 24px rgb(0 0 0 / .35); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121211; --surface: #1b1b19; --sunken: #161615; --border: #2e2e2a; --text: #ecece8; --muted: #a3a39a;
+  --accent: #6fbf94; --accent-ink: #0d1f15; --accent-soft: #1d2e24; --nav: #0c1522; --nav-text: #e7edf5;
+  --low: #6fcf97; --low-fill: #3dbb77; --med: #f0b048; --med-fill: #f0b429; --high: #f97066; --high-fill: #f2555a;
+  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 8px 24px rgb(0 0 0 / .35); color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--text); font: 15px/1.55 var(--body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--nav) }
+a { color: var(--accent) }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px }
+.wrap { max-width: 1320px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+
+header.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--nav); color: var(--nav-text) }
+header.bar .wrap { display: flex; align-items: center; gap: 20px; padding-block: 10px; flex-wrap: wrap }
+.logo { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: -.01em; font-size: 16px }
+.logo svg { flex: none }
+.logo small { font-weight: 400; opacity: .7; font-size: 13px }
+nav.views { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto }
+nav.views button { font: 500 13px var(--body); color: var(--nav-text); background: transparent; border: 0; padding: 7px 12px; border-radius: 8px; cursor: pointer; opacity: .78 }
+nav.views button:hover { opacity: 1; background: rgb(255 255 255 / .06) }
+nav.views button[aria-selected="true"] { opacity: 1; background: #198754; color: #fff }
+
+.intro { padding-block: 36px 8px; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 32px; align-items: end }
+.intro h1 { font: 700 clamp(28px, 4vw, 40px)/1.1 var(--display); letter-spacing: -.025em; margin: 0 0 12px; text-wrap: balance }
+.intro p { margin: 0; color: var(--muted); max-width: 62ch }
+.quote { margin: 16px 0 0; padding-left: 14px; border-left: 3px solid var(--accent); color: var(--text); font-style: italic; max-width: 62ch }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px }
+.stat b { display: block; font: 600 26px/1.1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -.02em }
+.stat span { font-size: 12px; color: var(--muted) }
+.mix { grid-column: 1 / -1; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px }
+.mix-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 8px; gap: 8px; flex-wrap: wrap }
+.mix-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--sunken) }
+.mix-bar i { display: block; height: 100% }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: 0 }
+
+section.view { padding-block: 24px 64px }
+.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 28px; align-items: start }
+.layout > * { min-width: 0 }
+.rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 72px); display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 100px); overflow: auto }
+.rail button { text-align: left; font: 500 13.5px var(--body); color: var(--text); background: transparent; border: 0; padding: 7px 10px; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px }
+.rail button span { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 400 }
+.rail button:hover { background: var(--sunken) }
+.rail button[aria-current="true"] { background: var(--accent-soft); color: var(--accent) }
+.search { width: 100%; font: 14px var(--body); padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); margin-bottom: 10px }
+
+.area { margin-bottom: 40px; scroll-margin-top: 80px }
+.area-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px }
+.area-head h2 { font: 650 22px/1.2 var(--display); letter-spacing: -.015em; margin: 0 }
+.area-head .count { color: var(--muted); font-size: 13px }
+.area-summary { color: var(--muted); margin: 0 0 12px; max-width: 75ch }
+.subnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; font-size: 12px }
+.subnav span { background: var(--sunken); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; color: var(--muted) }
+.subnav b { font-weight: 600; color: var(--text); margin-right: 2px; align-self: center }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; cursor: pointer; text-align: left; padding: 0; font: inherit; color: inherit; transition: box-shadow .15s, transform .15s }
+.card:hover { box-shadow: var(--shadow); transform: translateY(-1px) }
+.thumb { aspect-ratio: 16 / 10; max-width: 100%; background: var(--sunken); border-bottom: 1px solid var(--border); overflow: hidden; display: grid; place-items: center; color: var(--muted); font-size: 12px }
+.thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block }
+.card-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0 }
+.card-title { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start }
+.card-title b { font-weight: 600; font-size: 14.5px; line-height: 1.3 }
+.route { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere }
+.purpose { font-size: 13px; color: var(--text); margin: 0 }
+.pill { flex: none; font: 600 10.5px var(--body); text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px; border-radius: 999px; border: 1px solid currentColor }
+.pill.low { color: var(--low) } .pill.medium { color: var(--med) } .pill.high { color: var(--high) }
+
+dialog.sheet { width: min(1180px, 96vw); max-height: 92vh; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: var(--shadow) }
+dialog.sheet::backdrop { background: rgb(10 14 20 / .55) }
+.sheet-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); z-index: 1 }
+.sheet-head h3 { margin: 0; font: 650 20px/1.25 var(--display); letter-spacing: -.01em }
+.sheet-head .route { margin-top: 2px }
+.sheet-tools { display: flex; gap: 6px; align-items: center; flex: none }
+.btn { font: 500 13px var(--body); padding: 6px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer }
+.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink) }
+.sheet-body { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 0; max-height: calc(92vh - 76px); overflow: hidden }
+.shot { overflow: auto; background: var(--sunken); border-right: 1px solid var(--border); padding: 14px; max-height: calc(92vh - 76px) }
+.shot img { display: block; margin: 0 auto; border-radius: 6px; box-shadow: var(--shadow); max-width: 100% }
+.shot.mobile img { max-width: 390px; width: 100% }
+.shot .none { color: var(--muted); padding: 40px; text-align: center }
+.notes { overflow: auto; padding: 16px 20px 24px; max-height: calc(92vh - 76px); display: flex; flex-direction: column; gap: 14px; min-width: 0 }
+.notes h4 { margin: 0 0 4px; font: 600 11.5px var(--body); text-transform: uppercase; letter-spacing: .07em; color: var(--muted) }
+.notes p, .notes li { margin: 0; font-size: 13.5px }
+.notes ol, .notes ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px }
+.notes .sec b { font-weight: 600 }
+.cx { border-radius: 10px; padding: 10px 12px; border: 1px solid var(--border); background: var(--sunken) }
+.cx.high { border-left: 4px solid var(--high-fill) } .cx.medium { border-left: 4px solid var(--med-fill) } .cx.low { border-left: 4px solid var(--low-fill) }
+.file { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere }
+
+.findings { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 14px }
+.finding { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; border-top: 4px solid var(--border) }
+.finding.high { border-top-color: var(--high-fill) } .finding.medium { border-top-color: var(--med-fill) } .finding.low { border-top-color: var(--low-fill) }
+.finding h3 { margin: 0; font: 650 16.5px/1.3 var(--display); text-wrap: balance }
+.finding p { margin: 0; font-size: 13.5px }
+.finding .impact { color: var(--muted); font-style: italic }
+.chips { display: flex; flex-wrap: wrap; gap: 6px }
+.chip { font: 12px var(--mono); padding: 2px 8px; border-radius: 6px; background: var(--sunken); border: 1px solid var(--border); color: var(--text); cursor: pointer }
+.chip.static { cursor: default }
+.good { margin-top: 28px }
+.good h2, .view h2.big { font: 650 22px/1.2 var(--display); letter-spacing: -.015em; margin: 0 0 12px }
+.good ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px; padding: 0; list-style: none; margin: 0 }
+.good li { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; font-size: 13.5px }
+.good li code { font: 11.5px var(--mono); color: var(--accent) }
+
+.products { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px }
+.product { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0 }
+.product h3 { margin: 0; font: 650 16px var(--display) }
+.product .kind { font-size: 12px; color: var(--muted) }
+.product dl { margin: 0; display: grid; gap: 6px }
+.product dt { font: 600 11px var(--body); text-transform: uppercase; letter-spacing: .07em; color: var(--muted) }
+.product dd { margin: 0 0 4px; font-size: 13.5px }
+.sources { display: flex; flex-direction: column; gap: 3px; font-size: 12px }
+.sources a { overflow-wrap: anywhere }
+.sources em { color: var(--muted); font-style: normal }
+.patterns { margin-top: 28px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px }
+.patterns ul { columns: 2 320px; column-gap: 32px; margin: 0; padding-left: 18px }
+.patterns li { break-inside: avoid; margin-bottom: 8px; font-size: 14px }
+
+.navplan { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 14px }
+.navitem { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0 }
+.navitem header { display: flex; align-items: baseline; gap: 10px }
+.navitem .n { font: 600 12px var(--mono); color: var(--accent) }
+.navitem h3 { margin: 0; font: 650 19px var(--display); letter-spacing: -.01em }
+.navitem .when { font-size: 12px; color: var(--muted) }
+.navitem p { margin: 0; font-size: 13.5px }
+.navitem ol, .navitem ul { margin: 0; padding-left: 18px; font-size: 13.5px; display: flex; flex-direction: column; gap: 5px }
+.from { font-size: 12.5px; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 8px }
+.from b { color: var(--text); font-weight: 600 }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 18px }
+.box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0 }
+.box h3 { margin: 0 0 10px; font: 650 17px var(--display) }
+.box ul, .box ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px }
+.tablewrap { overflow-x: auto }
+table.gloss { border-collapse: collapse; width: 100%; font-size: 13.5px }
+table.gloss th, table.gloss td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top }
+table.gloss th { font: 600 11px var(--body); text-transform: uppercase; letter-spacing: .07em; color: var(--muted) }
+table.gloss td:last-child { font-weight: 600; color: var(--accent) }
+.roadmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 14px; margin-top: 18px }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px }
+.phase .n { font: 600 12px var(--mono); color: var(--accent) }
+.phase h3 { margin: 2px 0 8px; font: 650 16px var(--display) }
+.phase ul { margin: 0; padding-left: 18px; font-size: 13.5px; display: flex; flex-direction: column; gap: 6px }
+.lede { color: var(--muted); max-width: 75ch; margin: 0 0 18px }
+.empty { color: var(--muted); padding: 24px 0 }
+
+@media (max-width: 900px) {
+  .intro { grid-template-columns: 1fr }
+  .layout { grid-template-columns: 1fr }
+  .rail { position: static; flex-direction: row; overflow-x: auto; max-height: none; gap: 4px; padding-bottom: 4px }
+  .rail button { flex: none; background: var(--surface); border: 1px solid var(--border) }
+  .sheet-body { grid-template-columns: 1fr; max-height: none; overflow: visible }
+  .shot, .notes { max-height: none; border-right: 0 }
+  dialog.sheet { overflow: auto }
+  .two { grid-template-columns: 1fr }
+}
+@media (max-width: 520px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)) } nav.views { margin-left: 0 } }
+@media (prefers-reduced-motion: reduce) { .card { transition: none } .card:hover { transform: none } }
+</style>
+
+<header class="bar">
+  <div class="wrap">
+    <div class="logo">
+      <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true"><rect x="0" y="9" width="5" height="9" rx="1.5" fill="#3dbb77"/><rect x="8" y="5" width="5" height="13" rx="1.5" fill="#22a05b"/><rect x="16" y="0" width="5" height="18" rx="1.5" fill="#198754"/></svg>
+      bizinsights <small>Design Map</small>
+    </div>
+    <nav class="views" role="tablist" aria-label="Views">
+      <button role="tab" id="tab-screens" data-view="screens" aria-selected="true">Every screen</button>
+      <button role="tab" id="tab-findings" data-view="findings" aria-selected="false">What's confusing</button>
+      <button role="tab" id="tab-research" data-view="research" aria-selected="false">How others do it</button>
+      <button role="tab" id="tab-proposal" data-view="proposal" aria-selected="false">Simpler structure</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap intro">
+    <div>
+      <h1>Every screen of bizinsights, mapped for a simpler redesign</h1>
+      <p id="intro-what"></p>
+      <p class="quote" id="intro-quote"></p>
+    </div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <section class="view wrap" id="view-screens" data-view="screens">
+    <div class="layout">
+      <aside>
+        <label for="q" class="visually-hidden" style="position:absolute;left:-9999px">Find a screen</label>
+        <input id="q" class="search" type="search" placeholder="Find a screen, route or word…" autocomplete="off">
+        <div class="rail" id="rail"></div>
+      </aside>
+      <div id="areas"></div>
+    </div>
+  </section>
+
+  <section class="view wrap" id="view-findings" data-view="findings" hidden>
+    <h2 class="big">What makes it confusing</h2>
+    <p class="lede">Each finding comes from reading the code of every screen. Tap a page name to open that screen.</p>
+    <div class="findings" id="findings"></div>
+    <div class="good"><h2>Keep these: they already work</h2><ul id="good"></ul></div>
+  </section>
+
+  <section class="view wrap" id="view-research" data-view="research" hidden>
+    <h2 class="big">How similar platforms keep it simple</h2>
+    <p class="lede" id="research-lede"></p>
+    <div class="products" id="products"></div>
+    <div class="patterns"><h2 class="big" style="font-size:19px">Fifteen patterns they share</h2><ul id="patterns"></ul></div>
+    <p class="lede" id="not-verified" style="margin-top:16px"></p>
+  </section>
+
+  <section class="view wrap" id="view-proposal" data-view="proposal" hidden>
+    <h2 class="big">A simpler structure: six places instead of twenty-two</h2>
+    <p class="lede" id="proposal-lede"></p>
+    <div class="navplan" id="navplan"></div>
+    <div class="two">
+      <div class="box"><h3>Automatic by default</h3><ul id="auto"></ul></div>
+      <div class="box"><h3>WhatsApp in one button</h3><ol id="wa"></ol></div>
+    </div>
+    <div class="box" style="margin-top:14px"><h3>One word for each idea</h3><div class="tablewrap"><table class="gloss"><thead><tr><th>Today the product says</th><th>Say instead</th></tr></thead><tbody id="gloss"></tbody></table></div></div>
+    <div class="roadmap" id="roadmap"></div>
+  </section>
+</main>
+
+<dialog class="sheet" id="sheet" aria-labelledby="sheet-title">
+  <div class="sheet-head">
+    <div style="min-width:0">
+      <h3 id="sheet-title"></h3>
+      <div class="route" id="sheet-route"></div>
+    </div>
+    <div class="sheet-tools">
+      <button class="btn" id="btn-desktop" aria-pressed="true">Desktop</button>
+      <button class="btn" id="btn-mobile" aria-pressed="false">Phone</button>
+      <button class="btn" id="btn-close" aria-label="Close">Close</button>
+    </div>
+  </div>
+  <div class="sheet-body">
+    <div class="shot" id="sheet-shot"></div>
+    <div class="notes" id="sheet-notes"></div>
+  </div>
+</dialog>
+
+<script type="application/xml" id="design-xml">
+<!--
+  bizinsights — design architecture of the whole website, as it is today.
+
+  What this is: a map of every screen a visitor, merchant, team member, employee or shopper can
+  open, how the screens are grouped and reached, what each one shows (with its visible wording),
+  how hard it is for a non-technical merchant, and a screenshot of each one. It is a brief for a
+  redesign. It changes nothing in the product.
+
+  How to read it:
+    PART A  frames ............ the page skeletons screens are built from
+    PART B  shell ............. the sidebar, top bar, search, bell around every signed-in page
+    PART C  areas ............. every screen, area by area, in menu order
+    PART D  findings .......... what makes it confusing, with evidence
+    PART E  competitor-research how similar platforms solve the same problems (with sources)
+    PART F  redesign-proposal . a simpler structure, plain words, and what to make automatic
+
+  Screenshots: paths are relative to this file (docs/design-architecture/). Signed-in screens
+  were captured from a private local copy of the app filled with SAMPLE data (no real merchant
+  data: the "Demo Boutique" store, the Google Ads demo account, four sample employees); public
+  screens from https://bizinsights.io. Screens that need a real outside service (a WhatsApp phone,
+  an AWS SMS sender, a mailbox, Meta or AdSense sign-in) show their not-connected state, which is
+  what a new merchant sees first.
+
+  Complexity scale on every page:
+    low    = one job, few numbers, plain words
+    medium = several decisions or 10-30 figures, some jargon
+    high   = many figures or steps, technical words, or the same thing done elsewhere too
+-->
+<design-architecture product="bizinsights" url="https://bizinsights.io" generated="2026-10-30" source-commit="f7f6bb45"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <overview>
+    <what-it-is>Plain-language analytics and marketing for Shopify stores: sales and profit, shopping funnel, advertising (Meta, Google, AdSense), inventory, customer messaging (WhatsApp, SMS, email) with automations, staff and payroll, team access.</what-it-is>
+    <counts areas="13" pages="112" screenshots="135" sidebar-items-owner="22" area-menus="7" automation-builders="6" template-editors="3" message-histories="4"/>
+    <codebase ui="apps/web (Next.js App Router, static export)" routes="apps/web/src/app" components="apps/web/src/components" shell="apps/web/src/components/AppShell.tsx" flags="apps/web/src/lib/features.ts"/>
+    <owner-brief>"Right now it's so confusing and so mysterious… make all the information visible by a single tab and every part of the information more simple for a non-tech person… the automation stuffs have to be done automatically."</owner-brief>
+  </overview>
+
+  <legend>
+    <access-terms>public = anyone; signed in = any account; owner/admin = full-access members; a dotted name (marketing.ads, inventory.view…) = a Team &amp; Access permission; "module" = an area the workspace is offered (App Store workspaces don't get Inventory, Advertising, Staff, WhatsApp, SMS or Email); "flag" = a switch in apps/web/src/lib/features.ts.</access-terms>
+    <screenshot-naming>screenshots/{area-folder}/{page-id}--desktop.jpg (1440 px wide, full page) and --mobile.jpg (390 px wide). Extra shell shots: screenshots/02-shell/ (sidebar, bell panel, search palette, phone drawer).</screenshot-naming>
+    <screenshots-not-taken reason="each needs something the private copy can't provide">
+      <screen ref="verify-email">only shows for an account whose email isn't verified yet</screen>
+      <screen ref="connect-zapier">only opens from Zapier's own sign-in, with Zapier's request in the address</screen>
+      <screen ref="portal-home portal-timesheets portal-pay portal-schedule portal-account">need an employee who accepted an invitation</screen>
+      <screen ref="staff-payroll-period">needs an approved pay run</screen>
+      <screen ref="settings-api-keys settings-billing">switched off by flags today, so they redirect to Profile</screen>
+    </screenshots-not-taken>
+  </legend>
+
+  <!-- ============================================================
+       PART A + B. FRAMES AND THE SIGNED-IN SHELL
+       ============================================================ -->
+  <!-- ============================================================
+       PART A. THE FRAMES EVERY SCREEN SITS IN
+       ============================================================ -->
+  <frames>
+    <frame id="landing-frame" file="apps/web/src/components/landing/LandingPage.tsx" usedBy="landing">
+      Dark full-bleed marketing theme in the Geist font, custom cursor, floating pill navbar (logo, "Log in", "Sign up"), about 12 long scroll-driven scenes.
+    </frame>
+    <frame id="auth-split" file="apps/web/src/components/auth/AuthSplitShell.tsx" usedBy="login signup forgot-password reset-password">
+      A centred rounded card with two columns. Left (desktop only): a green illustrated showcase (AuthShowcase) with three rotating slides ("Turn your data into decisions" / "Every number, in plain words" / "Compare any dates at a glance"), ticks "Sales, orders and stock", "Plain-language reports", "Read-only Shopify access", "Access anywhere", and a tilted sample dashboard tagged "Illustration with sample figures". Right: logo, a pill button to the other auth page, a 32-36px heading, subtitle, form. Under the card: "Support · Privacy".
+    </frame>
+    <frame id="auth-card" file="apps/web/src/components/auth/AuthCard.tsx" usedBy="verify-email auth-callback auth-error invite">
+      One white card on a soft brand backdrop: logo, heading, subtitle, content, "Support · Privacy".
+    </frame>
+    <frame id="auth-shell" file="apps/web/src/components/ui.tsx (AuthShell)" usedBy="join stop unsubscribe">
+      The plainest frame: a narrow column, small logo, heading, subtitle, children, "Support · Privacy". No card.
+    </frame>
+    <frame id="bare-card" usedBy="onboarding claim connect-zapier">
+      A narrow column with a small logo and one card. No shared frame component; claim and connect-zapier have no Support/Privacy footer.
+    </frame>
+    <frame id="legal-page" file="apps/web/src/components/legal/LegalPage.tsx" usedBy="support privacy terms data-deletion">
+      Sticky top bar with logo and tabs "Privacy policy", "Terms of service", "Data deletion", "Support" (hidden on phones). Eyebrow, large heading, intro, "Last updated". A numbered "On this page" list (sticky column on desktop, fold-out on phones) beside a white article card with numbered sections (01, 02…). Footer with the legal entity and the four links.
+    </frame>
+    <frame id="error-page" file="apps/web/src/components/ErrorPage.tsx" usedBy="not-found root-error unavailable">
+      Top bar with logo and "Help &amp; support"; a centred panel with a big code graphic ("404", "500", "503"), a pill label, heading, body, buttons and a support reference; footer Privacy, Terms, Support.
+    </frame>
+    <frame id="app-shell" file="apps/web/src/components/AppShell.tsx" usedBy="every signed-in page under app/(app)">
+      Dark 240px sidebar on the left, sticky 64px top bar, page area up to 90rem wide, floating round help button bottom-right. Described in full below.
+    </frame>
+    <frame id="section-layout" usedBy="advertising inventory messaging automations staff settings settings-email whatsapp">
+      Inside the app shell, most areas add a SECOND menu of their own: a vertical list down the left of the page from tablet width, a horizontally scrolling row of pills on phones. So a desktop page shows two stacked menus side by side (dark sidebar + area menu).
+    </frame>
+    <frame id="detail-panel" file="apps/web/src/components/dashboard/TopicDetail.tsx" usedBy="dashboard ?view= topics">
+      A slide-over panel from the right (full screen on phones) over a dark backdrop. Header: icon, title, period line "{range} · {store}". Buttons "Download CSV" (some topics), "Print or save as PDF", close (X or Esc). Every panel ends with "What you could do next" (tips) and "What these numbers mean" (glossary).
+    </frame>
+    <frame id="portal-shell" file="apps/web/src/app/portal/layout.tsx" usedBy="employee portal">
+      A separate, simpler shell for employees: sticky top bar (organization name, "{name} · {job title}", "Manager view", "Sign out") and a pill tab row Dashboard · Timesheets · Pay · Schedule · Account. No sidebar, search, bell or help bubble.
+    </frame>
+  </frames>
+
+  <!-- ============================================================
+       PART B. THE SIGNED-IN SHELL (what is around every app page)
+       ============================================================ -->
+  <shell id="app-shell" files="apps/web/src/app/(app)/layout.tsx; components/AppShell.tsx; components/AppContext.tsx; components/CommandPalette.tsx; lib/settingsNav.ts; lib/features.ts; lib/access.ts"
+         screenshot-desktop="screenshots/02-shell/shell-sidebar--desktop.jpg" screenshot-mobile="screenshots/02-shell/shell-drawer--mobile.jpg">
+    <gate>
+      Every signed-in page first loads the user. Unverified email → /verify-email. No workspace → /portal (employee) or /onboarding (merchant). While loading: "Loading…". If the user can't be loaded: full-page error with "Try again" (countdown) and "Contact support". Revoked or expired access: full page "Access revoked" / "Access ended" with one "Open {workspace}" button per other workspace and "Sign out". Shared link ended: "This shared dashboard has closed". Permissions are re-checked every 5 seconds.
+    </gate>
+    <topbar>
+      <control name="menu" label="Open navigation" shownWhen="below lg (tablet and phone)">Opens the left drawer.</control>
+      <control name="store-picker" label="Store">Card with the Shopify bag, store name and .myshopify.com address over a native select. Options: every store, plus "+ Connect another store" (→ /settings/stores) for stores:manage. Hidden when there are no stores; "Choose a store" when none is picked.</control>
+      <control name="workspace-picker" label="Workspace" shownWhen="more than one workspace, md and up (inside the drawer on phones)">Plain select of workspace names.</control>
+      <control name="search" label="Search insights, pages and settings…" shownWhen="md and up (magnifier icon on phones)">Shows "Ctrl K" / "⌘ K" and opens the command palette. It only jumps to pages; it does not search store data.</control>
+      <control name="bell" label="Notifications">A red dot while a problem is open or a new note arrived. See notifications.</control>
+      <control name="account" shownWhen="below lg (on desktop it is at the foot of the sidebar)">Avatar menu: name and email, "Your profile" → /settings/profile, "Sign-in &amp; security" → /settings/security, "Sign out". A shared-link viewer instead sees "You opened this shared dashboard from an invitation link. It's view-only…", "Sign in to your account", "Close the shared dashboard".</control>
+    </topbar>
+    <sidebar>
+      <header>Logo → /dashboard. Members who are not owner/admin see a badge card: workspace name and "Shared with you · {Manager|Analyst|Viewer|Custom}" or "· View only"; a shared link adds "Access until {date}".</header>
+      <group name="(no title)">
+        <item label="Dashboard (owner/admin) · Overview (others)" route="/dashboard" icon="LayoutDashboard" shownWhen="owner or admin, or a member with 2+ dashboard areas"/>
+        <item label="Business Overview" route="/dashboard?view=overview" icon="Gauge" shownWhen="reports.view"/>
+        <item label="Sales &amp; Orders" route="/dashboard?view=sales" icon="ShoppingBag" shownWhen="analytics.sales"/>
+        <item label="Products" route="/dashboard?view=products" icon="Package" shownWhen="products.view or products.performance"/>
+        <item label="Inventory" route="/inventory" icon="Boxes" shownWhen="inventory module and inventory.view"/>
+        <item label="Customers" route="/dashboard?view=customers" icon="UsersRound" shownWhen="customers.list, customers.analytics or analytics.abandonment"/>
+        <item label="Advertising" route="/advertising" icon="Megaphone" shownWhen="ads module and marketing.ads"/>
+        <item label="Discounts" route="/dashboard?view=discounts" icon="BadgePercent" shownWhen="discounts.codes"/>
+        <item label="Shopping Funnel" route="/funnel" icon="Funnel" shownWhen="analytics.conversion"/>
+      </group>
+      <group name="Store">
+        <item label="Orders" route="/dashboard?view=orders" icon="ReceiptText" shownWhen="orders.list"/>
+        <item label="Stock" route="/dashboard?view=stock" icon="Boxes" shownWhen="products.inventory and the Inventory item is NOT shown"/>
+        <item label="Shipping" route="/dashboard?view=shipping" icon="Truck" shownWhen="orders.fulfillment"/>
+        <item label="Sales channels" route="/dashboard?view=channels" icon="Store" shownWhen="analytics.traffic"/>
+        <item label="Staff" route="/staff" icon="Users" shownWhen="staff module and any staff permission"/>
+        <item label="My work" route="/portal" icon="Briefcase" shownWhen="the account is also an employee somewhere"/>
+      </group>
+      <group name="Marketing &amp; integrations">
+        <item label="Google Ads" route="/advertising/google" icon="Google Ads glyph" shownWhen="ads module and marketing.ads"/>
+        <item label="Meta Ads" route="/advertising/meta" icon="Meta glyph" shownWhen="ads module and marketing.ads"/>
+        <item label="Automations" route="/automations" icon="Workflow" shownWhen="flag AUTOMATIONS_HUB and (SMS or email module)"/>
+        <item label="Customer Messaging" route="/messaging" icon="MessageSquareText" shownWhen="sms module and marketing.campaigns"/>
+        <item label="WhatsApp" route="/dashboard/whatsapp-automation" icon="MessageCircle" shownWhen="whatsapp module and marketing.campaigns"/>
+      </group>
+      <group name="Settings">
+        <item label="Integrations" route="/settings/integrations" icon="Plug" shownWhen="integrations.status"/>
+        <item label="Team &amp; Access" route="/team" icon="ShieldCheck" shownWhen="members:manage"/>
+        <item label="Business Settings (owner/admin) · My Account (others) · Notifications (shared link)" route="/settings/profile" icon="Settings"/>
+      </group>
+      <footer>"Need help?" card ("Get support or reach out to our team.") with a green "Contact support" button → /support, then the account card (avatar, name, email) whose menu opens upwards.</footer>
+      <counts total-items-owner="22" groups="4" note="An owner with every module sees 22 sidebar items, 9 of which open the same /dashboard page in a side panel. Two topics (Busiest times, Ad earnings) are not in the sidebar at all."/>
+    </sidebar>
+    <mobile>
+      Below lg the sidebar is hidden; "Open navigation" opens a 288px drawer with logo, close X, a "Workspace" select (phones, several workspaces) and the same sidebar content including the help card, but no account card (the avatar is in the top bar). The notifications panel goes full-width under the top bar.
+    </mobile>
+    <banners>
+      <banner name="access-notice">Dismissible info at the top of the page: "You don't have access to that page.", "That part of the dashboard isn't shared with you.", "Your access to this workspace was just updated by an owner or admin…".</banner>
+      <banner name="offline">"Connection lost": "Check your internet connection. Reports may be out of date; updates resume when you're online." with "Try again".</banner>
+      <banner name="help-bubble">Floating bottom-right: "Need a hand?", "We reply within one business day.", "Email support", "Help centre &amp; FAQ" (→ /support).</banner>
+    </banners>
+    <notifications screenshot-desktop="screenshots/02-shell/notifications--desktop.jpg">
+      Panel "Notifications" with "{n} to fix". States: "Loading…"; "We couldn't load your notifications. We'll keep trying."; empty "You're all caught up" / "Sync problems and anything else that needs you will show up here." Rows: severity icon (Urgent / Needs attention / Note), title, body, "{store} · {time}", linking by area (shopify → /settings/stores, ads → /settings/ads, integrations → /settings/integrations, email → /settings/email/accounts, staff → /staff/timesheets, whatsapp → /dashboard/whatsapp-automation, sms → /messaging/billing, privacy → /settings/privacy, inventory → /inventory/low-stock, general → /support). Footer "Notification settings" → /settings/notifications.
+    </notifications>
+    <command-palette screenshot-desktop="screenshots/02-shell/command-palette--desktop.jpg">
+      Ctrl/⌘ K. Modal "Go to", placeholder "Search insights, pages and settings…". Groups: Insights (Dashboard, Business overview, Sales, Ads, Ad earnings, Best sellers, Shopping funnel, Busiest times, Sales channels, Shipping, Stock, Discount codes, Customers, Recent orders) · Inventory (8) · Advertising (5) · Marketing (Automations, Customer Messaging) · Apps (WhatsApp, Staff, My work) · Settings (Team &amp; Access, Profile, Security, Workspace, Integrations, Shopify, Advertising, Email integrations, Notifications, Privacy requests, Audit log) · Help (Help centre). Note: palette names differ from sidebar names for the same page (see finding naming-drift).
+    </command-palette>
+    <route-guard>Every navigation checks the page against the member's permissions. A blocked page shows "Loading…" then redirects to the member's landing page with an access notice; with nothing assigned, /dashboard says "No access assigned".</route-guard>
+    <error-boundary file="apps/web/src/app/(app)/error.tsx">Inside the shell: big "500" drawn as a chart, "Something went wrong", "This page ran into a problem…", buttons "Try again", "Go to dashboard", "Contact support", "Support reference: {digest}".</error-boundary>
+    <visibility-layers>Whether an item shows depends on four layers the merchant can't see: role (owner/admin/member), about 20 permission keys, the workspace's origin (Shopify App Store workspaces never get Inventory, Advertising, Staff, WhatsApp, SMS or Email), and feature flags (lib/features.ts: Billing and API keys hidden, Automations hub on).</visibility-layers>
+  </shell>
+
+  <!-- ============================================================
+       PART C. EVERY SCREEN, AREA BY AREA
+       ============================================================ -->
+  <areas>
+    <area id="public" name="Public website, sign-in and links people receive" order="1">
+      <summary>What a visitor, a new merchant, an invited teammate, an employee or a shopper sees before (or instead of) the app. 22 screens in five different frames.</summary>
+
+      <page id="landing" route="/" file="apps/web/src/app/page.tsx (components/landing/LandingPage.tsx)" frame="landing-frame" title="Your store is talking." access="public (signed-in visitors go to /dashboard)"
+            screenshot-desktop="screenshots/01-public/landing--desktop.jpg" screenshot-mobile="screenshots/01-public/landing--mobile.jpg">
+        <purpose>A marketing story that persuades a Shopify merchant to sign up.</purpose>
+        <sections>
+          <section name="Intro animation">First visit only, locks scrolling: brand mark "bizinsights · Commerce Intelligence" flies into the navbar.</section>
+          <section name="Hero (scroll runway)">"Your store is talking." / "bizinsights turns every order, checkout, customer and payment into a clear picture of what your business is doing." Statements one at a time ("Thousands of events" → "But data alone isn't insight." → "Patterns" → "Business intelligence" → "Know what happened. Understand why. Know what to do next."), CTA "Start with bizinsights", "Already have an account? Log in".</section>
+          <section name="Signals → Decisions">"From signals to decisions." Cards: Sales / Conversion / Customer / Revenue Intelligence.</section>
+          <section name="Business pulse">"Your business. One pulse." Illustrative "Business Pulse" panel (signal sources, signals, status).</section>
+          <section name="Shopping funnel">"See where customers disappear." Four questions.</section>
+          <section name="Customers">"Not every customer behaves the same." Lens tabs New vs returning / By channel / By when they buy.</section>
+          <section name="Profit">"Revenue is only half the story." Waterfall "From revenue to what remains".</section>
+          <section name="Plain answers">"Don't search through reports. Ask the business." Mock window types "Why did conversion fall this week?"</section>
+          <section name="Shopify connection">"Connect once. bizinsights keeps listening." Five steps (OAuth authorization, Secure connection, Data synchronization, Webhook events, Analytics processing) and four trust cards.</section>
+          <section name="The dashboard">"Everything comes together here." Illustrative app window.</section>
+          <section name="Final CTA">"See your business clearly." "Create your bizinsights account".</section>
+          <section name="Your ad accounts (#google-data)">"Google Ads, Google AdSense and Meta Ads" with compliance text and permission codes adwords, adsense.readonly, ads_read.</section>
+          <section name="Footer">Privacy, Terms, Security, Support, "© 2026 bizinsights", "Shopify Business Intelligence".</section>
+        </sections>
+        <actions><action label="Log in" goes="/login"/><action label="Sign up / Start with bizinsights / Create your bizinsights account" goes="/signup"/></actions>
+        <states>Reduced motion: no intro, static hero.</states>
+        <complexity level="medium">Very long; no plain feature list, pricing, or FAQ. Shows engineering words to shoppers of the product: "OAuth authorization", "Webhook events", "adwords", "adsense.readonly", "ads_read". "Illustrative" is stamped on four scenes. Promotes ad platforms while the sign-in showcase deliberately avoids ad claims.</complexity>
+      </page>
+
+      <page id="login" route="/login" file="apps/web/src/app/login/page.tsx" frame="auth-split" title="Welcome Back" access="public"
+            screenshot-desktop="screenshots/01-public/login--desktop.jpg" screenshot-mobile="screenshots/01-public/login--mobile.jpg">
+        <purpose>Sign in with email and password, Google, or an emailed code, then finish any second step.</purpose>
+        <sections>
+          <section name="Notices">Alerts chosen by the URL: signed out, password changed, email confirmed, account deleted, Google cancelled, session expired.</section>
+          <section name="Password form">"Email Address", "Password" (show/hide), "Keep me signed in" (ticked), "Forgot Password?", "Sign In →"; divider "OR CONTINUE WITH"; "Continue with Google"; "Don't have an account? Create Account".</section>
+          <section name="Hidden modes on the same URL">Email-code sign-in · "Link your Google account" · "Confirm your email" (6-box code) · "Check your email" (email second factor) · "Two-step verification" (authenticator app).</section>
+        </sections>
+        <actions><action label="Sign In" goes="/dashboard"/><action label="Forgot Password?" goes="/forgot-password"/><action label="Continue with Google" goes="Google → /auth/callback"/><action label="Create Account" goes="/signup"/></actions>
+        <complexity level="medium">One address hides six screens. Words: "authenticator app", "two-step verification", "link your Google account". Capitalisation varies ("Welcome Back", "Sign In", "Forgot Password?").</complexity>
+      </page>
+
+      <page id="signup" route="/signup" file="apps/web/src/app/signup/page.tsx" frame="auth-split" title="Create your account" access="public"
+            screenshot-desktop="screenshots/01-public/signup--desktop.jpg" screenshot-mobile="screenshots/01-public/signup--mobile.jpg">
+        <purpose>Create a merchant account and confirm the email with a 6-digit code.</purpose>
+        <sections>
+          <section name="Step 1">"Free to start. You'll connect your Shopify store from your dashboard." "Continue with Google" first; divider "OR SIGN UP WITH YOUR EMAIL"; Full name, Email Address, Password (8+), Confirm password, terms checkbox; "Create Account →" disabled until valid.</section>
+          <section name="Step 2: Verify your email">6-box code, "Paste code", timers, "Verify and continue", "Use a different email address".</section>
+        </sections>
+        <actions><action label="Verify and continue" goes="/onboarding (new merchant)"/></actions>
+        <complexity level="low">Two steps, five inputs. Says "connect from your dashboard" but actually sends the merchant to /onboarding.</complexity>
+      </page>
+
+      <page id="forgot-password" route="/forgot-password" file="apps/web/src/app/forgot-password/page.tsx" frame="auth-split" title="Forgot your password?" access="public"
+            screenshot-desktop="screenshots/01-public/forgot-password--desktop.jpg" screenshot-mobile="screenshots/01-public/forgot-password--mobile.jpg">
+        <purpose>Ask for a reset code by email.</purpose>
+        <sections><section name="Form">"Email Address", "Send reset code →", "← Back to sign in".</section></sections>
+        <complexity level="low">One field.</complexity>
+      </page>
+
+      <page id="reset-password" route="/reset-password" file="apps/web/src/app/reset-password/page.tsx" frame="auth-split" title="Choose a new password" access="public"
+            screenshot-desktop="screenshots/01-public/reset-password--desktop.jpg" screenshot-mobile="screenshots/01-public/reset-password--mobile.jpg">
+        <purpose>Enter the emailed code and a new password.</purpose>
+        <sections><section name="Code + password">6-box code, "New password", "Confirm new password", "Reset password", "Send a new code (Ns)". If the email isn't remembered, an extra screen asks for it first.</section></sections>
+        <complexity level="low">The resend control works differently from signup's.</complexity>
+      </page>
+
+      <page id="verify-email" route="/verify-email" file="apps/web/src/app/verify-email/page.tsx" frame="auth-card" title="Verify your email" access="signed in but unverified">
+        <purpose>Verify the address of a signed-in account that is not verified yet.</purpose>
+        <sections><section name="Card">"Confirm that {email} is yours." "Email me a verification code", code boxes, "Verify email", "Sign in with a different account".</section></sections>
+        <complexity level="low">Same step as signup's verification, but in a different frame.</complexity>
+      </page>
+
+      <page id="onboarding" route="/onboarding" file="apps/web/src/app/onboarding/page.tsx" frame="bare-card" title="Let's get your store set up" access="signed in"
+            screenshot-desktop="screenshots/01-public/onboarding--desktop.jpg" screenshot-mobile="screenshots/01-public/onboarding--mobile.jpg">
+        <purpose>Connect the first Shopify store and watch the first import.</purpose>
+        <layout>Step pills "1. Verify email", "2. Connect Shopify", "3. First sync".</layout>
+        <sections>
+          <section name="Connect Shopify">"You'll sign in to Shopify, pick your store and approve read-only access…" "Continue with Shopify". Fallback form "Your store address" [your-store].myshopify.com.</section>
+          <section name="First sync">Progress bar and job rows "Store details", "Orders", "Products", "Inventory &amp; variants", "Storefront funnel tracking" (Waiting / Working… / Importing… N / Done · N / Failed – we'll retry). "Skip to dashboard" → "Go to dashboard".</section>
+        </sections>
+        <complexity level="medium">Three steps; the workspace "My store" is created silently, so the merchant never names or sees it. Words: "read-only access", "Storefront funnel tracking", "Inventory &amp; variants". This is the only onboarding: nothing here sets up ads, messaging, inventory or automations.</complexity>
+      </page>
+
+      <page id="claim" route="/claim" file="apps/web/src/app/claim/page.tsx" frame="bare-card" title="{store} is connected" access="public (after a Shopify App Store install)"
+            screenshot-desktop="screenshots/01-public/claim--desktop.jpg" screenshot-mobile="screenshots/01-public/claim--mobile.jpg">
+        <purpose>After installing from the Shopify App Store, add that store to a bizinsights account.</purpose>
+        <sections>
+          <section name="Claimable">"Add it to the account {email}?" "Add store and open dashboard" / "Use another account"; signed-out: "Create account" / "Sign in".</section>
+          <section name="Already owned">"{store} already has a bizinsights account" "…ask that account's owner to invite you from Settings, then Members."</section>
+          <section name="No claim">"Open bizinsights from Shopify".</section>
+        </sections>
+        <complexity level="medium">Three variants and an account decision. Points to "Settings, then Members", which the app now calls "Team &amp; Access".</complexity>
+      </page>
+
+      <page id="invite" route="/invite#token=…" file="apps/web/src/app/invite/page.tsx" frame="auth-card" title="{workspace name}" access="public (invitation link)"
+            screenshot-desktop="screenshots/01-public/invite--desktop.jpg" screenshot-mobile="screenshots/01-public/invite--mobile.jpg">
+        <purpose>Open a view-only shared dashboard from an invitation link, no account needed.</purpose>
+        <sections><section name="Pending">"A business dashboard shared with you": workspace and inviter, "As {role}: {modules}", "Access until {date}", "No account or password needed, and it's view-only…". Ended links: "This link has ended", "Invitation cancelled", "Invitation expired".</section></sections>
+        <complexity level="low">Automatic. "View-only" next to a role name like "Manager" can confuse.</complexity>
+      </page>
+
+      <page id="join" route="/join?token=…" file="apps/web/src/app/join/page.tsx" frame="auth-shell" title="Join {organization}" access="public (employee invitation)"
+            screenshot-desktop="screenshots/01-public/join--desktop.jpg" screenshot-mobile="screenshots/01-public/join--mobile.jpg">
+        <purpose>An employee accepts a staff invitation and creates their login.</purpose>
+        <sections><section name="New account">Organization, Name, Position, expiry; read-only Email; "Create password" with a strength meter and a live 5-rule checklist (12+ characters); "Activate my account".</section></sections>
+        <complexity level="medium">Password rules differ from merchant signup (12 characters + checklist vs 8). Third different frame for the same kind of step.</complexity>
+      </page>
+
+      <page id="connect-zapier" route="/connect/zapier" file="apps/web/src/app/connect/zapier/page.tsx" frame="bare-card" title="Allow Zapier to use bizinsights?" access="signed in; needs Manage integrations">
+        <purpose>Consent screen letting a Zapier account reach one store.</purpose>
+        <sections><section name="Consent">Workspace and Store selects; "Zapier will be able to" (10 ✓ items: alerts, ad spend, AdSense, daily summary, WhatsApp failed, integration status, ad sync, order paid…); optional "Also let Zapier send WhatsApp template messages…"; "Zapier won't be able to" (4 ✗). "Allow" / "Cancel".</section></sections>
+        <complexity level="medium">Long lists that mention ads and WhatsApp even when the store uses neither.</complexity>
+      </page>
+
+      <page id="stop" route="/stop?c=…" file="apps/web/src/app/stop/page.tsx" frame="auth-shell" title="Stop texts" access="public (shopper's SMS opt-out link)"
+            screenshot-desktop="screenshots/01-public/stop--desktop.jpg" screenshot-mobile="screenshots/01-public/stop--mobile.jpg">
+        <purpose>A shopper stops a store's marketing texts or all texts.</purpose>
+        <sections><section name="Choose">"Stop marketing texts from {business} to {+61 ••• 678}?" "Stop marketing texts" / "Stop all texts, including order updates".</section></sections>
+        <complexity level="low">For shoppers but branded bizinsights, not the store.</complexity>
+      </page>
+
+      <page id="unsubscribe" route="/unsubscribe?t=…" file="apps/web/src/app/unsubscribe/page.tsx" frame="auth-shell" title="Unsubscribe" access="public (shopper's email link)"
+            screenshot-desktop="screenshots/01-public/unsubscribe--desktop.jpg" screenshot-mobile="screenshots/01-public/unsubscribe--mobile.jpg">
+        <purpose>A shopper unsubscribes from a store's marketing email.</purpose>
+        <sections><section name="Confirm">"Stop marketing email from {business} to {masked email}?" "Unsubscribe".</section></sections>
+        <complexity level="low">One button. Same branding issue as /stop.</complexity>
+      </page>
+
+      <page id="support" route="/support" file="apps/web/src/app/support/page.tsx" frame="legal-page" title="Support" access="public"
+            screenshot-desktop="screenshots/01-public/support--desktop.jpg" screenshot-mobile="screenshots/01-public/support--mobile.jpg">
+        <purpose>Contact support and read FAQs.</purpose>
+        <sections>
+          <section name="Contact us">"Email our support team" — "We reply within one business day."</section>
+          <section name="Common questions">8 Q&amp;As (new-order timing, test orders, 60-day history with "read_orders"/"read_all_orders", mismatched figures, sessions, disconnecting, several stores).</section>
+          <section name="Your data">Links to privacy and "Delete your data".</section>
+        </sections>
+        <complexity level="medium">A help centre dressed as a legal document. FAQ answers use technical words (read_orders, Bogus Gateway, storefront tracking). Four different in-app buttons ("Help centre", "Help centre &amp; FAQ", "Contact support", "Need help?") all land here.</complexity>
+      </page>
+
+      <page id="privacy" route="/privacy" file="apps/web/src/app/privacy/page.tsx" frame="legal-page" title="Privacy policy" access="public"
+            screenshot-desktop="screenshots/01-public/privacy--desktop.jpg" screenshot-mobile="screenshots/01-public/privacy--mobile.jpg">
+        <purpose>The privacy policy (merchants and app-store reviewers).</purpose>
+        <sections><section name="At a glance">"No shopper identities in analytics", "Encrypted access", "Never sold", "Deleted when you leave", then 14 numbered sections.</section></sections>
+        <complexity level="high">Long legal text with AES-256-GCM, HMAC, tokens, scopes. Expected for a policy.</complexity>
+      </page>
+
+      <page id="terms" route="/terms" file="apps/web/src/app/terms/page.tsx" frame="legal-page" title="Terms of service" access="public"
+            screenshot-desktop="screenshots/01-public/terms--desktop.jpg" screenshot-mobile="screenshots/01-public/terms--mobile.jpg">
+        <purpose>The terms of service.</purpose>
+        <sections><section name="Highlights">"Read-only on your ad accounts", "Your data stays yours", "Leave whenever you like", "Changes announced first", then 14 sections.</section></sections>
+        <complexity level="medium">Long legal text.</complexity>
+      </page>
+
+      <page id="data-deletion" route="/data-deletion" file="apps/web/src/app/data-deletion/page.tsx" frame="legal-page" title="Delete your data" access="public"
+            screenshot-desktop="screenshots/01-public/data-deletion--desktop.jpg" screenshot-mobile="screenshots/01-public/data-deletion--mobile.jpg">
+        <purpose>How to remove Google/Meta access and have data deleted (URL required by Meta and Google).</purpose>
+        <sections><section name="Three steps">1 Disconnect in bizinsights · 2 Remove access at Google or Meta · 3 Ask us to delete everything.</section></sections>
+        <complexity level="medium">Needs knowledge of Google and Meta admin menus.</complexity>
+      </page>
+
+      <page id="auth-error" route="/auth/error" file="apps/web/src/app/auth/error/page.tsx" frame="auth-card" title="We couldn't sign you in" access="public"
+            screenshot-desktop="screenshots/01-public/auth-error--desktop.jpg" screenshot-mobile="screenshots/01-public/auth-error--mobile.jpg">
+        <purpose>Explains why a Google sign-in could not start.</purpose>
+        <complexity level="low">A dead-end explainer with "Back to sign in" and "Contact support".</complexity>
+      </page>
+
+      <page id="not-found" route="(any unknown path)" file="apps/web/src/app/not-found.tsx" frame="error-page" title="Page not found" access="public"
+            screenshot-desktop="screenshots/01-public/not-found--desktop.jpg" screenshot-mobile="screenshots/01-public/not-found--mobile.jpg">
+        <purpose>The 404 page.</purpose>
+        <complexity level="low">Offers "Go to dashboard" even to signed-out visitors.</complexity>
+      </page>
+
+      <page id="unavailable" route="(served by CloudFront when the server can't answer)" file="apps/web/src/app/unavailable/page.tsx" frame="error-page" title="Service temporarily unavailable" access="public"
+            screenshot-desktop="screenshots/01-public/unavailable--desktop.jpg" screenshot-mobile="screenshots/01-public/unavailable--mobile.jpg">
+        <purpose>The outage page: "This is on our side, not yours."</purpose>
+        <complexity level="low">Clear.</complexity>
+      </page>
+
+      <redirect-only>
+        <route path="/reset" goes="/forgot-password"/>
+        <route path="/start" goes="/onboarding?shop=… or /signup"/>
+        <route path="/auth/callback" goes="returns from Google sign-in, then /dashboard (shows 'Signing you in…')"/>
+        <route path="/ads/google" goes="/advertising/google/analytics"/>
+        <route path="/dashboard?view=ads | adsense | shoppers" goes="/advertising | /advertising/adsense | /funnel"/>
+      </redirect-only>
+    </area>
+    <area id="dashboard" name="Dashboard and its detail panels" order="2">
+      <summary>One page (/dashboard) plus 9 detail panels that slide over it (?view=…). Nine sidebar items point here. Shared controls on every analytics page: "Dates" (14 presets, calendar years, "Pick dates…") and "Compare with" (Previous period / Previous year / Custom), kept in the address bar.</summary>
+
+      <page id="dashboard-home" route="/dashboard" file="apps/web/src/app/(app)/dashboard/page.tsx (components/dashboard/HomePanels.tsx, HomeCards.tsx, OverviewCharts.tsx, StoreHeader.tsx)" frame="app-shell" title="Welcome back, {first name}! 👋" access="signed in; any dashboard area"
+            screenshot-desktop="screenshots/03-dashboard/dashboard-home--desktop.jpg" screenshot-mobile="screenshots/03-dashboard/dashboard-home--mobile.jpg">
+        <purpose>See how the store sold in the chosen dates, what ads and product costs took from that, and open any area's details.</purpose>
+        <layout>One column. Header: heading, "Here's what's happening with your store {in the last 30 days}.", three status pills (store: Connected / Importing your data… / Sync problem / Disconnected; freshness: Updated {x ago} / Catching up / Some updates failed; Shopify check: Matches Shopify / Mostly matches / Differs from Shopify), the Dates and Compare pickers, and a history line "Showing {dates}, whole days in the store's time zone · store created {d}". Refreshes every 15 s.</layout>
+        <sections>
+          <section order="1" name="Headline numbers (4 tiles)">Total sales · Orders · Average order value · Total products sold — each with ▲▼% "vs previous 30 days" and a sparkline; click opens ?view=sales or ?view=products.</section>
+          <section order="2" name="Sales vs ad spend (2/3 width)">Net sales, Ad spend, "Ads cost, of net sales"; bars per day. "Connect ad accounts" when none.</section>
+          <section order="3" name="Business profit overview (1/3)">Donut "After product costs and ads $x · x% margin": Net sales, Product costs, Ad spend, Left after these costs. "Not net profit: fees, shipping costs, apps and staff aren't taken off."</section>
+          <section order="4" name="Sales performance">Total sales, Orders, Average order with ▲▼; area chart; "View details →".</section>
+          <section order="5" name="Advertising performance">Tabs per platform; Ad spend, Link clicks, ROAS; bars; "Connect Google Ads or Meta Ads…".</section>
+          <section order="6" name="Top products">Top 5 by net revenue with image, amount and % of sales; "View all →".</section>
+          <section order="7" name="Expenses breakdown">Donut "Costs we can see": Product costs, Ad spend.</section>
+          <section order="8" name="Recent orders">5 rows: Order, Channel, Amount, Status, Date; "View all →".</section>
+          <section order="9" name="Key insights">4 graded rows (Needs attention / Keep an eye on / Looking good / For your info), worst first, each opening its topic.</section>
+          <section order="10" name="{dates} · daily">Big total; selects "Sales chart groups" (day/week/month) and "Sales chart shows" (Total / Custom / Net sales / Orders / Returns); columns shaded by tier plus a cumulative line.</section>
+          <section order="11" name="Monthly comparison · YTD">Grouped monthly columns for this year and up to two earlier years with ±% badges and a running total.</section>
+          <section order="12" name="Grow your business (managers)">Chips Shopify / Google Ads / Meta Ads: Connected or Not connected; "+ Add integration".</section>
+          <section order="13" name="More insights you can unlock">Dashed cards for locked modules with "Reconnect" or "Enable".</section>
+          <section order="14" name="About this data (footer)">"Up to date with Shopify as of {x}", collapsible import facts, a Shopify-check table (Figure, Shopify, bizinsights, Excluded, Result) and "Check now".</section>
+        </sections>
+        <states>No store: "Connect your first store" with "Continue with Shopify". Importing: "We're still importing your history…". Sync errors with "Reconnect". Empty store note. 60-day history note with "Import full history". Back from connecting ads: success banner.</states>
+        <complexity level="high">About 45 figures, 2 donuts and 4 charts on one screen, plus 3 pills and a footer that all talk about data freshness. Total sales, Orders and Average order are shown twice (tiles and Sales performance). Ad spend appears in four cards here and again on /advertising. Both donuts show the same two costs. Jargon: Net / Total / Gross / Custom sales, AOV, ROAS, margin, cumulative, YTD, "Not imported". The page answers "what happened" in numbers but never says in one sentence what to do today.</complexity>
+      </page>
+
+      <page id="dashboard-view-overview" route="/dashboard?view=overview" file="apps/web/src/components/dashboard/Overview.tsx, Details.tsx" frame="detail-panel" title="Business overview" access="reports.view"
+            screenshot-desktop="screenshots/03-dashboard/view-overview--desktop.jpg">
+        <purpose>Health check of every area plus a full table of key figures against the comparison dates.</purpose>
+        <sections>
+          <section name="In short">Sentence summary: net sales, orders, tracked visits, "{n} of {m} areas look good".</section>
+          <section name="How each part of your business is doing">13 graded rows (Sales, Orders, Average order, Returns, Tracked visits that bought, Returning customers, Stock, Shipping, Ads, Ad earnings, Best seller, Top channel, Busiest time).</section>
+          <section name="Every key figure">22 rows × These dates / Before / Change (gross sales … returning customers), mixing Shopify, pixel and ad-platform sources.</section>
+          <section name="{year} so far · Your store · tips · glossary">Year stats; store facts (products, variants, units, stock value, orders imported…).</section>
+        </sections>
+        <complexity level="high">About 90 values. Sessions vs tracked visits, ROAS, gross profit side by side. Repeats the home tiles and Key insights.</complexity>
+      </page>
+
+      <page id="dashboard-view-sales" route="/dashboard?view=sales" file="apps/web/src/components/dashboard/Details.tsx (SalesDetail), TotalSalesBreakdown.tsx, SalesBreakdown.tsx, ShopifyReports.tsx" frame="detail-panel" title="Sales" access="analytics.sales"
+            screenshot-desktop="screenshots/03-dashboard/view-sales--desktop.jpg">
+        <purpose>Understand the sales figure line by line, check it against Shopify, see sales by day and month.</purpose>
+        <sections>
+          <section name="In short / At a glance">Total sales, Custom sales, Net sales, Orders, Average order, Items sold, Returns.</section>
+          <section name="Total sales breakdown (configurator)">"Calculation" select (Shopify standard, Product revenue only, excluding tax / shipping / duties, saved ones); a switch per line (Net sales, Additional fees, Duties, Shipping charges, Taxes); "Reset to Shopify default", "Save configuration", "Apply to dashboard", "View calculation details", saved chips.</section>
+          <section name="How your net sales add up">Gross − Discounts − Returns = Net.</section>
+          <section name="Checked against Shopify">Table Figure / bizinsights / Shopify / Difference / Matches.</section>
+          <section name="Gross profit (Shopify) · This period and the one before · Returns · Daily · Monthly · glossary (17 terms)"/>
+        </sections>
+        <complexity level="high">About 60 numbers and 2 dense charts. An accounting configurator (which changes the dashboard for the whole team) sits inside a read-only view. Repeats the home charts.</complexity>
+      </page>
+
+      <page id="dashboard-view-products" route="/dashboard?view=products" file="apps/web/src/components/dashboard/TopProducts.tsx, Modules.tsx" frame="detail-panel" title="Best sellers" access="products.view or products.performance"
+            screenshot-desktop="screenshots/03-dashboard/view-products--desktop.jpg">
+        <purpose>Find the products that sell, grow or get returned.</purpose>
+        <sections>
+          <section name="Top 100 products">Ranking (Top selling, Highest revenue, Trending, Fastest growing, Most returned, Lowest performing), search, "Export CSV", 10-column table with a "Details" drawer (trend score, variants).</section>
+          <section name="Catalog">Active / Draft / Archived bar and Top vendors.</section>
+        </sections>
+        <complexity level="medium">Two CSV buttons. The table is visibly unstyled next to the other panels. Sidebar calls it "Products", palette "Best sellers", home "Top products".</complexity>
+      </page>
+
+      <page id="dashboard-view-customers" route="/dashboard?view=customers" file="apps/web/src/components/dashboard/Details.tsx (CustomersDetail), Contacts.tsx" frame="detail-panel" title="Customers" access="customers.list / customers.analytics / analytics.abandonment"
+            screenshot-desktop="screenshots/03-dashboard/view-customers--desktop.jpg">
+        <purpose>Returning vs new customers, and a hand-follow-up tool for abandoned checkouts and new customers.</purpose>
+        <sections>
+          <section name="Returning customers">Returning customer rate, Customers, New customers, stacked bar.</section>
+          <section name="Customers to follow up">Tabs "Left at checkout", "Newsletter sign-ups", "Newest customers"; editable message with {name} {items} {total} {link} {store}; per person: consent, cart link, buttons WhatsApp / Email / Text message / Other apps / Copy message / Open in Shopify.</section>
+        </sections>
+        <complexity level="medium">A manual CRM inside an analytics panel. Overlaps WhatsApp's Customers tab and the abandoned-checkout automations that should be doing this automatically.</complexity>
+      </page>
+
+      <page id="dashboard-view-orders" route="/dashboard?view=orders" frame="detail-panel" title="Recent orders" access="orders.list" file="apps/web/src/components/dashboard/Details.tsx (OrdersDetail)"
+            screenshot-desktop="screenshots/03-dashboard/view-orders--desktop.jpg">
+        <purpose>The 10 latest orders with links into Shopify.</purpose>
+        <complexity level="low">Repeats the home card (5 rows there, 10 here); ignores the picked dates while the summary says "these dates".</complexity>
+      </page>
+
+      <page id="dashboard-view-stock" route="/dashboard?view=stock" frame="detail-panel" title="Stock" access="products.inventory" file="apps/web/src/components/dashboard/Details.tsx (StockDetail)"
+            screenshot-desktop="screenshots/03-dashboard/view-stock--desktop.jpg">
+        <purpose>Units in stock, stock value, "Restock soon" table; "Open Inventory".</purpose>
+        <complexity level="medium">Duplicates the Inventory area; shown in the sidebar only when Inventory isn't.</complexity>
+      </page>
+
+      <page id="dashboard-view-shipping" route="/dashboard?view=shipping" frame="detail-panel" title="Shipping" access="orders.fulfillment" file="apps/web/src/components/dashboard/Details.tsx (ShippingDetail)"
+            screenshot-desktop="screenshots/03-dashboard/view-shipping--desktop.jpg">
+        <purpose>Orders waiting to ship, average time to ship, fulfilled %.</purpose>
+        <complexity level="low">"Waiting to ship" covers any date while the rest use the picked dates.</complexity>
+      </page>
+
+      <page id="dashboard-view-channels" route="/dashboard?view=channels" frame="detail-panel" title="Sales channels" access="analytics.traffic" file="apps/web/src/components/dashboard/Details.tsx (ChannelsDetail)"
+            screenshot-desktop="screenshots/03-dashboard/view-channels--desktop.jpg">
+        <purpose>Sales by channel and by traffic source, campaigns from UTM tags.</purpose>
+        <complexity level="medium">Jargon utm_campaign, utm_medium=paid, "tagged ads". Overlaps the funnel's traffic-source tab.</complexity>
+      </page>
+
+      <page id="dashboard-view-discounts" route="/dashboard?view=discounts" frame="detail-panel" title="Discount codes" access="discounts.codes" file="apps/web/src/components/dashboard/Details.tsx (DiscountsDetail)"
+            screenshot-desktop="screenshots/03-dashboard/view-discounts--desktop.jpg">
+        <purpose>Which codes were used, what they cost and brought in.</purpose>
+        <complexity level="low">Same data twice (bars, then table).</complexity>
+      </page>
+
+      <page id="dashboard-view-timing" route="/dashboard?view=timing" frame="detail-panel" title="Busiest times" access="analytics.behavior" file="apps/web/src/components/dashboard/Details.tsx (TimingDetail)"
+            screenshot-desktop="screenshots/03-dashboard/view-timing--desktop.jpg">
+        <purpose>Which weekdays and hours customers order.</purpose>
+        <complexity level="low">Not in the sidebar at all — reachable only from the palette or a Key-insights row.</complexity>
+      </page>
+    </area>
+
+    <area id="funnel" name="Shopping Funnel" order="3">
+      <page id="funnel" route="/funnel" file="apps/web/src/app/(app)/funnel/page.tsx (components/funnel/*)" frame="app-shell" title="Shopping Funnel" access="analytics.conversion"
+            screenshot-desktop="screenshots/04-funnel/funnel--desktop.jpg" screenshot-mobile="screenshots/04-funnel/funnel--mobile.jpg">
+        <purpose>See how tracked visitors move from arriving to buying, where they drop off, and what to check at each step.</purpose>
+        <layout>Header "Understand how visitors become customers and identify where you lose potential sales." with Refresh, Download CSV, Print; Dates and Compare; filter row Device / Visitors / Landed on / Country / Traffic source / Clear filters; freshness line. One long column; refreshes every 60 s.</layout>
+        <sections>
+          <section order="1" name="Funnel summary (6 cards)">Store visits, Product views, Added to cart, Reached checkout, Completed purchases, Conversion rate — each with a plain question ("How many people visited your online store?").</section>
+          <section order="2" name="Customer journey">5 horizontal bars with "x% went on to… · n visits didn't (x% drop-off)" and a "Largest drop-off" badge.</section>
+          <section order="3" name="Shopping Funnel insights">Cards "Improvement / Needs attention / Observation" with "Why it might matter:" and "What to do:".</section>
+          <section order="4" name="Where you lose potential customers">Drop-off table (8 columns incl. "a clear change / within normal variation").</section>
+          <section order="5" name="Funnel performance breakdown">Tabs Device / Country / Landing page / New vs returning / Traffic source; table + grouped bars.</section>
+          <section order="6" name="Where shoppers go on your site">Pages table with exit rate; "Where visits started" / "Where shoppers left".</section>
+          <section order="7" name="Funnel trend over time · Conversion rate trend">Two line charts.</section>
+          <section order="8" name="Product-level shopping funnel">Searchable product table with "Suggested action".</section>
+          <section order="9" name="Recommended actions by funnel stage">Five tick-lists "Done by {name} on {date}".</section>
+          <section order="10" name="Sessions and visitors (Shopify)">Shopify's own counts (different from tracked visits).</section>
+          <section order="11" name="About these numbers">Definitions and formulas.</section>
+          <section name="Stage drawer (on click)">8 numbered parts per stage: what it means, why it matters, how it's calculated, what's going well, problems, actions, data.</section>
+        </sections>
+        <states>No store; "Turn on storefront tracking to see your shopping funnel" (Reconnect / Enable); "No storefront visits in these dates"; pixel-not-updated note.</states>
+        <complexity level="high">Well over 100 numbers. The same 5 stage counts appear 4 times. Shopify sessions sit next to tracked visits with different numbers. Jargon: conversion, progression, drop-off, pts, two-proportion test, pixel, exit rate, UTM. The genuinely useful part (insights with "What to do") is section 3 of 11.</complexity>
+      </page>
+    </area>
+
+    <area id="advertising" name="Advertising" order="4">
+      <subnav file="apps/web/src/app/(app)/advertising/layout.tsx">
+        <item label="Overview" route="/advertising"/>
+        <item label="Meta Ads" route="/advertising/meta"/>
+        <item label="Google Ads" route="/advertising/google"/>
+        <item label="AdSense" route="/advertising/adsense"/>
+        <item label="Campaign comparison" route="/advertising/campaigns" shownWhen="marketing.campaigns"/>
+        <item label="Reports" route="/advertising/reports"/>
+        <note>Google Ads Analytics (/advertising/google/analytics) is a seventh page reachable only by link.</note>
+      </subnav>
+
+      <page id="advertising-overview" route="/advertising" file="apps/web/src/app/(app)/advertising/page.tsx" frame="section-layout" title="Advertising" access="marketing.ads; ads module"
+            screenshot-desktop="screenshots/05-advertising/advertising-overview--desktop.jpg" screenshot-mobile="screenshots/05-advertising/advertising-overview--mobile.jpg">
+        <purpose>All ad spend together, what platforms say it brought, and how Shopify sales compare.</purpose>
+        <sections>
+          <section name="Advertising at a glance">Ad spend, Purchases, Purchase value, ROAS, "Sales per $1 of ads (MER)", AdSense earnings.</section>
+          <section name="Next to your Shopify sales">Net sales, Orders, MER, Ads as share of sales, Cost per Shopify order; table "Two ways to credit a sale to ads".</section>
+          <section name="Platform cards">Meta Ads, Google Ads, Google AdSense with "See details".</section>
+          <section name="Trend charts · By platform table · definitions"/>
+        </sections>
+        <states>No store; "No ad accounts are connected to this store" with "Connect advertising accounts"; "DEMO DATA".</states>
+        <complexity level="high">About 40 figures; three competing ways to judge ads (platform ROAS, MER, Shopify visit record) side by side. Repeats the home ad cards.</complexity>
+      </page>
+
+      <page id="advertising-meta" route="/advertising/meta" file="apps/web/src/app/(app)/advertising/meta/page.tsx → components/advertising/PlatformPage.tsx" frame="section-layout" title="Meta Ads" access="marketing.ads"
+            screenshot-desktop="screenshots/05-advertising/advertising-meta--desktop.jpg">
+        <purpose>What Meta charged and what Meta credits to its ads, down to campaigns, ad sets, ads and audiences.</purpose>
+        <sections>
+          <section name="In short · At a glance (11 tiles) · Ad spend per day · Over the days · By platform · Campaigns (top 10)"/>
+          <section name="Meta Ads report (live)">13 more tiles; level tabs Campaigns / Ad sets / Ads / Placements / Devices / Countries / Age / Gender; 14-metric table.</section>
+          <section name="Ad accounts · tips · glossary (13 terms)"/>
+        </sections>
+        <complexity level="high">About 25 tiles and a 15-column table; spend, ROAS and purchases shown 3-4 times on one page. Reach, frequency, CPM, landing page views, bid strategy.</complexity>
+      </page>
+
+      <page id="advertising-google" route="/advertising/google" file="apps/web/src/app/(app)/advertising/google/page.tsx → PlatformPage.tsx" frame="section-layout" title="Google Ads" access="marketing.ads"
+            screenshot-desktop="screenshots/05-advertising/advertising-google--desktop.jpg">
+        <purpose>What Google charged and what it credits (purchases plus other conversions).</purpose>
+        <complexity level="high">Same structure as Meta plus a link to a second Google page. "Conv. value / cost" here is a different measure from the card's ROAS.</complexity>
+      </page>
+
+      <page id="advertising-google-analytics" route="/advertising/google/analytics" file="apps/web/src/app/(app)/advertising/google/analytics/page.tsx (components/ads/google/*)" frame="section-layout" title="Google Ads Analytics" access="marketing.ads"
+            screenshot-desktop="screenshots/05-advertising/advertising-google-analytics--desktop.jpg">
+        <purpose>Deep analysis of one Google Ads account (real or the simulated demo).</purpose>
+        <sections><section name="Overview · Campaign performance · Spending analytics · Conversion analytics · Device · Audience · Performance recommendations · Demo store (simulated)"/></sections>
+        <complexity level="high">Close to 100 figures; a demo mixed with real data; "ROAS" means yet another thing here. Overlaps /advertising/google.</complexity>
+      </page>
+
+      <page id="advertising-adsense" route="/advertising/adsense" file="apps/web/src/app/(app)/advertising/adsense/page.tsx" frame="section-layout" title="Google AdSense" access="marketing.ads"
+            screenshot-desktop="screenshots/05-advertising/advertising-adsense--desktop.jpg">
+        <purpose>What the AdSense ads on the store's sites earned (money in, kept apart from spend).</purpose>
+        <complexity level="high">Publisher vocabulary (RPM, ad requests, coverage, Active View, estimated vs final): a different business model filed under ad spending.</complexity>
+      </page>
+
+      <page id="advertising-campaigns" route="/advertising/campaigns" file="apps/web/src/app/(app)/advertising/campaigns/page.tsx" frame="section-layout" title="Campaign comparison" access="marketing.campaigns"
+            screenshot-desktop="screenshots/05-advertising/advertising-campaigns--desktop.jpg">
+        <purpose>Every Meta and Google campaign side by side.</purpose>
+        <complexity level="high">14-column table needing sideways scroll. The same campaigns also appear in 4 other places.</complexity>
+      </page>
+
+      <page id="advertising-reports" route="/advertising/reports" file="apps/web/src/app/(app)/advertising/reports/page.tsx" frame="section-layout" title="Advertising reports" access="marketing.ads"
+            screenshot-desktop="screenshots/05-advertising/advertising-reports--desktop.jpg">
+        <purpose>Preview and download the advertising tables as CSV (Summary, By platform, By day, Campaigns, AdSense by day).</purpose>
+        <complexity level="medium">A spreadsheet copy of the other pages.</complexity>
+      </page>
+    </area>
+    <area id="messaging-sms" name="Customer Messaging (SMS only)" order="5">
+      <subnav file="apps/web/src/app/(app)/messaging/layout.tsx" title="Customer Messaging">
+        <item label="Overview" route="/messaging"/>
+        <item label="Send SMS" route="/messaging/send"/>
+        <item label="Automations" route="/messaging/automations"/>
+        <item label="Message History" route="/messaging/history"/>
+        <item label="Settings" route="/messaging/settings"/>
+        <heading label="Advanced (owners/admins) · More (others)"/>
+        <item label="Setup guide" route="/messaging/setup"/>
+        <item label="SMS Sender" route="/messaging/sender"/>
+        <item label="Customer permissions" route="/messaging/consent"/>
+        <item label="Messaging costs" route="/messaging/billing"/>
+        <item label="Message templates" route="/messaging/templates"/>
+        <item label="Campaigns" route="/messaging/campaigns"/>
+        <item label="Customer segments" route="/messaging/segments"/>
+        <item label="Delivery analytics" route="/messaging/analytics"/>
+        <note>13 pages for one channel. Menu labels differ from page titles ("Customer permissions" → "Customer messaging permissions", "Messaging costs" → "Messaging costs &amp; limit", "Setup guide" → "Set up SMS"). No store: "Connect a Shopify store first: text messages are about a store's orders and customers…".</note>
+      </subnav>
+
+      <page id="messaging-overview" route="/messaging" file="apps/web/src/app/(app)/messaging/page.tsx (components/messaging/Overview.tsx)" frame="section-layout" title="Customer Messaging" access="sms module and marketing.campaigns"
+            screenshot-desktop="screenshots/07-messaging/messaging-overview--desktop.jpg" screenshot-mobile="screenshots/07-messaging/messaging-overview--mobile.jpg">
+        <purpose>Is texting ready? Jump to sending or building an SMS automation; this month's numbers.</purpose>
+        <sections>
+          <section name="Top card">"Status:" Ready / Setup required / Action required; "Send SMS", "Create SMS Automation".</section>
+          <section name="This month">SMS Automations (Active / Paused), Messages sent, Delivery rate, Monthly messaging limit ($ spent / $ budget).</section>
+          <section name="Your automations">Empty: three starter tiles "Order shipped", "Order confirmation", "Abandoned checkout". Otherwise top 5 with "View all".</section>
+          <section name="Messaging setup">Checklist "SMS sender", "Messaging verification", "Customer messaging permissions", "Monthly messaging limit", "Automatic SMS", "Test recipient", each "Fix this →".</section>
+          <section name="Worth a look">Undelivered texts, uncertain outcomes, campaigns waiting for approval.</section>
+        </sections>
+        <complexity level="medium">Clear status word, but the merchant must understand five setup items, "carrier" and "test mode". The checklist reappears on three other pages.</complexity>
+      </page>
+
+      <page id="messaging-setup" route="/messaging/setup?step=…" file="apps/web/src/app/(app)/messaging/setup/page.tsx (components/messaging/Setup.tsx)" frame="section-layout" title="Set up SMS" access="owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-setup--desktop.jpg">
+        <purpose>Five-step wizard with a live phone preview: Connect → Sender name → Message → Test SMS → Automatic SMS.</purpose>
+        <sections>
+          <section name="1 Connect your SMS provider">"AWS End User Messaging SMS" card with region and status; "Connect".</section>
+          <section name="2 Choose your sender name">Business name, country, Sender name (3-11 characters), status Not requested / Pending approval / Approved / Needs changes; "Request sender name", "Use bizinsights' shared sender for now"; India DLT warning.</section>
+          <section name="3 Write your message">Textarea, "Insert:" chips, SMS parts warning.</section>
+          <section name="4 Send a test SMS">Verify your mobile by code, "Send Test SMS", outcome with "AWS message ID".</section>
+          <section name="5 Turn on automatic SMS">"Monthly spending limit (US$)", consent basis radio, preset automatic texts each with a switch and inline editor, master switch "Enable Automatic SMS".</section>
+        </sections>
+        <complexity level="high">AWS, region, sender ID, registration, DLT, shared sender, SMS parts, carrier, consent basis, US$ budget. Five steps plus waiting for AWS approval plus a phone code before one real text. Step 5 duplicates the automations list and the SMS Sender page.</complexity>
+      </page>
+
+      <page id="messaging-send" route="/messaging/send" file="apps/web/src/app/(app)/messaging/send/page.tsx (components/messaging/SendSms.tsx)" frame="section-layout" title="Send SMS" access="owner/admin + View contact information"
+            screenshot-desktop="screenshots/07-messaging/messaging-send--desktop.jpg">
+        <purpose>Text chosen customers now or later (4 steps: Choose customers, Choose message, Preview, Send or schedule) and follow delivery.</purpose>
+        <complexity level="medium">Service vs marketing, consent labels, encoding, quiet hours, US$ cost. A new message written here is silently saved and approved as a template. Overlaps Campaigns.</complexity>
+      </page>
+
+      <page id="messaging-automations" route="/messaging/automations" file="apps/web/src/app/(app)/messaging/automations/page.tsx (Automations.tsx, RuleEditor.tsx)" frame="section-layout" title="SMS Automations" access="signed in; changes owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-automations--desktop.jpg">
+        <purpose>Every SMS automation as a card with an On/Off switch, Edit and a ⋯ menu (Duplicate, View history, Advanced settings, Delete).</purpose>
+        <sections><section name="Advanced settings (inline)">Name, Priority, "When this happens in Shopify", "If all of these hold", "Wait before sending" (quiet hours, customer time zone), "Then send this text", "Dry run", Submit for approval / Approve / Send back / Pause / Resume / Disable, "Test with recent orders", "Version history".</section></sections>
+        <complexity level="high">Two editors for the same automation (guided builder and "Advanced settings" with versions, priority and an approval workflow). The same flag is "Practice run" in the builder, "Dry run" here, "Test mode" in the hub.</complexity>
+      </page>
+
+      <page id="messaging-automation-edit" route="/messaging/automations/edit" file="apps/web/src/app/(app)/messaging/automations/edit/page.tsx (AutomationBuilder.tsx)" frame="section-layout" title="Create SMS Automation" access="owner/admin to change"
+            screenshot-desktop="screenshots/07-messaging/messaging-automation-edit--desktop.jpg">
+        <purpose>Five-step builder (When, Who, Message, Test, Review &amp; activate) beside a phone preview.</purpose>
+        <sections>
+          <section name="1 When">9 trigger cards + 5 "More triggers", each Available / Needs permission / Shopify refused / Not available; delay; "More timing options" (quiet hours, time zone, caps, "Practice run").</section>
+          <section name="2 Who">The event's customer / Customer segment / Specific customers; optional conditions.</section>
+          <section name="3 Message">Ready-made messages, variable chips, segments count, opt-out link, discount code.</section>
+          <section name="4 Test">Test numbers with codes; "Send Test".</section>
+          <section name="5 Review and activate">WHEN → WHO → SEND → MESSAGE → TIMING → STATUS blocks, "Before it goes live" checks, "Activate Automation".</section>
+        </sections>
+        <complexity level="high">Shopify permissions, segments, conditions, quiet hours, caps, practice run, encoding, opt-out link, discount codes, test numbers and readiness checks in one flow, on top of the 5-step setup.</complexity>
+      </page>
+
+      <page id="messaging-history" route="/messaging/history" file="apps/web/src/app/(app)/messaging/history/page.tsx" frame="section-layout" title="Message History" access="signed in"
+            screenshot-desktop="screenshots/07-messaging/messaging-history--desktop.jpg">
+        <purpose>Every text sent, held back or only recorded, and why (7 filters, details drawer with provider codes).</purpose>
+        <complexity level="medium">One of four separate message histories.</complexity>
+      </page>
+
+      <page id="messaging-settings" route="/messaging/settings" file="apps/web/src/app/(app)/messaging/settings/page.tsx" frame="section-layout" title="Settings" access="signed in; changes owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-settings--desktop.jpg">
+        <purpose>The setup checklist again, the "Enable Automatic SMS" master switch, test recipients, Advanced tiles, provider configuration, activity log.</purpose>
+        <complexity level="medium">Mostly links back into Setup; repeats the checklist, the master switch and test recipients.</complexity>
+      </page>
+
+      <page id="messaging-sender" route="/messaging/sender" file="apps/web/src/app/(app)/messaging/sender/page.tsx" frame="section-layout" title="SMS Sender" access="owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-sender--desktop.jpg">
+        <purpose>AWS identity, countries, budget, consent basis, quiet hours, caps and the "Send texts" / "Send marketing texts" switches.</purpose>
+        <complexity level="high">Raw infrastructure words a merchant can't act on: ARN, "Origination identity", configuration set, sandbox, tier, AWS region, DLT Principal Entity ID, two-way/one-way. Duplicates Setup steps 2 and 5.</complexity>
+      </page>
+
+      <page id="messaging-consent" route="/messaging/consent" file="apps/web/src/app/(app)/messaging/consent/page.tsx" frame="section-layout" title="Customer messaging permissions" access="owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-consent--desktop.jpg">
+        <purpose>Each customer's SMS consent and history; the suppression (do-not-text) list.</purpose>
+        <complexity level="medium">WhatsApp and Email each have their own separate list.</complexity>
+      </page>
+
+      <page id="messaging-billing" route="/messaging/billing" file="apps/web/src/app/(app)/messaging/billing/page.tsx" frame="section-layout" title="Messaging costs &amp; limit" access="owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-billing--desktop.jpg">
+        <purpose>What AWS charged for texts this month against the budget; by country, campaign, workflow; latest charges.</purpose>
+        <complexity level="medium">"Parts", carrier fee, "workflow"; the budget is edited on another page.</complexity>
+      </page>
+
+      <page id="messaging-templates" route="/messaging/templates" file="apps/web/src/app/(app)/messaging/templates/page.tsx" frame="section-layout" title="Message Templates" access="owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-templates--desktop.jpg">
+        <purpose>Reusable SMS texts with review/approval and versions; GSM-7 vs Unicode, parts, per-country price, DLT.</purpose>
+        <complexity level="high">One of three template systems; the builders mostly bypass it.</complexity>
+      </page>
+
+      <page id="messaging-campaigns" route="/messaging/campaigns" file="apps/web/src/app/(app)/messaging/campaigns/page.tsx" frame="section-layout" title="Campaigns" access="everyone (read-only for non-managers)"
+            screenshot-desktop="screenshots/07-messaging/messaging-campaigns--desktop.jpg">
+        <purpose>One marketing text to an audience: draft → submit → approve → schedule (type the count to confirm).</purpose>
+        <complexity level="high">Approval pipeline, segments, attribution window; the marketing switch lives on another page. WhatsApp campaigns follow different rules.</complexity>
+      </page>
+
+      <page id="messaging-segments" route="/messaging/segments" file="apps/web/src/app/(app)/messaging/segments/page.tsx" frame="section-layout" title="Customer Segments" access="owner/admin"
+            screenshot-desktop="screenshots/07-messaging/messaging-segments--desktop.jpg">
+        <purpose>Saved audiences by country, orders, spend and recency.</purpose>
+        <complexity level="low">Simple; the same filters are repeated inline in campaigns.</complexity>
+      </page>
+
+      <page id="messaging-analytics" route="/messaging/analytics" file="apps/web/src/app/(app)/messaging/analytics/page.tsx" frame="section-layout" title="Delivery Analytics" access="everyone"
+            screenshot-desktop="screenshots/07-messaging/messaging-analytics--desktop.jpg">
+        <purpose>Delivery, cost and orders that followed texts over a period.</purpose>
+        <complexity level="medium">AWS vs carrier acceptance; "workflow" and "automation" for the same thing on one page.</complexity>
+      </page>
+    </area>
+
+    <area id="whatsapp" name="WhatsApp" order="6">
+      <subnav file="apps/web/src/app/(app)/dashboard/whatsapp-automation/page.tsx (tabs in ?tab=)" title="WhatsApp">
+        <item label="Overview" route="/dashboard/whatsapp-automation"/>
+        <item label="Setup" route="?tab=setup"/>
+        <item label="Messages" route="?tab=messages"/>
+        <item label="Automations" route="?tab=automations"/>
+        <item label="Templates" route="?tab=templates"/>
+        <item label="Campaigns" route="?tab=campaigns"/>
+        <item label="Customers" route="?tab=customers" shownWhen="View contact information"/>
+        <item label="Settings" route="?tab=settings"/>
+        <note>Lives under /dashboard although it has nothing to do with the dashboard; /whatsapp redirects here. Opens on Setup until the four setup steps are done.</note>
+      </subnav>
+
+      <page id="wa-overview" route="/dashboard/whatsapp-automation" file="components/whatsapp/Overview.tsx" frame="section-layout" title="WhatsApp Automation" access="whatsapp module and marketing.campaigns"
+            screenshot-desktop="screenshots/08-whatsapp/wa-overview--desktop.jpg" screenshot-mobile="screenshots/08-whatsapp/wa-overview--mobile.jpg">
+        <purpose>Connection health, automation state, today's sending, failures and recent messages.</purpose>
+        <sections>
+          <section name="Tiles">Connection, Automation (Running / Paused / Finish setting up / Needs attention), Sent today (n / daily limit), Waiting to send.</section>
+          <section name="Finish setting up">Connect, Authorize, Configure, Test and activate + "Continue setup".</section>
+          <section name="Connection health · Last 7 / 30 days · Failures · Recent messages"/>
+        </sections>
+        <complexity level="medium">Read receipts, linked phone vs Cloud API, held messages; a fourth messaging dashboard.</complexity>
+      </page>
+
+      <page id="wa-setup" route="/dashboard/whatsapp-automation?tab=setup" file="components/whatsapp/Setup.tsx, CloudSignup.tsx, AppTokenConnect.tsx" frame="section-layout" title="WhatsApp Automation — Setup" access="Manage integrations; owner/admin"
+            screenshot-desktop="screenshots/08-whatsapp/wa-setup--desktop.jpg" screenshot-mobile="screenshots/08-whatsapp/wa-setup--mobile.jpg">
+        <purpose>Connect WhatsApp (QR-linked phone or Meta Cloud API), configure consent/hours/limits, verify your number, send a test.</purpose>
+        <sections>
+          <section name="1 Choose how to connect">"Pick one. Read what each means first: they are different kinds of connection." Card "Official WhatsApp Business Platform (Cloud API)" (Meta sign-in, business verification, Meta-approved templates, per-conversation charges, number can't stay in the phone app) vs "Link a WhatsApp phone with a QR code" (not official, ban risk, phone online every 14 days, daily caps) + a required "I understand…" tick. Cloud often disabled: "Meta must approve bizinsights as a Tech Provider…".</section>
+          <section name="2a Link your phone">"Show QR code" or "Get pairing code"; code changes every ~20 s; phone instructions; auto-continues when linked.</section>
+          <section name="2b Sign in with Meta">"Continue with Meta" pop-up; waiting / blocked / closed messages; hidden internal token form (WhatsApp Business account ID, Phone number ID, Access token).</section>
+          <section name="3 Configure">Business name, consent basis, sending hours, time zone, daily caps, retention ("Save and continue").</section>
+          <section name="4a Verify your own number · 4b Send a test message">6-digit code, then "Send test to my number" with live status.</section>
+          <section name="Set up">"Create an automation", "Send a message", "Write templates".</section>
+        </sections>
+        <complexity level="high">The merchant must pick between two technically different connection types after reading risk notices; the official option is often unavailable. Four steps plus a code before the first test — then a template on another tab and a 5-step automation that starts in test mode before any customer receives anything.</complexity>
+      </page>
+
+      <page id="wa-messages" route="?tab=messages" file="components/whatsapp/Messages.tsx" frame="section-layout" title="Message history" access="signed in"
+            screenshot-desktop="screenshots/08-whatsapp/wa-messages--desktop.jpg">
+        <purpose>Every WhatsApp message in and out, retry failures, send a one-off ("Why you're messaging": order / question / marketing, template or free text, attachment, consent tick).</purpose>
+        <complexity level="medium">Duplicates "Send SMS" with a different flow.</complexity>
+      </page>
+
+      <page id="wa-automations" route="?tab=automations" file="components/whatsapp/Automations.tsx" frame="section-layout" title="Automations" access="list everyone; create owner/admin"
+            screenshot-desktop="screenshots/08-whatsapp/wa-automations--desktop.jpg">
+        <purpose>Ready-made "Order confirmation", "Shipping update", "Cart reminder", "Auto-reply" ("Use this") and a 5-step builder (Trigger, Conditions, Message, Recipient &amp; timing, Review).</purpose>
+        <complexity level="high">A template must exist on another tab first ("create it on the Templates tab first"); "Test mode" is ticked by default; trigger names differ from SMS and the hub; the hub can't create WhatsApp automations.</complexity>
+      </page>
+
+      <page id="wa-templates" route="?tab=templates" file="components/whatsapp/Templates.tsx" frame="section-layout" title="Message templates" access="list everyone; edit owner/admin"
+            screenshot-desktop="screenshots/08-whatsapp/wa-templates--desktop.jpg">
+        <purpose>WhatsApp wordings with variables; on Cloud API, "Submit to Meta for review".</purpose>
+        <complexity level="medium">Kind of message (order update vs marketing); separate from SMS and email templates.</complexity>
+      </page>
+
+      <page id="wa-campaigns" route="?tab=campaigns" file="components/whatsapp/Campaigns.tsx" frame="section-layout" title="Campaigns" access="list everyone; manage owner/admin"
+            screenshot-desktop="screenshots/08-whatsapp/wa-campaigns--desktop.jpg">
+        <purpose>A marketing template to consenting customers, now or scheduled (caps 250 QR / 100,000 Cloud).</purpose>
+        <complexity level="medium">Different rules from SMS campaigns; QR ban-risk warnings.</complexity>
+      </page>
+
+      <page id="wa-customers" route="?tab=customers" file="components/whatsapp/Customers.tsx" frame="section-layout" title="Customers and consent" access="View contact information"
+            screenshot-desktop="screenshots/08-whatsapp/wa-customers--desktop.jpg">
+        <purpose>Consent per customer, "Record consent", "Do not message" list.</purpose>
+        <complexity level="medium">Third separate consent/suppression screen.</complexity>
+      </page>
+
+      <page id="wa-settings" route="?tab=settings" file="components/whatsapp/Settings.tsx, SettingsForm.tsx" frame="section-layout" title="Settings" access="owner/admin"
+            screenshot-desktop="screenshots/08-whatsapp/wa-settings--desktop.jpg">
+        <purpose>Connection (check / reconnect / disconnect), "Pause all automation", messaging settings (same form as Setup step 3), "About this service".</purpose>
+        <complexity level="medium">Business name, quiet hours, consent basis and pause each also exist separately for SMS and email.</complexity>
+      </page>
+    </area>
+
+    <area id="automations-hub" name="Automations hub" order="7">
+      <subnav file="apps/web/src/app/(app)/automations/layout.tsx" title="Automations" flag="AUTOMATIONS_HUB=true">
+        <item label="Automations" route="/automations"/>
+        <item label="Create automation" route="/automations/new"/>
+        <item label="Message history" route="/automations/history"/>
+        <item label="Audit log" route="/automations/audit" shownWhen="audit:read"/>
+      </subnav>
+
+      <page id="hub-overview" route="/automations" file="apps/web/src/app/(app)/automations/page.tsx (components/automations/Overview.tsx, Channels.tsx)" frame="section-layout" title="Automations" access="SMS or email module"
+            screenshot-desktop="screenshots/10-automations/hub-overview--desktop.jpg" screenshot-mobile="screenshots/10-automations/hub-overview--mobile.jpg">
+        <purpose>Channel connections and every SMS and email automation in one list.</purpose>
+        <sections>
+          <section name="Channels">WhatsApp Business ("On its own page", "Open WhatsApp") · SMS (Connect / Test connection / "Sender and limits") · Email (Connect a mailbox / Test / Disconnect).</section>
+          <section name="Your automations">Filters Search / Channel (All / SMS / Email) / Status; cards with Turn on / Pause / Disable / Edit / Messages / Delete.</section>
+        </sections>
+        <complexity level="medium">Says "on WhatsApp, by SMS or by email" but WhatsApp automations are neither listed nor creatable here. Duplicates the SMS and Email automation lists.</complexity>
+      </page>
+
+      <page id="hub-new" route="/automations/new" file="apps/web/src/app/(app)/automations/new/page.tsx (components/automations/Wizard.tsx)" frame="section-layout" title="Create an automation" access="owner/admin"
+            screenshot-desktop="screenshots/10-automations/hub-new--desktop.jpg">
+        <purpose>Four-step builder: Connect (SMS or Email) → Trigger → Message → Review and turn on.</purpose>
+        <complexity level="high">The simplest builder, but it's one more SMS editor and a second email builder with a different model (email text inline, no template — while Settings → Email requires a template).</complexity>
+      </page>
+
+      <page id="hub-history" route="/automations/history" file="apps/web/src/app/(app)/automations/history/page.tsx" frame="section-layout" title="Message history" access="hub access"
+            screenshot-desktop="screenshots/10-automations/hub-history--desktop.jpg">
+        <purpose>One history of automated SMS and email messages with period figures and retry.</purpose>
+        <complexity level="medium">Overlaps /messaging/history and /settings/email/activity and leaves WhatsApp out.</complexity>
+      </page>
+
+      <page id="hub-audit" route="/automations/audit" file="apps/web/src/app/(app)/automations/audit/page.tsx" frame="section-layout" title="Audit log" access="audit:read"
+            screenshot-desktop="screenshots/10-automations/hub-audit--desktop.jpg">
+        <purpose>Who changed channels and automations.</purpose>
+        <complexity level="low">Raw "key: value" detail; a third change log.</complexity>
+      </page>
+    </area>
+
+    <area id="email" name="Email (inside Settings)" order="8">
+      <subnav file="apps/web/src/app/(app)/settings/email/layout.tsx" title="Email integrations (horizontal tabs inside the Settings menu)">
+        <item label="Overview" route="/settings/email"/>
+        <item label="Accounts" route="/settings/email/accounts"/>
+        <item label="Domains" route="/settings/email/domains"/>
+        <item label="Templates" route="/settings/email/templates"/>
+        <item label="Automations" route="/settings/email/automations"/>
+        <item label="Activity" route="/settings/email/activity"/>
+        <item label="Settings" route="/settings/email/settings"/>
+        <note>Three menus deep on desktop: dark sidebar → Settings menu → email tabs.</note>
+      </subnav>
+
+      <page id="email-overview" route="/settings/email" file="apps/web/src/app/(app)/settings/email/page.tsx" frame="section-layout" title="Email integrations" access="email:read"
+            screenshot-desktop="screenshots/09-email/email-overview--desktop.jpg">
+        <purpose>Accounts, domains, automations and what was sent; "Start here" 3 steps when empty.</purpose>
+        <complexity level="medium">Lives under Settings while SMS, WhatsApp and the hub sit in the main menu.</complexity>
+      </page>
+
+      <page id="email-accounts" route="/settings/email/accounts" file="apps/web/src/app/(app)/settings/email/accounts/page.tsx" frame="section-layout" title="Email accounts" access="email:read"
+            screenshot-desktop="screenshots/09-email/email-accounts--desktop.jpg">
+        <purpose>Connect Google / Microsoft / custom SMTP mailboxes and verify sender addresses.</purpose>
+        <complexity level="high">OAuth consent, SMTP host/port/STARTTLS, app passwords, verification codes, default sender, daily limits.</complexity>
+      </page>
+
+      <page id="email-domains" route="/settings/email/domains" file="apps/web/src/app/(app)/settings/email/domains/page.tsx" frame="section-layout" title="Sending domains" access="email:read"
+            screenshot-desktop="screenshots/09-email/email-domains--desktop.jpg">
+        <purpose>Prove domain ownership; SPF / DKIM / DMARC records.</purpose>
+        <complexity level="high">Pure DNS jargon; optional for Google/Microsoft yet a main tab.</complexity>
+      </page>
+
+      <page id="email-templates" route="/settings/email/templates" file="apps/web/src/app/(app)/settings/email/templates/page.tsx" frame="section-layout" title="Email templates" access="email:read"
+            screenshot-desktop="screenshots/09-email/email-templates--desktop.jpg">
+        <purpose>List of email templates.</purpose>
+        <complexity level="low">Third template system.</complexity>
+      </page>
+
+      <page id="email-template-edit" route="/settings/email/templates/edit" file="apps/web/src/app/(app)/settings/email/templates/edit/page.tsx" frame="section-layout" title="New template" access="email:automate"
+            screenshot-desktop="screenshots/09-email/email-template-edit--desktop.jpg">
+        <purpose>Subject, raw HTML or plain text with {{customer.first_name | default: "there"}} placeholders, preview, versions.</purpose>
+        <complexity level="high">Raw HTML editing and template syntax.</complexity>
+      </page>
+
+      <page id="email-automations" route="/settings/email/automations" file="apps/web/src/app/(app)/settings/email/automations/page.tsx" frame="section-layout" title="Automations" access="email:read"
+            screenshot-desktop="screenshots/09-email/email-automations--desktop.jpg">
+        <purpose>Email automations as sentences ("When {event}… send {template} from {sender}…"), on/off, recent runs.</purpose>
+        <complexity level="medium">The sentence summary is the clearest automation display in the product — but it's the second place to manage email automations.</complexity>
+      </page>
+
+      <page id="email-automation-edit" route="/settings/email/automations/edit" file="apps/web/src/app/(app)/settings/email/automations/edit/page.tsx (ConditionBuilder.tsx)" frame="section-layout" title="New automation" access="email:automate"
+            screenshot-desktop="screenshots/09-email/email-automation-edit--desktop.jpg">
+        <purpose>Seven-step builder: When, Only when (conditions, "Edit as JSON"), Send from, Which email, Timing and limits, Preview and test ("Example data (JSON)"), Name it and turn it on.</purpose>
+        <complexity level="high">Seven steps; JSON; retry counts; a template must be written first on another tab.</complexity>
+      </page>
+
+      <page id="email-activity" route="/settings/email/activity" file="apps/web/src/app/(app)/settings/email/activity/page.tsx" frame="section-layout" title="Email activity" access="email:activity"
+            screenshot-desktop="screenshots/09-email/email-activity--desktop.jpg">
+        <purpose>Every email sent or attempted; details with Message-ID; Send again / Cancel.</purpose>
+        <complexity level="medium">The fourth message history.</complexity>
+      </page>
+
+      <page id="email-settings" route="/settings/email/settings" file="apps/web/src/app/(app)/settings/email/settings/page.tsx" frame="section-layout" title="Email settings" access="email:read"
+            screenshot-desktop="screenshots/09-email/email-settings--desktop.jpg">
+        <purpose>Business name, postal address, daily limit, pause sending, suppression list, Event API keys (with a curl example), recent changes.</purpose>
+        <complexity level="high">Developer content (API keys, curl, Bearer, JSON) mixed with merchant settings; the legally required postal address is tucked away here.</complexity>
+      </page>
+    </area>
+    <area id="inventory" name="Inventory" order="9">
+      <subnav file="apps/web/src/app/(app)/inventory/layout.tsx" title="Inventory">
+        <item label="Inventory overview" route="/inventory"/>
+        <item label="All stock" route="/inventory/stock"/>
+        <item label="Low stock" route="/inventory/low-stock"/>
+        <item label="Out of stock" route="/inventory/out-of-stock"/>
+        <item label="Inventory movements" route="/inventory/movements" shownWhen="inventory.history"/>
+        <item label="Locations" route="/inventory/locations"/>
+        <item label="Inventory reports" route="/inventory/reports"/>
+        <item label="Stock settings" route="/inventory/settings"/>
+        <note>Every page is about the store picked in the top bar. No store: "Connect a Shopify store first: inventory is the stock of a store's products." Any page can open the product panel with ?product=ID.</note>
+      </subnav>
+      <shared-block id="inventory-sync-strip">Coloured dot + "In step with Shopify" / "Stock may be out of date" / "Checking every stock level against Shopify…", "· Checked {time} · last change {time} · N locations", button "Refresh stock".</shared-block>
+      <shared-block id="inventory-connect-card">"Stock by location": "To see stock at each location, with on-hand, committed and incoming stock, bizinsights needs access to … in Shopify." → "Give access in Shopify" / "Reconnect the store".</shared-block>
+
+      <page id="inventory-overview" route="/inventory" file="apps/web/src/app/(app)/inventory/page.tsx" frame="section-layout" title="Inventory overview" access="inventory.view"
+            screenshot-desktop="screenshots/06-inventory/inventory-overview--desktop.jpg" screenshot-mobile="screenshots/06-inventory/inventory-overview--mobile.jpg">
+        <purpose>How much stock the store has, what it's worth, what sells and what needs restocking.</purpose>
+        <sections>
+          <section name="Header">Period select (Today … Custom dates).</section>
+          <section name="16 KPI tiles">Total products, Total variants, Available stock, On-hand stock, Committed stock, Incoming stock, Low-stock variants, Out-of-stock variants, Inventory cost value, Potential retail value, Units sold today, Units sold this month, Fast-moving variants, Slow-moving variants, Inventory turnover, Days of stock left.</section>
+          <section name="Out of stock (N) | Low stock (N)">Two lists with "See all".</section>
+        </sections>
+        <complexity level="high">16 KPIs with jargon (variants, on-hand vs available vs committed vs incoming, turnover ×). ? tooltips are the only explanation. The two lists repeat the next two pages.</complexity>
+      </page>
+
+      <page id="inventory-stock" route="/inventory/stock" file="apps/web/src/app/(app)/inventory/stock/page.tsx (StockTable.tsx)" frame="section-layout" title="All stock" access="inventory.view"
+            screenshot-desktop="screenshots/06-inventory/inventory-stock--desktop.jpg">
+        <purpose>Search and filter every variant's stock and act on selected rows.</purpose>
+        <sections>
+          <section name="Filters">Search, Location, Status (In stock / Low / Out / Not tracked), "More filters" (Vendor, Type, Collection, Price), "CSV", saved filters (this device only).</section>
+          <section name="Bulk bar">"N selected", "Export selected", Threshold + "Set threshold", "Clear".</section>
+          <section name="Table">Up to 12 columns: Product, SKU, Available, On hand, Committed, Incoming, Cost, Stock value, Status, Last updated, "View" · "History".</section>
+        </sections>
+        <complexity level="high">Its Status filter makes the Low / Out of stock pages redundant; thresholds can be set in three places.</complexity>
+      </page>
+
+      <page id="inventory-low-stock" route="/inventory/low-stock" file="apps/web/src/app/(app)/inventory/low-stock/page.tsx" frame="section-layout" title="Low stock" access="inventory.view"
+            screenshot-desktop="screenshots/06-inventory/inventory-low-stock--desktop.jpg">
+        <purpose>Items running low with "Sold / day", "Days left" and "Reorder" suggestion.</purpose>
+        <complexity level="medium">A pre-filtered copy of All stock; reorder maths depends on two settings on another page.</complexity>
+      </page>
+
+      <page id="inventory-out-of-stock" route="/inventory/out-of-stock" file="apps/web/src/app/(app)/inventory/out-of-stock/page.tsx" frame="section-layout" title="Out of stock" access="inventory.view"
+            screenshot-desktop="screenshots/06-inventory/inventory-out-of-stock--desktop.jpg">
+        <purpose>Tracked items with nothing left to sell (oversold shows below zero).</purpose>
+        <complexity level="medium">Another pre-filtered copy of All stock.</complexity>
+      </page>
+
+      <page id="inventory-movements" route="/inventory/movements" file="apps/web/src/app/(app)/inventory/movements/page.tsx" frame="section-layout" title="Inventory movements" access="inventory.history"
+            screenshot-desktop="screenshots/06-inventory/inventory-movements--desktop.jpg">
+        <purpose>Audit trail of every stock change (tabs "All changes" | "Changes made in bizinsights").</purpose>
+        <complexity level="medium">Four source types and four outcome states are hard to tell apart.</complexity>
+      </page>
+
+      <page id="inventory-locations" route="/inventory/locations" file="apps/web/src/app/(app)/inventory/locations/page.tsx" frame="section-layout" title="Locations" access="inventory.view"
+            screenshot-desktop="screenshots/06-inventory/inventory-locations--desktop.jpg">
+        <purpose>Stock per Shopify location (10 numeric columns).</purpose>
+        <complexity level="medium">Shows internal IDs and "App-managed".</complexity>
+      </page>
+
+      <page id="inventory-reports" route="/inventory/reports" file="apps/web/src/app/(app)/inventory/reports/page.tsx" frame="section-layout" title="Inventory reports" access="inventory.view"
+            screenshot-desktop="screenshots/06-inventory/inventory-reports--desktop.jpg">
+        <purpose>9 cards: stock over time, stock value, low/out over time, movement, top sellers, slow movers, velocity and sell-through, stock by location, changes made here.</purpose>
+        <complexity level="high">Sell-through, turnover, "recorded days"; empty for new stores; overlaps the overview.</complexity>
+      </page>
+
+      <page id="inventory-settings" route="/inventory/settings" file="apps/web/src/app/(app)/inventory/settings/page.tsx" frame="section-layout" title="Stock settings" access="inventory.view (editing needs two other permissions)"
+            screenshot-desktop="screenshots/06-inventory/inventory-settings--desktop.jpg">
+        <purpose>What counts as low stock, who gets alerted (email, bell, WhatsApp numbers), how often stock is checked, lead time and days to cover.</purpose>
+        <complexity level="high">Alerts, WhatsApp numbers (needing WhatsApp connected elsewhere), sync frequency and Shopify scopes on one page; stock emails are also switched on in /settings/notifications.</complexity>
+      </page>
+
+      <overlay id="inventory-product-panel" route="/inventory/*?product=ID" file="apps/web/src/components/inventory/ProductPanel.tsx, AdjustDialog.tsx">
+        Right-hand sheet: product information, one card per variant (price, cost, threshold "Change", sold 7/30 days, days left, suggested reorder, per-location table), sales chart, stock history, and "Adjust stock" (2-step dialog: Location, Change kind ×6, quantity, Reason, Note, Reference → "Review change" → "Confirm change").
+      </overlay>
+    </area>
+
+    <area id="staff" name="Staff Management" order="10">
+      <subnav file="apps/web/src/app/(app)/staff/layout.tsx" title="Staff Management">
+        <item label="Overview" route="/staff"/>
+        <item label="All employees" route="/staff/employees"/>
+        <item label="Add employee" route="/staff/employees/new" shownWhen="staff:manage"/>
+        <item label="Invitations" route="/staff/invitations"/>
+        <item label="Live attendance" route="/staff/attendance"/>
+        <item label="Timesheets" route="/staff/timesheets"/>
+        <item label="Shift schedules" route="/staff/schedules"/>
+        <item label="Payroll" route="/staff/payroll"/>
+        <item label="Payment history" route="/staff/payments"/>
+        <item label="Reports &amp; analytics" route="/staff/reports"/>
+        <item label="Settings" route="/staff/settings"/>
+        <note>11 items. The no-access card still says "Settings → Members &amp; roles", a page that now redirects to /team.</note>
+      </subnav>
+
+      <page id="staff-overview" route="/staff" file="apps/web/src/app/(app)/staff/page.tsx" frame="section-layout" title="Staff overview" access="staff:view"
+            screenshot-desktop="screenshots/11-staff/staff-overview--desktop.jpg" screenshot-mobile="screenshots/11-staff/staff-overview--mobile.jpg">
+        <purpose>Who is working now, what needs a decision, this month's hours and pay.</purpose>
+        <sections>
+          <section name="Right now">Working, On break, Absent, Pending review; "Open live attendance".</section>
+          <section name="Needs your attention">Triage rows with one button each (Review, Review hours, Review and approve, Resend, Fix). Empty: "Nothing needs your attention right now."</section>
+          <section name="Quick actions">Add staff, Invite employee (same page), Review hours, Run payroll, Record payment.</section>
+          <section name="This month">Up to 16 KPI cards (hours, overtime, payroll cost, paid, still to pay…).</section>
+        </sections>
+        <states>No employees: "Add your first employee" + a 4-step "How it works".</states>
+        <complexity level="medium">The triage list is the best pattern in the product (worth copying to the main Home). KPIs repeat Reports.</complexity>
+      </page>
+
+      <page id="staff-employees" route="/staff/employees" file="apps/web/src/app/(app)/staff/employees/page.tsx" frame="section-layout" title="All employees" access="staff:view"
+            screenshot-desktop="screenshots/11-staff/staff-employees--desktop.jpg">
+        <purpose>Find any employee (7 filters) and open their record.</purpose>
+        <complexity level="medium">"Position" needs the exact title; Status vs Account are two separate ideas.</complexity>
+      </page>
+
+      <page id="staff-employee-new" route="/staff/employees/new" file="apps/web/src/app/(app)/staff/employees/new/page.tsx (EmployeeForm.tsx)" frame="section-layout" title="Add employee" access="staff:manage"
+            screenshot-desktop="screenshots/11-staff/staff-employee-new--desktop.jpg">
+        <purpose>Create an employee (17 fields in 4 groups), then invite them to the portal.</purpose>
+        <complexity level="high">Overtime policy, break policy, time zone and currency are decisions a merchant can't make on day one.</complexity>
+      </page>
+
+      <page id="staff-employee" route="/staff/employee?id=…&amp;tab=…" file="apps/web/src/app/(app)/staff/employee/page.tsx" frame="section-layout" title="{employee name}" access="staff:view"
+            screenshot-desktop="screenshots/11-staff/staff-employee--desktop.jpg">
+        <purpose>One person: tabs Overview, Attendance, Timesheets, Payroll, Payment History, Schedule, Audit History.</purpose>
+        <complexity level="high">Each tab is a mini copy of a top-level staff page; a second, different "Add missing shift" form.</complexity>
+      </page>
+
+      <page id="staff-invitations" route="/staff/invitations" file="apps/web/src/app/(app)/staff/invitations/page.tsx" frame="section-layout" title="Invitations" access="staff:view"
+            screenshot-desktop="screenshots/11-staff/staff-invitations--desktop.jpg">
+        <purpose>Track, resend or revoke employee portal invitations.</purpose>
+        <complexity level="medium">A second invitation system next to Team &amp; Access, with near-identical words but different rules.</complexity>
+      </page>
+
+      <page id="staff-attendance" route="/staff/attendance" file="apps/web/src/app/(app)/staff/attendance/page.tsx" frame="section-layout" title="Live attendance" access="attendance:view"
+            screenshot-desktop="screenshots/11-staff/staff-attendance--desktop.jpg">
+        <purpose>Who is clocked in right now (9 KPIs, a filtered board, refreshes every 10 s).</purpose>
+        <complexity level="medium">Overlaps the Overview's "Right now".</complexity>
+      </page>
+
+      <page id="staff-timesheets" route="/staff/timesheets" file="apps/web/src/app/(app)/staff/timesheets/page.tsx" frame="section-layout" title="Timesheets" access="attendance:view"
+            screenshot-desktop="screenshots/11-staff/staff-timesheets--desktop.jpg">
+        <purpose>Check, correct and approve hours (tabs "Shifts" | "Change requests").</purpose>
+        <complexity level="high">Approval states, locks, flags and corrections; four actions per row.</complexity>
+      </page>
+
+      <page id="staff-schedules" route="/staff/schedules" file="apps/web/src/app/(app)/staff/schedules/page.tsx" frame="section-layout" title="Shift schedules" access="staff:view"
+            screenshot-desktop="screenshots/11-staff/staff-schedules--desktop.jpg">
+        <purpose>Weekly grid (employees × 7 days) with "Add shift".</purpose>
+        <complexity level="medium">Wide grid, poor on phones; overnight logic implicit.</complexity>
+      </page>
+
+      <page id="staff-payroll" route="/staff/payroll" file="apps/web/src/app/(app)/staff/payroll/page.tsx" frame="section-layout" title="Payroll" access="pay:view"
+            screenshot-desktop="screenshots/11-staff/staff-payroll--desktop.jpg">
+        <purpose>Start a pay run and see all pay runs.</purpose>
+        <complexity level="high">9 statuses; gross, net (estimated), outstanding, pay cycle.</complexity>
+      </page>
+
+      <page id="staff-payroll-period" route="/staff/payroll/period?id=…" file="apps/web/src/app/(app)/staff/payroll/period/page.tsx" frame="section-layout" title="Pay run: {span}" access="pay:view">
+        <purpose>Check one pay run, fix blockers, approve, add earnings/deductions, record payments, download payslips.</purpose>
+        <complexity level="high">Six workflow buttons, versions, locks and multipliers.</complexity>
+      </page>
+
+      <page id="staff-payments" route="/staff/payments" file="apps/web/src/app/(app)/staff/payments/page.tsx" frame="section-layout" title="Payment history" access="pay:view"
+            screenshot-desktop="screenshots/11-staff/staff-payments--desktop.jpg">
+        <purpose>Record wages paid outside bizinsights and see what is still owed.</purpose>
+        <complexity level="medium">Bookkeeping only; duplicates "Record payment" on the pay run.</complexity>
+      </page>
+
+      <page id="staff-reports" route="/staff/reports" file="apps/web/src/app/(app)/staff/reports/page.tsx" frame="section-layout" title="Reports &amp; analytics" access="attendance:view"
+            screenshot-desktop="screenshots/11-staff/staff-reports--desktop.jpg">
+        <purpose>Hours, attendance and pay charts over any period; report tables with CSV / Excel / PDF.</purpose>
+        <complexity level="high">Abstract report × group-by combinations; KPIs repeat the Overview.</complexity>
+      </page>
+
+      <page id="staff-settings" route="/staff/settings" file="apps/web/src/app/(app)/staff/settings/page.tsx" frame="section-layout" title="Staff settings" access="staff:view"
+            screenshot-desktop="screenshots/11-staff/staff-settings--desktop.jpg">
+        <purpose>Time zone, currency, pay cycle, departments, overtime policies, break policies, public holidays.</purpose>
+        <complexity level="high">The merchant has to write their own overtime and award rules.</complexity>
+      </page>
+    </area>
+
+    <area id="team" name="Team &amp; Access" order="11">
+      <page id="team-access" route="/team" file="apps/web/src/app/(app)/team/page.tsx (components/team/*)" frame="app-shell" title="Team &amp; Access" access="members:manage"
+            screenshot-desktop="screenshots/12-team/team-access--desktop.jpg" screenshot-mobile="screenshots/12-team/team-access--mobile.jpg">
+        <purpose>Invite people to the dashboard and control exactly what each can see.</purpose>
+        <layout>Breadcrumb "Settings › Team &amp; Access" but the page leaves the settings layout (the settings menu disappears).</layout>
+        <sections>
+          <section name="Summary">Total Invitations, Active Shared Access, Pending Invitations, Expired, Revoked.</section>
+          <section name="Team Members">Search, Status, Role, Section, Sort; table Recipient / Role / Permissions / Status / Expiration / ⋯ (13 possible actions).</section>
+          <section name="Invite member panel">Email, Role cards (Admin, Manager, Analyst, Viewer, Custom), per-permission ticks across 11 modules with Sensitive / Makes changes / Download badges, optional Staff role, Message, Access duration (7/14/30/60 days), "Send Invitation".</section>
+          <section name="How access works">6 role cards and 2 notes.</section>
+        </sections>
+        <complexity level="high">Roles plus per-permission ticks across 11 modules, a separate staff role, link-based view-only access vs signed-in members, renew / replace / revoke / remove.</complexity>
+      </page>
+    </area>
+
+    <area id="settings" name="Settings" order="12">
+      <subnav file="apps/web/src/app/(app)/settings/layout.tsx + lib/settingsNav.ts">
+        <item label="Profile" route="/settings/profile"/>
+        <item label="Security" route="/settings/security"/>
+        <item label="Workspace" route="/settings/workspace" shownWhen="members:manage"/>
+        <item label="Integrations" route="/settings/integrations" shownWhen="integrations.status"/>
+        <item label="Shopify" route="/settings/stores" shownWhen="integrations.status"/>
+        <item label="Advertising" route="/settings/ads" shownWhen="integrations.status and ads module"/>
+        <item label="Email integrations" route="/settings/email" shownWhen="email:read"/>
+        <item label="Team &amp; Access" route="/team" shownWhen="members:manage (leaves the settings layout)"/>
+        <item label="Notifications" route="/settings/notifications"/>
+        <item label="API keys" route="/settings/api-keys" shownWhen="flag API_KEYS_ENABLED (off → hidden)"/>
+        <item label="Billing" route="/settings/billing" shownWhen="flag BILLING_PAGE (off outside tests → hidden)"/>
+        <item label="Privacy requests" route="/settings/privacy" shownWhen="audit:read"/>
+        <item label="Audit log" route="/settings/audit" shownWhen="audit:read"/>
+        <note>Under the menu on desktop: an "Account security" summary card. /settings itself redirects to /settings/profile (no settings home). /settings/members redirects to /team.</note>
+      </subnav>
+
+      <page id="settings-integrations" route="/settings/integrations" file="apps/web/src/app/(app)/settings/integrations/page.tsx (components/integrations/*)" frame="section-layout" title="Integrations" access="integrations.status"
+            screenshot-desktop="screenshots/13-settings/settings-integrations--desktop.jpg" screenshot-mobile="screenshots/13-settings/settings-integrations--mobile.jpg">
+        <purpose>Every connected platform at a glance; connect one with a single button.</purpose>
+        <sections>
+          <section name="One Click Setup">"Connect your accounts securely. We handle the setup…" "Learn more" (3 steps).</section>
+          <section name="Cards in order">Google Ads, Shopify, WhatsApp, Meta Ads, Google AdSense, Zapier — logo, one-line purpose, state pill, one button ("Connect" / "Manage" / "Fix it"), details, "brings" chips.</section>
+          <section name="Google Ads demo dialog">5 simulated steps ending "Open Demo Dashboard".</section>
+          <section name="Zapier card">"Connect" / "Add a Zap", recent events with "Retry", and a "Platform setup" checklist naming ZAPIER_CLIENT_ID, ZAPIER_CLIENT_SECRET, ZAPIER_REDIRECT_URI, docs/zapier.md.</section>
+        </sections>
+        <complexity level="medium">The one-button card is the right pattern. But "Manage" goes to three different pages; SMS and Email aren't here at all; 13+ status words; developer environment-variable names are shown to merchants.</complexity>
+      </page>
+
+      <page id="settings-stores" route="/settings/stores" file="apps/web/src/app/(app)/settings/stores/page.tsx (components/ShopifyConnect.tsx)" frame="section-layout" title="Shopify stores" access="integrations.status"
+            screenshot-desktop="screenshots/13-settings/settings-stores--desktop.jpg">
+        <purpose>Connect Shopify stores, see what each one shares, re-sync or disconnect.</purpose>
+        <sections><section name="Store card">Status, "What bizinsights can read from this store" (Shopify permission names with Optional / Required and "Remove"), "What you get on the dashboard (N of M reports)", "Sync now", "Disconnect" (browser confirm).</section></sections>
+        <complexity level="high">Shopify OAuth scopes exposed as a list; native browser confirm() dialogs; menu says "Shopify", page says "Shopify stores".</complexity>
+      </page>
+
+      <page id="settings-ads" route="/settings/ads" file="apps/web/src/app/(app)/settings/ads/page.tsx (components/settings/ads/*)" frame="section-layout" title="Advertising integrations" access="integrations.status; ads module"
+            screenshot-desktop="screenshots/13-settings/settings-ads--desktop.jpg">
+        <purpose>Connect, choose, refresh, hide and disconnect Google Ads, Meta Ads and AdSense accounts.</purpose>
+        <sections>
+          <section name="Hero">"Secure, official APIs", "Refreshes by itself", "One-click setup".</section>
+          <section name="Platform cards (3 modes each)">Not connected (what you'll get, requirements, connect) · login only (check for / choose ad accounts) · connected (account details, data status, "Show on dashboard", "Sync data now", "Reconnect account", AdSense site picking).</section>
+        </sections>
+        <complexity level="high">Very long; duplicates the cards on Integrations; "hide" vs "disconnect", demo vs real, manager accounts.</complexity>
+      </page>
+
+      <page id="settings-profile" route="/settings/profile" file="apps/web/src/app/(app)/settings/profile/page.tsx" frame="section-layout" title="Profile" access="signed in"
+            screenshot-desktop="screenshots/13-settings/settings-profile--desktop.jpg">
+        <purpose>Display name and personal time zone (≈400 raw zone names).</purpose>
+        <complexity level="low">Fine.</complexity>
+      </page>
+
+      <page id="settings-security" route="/settings/security" file="apps/web/src/app/(app)/settings/security/page.tsx → components/auth/AccountSecurity.tsx" frame="section-layout" title="Security" access="signed in"
+            screenshot-desktop="screenshots/13-settings/settings-security--desktop.jpg">
+        <purpose>Email, password, two-step verification, devices, sign-in methods, sign-in history, sign out, delete account (9 cards).</purpose>
+        <complexity level="high">IP addresses, authenticator keys; "Sign out of all devices" twice; security status shown in two places. The same screen is reused for hourly employees in the portal.</complexity>
+      </page>
+
+      <page id="settings-workspace" route="/settings/workspace" file="apps/web/src/app/(app)/settings/workspace/page.tsx" frame="section-layout" title="Workspace" access="members:manage"
+            screenshot-desktop="screenshots/13-settings/settings-workspace--desktop.jpg">
+        <purpose>Rename the workspace or create another one.</purpose>
+        <complexity level="low">"Workspace" is never explained; shows the raw role word.</complexity>
+      </page>
+
+      <page id="settings-notifications" route="/settings/notifications" file="apps/web/src/app/(app)/settings/notifications/page.tsx" frame="section-layout" title="Notifications" access="any member"
+            screenshot-desktop="screenshots/13-settings/settings-notifications--desktop.jpg">
+        <purpose>Two email switches: "Sync problems" and "Stock alerts".</purpose>
+        <complexity level="low">Only two options while alerts are configured in four other places (inventory, SMS, WhatsApp, email).</complexity>
+      </page>
+
+      <page id="settings-privacy" route="/settings/privacy" file="apps/web/src/app/(app)/settings/privacy/page.tsx" frame="section-layout" title="Privacy requests" access="audit:read"
+            screenshot-desktop="screenshots/13-settings/settings-privacy--desktop.jpg">
+        <purpose>Answer customer data requests forwarded by Shopify ("Download data" as JSON).</purpose>
+        <complexity level="low">Rare task; JSON output.</complexity>
+      </page>
+
+      <page id="settings-audit" route="/settings/audit" file="apps/web/src/app/(app)/settings/audit/page.tsx" frame="section-layout" title="Audit log" access="audit:read"
+            screenshot-desktop="screenshots/13-settings/settings-audit--desktop.jpg">
+        <purpose>Who did what in the workspace.</purpose>
+        <complexity level="low">No filters; staff, inventory and team each keep a separate history.</complexity>
+      </page>
+
+      <page id="settings-api-keys" route="/settings/api-keys" file="apps/web/src/app/(app)/settings/api-keys/page.tsx" title="API keys" access="hidden by flag API_KEYS_ENABLED">
+        <purpose>Read-only keys for external tools ("Authorization: Bearer sk_live_…").</purpose>
+        <complexity level="medium">Unreachable today.</complexity>
+      </page>
+
+      <page id="settings-billing" route="/settings/billing" file="apps/web/src/app/(app)/settings/billing/page.tsx" title="Billing" access="hidden by flag BILLING_PAGE">
+        <purpose>Plans billed through Shopify ("Upgrade to X", "Approve X in Shopify").</purpose>
+        <complexity level="medium">Unreachable today.</complexity>
+      </page>
+    </area>
+
+    <area id="employee-portal" name="Employee portal (for staff, not merchants)" order="13">
+      <page id="portal-home" route="/portal" file="apps/web/src/app/portal/page.tsx" frame="portal-shell" title="Welcome, {first name}" access="employee">
+        <purpose>Clock in/out, take breaks, see hours and pay.</purpose>
+        <sections>
+          <section name="Clock card">Status (Not clocked in / Working / On break), live timer, "Clock in", "Start break" (Short / Meal), "Clock out".</section>
+          <section name="6 KPIs">Today, This week, This month, Current pay period, Estimated gross earnings, Overtime this pay period.</section>
+          <section name="Cards">Last completed shift, Waiting for approval, Upcoming shifts, Recent payments.</section>
+        </sections>
+        <complexity level="medium">Task-focused and clear; the clock button is the whole point.</complexity>
+      </page>
+      <page id="portal-timesheets" route="/portal/timesheets" file="apps/web/src/app/portal/timesheets/page.tsx" frame="portal-shell" title="Timesheets" access="employee">
+        <purpose>Own shifts; "Request a change", "Report a missed shift".</purpose>
+        <complexity level="low">Straightforward.</complexity>
+      </page>
+      <page id="portal-pay" route="/portal/pay" file="apps/web/src/app/portal/pay/page.tsx" frame="portal-shell" title="Pay" access="employee">
+        <purpose>Approved pay periods and "Download payslip".</purpose>
+        <complexity level="low">Clear.</complexity>
+      </page>
+      <page id="portal-schedule" route="/portal/schedule" file="apps/web/src/app/portal/schedule/page.tsx" frame="portal-shell" title="Schedule" access="employee">
+        <purpose>Planned shifts for the next 4 weeks.</purpose>
+        <complexity level="low">Read-only.</complexity>
+      </page>
+      <page id="portal-account" route="/portal/account" file="apps/web/src/app/portal/account/page.tsx" frame="portal-shell" title="Account" access="employee">
+        <purpose>Employee details, phone number, and the full merchant security console.</purpose>
+        <complexity level="high">The 9-card merchant security screen (IP addresses, authenticator keys, Google linking) inside a simple employee portal.</complexity>
+      </page>
+    </area>
+  </areas>
+
+  <!-- ============================================================
+       PART D. WHAT MAKES IT CONFUSING (cross-cutting findings)
+       Each finding names the pages it comes from (page ids above).
+       ============================================================ -->
+  <findings>
+    <finding id="too-many-doors" severity="high" title="Too many doors: 22 menu items, 7 second-level menus, ~110 screens">
+      <evidence>An owner with every module sees 22 sidebar items in 4 groups; 9 of them open the same /dashboard page in a side panel. Advertising, Inventory, Customer Messaging, WhatsApp, Automations, Staff and Settings each add their own second menu, and Email adds a third level (sidebar → Settings menu → email tabs). Two topics (Busiest times, Ad earnings) exist but are in no menu. Google Ads Analytics is reachable only by a link.</evidence>
+      <pages>app-shell, dashboard-home, advertising-google-analytics, email-overview</pages>
+      <customer-impact>A merchant can't form a picture of "where things are"; every visit starts with hunting.</customer-impact>
+    </finding>
+
+    <finding id="channel-silos" severity="high" title="Messaging is split into four separate products">
+      <evidence>SMS = "Customer Messaging" (13 pages). WhatsApp = 8 tabs under /dashboard/whatsapp-automation. Email = 7 tabs inside Settings. Plus an "Automations" hub that covers SMS and email but not WhatsApp. Result: 6 places to build an automation (SMS builder, SMS "Advanced settings", SMS Setup step 5, WhatsApp builder, Email 7-step builder, hub 4-step wizard), 3 template editors with 3 variable syntaxes ({{customer_name}}, {{customer_first_name}}, {{customer.first_name}}), 4 message histories, 3 consent / do-not-contact lists, 3 change logs, test phones added in 5 places, business name / quiet hours / daily caps / pause-all set separately per channel.</evidence>
+      <pages>messaging-*, wa-*, hub-*, email-*</pages>
+      <customer-impact>The merchant has to learn the same idea three or four times with different words and rules.</customer-impact>
+    </finding>
+
+    <finding id="setup-before-value" severity="high" title="Nothing works until the merchant finishes long setups; nothing is on by default">
+      <evidence>Before the first customer message: SMS ≈ 5 setup steps + AWS sender approval + phone code + budget + consent basis + master switch + leaving sandbox, then a 5-step automation. WhatsApp ≈ choose connection type and accept risks, scan, configure, verify number, test, write a template on another tab, 5-step automation, untick "Test mode". Email ≈ connect a mailbox (or SMTP + sender code), write an HTML template, activate it, 7-step automation. Ready-made automations exist ("Order confirmation", "Shipping update", "Cart reminder", "Abandoned checkout") but each still has to be built and switched on by hand.</evidence>
+      <pages>messaging-setup, wa-setup, wa-automations, email-accounts, email-automation-edit, hub-new</pages>
+      <customer-impact>The owner's own words: "so sophisticated to implement the WhatsApp and other stuffs… the automation stuffs have to be done automatically."</customer-impact>
+    </finding>
+
+    <finding id="no-single-home" severity="high" title="No single place that says what needs me today">
+      <evidence>The dashboard shows ~45 numbers but no to-do list. Problems are spread over: the bell, three status pills, "Key insights", the funnel's insights section, the messaging "Worth a look" card, WhatsApp "Failures", inventory lists, the staff "Needs your attention" card and the per-area setup checklists. The best triage pattern in the product (Staff overview's "Needs your attention" with one button per row) is used only for staff.</evidence>
+      <pages>dashboard-home, staff-overview, messaging-overview, wa-overview, funnel, inventory-overview</pages>
+      <customer-impact>"All the information visible by a single tab" — today it takes 6+ pages.</customer-impact>
+    </finding>
+
+    <finding id="same-number-many-places" severity="medium" title="The same figures repeat on many pages, sometimes with different meanings">
+      <evidence>Ad spend appears in 4 dashboard cards, the business-overview table, /advertising, each platform page, both "By platform" tables and the live reports (≈10 places). Campaigns appear in 5 places. The funnel's 5 stage counts appear 4 times on one page. "ROAS" means three different things (platform purchase ROAS; "Conv. value / cost"; conversion value ÷ spend in Google Ads Analytics), next to MER and "Sales per $1". Sales has Total / Net / Gross / Custom; "Average order value" vs "Average order"; "Returns" vs "Refunds"; "Best sellers" vs "Top products" vs "Top 100 products".</evidence>
+      <pages>dashboard-home, dashboard-view-overview, advertising-*, funnel</pages>
+    </finding>
+
+    <finding id="engineer-language" severity="medium" title="Engineering words shown to merchants">
+      <evidence>Landing: "OAuth authorization", "Webhook events", adwords / adsense.readonly / ads_read. Integrations: ZAPIER_CLIENT_ID, ZAPIER_CLIENT_SECRET, docs/zapier.md, docs/ads-setup.md. SMS Sender: ARN, "Origination identity", configuration set, sandbox, tier, AWS region, DLT Principal Entity ID. Email: SMTP, STARTTLS, DKIM selectors, DMARC, Message-ID, JSON conditions, curl, Bearer keys. Shopify stores page: raw permission (scope) names. Security: IP addresses, authenticator keys. Funnel: "two-proportion test at 95%".</evidence>
+      <pages>landing, settings-integrations, messaging-sender, email-domains, email-settings, email-automation-edit, settings-stores, funnel</pages>
+    </finding>
+
+    <finding id="connections-scattered" severity="medium" title="Connecting things happens on many pages">
+      <evidence>Settings → Integrations shows Shopify, Google Ads, Meta, AdSense, WhatsApp, Zapier — but not SMS (/messaging/setup) or Email (/settings/email/accounts). Its "Manage" button goes to three different pages. Ads are managed on both /settings/integrations and /settings/ads. Shopify can be connected from /onboarding, /settings/stores and the inventory connect card. The hub repeats SMS and email connect controls.</evidence>
+      <pages>settings-integrations, settings-ads, settings-stores, hub-overview, messaging-setup, email-accounts, wa-setup</pages>
+    </finding>
+
+    <finding id="naming-drift" severity="medium" title="One page, several names">
+      <evidence>Sidebar vs palette vs page title: "Sales &amp; Orders" / "Sales"; "Products" / "Best sellers"; "Orders" / "Recent orders"; "Discounts" / "Discount codes"; "Shopify" / "Shopify stores"; "Advertising" / "Advertising integrations"; "Customer permissions" / "Customer messaging permissions"; "Messaging costs" / "Messaging costs &amp; limit"; "Setup guide" / "Set up SMS". The settings item changes name by role ("Business Settings" / "My Account" / "Notifications"). One flag is "Practice run", "Dry run" and "Test mode"; "workflow" and "automation" are used for the same thing. Stale texts point to pages that no longer exist ("Settings → Members &amp; roles", "Settings, then Members").</evidence>
+      <pages>app-shell, command-palette, messaging-*, staff (no-access card), claim</pages>
+    </finding>
+
+    <finding id="freshness-noise" severity="low" title="Data freshness is explained everywhere">
+      <evidence>Dashboard: 3 status pills + history line + "About this data" footer + check dots. Advertising: "Source: … · updated" on every card. Funnel: freshness line. Inventory: sync strip on every page.</evidence>
+      <pages>dashboard-home, advertising-overview, funnel, inventory-*</pages>
+    </finding>
+
+    <finding id="invisible-permissions" severity="medium" title="Menu items appear and disappear for reasons the user can't see">
+      <evidence>Four layers decide visibility: role, ~20 permission keys, the workspace's origin (App Store workspaces lose 7 modules), and feature flags. Staff and inventory each use 8–11 more permissions; many buttons vanish silently, a few explain why.</evidence>
+      <pages>app-shell, team-access, inventory-*, staff-*</pages>
+    </finding>
+
+    <finding id="action-tools-in-analytics" severity="medium" title="Tools that do things are hidden inside reading pages">
+      <evidence>The "Custom sales" accounting configurator (changes the dashboard for the whole team) sits inside the Sales detail panel. A manual follow-up CRM ("Customers to follow up" with WhatsApp / Email / Text buttons) sits inside the Customers panel — doing by hand what the abandoned-checkout automations should do. A team checklist sits at the bottom of the funnel.</evidence>
+      <pages>dashboard-view-sales, dashboard-view-customers, funnel</pages>
+    </finding>
+
+    <finding id="inconsistent-frames" severity="low" title="Same kind of screen, different frames and rules">
+      <evidence>Five sign-in frames (split card, card, plain column, bare card, error page) for six code-entry flows with different resend timers; 8-character passwords for merchants vs 12 + checklist for employees. Three page patterns inside the app (section menu, settings menu, full-width Team page). Native browser confirm()/prompt() on Shopify stores, API keys and inventory "Save filter".</evidence>
+      <pages>login, signup, verify-email, join, settings-stores, team-access</pages>
+    </finding>
+
+    <finding id="two-invite-systems" severity="low" title="Two invitation systems with near-identical words">
+      <evidence>Team &amp; Access invites dashboard viewers (view-only links, 7–60 days). Staff → Invitations invites employees to the clock-in portal (one-time links, hours). Both say "Invite", "Resend", "Copy link", "Revoke".</evidence>
+      <pages>team-access, staff-invitations, staff-employee-new</pages>
+    </finding>
+
+    <finding id="hidden-and-redirect-routes" severity="low" title="Routes that exist only to redirect, and finished pages nobody can open">
+      <evidence>Redirect-only: /reset, /start, /whatsapp, /ads/google, /settings, /settings/members, /dashboard?view=ads|adsense|shoppers. Hidden by flags: /settings/api-keys, /settings/billing.</evidence>
+    </finding>
+
+    <good-patterns note="Keep these; they already work and the redesign can reuse them without changing the visual design.">
+      <pattern page="settings-integrations">One card per platform with one button ("Connect" / "Manage" / "Fix it") and a plain state pill.</pattern>
+      <pattern page="staff-overview">"Needs your attention": each row is a problem with one button that fixes it.</pattern>
+      <pattern page="email-automations">An automation described as one sentence: "When {event}… send {email} from {sender} to {customer} {delay}."</pattern>
+      <pattern page="dashboard detail panels">"In short" sentence at the top and "What you could do next" at the bottom.</pattern>
+      <pattern page="funnel">Insight cards with "Why it might matter:" and "What to do:".</pattern>
+      <pattern page="messaging-setup, messaging-automation-edit">Live phone preview beside the editor.</pattern>
+      <pattern page="all">Consistent loading skeletons and "We couldn't load X… Try again" errors.</pattern>
+      <pattern page="portal-home">The employee portal: one big button for the one job.</pattern>
+    </good-patterns>
+  </findings>
+
+  <!-- ============================================================
+       PART E. HOW SIMILAR PLATFORMS DO IT (researched 2026-10-30)
+       verified="read" = the page was read; "snippet" = only a search summary could be read; "vendor" = the vendor's own claim.
+       ============================================================ -->
+  <competitor-research date="2026-10-30">
+    <product name="Shopify Admin (Home, Analytics, Sidekick)" kind="built into Shopify">
+      <navigation>Home, then ~6 core areas (Orders, Products, Customers, Analytics, Marketing, Discounts), Sales channels, Apps, Settings.</navigation>
+      <home>Setup tasks until the first sale; then 4 metric tabs (sessions, total sales, orders, conversion rate) each user can swap; order tasks with counts; daily insight cards with "View report". Sidekick Pulse shows up to 5 suggested actions and changes nothing without approval.</home>
+      <sources><source url="https://help.shopify.com/en/manual/shopify-admin/shopify-home" verified="read"/><source url="https://help.shopify.com/ur/manual/ai-powered-tools/sidekick/pulse" verified="read"/><source url="https://help.shopify.com/en/manual/shopify-admin/shopify-admin-overview" verified="read"/></sources>
+    </product>
+    <product name="Klaviyo" kind="email/SMS automation">
+      <navigation>Home, Campaigns, Flows, Audience, Analytics; integrations moved into Settings.</navigation>
+      <onboarding>3 steps inside Shopify: sign-up form, Welcome flow, Abandoned checkout flow — both automations created and switched on during setup, styled from the Shopify theme, sender defaulted to the store name; skippable and resumable.</onboarding>
+      <home>Alerts only when something is wrong → performance (revenue Klaviyo caused, split by channel and automations vs campaigns) → top flows → recent campaigns.</home>
+      <automations>Flows tab is pre-populated with best-practice flows; library filterable by goal and channel.</automations>
+      <sources><source url="https://help.klaviyo.com/hc/en-us/articles/56142022927003" verified="read" date="2026-09-21"/><source url="https://help.klaviyo.com/hc/en-us/articles/9974064152347" verified="read"/><source url="https://help.klaviyo.com/hc/en-us/articles/115002779211" verified="read" date="2026-10-07"/></sources>
+    </product>
+    <product name="Omnisend" kind="email/SMS automation">
+      <onboarding>4 steps: connect store, contacts sync automatically, branding, start. Templates pre-filled with the brand.</onboarding>
+      <automations>Pre-built automations with trigger, delays, messages and exit conditions already set; one automation mixes email, SMS and push and checks consent per channel.</automations>
+      <sources><source url="https://support.omnisend.com/en/articles/4334766-automations-library" verified="read" date="2026-09-16"/><source url="https://support.omnisend.com/en/articles/8172193-getting-started-with-omnisend" verified="read" date="2026-08-05"/></sources>
+    </product>
+    <product name="Shopify Messaging" kind="email + SMS + WhatsApp in one app">
+      <automations>Abandoned-checkout email on by default for new stores; SMS automations pre-built; WhatsApp added 29 Jul 2026 with pre-built templates via Meta's Embedded Signup, a forced STOP line, charges on the Shopify bill; WhatsApp not yet in cart/checkout automations.</automations>
+      <sources><source url="https://apps.shopify.com/shopify-messaging" verified="read"/><source url="https://changelog.shopify.com/posts/shopify-messaging-now-supports-whatsapp-marketing" verified="read" date="2026-07-29"/><source url="https://getkanal.com/blog/shopify-messaging-whatsapp-channel.md" verified="read" note="written by a competitor"/></sources>
+    </product>
+    <product name="Postscript / Attentive" kind="SMS">
+      <compliance>Postscript assigns a number at install and enforces quiet hours automatically. Attentive offers one-click transactional journeys and tells merchants to switch off Shopify's duplicates.</compliance>
+      <sources><source url="https://help.postscript.io/en/articles/13563937-guide-to-quiet-hours" verified="read" date="2026-08-18"/><source url="https://help.attentivemobile.com/hc/en-us/articles/9555427119508" verified="snippet"/></sources>
+    </product>
+    <product name="Wati / Interakt / AiSensy / Gallabox" kind="WhatsApp for Shopify">
+      <onboarding>Wati: one path via Meta Embedded Signup (choose option → business details → "Continue with Facebook" → number and display name → Finish), or "Coexistence" (keep the WhatsApp Business app; scan a QR; sync up to 180 days of chats). Interakt: 3 steps with a trial while Meta verification is pending. AiSensy: Shopify automations pre-listed with sample text and default timings (cart reminders at ~20 min, 3 h, 1 day; order confirmed / fulfilled / feedback), each switched on once its template is approved. Gallabox: ready-to-use order templates.</onboarding>
+      <sources><source url="https://support.wati.io/en/articles/11462961-how-to-connect-your-whatsapp-number-to-wati-via-embedded-signup-cloud-api" verified="snippet"/><source url="https://support.wati.io/en/articles/11822421-how-to-connect-your-whatsapp-number-to-wati-via-whatsapp-coexistence-coex" verified="snippet"/><source url="https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users" verified="read"/><source url="https://wiki.aisensy.com/en/articles/11484725-how-to-setup-messages-for-your-shopify-store-aisensy-x-shopify-2" verified="read"/><source url="https://docs.gallabox.com/integrations/e-commerce/shopify/overview" verified="read"/></sources>
+    </product>
+    <product name="Triple Whale / Polar / Lifetimely / TrueProfit / Peel" kind="Shopify analytics and profit">
+      <patterns>Triple Whale: one summary dashboard with a section per source, tiles you can pin/hide (snippet). Polar: anomaly alerts by email/Slack; AI daily digest (vendor). Lifetimely: setup checklist 0/5 in the corner, default gross margin when costs are unknown, an AI agent that says what changed, why, and the next move — merchant approves. TrueProfit: costs tracked automatically, mobile app with 4 pinned numbers. Peel: daily insights only on days something notable happened, each with "View data".</patterns>
+      <sources><source url="https://help.useamp.com/article/647-getting-started-account-setup-walkthrough" verified="read" date="2026-04-03"/><source url="https://useamp.com/products/analytics" verified="read"/><source url="https://helpdesk.trueprofit.io/en/articles/11330581-using-the-trueprofit-mobile-app" verified="read"/><source url="https://help.peelinsights.com/docs/the-daily-insights" verified="read"/><source url="https://www.polaranalytics.com/features/smart-alerts" verified="read"/><source url="https://kb.triplewhale.com/en/articles/5725275-track-kpis-with-the-summary-dashboard" verified="snippet"/></sources>
+    </product>
+    <product name="Inventory Planner / Prediko / Stocky" kind="inventory">
+      <patterns>Inventory Planner's landing page: stock value, items to replenish, overstock, best sellers; each recommendation says what to buy, how much, and "potential lost revenue", with "how this was calculated". Prediko: low/overstock alerts lead straight to a purchase order; scheduled email reports. Stocky stops on 31 Aug 2026.</patterns>
+      <sources><source url="https://help.inventory-planner.com/en/articles/3456738-inventory-planner-101" verified="read"/><source url="https://apps.shopify.com/prediko" verified="read"/><source url="https://help.shopify.com/en/manual/products/inventory/stocky/inventory-management/demand-forecasting" verified="read"/></sources>
+    </product>
+    <product name="Deputy / Homebase / Connecteam" kind="staff and payroll">
+      <patterns>Deputy: a 3-step setup wizard that asks what problems you want solved and turns on matching areas; "Labor %" = wages as a share of sales (snippet). Homebase: live labour cost and overtime alerts (vendor). Connecteam: "5-minute company set-up" with templates.</patterns>
+      <sources><source url="https://help.deputy.com/hc/en-au/articles/15225556703247-Getting-Started-with-Deputy-via-Xero-Reseller" verified="snippet"/><source url="https://help.connecteam.com/en/articles/5844953-your-5-minute-company-set-up" verified="read"/></sources>
+    </product>
+
+    <shared-patterns>
+      <pattern n="1">Home = a few numbers + "what needs you" (Shopify, Klaviyo, Inventory Planner).</pattern>
+      <pattern n="2">Alerts appear only when something is wrong, at the top (Klaviyo, Peel, Polar).</pattern>
+      <pattern n="3">Every change explained as: what changed, why, what to do (Lifetimely, Sidekick, Peel).</pattern>
+      <pattern n="4">The product recommends; the merchant approves (Sidekick, Lifetimely).</pattern>
+      <pattern n="5">The essential automations are created and switched on during setup (Klaviyo, Shopify Messaging).</pattern>
+      <pattern n="6">Templates arrive fully filled in — trigger, timing, wording (Omnisend, Klaviyo, AiSensy).</pattern>
+      <pattern n="7">Branding and sender are taken from the store automatically (Klaviyo, Shopify, Omnisend).</pattern>
+      <pattern n="8">Setup is short, skippable, resumable, with visible progress (Lifetimely 0/5, Klaviyo, Deputy).</pattern>
+      <pattern n="9">Defaults stand in for inputs the merchant doesn't have (Lifetimely default margin, TrueProfit auto costs).</pattern>
+      <pattern n="10">Compliance handled by the product, shown as a fact, not a form (Postscript quiet hours, Shopify STOP line).</pattern>
+      <pattern n="11">All channels in one messaging area; channel is a choice per message (Shopify Messaging, Omnisend, Klaviyo).</pattern>
+      <pattern n="12">One Connections page in Settings with simple status words (Klaviyo, Polar, Omnisend).</pattern>
+      <pattern n="13">Numbers reach the merchant outside the app: daily digest, push alerts (Peel, Polar, Triple Whale, TrueProfit).</pattern>
+      <pattern n="14">Mobile shows a handful of pinned numbers (TrueProfit, Shopify).</pattern>
+      <pattern n="15">People help with the hard parts — included onboarding (Polar, Prediko, Interakt).</pattern>
+    </shared-patterns>
+    <not-verified>Triple Whale's full help pages and menu; Polar's exact menu; Homebase and Deputy home screens; template-approval times at Wati/AiSensy/Interakt; whether Shopify Messaging supports Coexistence; Zoko's same-day claims.</not-verified>
+  </competitor-research>
+
+  <!-- ============================================================
+       PART F. THE SIMPLER STRUCTURE (proposal — nothing here is built yet)
+       It changes WHERE things live and WHAT is automatic, not the visual design.
+       ============================================================ -->
+  <redesign-proposal status="proposal" principle="One home that tells you what to do; five places to go; everything else automatic or one click deep.">
+    <target-navigation items="6" replaces="22 sidebar items + 7 area menus">
+      <item order="1" label="Home" route="/home (today's /dashboard)" icon="LayoutDashboard">
+        <purpose>The single tab: everything important on one screen.</purpose>
+        <contents>
+          <block order="1" name="Needs you">One list merging the bell alerts, sync problems, failed messages, low/out of stock, orders waiting to ship, staff approvals and setup gaps — each row with one button (the Staff "Needs your attention" pattern). Hidden when empty.</block>
+          <block order="2" name="Setup checklist (until done)">"Get the most from bizinsights · 2 of 5": Shopify connected ✓ · Product costs (or "use a 40% margin for now") · Turn on recommended automations · Connect ads (optional) · Turn on visitor tracking. Skippable, resumable.</block>
+          <block order="3" name="Four numbers">Sales · Orders · Left after costs · Visitors — each with change vs last period and a one-line meaning; per-user choice of which four.</block>
+          <block order="4" name="What changed">2–3 plain-English cards: "Sales up 18% vs last Tuesday, mostly from Product X" → "See why" + one suggested action the merchant approves.</block>
+          <block order="5" name="Working for you">Automations strip: "Abandoned checkout · On · 12 sent · $340 recovered" etc., across WhatsApp, SMS and email.</block>
+          <block order="6" name="One chart">Sales by day with the comparison line. Everything else lives one click away in Sales.</block>
+        </contents>
+        <moves-from>dashboard-home (tiles, charts), bell, Key insights, staff "Needs your attention", messaging "Worth a look", WhatsApp failures, inventory lists, setup checklists of SMS/WhatsApp/email.</moves-from>
+      </item>
+      <item order="2" label="Sales" route="/sales" icon="ChartColumn">
+        <purpose>All reading and analysis, as tabs on one page sharing one date picker.</purpose>
+        <tabs>Overview · Products · Customers · Orders &amp; shipping · Visitors (today's Shopping Funnel) · Ads (Meta, Google, AdSense as a filter, not separate pages)</tabs>
+        <moves-from>dashboard ?view= panels (overview, sales, products, customers, orders, shipping, channels, discounts, timing), /funnel, /advertising/* (7 pages → one Ads tab with a platform filter and an "Advanced report" drawer), Custom-sales configurator → Settings › Business details.</moves-from>
+      </item>
+      <item order="3" label="Marketing" route="/marketing" icon="Megaphone">
+        <purpose>One home for WhatsApp, SMS and email. The channel is a choice inside each message, not a separate product.</purpose>
+        <tabs>
+          <tab name="Automations">A list of recommended automations, each a single switch with its result ("Order confirmation · WhatsApp + email · On"). Pre-built: Order confirmation, Shipping update, Abandoned checkout (3 reminders), Welcome, Win-back, Review request. "Customize" opens ONE builder (When → Who → Message per channel → Review) written as a sentence.</tab>
+          <tab name="Campaigns">One composer: pick audience, write once, tick WhatsApp / SMS / Email, preview each, schedule. One approval rule.</tab>
+          <tab name="Contacts">One consent list per customer with three channel columns and one do-not-contact list.</tab>
+          <tab name="Results">One history and one results page across channels (sent, delivered, orders that followed, cost).</tab>
+          <tab name="Channels">Three cards (WhatsApp, SMS, Email) with "Connect" / "Fix it"; templates per channel tucked inside each automation.</tab>
+        </tabs>
+        <moves-from>/messaging/* (13 pages), /dashboard/whatsapp-automation (8 tabs), /automations/* (4), /settings/email/* (9), dashboard Customers "follow up" tool.</moves-from>
+      </item>
+      <item order="4" label="Stock" route="/stock" icon="Boxes">
+        <purpose>One table with a default "Needs attention" view: Out of stock / Runs out in N days / Too much stock, each row with "Reorder N · sales at risk $X".</purpose>
+        <moves-from>/inventory overview, all stock, low stock, out of stock (one table + filter chips); movements and reports as tabs; Stock settings behind a gear.</moves-from>
+      </item>
+      <item order="5" label="Team" route="/team" icon="Users" shownWhen="the merchant turned Staff on">
+        <purpose>Today (who's working + approvals), People, Hours (timesheets + schedules), Pay (payroll + payments).</purpose>
+        <moves-from>/staff/* (13 pages → 4 tabs); staff settings behind a gear with sensible defaults per country.</moves-from>
+      </item>
+      <item order="6" label="Settings" route="/settings" icon="Settings">
+        <sections>
+          <section name="Connections">EVERY connection on one page: Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, Email, Zapier. "Manage" opens a drawer here instead of another page.</section>
+          <section name="Business details">Entered once, used by every channel: business name, postal address, time zone, currency, quiet hours, daily message caps, how sales are counted (today's Custom sales).</section>
+          <section name="People &amp; access">Dashboard members and shared links (today's Team &amp; Access) — clearly separate from staff.</section>
+          <section name="Notifications">All alert and digest choices in one place, including a daily summary email.</section>
+          <section name="Your account">Profile, Security.</section>
+          <section name="Plan &amp; billing · Privacy &amp; audit · Developer (API keys, event keys, Zapier setup)"/>
+        </sections>
+      </item>
+    </target-navigation>
+
+    <automation-by-default>
+      <rule>When Shopify connects, create the recommended automations as drafts with brand, sender and wording filled in from the store.</rule>
+      <rule>Email: switch the transactional ones on as soon as a mailbox is connected (with a clear "On — turn off" toggle and a duplicate-notification warning if Shopify's own emails are on).</rule>
+      <rule>WhatsApp and SMS: switch on after the channel connects and the merchant picks a consent basis once; submit the needed WhatsApp templates to Meta automatically and show "Waiting for Meta approval (usually under 24 h)".</rule>
+      <rule>Test mode turns itself off after the first successful test; no separate "Practice run / Dry run / Test mode" words.</rule>
+      <rule>Defaults for everything a merchant can't decide on day one: SMS budget (e.g. US$20/month, adjustable), quiet hours 9 pm–8 am in the customer's time zone, one message per customer per day, overtime and break policies by country.</rule>
+    </automation-by-default>
+
+    <whatsapp-simplification>
+      <step>One "Connect WhatsApp" button. Default to Meta's Embedded Signup in "keep using my WhatsApp Business app" (Coexistence) mode once Meta approves bizinsights as a Tech Provider; until then the QR link, explained in one sentence ("Works like WhatsApp Web; keep your phone online"), with the risks behind "Learn more".</step>
+      <step>Hide the token form and Cloud API vocabulary behind "Advanced".</step>
+      <step>Skip "write a template first": templates for the recommended automations are created and submitted automatically.</step>
+      <step>Verify the merchant's own number automatically (already done for the linked number) and send the test with one button.</step>
+      <step>On disconnect: a "Reconnect WhatsApp" row in Home › Needs you.</step>
+    </whatsapp-simplification>
+
+    <plain-words glossary="one name per idea, used everywhere">
+      <term today="Sessions / Tracked visits" use="Visitors"/>
+      <term today="Conversion rate" use="Visitors who bought"/>
+      <term today="AOV / Average order value / Average order" use="Average order"/>
+      <term today="ROAS / MER / Sales per $1 (Shopify's record)" use="Sales per $1 of ads (one definition, with the platform's own figure in a tooltip)"/>
+      <term today="COGS / Cost of goods sold" use="Product costs"/>
+      <term today="Returns / Refunds" use="Refunds"/>
+      <term today="Best sellers / Top products / Top 100 products" use="Top products"/>
+      <term today="Practice run / Dry run / Test mode" use="Test mode"/>
+      <term today="Workflow / Automation" use="Automation"/>
+      <term today="Suppression list / Do not message" use="Do-not-contact list"/>
+      <term today="Sender ID / Origination identity / Sender name" use="Sender name"/>
+      <term today="Integrations / Connections / Email integrations / Advertising integrations" use="Connections"/>
+      <term today="Workspace" use="Business (explained once)"/>
+    </plain-words>
+
+    <roadmap>
+      <phase n="1" name="Quick wins (wording and order, no new features)">
+        <task>Apply the plain-words glossary to the sidebar, palette and page titles; fix stale texts ("Settings → Members &amp; roles", "Settings, then Members").</task>
+        <task>Collapse the sidebar to the six items above; turn the dashboard ?view= panels into tabs of Sales.</task>
+        <task>Move developer-only content (Zapier env-var checklist, ARN, event API keys, curl) under Settings › Developer; show DLT fields only for India.</task>
+        <task>Add SMS and Email cards to Settings › Connections; "Manage" opens a drawer.</task>
+        <task>Replace native confirm()/prompt() with the app's dialog.</task>
+      </phase>
+      <phase n="2" name="One Home">
+        <task>Build Home › Needs you from the existing alert feed (GET /workspaces/:ws/alerts) plus inventory, shipping, messaging and staff counts the API already returns.</task>
+        <task>Setup checklist across modules; "What changed" cards from the existing Key insights / funnel insights logic.</task>
+      </phase>
+      <phase n="3" name="One Marketing area">
+        <task>Merge the four messaging areas into Marketing (Automations, Campaigns, Contacts, Results, Channels) on top of the existing per-channel engines.</task>
+        <task>Recommended automations created automatically and switched on by default with the rules above.</task>
+        <task>One builder and one template library with per-channel variants; one variable syntax.</task>
+      </phase>
+      <phase n="4" name="Outside the app">
+        <task>Daily summary email (yesterday's sales, the biggest change and why, today's to-dos) built on the existing daily email.</task>
+        <task>Phone view with four pinned numbers and the Needs-you list.</task>
+        <task>A first-run question "What do you want help with? Profit · Messages · Stock · Staff" that turns modules on or off.</task>
+      </phase>
+    </roadmap>
+  </redesign-proposal>
+</design-architecture>
+
+</script>
+<script>
+(() => {
+  const doc = new DOMParser().parseFromString(document.getElementById("design-xml").textContent.trim(), "application/xml");
+  const $ = (s, el = document) => el.querySelector(s);
+  const all = (s, el = doc) => [...el.querySelectorAll(s)];
+  const kids = (el, name) => el ? [...el.children].filter((c) => c.tagName === name) : [];
+  const txt = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+
+  const root = doc.documentElement;
+  const pages = all("areas page");
+  const byId = new Map(pages.map((p) => [p.getAttribute("id"), p]));
+  const level = (p) => kids(p, "complexity")[0]?.getAttribute("level") || "low";
+
+  // Intro and counts
+  $("#intro-what").textContent = txt($("overview what-it-is", doc));
+  $("#intro-quote").textContent = txt($("overview owner-brief", doc));
+  const counts = $("overview counts", doc);
+  const shots = pages.filter((p) => p.getAttribute("screenshot-desktop")).length;
+  const mix = { low: 0, medium: 0, high: 0 };
+  pages.forEach((p) => mix[level(p)]++);
+  const stats = $("#stats");
+  [[pages.length, "screens"], [counts.getAttribute("sidebar-items-owner"), "sidebar items"], [counts.getAttribute("automation-builders"), "automation builders"], [shots, "screenshots"]]
+    .forEach(([n, l]) => stats.append(h(`<div class="stat"><b>${esc(n)}</b><span>${esc(l)}</span></div>`)));
+  const pct = (n) => (100 * n / pages.length).toFixed(1);
+  stats.append(h(`<div class="mix"><div class="mix-head"><span>How hard each screen is for a non-technical merchant</span><span>${mix.high} high · ${mix.medium} medium · ${mix.low} low</span></div>
+    <div class="mix-bar" role="img" aria-label="${mix.high} high, ${mix.medium} medium, ${mix.low} low"><i style="width:${pct(mix.high)}%;background:var(--high-fill)"></i><i style="width:${pct(mix.medium)}%;background:var(--med-fill)"></i><i style="width:${pct(mix.low)}%;background:var(--low-fill)"></i></div>
+    <div class="legend"><span><i style="background:var(--high-fill)"></i>High: many figures, steps or technical words</span><span><i style="background:var(--med-fill)"></i>Medium</span><span><i style="background:var(--low-fill)"></i>Low: one job, plain words</span></div></div>`));
+
+  // Screens view
+  const areasEl = $("#areas"), rail = $("#rail");
+  const areas = all("areas > area");
+  function card(p) {
+    const d = p.getAttribute("screenshot-desktop");
+    const lv = level(p);
+    const el = h(`<button class="card" type="button" data-id="${esc(p.getAttribute("id"))}">
+      <div class="thumb">${d ? `<img loading="lazy" decoding="async" alt="" src="${esc(d)}">` : "No screenshot"}</div>
+      <div class="card-body">
+        <div class="card-title"><b>${esc(p.getAttribute("title"))}</b><span class="pill ${lv}">${lv}</span></div>
+        <div class="route">${esc(p.getAttribute("route"))}</div>
+        <p class="purpose">${esc(txt(kids(p, "purpose")[0]))}</p>
+      </div></button>`);
+    el.addEventListener("click", () => openPage(p.getAttribute("id")));
+    return el;
+  }
+  for (const a of areas) {
+    const ps = kids(a, "page");
+    const id = "area-" + a.getAttribute("id");
+    const sub = kids(a, "subnav")[0];
+    const subHtml = sub ? `<div class="subnav"><b>Menu:</b>${kids(sub, "item").map((i) => `<span>${esc(i.getAttribute("label"))}</span>`).join("")}</div>` : "";
+    const sec = h(`<div class="area" id="${esc(id)}">
+      <div class="area-head"><h2>${esc(a.getAttribute("name"))}</h2><span class="count">${ps.length} screen${ps.length === 1 ? "" : "s"}</span></div>
+      ${kids(a, "summary")[0] ? `<p class="area-summary">${esc(txt(kids(a, "summary")[0]))}</p>` : ""}
+      ${subHtml}<div class="grid"></div></div>`);
+    ps.forEach((p) => $(".grid", sec).append(card(p)));
+    areasEl.append(sec);
+    const b = h(`<button type="button" data-target="${esc(id)}">${esc(a.getAttribute("name").replace(/ \(.*\)$/, ""))}<span>${ps.length}</span></button>`);
+    b.addEventListener("click", () => { document.getElementById(id).scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); });
+    rail.append(b);
+  }
+  const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) rail.querySelectorAll("button").forEach((b) => b.setAttribute("aria-current", String(b.dataset.target === e.target.id))); }), { rootMargin: "-30% 0px -60% 0px" });
+  document.querySelectorAll(".area").forEach((s) => io.observe(s));
+
+  $("#q").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll(".card").forEach((c) => { const p = byId.get(c.dataset.id); c.hidden = !!q && !p.textContent.toLowerCase().includes(q) && !(p.getAttribute("route") + p.getAttribute("title")).toLowerCase().includes(q); });
+    document.querySelectorAll(".area").forEach((s) => { s.hidden = ![...s.querySelectorAll(".card")].some((c) => !c.hidden); });
+  });
+
+  // Detail sheet
+  const sheet = $("#sheet");
+  let current = null, mode = "desktop";
+  function renderShot() {
+    const src = current.getAttribute("screenshot-" + mode) || (mode === "mobile" ? null : null);
+    const shot = $("#sheet-shot");
+    shot.className = "shot " + mode;
+    shot.innerHTML = src ? `<img alt="Screenshot of ${esc(current.getAttribute("title"))} (${mode})" src="${esc(src)}">` : `<div class="none">No ${mode === "mobile" ? "phone" : "desktop"} screenshot for this screen.</div>`;
+    $("#btn-desktop").setAttribute("aria-pressed", String(mode === "desktop"));
+    $("#btn-mobile").setAttribute("aria-pressed", String(mode === "mobile"));
+    $("#btn-mobile").disabled = !current.getAttribute("screenshot-mobile");
+  }
+  function openPage(id) {
+    const p = byId.get(id); if (!p) return;
+    current = p; mode = "desktop";
+    $("#sheet-title").textContent = p.getAttribute("title");
+    $("#sheet-route").textContent = p.getAttribute("route") + (p.getAttribute("access") ? "  ·  " + p.getAttribute("access") : "");
+    const secs = kids(kids(p, "sections")[0], "section");
+    const acts = kids(kids(p, "actions")[0], "action");
+    const cx = kids(p, "complexity")[0];
+    const lv = level(p);
+    $("#sheet-notes").innerHTML = `
+      <div><h4>What it's for</h4><p>${esc(txt(kids(p, "purpose")[0]))}</p></div>
+      ${kids(p, "layout")[0] ? `<div><h4>Layout</h4><p>${esc(txt(kids(p, "layout")[0]))}</p></div>` : ""}
+      ${secs.length ? `<div><h4>What's on it, top to bottom</h4><ul>${secs.map((s) => `<li class="sec"><b>${esc(s.getAttribute("name"))}</b>${txt(s) ? " — " + esc(txt(s)) : ""}</li>`).join("")}</ul></div>` : ""}
+      ${acts.length ? `<div><h4>Buttons and where they go</h4><ul>${acts.map((a) => `<li>“${esc(a.getAttribute("label"))}” → ${esc(a.getAttribute("goes"))}</li>`).join("")}</ul></div>` : ""}
+      ${kids(p, "states")[0] ? `<div><h4>Other states</h4><p>${esc(txt(kids(p, "states")[0]))}</p></div>` : ""}
+      <div class="cx ${lv}"><h4>Complexity: ${lv}</h4><p>${esc(txt(cx))}</p></div>
+      <div class="file">${esc(p.getAttribute("file") || "")}</div>`;
+    renderShot();
+    sheet.showModal();
+    $("#sheet-shot").scrollTop = 0; $("#sheet-notes").scrollTop = 0;
+  }
+  $("#btn-desktop").addEventListener("click", () => { mode = "desktop"; renderShot(); });
+  $("#btn-mobile").addEventListener("click", () => { mode = "mobile"; renderShot(); });
+  $("#btn-close").addEventListener("click", () => sheet.close());
+  sheet.addEventListener("click", (e) => { if (e.target === sheet) sheet.close(); });
+
+  const pageChips = (list) => list.split(",").map((s) => s.trim()).filter(Boolean).map((id) => {
+    const real = byId.has(id) ? id : null;
+    return real ? `<button type="button" class="chip" data-open="${esc(id)}">${esc(id)}</button>` : `<span class="chip static">${esc(id)}</span>`;
+  }).join("");
+  document.addEventListener("click", (e) => { const b = e.target.closest("[data-open]"); if (b) openPage(b.dataset.open); });
+
+  // Findings
+  const fEl = $("#findings");
+  for (const f of all("findings > finding")) {
+    const pagesList = txt(kids(f, "pages")[0]);
+    fEl.append(h(`<article class="finding ${esc(f.getAttribute("severity"))}">
+      <span class="pill ${f.getAttribute("severity") === "high" ? "high" : f.getAttribute("severity") === "medium" ? "medium" : "low"}" style="align-self:flex-start">${esc(f.getAttribute("severity"))}</span>
+      <h3>${esc(f.getAttribute("title"))}</h3>
+      <p>${esc(txt(kids(f, "evidence")[0]))}</p>
+      ${kids(f, "customer-impact")[0] ? `<p class="impact">${esc(txt(kids(f, "customer-impact")[0]))}</p>` : ""}
+      ${pagesList ? `<div class="chips">${pageChips(pagesList)}</div>` : ""}
+    </article>`));
+  }
+  for (const g of all("good-patterns > pattern")) $("#good").append(h(`<li><code>${esc(g.getAttribute("page"))}</code><br>${esc(txt(g))}</li>`));
+
+  // Research
+  const cr = $("competitor-research", doc);
+  $("#research-lede").textContent = `Researched ${cr.getAttribute("date")} from each vendor's own help pages and app-store listings. “snippet” means only a search summary could be read; “vendor” means the vendor's own claim.`;
+  for (const p of kids(cr, "product")) {
+    const rows = [...p.children].filter((c) => c.tagName !== "sources").map((c) => `<dt>${esc(c.tagName.replace(/-/g, " "))}</dt><dd>${esc(txt(c))}</dd>`).join("");
+    const src = kids(kids(p, "sources")[0], "source").map((s) => `<a href="${esc(s.getAttribute("url"))}" target="_blank" rel="noopener">${esc(s.getAttribute("url").replace(/^https?:\/\//, ""))}</a>${s.getAttribute("verified") !== "read" ? ` <em>(${esc(s.getAttribute("verified"))})</em>` : ""}`).join("");
+    $("#products").append(h(`<article class="product"><h3>${esc(p.getAttribute("name"))}</h3><div class="kind">${esc(p.getAttribute("kind"))}</div><dl>${rows}</dl><div class="sources">${src}</div></article>`));
+  }
+  for (const p of all("shared-patterns > pattern")) $("#patterns").append(h(`<li>${esc(txt(p))}</li>`));
+  $("#not-verified").textContent = "Not verified: " + txt($("not-verified", doc));
+
+  // Proposal
+  const rp = $("redesign-proposal", doc);
+  $("#proposal-lede").textContent = rp.getAttribute("principle") + " This is a proposal: it changes where things live and what is automatic, not the visual design.";
+  for (const it of all("target-navigation > item")) {
+    const blocks = all("contents > block", it).map((b) => `<li><b>${esc(b.getAttribute("name"))}.</b> ${esc(txt(b))}</li>`).join("");
+    const tabsEl = kids(it, "tabs")[0];
+    const tabs = tabsEl ? (kids(tabsEl, "tab").length ? `<ul>${kids(tabsEl, "tab").map((t) => `<li><b>${esc(t.getAttribute("name"))}.</b> ${esc(txt(t))}</li>`).join("")}</ul>` : `<p><b>Tabs:</b> ${esc(txt(tabsEl))}</p>`) : "";
+    const secs = all("sections > section", it).map((s) => `<li><b>${esc(s.getAttribute("name"))}</b>${txt(s) ? ". " + esc(txt(s)) : ""}</li>`).join("");
+    const from = kids(it, "moves-from")[0];
+    $("#navplan").append(h(`<article class="navitem">
+      <header><span class="n">${esc(it.getAttribute("order"))}</span><h3>${esc(it.getAttribute("label"))}</h3>${it.getAttribute("shownWhen") ? `<span class="when">${esc(it.getAttribute("shownWhen"))}</span>` : ""}</header>
+      <p>${esc(txt(kids(it, "purpose")[0]))}</p>
+      ${blocks ? `<ol>${blocks}</ol>` : ""}${tabs}${secs ? `<ul>${secs}</ul>` : ""}
+      ${from ? `<div class="from"><b>Replaces:</b> ${esc(txt(from))}</div>` : ""}
+    </article>`));
+  }
+  for (const r of all("automation-by-default > rule")) $("#auto").append(h(`<li>${esc(txt(r))}</li>`));
+  for (const s of all("whatsapp-simplification > step")) $("#wa").append(h(`<li>${esc(txt(s))}</li>`));
+  for (const t of all("plain-words > term")) $("#gloss").append(h(`<tr><td>${esc(t.getAttribute("today"))}</td><td>${esc(t.getAttribute("use"))}</td></tr>`));
+  for (const ph of all("roadmap > phase")) $("#roadmap").append(h(`<article class="phase"><span class="n">Phase ${esc(ph.getAttribute("n"))}</span><h3>${esc(ph.getAttribute("name"))}</h3><ul>${kids(ph, "task").map((t) => `<li>${esc(txt(t))}</li>`).join("")}</ul></article>`));
+
+  // Views (with #screens / #findings / #research / #proposal links)
+  const tabs = [...document.querySelectorAll("nav.views button")];
+  function show(v) {
+    tabs.forEach((t) => t.setAttribute("aria-selected", String(t.dataset.view === v)));
+    document.querySelectorAll("section.view").forEach((s) => { s.hidden = s.dataset.view !== v; });
+    try { history.replaceState(null, "", "#" + v); } catch {}
+  }
+  tabs.forEach((t) => t.addEventListener("click", () => { show(t.dataset.view); window.scrollTo({ top: 0 }); }));
+  const start = (location.hash || "").slice(1);
+  if (["screens", "findings", "research", "proposal"].includes(start)) show(start);
+})();
+</script>
+
+</body>
+</html>

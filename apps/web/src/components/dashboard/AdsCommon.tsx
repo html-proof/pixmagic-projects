@@ -5,10 +5,11 @@ import { adAccountStatusLabel, adErrorMessage, isAdAccountStatus, isAdErrorCode,
 import { addDays } from "@app/shared/dates";
 import { weekdayOf } from "@app/shared/sales";
 import { Alert } from "@/components/ui";
+import { AD_STATE, syncRunning } from "@/lib/adConnections";
 import { upToWords } from "./adFigures";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtSpan, fmtWeekday } from "./format";
 import type { Column } from "./ColumnsWithTotal";
-import { Delta, NeutralDelta } from "./Primitives";
+import { Badge, Delta, NeutralDelta } from "./Primitives";
 import type { AdAccount, AdFigures, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -63,21 +64,51 @@ export function dailyMoneyColumns<D extends { day: string }>(series: D[], value:
   });
 }
 
-type AccountState = Pick<AdAccount, "counted" | "status" | "lastSyncedAt" | "coverage" | "unsplitThrough">;
+type AccountState = Pick<AdAccount, "counted" | "status" | "lastSyncedAt" | "coverage" | "unsplitThrough" | "syncRequestedAt">;
 
 /** Nothing stored yet: never synced (older answers say so by lastSyncedAt alone). Days AdSense didn't split by site were read. */
-const neverRead = (acc: AccountState) => (acc.coverage ? acc.coverage.through === null && !acc.unsplitThrough : !acc.lastSyncedAt);
+const neverRead = (acc: Pick<AccountState, "coverage" | "unsplitThrough" | "lastSyncedAt">) => (acc.coverage ? acc.coverage.through === null && !acc.unsplitThrough : !acc.lastSyncedAt);
+
+/**
+ * A sync someone asked for after the first one (Refresh, Sync all now, turning the account back on) is
+ * on its way: what Settings shows as "Synchronizing" (connectionState in lib/adConnections), told the
+ * same way (syncRunning: asked for, not finished, and not so long ago that it was lost). Never for an
+ * account waiting for a reconnect, for which nothing is queued, nor for a working one's first sync
+ * (still "Fetching history"); for one whose syncs fail, whether or not one ever worked. Every account
+ * listed here is shown on the dashboard (the ones hidden from it aren't read), so it counts as enabled.
+ */
+export function refreshing(acc: Pick<AdAccount, "status" | "lastSyncedAt" | "syncRequestedAt">, now = Date.now()): boolean {
+  if (acc.status === "reconnect" || (acc.status === "active" && !acc.lastSyncedAt)) return false;
+  return syncRunning({ enabled: true, syncRequestedAt: acc.syncRequestedAt ?? null }, now);
+}
+
+/** "Synchronizing", with when the figures shown were last synced when one ever was. */
+const synchronizingWords = (acc: Pick<AdAccount, "lastSyncedAt">) =>
+  acc.lastSyncedAt ? `${AD_STATE.synchronizing.label} · last synced ${fmtRelative(acc.lastSyncedAt)}` : AD_STATE.synchronizing.label;
 
 /**
  * Accounts left out of the totals (another currency), those still being read for the first time,
- * and those whose updates don't work (whatever they stored before: their days since are missing).
+ * those whose updates don't work (whatever they stored before: their days since are missing), and
+ * working ones a refresh is on its way for (their figures are the last sync's meanwhile).
  */
 export function accountGroups<A extends AccountState>(accounts: A[]) {
   return {
     left: accounts.filter((acc) => !acc.counted),
     waiting: accounts.filter((acc) => acc.counted && acc.status === "active" && neverRead(acc)),
     failing: accounts.filter((acc) => acc.counted && acc.status !== "active"),
+    refreshing: accounts.filter((acc) => acc.counted && acc.status === "active" && !neverRead(acc) && refreshing(acc)),
   };
+}
+
+/** Sync data now (Settings → Advertising) asks again for it: its syncs fail, and the platform hasn't closed it. */
+const retryable = (acc: Pick<AdAccount, "status" | "errorCode" | "accountStatus">) => (acc.status === "error" || acc.status === "unavailable") && !isClosedAdAccount(acc);
+
+/** When it was last tried, if that was after its last sync that worked (null: not known, or that one worked). */
+function lastTried(acc: Pick<AdAccount, "lastSyncedAt" | "lastSyncAttemptAt">): string | null {
+  const tried = acc.lastSyncAttemptAt ? Date.parse(acc.lastSyncAttemptAt) : NaN;
+  if (Number.isNaN(tried)) return null;
+  const worked = acc.lastSyncedAt ? Date.parse(acc.lastSyncedAt) : NaN;
+  return Number.isNaN(worked) || tried > worked ? acc.lastSyncAttemptAt! : null;
 }
 
 /** The reason an account isn't working, as a code: its own, or for an older answer without one, its status's usual one. */
@@ -138,43 +169,70 @@ export function timeZoneNote(accounts: AdAccount[]): string | null {
     : `${who} days follow their own time zones (${zones.join(", ")}), not your store's.`;
 }
 
-/** An account's sync state, at the end of its row in the accounts list. */
-export function AccountStatus({ acc }: { acc: Pick<AdAccount, "status" | "lastSyncedAt" | "provider" | "accountStatus" | "coverage"> }) {
+/**
+ * An account's sync state, at the end of its row in the accounts list: while a refresh is on its way,
+ * that, with when its figures were last synced; for one whose syncs fail, when it was last tried.
+ */
+export function AccountStatus({
+  acc,
+}: {
+  acc: Pick<AdAccount, "status" | "lastSyncedAt" | "provider" | "accountStatus" | "coverage" | "syncRequestedAt" | "lastSyncAttemptAt">;
+}) {
   const label = adAccountStatusLabel(isAdAccountStatus(acc.accountStatus) ? acc.accountStatus : null, acc.provider);
   const through = acc.coverage?.through;
+  const tried = lastTried(acc);
   const [text, tone] =
     acc.status === "reconnect"
       ? ["Needs reconnecting", "text-danger"]
-      : acc.status === "permission"
-        ? ["No access to this account", "text-danger"]
-        : acc.status === "unavailable"
-          ? [label ?? `Unavailable at ${PLATFORM_NAME[acc.provider]}`, "text-warn"]
-          : acc.status === "error"
-            ? ["Sync problem", "text-warn"]
-            : [acc.lastSyncedAt ? `Synced ${fmtRelative(acc.lastSyncedAt)}` : "Fetching history…", "text-muted"];
+      : refreshing(acc)
+        ? [synchronizingWords(acc), "text-muted"]
+        : acc.status === "permission"
+          ? ["No access to this account", "text-danger"]
+          : acc.status === "unavailable"
+            ? [label ?? `Unavailable at ${PLATFORM_NAME[acc.provider]}`, "text-warn"]
+            : acc.status === "error"
+              ? [`Sync problem${tried ? ` · last tried ${fmtRelative(tried)}` : ""}`, "text-warn"]
+              : [acc.lastSyncedAt ? `Synced ${fmtRelative(acc.lastSyncedAt)}` : "Fetching history…", "text-muted"];
   return (
-    <span className={`text-xs ${tone}`}>
+    <span className={`text-xs ${tone}`} data-testid="ad-account-status">
       {text}
       {acc.status !== "active" && through ? ` · figures up to ${fmtDay(through, { year: false })}` : ""}
     </span>
   );
 }
 
+/** A small spinning ring: something is on its way. */
+const Spinner = () => <span aria-hidden className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />;
+
 /**
- * What's wrong or still loading, per account, in words: first syncs on their way, and accounts
- * whose updates stopped (why, and what fixes it).
+ * What's wrong or still loading, per account, in words: first syncs on their way, refreshes someone
+ * asked for (the figures meanwhile are the last sync's), and accounts whose updates stopped (why, and
+ * what fixes it: reconnecting, or for a sync that failed, trying again from Settings).
  */
 export function AdStatusNotes({ accounts, manage }: { accounts: AdAccount[]; manage: boolean }) {
-  const { waiting, failing } = accountGroups(accounts);
-  if (!waiting.length && !failing.length) return null;
+  const { waiting, failing, refreshing: updating } = accountGroups(accounts);
+  if (!waiting.length && !failing.length && !updating.length) return null;
   const reconnect = failing.some((a) => a.status === "reconnect" || a.status === "permission");
+  // One already being tried again needs nothing pressed.
+  const retry = failing.some((a) => retryable(a) && !refreshing(a));
   return (
     <div className="mb-3 space-y-2" data-testid="ads-status-notes">
       {waiting.length > 0 && (
         <Alert kind="info">
           <span className="inline-flex items-center gap-2">
-            <span aria-hidden className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <Spinner />
             Fetching the last 90 days from {waiting.map(nameOf).join(", ")}. Their figures fill in within a few minutes; this page updates by itself.
+          </span>
+        </Alert>
+      )}
+      {updating.length > 0 && (
+        <Alert kind="info">
+          <span className="inline-flex items-center gap-2" data-testid="ads-refreshing">
+            <Spinner />
+            <span>
+              {AD_STATE.synchronizing.label} {updating.map((a) => (a.lastSyncedAt ? `${nameOf(a)}, last synced ${fmtRelative(a.lastSyncedAt)}` : nameOf(a))).join("; ")}. Until the new figures land, the
+              ones here are from that sync; this page updates by itself.
+            </span>
           </span>
         </Alert>
       )}
@@ -194,10 +252,11 @@ export function AdStatusNotes({ accounts, manage }: { accounts: AdAccount[]; man
                     : neverRead(a)
                       ? "Nothing could be read from it yet."
                       : ""}
+                {refreshing(a) ? " Trying again now." : ""}
               </li>
             ))}
           </ul>
-          {reconnect && (
+          {reconnect ? (
             <p className="mt-1">
               {manage ? (
                 <Link className="font-medium underline" href="/settings/ads">
@@ -207,6 +266,17 @@ export function AdStatusNotes({ accounts, manage }: { accounts: AdAccount[]; man
                 "Ask a workspace owner or admin to reconnect."
               )}
             </p>
+          ) : (
+            // Sync data now on Settings → Advertising queues its sync again (POST …/ads/sync).
+            retry &&
+            manage && (
+              <p className="mt-1" data-testid="ads-try-again">
+                <Link className="font-medium underline" href="/settings/ads">
+                  Try again in Settings
+                </Link>{" "}
+                with Sync data now. bizinsights also keeps trying by itself.
+              </p>
+            )
           )}
         </Alert>
       )}
@@ -311,7 +381,11 @@ export const AD_DEFINITIONS: Array<[string, ReactNode]> = [
 ];
 
 export const ADSENSE_DEFINITIONS: Array<[string, ReactNode]> = [
-  ["Estimated earnings", "What AdSense estimates the ads on your site earned. AdSense finalizes each month after it ends, so recent days can still change; it isn't money paid out yet."],
+  ["Estimated earnings", "What AdSense estimates the ads on your site earned. AdSense finalizes each month in the first days of the next, so recent days can still change."],
+  [
+    "Estimated or Final",
+    "Final: every day of the figures is in a month AdSense has finalized, and bizinsights has read it again since. Estimated: some of the days can still change.",
+  ],
   ["Page views", "Pages on your site that showed AdSense ads, as AdSense counts them."],
   ["Impressions", "AdSense counts one for each ad request where at least one ad was delivered to the page, not one for every ad shown."],
   ["Click-through rate (CTR)", "Clicks ÷ impressions."],
@@ -319,6 +393,35 @@ export const ADSENSE_DEFINITIONS: Array<[string, ReactNode]> = [
   ["Page RPM", "Estimated earnings × 1,000 ÷ page views: what a thousand page views earn."],
   ["Impression RPM", "Estimated earnings × 1,000 ÷ impressions."],
 ];
+
+/** The live AdSense report's own figures (never stored), beside the ones above. */
+export const ADSENSE_REPORT_DEFINITIONS: Array<[string, ReactNode]> = [
+  ["Ad requests", "Times an ad unit on your pages asked AdSense for ads. One request can show no ad, one, or several."],
+  ["Coverage", "The share of those requests that got an ad back."],
+  ["Active View viewable", "Of the impressions Active View could measure, the share that were viewable: at least half of the ad on screen for at least a second."],
+  ["Ad unit", "An ad unit as it is named in your AdSense account. Its row counts only what it earned on this store's sites."],
+];
+
+/**
+ * Whether AdSense earnings are final or still AdSense's estimate (`final` in the API's AdSense
+ * figures, or the live report's dates against adsenseFinalThrough). Nothing for an answer from
+ * before the API said.
+ */
+export function EarningsState({ final }: { final: boolean | undefined }) {
+  if (final === undefined) return null;
+  return (
+    <span
+      data-testid="adsense-final"
+      data-final={final}
+      title={final ? "AdSense has finalized every day of these figures." : "AdSense's estimate: it finalizes each month in the first days of the next, so these can still change."}
+    >
+      <Badge tone={final ? "good" : "neutral"}>{final ? "Final" : "Estimated"}</Badge>
+    </span>
+  );
+}
+
+/** The earnings' name beside the figure: AdSense's own "Estimated earnings" until they are final. */
+export const earningsLabel = (final: boolean | undefined) => (final ? "Earnings (final)" : "Estimated earnings");
 
 /** A small, folded list of what each measure means, under a card or a report. */
 export function Definitions({ items, title = "What these figures mean" }: { items: Array<[string, ReactNode]>; title?: string }) {

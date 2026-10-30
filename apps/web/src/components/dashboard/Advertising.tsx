@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { groupSeries } from "@app/shared/ads";
+import { periodsOf, type PeriodGranularity } from "@app/shared/dates";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import {
@@ -11,6 +13,7 @@ import {
   ChangeNote,
   ComparedLine,
   Definitions,
+  earningsLabel,
   SoFarNote,
   timeZoneNote,
   UNAVAILABLE,
@@ -18,9 +21,10 @@ import {
 } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
 import { noEarlierData } from "./DateRange";
-import { fmtDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtTimes, plural } from "./format";
+import { fmtDay, fmtMoneyCompact, fmtMoneyWhole, fmtPeriod, fmtRange, fmtRelative, fmtTimes, periodChoices, plural } from "./format";
 import { Icon } from "./Icons";
 import { LineChart, type LineSeries } from "./LineChart";
+import { ChartChoice } from "./Primitives";
 import type { AdAccount, AdFigures, AdsenseModule, AdsModule, AdsProviderFigures, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -54,7 +58,7 @@ const PLATFORM: Record<Provider, { name: string; short: string; Icon: (p: { size
     short: "AdSense",
     Icon: GoogleIcon,
     color: "var(--viz-cat-3)",
-    explain: "What AdSense estimates the ads shown on your site earned you. It finalizes each month after it ends.",
+    explain: "What AdSense estimates the ads shown on your site earned you. It finalizes each month in the first days of the next.",
   },
 };
 
@@ -343,7 +347,7 @@ function EarningsCard({ a, ov }: { a: AdsenseModule; ov: Overview }) {
       note={[timeZoneNote(accounts), historyNote(a, "adsense"), leftOut].filter(Boolean).join(" ") || null}
       testid="ads-earnings"
     >
-      <Headline label="Estimated earnings" fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
+      <Headline label={earningsLabel(a.final)} fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
       {c && (
         <Facts
           items={[
@@ -377,17 +381,32 @@ function perPlatform(pick: (p: Provider) => Array<number | null> | null): LineSe
     .map(({ p, values }) => ({ key: p, label: PLATFORM[p].name, color: PLATFORM[p].color, values }));
 }
 
+/**
+ * The platforms' figures over the dates: per day, or added up per week (Monday to Sunday) or month
+ * (`groupSeries`), where a period missing any day's figures is left blank like a missing day.
+ */
 function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
   const ads = ov.modules.ads;
   const sense = ov.modules.adsense;
-  const days = (ads?.series ?? sense?.series ?? []).map((d) => d.day);
-  const byP = (p: "meta" | "google") => ads?.seriesByProvider.find((s) => s.provider === p)?.series ?? null;
+  const [pickedBy, setBy] = useState<PeriodGranularity>("day");
+  const choices = periodChoices(ov.range);
+  const by = choices.some(([g]) => g === pickedBy) ? pickedBy : "day";
+  const group = <T extends { day: string }>(s: T[]) => (by === "day" ? s : groupSeries(s, ov.range, by));
+  const points = group<{ day: string }>(ads?.series ?? sense?.series ?? []);
+  const days = points.map((d) => d.day);
+  const periods = by === "day" ? undefined : periodsOf(ov.range, by).map((p) => ({ tick: fmtPeriod(p, by, "tick"), long: fmtPeriod(p, by, "long") }));
+  const senseSeries = sense ? group(sense.series) : null;
+  const byP = (p: "meta" | "google") => {
+    const s = ads?.seriesByProvider.find((x) => x.provider === p)?.series;
+    return s ? group(s) : null;
+  };
+  const per = by;
   const sameMoney = !ads || !sense || ads.currency === sense.currency;
   const spendSeries = perPlatform((p) => (p === "adsense" ? null : (byP(p)?.map((d) => d.spend) ?? null))).map((s) => ({ ...s, label: `${s.label} spend` }));
-  const earnSeries: LineSeries[] = sense ? [{ key: "adsense", label: "AdSense estimated earnings", color: PLATFORM.adsense.color, values: sense.series.map((d) => d.earnings) }] : [];
-  const impressions = perPlatform((p) => (p === "adsense" ? (sense?.series.map((d) => d.impressions) ?? null) : (byP(p)?.map((d) => d.impressions) ?? null)));
+  const earnSeries: LineSeries[] = senseSeries ? [{ key: "adsense", label: "AdSense estimated earnings", color: PLATFORM.adsense.color, values: senseSeries.map((d) => d.earnings) }] : [];
+  const impressions = perPlatform((p) => (p === "adsense" ? (senseSeries?.map((d) => d.impressions) ?? null) : (byP(p)?.map((d) => d.impressions) ?? null)));
   // Link clicks for the ad platforms; AdSense's clicks are clicks on the ads on your site.
-  const clicks = perPlatform((p) => (p === "adsense" ? (sense?.series.map((d) => d.clicks) ?? null) : (byP(p)?.map((d) => d.linkClicks) ?? null)));
+  const clicks = perPlatform((p) => (p === "adsense" ? (senseSeries?.map((d) => d.clicks) ?? null) : (byP(p)?.map((d) => d.linkClicks) ?? null)));
   const unread = (s: LineSeries[]) => s.every((x) => x.values.every((v) => v === null));
   const quiet = (s: LineSeries[]) => s.every((x) => x.values.every((v) => v === null || v === 0));
 
@@ -399,7 +418,7 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
     ) : quiet(series) && series.every((x) => x.values.every((v) => v !== null)) ? (
       <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted">No ad activity in these dates.</p>
     ) : (
-      <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={label} today={ov.today} integer={integer} />
+      <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={label} today={by === "day" ? ov.today : undefined} integer={integer} periods={periods} />
     );
 
   const moneyCur = ads?.currency ?? sense?.currency ?? "USD";
@@ -408,34 +427,46 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
   const axis = (cur: string) => (v: number, step: number) => (step < 1 ? fmtMoney(v, cur) : fmtMoneyCompact(v, cur));
   const count = (v: number) => new Intl.NumberFormat(undefined, { notation: "compact" }).format(v);
   const span = fmtRange(ov.range.from, ov.range.to);
-  const gaps = [...spendSeries, ...earnSeries].some((s) => s.values.some((v) => v === null)) ? " Days a platform has no figures for yet are left blank, not drawn as 0." : "";
+  const gaps = [...spendSeries, ...earnSeries].some((s) => s.values.some((v) => v === null))
+    ? by === "day"
+      ? " Days a platform has no figures for yet are left blank, not drawn as 0."
+      : ` A ${per} a platform lacks any day's figures for is left blank, not drawn as a lower figure.`
+    : "";
+  const weeks = by === "week" ? " Weeks run Monday to Sunday." : "";
+  // The chart's name for screen readers is its title: "spend and earnings" only when both are drawn.
+  const moneyTitle = ads && sense ? `Ad spend and estimated ad earnings per ${per}` : ads ? `Ad spend per ${per}` : `Estimated ad earnings per ${per}`;
 
   return (
     <div className="mt-4 space-y-4">
+      {choices.length > 1 && (
+        <div className="flex justify-end">
+          <ChartChoice<PeriodGranularity> label="Ad charts group" value={by} onChange={setBy} options={choices} />
+        </div>
+      )}
       {sameMoney ? (
         <ChartCard
-          title={ads && sense ? "Ad spend and estimated ad earnings per day" : ads ? "Ad spend per day" : "Estimated ad earnings per day"}
-          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; estimated earnings are what AdSense expects to pay you, not money paid out yet." : ""}${gaps}`}
+          title={moneyTitle}
+          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; earnings are AdSense's estimate until it finalizes each month, in the first days of the next." : ""}${weeks}${gaps}`}
           testid="ads-money-chart"
         >
-          {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `Ad spend and earnings per day, ${span}`)}
+          {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `${moneyTitle}, ${span}`)}
         </ChartCard>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
-          <ChartCard title="Ad spend per day" sub={`${span}, in ${ads!.currency}.${gaps}`} testid="ads-money-chart">
-            {plot(spendSeries, money(ads!.currency), axis(ads!.currency), `Ad spend per day, ${span}`)}
+          <ChartCard title={`Ad spend per ${per}`} sub={`${span}, in ${ads!.currency}.${weeks}${gaps}`} testid="ads-money-chart">
+            {plot(spendSeries, money(ads!.currency), axis(ads!.currency), `Ad spend per ${per}, ${span}`)}
           </ChartCard>
-          <ChartCard title="Estimated ad earnings per day" sub={`${span}, in ${sense!.currency}.`} testid="ads-earnings-chart">
-            {plot(earnSeries, money(sense!.currency), axis(sense!.currency), `Ad earnings per day, ${span}`)}
+          <ChartCard title={`Estimated ad earnings per ${per}`} sub={`${span}, in ${sense!.currency}.${weeks}`} testid="ads-earnings-chart">
+            {plot(earnSeries, money(sense!.currency), axis(sense!.currency), `Ad earnings per ${per}, ${span}`)}
           </ChartCard>
         </div>
       )}
       <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="Impressions per day" sub="Times ads were shown, by platform (AdSense: ad requests that delivered an ad)." testid="ads-impressions-chart">
-          {plot(impressions, fmtNum, count, `Impressions per day by platform, ${span}`, true)}
+        <ChartCard title={`Impressions per ${per}`} sub="Times ads were shown, by platform (AdSense: ad requests that delivered an ad)." testid="ads-impressions-chart">
+          {plot(impressions, fmtNum, count, `Impressions per ${per} by platform, ${span}`, true)}
         </ChartCard>
-        <ChartCard title="Link clicks per day" sub="Clicks on the ads' links, by platform (AdSense: clicks on the ads on your site)." testid="ads-clicks-chart">
-          {plot(clicks, fmtNum, count, `Link clicks per day by platform, ${span}`, true)}
+        <ChartCard title={`Link clicks per ${per}`} sub="Clicks on the ads' links, by platform (AdSense: clicks on the ads on your site)." testid="ads-clicks-chart">
+          {plot(clicks, fmtNum, count, `Link clicks per ${per} by platform, ${span}`, true)}
         </ChartCard>
       </div>
     </div>
@@ -496,7 +527,7 @@ function Comparison({ ov }: { ov: Overview }) {
     <div className="card mt-4 min-w-0" data-testid="ads-comparison">
       <h3 className="font-semibold">By platform</h3>
       <p className="text-xs text-muted">
-        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is AdSense&apos;s estimate of what it will pay you, not money paid out yet.
+        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is what AdSense says the ads on your site earned, its estimate until it finalizes the month.
       </p>
       <div className="-mx-1 mt-3 overflow-x-auto">
         <table className="w-full min-w-[46rem] text-sm">

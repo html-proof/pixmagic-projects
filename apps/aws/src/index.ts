@@ -5,9 +5,9 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_GEO_HEADER, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
-import { configReport, defaultShard, evolutionStatus, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
+import { configReport, defaultShard, evolutionStatus, logger, memoryBlobs, memoryCoord, reportUnscopedSystemQueries, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { productCheck, shopifyCheckReport } from "@app/core/reports";
-import { systemDb } from "@app/db";
+import { crossTenant, systemDb } from "@app/db";
 import { apiDeps, originCheck } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
@@ -41,6 +41,9 @@ import { staticSite } from "./staticSite.js";
  * configuration (secrets.ts). local.ts runs the same app on one machine, without any of them.
  */
 const here = dirname(fileURLToPath(import.meta.url));
+
+// A system query that names no row scope is logged with where it came from (docs/system-database-role.md).
+reportUnscopedSystemQueries();
 
 /** Set by the CloudFront viewer-request function from what CloudFront itself saw (infra/cdk). */
 const VIEWER_IP = "x-insights-viewer-ip";
@@ -240,7 +243,7 @@ export const handler = async (event: unknown, context: unknown) => {
   const action = event && typeof event === "object" ? (event as Partial<Action>).action : undefined;
   if (action === "after-move") {
     // Once, after the database is copied in from another deployment (docs/aws-deployment.md, Cutover).
-    const result = await seedAfterMove(await jobs());
+    const result = await crossTenant("maintenance", async () => seedAfterMove(await jobs()));
     logger.info(result, "after-move repair queued");
     return result;
   }
@@ -248,38 +251,45 @@ export const handler = async (event: unknown, context: unknown) => {
     // After each deploy's migrations: stores whose orders lack their sales records or their
     // customer's history (seedSalesRereads), and new vs returning customers settled again.
     const deps = await jobs();
-    const settledDays = await settleAllCustomers(deps);
-    const queued = await seedSalesRereads(deps);
-    return { queued, settledDays };
+    return crossTenant("maintenance", async () => {
+      const settledDays = await settleAllCustomers(deps);
+      const queued = await seedSalesRereads(deps);
+      return { queued, settledDays };
+    });
   }
   if (action === "verify") {
     // Check stores' figures against Shopify now (docs/RUNBOOK.md); the daily check runs by itself.
     const e = event as Partial<Action>;
-    return startChecks(await jobs(), {
+    const deps = await jobs();
+    return crossTenant("maintenance", () => startChecks(deps, {
       shop: typeof e.shop === "string" ? e.shop : undefined,
       days: typeof e.days === "number" && e.days >= 1 && e.days <= 366 ? Math.floor(e.days) : undefined,
       dryRun: e.dryRun === true,
-    });
+    }));
   }
   if (action === "shopify-check") {
     // The reconciliation report for one store (core reports/shopifyCheck.ts): every figure of the
     // standard periods, ours next to Shopify's own reports, read live. Read-only; docs/RUNBOOK.md.
     const shop = (event as Partial<Action>).shop;
     const deps = await jobs();
-    const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
-    if (!store) return { error: "unknown_shop" };
-    return shopifyCheckReport(systemDb, store, deps);
+    return crossTenant("maintenance", async () => {
+      const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
+      if (!store) return { error: "unknown_shop" };
+      return shopifyCheckReport(systemDb, store, deps);
+    });
   }
   if (action === "product-check") {
     const e = event as Partial<Action>;
     const deps = await jobs();
-    const stores = await systemDb.store.findMany({ where: { status: "active", ...(e.shop ? { shopDomain: e.shop } : {}) } });
-    const results = [];
-    for (const store of stores) {
-      try { results.push(await productCheck(systemDb, store, deps, e.dateFrom && e.dateTo ? { from: e.dateFrom, to: e.dateTo } : undefined)); }
-      catch (err) { results.push({ shop: store.shopDomain, status: "not_verifiable", reason: err instanceof Error ? err.message : "Report failed" }); }
-    }
-    return { results };
+    return crossTenant("maintenance", async () => {
+      const stores = await systemDb.store.findMany({ where: { status: "active", ...(e.shop ? { shopDomain: e.shop } : {}) } });
+      const results = [];
+      for (const store of stores) {
+        try { results.push(await productCheck(systemDb, store, deps, e.dateFrom && e.dateTo ? { from: e.dateFrom, to: e.dateTo } : undefined)); }
+        catch (err) { results.push({ shop: store.shopDomain, status: "not_verifiable", reason: err instanceof Error ? err.message : "Report failed" }); }
+      }
+      return { results };
+    });
   }
   if (action === "cost-report") {
     // The owner's daily AWS cost email (costReport.ts): one Cost Explorer call, sent through Resend.
@@ -307,20 +317,25 @@ export const handler = async (event: unknown, context: unknown) => {
     // the service starts (infra/cdk/lib/whatsapp-stack.ts). Idempotent; the password comes from its secret.
     await ensureSecrets();
     const e = process.env;
-    if (!e.DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
-    const result = await ensureEvolutionDb({ databaseUrl: e.DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
+    if (!e.OWNER_DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
+    const result = await ensureEvolutionDb({ databaseUrl: e.OWNER_DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
     logger.info(result, "evolution database ready");
     return result;
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();
-    if (!process.env.DATABASE_URL) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
-    if (action === "counts") return tableCounts(process.env.DATABASE_URL);
+    // The owner's login (only the cron is given it): migrations change tables, which the system role can't.
+    const ownerUrl = process.env.OWNER_DATABASE_URL;
+    if (!ownerUrl) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
+    if (action === "counts") return tableCounts(ownerUrl);
+    // Without it init.sql would make the system role with its development password.
+    if (process.env.NODE_ENV === "production" && !process.env.SYSTEM_DB_PASSWORD) throw new Error("SYSTEM_DB_SECRET_ARN is not set (insights/<env>/db-system)");
     const result = await migrate({
-      databaseUrl: process.env.DATABASE_URL,
+      databaseUrl: ownerUrl,
       migrationsDir: join(here, "migrations"),
       initSql: readFileSync(join(here, "init.sql"), "utf8"),
       appRlsPassword: process.env.APP_RLS_PASSWORD,
+      systemPassword: process.env.SYSTEM_DB_PASSWORD,
     });
     logger.info(result, "migrations applied");
     return result;

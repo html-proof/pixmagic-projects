@@ -108,7 +108,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
 
-      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous)}.`}>
+      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous, ov.range)}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} label={versus} />} />}
           {custom && <Stat label={`Custom sales · ${custom.name}`} value={money(custom.current)} note={<Delta value={custom.delta} label={versus} />} />}

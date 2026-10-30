@@ -9,7 +9,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/adsAnalytics), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, daysBetweenInclusive, eachDay } from "./dates";
+import { addDays, daysBetweenInclusive, eachDay, periodsOf, PERIOD_GRANULARITIES, type PeriodGranularity } from "./dates";
 import type { AdDayRow, GoogleReportMetrics } from "./ads";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -79,8 +79,8 @@ export function metricsOf(t: AdsSums): AdsMetrics {
 // Series: the figures per day, week (Monday to Sunday) or month, every period of the range present.
 // ---------------------------------------------------------------------------
 
-export const ADS_GRANULARITIES = ["day", "week", "month"] as const;
-export type AdsGranularity = (typeof ADS_GRANULARITIES)[number];
+export const ADS_GRANULARITIES = PERIOD_GRANULARITIES;
+export type AdsGranularity = PeriodGranularity;
 
 export interface AdsPeriod extends AdsMetrics {
   /** The period's first day (the day itself, the week's Monday, the month's first), clipped to the range. */
@@ -88,42 +88,6 @@ export interface AdsPeriod extends AdsMetrics {
   to: string;
   /** "2026-10-19" for a day, "2026-W42" for a week, "2026-10" for a month. */
   key: string;
-}
-
-/** The Monday of the week `day` is in. */
-export function weekStart(day: string): string {
-  const wd = new Date(`${day}T00:00:00Z`).getUTCDay();
-  return addDays(day, -((wd + 6) % 7));
-}
-
-/** ISO week label, "2026-W42". */
-export function weekKey(day: string): string {
-  const d = new Date(`${day}T00:00:00Z`);
-  // ISO weeks: the week with the year's first Thursday is week 1.
-  const target = new Date(d.getTime());
-  target.setUTCDate(target.getUTCDate() + 3 - ((target.getUTCDay() + 6) % 7));
-  const year = target.getUTCFullYear();
-  const firstThursday = new Date(Date.UTC(year, 0, 4));
-  const week = 1 + Math.round(((target.getTime() - firstThursday.getTime()) / 86_400_000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
-  return `${year}-W${String(week).padStart(2, "0")}`;
-}
-
-const monthStart = (day: string) => `${day.slice(0, 7)}-01`;
-
-/** The periods of [from, to] at `g`: each with its first and last day inside the range. */
-export function periodsOf(range: { from: string; to: string }, g: AdsGranularity): Array<{ key: string; from: string; to: string }> {
-  if (range.from > range.to) return [];
-  if (g === "day") return eachDay(range.from, range.to).map((d) => ({ key: d, from: d, to: d }));
-  const out: Array<{ key: string; from: string; to: string }> = [];
-  let start = range.from;
-  while (start <= range.to) {
-    const periodStart = g === "week" ? weekStart(start) : monthStart(start);
-    const next = g === "week" ? addDays(periodStart, 7) : addDays(monthStart(addDays(periodStart, 31)), 0);
-    const end = addDays(next, -1);
-    out.push({ key: g === "week" ? weekKey(periodStart) : periodStart.slice(0, 7), from: start, to: end < range.to ? end : range.to });
-    start = next;
-  }
-  return out;
 }
 
 export function adsSeries(rows: ReadonlyArray<AdDayRow>, range: { from: string; to: string }, g: AdsGranularity): AdsPeriod[] {

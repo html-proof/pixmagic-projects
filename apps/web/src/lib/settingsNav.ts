@@ -1,4 +1,4 @@
-import { Bell, Building2, CreditCard, FileLock2, KeyRound, Mail, Megaphone, Plug, ScrollText, ShieldCheck, Store, UserRound, UsersRound, type LucideIcon } from "lucide-react";
+import { Bell, Building2, CreditCard, FileLock2, KeyRound, Mail, Megaphone, Plug, ReceiptText, ScrollText, ShieldCheck, Store, UserRound, UsersRound, type LucideIcon } from "lucide-react";
 import { API_KEYS_ENABLED, BILLING_PAGE } from "@/lib/features";
 
 /**
@@ -13,6 +13,7 @@ export const SETTINGS_PAGES: ReadonlyArray<{ slug: string; label: string; icon: 
   { slug: "integrations", label: "Integrations", icon: Plug, keywords: "connect your business shopify whatsapp google meta adsense" },
   { slug: "stores", label: "Shopify", icon: Store, keywords: "stores connect disconnect" },
   { slug: "ads", label: "Advertising", icon: Megaphone, keywords: "meta google ads adsense" },
+  { slug: "costs", label: "Costs", icon: ReceiptText, keywords: "expenses net profit shopify plan apps staff rent fees shipping" },
   { slug: "email", label: "Email integrations", icon: Mail, keywords: "gmail outlook smtp" },
   { slug: "members", label: "Team & Access", icon: UsersRound, keywords: "team members roles invite users permissions share", href: "/team" },
   { slug: "notifications", label: "Notifications", icon: Bell, keywords: "alerts emails" },

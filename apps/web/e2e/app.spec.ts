@@ -6,7 +6,7 @@ import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, signedL
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Onboarding creates the workspace when the user clicks connect; tests that skip Shopify create it directly. */
@@ -618,7 +618,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   // Settings: Shopify, without the advertising, email and WhatsApp connections.
   await page.goto("/settings/integrations");
   await expect(page.getByTestId("int-shopify")).toBeVisible();
-  for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense"]) await expect(page.getByTestId(id)).toHaveCount(0);
+  for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense", "int-zapier"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
   await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
   for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);

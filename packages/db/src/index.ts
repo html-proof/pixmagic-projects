@@ -1,16 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
+import type { CrossTenantReason } from "./crossTenant.js";
 import { Prisma, PrismaClient } from "./generated/client.js";
 
+export * from "./crossTenant.js";
 export * from "./generated/client.js";
 
 /**
  * Database access.
  *
- * Two roles, same as before:
- *  - systemDb: owner connection. Bypasses RLS. Use ONLY for auth bootstrap,
- *    webhook intake, worker jobs, migrations. Every call site scopes by
- *    store/workspace explicitly.
+ * Two clients:
+ *  - systemDb: the system paths (auth bootstrap, webhook intake, worker jobs, sweeps). Its rows
+ *    are scoped where each request, job or sweep starts (forTenant / crossTenant / withoutTenant,
+ *    below), and every call site still scopes by store/workspace explicitly. Its login is the
+ *    non-owner role `app_system` (docs/system-database-role.md), on which those scopes are row-level
+ *    security; on the owner's login (production until the switch) they change nothing.
  *  - tenantDb: non-owner role `app_rls`. RLS policies apply, so a query that
  *    forgets a workspace filter still cannot read another tenant's rows.
  *
@@ -36,8 +41,8 @@ interface Scope {
   /** This invocation's connection pools, opened on first use. */
   system?: Promise<Adapter>;
   tenant?: Promise<Adapter>;
-  /** This invocation's Prisma request queues (see scopedQueues). */
-  queues?: Partial<Record<Role, Queue>>;
+  /** This invocation's Prisma request queues, one per role and row scope (see scopedQueues). */
+  queues?: Record<string, Queue>;
 }
 
 /** Prisma's per-client request queue (its internal DataLoader). */
@@ -99,7 +104,120 @@ function connection(role: Role): Promise<Adapter> {
   const url = role === "system" ? s.urls.system : tenantUrl(s.urls);
   // A function instance serves one request at a time: three connections per role cover a
   // request's parallel queries without crowding RDS's connection limit across many instances.
-  return (s[role] ??= new PrismaPg({ connectionString: url, max: 3 }).connect());
+  return (s[role] ??=
+    role === "system"
+      ? new PrismaPg(new SystemPool({ connectionString: url, max: 3 }), { disposeExternalPool: true }).connect()
+      : new PrismaPg({ connectionString: url, max: 3 }).connect());
+}
+
+/**
+ * Whose rows `systemDb` sees (docs/system-database-role.md).
+ *
+ * The system role is not the tables' owner, so row-level security applies to it as it does to
+ * app_rls: `forTenant` shows one workspace's rows, `crossTenant` every workspace's (for a reason on
+ * the reviewed list, crossTenant.ts), `withoutTenant` none, only the tables that belong to no
+ * workspace (people, sign-in). Each is set once where a request, a job or a sweep starts, and every
+ * `systemDb` call under it, however deep, inherits it.
+ *
+ * Unlike `withTenant` it is not a transaction: an ad sync waits seconds on Meta and must not hold one
+ * open. The two settings the policies read (app.scope, app.workspace_id) stay on each pooled
+ * connection instead, re-sent only when it was last checked out for another scope (SystemPool). A
+ * transaction keeps the scope it began in.
+ */
+export interface RowScope {
+  kind: "tenant" | "all" | "none";
+  /** The workspace of a `tenant` scope; empty otherwise. */
+  workspaceId: string;
+  reason?: CrossTenantReason;
+}
+
+const rows = new AsyncLocalStorage<RowScope>();
+
+/** Run `fn` with `systemDb` seeing one workspace's rows (and the tables that belong to none). */
+export async function forTenant<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+  if (!workspaceId) throw new Error("forTenant requires a workspaceId");
+  // Awaited inside the scope, like withDb: a Prisma query starts only when awaited.
+  return rows.run({ kind: "tenant", workspaceId }, async () => await fn());
+}
+
+/** Run `fn` with `systemDb` seeing every workspace's rows, for a reason on the reviewed list. */
+export async function crossTenant<T>(reason: CrossTenantReason, fn: () => Promise<T>): Promise<T> {
+  return rows.run({ kind: "all", workspaceId: "", reason }, async () => await fn());
+}
+
+/** Run `fn` with `systemDb` seeing no workspace's rows: only people, sign-in and intake tables. */
+export async function withoutTenant<T>(fn: () => Promise<T>): Promise<T> {
+  return rows.run({ kind: "none", workspaceId: "" }, async () => await fn());
+}
+
+/** The row scope `systemDb` is in here, if any. */
+export function rowScope(): RowScope | undefined {
+  return rows.getStore();
+}
+
+let unscopedListener: (() => void) | undefined;
+
+/**
+ * Called for each system query that runs in no row scope. Until every entry point names one
+ * (docs/system-database-role.md, step 3) such a query still sees every workspace, as on the owner's
+ * login; core logs where it came from.
+ */
+export function onUnscopedSystemQuery(listener: (() => void) | undefined) {
+  unscopedListener = listener;
+}
+
+interface RowSettings {
+  key: string;
+  scope: RowScope["kind"];
+  workspaceId: string;
+}
+
+const UNSCOPED: RowSettings = { key: "all:", scope: "all", workspaceId: "" };
+
+function rowSettings(): RowSettings {
+  const r = rows.getStore();
+  if (!r) {
+    unscopedListener?.();
+    return UNSCOPED;
+  }
+  return { key: `${r.kind}:${r.workspaceId}`, scope: r.kind, workspaceId: r.workspaceId };
+}
+
+const APPLIED = Symbol("rowSettings");
+type ScopedClient = pg.PoolClient & { [APPLIED]?: string };
+type ConnectCallback = (err: Error | undefined, client: pg.PoolClient | undefined, done: (release?: boolean | Error) => void) => void;
+
+/**
+ * The system role's pool: each connection it hands out carries the current row scope. The scope
+ * is read when connect() is called, not when the connection arrives: pg-pool hands a released
+ * connection to the next caller from inside the releasing caller's code, in that caller's async
+ * context. PrismaPg's statements come through here too (pool.query checks out with connect()).
+ */
+class SystemPool extends pg.Pool {
+  override connect(): Promise<pg.PoolClient>;
+  override connect(callback: ConnectCallback): void;
+  override connect(callback?: ConnectCallback): Promise<pg.PoolClient> | void {
+    const want = rowSettings();
+    const ready = super.connect().then((client) => applyRowSettings(client as ScopedClient, want));
+    if (!callback) return ready;
+    ready.then(
+      (client) => callback(undefined, client, client.release),
+      (err: Error) => callback(err, undefined, () => {}),
+    );
+  }
+}
+
+async function applyRowSettings(client: ScopedClient, want: RowSettings): Promise<pg.PoolClient> {
+  if (client[APPLIED] === want.key) return client;
+  try {
+    // Session-level (false): checked out, a connection is never inside a transaction.
+    await client.query("SELECT set_config('app.scope', $1, false), set_config('app.workspace_id', $2, false)", [want.scope, want.workspaceId]);
+  } catch (err) {
+    client.release(err as Error);
+    throw err;
+  }
+  client[APPLIED] = want.key;
+  return client;
 }
 
 async function closeScope(s: Scope) {
@@ -184,7 +302,8 @@ function sharedClient(role: Role): PrismaClient {
  * on that scope's connections, which it closes when it finishes, leaving the query hanging. So
  * every scope gets its own queue, built with the
  * shared one's options (same batching, same handlers), and the shared client's queue only hands
- * each call to the current scope's.
+ * each call to the current scope's. The same goes for row scopes (forTenant and the others): a
+ * batch runs in the row scope of the call that started it, so each row scope has a queue too.
  *
  * This reaches into Prisma's internals (`_requestHandler.dataloader`), so it checks their shape and
  * fails every query if an upgrade changed it; the "queries from concurrent scopes" test (in
@@ -201,7 +320,9 @@ function scopedQueues(role: Role, client: PrismaClient) {
     options: own.options,
     request(request) {
       const queues = (scope().queues ??= {});
-      return (queues[role] ??= new NewQueue(own.options)).request(request);
+      const r = rows.getStore();
+      const key = r ? `${role}|${r.kind}:${r.workspaceId}` : role;
+      return (queues[key] ??= new NewQueue(own.options)).request(request);
     },
   };
 }

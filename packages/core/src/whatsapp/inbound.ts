@@ -1,32 +1,26 @@
 /**
- * Customers' messages to the store's number (Meta's webhook; until the last QR-linked phone is
- * gone, also Evolution's MESSAGES_UPSERT), never the store's own.
+ * Customers' messages to the store's number (Evolution's MESSAGES_UPSERT, not sent by the store).
  *
- * Anyone may write to a business number, so bizinsights keeps only what concerns the store's
- * customers:
+ * The linked phone may be someone's own WhatsApp, with family and friends in it, so bizinsights
+ * keeps only what concerns the store's customers:
  *  - STOP and START are honoured from anyone (a number that replied STOP goes on the store's
  *    do-not-message list by its keyed hash, nothing else of it is kept);
  *  - other messages are recorded only from numbers that are already the store's contacts (a
  *    customer bizinsights messaged or whose consent was recorded), and only they can start a
  *    "customer sends a message" automation. Everything else is dropped unread.
- * Group chats, broadcasts and statuses never reach this (this checks the sender is a person).
+ * Group chats, broadcasts and statuses never reach this (the instance ignores groups, and this
+ * checks again).
  */
 import { systemDb, type WappConnection } from "@app/db";
 import { maskPhone, normalizePhone, waIsStart, waIsStop, type WaFacts } from "@app/shared";
 import { logger } from "../logger.js";
 import { businessNameOf, settingsOf, storeById, waEncrypt, waPhoneHash, type WaDeps } from "./common.js";
 import { contactByPhone, contactFirstName, optInByReply, optOutByReply } from "./contacts.js";
+import { jidNumber } from "./evolution.js";
 import { queueMessage } from "./messages.js";
 import { runAutomations } from "./automations.js";
 
-/** A WhatsApp JID's number ("61412345678@s.whatsapp.net" → "61412345678"); null for groups, broadcasts, LIDs. */
-export function jidNumber(jid: string | null | undefined): string | null {
-  if (!jid) return null;
-  const m = /^(\d{6,15})(?::\d+)?@s\.whatsapp\.net$/.exec(jid);
-  return m ? m[1]! : null;
-}
-
-/** A customer's message, already schema-checked: the sender as a JID (Meta's `from` is put in that form). */
+/** A customer's message as Evolution delivers it (data of MESSAGES_UPSERT), already schema-checked. */
 export interface InboundMessage {
   id: string;
   remoteJid: string;
@@ -83,7 +77,7 @@ export async function applyInbound(deps: Pick<WaDeps, "queues">, conn: WappConne
   }
 
   const settings = await settingsOf(store);
-  // Each message once: Meta's retries and a replayed event find it recorded. A STOP or START is
+  // Each message once: Evolution's retries and a replayed event find it recorded. A STOP or START is
   // applied again all the same while the contact doesn't show it yet: a try that failed after the
   // message was recorded must not lose the customer's opt-out.
   let duplicate = false;

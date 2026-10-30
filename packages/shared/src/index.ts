@@ -24,3 +24,4 @@ export * from "./salesCalculation.js";
 export * from "./businessEvents.js";
 export * from "./sheet.js";
 export * from "./partialUpdate.js";
+export * from "./expenses.js";

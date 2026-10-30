@@ -528,6 +528,8 @@ export const OVERVIEW_MODULE_ACCESS = {
   shopify_sessions: ["analytics.conversion"],
   profit: ["finance.breakdown"],
   shopify_check: ["finance.breakdown"],
+  // The owner's own costs (Settings → Costs): money figures as sensitive as the cost of goods beside them.
+  expenses: ["finance.breakdown"],
   // Not a module of the overview: the live customer lists (GET .../contacts), named here so the
   // dashboard's capability list can say whether this member gets them at all.
   contacts: ["customers.list", "analytics.abandonment"],

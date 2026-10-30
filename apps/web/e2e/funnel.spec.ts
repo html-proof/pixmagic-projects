@@ -7,7 +7,7 @@ import { createWorkspace, insertStore, signUp, stubShopify, uniqueEmail } from "
 // explanation, visits by traffic source and products' checkouts, the filter narrowing the page, the
 // checklist kept per store, the download, and the dashboard's old ?view=shoppers link landing on it.
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 const DAY = "2026-09-21";

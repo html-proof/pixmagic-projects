@@ -12,7 +12,7 @@ import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail }
  * campaign. Meta itself can't run in e2e: the live report says so and nothing else waits on it.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Today (UTC, the store's zone here) plus `n` days, as YYYY-MM-DD. */
@@ -137,6 +137,65 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByTestId("download-ads_campaigns")).toHaveAttribute("href", new RegExp(`section=ads_campaigns&preset=custom&from=${day(-7)}&to=${day(-1)}`));
 });
 
+test("trend charts group by week and month, the week presets run Monday to Sunday, and the Advertising pages print", async ({ page }) => {
+  const email = uniqueEmail("ads-periods");
+  await signUp(page, email);
+  const ws = await createWorkspace(page, "Ads Periods Co");
+  const storeId = await insertStore(db, ws, `ads-periods-${Date.now()}.myshopify.com`);
+  const conn = await insertAdConnection(db, { workspaceId: ws, storeId, provider: "meta", accountId: "act_2", accountName: "Shop ads", historyFrom: day(-89), syncedThrough: day(0), lastSyncedAt: new Date() });
+  for (let n = -34; n <= -1; n++) {
+    await db.query(
+      `INSERT INTO ad_campaign_daily (workspace_id, store_id, connection_id, provider, account_id, campaign_id, campaign_name, day, spend, impressions, clicks, link_clicks, conversions, conversion_value, purchases, purchase_value, leads, currency, updated_at)
+       VALUES ($1, $2, $3, 'meta', 'act_2', '1', 'Autumn', $4, 10, 1000, 30, 20, 1, 40, 1, 40, 0, 'USD', now())`,
+      [ws, storeId, conn, day(n)],
+    );
+  }
+  await seedOrder(ws, storeId, "W1", day(-30), 50, null);
+  await seedOrder(ws, storeId, "W2", day(-10), 50, null);
+  // 34 days always reach into a second calendar month, so weeks and months are both offered.
+  const dates = `preset=custom&from=${day(-34)}&to=${day(-1)}`;
+
+  // The Advertising overview's charts: per day, then added up per week (Monday to Sunday) and per month.
+  await page.goto(`/advertising?${dates}`);
+  const money = page.getByTestId("ads-money-chart");
+  await expect(money).toContainText("Ad spend per day");
+  const group = page.getByRole("combobox", { name: "Ad charts group" });
+  await group.selectOption("week");
+  await expect(money).toContainText("Ad spend per week");
+  await expect(money).toContainText("Weeks run Monday to Sunday");
+  await expect(money.locator("[aria-label*='Ad spend per week']")).toBeVisible();
+  await group.selectOption("month");
+  await expect(money).toContainText("Ad spend per month");
+  // Clicks, reach and store visits are said to be different counts, never added together; the page prints.
+  await expect(page.getByTestId("measures-differ")).toContainText("never added together");
+  await expect(page.getByTestId("ad-print")).toBeVisible();
+
+  // The Meta Ads page's trend, by week.
+  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Meta Ads" }).click();
+  await page.getByRole("combobox", { name: "Trend groups" }).selectOption("week");
+  await expect(page.getByTestId("ads-trend").locator("[aria-label*='per week by platform']")).toBeVisible();
+
+  // The dashboard's sales chart, by week and by month.
+  await page.goto(`/dashboard?${dates}`);
+  const sales = page.getByTestId("trend-sales");
+  await expect(sales.getByRole("heading")).toContainText("daily");
+  const salesGroup = page.getByRole("combobox", { name: "Sales chart groups" });
+  await salesGroup.selectOption("week");
+  await expect(sales.getByRole("heading")).toContainText("weekly");
+  await expect(sales).toContainText("weeks run Monday to Sunday");
+  await salesGroup.selectOption("month");
+  await expect(sales.getByRole("heading")).toContainText("monthly");
+
+  // Last week and this week: calendar weeks from Monday, in the store's zone (UTC here). A week has
+  // nothing to group by week or month, so the chart is back to days.
+  await page.getByLabel("Dates").selectOption("lastweek");
+  await expect(page).toHaveURL(/preset=lastweek/);
+  await expect(sales.getByRole("heading")).toContainText("daily");
+  await expect(salesGroup).toHaveCount(0);
+  await page.getByLabel("Dates").selectOption("wtd");
+  await expect(page).toHaveURL(/preset=wtd/);
+});
+
 test("the AdSense page splits the earnings by country and device type from AdSense's live report", async ({ page }) => {
   const email = uniqueEmail("ads-adsense");
   await signUp(page, email);
@@ -156,7 +215,12 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/adsense/report?*`, (route) => {
     const level = new URL(route.request().url()).searchParams.get("level") ?? "country";
     asked.push(level);
-    const rows = level === "country" ? [{ id: "AU", name: "Australia", ...totals(10, 5000) }, { id: "NZ", name: "New Zealand", ...totals(4, 2000) }] : [{ id: "HighEndMobile", name: "High-end mobile devices", ...totals(14, 7000) }];
+    const rows =
+      level === "country"
+        ? [{ id: "AU", name: "Australia", ...totals(10, 5000) }, { id: "NZ", name: "New Zealand", ...totals(4, 2000) }]
+        : level === "ad_unit"
+          ? [{ id: "ca-pub-77:1001", name: "Article footer", ...totals(14, 7000), adRequests: 8000, coverage: 0.9, viewability: 0.6 }]
+          : [{ id: "HighEndMobile", name: "High-end mobile devices", ...totals(14, 7000) }];
     return route.fulfill({
       json: {
         account: { id: conn, accountId: "pub-77", name: "Shop site" },
@@ -168,6 +232,10 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   });
 
   await page.goto(`/advertising/adsense?preset=custom&from=${day(-7)}&to=${day(-1)}`);
+  // The last seven days always reach past the last month AdSense has finalized: estimated.
+  const glance = page.getByTestId("module-d-adsense-glance").getByTestId("adsense-final");
+  await expect(glance).toHaveAttribute("data-final", "false");
+  await expect(glance).toHaveText("Estimated");
   const table = page.getByTestId("adsense-report-table");
   await expect(table).toContainText("Whole account");
   await expect(table).toContainText("Australia");
@@ -176,5 +244,40 @@ test("the AdSense page splits the earnings by country and device type from AdSen
   await page.getByTestId("adsense-report-platform").click();
   await expect(table).toContainText("High-end mobile devices");
   await expect(table).not.toContainText("Australia");
-  expect(asked).toEqual(expect.arrayContaining(["country", "platform"]));
+  // By ad unit, with AdSense's ad requests, coverage and viewability beside the earnings.
+  await page.getByTestId("adsense-report-ad_unit").click();
+  await expect(table).toContainText("Article footer");
+  await expect(table).toContainText("8,000");
+  await expect(table).toContainText("90%");
+  await expect(table).toContainText("60%");
+  expect(asked).toEqual(expect.arrayContaining(["country", "platform", "ad_unit"]));
+});
+
+test("the AdSense page says a refresh someone asked for is on its way, and offers to try again an account whose syncs fail", async ({ page }) => {
+  const email = uniqueEmail("ads-refresh");
+  await signUp(page, email);
+  const ws = await createWorkspace(page, "AdSense Refresh Co");
+  const storeId = await insertStore(db, ws, `ads-refresh-${Date.now()}.myshopify.com`);
+  const at = { workspaceId: ws, storeId, provider: "adsense" as const };
+  // Synced an hour ago, and someone just pressed Sync data now: its figures are that sync's meanwhile.
+  await insertAdConnection(db, { ...at, accountId: "pub-81", accountName: "Shop site", historyFrom: day(-89), syncedThrough: day(0), lastSyncedAt: new Date(Date.now() - 60 * 60_000), syncRequestedAt: new Date() });
+  // Its syncs fail, none ever worked, and the last one was tried an hour ago.
+  const failing = await insertAdConnection(db, { ...at, accountId: "pub-82", accountName: "Blog site", status: "error", errorCode: "temporary" });
+  await db.query(`UPDATE ad_connections SET last_sync_attempt_at = (now() at time zone 'utc') - interval '1 hour' WHERE id = $1`, [failing]);
+  // AdSense itself can't run in e2e, and its live report isn't what this is about.
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/adsense/report?*`, (route) => route.fulfill({ status: 404, json: { error: "Not found" } }));
+
+  await page.goto(`/advertising/adsense?preset=custom&from=${day(-7)}&to=${day(-1)}`);
+  await expect(page.getByTestId("ads-refreshing")).toContainText("Synchronizing Shop site (Google AdSense), last synced 1 hour ago");
+  const status = (name: string) => page.getByTestId("module-d-adsense-accounts").locator("li").filter({ hasText: name }).getByTestId("ad-account-status");
+  await expect(status("Shop site")).toHaveText("Synchronizing · last synced 1 hour ago");
+  await expect(status("Blog site")).toHaveText("Sync problem · last tried 1 hour ago");
+  // The owner may manage integrations: Sync data now in Settings tries it again.
+  await expect(page.getByTestId("ads-try-again").getByRole("link", { name: "Try again in Settings" })).toHaveAttribute("href", "/settings/ads");
+
+  // Someone pressed Sync data now for it too: the page, looking again every 5 s while a refresh runs, says so by itself.
+  await db.query(`UPDATE ad_connections SET sync_requested_at = now() at time zone 'utc' WHERE id = $1`, [failing]);
+  await expect(status("Blog site")).toHaveText("Synchronizing", { timeout: 15_000 });
+  await expect(page.getByTestId("ads-status-notes")).toContainText("Nothing could be read from it yet. Trying again now.");
+  await expect(page.getByTestId("ads-try-again")).toHaveCount(0);
 });

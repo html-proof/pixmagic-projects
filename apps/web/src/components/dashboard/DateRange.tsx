@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeftRight, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react";
 import {
+  addDays,
   calendarYear,
   customRangeProblem,
   daysBetweenInclusive,
@@ -16,13 +17,20 @@ import {
   type CompareMode,
   type Comparison,
   type CustomRangeProblem,
+  type DatePreset,
   type DateRange,
 } from "@app/shared/dates";
 import { fmtClock, fmtComparison, fmtDay, fmtRange, fmtSpan } from "./format";
 
-export const PRESETS = [
+/**
+ * The dates menu. `option` is the menu's longer wording where the pill's short label leaves a
+ * question open: which day weeks start on (Monday, `WEEK_STARTS_ON` in @app/shared).
+ */
+export const PRESETS: ReadonlyArray<{ id: DatePreset; label: string; option?: string }> = [
   { id: "today", label: "Today" },
   { id: "yesterday", label: "Yesterday" },
+  { id: "wtd", label: "This week", option: "This week (Mon – today)" },
+  { id: "lastweek", label: "Last week", option: "Last week (Mon – Sun)" },
   { id: "7d", label: "Last 7 days" },
   { id: "30d", label: "Last 30 days" },
   { id: "90d", label: "Last 90 days" },
@@ -33,8 +41,8 @@ export const PRESETS = [
   { id: "ytd", label: "This year" },
   { id: "lastyear", label: "Last year" },
   { id: "custom", label: "Custom" },
-] as const;
-export type PresetId = (typeof PRESETS)[number]["id"];
+];
+export type PresetId = DatePreset;
 
 /** What the changes compare with, as Shopify Analytics' second date chip offers (`COMPARE_MODES` in @app/shared). */
 export const COMPARISONS: ReadonlyArray<{ id: CompareMode; label: string }> = [
@@ -261,10 +269,13 @@ export function versusWords(shown: { range: DateRange; previous: ShownComparison
   if (p.compare === "custom") return `vs ${comparisonDates(p)}`;
   // A finished day names the day it is compared with: "the day before" left it to be worked out,
   // next to a Shopify screen comparing with a date of its own.
+  // This week so far is compared with the same weekdays of the week before (Monday on).
+  if (p.from === addDays(range.from, -7) && p.to === addDays(range.to, -7) && days < 7) return p.until ? "vs same time last week" : "vs same days last week";
   if (days === 1) return p.until ? "vs same time yesterday" : `vs ${fmtDay(p.from, { year: false })}`;
   // Last year is compared with the whole year before, leap or not; last month with the whole month before.
   if (wholeYear(range) && wholeYear(p)) return "vs the year before";
   if (daysBetweenInclusive(p.from, p.to) !== days) return "vs the month before";
+  if (days === 7 && new Date(`${range.from}T00:00:00Z`).getUTCDay() === 1 && p.to === addDays(range.from, -1)) return "vs the week before";
   return `vs previous ${days} days`;
 }
 
@@ -272,8 +283,10 @@ export function versusWords(shown: { range: DateRange; previous: ShownComparison
  * What the numbers are compared with, for a panel's help line: "17 Oct 2025 until 4:44 pm, the
  * same dates a year earlier, up to the same time of day, as Shopify compares".
  */
-export function comparisonHelp(p: ShownComparison): string {
-  const how = p.compare === "year" ? ", the same dates a year earlier" : p.compare === "custom" ? "" : ", the same number of days just before";
+export function comparisonHelp(p: ShownComparison, range?: DateRange): string {
+  const sameWeekdays = range && p.from === addDays(range.from, -7) && p.to === addDays(range.to, -7) && daysBetweenInclusive(range.from, range.to) < 7;
+  const how =
+    p.compare === "year" ? ", the same dates a year earlier" : p.compare === "custom" ? "" : sameWeekdays ? ", the same weekdays of the week before" : ", the same number of days just before";
   return `${fmtComparison(p)}${how}${p.until ? ", up to the same time of day, as Shopify compares" : ""}`;
 }
 
@@ -330,7 +343,7 @@ function PillSelect<T extends string>({
   title?: string;
   size: "sm" | "md";
   value: T;
-  options: ReadonlyArray<{ id: T; label: string }>;
+  options: ReadonlyArray<{ id: T; label: string; option?: string }>;
   /** More choices after `options`, under a heading each (the dates menu's calendar years). */
   groups?: ReadonlyArray<{ label: string; options: ReadonlyArray<{ id: T; label: string }> }>;
   onChange: (value: T) => void;
@@ -348,7 +361,7 @@ function PillSelect<T extends string>({
       <label htmlFor={id} className="sr-only">{label}</label>
       <select id={id} className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0" value={value} onChange={(e) => onChange(e.target.value as T)}>
         {options.map((o) => (
-          <option key={o.id} value={o.id}>{o.id === "custom" ? "Pick dates…" : o.label}</option>
+          <option key={o.id} value={o.id}>{o.id === "custom" ? "Pick dates…" : (o.option ?? o.label)}</option>
         ))}
         {groups.map((g) => (
           <optgroup key={g.label} label={g.label}>
@@ -414,7 +427,7 @@ export function DateRangeSelect({
       label={label}
       icon={CalendarDays}
       text={text}
-      title={shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}).` : undefined}
+      title={shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}); weeks run Monday to Sunday.` : undefined}
       size={size}
       value={year !== null ? yearId(year) : r.preset}
       options={PRESETS}
@@ -580,6 +593,10 @@ export function periodWords(r: DateRangeState, shown: Shown): string {
       return "today";
     case "yesterday":
       return "yesterday";
+    case "wtd":
+      return "this week";
+    case "lastweek":
+      return "last week";
     case "mtd":
       return "this month";
     case "lastmonth":

@@ -10,7 +10,7 @@ import { createWorkspace, signUp, uniqueEmail } from "./helpers";
  * are missing rather than days without sales.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 test("any calendar year of the store, 12 months at a time, with where its orders begin", async ({ page }) => {

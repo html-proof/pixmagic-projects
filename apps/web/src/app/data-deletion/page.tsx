@@ -24,7 +24,7 @@ export const metadata: Metadata = {
  * URLs are set in the Meta app; until then the removal still ends the token, and the next update marks
  * the connection "reconnect", which is why the page says "at the latest at its next update".
  */
-const UPDATED = "2026-10-28";
+const UPDATED = "2026-10-19";
 
 const TOC = [
   { id: "disconnect", title: "Disconnect in bizinsights" },
@@ -72,8 +72,8 @@ export default function DataDeletionPage() {
             Your ads keep running.
           </li>
           <li>
-            <strong>WhatsApp</strong> — bizinsights&apos; access token for your WhatsApp Business Platform number is deleted, and Meta stops
-            sending that account&apos;s messages to bizinsights. Messages waiting to be sent and
+            <strong>WhatsApp</strong> — a linked phone is logged out (it disappears from Linked devices on the phone) and its session is
+            deleted; for a WhatsApp Business Platform number, bizinsights&apos; access token is deleted. Messages waiting to be sent and
             running campaigns are cancelled. Message history is kept for your records (each record for 365 days) and then deleted, or
             immediately on request (see step 3).
           </li>

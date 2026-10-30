@@ -1,6 +1,7 @@
 import type { Store, Tx } from "@app/db";
 import { comparisonImported, delta, localDay, pastYearBreakdown, resolveCapabilities, storeStartDay, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
+import { expensesModule } from "../expenses.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
 import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
@@ -178,6 +179,12 @@ export async function storeOverview(
         previous: before ?? { customers: null, returningCustomers: null, newCustomers: null, returningCustomerRate: null },
       };
     }
+  }
+
+  // The owner's own costs (Settings → Costs), set against the sales above: only beside them.
+  if (modules.sales_overview && sees("expenses")) {
+    const expenses = await expensesModule(tx, scope, store.currency, range, previous);
+    if (expenses) modules.expenses = expenses;
   }
 
   if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range, {}, now);

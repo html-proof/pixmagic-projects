@@ -1,6 +1,6 @@
 "use client";
 import { useApp } from "@/components/AppContext";
-import { AdvertisingBody, AdvertisingHeader, DownloadCsv, NotConnected } from "@/components/advertising/AdvertisingUi";
+import { AdvertisingBody, AdvertisingHeader, DownloadCsv, MeasuresDiffer, NotConnected } from "@/components/advertising/AdvertisingUi";
 import { OverviewKpis } from "@/components/advertising/OverviewKpis";
 import { useAdvertising } from "@/components/advertising/useAdvertising";
 import { AdvertisingSection } from "@/components/dashboard/Advertising";
@@ -29,6 +29,7 @@ export default function AdvertisingOverviewPage() {
               <OverviewKpis ov={ov} />
               {ov.modules.ads && <SalesVsSpend a={ov.modules.ads} ov={ov} />}
               <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} embedded />
+              {ov.modules.ads && <MeasuresDiffer />}
             </>
           )
         }

@@ -23,6 +23,7 @@ import {
   fromAdsenseReport,
   fromGoogleAdsRow,
   fromMetaInsight,
+  groupSeries,
   fromMetaRangeInsight,
   metaAttributionLabel,
   metaReportMetrics,
@@ -31,6 +32,9 @@ import {
   previousRange,
   siteTotals,
   adErrorMessage,
+  ADSENSE_FINALIZED_BY_DAY,
+  adsenseFinalThrough,
+  adsenseReportRows,
   adsenseReportTotals,
   adStatusCode,
   adsVsSales,
@@ -358,6 +362,31 @@ describe("AdSense", () => {
   });
 });
 
+describe("a daily series in weeks and months", () => {
+  const d = (day: string, spend: number | null, clicks: number | null = spend === null ? null : 1) => ({ day, spend, clicks });
+
+  it("adds each Monday-to-Sunday week's days up, and leaves a week missing any day blank", () => {
+    // Thursday 1 Oct to Wednesday 14 Oct: 4 days of one week, a whole week, 3 days of the next.
+    const days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14"];
+    const series = days.map((day) => d(day, day === "2026-10-13" ? null : 10.1));
+    const weeks = groupSeries(series, { from: "2026-10-01", to: "2026-10-14" }, "week");
+    expect(weeks.map((w) => [w.key, w.day, w.from, w.to, w.spend, w.clicks])).toEqual([
+      ["2026-W40", "2026-10-01", "2026-10-01", "2026-10-04", 40.4, 4],
+      ["2026-W41", "2026-10-05", "2026-10-05", "2026-10-11", 70.7, 7],
+      // 13 Oct has no figures yet: the week is unknown, not 20.2.
+      ["2026-W42", "2026-10-12", "2026-10-12", "2026-10-14", null, null],
+    ]);
+  });
+
+  it("adds calendar months up, and keeps a figure missing on one day apart from the others", () => {
+    const series = [d("2026-09-29", 5), d("2026-09-30", 5), { day: "2026-10-01", spend: 7, clicks: null }, d("2026-10-02", 3)];
+    expect(groupSeries(series, { from: "2026-09-29", to: "2026-10-02" }, "month")).toEqual([
+      { day: "2026-09-29", key: "2026-09", from: "2026-09-29", to: "2026-09-30", spend: 10, clicks: 2 },
+      { day: "2026-10-01", key: "2026-10", from: "2026-10-01", to: "2026-10-02", spend: 10, clicks: null },
+    ]);
+  });
+});
+
 describe("the Meta Ads report's numbers", () => {
   it("works out link clicks, costs, purchases and return from one range's row, counting a purchase once", () => {
     const m = metaReportMetrics({
@@ -372,6 +401,8 @@ describe("the Meta Ads report's numbers", () => {
         { action_type: "purchase", value: "10" },
         { action_type: "offsite_conversion.fb_pixel_purchase", value: "10" },
         { action_type: "lead", value: "3" },
+        { action_type: "omni_landing_page_view", value: "500" },
+        { action_type: "landing_page_view", value: "500" },
       ],
       action_values: [
         { action_type: "omni_purchase", value: "1000" },
@@ -388,6 +419,9 @@ describe("the Meta Ads report's numbers", () => {
       linkCtr: 0.012,
       costPerLinkClick: 0.42,
       cpm: 5,
+      // Counted once, though Meta reports it under two names.
+      landingPageViews: 500,
+      costPerLandingPageView: 0.5,
       purchases: 10,
       purchaseValue: 1000,
       costPerPurchase: 25,
@@ -398,7 +432,7 @@ describe("the Meta Ads report's numbers", () => {
 
   it("says 'unknown' rather than zero when Meta leaves a figure out, and never divides by zero", () => {
     const m = metaReportMetrics({ spend: "0", impressions: "0" });
-    expect(m).toMatchObject({ reach: null, frequency: null, linkCtr: null, costPerLinkClick: null, cpm: null, costPerPurchase: null, roas: null, purchases: 0 });
+    expect(m).toMatchObject({ reach: null, frequency: null, linkCtr: null, costPerLinkClick: null, cpm: null, landingPageViews: 0, costPerLandingPageView: null, costPerPurchase: null, roas: null, purchases: 0 });
     // Frequency is impressions per person when Meta gives reach but not frequency.
     expect(metaReportMetrics({ impressions: "300", reach: "120" }).frequency).toBe(2.5);
   });
@@ -440,12 +474,85 @@ describe("a connection's wording", () => {
 
 describe("the AdSense report's totals", () => {
   const headers = [{ name: "DOMAIN_CODE" }, { name: "ESTIMATED_EARNINGS" }, { name: "PAGE_VIEWS" }, { name: "IMPRESSIONS" }, { name: "CLICKS" }];
-  const rows = [{ earnings: 1, pageViews: 100, impressions: 200, clicks: 2, pageRpm: 10, perClick: 0.5, ctr: 0.01 }];
+  const rows = [{ earnings: 1, pageViews: 100, impressions: 200, clicks: 2, pageRpm: 10, perClick: 0.5, ctr: 0.01, adRequests: null, coverage: null, viewability: null }];
 
   it("are AdSense's totals row when it sent one, read by column name, else the rows added up", () => {
-    expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({ earnings: 12.5, pageViews: 5000, impressions: 8000, clicks: 25, pageRpm: 2.5, perClick: 0.5, ctr: 25 / 8000 });
+    expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({
+      earnings: 12.5,
+      pageViews: 5000,
+      impressions: 8000,
+      clicks: 25,
+      pageRpm: 2.5,
+      perClick: 0.5,
+      ctr: 25 / 8000,
+      // Not asked of AdSense (an answer without the columns): unknown, never 0.
+      adRequests: null,
+      coverage: null,
+      viewability: null,
+    });
     expect(adsenseReportTotals({ headers }, rows)).toMatchObject({ earnings: 1, pageViews: 100, impressions: 200, clicks: 2 });
-    expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null });
+    expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null, adRequests: null, coverage: null, viewability: null });
+  });
+
+  it("take ad requests, coverage and viewability as AdSense's totals row gives them, or add up what can be", () => {
+    const all = [...headers, { name: "AD_REQUESTS" }, { name: "AD_REQUESTS_COVERAGE" }, { name: "ACTIVE_VIEW_VIEWABILITY" }];
+    const totals = { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }, { value: "10000" }, { value: "0.8" }, { value: "0.62" }] };
+    expect(adsenseReportTotals({ headers: all, totals }, [])).toMatchObject({ adRequests: 10000, coverage: 0.8, viewability: 0.62 });
+    // Without one: requests add, coverage is worked back through them (600 + 100 of 1,000), viewability can't be.
+    const a = { ...rows[0]!, adRequests: 800, coverage: 0.75, viewability: 0.5 };
+    const b = { ...rows[0]!, adRequests: 200, coverage: 0.5, viewability: 0.9 };
+    expect(adsenseReportTotals({ headers: all }, [a, b])).toMatchObject({ adRequests: 1000, coverage: 0.7, viewability: null });
+    // One row's are its own; one row without requests leaves the sum unknown.
+    expect(adsenseReportTotals({ headers: all }, [a])).toMatchObject({ adRequests: 800, coverage: 0.75, viewability: 0.5 });
+    expect(adsenseReportTotals({ headers: all }, [a, { ...b, adRequests: null }])).toMatchObject({ adRequests: null, coverage: null });
+  });
+});
+
+describe("the AdSense report by ad unit", () => {
+  const headers = [
+    { name: "AD_UNIT_ID", type: "DIMENSION" },
+    { name: "AD_UNIT_NAME", type: "DIMENSION" },
+    { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" },
+    { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
+    { name: "IMPRESSIONS", type: "METRIC_TALLY" },
+    { name: "CLICKS", type: "METRIC_TALLY" },
+    { name: "AD_REQUESTS", type: "METRIC_TALLY" },
+    { name: "AD_REQUESTS_COVERAGE", type: "METRIC_RATIO" },
+    { name: "ACTIVE_VIEW_VIEWABILITY", type: "METRIC_RATIO" },
+  ];
+  const cells = (...v: string[]) => ({ cells: v.map((value) => ({ value })) });
+
+  it("names each ad unit as AdSense does, with its requests, coverage and viewability; a ratio AdSense left empty is unknown", () => {
+    const { rows, currency } = adsenseReportRows("ad_unit", {
+      headers,
+      rows: [cells("ca-pub-1:111", "Sidebar", "1.50", "300", "280", "2", "320", "0.875", "0.6"), cells("ca-pub-1:222", "Footer", "4.20", "900", "850", "5", "1000", "0.85", "")],
+    });
+    expect(currency).toBe("AUD");
+    expect(rows).toEqual([
+      { id: "ca-pub-1:222", name: "Footer", earnings: 4.2, pageViews: 900, impressions: 850, clicks: 5, pageRpm: 4.67, perClick: 0.84, ctr: 5 / 850, adRequests: 1000, coverage: 0.85, viewability: null },
+      { id: "ca-pub-1:111", name: "Sidebar", earnings: 1.5, pageViews: 300, impressions: 280, clicks: 2, pageRpm: 5, perClick: 0.75, ctr: 2 / 280, adRequests: 320, coverage: 0.875, viewability: 0.6 },
+    ]);
+    // An ad unit AdSense gives no name for goes by its id.
+    expect(adsenseReportRows("ad_unit", { headers, rows: [cells("ca-pub-1:333", "", "1", "1", "1", "0", "1", "1", "1")] }).rows[0]).toMatchObject({ id: "ca-pub-1:333", name: "ca-pub-1:333" });
+  });
+});
+
+describe("whether AdSense's figures are final", () => {
+  it("are final for every month that ended before the month before the read, and for that month too once it was past the 10th", () => {
+    expect(ADSENSE_FINALIZED_BY_DAY).toBe(10);
+    // Read on 5 Nov: October is still being finalized (and re-read daily); September is final.
+    expect(adsenseFinalThrough("2026-11-05")).toBe("2026-09-30");
+    expect(adsenseFinalThrough("2026-11-10")).toBe("2026-09-30");
+    // On the 11th the re-reads of October's first ten days are done.
+    expect(adsenseFinalThrough("2026-11-11")).toBe("2026-10-31");
+    expect(adsenseFinalThrough("2026-11-30")).toBe("2026-10-31");
+    // Across the year's turn, and February's short month.
+    expect(adsenseFinalThrough("2027-01-03")).toBe("2026-11-30");
+    expect(adsenseFinalThrough("2027-01-20")).toBe("2026-12-31");
+    expect(adsenseFinalThrough("2028-03-11")).toBe("2028-02-29");
+    // Never read: nothing is final.
+    expect(adsenseFinalThrough(null)).toBeNull();
+    expect(adsenseFinalThrough("not a day")).toBeNull();
   });
 });
 

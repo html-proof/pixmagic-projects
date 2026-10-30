@@ -2,7 +2,7 @@
 // (No #! line: infra/cdk/test imports this file, and Vitest can't load one that starts with #! in a
 // Windows checkout, whose line ends are CRLF. It always runs as `node ...` anyway.)
 //
-//   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]... [--dry-run]
+//   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]... [--unset NAME]... [--dry-run]
 //
 // --from <file>  a dotenv file (e.g. the main checkout's .env) to copy the values below from; the
 //                ones that must match the old deployment's secrets (TOKEN_ENCRYPTION_KEYS decrypts
@@ -14,6 +14,9 @@
 //                value without that secret's shape, or equal to one of the app's public settings
 //                (an App ID or client id copied instead of the secret), is refused. So is a Meta
 //                secret (META_APP_SECRET, WHATSAPP_APP_SECRET) that Meta says isn't its app's.
+//                Replacing ZAPIER_CLIENT_SECRET keeps the old value as ZAPIER_CLIENT_SECRET_PREVIOUS,
+//                which bizinsights still accepts until Zapier has the new one (docs/RUNBOOK.md).
+// --unset NAME   remove a key that only lasts a rotation: ZAPIER_CLIENT_SECRET_PREVIOUS.
 // --dry-run      everything but the write: says what would change, and lists the keys the secret
 //                holds (`keys now:`), which is how to check that a provider's secret is there.
 //
@@ -64,13 +67,17 @@ const SHAPES = {
   // The app's email provider (packages/core/src/mail; docs/aws-deployment.md "App email").
   RESEND_API_KEY: [/^re_[A-Za-z0-9_]{20,}$/, "a Resend API key (it starts with re_)"],
   RESEND_WEBHOOK_SECRET: [/^whsec_[A-Za-z0-9+/=]{20,}$/, "a Resend webhook signing secret (it starts with whsec_)"],
-  // bizinsights' old Nango environment, only while the connections made through it are moved off it
-  // (docs/ads-setup.md, "Leaving Nango"). Older keys are UUIDs; no prefix is documented, so only their length and characters.
-  NANGO_SECRET_KEY: [/^[A-Za-z0-9_-]{32,}$/, "a Nango secret API key (Nango → Environment Settings → API Keys)"],
   // The secret of bizinsights' own OAuth client for its Zapier app (docs/zapier.md): made by the owner
   // (32 random bytes, base64url) and entered in the Zapier app's environment as CLIENT_SECRET too.
   ZAPIER_CLIENT_SECRET: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _; docs/zapier.md says how to make one)"],
+  // The one before it, still accepted while a rotation is under way (docs/RUNBOOK.md, "Rotate the Zapier client secret").
+  ZAPIER_CLIENT_SECRET_PREVIOUS: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _)"],
 };
+
+/** A secret whose replaced value is kept under another name, still accepted until the rotation is finished. */
+export const KEEPS_PREVIOUS = { ZAPIER_CLIENT_SECRET: "ZAPIER_CLIENT_SECRET_PREVIOUS" };
+/** Keys --unset may remove: only those a rotation leaves behind. */
+export const UNSETTABLE = ["ZAPIER_CLIENT_SECRET_PREVIOUS"];
 
 /** Copied from --from files when present there. */
 const COPY = [
@@ -87,8 +94,8 @@ const COPY = [
   "EMAIL_MICROSOFT_CLIENT_SECRET",
   "EMAIL_CREDENTIAL_KEYS",
   "TURNSTILE_SECRET",
-  "NANGO_SECRET_KEY",
   "ZAPIER_CLIENT_SECRET",
+  "ZAPIER_CLIENT_SECRET_PREVIOUS",
 ];
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
 /** Values anyone can read in this repository (packages/core/src/env.ts PUBLIC_SECRET_MARKERS). */
@@ -256,7 +263,19 @@ async function main() {
       console.log(accepted ? `Meta accepts it as app ${app.appId}'s secret.` : `Meta didn't answer (${detail}), so it is stored unchecked: connect Meta Ads once afterwards to check it.`);
     }
     if (next[name] !== value) report.push(`${name}: ${next[name] ? "replaced" : "set"} from ${source}`);
+    const keep = KEEPS_PREVIOUS[name];
+    if (keep && next[name] && next[name] !== value) {
+      next[keep] = next[name];
+      report.push(`${keep}: the replaced ${name}, still accepted until you --unset ${keep}`);
+    }
     next[name] = value;
+  }
+  for (const name of opt("--unset")) {
+    if (!UNSETTABLE.includes(name)) throw new Error(`Won't remove ${name}: only ${UNSETTABLE.join(", ")}`);
+    if (name in next) {
+      delete next[name];
+      report.push(`${name}: removed`);
+    }
   }
 
   const generate = { SESSION_SECRET: () => randomBytes(48).toString("base64url"), APP_RLS_PASSWORD: () => randomBytes(24).toString("hex") };

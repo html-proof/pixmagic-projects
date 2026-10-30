@@ -1,4 +1,4 @@
-import { systemDb, type Store, type Tx } from "@app/db";
+import { crossTenant, systemDb, type Store, type Tx } from "@app/db";
 import { audit, encryptTokenFields, endBillingForStore, logger, purgeStoreData, seedInitialSync, syncBillingFromShopify, type TokenResponse } from "@app/core";
 import { randomToken } from "@app/shared";
 import { HttpError, type Deps } from "./context.js";
@@ -26,11 +26,14 @@ export const lockWorkspace = (tx: Tx, workspaceId: string) => tx.$queryRaw`SELEC
  * True when `shop` is live (not uninstalled) in some workspace other than `workspaceId` that an
  * account has claimed. A store installed from Shopify that nobody has claimed yet doesn't count:
  * connecting it goes through Shopify's own approval for that store, which proves as much as a
- * claim would, so it moves to the workspace it is being connected to.
+ * claim would, so it moves to the workspace it is being connected to. Looks across workspaces, from
+ * any request's scope (the `shopify_install` reason, @app/db crossTenant.ts).
  */
 export async function storeTakenElsewhere(shop: string, workspaceId: string): Promise<boolean> {
-  const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
-  return !!existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled" && !(await unclaimed(existing.workspaceId));
+  return crossTenant("shopify_install", async () => {
+    const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
+    return !!existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled" && !(await unclaimed(existing.workspaceId));
+  });
 }
 
 /** "Demo-Shop.myshopify.com" → "Demo Shop": the name a workspace made for a store starts with. */
@@ -88,9 +91,14 @@ export interface AttachInput {
  * Attach a shop to a workspace with fresh tokens (reviving its uninstalled row, or re-connecting
  * it in the same workspace), audit it and seed the initial sync. Throws 409 `store_taken` when
  * the shop is live in another workspace. Callers have already checked who may connect to
- * `workspaceId`.
+ * `workspaceId`. Across workspaces, from any request's scope (the `shopify_install` reason): a store
+ * moving in leaves rows, a sync and maybe an empty workspace behind in the one it comes from.
  */
 export async function attachStore(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInput): Promise<Store> {
+  return crossTenant("shopify_install", () => attach(deps, input));
+}
+
+async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInput): Promise<Store> {
   const { workspaceId, shop, token } = input;
   const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
   // Moving a store from another workspace: one it was uninstalled from, or one nobody claimed.

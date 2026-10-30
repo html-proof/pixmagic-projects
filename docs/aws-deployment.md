@@ -25,7 +25,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito,evolution-api,evolution-db}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -258,12 +258,15 @@ affect:
   `packages/shared`, the e2e stand-ins (`infra/cognito-local`, `infra/postgres`,
   `docker-compose.yml`), the dependencies or `ci.yml`, or has the label `e2e` (labels are read per
   push: add it, then push). A push to `main` always needs them before Deploy to AWS.
-- Each pull-request job that passes records the tree it tested: a commit status `ci/passed-<job>`
-  ("tree <tree>") on the pull request's head. The push to `main` that merges it looks these up first
-  (job "Already passed on a pull request?", about a minute) and skips each job that already passed
-  on exactly its tree. That holds
-  when `main` hasn't moved since the pull request's last run: of several pull requests merged back to
-  back, only the first saves anything.
+- Each pull-request job that passes records the code it tested: a commit status `ci/passed-<job>`
+  ("code <key>") on the pull request's head, where the key hashes the tested commit's files less
+  Markdown and `docs/` (`infra/runner/code-key.mjs`). Every run looks these up first (job "Already
+  passed on this code?", about a minute) and skips each job that already passed on the same code:
+  a pull request's run on its newest 30 commits, so a push that changed only Markdown or `docs/`
+  costs a minute; a push to `main` on the commits it was made from and the head of the pull request
+  it merged. That holds for `main` when its code hasn't moved since the pull request's last run: of
+  several pull requests merged back to back, only the first saves anything. Records made before
+  2026-10-29 name the exact tree ("tree <tree>") and still count.
 - The integration tests (`pnpm test:integration` and the migrations check, ~4 of the checks job's
   ~7.5 minutes) run only when something they read changed since a run where they passed. The checks
   job hashes the git ids of `apps/api`, `apps/worker`, `packages/`, `test-support/`,
@@ -279,13 +282,27 @@ affect:
   artifacts, which count against the account's Actions storage (GitHub Free: 500 MB for all its
   private repositories together, artifacts and Packages). Once that was used up, every upload
   failed with "Artifact storage quota has been hit", no pass was recorded, and every push to `main`
-  ran the whole ~45-minute suite. The only artifact left is the Playwright report of a failed e2e
-  run (7 days).
-- A newer push cancels the older run on the same pull request. On `main` it waits: the run in
-  progress finishes and deploys, then the newest waiting push runs (older waiting ones are dropped).
-  So merges minutes apart still deploy, at most one run behind. Before 2026-10-18 `main` cancelled
-  too, and that day only 2 of 8 main runs reached Deploy. Re-run a failed job only when it is flaky,
-  not to retry a real failure.
+  ran the whole ~45-minute suite. CI uploads no artifacts at all since 2026-10-30: a failed e2e
+  test's page snapshot (Playwright's error-context.md) is printed in the "Run pnpm e2e" log
+  instead, under "Page when it failed".
+- A newer push waits for the run in progress on the same branch; then the newest waiting push runs
+  (GitHub drops older waiting ones, "Canceling since a higher priority waiting request ... exists":
+  those never started). On `main` the run in progress finishes and deploys, so merges minutes apart
+  still deploy, at most one run behind. Before 2026-10-18 `main` cancelled, and that day only 2 of 8
+  main runs reached Deploy. Making a pull request a draft is the one event that cancels its run in
+  progress (holding it, below).
+- On a pull request, the checks and e2e jobs start `infra/runner/stop-when-superseded.mjs`, which
+  asks GitHub every minute for the pull request's head. Once a newer push arrives it compares the
+  code the run tests (the pull request merged into `main`) with GitHub's merge of the newer head
+  into `main`, Markdown and `docs/` aside. The same code (a push of only docs, or `main` merged into
+  the branch by hand) lets the run finish, and the run for that push then skips what it passed.
+  Other code, or a push that conflicts with `main`, cancels the run within a minute; the job's last
+  step, "Newer pushes while this job ran", prints why, and the run's Annotations show it. Comparing
+  the two heads instead would stop a run whenever `main` is merged into the branch: that lists
+  every file `main` changed since the branch's last merge. Until 2026-10-29 every push
+  cancelled the pull request's run in progress: a merge of a docs-only `main` into #290 cancelled
+  its run 27 minutes into the checks, and the PC had to start over.
+- Re-run a failed job only when it is flaky, not to retry a real failure.
 
 Minutes used so far this month: GitHub → Settings → Billing and licensing → Usage, or
 `gh api users/html-proof/settings/billing/usage/summary` (after `gh auth refresh -s user` once).
@@ -549,11 +566,19 @@ job signs in only with the OIDC deploy role and checks that it did.
   integration tests and the e2e suite 2-3 times slower too and can time a test out even plugged in
   and awake (2026-10-19 20:28Z): re-run the job once the PC is quiet.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
-- "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
-  Actions storage is used up (see the CI list above). Only that report is lost; the pass records
-  are commit statuses. Storage per private repository:
+- With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
+  land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
+  its run. A cancelled run shows as failing checks, and held pull requests read as broken: on
+  2026-10-28 five were closed as failed with their work unmerged, and #293 looked failed on
+  2026-10-29. On a draft, CI cancels the queued or running run and skips every job (ci.yml), so the
+  checks are grey and GitHub won't merge it until it's marked ready: `gh pr ready <n>` runs
+  everything.
+- "Artifact storage quota has been hit": the account's 500 MB of Actions storage is used up (see
+  the CI list above). CI no longer uploads any artifact, so only a run of an older `ci.yml` shows
+  it (its Playwright report step; that run's red comes from the failed test, named in the "Run pnpm
+  e2e" log). On 2026-10-30 the whole account held ~1.3 MB of artifacts and uploads were still
+  refused; GitHub's meter needs `gh auth refresh -s user` to read. Storage per private repository:
   `gh api repos/html-proof/<repo>/actions/artifacts --paginate --jq '.artifacts[].size_in_bytes'`.
-  Deleting artifacts frees it once GitHub recounts (it says every 6-12 hours).
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
   what one pull request's job leaves behind the next job on that runner runs with. With the runner
   for main that stops short of main's CI and the deploy; without it, they run with it too. Only
@@ -903,9 +928,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   sign-in asks for the key).
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
-- **WhatsApp**: Meta's Tech Provider steps (business verification done; App Review for the two
-  `whatsapp_*` permissions; the app's WhatsApp webhook), in Meta's consoles only:
-  [whatsapp.md](whatsapp.md), "Owner's steps (Meta)". Until Meta approves, no merchant can connect.
+- **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
+  the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
+  (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
   US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
   Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so
@@ -936,7 +961,7 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app 971575545351940
   (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works); steps in
   [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` is removed at both once
-  the move off Nango is done ([ads-setup.md](ads-setup.md#leaving-nango));
+  the release without Nango's code is live ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
   and, once their clients
   exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
@@ -957,15 +982,16 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
 | GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
+| CloudWatch: 33 alarms (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
 | WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, on demand, 17.29; Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 |
-| **Total** | **~106.5** (~117 with GST) |
+| **Total** | **~107.3** (~118 with GST) |
 
-The figures in this paragraph leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
+The figures in this paragraph were worked out with CloudWatch at ~1.5, before the recount and the
+three alarms of 2026-10-29: add 0.80 (0.88 with GST) to each. They leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
 (on Fargate Spot, `whatsapp.spot` in config.ts, its task would be about 5). With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
 brings it to ~72.8 (~80 with GST): that was the only combination under the US$80 budget before the
 audit stack. The owner chose to keep Advanced RDS (2026-10-18). The admin host adds
@@ -1145,6 +1171,28 @@ What production does have, at no extra cost:
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
   and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
+- Alarms on what the logs say (log metric filters in `infra/cdk/lib/app-stack.ts`): bursts of error
+  lines per function, texts on hold, automated messages refused, WhatsApp's service not answering;
+  and, each counted over an hour (what to do: [RUNBOOK.md](RUNBOOK.md)):
+  - `sync-jobs-failed-for-good`: 10 or more sync-queue jobs ran out of attempts in an hour (the
+    jobs function's `"sync job failed"` line with `"final":true` and `"attempts"` 6 or more, core's
+    `MAX_ATTEMPTS`). A failure no retry helps is final on its first attempt and isn't counted: a
+    paused or closed shop, refused access and the like come back with every daily reconcile, which
+    starts all stores in the same tick, so a few such stores would set it off every day. Each
+    failure already reaches its merchant (an alert, or the ad account's card); one store's jobs make
+    a handful at most, so ten is more than one store's.
+  - `ad-connections-need-merchants`: 10 or more ad connections turned to Reconnect or permission in
+    an hour (`"ad connection needs the merchant"`, logged once per connection when it turns, from
+    any of the three functions). One merchant's sign-in ending turns the accounts connected with it,
+    one to a few per store, and each sign-in ends at a time of its own; ten in an hour is a break at
+    the platform or in bizinsights' app. A store that connected ten or more ad accounts with one
+    sign-in can set it off alone: the lines' `storeId` tells.
+  - `ad-figures-differ`: the cron's daily check of stored ad figures against the platform found one
+    outside its tolerance (`"ad figures differ from the platform"`; [ads-setup.md](ads-setup.md),
+    "Checked against the platform"). It clears the hour after and fires again with the next day's
+    check while the difference stays.
+  - Cost: US$0.10 a month each (the cost table); the three metrics they count are within CloudWatch's
+    ten free custom metrics.
 
 ## Security checks (Trusted Advisor)
 
