@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ArrowRight, ChevronRight, CircleCheck, Info, Lightbulb, Megaphone, OctagonAlert, Package, Plus, ReceiptText, Rocket, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
 import type { AdSpendProvider } from "@app/shared/ads";
+import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -21,14 +22,17 @@ import type { AdsModule, Overview, RecentOrder } from "./types";
 // The dashboard under its four headline numbers, in the owner's design (2026-10-24): sales against
 // ad spend and what is left after the costs we know, then sales, advertising and best sellers,
 // then costs, recent orders and key insights, and the integrations strip at the foot. Every figure
-// is one the overview already carries. What the store's data can't tell (fees, postage, apps and
-// staff; shoppers' names) isn't drawn, and the panels say so rather than guess.
+// is one the overview already carries. Fees, postage, apps and staff come only from the costs the
+// owner enters (Settings → Costs); shoppers' names never. What isn't known isn't drawn, and the
+// panels say so rather than guess.
 // ---------------------------------------------------------------------------
 
 /** One colour per thing, the same in every panel (the reference palette's first three slots, validated together). */
 const SALES = "var(--viz-cat-3)";
 const PRODUCT_COSTS = "var(--viz-cat-1)";
 const AD_SPEND = "var(--viz-cat-2)";
+/** The owner's own costs (Settings → Costs). */
+const YOUR_COSTS = "var(--viz-running)";
 
 const PROVIDER: Record<AdSpendProvider, { name: string; Icon: (p: { size?: number }) => ReactNode }> = {
   google: { name: "Google Ads", Icon: GoogleAdsIcon },
@@ -114,6 +118,10 @@ interface Costs {
   adSpend: number | null;
   adState: CostState;
   byProvider: Array<{ provider: AdSpendProvider; spend: number }>;
+  /** The owner's own costs for the dates (Settings → Costs); null when this member isn't shown them. */
+  yourCosts: number | null;
+  /** Their categories, biggest first. */
+  yourByCategory: Array<{ label: string; amount: number }>;
 }
 
 /**
@@ -139,7 +147,27 @@ function costsOf(ov: Overview, ads: AdsModule | null, adsOn: boolean): Costs {
     adSpend,
     adState,
     byProvider: ads && adSpend !== null ? ads.byProvider.filter((b) => b.current).map((b) => ({ provider: b.provider, spend: b.current!.spend })) : [],
+    yourCosts: ov.modules.expenses?.current.total ?? null,
+    yourByCategory: ov.modules.expenses?.current.byCategory.map((c) => ({ label: EXPENSE_CATEGORY_LABEL[c.category], amount: c.amount })) ?? [],
   };
+}
+
+/** "product costs, ads and your costs". */
+const listOf = (items: string[]) => new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
+
+/**
+ * Net profit for the dates (`netProfit` in @app/shared/expenses), or why not. Revenue is total sales
+ * less taxes and duties: net sales, shipping and additional fees, the lines a member who may see the
+ * owner's costs is shown too. Ad spend: none connected is 0 (other ads are the owner's costs); a
+ * member not shown the ads gets no net profit, which would give the spend away.
+ */
+function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown: boolean }): { value: number | null; gaps: ProfitGap[]; revenue: number } | null {
+  const e = ov.modules.expenses;
+  const c = ov.modules.sales_overview?.current;
+  if (!e || !c || c.shipping === undefined || c.additionalFees === undefined) return null;
+  const revenue = Math.round((c.netSales + c.shipping + c.additionalFees) * 100) / 100;
+  const adSpend = !ads.offered ? 0 : !ads.shown ? "hidden" : k.adState === "missing" ? 0 : k.adSpend;
+  return { ...netProfit({ revenue, productCosts: k.productCosts, uncosted: k.uncosted, adSpend, yourCosts: e.current.total, complete: e.complete }), revenue };
 }
 
 /** A cost with no figure, in words: product costs need Shopify's reports, ad spend an ad account. */
@@ -204,50 +232,78 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
 // ---- Profit overview ----------------------------------------------------------------------------
 
 /**
- * What is left of net sales after the costs bizinsights can see: Shopify's cost of goods sold and
- * the ad spend. Not net profit (fees, postage, apps and staff aren't known), and it says so.
+ * What is left of net sales after the costs bizinsights can see: Shopify's cost of goods sold, the
+ * ad spend and the owner's own costs (Settings → Costs). It is called net profit only when every
+ * one is known and the owner has said the costs list is complete for the dates (`profitOf`); then
+ * it is worked out from revenue (net sales, shipping and fees). Otherwise it says what is missing.
  */
-export function ProfitOverview({ ov, currency, adsOn }: { ov: Overview; currency: string; adsOn: boolean }) {
+export function ProfitOverview({ ov, currency, adsOn, adsOffered, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; adsOffered: boolean; manageCosts: boolean }) {
   const net = ov.modules.sales_overview!.current.netSales;
   const k = costsOf(ov, adsOn ? comparableAds(ov, currency) : null, adsOn);
+  const profit = profitOf(ov, k, { offered: adsOffered, shown: adsOn });
+  const isNet = profit?.value !== null && profit?.value !== undefined;
   const money = (n: number) => fmtMoney(n, currency);
-  const share = (n: number) => (net > 0 ? fmtPct(n / net) : null);
-  const taken = (k.productCosts ?? 0) + (k.adSpend ?? 0);
-  const left = net - taken;
-  const what = k.productCosts !== null && k.adSpend !== null ? "After product costs and ads" : k.productCosts !== null ? "After product costs" : k.adSpend !== null ? "After ad spend" : "Net sales";
+  // Net profit is out of revenue; what is left without it, out of net sales.
+  const base = isNet ? profit!.revenue : net;
+  const share = (n: number) => (base > 0 ? fmtPct(n / base) : null);
+  const taken = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
+  const left = isNet ? profit!.value! : net - taken;
+  const after = [k.productCosts !== null ? "product costs" : null, k.adSpend !== null ? "ads" : null, k.yourCosts ? "your costs" : null].filter((x): x is string => x !== null);
+  const what = isNet ? "Net profit" : after.length ? `After ${listOf(after)}` : "Net sales";
   const slices: DonutSlice[] = [
-    { key: "left", label: "Left after these costs", value: left, color: SALES },
+    { key: "left", label: isNet ? "Net profit" : "Left after these costs", value: left, color: SALES },
     { key: "products", label: "Product costs", value: k.productCosts ?? 0, color: PRODUCT_COSTS },
     { key: "ads", label: "Ad spend", value: k.adSpend ?? 0, color: AD_SPEND },
+    { key: "yours", label: "Your costs", value: k.yourCosts ?? 0, color: YOUR_COSTS },
   ];
+  const gaps = profit?.gaps ?? [];
   return (
-    <HomeCard id="profit" title="Business profit overview" sub="What's left of your net sales after the costs bizinsights can see.">
+    <HomeCard id="profit" title="Business profit overview" sub={isNet ? "Your net profit for these dates, from every cost you've told bizinsights about." : "What's left of your net sales after the costs bizinsights can see."}>
       {/* Ring and legend side by side when the panel is wide enough, else one above the other. */}
       <div className="@container">
         <div className="flex flex-col items-center gap-5 @[25rem]:flex-row">
-          <Donut slices={slices} label={`${what}: ${money(left)}${net > 0 ? `, ${fmtPct(left / net)} of net sales` : ""}`}>
-            <span className={`text-lg font-bold tabular-nums tracking-tight ${left < 0 ? "text-danger" : ""}`}>{money(left)}</span>
-            <span className="text-[11px] leading-tight text-muted">{what}</span>
+          <Donut slices={slices} label={`${what}: ${money(left)}${base > 0 ? `, ${fmtPct(left / base)} of ${isNet ? "revenue" : "net sales"}` : ""}`}>
+            <span className={`text-lg font-bold tabular-nums tracking-tight ${left < 0 ? "text-danger" : ""}`} data-testid="profit-left">{money(left)}</span>
+            <span className="text-[11px] leading-tight text-muted" data-testid="profit-what">{what}</span>
             {/* A margin needs the cost of what was sold: ad spend alone taken off sales isn't one. */}
-            {net > 0 && taken > 0 && (k.productCosts !== null ? (
-              <span className="mt-0.5 text-[11px] font-semibold text-good">{fmtPct(left / net)} margin</span>
+            {base > 0 && taken > 0 && (k.productCosts !== null ? (
+              <span className="mt-0.5 text-[11px] font-semibold text-good">{fmtPct(left / base)} {isNet ? "net " : ""}margin</span>
             ) : (
-              <span className="mt-0.5 text-[11px] text-muted">{fmtPct(left / net)} of net sales</span>
+              <span className="mt-0.5 text-[11px] text-muted">{fmtPct(left / base)} of net sales</span>
             ))}
           </Donut>
           <ul className="w-full min-w-0 flex-1 space-y-2.5">
-            <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />
+            {isNet ? (
+              <>
+                <LegendRow label="Revenue" value={money(profit!.revenue)} share={fmtPct(1)} />
+                <LegendRow sub label="Net sales, shipping and fees, without tax" value={money(net)} />
+              </>
+            ) : (
+              <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />
+            )}
             <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : STATE_WORDS.products[k.productState as Exclude<CostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
             {adsOn && <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : STATE_WORDS.ads[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />}
-            <LegendRow color={SALES} label="Left after these costs" value={money(left)} share={share(left)} />
+            {k.yourCosts !== null && <LegendRow color={YOUR_COSTS} label="Your costs" value={money(k.yourCosts)} share={share(k.yourCosts)} />}
+            <LegendRow color={SALES} label={isNet ? "Net profit" : "Left after these costs"} value={money(left)} share={share(left)} />
           </ul>
         </div>
       </div>
-      <p className="mt-4 text-xs text-muted">
-        Not net profit: fees, shipping costs, apps and staff aren&apos;t taken off.
-        {k.productState === "known" && k.uncosted !== null && k.uncosted > 0 && <> {money(k.uncosted)} of sales had no cost recorded in Shopify, so their cost isn&apos;t included.</>}
-        {k.productState === "unavailable" && <> Product costs come from Shopify&apos;s profit report, which isn&apos;t available for this store.</>}
-        {k.productState === "missing" && <> Product costs need access to Shopify&apos;s reports.</>}
+      <p className="mt-4 text-xs text-muted" data-testid="profit-note">
+        {isNet ? (
+          <>Revenue less Shopify&apos;s product costs, your ad spend and your costs (Settings → Costs), which you&apos;ve marked complete for these dates.</>
+        ) : (
+          <>
+            Not net profit
+            {profit ? `: ${gaps.map((g) => PROFIT_GAP_WORDS[g].replace(/\.$/, "")).join("; ")}.` : ": fees, shipping costs, apps and staff aren't taken off."}
+            {k.productState === "known" && k.uncosted !== null && k.uncosted > 0 && <> {money(k.uncosted)} of sales had no cost recorded in Shopify, so their cost isn&apos;t included.</>}
+          </>
+        )}
+        {profit && manageCosts && (ov.modules.expenses!.count === 0 || gaps.includes("costs_not_complete")) && (
+          <>
+            {" "}
+            <Link href="/settings/costs" className="font-medium text-accent hover:underline">{ov.modules.expenses!.count === 0 ? "Add your costs" : "Review your costs"}</Link>
+          </>
+        )}
       </p>
     </HomeCard>
   );
@@ -435,12 +491,12 @@ export function TopProductsHome({ ov, currency, onOpen }: { ov: Overview; curren
 
 // ---- Expenses breakdown -------------------------------------------------------------------------
 
-export function ExpensesBreakdown({ ov, currency, adsOn, manage }: { ov: Overview; currency: string; adsOn: boolean; manage: boolean }) {
+export function ExpensesBreakdown({ ov, currency, adsOn, manage, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; manage: boolean; manageCosts: boolean }) {
   const k = costsOf(ov, adsOn ? comparableAds(ov, currency) : null, adsOn);
   const money = (n: number) => fmtMoney(n, currency);
-  const total = (k.productCosts ?? 0) + (k.adSpend ?? 0);
+  const total = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
   const share = (n: number) => (total > 0 ? fmtPct(n / total) : null);
-  const any = k.productCosts !== null || k.adSpend !== null;
+  const any = k.productCosts !== null || k.adSpend !== null || !!k.yourCosts;
   return (
     <HomeCard
       id="expenses"
@@ -454,6 +510,7 @@ export function ExpensesBreakdown({ ov, currency, adsOn, manage }: { ov: Overvie
             slices={[
               { key: "products", label: "Product costs", value: k.productCosts ?? 0, color: PRODUCT_COSTS },
               { key: "ads", label: "Ad spend", value: k.adSpend ?? 0, color: AD_SPEND },
+              { key: "yours", label: "Your costs", value: k.yourCosts ?? 0, color: YOUR_COSTS },
             ]}
             label={any ? `Costs we can see: ${money(total)}` : "No costs to show yet"}
             size={150}
@@ -470,11 +527,29 @@ export function ExpensesBreakdown({ ov, currency, adsOn, manage }: { ov: Overvie
                 {k.byProvider.length > 1 && k.byProvider.map((b) => <LegendRow key={b.provider} sub label={PROVIDER[b.provider].name} value={money(b.spend)} share={share(b.spend)} />)}
               </>
             )}
+            {k.yourCosts !== null && (
+              <>
+                <LegendRow color={YOUR_COSTS} label="Your costs" value={money(k.yourCosts)} share={share(k.yourCosts)} />
+                {k.yourByCategory.map((c) => <LegendRow key={c.label} sub label={c.label} value={money(c.amount)} share={share(c.amount)} />)}
+              </>
+            )}
           </ul>
         </div>
       </div>
       <p className="mt-4 text-xs text-muted">
-        Shipping costs, fees, apps and staff aren&apos;t included: bizinsights can&apos;t see them.
+        {k.yourCosts === null ? (
+          <>Shipping costs, fees, apps and staff aren&apos;t included: bizinsights can&apos;t see them.</>
+        ) : (
+          <>
+            Your costs are the ones you keep in Settings → Costs, spread over the days each covers.
+            {manageCosts && (
+              <>
+                {" "}
+                <Link href="/settings/costs" className="font-medium text-accent hover:underline">{ov.modules.expenses!.count === 0 ? "Add your costs" : "Manage your costs"}</Link>
+              </>
+            )}
+          </>
+        )}
         {adsOn && k.adState === "missing" && manage && (
           <>
             {" "}

@@ -7,14 +7,15 @@ import { testEnv } from "./env.js";
 
 /** Create/migrate the *_test database and apply role grants before integration tests. */
 export default async function setup() {
+  // Migrations and init.sql run on the owner's login (prisma.config.ts prefers OWNER_DATABASE_URL).
   const env = { ...process.env, ...testEnv, CI_OVERRIDE: "1" };
-  if (process.env.CI_DATABASE_URL) env.DATABASE_URL = process.env.CI_DATABASE_URL;
+  if (process.env.CI_DATABASE_URL) env.OWNER_DATABASE_URL = process.env.CI_DATABASE_URL;
   const run = (script: string) =>
     execSync(`pnpm --filter @app/db ${script}`, { stdio: "inherit", env, cwd: resolve(__dirname, "..") });
 
   // The suites truncate the whole database between tests, so they need it to themselves. Take the
   // lock before touching it at all: two runs migrating at once corrupt `_prisma_migrations`.
-  const unlock = await lockTestDatabase(env.DATABASE_URL);
+  const unlock = await lockTestDatabase(env.OWNER_DATABASE_URL);
   try {
     // With TEST_DB pointing at a database that doesn't exist yet, this creates it.
     run("migrate:deploy");

@@ -9,7 +9,7 @@ import { signUp, uniqueEmail } from "./helpers";
  * The API's rules are covered by apps/api/test/inventory.test.ts; this checks the pages show them.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function ownerWithStore(page: Page) {

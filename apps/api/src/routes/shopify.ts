@@ -1,6 +1,6 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { systemDb, type Store, type User } from "@app/db";
+import { crossTenant, systemDb, type Store, type User } from "@app/db";
 import {
   audit,
   buildAuthorizeUrl,
@@ -165,8 +165,12 @@ const connectedPage = (from: ConnectFrom | undefined, storeId: string) =>
  * Settings → Stores: that page explains the refusal itself, beside its connect button.
  */
 async function takenLanding(userId: string, shop: string, workspaceId: string, from: ConnectFrom | undefined): Promise<string | null> {
-  const store = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { id: true, workspaceId: true } });
-  const m = store ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: store.workspaceId, userId } } }) : null;
+  // The store and this person's membership where it lives: another workspace's, by design.
+  const { store, m } = await crossTenant("shopify_install", async () => {
+    const store = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { id: true, workspaceId: true } });
+    const m = store ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: store.workspaceId, userId } } }) : null;
+    return { store, m };
+  });
   const member = !!m && memberState(m) === "active";
   logger.info({ event: "shopify_store_taken", shop, workspaceId, member }, "store already connected to another workspace");
   if (store && member) return `/dashboard?${new URLSearchParams({ ws: store.workspaceId, store: store.id })}`;
@@ -262,7 +266,8 @@ const storeApps = (workspaceId: string): Promise<StoreApp[]> =>
  * an answer the merchant can act on.
  */
 export async function installApp(shop: string, workspaceId: string): Promise<ShopifyApp> {
-  const existing = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { shopDomain: true, shopifyAppKey: true } });
+  // The app it installed through before, in whichever workspace it was connected to.
+  const existing = await crossTenant("shopify_install", () => systemDb.store.findUnique({ where: { shopDomain: shop }, select: { shopDomain: true, shopifyAppKey: true } }));
   const app = connectApp(shop, await storeApps(workspaceId), existing);
   if (!app) {
     throw new HttpError(

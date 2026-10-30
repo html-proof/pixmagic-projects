@@ -22,7 +22,7 @@
  * the same checks, so App Review can be recorded with the app's own test number.
  */
 import { randomBytes, randomInt } from "node:crypto";
-import { systemDb, type Store, type WappConnection } from "@app/db";
+import { crossTenant, systemDb, type Store, type WappConnection } from "@app/db";
 import { maskPhone, normalizePhone } from "@app/shared";
 import { z } from "zod";
 import { env } from "../env.js";
@@ -277,8 +277,10 @@ async function finishConnect(
     downSince: null,
     createdByUserId: input.userId,
   };
-  // Another store can't hold the same number (phone_number_id is unique while connected).
-  const taken = await systemDb.wappConnection.findFirst({ where: { phoneNumberId: d.phoneNumberId, storeId: { not: input.store.id } }, select: { id: true } });
+  // Another store can't hold the same number (phone_number_id is unique while connected), in any workspace.
+  const taken = await crossTenant("already_connected", () =>
+    systemDb.wappConnection.findFirst({ where: { phoneNumberId: d.phoneNumberId, storeId: { not: input.store.id } }, select: { id: true } }),
+  );
   if (taken) throw new WhatsappError("This number is already connected to another store on bizinsights.", 409, "number_taken");
   const conn = await systemDb.wappConnection.upsert({ where: { storeId: input.store.id }, create: { workspaceId: input.store.workspaceId, storeId: input.store.id, ...fields }, update: fields });
   const client = evolutionClient(shard, f);

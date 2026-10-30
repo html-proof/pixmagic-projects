@@ -2,7 +2,7 @@
  * Connecting and disconnecting: the sign-in's tokens wait while the person picks accounts, the chosen
  * accounts become connections, and access is taken back only when no other connection relies on it.
  */
-import { systemDb, type AdConnection } from "@app/db";
+import { crossTenant, systemDb, type AdConnection } from "@app/db";
 import { decrypt, type AdProvider } from "@app/shared";
 import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type AdAccountList, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
@@ -232,14 +232,17 @@ export async function saveAdConnections(input: {
 
 /**
  * A refresh token this person already gave bizinsights, for a sign-in where Google didn't send a new
- * one (it only does on first consent). Taken from another of their connections on the same platform.
+ * one (it only does on first consent). Taken from another of their connections on the same platform,
+ * in any workspace (the `ad_grants` reason).
  */
 export async function reusableRefreshToken(provider: AdProvider, externalUserId: string | null): Promise<string | null> {
   if (provider === "meta" || !externalUserId) return null;
-  const row = await systemDb.adConnection.findFirst({
-    where: { provider, externalUserId, source: "direct", refreshTokenEnc: { not: null }, status: { not: "reconnect" } },
-    orderBy: { updatedAt: "desc" },
-  });
+  const row = await crossTenant("ad_grants", () =>
+    systemDb.adConnection.findFirst({
+      where: { provider, externalUserId, source: "direct", refreshTokenEnc: { not: null }, status: { not: "reconnect" } },
+      orderBy: { updatedAt: "desc" },
+    }),
+  );
   if (!row?.refreshTokenEnc) return null;
   return decrypt(row.refreshTokenEnc, keyring(), aad(row.storeId, row.provider, "refresh"));
 }
@@ -253,11 +256,13 @@ const holdsGrant = { status: { not: "reconnect" }, accessTokenEnc: { not: "" } }
  * (GoogleConsentOptions.forceConsent false): a consent hands out a new refresh token every time, and
  * Google silently ends a login's oldest past 100 for one client. Google then sends none, and theirs is
  * reused (reusableRefreshToken); if they pick a login bizinsights holds none for, the callback asks
- * again with the consent screen.
+ * again with the consent screen. Their connections in any workspace (the `ad_grants` reason).
  */
 export async function holdsReusableRefreshToken(provider: AdProvider, userId: string): Promise<boolean> {
   if (provider === "meta") return false;
-  const n = await systemDb.adConnection.count({ where: { provider, connectedByUserId: userId, source: "direct", externalUserId: { not: null }, refreshTokenEnc: { not: null }, ...holdsGrant } });
+  const n = await crossTenant("ad_grants", () =>
+    systemDb.adConnection.count({ where: { provider, connectedByUserId: userId, source: "direct", externalUserId: { not: null }, refreshTokenEnc: { not: null }, ...holdsGrant } }),
+  );
   return n > 0;
 }
 
@@ -304,9 +309,14 @@ async function resolvePerson(conn: AdConnection, fetchImpl?: FetchLike): Promise
  * Whether anything else relies on this person's grant: a connection on the same grant (Google Ads and
  * AdSense share one), anywhere, by them, or by a person bizinsights doesn't know yet who turns out to
  * be them. Those are looked up now (a few at a time; the rest, and any that can't be looked up, keep
- * the grant, to be safe: revoking at Google ends every connection on it).
+ * the grant, to be safe: revoking at Google ends every connection on it). In every workspace, from
+ * whichever scope asks (the `ad_grants` reason, @app/db crossTenant.ts).
  */
-async function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
+function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
+  return crossTenant("ad_grants", () => grantUsedAnywhere(provider, externalUserId, exceptId, fetchImpl));
+}
+
+async function grantUsedAnywhere(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
   const family = { provider: { in: grantFamily(provider) }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
   if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
   // A login of theirs still waiting for its ad accounts (logins.ts) reads through the same grant.

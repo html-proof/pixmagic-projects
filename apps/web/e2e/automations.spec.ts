@@ -11,7 +11,7 @@ import { insertStore, signUp, uniqueEmail } from "./helpers";
  * this checks the pages drive them.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** A JSON call from the page (its session cookie and origin). */

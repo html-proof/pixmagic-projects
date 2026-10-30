@@ -118,6 +118,7 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/advertising", "marketing.ads"],
   ["/advertising/campaigns", "marketing.campaigns"],
   ["/funnel", "analytics.conversion"],
+  ["/sheet", "analytics.sales"],
   ["/inventory", "inventory.view"],
   ["/inventory/movements", "inventory.history"],
   ["/team", "members:manage"],
@@ -133,6 +134,8 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/settings/integrations", "integrations.status"],
   ["/settings/stores", "integrations.status"],
   ["/settings/ads", "integrations.status"],
+  // The store's own costs: money figures as sensitive as the cost of goods beside them.
+  ["/settings/costs", "finance.breakdown"],
   ["/settings/email", "email:read"],
   ["/settings/api-keys", "apikeys:manage"],
   ["/settings/billing", "full"],

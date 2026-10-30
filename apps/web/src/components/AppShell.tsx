@@ -20,6 +20,7 @@ import {
   OctagonAlert,
   Search,
   Settings,
+  Sheet,
   ShieldCheck,
   Store,
   TriangleAlert,
@@ -122,7 +123,58 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const here = areaOf(path, view);
   // Only what this member was granted (Team & Access), of what the workspace offers; the API refuses
   // the rest whatever the menu shows.
-  const items: NavItem[] = useAreas().map((a) => ({ label: a.label, icon: a.icon, href: a.href, topic: a.topic, active: a.id === here }));
+  const topic = (t: Topic, label: string, icon: LucideIcon): NavItem[] => (seesTopic(access, t, offers) ? [{ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t }] : []);
+  const area = (href: string, label: string, icon: LucideIcon): NavItem => ({ label, icon, href, active: path === href || path.startsWith(`${href}/`) });
+  const within = (href: string) => path === href || path.startsWith(`${href}/`);
+  // Each platform's own pages light up its own entry, not Advertising's as well.
+  const adsPlatform = within("/advertising/google") || within("/advertising/meta");
+  const ads = seesTopic(access, "ads", offers);
+
+  const main: NavItem[] = [
+    ...(showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : []),
+    ...topic("overview", "Business Overview", Gauge),
+    // The Profit sheet: every figure a column per day, week or month, with the business events (/sheet).
+    ...(allowed("analytics.sales") ? [area("/sheet", "Profit sheet", Sheet)] : []),
+    ...topic("sales", "Sales & Orders", ShoppingBag),
+    ...topic("products", "Products", Package),
+    // The Inventory section (stock per location, alerts, changes). It takes the place of the
+    // dashboard's Stock panel in the menu for whoever can open it; the panel stays on the dashboard.
+    ...(offers("inventory") && allowed("inventory.view") ? [area("/inventory", "Inventory", Boxes)] : []),
+    ...topic("customers", "Customers", UsersRound),
+    // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
+    ...(ads ? [{ ...area("/advertising", "Advertising", Megaphone), active: within("/advertising") && !adsPlatform }] : []),
+    ...topic("discounts", "Discounts", BadgePercent),
+    // The Shopping Funnel: a page of its own (/funnel), shown to whoever the dashboard's shoppers panel was.
+    ...(seesTopic(access, "shoppers", offers) ? [area("/funnel", "Shopping Funnel", Funnel)] : []),
+  ];
+  const inventory = offers("inventory") && allowed("inventory.view");
+  const store: NavItem[] = [
+    ...topic("orders", "Orders", ReceiptText),
+    ...(inventory ? [] : topic("stock", "Stock", Boxes)),
+    ...topic("shipping", "Shipping", Truck),
+    ...topic("channels", "Sales channels", Store),
+    ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
+    ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
+  ];
+  // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
+  const automationsHub = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
+  const marketing: NavItem[] = [
+    ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
+    // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
+    ...(automationsHub ? [area("/automations", "Automations", Workflow)] : []),
+    ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
+    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/dashboard/whatsapp-automation", "WhatsApp", MessageCircle)] : []),
+  ];
+  const settings: NavItem[] = [
+    ...(allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
+    ...(allowed("members:manage") ? [area("/team", "Team & Access", ShieldCheck)] : []),
+    // Opened from a shared link: no account to manage, only their notifications for this workspace.
+    me.shared
+      ? area("/settings/notifications", "Notifications", Bell)
+      : full
+        ? { ...area("/settings", "Business Settings", Settings), href: "/settings/profile", active: within("/settings") && !within("/settings/integrations") }
+        : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
+  ];
 
   return (
     <nav aria-label="App" className="flex flex-1 flex-col gap-4 px-3 pb-4 pt-2">
@@ -611,18 +663,27 @@ export function AppShell({ children }: { children: ReactNode }) {
   const items = useMemo<PaletteItem[]>(() => {
     const go = (href: string) => () => router.push(href);
     const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null, !!me.shared, offers);
-    const place = (group: string, p: Place): PaletteItem => ({
-      id: p.id,
-      label: p.label,
-      group,
-      icon: p.icon,
-      keywords: p.keywords,
-      go: p.topic ? () => goToTopic(p.topic!, window.location.pathname, (href) => router.push(href)) : go(p.href),
-    });
-    // The pages inside an area's places, found by name too: each ad platform's, every stock list, and
-    // the settings pages that open from Connections.
-    const inside: Record<string, PaletteItem[]> = {
-      sales: seesTopic(access, "ads", offers)
+    return [
+      ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
+      ...(allowed("analytics.sales")
+        ? [{ id: "sheet", label: "Profit sheet", group: "Insights", icon: Sheet, keywords: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer", go: go("/sheet") }]
+        : []),
+      ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
+        (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
+      ),
+      ...(offers("inventory") && allowed("inventory.view")
+        ? [
+            { id: "inventory", label: "Inventory", group: "Inventory", icon: Boxes, keywords: "stock levels warehouse locations sku", go: go("/inventory") },
+            { id: "inventory-stock", label: "All stock", group: "Inventory", icon: Boxes, keywords: "inventory products variants sku barcode", go: go("/inventory/stock") },
+            { id: "inventory-low", label: "Low stock", group: "Inventory", icon: TriangleAlert, keywords: "inventory running low restock reorder", go: go("/inventory/low-stock") },
+            { id: "inventory-out", label: "Out of stock", group: "Inventory", icon: OctagonAlert, keywords: "inventory sold out", go: go("/inventory/out-of-stock") },
+            ...(allowed("inventory.history") ? [{ id: "inventory-movements", label: "Inventory movements", group: "Inventory", icon: Boxes, keywords: "stock history adjustments audit", go: go("/inventory/movements") }] : []),
+            { id: "inventory-locations", label: "Locations", group: "Inventory", icon: Store, keywords: "inventory warehouses shops", go: go("/inventory/locations") },
+            { id: "inventory-reports", label: "Inventory reports", group: "Inventory", icon: ChartColumn, keywords: "stock trends turnover sell-through", go: go("/inventory/reports") },
+            { id: "inventory-settings", label: "Stock settings", group: "Inventory", icon: Settings, keywords: "thresholds alerts low stock", go: go("/inventory/settings") },
+          ]
+        : []),
+      ...(seesTopic(access, "ads", offers)
         ? [
             { id: "advertising-meta", label: "Meta Ads", group: "Sales", icon: Megaphone, keywords: "facebook instagram ads spend purchases roas advertising", go: go("/advertising/meta") },
             { id: "advertising-google", label: "Google Ads", group: "Sales", icon: Megaphone, keywords: "google ads spend conversions roas advertising", go: go("/advertising/google") },
