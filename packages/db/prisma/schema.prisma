@@ -350,6 +350,7 @@ model Store {
   inventorySyncRuns     InventorySyncRun[]
   expenses              StoreExpense[]
   expenseSettings       StoreExpenseSettings?
+  businessEvents        BusinessEvent[]
 
   @@index([workspaceId])
   @@map("stores")
