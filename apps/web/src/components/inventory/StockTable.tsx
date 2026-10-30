@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Bookmark, Download, Search, X } from "lucide-react";
-import { useToast } from "@/components/AppUi";
+import { ConfirmDialog, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { EmptyState } from "@/components/ui";
 import { fmtDay, fmtRelative } from "@/components/dashboard/format";
@@ -34,6 +34,8 @@ export function StockTable({ fixed = {}, planning = false, title }: { fixed?: St
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saved, setSaved] = useState<SavedFilter[]>([]);
   const [bulkThreshold, setBulkThreshold] = useState("");
+  /** The name being typed for the filter about to be saved (null: not saving one). */
+  const [naming, setNaming] = useState<string | null>(null);
 
   useEffect(() => setSaved(storeId ? readSavedFilters(storeId) : []), [storeId]);
   // Search as they type, once they pause.
@@ -79,8 +81,9 @@ export function StockTable({ fixed = {}, planning = false, title }: { fixed?: St
   const allPicked = rows.length > 0 && rows.every((r) => selected.has(r.variantId));
   const exportHref = apiHref(`${base}/stock/export?${stockQueryString(query)}`);
 
-  const saveCurrent = () => {
-    const name = window.prompt("Name this filter", chips.map((c) => c.label).join(", ").slice(0, 60) || "My filter");
+  const saveCurrent = (typed: string) => {
+    const name = typed.trim();
+    setNaming(null);
     if (!name) return;
     const next = [...saved.filter((s) => s.name !== name), { name, filters }];
     setSaved(next);
@@ -225,7 +228,7 @@ export function StockTable({ fixed = {}, planning = false, title }: { fixed?: St
               </button>
             ))}
             {chips.length > 0 && (
-              <button type="button" className="inline-flex items-center gap-1 text-accent underline" onClick={saveCurrent}>
+              <button type="button" className="inline-flex items-center gap-1 text-accent underline" onClick={() => setNaming(chips.map((c) => c.label).join(", ").slice(0, 60) || "My filter")}>
                 <Bookmark aria-hidden className="h-3 w-3" /> Save filter
               </button>
             )}
@@ -320,6 +323,11 @@ export function StockTable({ fixed = {}, planning = false, title }: { fixed?: St
           {planning && shown.salesDays < 14 && <p className="mt-2 text-xs text-muted">Sales rates need at least 14 days of imported orders; bizinsights has {fmtNum(shown.salesDays)}.</p>}
         </div>
       )}
+      <ConfirmDialog open={naming !== null} title="Name this filter" confirmLabel="Save filter" confirmDisabled={!naming?.trim()} onCancel={() => setNaming(null)} onConfirm={() => saveCurrent(naming ?? "")}>
+        <label className="label" htmlFor="filter-name">Name</label>
+        <input id="filter-name" className="input" value={naming ?? ""} maxLength={60} onChange={(e) => setNaming(e.target.value)} />
+        <p>Saved on this device, next to your filters.</p>
+      </ConfirmDialog>
     </div>
   );
 }

@@ -46,10 +46,14 @@ test("Integrations shows Google Ads, Shopify, WhatsApp, Meta Ads, Google AdSense
   await quietMeta(page);
   await page.goto("/settings/integrations");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
   const cards = page.locator('section[data-testid^="int-"]');
-  await expect(cards).toHaveCount(6);
-  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-google", "int-shopify", "int-whatsapp", "int-meta", "int-adsense", "int-zapier"]);
+  await expect(cards).toHaveCount(8);
+  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-google", "int-shopify", "int-whatsapp", "int-sms", "int-email", "int-meta", "int-adsense", "int-zapier"]);
+  // Text messages and Email, as the Automations hub reads them: nothing connected yet, one Connect each.
+  await expect(page.getByTestId("int-sms")).toHaveAttribute("data-state", "not_connected");
+  await expect(page.getByTestId("int-email")).toHaveAttribute("data-state", "not_connected");
+  await expect(page.getByRole("link", { name: "Connect Email" })).toHaveAttribute("href", /\/settings\/email\/accounts/);
   // Zapier: server.env has no ZAPIER_CLIENT_SECRET, so it isn't set up here, and there is nothing to open.
   const zapier = page.getByTestId("int-zapier");
   await expect(zapier).toContainText("Not set up yet");

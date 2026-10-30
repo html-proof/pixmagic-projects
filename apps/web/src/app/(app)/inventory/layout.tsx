@@ -12,13 +12,13 @@ import { isRefused } from "@/lib/api";
 import { useOpenProduct } from "@/lib/inventory";
 
 const ITEMS = [
-  ["", "Inventory overview"],
+  ["", "Stock overview"],
   ["stock", "All stock"],
   ["low-stock", "Low stock"],
   ["out-of-stock", "Out of stock"],
-  ["movements", "Inventory movements"],
+  ["movements", "Stock movements"],
   ["locations", "Locations"],
-  ["reports", "Inventory reports"],
+  ["reports", "Stock reports"],
   ["settings", "Stock settings"],
 ] as const;
 
@@ -35,13 +35,13 @@ export default function InventoryLayout({ children }: { children: ReactNode }) {
   });
   return (
     <ToastProvider>
-      <SectionLayout title="Inventory" icon={<Boxes aria-hidden className="h-[18px] w-[18px] text-accent" />} items={items}>
+      <SectionLayout title="Stock" icon={<Boxes aria-hidden className="h-[18px] w-[18px] text-accent" />} items={items}>
         {storesStatus !== "ready" ? (
           <StoresPending />
         ) : !store ? (
           <div className="card">
-            <h1 className="text-lg font-semibold">Inventory</h1>
-            <p className="mt-1 text-sm text-muted">Connect a Shopify store first: inventory is the stock of a store&apos;s products.</p>
+            <h1 className="text-lg font-semibold">Stock</h1>
+            <p className="mt-1 text-sm text-muted">Connect a Shopify store first: this is the stock of a store&apos;s products.</p>
             {canManage(workspace.role) && (
               <Link href="/onboarding" className="btn-primary mt-3 inline-flex">
                 Connect a store

@@ -107,41 +107,22 @@
       <control name="bell" label="Notifications">A red dot while a problem is open or a new note arrived. See notifications.</control>
       <control name="account" shownWhen="below lg (on desktop it is at the foot of the sidebar)">Avatar menu: name and email, "Your profile" → /settings/profile, "Sign-in &amp; security" → /settings/security, "Sign out". A shared-link viewer instead sees "You opened this shared dashboard from an invitation link. It's view-only…", "Sign in to your account", "Close the shared dashboard".</control>
     </topbar>
-    <sidebar>
+    <sidebar changed="redesign phase 1" file="apps/web/src/components/AreaNav.tsx">
       <header>Logo → /dashboard. Members who are not owner/admin see a badge card: workspace name and "Shared with you · {Manager|Analyst|Viewer|Custom}" or "· View only"; a shared link adds "Access until {date}".</header>
-      <group name="(no title)">
-        <item label="Dashboard (owner/admin) · Overview (others)" route="/dashboard" icon="LayoutDashboard" shownWhen="owner or admin, or a member with 2+ dashboard areas"/>
-        <item label="Business Overview" route="/dashboard?view=overview" icon="Gauge" shownWhen="reports.view"/>
-        <item label="Sales &amp; Orders" route="/dashboard?view=sales" icon="ShoppingBag" shownWhen="analytics.sales"/>
-        <item label="Products" route="/dashboard?view=products" icon="Package" shownWhen="products.view or products.performance"/>
-        <item label="Inventory" route="/inventory" icon="Boxes" shownWhen="inventory module and inventory.view"/>
-        <item label="Customers" route="/dashboard?view=customers" icon="UsersRound" shownWhen="customers.list, customers.analytics or analytics.abandonment"/>
-        <item label="Advertising" route="/advertising" icon="Megaphone" shownWhen="ads module and marketing.ads"/>
-        <item label="Discounts" route="/dashboard?view=discounts" icon="BadgePercent" shownWhen="discounts.codes"/>
-        <item label="Shopping Funnel" route="/funnel" icon="Funnel" shownWhen="analytics.conversion"/>
+      <group name="(no title)" note="Six areas, one name each, the same in the sidebar, the search and the page titles. An area shows only when the member has at least one place in it (Team &amp; Access, and what the workspace offers); it links to its first place.">
+        <item label="Home" route="/dashboard" icon="LayoutDashboard" shownWhen="owner or admin, or a member with 2+ dashboard areas"/>
+        <item label="Sales" route="its first tab (normally /dashboard?view=sales)" icon="ChartColumn" shownWhen="any Sales tab">
+          <tabs shownAs="a row of tabs inside the detail panel (switching tabs keeps one history entry, so Close leaves the panel) and over /funnel and /advertising/*; hidden when the member has one tab">Sales · Top products · Customers · Recent orders · Shipping · Sales channels · Discount codes · Busiest times · Visitors (/funnel) · Ads (/advertising) · Business overview</tabs>
+        </item>
+        <item label="Marketing" route="its first tab (normally /automations)" icon="Megaphone" shownWhen="any Marketing tab">
+          <tabs shownAs="a row of tabs over each channel's pages; each channel keeps its own menu below">Automations · WhatsApp (/dashboard/whatsapp-automation) · Text messages (/messaging) · Email (/settings/email, out of the settings frame)</tabs>
+        </item>
+        <item label="Stock" route="/inventory, or the dashboard's Stock panel without the Inventory pages" icon="Boxes" shownWhen="inventory.view (with the module) or products.inventory"/>
+        <item label="Staff" route="/staff" icon="Users" shownWhen="staff module and any staff permission" note="The proposal said &quot;Team&quot;; kept &quot;Staff&quot;, the name of all its pages, so it isn't confused with People &amp; access."/>
+        <item label="Settings" route="/settings/integrations (Connections) for whoever manages connections, else /settings/profile; /settings/notifications from a shared link" icon="Settings" shownWhen="always"/>
       </group>
-      <group name="Store">
-        <item label="Orders" route="/dashboard?view=orders" icon="ReceiptText" shownWhen="orders.list"/>
-        <item label="Stock" route="/dashboard?view=stock" icon="Boxes" shownWhen="products.inventory and the Inventory item is NOT shown"/>
-        <item label="Shipping" route="/dashboard?view=shipping" icon="Truck" shownWhen="orders.fulfillment"/>
-        <item label="Sales channels" route="/dashboard?view=channels" icon="Store" shownWhen="analytics.traffic"/>
-        <item label="Staff" route="/staff" icon="Users" shownWhen="staff module and any staff permission"/>
-        <item label="My work" route="/portal" icon="Briefcase" shownWhen="the account is also an employee somewhere"/>
-      </group>
-      <group name="Marketing &amp; integrations">
-        <item label="Google Ads" route="/advertising/google" icon="Google Ads glyph" shownWhen="ads module and marketing.ads"/>
-        <item label="Meta Ads" route="/advertising/meta" icon="Meta glyph" shownWhen="ads module and marketing.ads"/>
-        <item label="Automations" route="/automations" icon="Workflow" shownWhen="flag AUTOMATIONS_HUB and (SMS or email module)"/>
-        <item label="Customer Messaging" route="/messaging" icon="MessageSquareText" shownWhen="sms module and marketing.campaigns"/>
-        <item label="WhatsApp" route="/dashboard/whatsapp-automation" icon="MessageCircle" shownWhen="whatsapp module and marketing.campaigns"/>
-      </group>
-      <group name="Settings">
-        <item label="Integrations" route="/settings/integrations" icon="Plug" shownWhen="integrations.status"/>
-        <item label="Team &amp; Access" route="/team" icon="ShieldCheck" shownWhen="members:manage"/>
-        <item label="Business Settings (owner/admin) · My Account (others) · Notifications (shared link)" route="/settings/profile" icon="Settings"/>
-      </group>
-      <footer>"Need help?" card ("Get support or reach out to our team.") with a green "Contact support" button → /support, then the account card (avatar, name, email) whose menu opens upwards.</footer>
-      <counts total-items-owner="22" groups="4" note="An owner with every module sees 22 sidebar items, 9 of which open the same /dashboard page in a side panel. Two topics (Busiest times, Ad earnings) are not in the sidebar at all."/>
+      <footer>"Need help?" card ("Get support or reach out to our team.") with a green "Contact support" button → /support, then the account card (avatar, name, email) whose menu opens upwards with Profile, Sign-in &amp; security, My work (employees only, moved here from the sidebar), Sign out.</footer>
+      <counts total-items-owner="6" groups="1" before="22 items in 4 groups (until 2026-10-30)"/>
     </sidebar>
     <mobile>
       Below lg the sidebar is hidden; "Open navigation" opens a 288px drawer with logo, close X, a "Workspace" select (phones, several workspaces) and the same sidebar content including the help card, but no account card (the avatar is in the top bar). The notifications panel goes full-width under the top bar.
@@ -155,7 +136,7 @@
       Panel "Notifications" with "{n} to fix". States: "Loading…"; "We couldn't load your notifications. We'll keep trying."; empty "You're all caught up" / "Sync problems and anything else that needs you will show up here." Rows: severity icon (Urgent / Needs attention / Note), title, body, "{store} · {time}", linking by area (shopify → /settings/stores, ads → /settings/ads, integrations → /settings/integrations, email → /settings/email/accounts, staff → /staff/timesheets, whatsapp → /dashboard/whatsapp-automation, sms → /messaging/billing, privacy → /settings/privacy, inventory → /inventory/low-stock, general → /support). Footer "Notification settings" → /settings/notifications.
     </notifications>
     <command-palette screenshot-desktop="screenshots/02-shell/command-palette--desktop.jpg">
-      Ctrl/⌘ K. Modal "Go to", placeholder "Search insights, pages and settings…". Groups: Insights (Dashboard, Business overview, Sales, Ads, Ad earnings, Best sellers, Shopping funnel, Busiest times, Sales channels, Shipping, Stock, Discount codes, Customers, Recent orders) · Inventory (8) · Advertising (5) · Marketing (Automations, Customer Messaging) · Apps (WhatsApp, Staff, My work) · Settings (Team &amp; Access, Profile, Security, Workspace, Integrations, Shopify, Advertising, Email integrations, Notifications, Privacy requests, Audit log) · Help (Help centre). Note: palette names differ from sidebar names for the same page (see finding naming-drift).
+      Ctrl/⌘ K. Modal "Go to", placeholder "Search insights, pages and settings…". Since phase 1 its groups are the six areas, with the sidebar's and tabs' names: Home · Sales (every tab, plus Meta Ads, Google Ads, Google Ads analytics, Ad earnings, Campaign comparison, Ad reports) · Marketing (Automations, WhatsApp, Text messages, Email) · Stock (Stock, All stock, Low stock, Out of stock, Stock movements, Locations, Stock reports, Stock settings) · Staff · Settings (Connections, Shopify stores, Ad accounts, Business details, People &amp; access, Notifications, Profile, Sign-in &amp; security, Privacy requests, Audit log) · Your account (My work) · Help (Help centre). Old names stay findable as search words (e.g. "best sellers", "shopping funnel", "integrations").
     </command-palette>
     <route-guard>Every navigation checks the page against the member's permissions. A blocked page shows "Loading…" then redirects to the member's landing page with an access notice; with nothing assigned, /dashboard says "No access assigned".</route-guard>
     <error-boundary file="apps/web/src/app/(app)/error.tsx">Inside the shell: big "500" drawn as a chart, "Something went wrong", "This page ran into a problem…", buttons "Try again", "Go to dashboard", "Contact support", "Support reference: {digest}".</error-boundary>
@@ -459,7 +440,7 @@
     </area>
 
     <area id="funnel" name="Shopping Funnel" order="3">
-      <page id="funnel" route="/funnel" file="apps/web/src/app/(app)/funnel/page.tsx (components/funnel/*)" frame="app-shell" title="Shopping Funnel" access="analytics.conversion"
+      <page id="funnel" route="/funnel" file="apps/web/src/app/(app)/funnel/page.tsx (components/funnel/*)" frame="app-shell" title="Visitors" title-before="Shopping Funnel" access="analytics.conversion"
             screenshot-desktop="screenshots/04-funnel/funnel--desktop.jpg" screenshot-mobile="screenshots/04-funnel/funnel--mobile.jpg">
         <purpose>See how tracked visitors move from arriving to buying, where they drop off, and what to check at each step.</purpose>
         <layout>Header "Understand how visitors become customers and identify where you lose potential sales." with Refresh, Download CSV, Print; Dates and Compare; filter row Device / Visitors / Landed on / Country / Traffic source / Clear filters; freshness line. One long column; refreshes every 60 s.</layout>
@@ -493,7 +474,7 @@
         <note>Google Ads Analytics (/advertising/google/analytics) is a seventh page reachable only by link.</note>
       </subnav>
 
-      <page id="advertising-overview" route="/advertising" file="apps/web/src/app/(app)/advertising/page.tsx" frame="section-layout" title="Advertising" access="marketing.ads; ads module"
+      <page id="advertising-overview" route="/advertising" file="apps/web/src/app/(app)/advertising/page.tsx" frame="section-layout" title="Ads" title-before="Advertising" access="marketing.ads; ads module"
             screenshot-desktop="screenshots/05-advertising/advertising-overview--desktop.jpg" screenshot-mobile="screenshots/05-advertising/advertising-overview--mobile.jpg">
         <purpose>All ad spend together, what platforms say it brought, and how Shopify sales compare.</purpose>
         <sections>
@@ -542,7 +523,7 @@
         <complexity level="high">14-column table needing sideways scroll. The same campaigns also appear in 4 other places.</complexity>
       </page>
 
-      <page id="advertising-reports" route="/advertising/reports" file="apps/web/src/app/(app)/advertising/reports/page.tsx" frame="section-layout" title="Advertising reports" access="marketing.ads"
+      <page id="advertising-reports" route="/advertising/reports" file="apps/web/src/app/(app)/advertising/reports/page.tsx" frame="section-layout" title="Ad reports" title-before="Advertising reports" access="marketing.ads"
             screenshot-desktop="screenshots/05-advertising/advertising-reports--desktop.jpg">
         <purpose>Preview and download the advertising tables as CSV (Summary, By platform, By day, Campaigns, AdSense by day).</purpose>
         <complexity level="medium">A spreadsheet copy of the other pages.</complexity>
@@ -567,7 +548,7 @@
         <note>13 pages for one channel. Menu labels differ from page titles ("Customer permissions" → "Customer messaging permissions", "Messaging costs" → "Messaging costs &amp; limit", "Setup guide" → "Set up SMS"). No store: "Connect a Shopify store first: text messages are about a store's orders and customers…".</note>
       </subnav>
 
-      <page id="messaging-overview" route="/messaging" file="apps/web/src/app/(app)/messaging/page.tsx (components/messaging/Overview.tsx)" frame="section-layout" title="Customer Messaging" access="sms module and marketing.campaigns"
+      <page id="messaging-overview" route="/messaging" file="apps/web/src/app/(app)/messaging/page.tsx (components/messaging/Overview.tsx)" frame="section-layout" title="Text messages" title-before="Customer Messaging" access="sms module and marketing.campaigns"
             screenshot-desktop="screenshots/07-messaging/messaging-overview--desktop.jpg" screenshot-mobile="screenshots/07-messaging/messaging-overview--mobile.jpg">
         <purpose>Is texting ready? Jump to sending or building an SMS automation; this month's numbers.</purpose>
         <sections>
@@ -631,7 +612,7 @@
         <complexity level="medium">Mostly links back into Setup; repeats the checklist, the master switch and test recipients.</complexity>
       </page>
 
-      <page id="messaging-sender" route="/messaging/sender" file="apps/web/src/app/(app)/messaging/sender/page.tsx" frame="section-layout" title="SMS Sender" access="owner/admin"
+      <page id="messaging-sender" route="/messaging/sender" file="apps/web/src/app/(app)/messaging/sender/page.tsx" frame="section-layout" title="Sender name" title-before="SMS Sender" access="owner/admin"
             screenshot-desktop="screenshots/07-messaging/messaging-sender--desktop.jpg">
         <purpose>AWS identity, countries, budget, consent basis, quiet hours, caps and the "Send texts" / "Send marketing texts" switches.</purpose>
         <complexity level="high">Raw infrastructure words a merchant can't act on: ARN, "Origination identity", configuration set, sandbox, tier, AWS region, DLT Principal Entity ID, two-way/one-way. Duplicates Setup steps 2 and 5.</complexity>
@@ -798,7 +779,7 @@
         <note>Three menus deep on desktop: dark sidebar → Settings menu → email tabs.</note>
       </subnav>
 
-      <page id="email-overview" route="/settings/email" file="apps/web/src/app/(app)/settings/email/page.tsx" frame="section-layout" title="Email integrations" access="email:read"
+      <page id="email-overview" route="/settings/email" file="apps/web/src/app/(app)/settings/email/page.tsx" frame="section-layout" title="Email" title-before="Email integrations" access="email:read"
             screenshot-desktop="screenshots/09-email/email-overview--desktop.jpg">
         <purpose>Accounts, domains, automations and what was sent; "Start here" 3 steps when empty.</purpose>
         <complexity level="medium">Lives under Settings while SMS, WhatsApp and the hub sit in the main menu.</complexity>
@@ -867,7 +848,7 @@
       <shared-block id="inventory-sync-strip">Coloured dot + "In step with Shopify" / "Stock may be out of date" / "Checking every stock level against Shopify…", "· Checked {time} · last change {time} · N locations", button "Refresh stock".</shared-block>
       <shared-block id="inventory-connect-card">"Stock by location": "To see stock at each location, with on-hand, committed and incoming stock, bizinsights needs access to … in Shopify." → "Give access in Shopify" / "Reconnect the store".</shared-block>
 
-      <page id="inventory-overview" route="/inventory" file="apps/web/src/app/(app)/inventory/page.tsx" frame="section-layout" title="Inventory overview" access="inventory.view"
+      <page id="inventory-overview" route="/inventory" file="apps/web/src/app/(app)/inventory/page.tsx" frame="section-layout" title="Stock overview" title-before="Inventory overview" access="inventory.view"
             screenshot-desktop="screenshots/06-inventory/inventory-overview--desktop.jpg" screenshot-mobile="screenshots/06-inventory/inventory-overview--mobile.jpg">
         <purpose>How much stock the store has, what it's worth, what sells and what needs restocking.</purpose>
         <sections>
@@ -901,7 +882,7 @@
         <complexity level="medium">Another pre-filtered copy of All stock.</complexity>
       </page>
 
-      <page id="inventory-movements" route="/inventory/movements" file="apps/web/src/app/(app)/inventory/movements/page.tsx" frame="section-layout" title="Inventory movements" access="inventory.history"
+      <page id="inventory-movements" route="/inventory/movements" file="apps/web/src/app/(app)/inventory/movements/page.tsx" frame="section-layout" title="Stock movements" title-before="Inventory movements" access="inventory.history"
             screenshot-desktop="screenshots/06-inventory/inventory-movements--desktop.jpg">
         <purpose>Audit trail of every stock change (tabs "All changes" | "Changes made in bizinsights").</purpose>
         <complexity level="medium">Four source types and four outcome states are hard to tell apart.</complexity>
@@ -913,7 +894,7 @@
         <complexity level="medium">Shows internal IDs and "App-managed".</complexity>
       </page>
 
-      <page id="inventory-reports" route="/inventory/reports" file="apps/web/src/app/(app)/inventory/reports/page.tsx" frame="section-layout" title="Inventory reports" access="inventory.view"
+      <page id="inventory-reports" route="/inventory/reports" file="apps/web/src/app/(app)/inventory/reports/page.tsx" frame="section-layout" title="Stock reports" title-before="Inventory reports" access="inventory.view"
             screenshot-desktop="screenshots/06-inventory/inventory-reports--desktop.jpg">
         <purpose>9 cards: stock over time, stock value, low/out over time, movement, top sellers, slow movers, velocity and sell-through, stock by location, changes made here.</purpose>
         <complexity level="high">Sell-through, turnover, "recorded days"; empty for new stores; overlaps the overview.</complexity>
@@ -1032,7 +1013,7 @@
     </area>
 
     <area id="team" name="Team &amp; Access" order="11">
-      <page id="team-access" route="/team" file="apps/web/src/app/(app)/team/page.tsx (components/team/*)" frame="app-shell" title="Team &amp; Access" access="members:manage"
+      <page id="team-access" route="/team" file="apps/web/src/app/(app)/team/page.tsx (components/team/*)" frame="app-shell" title="People &amp; access" title-before="Team &amp; Access" access="members:manage"
             screenshot-desktop="screenshots/12-team/team-access--desktop.jpg" screenshot-mobile="screenshots/12-team/team-access--mobile.jpg">
         <purpose>Invite people to the dashboard and control exactly what each can see.</purpose>
         <layout>Breadcrumb "Settings › Team &amp; Access" but the page leaves the settings layout (the settings menu disappears).</layout>
@@ -1064,7 +1045,7 @@
         <note>Under the menu on desktop: an "Account security" summary card. /settings itself redirects to /settings/profile (no settings home). /settings/members redirects to /team.</note>
       </subnav>
 
-      <page id="settings-integrations" route="/settings/integrations" file="apps/web/src/app/(app)/settings/integrations/page.tsx (components/integrations/*)" frame="section-layout" title="Integrations" access="integrations.status"
+      <page id="settings-integrations" route="/settings/integrations" file="apps/web/src/app/(app)/settings/integrations/page.tsx (components/integrations/*)" frame="section-layout" title="Connections" title-before="Integrations" access="integrations.status"
             screenshot-desktop="screenshots/13-settings/settings-integrations--desktop.jpg" screenshot-mobile="screenshots/13-settings/settings-integrations--mobile.jpg">
         <purpose>Every connected platform at a glance; connect one with a single button.</purpose>
         <sections>
@@ -1083,7 +1064,7 @@
         <complexity level="high">Shopify OAuth scopes exposed as a list; native browser confirm() dialogs; menu says "Shopify", page says "Shopify stores".</complexity>
       </page>
 
-      <page id="settings-ads" route="/settings/ads" file="apps/web/src/app/(app)/settings/ads/page.tsx (components/settings/ads/*)" frame="section-layout" title="Advertising integrations" access="integrations.status; ads module"
+      <page id="settings-ads" route="/settings/ads" file="apps/web/src/app/(app)/settings/ads/page.tsx (components/settings/ads/*)" frame="section-layout" title="Ad accounts" title-before="Advertising integrations" access="integrations.status; ads module"
             screenshot-desktop="screenshots/13-settings/settings-ads--desktop.jpg">
         <purpose>Connect, choose, refresh, hide and disconnect Google Ads, Meta Ads and AdSense accounts.</purpose>
         <sections>
@@ -1099,13 +1080,13 @@
         <complexity level="low">Fine.</complexity>
       </page>
 
-      <page id="settings-security" route="/settings/security" file="apps/web/src/app/(app)/settings/security/page.tsx → components/auth/AccountSecurity.tsx" frame="section-layout" title="Security" access="signed in"
+      <page id="settings-security" route="/settings/security" file="apps/web/src/app/(app)/settings/security/page.tsx → components/auth/AccountSecurity.tsx" frame="section-layout" title="Sign-in &amp; security" title-before="Security" access="signed in"
             screenshot-desktop="screenshots/13-settings/settings-security--desktop.jpg">
         <purpose>Email, password, two-step verification, devices, sign-in methods, sign-in history, sign out, delete account (9 cards).</purpose>
         <complexity level="high">IP addresses, authenticator keys; "Sign out of all devices" twice; security status shown in two places. The same screen is reused for hourly employees in the portal.</complexity>
       </page>
 
-      <page id="settings-workspace" route="/settings/workspace" file="apps/web/src/app/(app)/settings/workspace/page.tsx" frame="section-layout" title="Workspace" access="members:manage"
+      <page id="settings-workspace" route="/settings/workspace" file="apps/web/src/app/(app)/settings/workspace/page.tsx" frame="section-layout" title="Business details" title-before="Workspace" access="members:manage"
             screenshot-desktop="screenshots/13-settings/settings-workspace--desktop.jpg">
         <purpose>Rename the workspace or create another one.</purpose>
         <complexity level="low">"Workspace" is never explained; shows the raw role word.</complexity>
@@ -1413,12 +1394,12 @@
     </plain-words>
 
     <roadmap>
-      <phase n="1" name="Quick wins (wording and order, no new features)">
-        <task>Apply the plain-words glossary to the sidebar, palette and page titles; fix stale texts ("Settings → Members &amp; roles", "Settings, then Members").</task>
-        <task>Collapse the sidebar to the six items above; turn the dashboard ?view= panels into tabs of Sales.</task>
-        <task>Move developer-only content (Zapier env-var checklist, ARN, event API keys, curl) under Settings › Developer; show DLT fields only for India.</task>
-        <task>Add SMS and Email cards to Settings › Connections; "Manage" opens a drawer.</task>
-        <task>Replace native confirm()/prompt() with the app's dialog.</task>
+      <phase n="1" name="Quick wins (wording and order, no new features)" status="mostly done 2026-10-30">
+        <task status="done">Apply the plain-words glossary to the sidebar, palette and page titles; fix stale texts ("Settings → Members &amp; roles", "Settings, then Members"). Renamed: Integrations → Connections, Workspace → Business details, Team &amp; Access → People &amp; access, Security → Sign-in &amp; security, Inventory → Stock, Advertising → Ads, Customer Messaging → Text messages, SMS Sender → Sender name, Email integrations → Email, Shopping Funnel → Visitors, Best sellers → Top products, Staff Management → Staff.</task>
+        <task status="done">Collapse the sidebar to the six items above; turn the dashboard ?view= panels into tabs of Sales (and the four messaging areas into tabs of Marketing). Panels stay slide-overs over Home; a /sales page of its own is not built.</task>
+        <task status="not started">Move developer-only content (Zapier env-var checklist, ARN, event API keys, curl) under Settings › Developer; show DLT fields only for India.</task>
+        <task status="done, without the drawer">Add SMS and Email cards to Settings › Connections (state from GET …/automations/connections). "Manage" still opens the channel's own page; the drawer is not built.</task>
+        <task status="done">Replace native confirm()/prompt() with the app's dialog (Shopify stores disconnect and permission removal, API key revoke, Stock "Save filter").</task>
       </phase>
       <phase n="2" name="One Home">
         <task>Build Home › Needs you from the existing alert feed (GET /workspaces/:ws/alerts) plus inventory, shipping, messaging and staff counts the API already returns.</task>

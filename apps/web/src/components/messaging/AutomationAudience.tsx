@@ -139,7 +139,7 @@ export function CustomerPicker({ base, value, onChange, disabled, contact }: { b
     };
   }, [base, q, contact]);
 
-  if (!contact) return <p className="text-sm text-muted">Choosing customers by name needs &ldquo;View contact information&rdquo; in Team &amp; Access.</p>;
+  if (!contact) return <p className="text-sm text-muted">Choosing customers by name needs &ldquo;View contact information&rdquo; in Settings → People &amp; access.</p>;
   const label = (c: AudienceCustomer | undefined, id: string) => (c ? `${c.name ?? "Customer"} · ${c.number}` : id === "" ? "" : "A customer");
   const toggle = (c: AudienceCustomer) => {
     setKnown((k) => ({ ...k, [c.id]: c }));

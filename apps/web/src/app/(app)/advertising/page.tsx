@@ -13,7 +13,7 @@ export default function AdvertisingOverviewPage() {
   return (
     <>
       <AdvertisingHeader
-        title="Advertising"
+        title="Ads"
         sub="Every platform together: what you spent, what the platforms credit to their ads, and your Shopify sales per unit of spend. AdSense's earnings are money in, kept apart from the spend."
         r={s.dates}
         shown={s.shown}

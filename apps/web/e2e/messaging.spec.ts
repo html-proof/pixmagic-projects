@@ -39,10 +39,12 @@ test("an owner sets up a sender, verifies a test number, writes a template and t
   const { base } = await ownerWithStore(page);
 
   await page.goto("/dashboard");
-  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Customer Messaging" }).click();
+  // Text messages is one of Marketing's tabs.
+  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Marketing" }).click();
+  await page.getByTestId("area-tabs-marketing").getByRole("link", { name: "Text messages" }).click();
   await expect(page).toHaveURL(/\/messaging\/?$/);
   // The heading comes with the overview's first load, which outlasted 5 s on the PC runner on battery.
-  await expect(page.getByRole("heading", { name: /Customer Messaging/ }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: /Text messages/ }).first()).toBeVisible({ timeout: 15_000 });
 
   // The sender, checked with (the stand-in for) AWS.
   const saved = await call(page, "PUT", `${base}/sender`, { senderType: "sender_id", originationIdentity: "LOCALTEST", countries: ["AU"], monthlyBudgetUsd: 5, hardStop: true, transactionalBasis: "checkout_notice", quietStart: 0, quietEnd: 0, maxPerCustomerDay: 3, maxMarketingPerWeek: 2 });
