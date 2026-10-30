@@ -11,7 +11,7 @@ import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail }
  * screen; the event comes off again; and the page fits a phone (the sheet scrolls, not the page).
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Today (UTC, the store's zone here) plus `n` days, as YYYY-MM-DD. */

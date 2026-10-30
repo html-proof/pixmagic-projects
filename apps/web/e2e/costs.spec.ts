@@ -9,7 +9,7 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
  * can't run in e2e (no read_reports), so the card says why it isn't net profit instead of giving one.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Today (UTC, the store's zone here). */
