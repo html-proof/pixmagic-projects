@@ -72,7 +72,7 @@ export interface CustomerDay {
 /** How well one share of orders with a customer fits `k` of `n` (binomial log-likelihood at its own rate; 0 for none or all). */
 const shareFit = (k: number, n: number) => (k <= 0 || k >= n ? 0 : k * Math.log(k / n) + (n - k) * Math.log(1 - k / n));
 /** How much likelier (log) a start after the first day with a known customer must make the orders than that day does. */
-const LATER_START_EVIDENCE = 2;
+const LATER_START_EVIDENCE = 1;
 /** The orders before a start have at most this part of the share with a customer that the orders from it on have. */
 const BEFORE_START_SHARE = 1 / 3;
 

@@ -80,7 +80,7 @@ Customers are counted from the first store-local day on which every order's cust
    stretches, each with its own share of orders that have a customer: it is the day with a known
    customer that fits them best (binomial log-likelihood; that day's orders without one count as
    before it), where the share before is at most a third of the share after. A start later than the
-   first day with a known customer must fit better by more than 2 (log): a store whose first weeks
+   first day with a known customer must fit better by more than 1 (log): a store whose first weeks
    had fewer customers by chance keeps its first day.
    - Not simply the first day with a customer: a single old order linked out of turn (updated since
      the grant, or dated by when it was processed elsewhere) would otherwise start the figures before
