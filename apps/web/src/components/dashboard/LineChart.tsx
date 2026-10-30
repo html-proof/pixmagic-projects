@@ -1,7 +1,7 @@
 "use client";
 import { useId, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { fmtDay, fmtLongDay } from "./format";
-import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
+import { columnPath, columnWidth, niceTicksAround, useWidth } from "./chartUtils";
 
 // ---------------------------------------------------------------------------
 // A small multi-series line chart: one shared y-axis (never two), one line per series, a crosshair
@@ -84,18 +84,22 @@ export function LineChart({
   const n = days.length;
   // The dates can change under a held hover (a shorter range): never read past the new end.
   const at = hover !== null && hover < n ? hover : null;
-  const max = Math.max(0, ...series.flatMap((s) => s.values.filter((v): v is number => v !== null)));
+  const known = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
+  const max = Math.max(0, ...known);
+  // A day can be below zero (more refunds than sales): the axis reaches down to it, never past the chart.
+  const min = Math.min(0, ...known);
   const show = (v: number | null | undefined) => (v === null || v === undefined ? NO_DATA : format(v));
-  const ticks = niceTicks(Math.max(max, floor, integer ? 4 : 0), 4);
-  const step = ticks[1] ?? 1;
-  const top = ticks[ticks.length - 1] || 1;
+  const ticks = niceTicksAround(min, Math.max(max, floor, integer ? 4 : 0), 4);
+  const step = ticks.length > 1 ? ticks[1]! - ticks[0]! : 1;
+  const bottom = ticks[0]!;
+  const top = ticks.length > 1 ? ticks[ticks.length - 1]! : bottom + 1;
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right - END_LABEL_W);
   const plotH = height - MARGIN.top - MARGIN.bottom;
   // Bars sit in the middle of equal slots; line points run edge to edge.
   const slot = n ? plotW / n : 0;
   const barW = columnWidth(slot);
   const x = (i: number) => MARGIN.left + (bars ? slot * (i + 0.5) : n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-  const y = (v: number) => MARGIN.top + plotH - (v / top) * plotH;
+  const y = (v: number) => MARGIN.top + plotH - ((v - bottom) / (top - bottom)) * plotH;
 
   // About one date label per 70px, always including the first and last day.
   const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 70))));
@@ -162,7 +166,8 @@ export function LineChart({
               ))}
             {ticks.map((t, i) => (
               <g key={i}>
-                <line x1={MARGIN.left} x2={MARGIN.left + plotW} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
+                {/* With days below zero, the zero line is the one the columns stand on: a shade darker. */}
+                <line x1={MARGIN.left} x2={MARGIN.left + plotW} y1={y(t)} y2={y(t)} stroke={t === 0 && bottom < 0 ? "var(--muted)" : "var(--border)"} strokeOpacity={t === 0 && bottom < 0 ? 0.6 : 1} strokeWidth={1} />
                 <text x={MARGIN.left - 6} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill="var(--muted)">
                   {fmtAxis(t, step)}
                 </text>

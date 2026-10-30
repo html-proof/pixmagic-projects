@@ -34,6 +34,21 @@ export function niceTicks(max: number, count: number): number[] {
   return ticks;
 }
 
+/**
+ * Gridlines for figures that can go below zero (a day with more refunds than sales): the same
+ * steps on both sides of zero, from the lowest figure up to the highest. Never below zero, it is
+ * `niceTicks`. The longer side gets about `count` steps, the whole axis at most about six.
+ */
+export function niceTicksAround(min: number, max: number, count: number): number[] {
+  if (!(min < 0)) return niceTicks(max, count);
+  const step = niceStep(Math.max(Math.max(max, -min) / count, (max - min) / 6));
+  // Whole step indexes from just below the lowest figure to just above the highest (the 1e-9 keeps
+  // a figure on a gridline, like −0.3 in steps of 0.1, from adding a step past it).
+  const ticks: number[] = [];
+  for (let i = Math.floor(min / step + 1e-9), hi = Math.ceil(max / step - 1e-9); i <= hi; i++) ticks.push(Number((i * step).toPrecision(12)) || 0);
+  return ticks;
+}
+
 export function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
