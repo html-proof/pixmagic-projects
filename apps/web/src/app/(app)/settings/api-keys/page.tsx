@@ -3,7 +3,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
-import { ConfirmDialog } from "@/components/AppUi";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { API_KEYS_ENABLED } from "@/lib/features";
@@ -28,8 +27,6 @@ function ApiKeys() {
   const [name, setName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  /** The key waiting for a yes before it's revoked. */
-  const [revoking, setRevoking] = useState<Key | null>(null);
 
   if (!allowed) return <Alert kind="info">Only owners and admins can manage API keys.</Alert>;
 
@@ -47,6 +44,7 @@ function ApiKeys() {
   }
 
   async function revoke(id: string) {
+    if (!confirm("Revoke this key? Tools using it will stop working.")) return;
     setActionMsg(null);
     try {
       await api(`/workspaces/${workspace.id}/api-keys/${id}`, { method: "DELETE" });
@@ -83,26 +81,13 @@ function ApiKeys() {
             <span className="flex-1">{k.name} <code className="text-muted">{k.prefix}…</code></span>
             <span className="text-xs text-muted">{k.revokedAt ? "Revoked" : k.lastUsedAt ? `Used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "Never used"}</span>
             {!k.revokedAt && (
-              <button className="text-danger" aria-label={`Revoke key ${k.name}`} onClick={() => setRevoking(k)}>
+              <button className="text-danger" aria-label={`Revoke key ${k.name}`} onClick={() => revoke(k.id)}>
                 Revoke
               </button>
             )}
           </li>
         ))}
       </ul>
-      <ConfirmDialog
-        open={!!revoking}
-        title={`Revoke ${revoking?.name ?? "this key"}?`}
-        confirmLabel="Revoke"
-        danger
-        onCancel={() => setRevoking(null)}
-        onConfirm={() => {
-          if (revoking) void revoke(revoking.id);
-          setRevoking(null);
-        }}
-      >
-        <p>Tools using it will stop working.</p>
-      </ConfirmDialog>
     </section>
   );
 }

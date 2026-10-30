@@ -5,7 +5,7 @@ import type { StaffPermission } from "@app/shared/staff";
 import { SectionLayout, ToastProvider } from "@/components/AppUi";
 import { useStaff } from "@/lib/staff";
 
-/** The Staff section: Overview through Settings, each shown only to those who may use it. */
+/** The Staff Management section: Overview through Settings, each shown only to those who may use it. */
 const ITEMS: ReadonlyArray<readonly [string, string, StaffPermission]> = [
   ["", "Overview", "staff:view"],
   ["employees", "All employees", "staff:view"],
@@ -26,8 +26,8 @@ export default function StaffLayout({ children }: { children: ReactNode }) {
   if (!access.permissions.length) {
     return (
       <div className="card max-w-xl">
-        <h1 className="text-lg font-semibold">Staff</h1>
-        <p className="mt-1 text-sm text-muted">You don&apos;t have access to Staff in this workspace. An owner or admin can give you a staff role in Settings → People &amp; access.</p>
+        <h1 className="text-lg font-semibold">Staff Management</h1>
+        <p className="mt-1 text-sm text-muted">You don&apos;t have access to Staff Management in this workspace. An owner or admin can give you a staff role in Settings → Members &amp; roles.</p>
       </div>
     );
   }
@@ -38,7 +38,7 @@ export default function StaffLayout({ children }: { children: ReactNode }) {
   });
   return (
     <ToastProvider>
-      <SectionLayout title="Staff" icon={STAFF_ICON} items={items}>
+      <SectionLayout title="Staff Management" icon={STAFF_ICON} items={items}>
         {children}
       </SectionLayout>
     </ToastProvider>

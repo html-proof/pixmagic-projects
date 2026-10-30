@@ -162,7 +162,7 @@ test.describe("signed in", () => {
 
   const appPages: ReadonlyArray<readonly [string, RegExp]> = [
     ["/dashboard", /./],
-    ["/team", /People & access/],
+    ["/team", /Team & Access/],
     ["/settings/members", /./],
     ["/settings/security", /./],
     ["/settings/profile", /Profile/],
