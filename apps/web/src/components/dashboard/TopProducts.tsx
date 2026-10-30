@@ -31,11 +31,13 @@ export function TopProducts({ ov, currency, collection = null, collections = [],
   const synchronizedAt = ov.freshness?.asOf ?? report?.lastSyncedAt;
   const csv = () => {
     if (!allowed("reports.export")) return;
-    const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold"],
-      ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold])];
+    // Narrowed to a collection: every row and the file's name say so, so it is never read as the whole store's ranking.
+    const narrowed = collection ? [`${collection.title} (${collection.id})`] : [];
+    const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold", ...(collection ? ["Only products now in collection"] : [])],
+      ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold, ...narrowed])];
     const text = values.map(row => row.map(v => `"${(typeof v === "string" && /^\s*[=+\-@\t\r]/.test(v) ? "'" + v : String(v ?? "")).replaceAll('"', '""')}"`).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob(["\ufeff", text], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a"); a.href = url; a.download = `top-products-${ov.range.from}-${ov.range.to}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url; a.download = `top-products-${collection ? `collection-${collection.id.replace(/[^\w-]/g, "-")}-` : ""}${ov.range.from}-${ov.range.to}.csv`; a.click(); URL.revokeObjectURL(url);
   };
   return <Panel id="d-top-products" title="Top 100 products" help="Net units sold by default, with net revenue breaking ties. Returns and cancellations count on the date of their sales reversal. Growth compares the immediately preceding period, with the same elapsed time for a running day.">
     <div className="mb-4 flex flex-wrap gap-3">

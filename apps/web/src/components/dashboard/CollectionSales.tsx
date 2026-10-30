@@ -1,6 +1,7 @@
 "use client";
 import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct, useLiveApi } from "@/lib/api";
+import { collectionSalesParams } from "./collectionDates";
 import { comparisonHelp, versusWords } from "./DateRange";
 import { fmtRelative } from "./format";
 import { Delta, Panel } from "./Primitives";
@@ -65,13 +66,13 @@ const LIVE_EVERY_MS = 15_000;
 export const collectionName = (c: { collectionId: string; title: string }) => c.title || `Collection ${c.collectionId}`;
 
 /**
- * The report for the dashboard's dates and what they are compared with, written out as custom
- * dates so both sides are the dashboard's own. `shown` false (no product sales for this member or
- * store): nothing is asked.
+ * The report for the dashboard's dates and what they are compared with, asked so that both sides
+ * are the dashboard's own (collectionSalesParams). `shown` false (no product sales for this member
+ * or store): nothing is asked.
  */
 export function useCollectionSales(ov: Overview, shown: boolean) {
   const { workspace } = useApp();
-  const params = new URLSearchParams({ preset: "custom", from: ov.range.from, to: ov.range.to, compare: "custom", cfrom: ov.previous.from, cto: ov.previous.to });
+  const params = collectionSalesParams(ov.range, ov.previous);
   const path = shown ? `/workspaces/${workspace.id}/stores/${ov.store.id}/analytics/collections/sales?${params}` : null;
   const live = useLiveApi<CollectionSalesReport>(path, LIVE_EVERY_MS);
   // Never the figures of other dates under these ones.

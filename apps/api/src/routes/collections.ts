@@ -15,7 +15,8 @@ const query = z.object(datesQuery);
  * access (orders and products) as GET .../analytics/products/top-selling.
  *
  * The products page asks with the dashboard's own dates written out as custom dates (it has no
- * preset to send). A preset's dates may start before the store's first day (the last 90 days of a
+ * preset to send), and its comparison as the mode whenever that gives the same days, else as dates
+ * (apps/web/src/components/dashboard/collectionDates.ts). A preset's dates may start before the store's first day (the last 90 days of a
  * store a month old), which dates picked in the date picker may not: that limit isn't applied
  * here, and days before the store simply have no sales.
  */

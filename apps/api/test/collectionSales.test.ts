@@ -168,6 +168,15 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     expect(body.totals.previous).toBeNull();
   });
 
+  it("answers a 366-day range against the 366 days before it, as the dashboard compares them", async () => {
+    // What the products page sends for a financial year with a 29 February in it: the days before
+    // have none, a day past the 12 months custom comparison dates may span (collectionDates.ts).
+    const { a, ws, store } = await owner();
+    const res = await get(a.headers, ws, store.id, "preset=custom&from=2023-07-01&to=2024-06-30&compare=previous");
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ range: { from: "2023-07-01", to: "2024-06-30" }, previous: { from: "2022-06-30", to: "2023-06-30", compare: "previous" } });
+  });
+
   it("withholds every figure until the dates' sales are all in", async () => {
     const { a, ws, store } = await owner();
     await catalog(store);
