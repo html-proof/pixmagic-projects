@@ -56,7 +56,7 @@ function shopifyState(s: StoreSummary | null): State {
 function whatsappState(o: WaOverview | null, failed: boolean): State {
   if (!o) return failed ? "unknown" : "checking";
   const c = o.connection;
-  if (!c || c.status === "disconnected") return o.platform.cloudApi.missing.length ? "unavailable" : "not_connected";
+  if (!c || c.status === "disconnected") return o.platform.evolution ? "not_connected" : "unavailable";
   if (c.status === "pairing" || c.status === "reconnecting") return "connecting";
   if (c.status === "logged_out") return "permission_expired";
   if (c.status === "failed") return "failed";
@@ -180,7 +180,7 @@ export default function IntegrationsPage() {
             action={
               !store || !wa.data || !storeBase ? null : waConn ? (
                 <ManageLink name="WhatsApp" href={WA_PAGE} attention={waState === "permission_expired" || waState === "failed"} />
-              ) : !manage || wa.data.platform.cloudApi.missing.length ? null : (
+              ) : !manage || !wa.data.platform.evolution ? null : (
                 <ConnectButton name="WhatsApp" href={waHref("setup")} testid="int-whatsapp-connect">
                   Connect
                 </ConnectButton>
@@ -197,30 +197,25 @@ export default function IntegrationsPage() {
                 <p>
                   <span className="text-muted">Number:</span> {waConn.phone ?? "—"}
                   {waConn.profileName ? ` · ${waConn.profileName}` : ""}
-                  <span className="text-muted"> · WhatsApp Business Platform</span>
+                  <span className="text-muted"> · {waConn.provider === "qr" ? "linked phone" : "Cloud API"}</span>
                 </p>
                 <p className="text-muted">
                   {waState === "connecting"
-                    ? "Connecting with Meta."
+                    ? waConn.status === "pairing"
+                      ? "Waiting for the phone to scan the code."
+                      : "WhatsApp is reconnecting by itself."
                     : waState === "permission_expired"
-                      ? "Meta's access for bizinsights ended: connect again from Fix it."
+                      ? "The phone logged this link out: link it again from Fix it."
                       : waState === "failed"
                         ? (waConn.reason ?? "Not connected: see Fix it.")
                         : `Working${waConn.lastCheckedAt ? ` · last checked ${fmtRelative(waConn.lastCheckedAt)}` : ""}`}
                 </p>
               </>
-            ) : wa.data.connection?.reasonCode === "qr_linking_retired" ? (
-              <p className="text-muted">
-                QR-code linking was retired: connect your number through Meta&apos;s WhatsApp Business Platform to send again.{" "}
-                <Link className="text-accent underline-offset-2 hover:underline" href={WA_PAGE}>
-                  Open WhatsApp Automation
-                </Link>
-              </p>
-            ) : wa.data.platform.cloudApi.missing.length ? (
+            ) : !wa.data.platform.evolution ? (
               <p className="text-muted">Connecting WhatsApp is being switched on.</p>
             ) : !manage ? null : (
               <p className="text-muted">
-                Connect your WhatsApp Business number through Meta&apos;s WhatsApp Business Platform.{" "}
+                Link your WhatsApp with a QR code in a minute, or connect Meta&apos;s official Cloud API.{" "}
                 <Link className="text-accent underline-offset-2 hover:underline" href={WA_PAGE}>
                   What WhatsApp Automation does
                 </Link>

@@ -13,6 +13,7 @@ import {
   ChangeNote,
   ComparedLine,
   Definitions,
+  earningsLabel,
   SoFarNote,
   timeZoneNote,
   UNAVAILABLE,
@@ -57,7 +58,7 @@ const PLATFORM: Record<Provider, { name: string; short: string; Icon: (p: { size
     short: "AdSense",
     Icon: GoogleIcon,
     color: "var(--viz-cat-3)",
-    explain: "What AdSense estimates the ads shown on your site earned you. It finalizes each month after it ends.",
+    explain: "What AdSense estimates the ads shown on your site earned you. It finalizes each month in the first days of the next.",
   },
 };
 
@@ -346,7 +347,7 @@ function EarningsCard({ a, ov }: { a: AdsenseModule; ov: Overview }) {
       note={[timeZoneNote(accounts), historyNote(a, "adsense"), leftOut].filter(Boolean).join(" ") || null}
       testid="ads-earnings"
     >
-      <Headline label="Estimated earnings" fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
+      <Headline label={earningsLabel(a.final)} fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
       {c && (
         <Facts
           items={[
@@ -445,7 +446,7 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
       {sameMoney ? (
         <ChartCard
           title={moneyTitle}
-          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; estimated earnings are what AdSense expects to pay you, not money paid out yet." : ""}${weeks}${gaps}`}
+          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; earnings are AdSense's estimate until it finalizes each month, in the first days of the next." : ""}${weeks}${gaps}`}
           testid="ads-money-chart"
         >
           {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `${moneyTitle}, ${span}`)}
@@ -526,7 +527,7 @@ function Comparison({ ov }: { ov: Overview }) {
     <div className="card mt-4 min-w-0" data-testid="ads-comparison">
       <h3 className="font-semibold">By platform</h3>
       <p className="text-xs text-muted">
-        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is AdSense&apos;s estimate of what it will pay you, not money paid out yet.
+        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is what AdSense says the ads on your site earned, its estimate until it finalizes the month.
       </p>
       <div className="-mx-1 mt-3 overflow-x-auto">
         <table className="w-full min-w-[46rem] text-sm">

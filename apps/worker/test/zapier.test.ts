@@ -1,11 +1,22 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { disconnectDb, systemDb, type ZapierHook } from "@app/db";
 import { resetDb } from "@app/db/testing";
-import { applyMessageStatus, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, resetEnvCache, type FetchLike } from "@app/core";
-import { checkZapierThresholds, deliverZapier, maybeSendAdsDailySummary, recordZapierEvent, sweepZapier, zapierAfterAdSync, type ZapierJob } from "@app/core/zapier";
+import { applyMessageStatus, audit, encryptTokenFields, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, resetEnvCache, type FetchLike } from "@app/core";
+import {
+  checkZapierThresholds,
+  deliverZapier,
+  maybeSendAdsDailySummary,
+  recordZapierEvent,
+  retryZapierDelivery,
+  sweepZapier,
+  unsubscribeZapierHook,
+  zapierAfterAdSync,
+  type ZapierJob,
+} from "@app/core/zapier";
 import { ZAPIER_MAX_ATTEMPTS } from "@app/shared/zapier";
-import type { WorkerDeps } from "../src/handlers.js";
+import { processWebhook, type WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 
 /**
  * Zapier's outbox delivered by the worker (docs/zapier.md): the delivery jobs on the sync queue, their
@@ -19,12 +30,16 @@ const HOOK = "https://hooks.zapier.com/hooks/standard/1/abc/";
 let answers: Array<Response | Error> = [];
 let calls: Array<{ url: string; init: RequestInit }> = [];
 const fetchImpl = (async (input: Parameters<FetchLike>[0], init?: RequestInit) => {
+  // Shopify, asked for an order's sales by the orders/paid webhook: none stored there.
+  const sales = salesAnswer(input, init);
+  if (sales) return sales;
   calls.push({ url: String(input), init: init ?? {} });
   const next = answers.shift() ?? new Response("ok", { status: 200 });
   if (next instanceof Error) throw next;
   return next;
 }) as FetchLike;
-const deps: WorkerDeps = { coord, queues, payloads: memoryBlobs(), mailer: memoryMailer(), fetchImpl };
+const mailer = memoryMailer();
+const deps: WorkerDeps = { coord, queues, payloads: memoryBlobs(), mailer, fetchImpl };
 
 function setEnv(vars: Record<string, string>) {
   Object.assign(process.env, vars);
@@ -37,6 +52,7 @@ beforeEach(async () => {
   await resetDb();
   queues.clear();
   coord.clear();
+  mailer.sent.length = 0;
   answers = [];
   calls = [];
 });
@@ -80,7 +96,7 @@ describe("delivering an event to a Zap", () => {
     expect(calls[0]!.url).toBe(HOOK);
     expect(calls[0]!.init.redirect).toBe("manual");
     const sent = JSON.parse(String(calls[0]!.init.body));
-    expect(sent).toMatchObject({ id: `alert_raised:a1:${w.store.id}`, event: "alert_raised", store: { id: w.store.id, name: w.store.name }, data: { title: "Couldn't sync your orders" } });
+    expect(sent).toMatchObject({ id: `alert_raised:a1:${w.store.id}`, event: "alert_raised", schema_version: 1, store: { id: w.store.id, name: w.store.name }, data: { title: "Couldn't sync your orders" } });
     const d = await onlyDelivery();
     expect(d).toMatchObject({ status: "delivered", attempts: 1, responseStatus: 200, errorCode: null });
     expect((await systemDb.zapierHook.findUniqueOrThrow({ where: { id: w.hook.id } })).lastDeliveredAt).not.toBeNull();
@@ -151,7 +167,8 @@ describe("delivering an event to a Zap", () => {
     answers = [new Response("", { status: 400 }), new Response("", { status: 302, headers: { location: "http://169.254.169.254/" } })];
     expect(await deliverZapier(a!.id, deps)).toBe("failed");
     expect(await deliverZapier(b!.id, deps)).toBe("failed");
-    expect((await systemDb.zapierDelivery.findMany({ orderBy: { createdAt: "asc" } })).map((d) => d.errorCode)).toEqual(["rejected", "redirect_refused"]);
+    // (The "Some events didn't reach Zapier" alert they raise is a third, for the same "New alert" Zap.)
+    expect((await systemDb.zapierDelivery.findMany({ where: { id: { in: [a!.id, b!.id] } }, orderBy: { createdAt: "asc" } })).map((d) => d.errorCode)).toEqual(["rejected", "redirect_refused"]);
     expect(calls).toHaveLength(2);
   });
 
@@ -342,3 +359,248 @@ describe("WhatsApp messages that fail", () => {
 });
 
 const NOW_WA = new Date("2026-10-28T10:00:00Z");
+
+describe("the envelope's version", () => {
+  it("an event written before the envelope had one still goes out as version 1", async () => {
+    const w = await world("alert_raised");
+    await alertEvent(w);
+    const ev = await systemDb.zapierEvent.findFirstOrThrow();
+    const { schema_version: _v, ...old } = ev.payload as Record<string, unknown>;
+    await systemDb.zapierEvent.update({ where: { id: ev.id }, data: { payload: old as never } });
+    await deliverZapier((await onlyDelivery()).id, deps);
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ event: "alert_raised", schema_version: 1 });
+  });
+});
+
+describe("events that never reach Zapier", () => {
+  const alertOpen = (storeId: string) => systemDb.alert.findFirst({ where: { storeId, code: "zapier_delivery_failed", resolvedAt: null } });
+
+  it("raise the store's alert once; Retry sends each again, and the alert resolves once none is left failed", async () => {
+    const w = await world("alert_raised");
+    await alertEvent(w, "a1");
+    await alertEvent(w, "a2");
+    const [a, b] = await systemDb.zapierDelivery.findMany({ orderBy: { createdAt: "asc" } });
+    answers = [new Response("", { status: 400 }), new Response("", { status: 404 })];
+    expect(await deliverZapier(a!.id, deps)).toBe("failed");
+    expect(await deliverZapier(b!.id, deps)).toBe("failed");
+    // One alert while it is open, worded for owners and admins, emailed once.
+    expect(await systemDb.alert.count({ where: { storeId: w.store.id, code: "zapier_delivery_failed" } })).toBe(1);
+    expect(mailer.sent.filter((m) => m.subject.includes("Zapier"))).toHaveLength(1);
+
+    queues.clear();
+    expect(await retryZapierDelivery(w.ws.id, w.store.id, a!.id, queues, { userId: w.user.id })).toBe("queued");
+    expect(await systemDb.zapierDelivery.findUniqueOrThrow({ where: { id: a!.id } })).toMatchObject({ status: "pending", attempts: 0, errorCode: null, responseStatus: null });
+    expect(zapierJobs().map((j) => j.deliveryId)).toEqual([a!.id]);
+    // Twice is once: it isn't failed any more.
+    expect(await retryZapierDelivery(w.ws.id, w.store.id, a!.id, queues, { userId: w.user.id })).toBe("not_failed");
+    expect(await deliverZapier(a!.id, deps)).toBe("delivered");
+    // b is still failed: the alert stays.
+    expect(await alertOpen(w.store.id)).not.toBeNull();
+    expect(await retryZapierDelivery(w.ws.id, w.store.id, b!.id, queues, { userId: w.user.id })).toBe("queued");
+    expect(await deliverZapier(b!.id, deps)).toBe("delivered");
+    expect(await alertOpen(w.store.id)).toBeNull();
+    expect(await systemDb.auditLog.count({ where: { workspaceId: w.ws.id, action: "zapier.delivery_retried" } })).toBe(2);
+
+    // Another business's delivery, or none: not found.
+    const other = await world("alert_raised");
+    expect(await retryZapierDelivery(other.ws.id, other.store.id, a!.id, queues, { userId: other.user.id })).toBe("not_found");
+  });
+
+  it("a failed one whose Zap is gone can't be sent again; the sweep resolves the alert it left", async () => {
+    const w = await world("alert_raised");
+    await alertEvent(w);
+    const d = await onlyDelivery();
+    answers = [new Response("", { status: 400 })];
+    expect(await deliverZapier(d.id, deps)).toBe("failed");
+    expect(await alertOpen(w.store.id)).not.toBeNull();
+    expect(await unsubscribeZapierHook(w.grant, w.hook.id)).toBe(true);
+    expect(await retryZapierDelivery(w.ws.id, w.store.id, d.id, queues, { userId: w.user.id })).toBe("trigger_gone");
+    expect((await sweepZapier(deps)).settled).toBe(1);
+    expect(await alertOpen(w.store.id)).toBeNull();
+  });
+});
+
+describe("AdSense earnings that fell below an amount", () => {
+  const NOW = new Date("2026-10-28T09:00:00Z");
+  async function adsense(w: { ws: { id: string }; store: { id: string } }, syncedThrough: string, days: Record<string, number>) {
+    const c = await systemDb.adConnection.create({
+      data: { workspaceId: w.ws.id, storeId: w.store.id, provider: "adsense", accountId: "pub-1", currency: "AUD", accessTokenEnc: "x", tokenKeyVersion: 1, lastSyncedAt: NOW, syncedThrough },
+    });
+    for (const [day, earnings] of Object.entries(days)) {
+      await systemDb.adsenseDaily.create({ data: { workspaceId: w.ws.id, storeId: w.store.id, connectionId: c.id, accountId: "pub-1", site: "", day, earnings, currency: "AUD" } });
+    }
+    return c;
+  }
+  /** A trigger made a week before NOW, so the finished day is news to it. */
+  async function belowTrigger(amount: number) {
+    const w = await world("adsense_earnings_threshold", { period: "day", amount, direction: "below" });
+    await systemDb.zapierHook.update({ where: { id: w.hook.id }, data: { createdAt: new Date("2026-10-21T00:00:00Z") } });
+    return w;
+  }
+
+  it("fires once for a finished day that ended below it, only once every account has the whole day", async () => {
+    const w = await belowTrigger(20);
+    // Today (the 28th) has nothing yet: still running, so never "below". Yesterday ended at 5, but the account is stored only through the 26th.
+    const c = await adsense(w, "2026-10-26", { "2026-10-27": 5 });
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+    await systemDb.adConnection.update({ where: { id: c.id }, data: { syncedThrough: "2026-10-28" } });
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(1);
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+    const ev = await systemDb.zapierEvent.findFirstOrThrow();
+    expect(ev.dedupeKey).toBe(`adsense_earnings_threshold:${w.hook.id}:2026-10-27`);
+    expect((ev.payload as { data: Record<string, unknown> }).data).toMatchObject({
+      trigger: { platform: "adsense", period: "day", amount: 20, direction: "below" },
+      period: "2026-10-27",
+      period_complete: true,
+      earnings_estimated: 5,
+      currency: "AUD",
+    });
+  });
+
+  it("stays quiet for a day that ended at or above it", async () => {
+    const w = await belowTrigger(20);
+    await adsense(w, "2026-10-28", { "2026-10-27": 20, "2026-10-28": 0 });
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+    expect(await systemDb.zapierEvent.count()).toBe(0);
+  });
+
+  it("an \"above\" trigger made before the direction existed still fires on reaching the amount", async () => {
+    const w = await world("adsense_earnings_threshold", { period: "day", amount: 20 });
+    await adsense(w, "2026-10-28", { "2026-10-28": 21 });
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(1);
+    expect(((await systemDb.zapierEvent.findFirstOrThrow()).payload as { data: { trigger: Record<string, unknown> } }).data.trigger.direction).toBe("above");
+  });
+});
+
+describe("ad accounts synced", () => {
+  const NOW = new Date("2026-10-28T09:05:00Z");
+  it("one event per account and hour, with no figures; never for the demo", async () => {
+    const w = await world("sync_completed");
+    const c = await systemDb.adConnection.create({
+      data: { workspaceId: w.ws.id, storeId: w.store.id, provider: "meta", accountId: "act_9", accountName: "Acme ads", currency: "AUD", accessTokenEnc: "x", tokenKeyVersion: 1, lastSyncedAt: NOW, syncedThrough: "2026-10-28" },
+    });
+    await zapierAfterAdSync(c.id, { queues }, NOW);
+    await zapierAfterAdSync(c.id, { queues }, new Date(NOW.getTime() + 40 * 60_000));
+    const events = await systemDb.zapierEvent.findMany();
+    expect(events.map((e) => e.dedupeKey)).toEqual([`sync_completed:${c.id}:2026-10-28T09`]);
+    expect((events[0]!.payload as { data: Record<string, unknown> }).data).toEqual({
+      integration: "meta_ads",
+      integration_name: "Meta Ads",
+      connection_id: c.id,
+      account_id: "act_9",
+      account_name: "Acme ads",
+      synced_at: NOW.toISOString(),
+      data_through: "2026-10-28",
+    });
+    expect(zapierJobs()).toHaveLength(1);
+    await zapierAfterAdSync(c.id, { queues }, new Date(NOW.getTime() + 60 * 60_000));
+    expect(await systemDb.zapierEvent.count()).toBe(2);
+
+    const demo = await systemDb.adConnection.create({
+      data: { workspaceId: w.ws.id, storeId: w.store.id, provider: "google", accountId: "demo", currency: "USD", accessTokenEnc: "x", tokenKeyVersion: 1, isDemo: true, demoSeed: 1, lastSyncedAt: NOW },
+    });
+    await zapierAfterAdSync(demo.id, { queues }, NOW);
+    expect(await systemDb.zapierEvent.count()).toBe(2);
+  });
+});
+
+describe("integrations connected and disconnected", () => {
+  it("become an event from the audit row, for the store it names; demos and other actions don't", async () => {
+    const w = await world("integration_connected");
+    const gone = await systemDb.zapierHook.create({ data: { workspaceId: w.ws.id, storeId: w.store.id, grantId: w.grant.id, event: "integration_disconnected", targetUrl: `${HOOK}d/` } });
+    await audit({ workspaceId: w.ws.id, actorUserId: w.user.id, action: "ads.connected", targetType: "store", targetId: w.store.id, metadata: { provider: "adsense", accounts: 2 } });
+    await audit({ workspaceId: w.ws.id, actorUserId: w.user.id, action: "ads.demo_connected", targetType: "store", targetId: w.store.id, metadata: { isNew: true } });
+    await audit({ workspaceId: w.ws.id, actorUserId: w.user.id, action: "member.removed", targetType: "store", targetId: w.store.id });
+    await audit({ workspaceId: w.ws.id, actorUserId: w.user.id, action: "whatsapp.disconnected", targetType: "store", targetId: w.store.id, metadata: { cancelledMessages: 0 } });
+    await audit({ workspaceId: w.ws.id, actorUserId: w.user.id, action: "zapier.connected", targetType: "zapier_grant", targetId: "g1", metadata: { storeId: w.store.id } });
+    const events = await systemDb.zapierEvent.findMany({ orderBy: { createdAt: "asc" } });
+    expect(events.map((e) => [e.event, (e.payload as { data: { integration: string } }).data.integration])).toEqual([
+      ["integration_connected", "adsense"],
+      ["integration_disconnected", "whatsapp"],
+      ["integration_connected", "zapier"],
+    ]);
+    expect((events[0]!.payload as { data: Record<string, unknown> }).data).toMatchObject({ integration_name: "Google AdSense", accounts: 2, settings_url: expect.stringMatching(/\/settings\/ads$/) });
+    // Who did it is the audit log's, not the Zap's.
+    expect(JSON.stringify(events.map((e) => e.payload))).not.toContain(w.user.id);
+    expect(await systemDb.zapierDelivery.count({ where: { hookId: gone.id } })).toBe(1);
+    // Written without a queue at hand: the cron sweep sends them.
+    expect(zapierJobs()).toHaveLength(0);
+    expect((await sweepZapier(deps)).queued).toBe(3);
+  });
+});
+
+describe("orders paid", () => {
+  async function paidWorld(permissions?: string[]) {
+    const w = await world("order_paid", {}, permissions ? { permissions } : {});
+    await systemDb.store.update({
+      where: { id: w.store.id },
+      data: encryptTokenFields(w.store.id, { accessToken: "shpat_x", scopes: ["read_orders"], accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }),
+    });
+    return w;
+  }
+  let seq = 0;
+  async function webhook(shop: string, topic: string, payload: unknown) {
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: `zw${++seq}`, topic, shopDomain: shop } });
+    return processWebhook({ eventId: ev.id, topic, shop, payload }, deps);
+  }
+  const order = (over: Record<string, unknown> = {}) => ({
+    id: 5550001,
+    name: "#1001",
+    currency: "AUD",
+    created_at: "2026-10-28T08:59:00Z",
+    updated_at: "2026-10-28T09:00:00Z",
+    processed_at: "2026-10-28T08:59:00Z",
+    cancelled_at: null,
+    financial_status: "paid",
+    subtotal_price: "119.90",
+    total_discounts: "10.00",
+    total_tax: "11.81",
+    total_price: "129.90",
+    source_name: "web",
+    customer: { id: 7, email: "pat@example.com", first_name: "Pat", phone: "+61400000000" },
+    email: "pat@example.com",
+    billing_address: { address1: "1 Secret St" },
+    discount_codes: [{ code: "PAT-ONLY-10", amount: "10.00" }],
+    line_items: [{ id: 1, product_id: 7001, variant_id: 8001, sku: "TEE-BLK-M", title: "Black T-shirt", quantity: 2, price: "59.95", total_discount: "0" }],
+    ...over,
+  });
+
+  it("Shopify's orders/paid becomes one event per order, with its amounts and items and nothing about who bought it", async () => {
+    const w = await paidWorld();
+    await webhook(w.store.shopDomain, "orders/create", order());
+    expect(await systemDb.zapierEvent.count()).toBe(0);
+    await webhook(w.store.shopDomain, "orders/paid", order());
+    // Shopify sends a webhook more than once.
+    await webhook(w.store.shopDomain, "orders/paid", order());
+    const events = await systemDb.zapierEvent.findMany();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.dedupeKey).toBe(`order_paid:${w.store.id}:5550001`);
+    expect((events[0]!.payload as { data: Record<string, unknown> }).data).toEqual({
+      order_id: "5550001",
+      order_name: "#1001",
+      currency: "AUD",
+      total_price: 129.9,
+      subtotal: 119.9,
+      total_discounts: 10,
+      total_tax: 11.81,
+      total_shipping: 0,
+      financial_status: "paid",
+      items: 2,
+      line_items: [{ product_id: "7001", variant_id: "8001", sku: "TEE-BLK-M", title: "Black T-shirt", quantity: 2, price: 59.95 }],
+      sales_channel: "web",
+      processed_at: "2026-10-28T08:59:00.000Z",
+    });
+    expect(JSON.stringify(events[0]!.payload)).not.toMatch(/pat@example|Pat|\+614|Secret St|PAT-ONLY|customer/);
+    // Queued at once: the worker has its queue at hand.
+    expect(zapierJobs()).toHaveLength(1);
+  });
+
+  it("not for a test order, nor for a member who can't see the store's sales", async () => {
+    const w = await paidWorld();
+    await webhook(w.store.shopDomain, "orders/paid", order({ id: 5550002, test: true }));
+    const noSales = await paidWorld(["integrations.status", "integrations.manage", "marketing.ads"]);
+    await webhook(noSales.store.shopDomain, "orders/paid", order({ id: 5550003 }));
+    expect(await systemDb.zapierEvent.count()).toBe(0);
+    expect(await systemDb.zapierDelivery.count()).toBe(0);
+  });
+});

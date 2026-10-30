@@ -1,16 +1,17 @@
 /**
  * The outbox: an event is written where it happens (an alert raised, a WhatsApp message failing, an
- * ad sync's figures crossing a trigger's amount), with one delivery row per Zap trigger that may
- * receive it, and handed to the worker (zapier/delivery.ts). A store with no trigger for the event
- * writes nothing: one indexed lookup is all an event costs it.
+ * ad sync's figures crossing a trigger's amount, an integration connected, an order paid), with one
+ * delivery row per Zap trigger that may receive it, and handed to the worker (zapier/delivery.ts). A
+ * store with no trigger for the event writes nothing: one indexed lookup is all an event costs it.
  *
- * Writing an event never throws: it is called from the middle of other work (raiseAlert, a WhatsApp
- * status report), which must not fail because Zapier's side of it did.
+ * Writing an event never throws: it is called from the middle of other work (raiseAlert, audit, a
+ * WhatsApp status report, a Shopify webhook), which must not fail because Zapier's side of it did.
+ * No event carries a customer's name, email, address or full phone number.
  */
 import { Prisma, systemDb, type WappMessage } from "@app/db";
 import { ALERT_PATH, describeAlert } from "@app/shared/alerts";
 import { WA_SKIP_LABEL, type WaSkipReason } from "@app/shared/whatsapp";
-import type { ZapierEvent } from "@app/shared/zapier";
+import { integrationOfProvider, ZAPIER_INTEGRATIONS, ZAPIER_SCHEMA_VERSION, type ZapierEvent, type ZapierIntegration } from "@app/shared/zapier";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import type { Queues } from "../queues.js";
@@ -60,6 +61,7 @@ export async function recordZapierEvent(input: ZapierEventInput, queues?: Pick<Q
     const envelope: ZapierEnvelope = {
       id: input.dedupeKey,
       event: input.event,
+      schema_version: ZAPIER_SCHEMA_VERSION,
       occurred_at: (input.occurredAt ?? now).toISOString(),
       store: { id: store.id, name: store.name ?? store.shopDomain, shop_domain: store.shopDomain },
       data: input.data,
@@ -161,4 +163,119 @@ export async function zapierWhatsappFailed(m: Pick<WappMessage, "id" | "workspac
     { workspaceId: m.workspaceId, storeId: m.storeId, event: "whatsapp_message_failed", dedupeKey: `whatsapp_message_failed:${m.id}`, data: whatsappFailedData({ ...m, reason: "provider_rejected", errorCode: "whatsapp_error" }, at), occurredAt: at },
     queues,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Integrations connected and disconnected
+// ---------------------------------------------------------------------------
+
+/** Where each integration is looked after in bizinsights. */
+const INTEGRATION_PATH: Record<ZapierIntegration, string> = {
+  meta_ads: ALERT_PATH.ads,
+  google_ads: ALERT_PATH.ads,
+  adsense: ALERT_PATH.ads,
+  whatsapp: ALERT_PATH.whatsapp,
+  zapier: ALERT_PATH.integrations,
+};
+
+/** The audit actions that are an integration connected or disconnected (samples look them up). */
+export const INTEGRATION_AUDIT_ACTIONS = ["ads.connected", "ads.disconnected", "whatsapp.connected", "whatsapp.disconnected", "zapier.connected", "zapier.disconnected"];
+
+interface AuditRow {
+  id: string;
+  workspaceId: string | null;
+  action: string;
+  targetType?: string | null;
+  targetId?: string | null;
+  metadata?: unknown;
+  createdAt: Date;
+}
+
+/**
+ * An audit row that is an integration connected or disconnected for a store: an ad platform, WhatsApp
+ * or Zapier. Null for anything else, the Google Ads demo (its figures are generated) and an ad sign-in
+ * still waiting for an ad account included: neither is an integration at work.
+ */
+export function integrationChange(row: Pick<AuditRow, "action" | "targetType" | "targetId" | "metadata">): { event: "integration_connected" | "integration_disconnected"; integration: ZapierIntegration; storeId: string } | null {
+  if (!INTEGRATION_AUDIT_ACTIONS.includes(row.action)) return null;
+  const [area, what] = row.action.split(".") as [string, string];
+  const meta = (row.metadata && typeof row.metadata === "object" ? row.metadata : {}) as Record<string, unknown>;
+  const integration: ZapierIntegration | null = area === "ads" ? integrationOfProvider(String(meta.provider ?? "")) : (area as "whatsapp" | "zapier");
+  // Zapier's rows are about its connection (the grant); the others about the store.
+  const storeId = area === "zapier" ? meta.storeId : row.targetType === "store" ? row.targetId : null;
+  if (!integration || typeof storeId !== "string" || !storeId) return null;
+  return { event: what === "connected" ? "integration_connected" : "integration_disconnected", integration, storeId };
+}
+
+/** "Integration connected / disconnected": which integration, how many ad accounts, and where it is looked after. Never who did it. */
+export function integrationEventData(change: NonNullable<ReturnType<typeof integrationChange>>, row: Pick<AuditRow, "metadata">, at: Date): Record<string, unknown> {
+  const meta = (row.metadata && typeof row.metadata === "object" ? row.metadata : {}) as Record<string, unknown>;
+  return {
+    integration: change.integration,
+    integration_name: ZAPIER_INTEGRATIONS[change.integration],
+    accounts: typeof meta.accounts === "number" ? meta.accounts : null,
+    [change.event === "integration_connected" ? "connected_at" : "disconnected_at"]: at.toISOString(),
+    settings_url: `${env().APP_URL}${INTEGRATION_PATH[change.integration]}`,
+  };
+}
+
+/** Called by audit() for every row it writes: those that are an integration connected or disconnected become an event (the cron sweep sends it). */
+export async function zapierAuditEvent(row: AuditRow): Promise<void> {
+  const change = integrationChange(row);
+  if (!change || !row.workspaceId) return;
+  await recordZapierEvent({
+    workspaceId: row.workspaceId,
+    storeId: change.storeId,
+    event: change.event,
+    dedupeKey: `${change.event}:${row.id}`,
+    data: integrationEventData(change, row, row.createdAt),
+    occurredAt: row.createdAt,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Orders paid
+// ---------------------------------------------------------------------------
+
+/** Line items an "Order paid" event lists (all of them are counted in `items`). */
+const ORDER_LINES = 100;
+
+export interface PaidOrder {
+  shopifyId: string;
+  name: string;
+  currency: string;
+  totalPrice: number;
+  subtotal: number;
+  totalDiscounts: number;
+  totalTax: number;
+  totalShipping: number;
+  financialStatus: string | null;
+  sourceName: string | null;
+  processedAt: Date;
+  lineItems: Array<{ productShopifyId: string | null; variantShopifyId: string | null; sku: string | null; title: string; quantity: number; price: number }>;
+}
+
+/** "Order paid": the order's number, amounts and items. Never who bought it: no name, email, address, phone, customer id or discount code. */
+export function orderPaidData(o: PaidOrder): Record<string, unknown> {
+  return {
+    order_id: o.shopifyId,
+    order_name: o.name,
+    currency: o.currency,
+    total_price: o.totalPrice,
+    subtotal: o.subtotal,
+    total_discounts: o.totalDiscounts,
+    total_tax: o.totalTax,
+    total_shipping: o.totalShipping,
+    financial_status: o.financialStatus,
+    items: o.lineItems.reduce((s, li) => s + li.quantity, 0),
+    line_items: o.lineItems.slice(0, ORDER_LINES).map((li) => ({ product_id: li.productShopifyId, variant_id: li.variantShopifyId, sku: li.sku, title: li.title, quantity: li.quantity, price: li.price })),
+    sales_channel: o.sourceName,
+    processed_at: o.processedAt.toISOString(),
+  };
+}
+
+/** Shopify's orders/paid webhook (the worker): one event per order. Test orders aren't sent (Shopify's reports leave them out too). */
+export async function zapierOrderPaid(store: { id: string; workspaceId: string }, o: PaidOrder & { test: boolean }, queues?: Pick<Queues, "sync">, now = new Date()): Promise<void> {
+  if (o.test) return;
+  await recordZapierEvent({ workspaceId: store.workspaceId, storeId: store.id, event: "order_paid", dedupeKey: `order_paid:${store.id}:${o.shopifyId}`, data: orderPaidData(o), occurredAt: now }, queues, now);
 }

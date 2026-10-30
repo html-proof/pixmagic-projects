@@ -35,7 +35,7 @@ vi.mock("../src/adConnections/config.js", () => ({
 
 const { adsenseReportForConnection, googleReportForConnection, metaReportForConnection } = await import("../src/adConnections/reports.js");
 const { AdsAuthError, AdsPermissionError, AdsRateLimitedError, AdsReportPendingError, AdsRetryableError } = await import("../src/ads.js");
-const { googleAdsOperationsToday, googleAdsPaused, pauseGoogleAds } = await import("../src/adConnections/budget.js");
+const { googleAdsOperationsToday, googleAdsPaused, metaAdsPaused, pauseGoogleAds } = await import("../src/adConnections/budget.js");
 const { memoryCoord } = await import("../src/coord.js");
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -79,6 +79,28 @@ describe("live reports per connection", () => {
     recorded.length = 0;
     expect((await metaReportForConnection(conn(), "campaign", "2026-09-01", "2026-09-07", meta)).rows).toEqual([]);
     expect(recorded).toEqual([]);
+  });
+
+  it("Meta: its limit on bizinsights' app pauses Meta Ads, syncs too; while paused no call is made and the answer is Meta's throttling", async () => {
+    const coord = memoryCoord();
+    let calls = 0;
+    const appLimit: FetchLike = async () => (calls++, json({ error: { message: "(#4) Application request limit reached", code: 4 } }, 400));
+    await expect(metaReportForConnection(conn(), "campaign", "2026-10-01", "2026-10-07", appLimit, { coord })).rejects.toMatchObject({ code: 4, errorCode: "rate_limited" });
+    expect(await metaAdsPaused(coord)).toBe(true);
+    // Another account's report, while paused: Meta isn't asked, and the route words it as Meta's throttling ("busy").
+    calls = 0;
+    recorded.length = 0;
+    const held = await metaReportForConnection(conn({ id: "conn2", accountId: "act_2" }), "campaign", "2026-10-01", "2026-10-07", appLimit, { coord }).catch((e: unknown) => e);
+    expect(held).toBeInstanceOf(AdsRateLimitedError);
+    expect(held).toMatchObject({ errorCode: "rate_limited" });
+    expect((held as InstanceType<typeof AdsRateLimitedError>).retryAfterS).toBeGreaterThan(890);
+    expect(calls).toBe(0);
+    expect(recorded).toEqual([]);
+    // One account's own throttling (17) leaves the others alone.
+    const fresh = memoryCoord();
+    const userLimit: FetchLike = async () => json({ error: { message: "User request limit reached", code: 17 } }, 400);
+    await expect(metaReportForConnection(conn(), "campaign", "2026-10-01", "2026-10-07", userLimit, { coord: fresh })).rejects.toMatchObject({ code: 17 });
+    expect(await metaAdsPaused(fresh)).toBe(false);
   });
 
   it("Google: the failure is classified and recorded as a report's; recording failing never hides the report's own error", async () => {

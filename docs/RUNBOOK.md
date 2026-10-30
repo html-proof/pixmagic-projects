@@ -48,6 +48,34 @@ WhatsApp's Evolution API service: no task running, the sweep couldn't reach it, 
 nearly full. Messages wait meanwhile. Steps in [whatsapp.md](whatsapp.md), "Runbook" (and
 "Scaling" for memory).
 
+### `sync-jobs-failed-for-good` (alarm) – ten or more sync jobs ran out of attempts in an hour
+Counted: a sync-queue job's `"sync job failed"` line with `"final":true` on its sixth attempt (core's `MAX_ATTEMPTS`), so failures a retry should have got past. Not counted: a failure no retry helps, final on its first attempt (`UnrecoverableError`): a paused, frozen or closed shop (Shopify `402`/`404`/`423`), access Shopify refuses, protected customer data not approved, an ad connection marked for its merchant. Those come back with every store's daily reconcile and their merchants are told already. Each counted failure has reached its merchant too (a `sync_*_failed` alert, or the ad account's card); the alarm is for a cause they share.
+1. Logs Insights on `/aws/lambda/insights-production-jobs`, the hour of the alarm: `filter @message like /"msg":"sync job failed"/ and @message like /"final":true/ and attempts >= 6 | stats count() by err.name, err.message`.
+2. `429`/`5xx` from Shopify, Meta or Google after every attempt: an outage there (https://www.shopifystatus.com); the daily reconcile and the ad re-check fetch the days again once it is over.
+3. The same error from our own code everywhere (a `TypeError`, a Prisma error) right after a release: a bug. `node infra/cdk/scripts/rollback.mjs`, or a forward fix, then re-sync the stores it stopped.
+4. Not this alarm's to see: Shopify refusing every store's token at once (`401`/`403`, `"Shopify refused the store's token"` in the same log) is final at once. The stores turn to Reconnect with critical alerts; see [Webhooks returning 401 en masse](#webhooks-returning-401-en-masse) for the app's credentials.
+
+### `ad-connections-need-merchants` (alarm) – ten or more ad connections turned to Reconnect or permission in an hour
+Each connection logs `"ad connection needs the merchant"` once, when it turns (core's `recordAdFailure`), and its merchant gets an `ads_reconnect` alert. Many in an hour, across stores, means something changed for everyone.
+1. Logs Insights on `/aws/lambda/insights-production-jobs`, `-api` and `-cron`: `filter @message like /ad connection needs the merchant/ | stats count() by provider, errorCode, storeId`.
+2. All one `storeId`: one merchant's sign-in with many ad accounts ended. Nothing to do: their cards say Reconnect.
+3. One `provider` across stores:
+   - Meta, `auth_expired`: Meta stopped taking bizinsights' tokens. Check the app at developers.facebook.com (restricted, a review that took `ads_read` away, the app's mode), and whether `META_APP_SECRET` was changed recently (`put-secrets.mjs`). `scope_missing`: people's `ads_read` was taken back.
+   - AdSense or Google Ads, `auth_expired`: Google stopped refreshing the tokens. Check the OAuth client in the Google Cloud project (deleted or its secret rotated without `put-secrets.mjs`, the consent screen back in Testing, where refresh tokens last 7 days).
+   - `no_access` (permission) across stores: the platform answers its permission error differently now. Compare a real answer with `metaClassifyPermissionError` / `adsenseGet` and fix the classification.
+4. Once the cause is fixed: a connection whose access really ended needs its merchant's Reconnect; one marked by our mistake goes back to working with the next sync that works (Refresh on its card).
+
+### `ad-figures-differ` (alarm) – stored ad figures differ from the platform
+The cron's daily check ([ads-setup.md](ads-setup.md), "Checked against the platform") found a figure of a settled week outside its tolerance. Merchants aren't told, and the connection isn't changed.
+1. The line, in `/aws/lambda/insights-production-cron`: `filter @message like /ad figures differ from the platform/`. It names the `provider`, `connectionId`, the week (`since`, `until`, the account's own days), `currency`, the `field`, both sides (`stored`, `platform`) and `relative` ((stored − platform) ÷ platform).
+2. What is stored, per day: `SELECT day, sum(spend), sum(impressions), sum(clicks), sum(link_clicks), sum(purchases), sum(purchase_value), string_agg(DISTINCT currency, ',') FROM ad_campaign_daily WHERE connection_id = '…' AND day BETWEEN '…' AND '…' GROUP BY day ORDER BY day;` (AdSense: `sum(earnings), sum(page_views), sum(impressions), sum(clicks)` from `adsense_daily`, every site). Set it beside Ads Manager for the same days in the ad account's time zone, attribution "each ad set's own setting" (AdSense: a report of the same dates).
+3. What it usually means:
+   - `currency`: rows stored in another currency than the account's (the account changed, or rows from another account): a re-sync of the days stores them again.
+   - One day short or missing: a window that wasn't stored whole. The daily re-check stores the last 30 days again; if the next day's check still differs, the sync reads or stores something wrong.
+   - Only `purchases` / `purchaseValue`: attribution or which actions count as purchases (`META_PURCHASE` in `packages/shared/src/ads.ts`).
+   - AdSense `earnings` in the first days of a month: AdSense finalizing the month before; the re-check reads the whole month again until the 10th.
+4. A difference that stays after the re-check has stored the week again is a bug in reading or storing: a forward fix with a test, then a re-sync of the account's days.
+
 ### Webhooks returning 401 en masse
 `SHOPIFY_API_SECRET` doesn't match the app (secret rotated in the Partner dashboard but not in the app secret, or vice versa). `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET`, then get fresh function instances (it takes effect only there). Shopify retries failed deliveries for 48 h, so nothing is lost if fixed promptly.
 
@@ -123,7 +151,7 @@ half hour, or Settings → Shopify → Reconnect).
 | `ops:recompute` | Rebuilds `daily_store_metrics` for `OPS_SHOP` from its orders and refunds. |
 | `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp Automation's connections (instance token, webhook key, linked number), test number, contacts (number, first name), messages (number, send details, text) and webhook bodies waiting to be applied (the older `whatsapp_*` and `wa_*` tables, read by nothing, are left as they are; docs/whatsapp.md), and the inventory alerts' WhatsApp numbers. Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). Ad connections are picked by both ciphertexts (access and refresh token), not by `token_key_version`, and each sign-in's rows are rewritten together, only over what was read. |
 | `ops:ad-persons` | Fills in who granted access (`ad_connections.external_user_id`: Google's account id, Meta's app-scoped user id) for ad connections that don't know it, one look-up per sign-in (Google: a token refresh first). Until a connection knows, a Disconnect looks the unknown ones up itself (10 sign-ins at most) and keeps the grant at Google or Meta for any it can't place, so run this once after this version is deployed, and again while it prints connections still without a person. A token that no longer works marks its connections "reconnect"; ones the platform wouldn't place stay unknown (their next sync tries again). Safe to repeat (`OPS_LIMIT` caps the sign-ins per run, default 200). |
-| `ops:ad-health` | Reads only: how the ad connections stand (packages/core/src/adConnections/health.ts). Connections per platform, how each is read (`direct`: bizinsights' own sign-in; `nango` while one made through Nango from 2026-10-22 to 2026-10-28 hasn't been moved off it yet) and status; error codes; how many rows and waiting logins are still to move off Nango ("Still to move off Nango", 0 once the move is done: docs/ads-setup.md, "Leaving Nango") and how many wait for a reconnect; the shown, active ones without a successful sync for a day (or never, an hour after connecting) and the ones failing 3+ syncs in a row, by connection id, platform account id, workspace and store; the last 24 hours of syncs by outcome and platform with the commonest failure codes; which platforms this server offers Connect for; and whether `NANGO_SECRET_KEY` is still set (needed only until the move is done). Ids and counts only: no token, ciphertext, Nango connection id, email or account name, so its output can go into a ticket. Uses the same env file as the other tasks; it decrypts nothing. |
+| `ops:ad-health` | Reads only: how the ad connections stand (packages/core/src/adConnections/health.ts). Connections per platform and status; error codes; how many wait for a reconnect; the shown, active ones without a successful sync for a day (or never, an hour after connecting) and the ones failing 3+ syncs in a row, by connection id, platform account id, workspace and store; the last 24 hours of syncs by outcome and platform with the commonest failure codes; and which platforms this server offers Connect for. Ids and counts only: no token, ciphertext, email or account name, so its output can go into a ticket. Uses the same env file as the other tasks; it decrypts nothing. |
 
 ## Routine operations
 
@@ -157,6 +185,32 @@ Queued mail is held (cancelled after 72 hours); the dashboard shows the reason. 
 
 ### Rotate the Shopify client secret
 Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET` and fresh function instances within that window.
+
+### Rotate the Zapier client secret
+The secret is on both sides: bizinsights' `ZAPIER_CLIENT_SECRET` (Secrets Manager) and the Zapier app's
+`CLIENT_SECRET` (each version's environment). During the change bizinsights accepts the old one too
+(`ZAPIER_CLIENT_SECRET_PREVIOUS`), so no connection breaks. PowerShell, from the repository root:
+1. Make the new secret and copy it (never paste it into a chat):
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))" | Set-Clipboard`
+2. `node infra/cdk/scripts/put-secrets.mjs --set ZAPIER_CLIENT_SECRET` (reads the clipboard). It keeps the
+   replaced secret as `ZAPIER_CLIENT_SECRET_PREVIOUS` and says so. Then fresh function instances: from
+   then on both secrets are accepted.
+3. Give every version of the Zapier app that has users the new secret (`npx zapier-platform-cli versions`
+   lists them). `env:set` prints what it sets, so its output is thrown away; a promoted version needs `--force`:
+   ```powershell
+   cd integrations\zapier
+   $secret = Get-Clipboard
+   npx zapier-platform-cli env:set 1.1.0 "CLIENT_SECRET=$secret" | Out-Null
+   Remove-Variable secret
+   Set-Clipboard -Value " "
+   ```
+4. Wait a day, then check the API's logs for `zapier client used the previous secret` since step 3
+   (CloudWatch Logs Insights on the API function's log group: `filter msg like /previous secret/`). None:
+   `node infra/cdk/scripts/put-secrets.mjs --unset ZAPIER_CLIENT_SECRET_PREVIOUS`, then fresh function
+   instances. Some: a version still has the old secret; repeat step 3 for it first.
+
+Connections keep working throughout: tokens bizinsights issued don't depend on the client secret, only
+Zapier's calls to the token endpoint do.
 
 ### Rotate the OTP pepper
 `OTP_PEPPER` keys the sign-in codes. Unless `CUSTOMER_HASH_KEY` is set, it also keys the stored customer hashes: orders' `customer_key` (returning-customer history) and WhatsApp contacts' phone hash, which is how a customer's STOP opt-out is found again. Rotating it then would reset that history and **let opted-out customers be messaged again**. So, in this order:

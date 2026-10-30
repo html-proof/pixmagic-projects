@@ -2,6 +2,7 @@ export * from "./env.js";
 export * from "./errors.js";
 export * from "./apps.js";
 export * from "./logger.js";
+export * from "./rowScope.js";
 export * from "./http.js";
 export * from "./shopify.js";
 export * from "./scopes.js";

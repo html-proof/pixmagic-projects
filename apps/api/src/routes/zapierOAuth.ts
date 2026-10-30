@@ -12,6 +12,8 @@ import {
   zapierReturnUrl,
   type AuthorizeParams,
 } from "@app/core/zapier";
+import { allows } from "@app/shared";
+import { ZAPIER_SCOPE_INFO, ZAPIER_SCOPES } from "@app/shared/zapier";
 import { body, clientIp, HttpError, memberAllows, requireUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -23,8 +25,9 @@ import { limit, LIMITS } from "../rateLimit.js";
  *   (client, exact redirect URI, response_type=code, state), and the signed-in person's workspaces and
  *   stores, each saying whether they may allow Zapier there ("Manage integrations").
  * - POST /workspaces/:ws/stores/:storeId/zapier/authorize: Allow. The member's own sign-in (never a
- *   shared link or an API key), "Manage integrations" in that workspace, the store in it. Answers the
- *   redirect back to Zapier with a single-use code and the state as Zapier sent it.
+ *   shared link or an API key), "Manage integrations" in that workspace, the store in it, and for each
+ *   scope ticked (sending WhatsApp messages) what that needs too. Answers the redirect back to Zapier
+ *   with a single-use code and the state as Zapier sent it.
  * - POST /oauth/token: Zapier's server exchanging a code, or a refresh token. Form-encoded or JSON;
  *   the client's secret in the body (client_secret_post) or in HTTP Basic. Answers RFC 6749's shapes.
  *
@@ -40,6 +43,9 @@ const authorizeSchema = z.object({
   response_type: z.string().max(40).default(""),
   state: z.string().max(2000).default(""),
 });
+
+/** What Allow takes beyond Zapier's request: the scopes ticked on the page (none by default). */
+const allowSchema = z.object({ scopes: z.array(z.enum(ZAPIER_SCOPES)).max(ZAPIER_SCOPES.length * 2).default([]) });
 
 /** Why the page can't go on, in words, by what was wrong with Zapier's request. Never redirected to. */
 const PROBLEM: Record<NonNullable<ReturnType<typeof authorizeProblem>>, [string, string]> = {
@@ -117,6 +123,8 @@ export function zapierOAuthRoutes(app: App, deps: Deps) {
         name: m.workspace.name,
         // Allowing Zapier needs "Manage integrations" there (owners and admins have it).
         allowed: memberAllows(m, "integrations.manage"),
+        // What they may tick beyond triggers and searches (sending WhatsApp messages: owners and admins).
+        scopes: ZAPIER_SCOPES.filter((sc) => memberAllows(m, ZAPIER_SCOPE_INFO[sc].needs)),
         stores: stores.filter((s) => s.workspaceId === m.workspaceId).map((s) => ({ id: s.id, name: s.name ?? s.shopDomain, shopDomain: s.shopDomain })),
       })),
       cancelUrl: zapierReturnUrl(params.redirect_uri, { error: "access_denied", state: params.state }),
@@ -129,11 +137,16 @@ export function zapierOAuthRoutes(app: App, deps: Deps) {
     if (!a.user || a.link) throw new HttpError(403, "Sign in to your own account to connect Zapier.", "forbidden");
     const store = await systemDb.store.findFirst({ where: { id: storeId, workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true } });
     if (!store) throw new HttpError(404, "Not found", "not_found");
-    const params = authorizeSchema.parse(await body(c));
+    const input = await body(c);
+    const params = authorizeSchema.parse(input);
+    const { scopes } = allowSchema.parse(input);
     checkRequest(params);
+    for (const sc of scopes) {
+      if (!allows(a.access, ZAPIER_SCOPE_INFO[sc].needs)) throw new HttpError(403, `Only ${ZAPIER_SCOPE_INFO[sc].needsLabel} may let Zapier "${ZAPIER_SCOPE_INFO[sc].label.toLowerCase()}". Untick it, or ask one of them.`, "forbidden");
+    }
     await limit(deps.coord, `rl:zapier:authorize:${a.user.id}`, LIMITS.zapierAuthorize);
-    const code = await issueAuthorizationCode(deps.coord, { clientId: params.client_id, redirectUri: params.redirect_uri, userId: a.user.id, workspaceId: ws, storeId: store.id });
-    logger.info({ workspaceId: ws, storeId: store.id }, "zapier authorization allowed");
+    const code = await issueAuthorizationCode(deps.coord, { clientId: params.client_id, redirectUri: params.redirect_uri, userId: a.user.id, workspaceId: ws, storeId: store.id, scopes: [...new Set(scopes)] });
+    logger.info({ workspaceId: ws, storeId: store.id, scopes }, "zapier authorization allowed");
     return c.json({ redirect: zapierReturnUrl(params.redirect_uri, { code, state: params.state }) });
   });
 

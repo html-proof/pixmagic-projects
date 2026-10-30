@@ -8,3 +8,4 @@ export * from "./events.js";
 export * from "./hooks.js";
 export * from "./manage.js";
 export * from "./oauth.js";
+export * from "./whatsapp.js";

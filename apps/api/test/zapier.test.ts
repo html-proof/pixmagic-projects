@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { raiseAlert } from "@app/core";
+import { audit, logger, raiseAlert } from "@app/core";
 import { systemDb } from "@app/db";
 import { sha256Hex } from "@app/shared";
 import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -15,7 +15,13 @@ let ctx: TestCtx;
 const CLIENT_ID = "bizinsights-zapier-test";
 const CLIENT_SECRET = randomBytes(32).toString("base64url");
 const REDIRECT = "https://zapier.com/dashboard/auth/oauth/return/App4242CLIAPI/";
-const ZAPIER_ENV = { ZAPIER_CLIENT_ID: CLIENT_ID, ZAPIER_CLIENT_SECRET: CLIENT_SECRET, ZAPIER_REDIRECT_URI: REDIRECT, ZAPIER_INVITE_URL: "https://zapier.com/developer/public-invite/1/abc/" };
+const ZAPIER_ENV = {
+  ZAPIER_CLIENT_ID: CLIENT_ID,
+  ZAPIER_CLIENT_SECRET: CLIENT_SECRET,
+  ZAPIER_CLIENT_SECRET_PREVIOUS: "",
+  ZAPIER_REDIRECT_URI: REDIRECT,
+  ZAPIER_INVITE_URL: "https://zapier.com/developer/public-invite/1/abc/",
+};
 const HOOK = "https://hooks.zapier.com/hooks/standard/123/abcdef/";
 
 beforeAll(async () => {
@@ -75,7 +81,7 @@ describe("connecting Zapier (OAuth 2.0, authorization code)", () => {
     const { owner, ws, store } = await business("owner-z", "owner@zap.test", "Zap Shop", "zap.myshopify.com");
     const page = await ctx.app.inject({ method: "GET", url: `/oauth/zapier/authorize?${authorizeQuery()}`, headers: owner.headers });
     expect(page.statusCode, page.body).toBe(200);
-    expect(page.json().workspaces).toEqual([{ id: ws, name: "Zap Shop", allowed: true, stores: [{ id: store.id, name: "Zap Shop", shopDomain: "zap.myshopify.com" }] }]);
+    expect(page.json().workspaces).toEqual([{ id: ws, name: "Zap Shop", allowed: true, scopes: ["whatsapp_send"], stores: [{ id: store.id, name: "Zap Shop", shopDomain: "zap.myshopify.com" }] }]);
     expect(new URL(page.json().cancelUrl).searchParams.get("error")).toBe("access_denied");
 
     const allowed = await allow(owner.headers, ws, store.id, { state: "a b&c=d/é" });
@@ -203,6 +209,28 @@ describe("connecting Zapier (OAuth 2.0, authorization code)", () => {
     // The code wasn't spent by the refusals.
     expect((await token({ grant_type: "authorization_code", code, redirect_uri: REDIRECT })).statusCode).toBe(200);
     expect((await token({ grant_type: "password", username: "x" })).json().error).toBe("unsupported_grant_type");
+  });
+
+  it("takes the previous client secret too while a rotation is under way, saying so in the logs, and not after", async () => {
+    const { owner, ws, store } = await business("owner-rot", "owner@rotate.test", "Rotate", "rotate.myshopify.com");
+    const next = randomBytes(32).toString("base64url");
+    const exchange = async (secret: string) => token({ grant_type: "authorization_code", code: await codeFor(owner.headers, ws, store.id), redirect_uri: REDIRECT }, { secret });
+    // The new secret isn't bizinsights' yet.
+    expect((await exchange(next)).statusCode).toBe(401);
+    ctx.setEnv({ ZAPIER_CLIENT_SECRET: next, ZAPIER_CLIENT_SECRET_PREVIOUS: CLIENT_SECRET });
+    const warn = vi.spyOn(logger, "warn");
+    expect((await exchange(CLIENT_SECRET)).statusCode).toBe(200);
+    expect(warn.mock.calls.some((c) => String(c[1] ?? c[0]).includes("previous secret"))).toBe(true);
+    warn.mockClear();
+    expect((await exchange(next)).statusCode).toBe(200);
+    expect(warn.mock.calls.some((c) => String(c[1] ?? c[0]).includes("previous secret"))).toBe(false);
+    // In Basic too.
+    expect((await token({ grant_type: "authorization_code", code: await codeFor(owner.headers, ws, store.id), redirect_uri: REDIRECT }, { basic: true, secret: CLIENT_SECRET })).statusCode).toBe(200);
+    expect((await exchange("neither-of-them")).statusCode).toBe(401);
+    // The rotation finished: the old one is refused.
+    ctx.setEnv({ ZAPIER_CLIENT_SECRET_PREVIOUS: "" });
+    expect((await exchange(CLIENT_SECRET)).statusCode).toBe(401);
+    expect((await exchange(next)).statusCode).toBe(200);
   });
 
   it("is off until the owner sets it up: not_configured, after asking who is calling", async () => {
@@ -351,6 +379,40 @@ describe("Zapier's triggers (REST hooks)", () => {
     expect(await systemDb.zapierHook.count()).toBe(0);
   });
 
+  it("AdSense's threshold takes which way it is crossed; each Zap turned on or off is in the audit log", async () => {
+    const { owner, ws, store } = await business("owner-dir", "owner@direction.test", "Direction", "direction.myshopify.com");
+    const t = await connect(owner.headers, ws, store.id);
+    const below = await zpost(t.access_token, "/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "day", amount: "20", direction: "below", zapId: 77 });
+    expect(below.statusCode, below.body).toBe(201);
+    expect((await systemDb.zapierHook.findUniqueOrThrow({ where: { id: below.json().id } })).inputs).toEqual({ period: "day", amount: 20, direction: "below" });
+    const above = await zpost(t.access_token, "/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "month", amount: 300 });
+    expect((await systemDb.zapierHook.findUniqueOrThrow({ where: { id: above.json().id } })).inputs).toEqual({ period: "month", amount: 300, direction: "above" });
+    expect((await zpost(t.access_token, "/zapier/hooks", { event: "adsense_earnings_threshold", targetUrl: HOOK, period: "day", amount: 5, direction: "sideways" })).statusCode).toBe(400);
+
+    const subscribed = await systemDb.auditLog.findMany({ where: { workspaceId: ws, action: "zapier.trigger_subscribed" }, orderBy: { createdAt: "asc" } });
+    expect(subscribed).toHaveLength(2);
+    expect(subscribed[0]).toMatchObject({ actorUserId: owner.user.id, targetType: "zapier_hook", targetId: below.json().id, metadata: { storeId: store.id, event: "adsense_earnings_threshold", zapId: "77" } });
+    expect((await ctx.app.inject({ method: "DELETE", url: `/zapier/hooks/${below.json().id}`, headers: bearer(t.access_token) })).statusCode).toBe(200);
+    const unsubscribed = await systemDb.auditLog.findMany({ where: { workspaceId: ws, action: "zapier.trigger_unsubscribed" } });
+    expect(unsubscribed).toHaveLength(1);
+    expect(unsubscribed[0]).toMatchObject({ actorUserId: owner.user.id, targetId: below.json().id });
+  });
+
+  it("the new triggers need the connection's own permission, and sales for paid orders, refused in words", async () => {
+    const { ws, store } = await business("owner-np", "owner@newperm.test", "NewPerm", "newperm.myshopify.com");
+    const manager = await signIn(ctx, "manager-np", "manager@newperm.test");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: manager.user.id, role: "manager", permissions: ["integrations.status", "integrations.manage"] } });
+    const t = await connect(manager.headers, ws, store.id);
+    for (const event of ["integration_connected", "integration_disconnected", "sync_completed"]) {
+      expect((await zpost(t.access_token, "/zapier/hooks", { event, targetUrl: HOOK })).statusCode, event).toBe(201);
+    }
+    const paid = await zpost(t.access_token, "/zapier/hooks", { event: "order_paid", targetUrl: HOOK });
+    expect(paid.statusCode).toBe(403);
+    expect(paid.json()).toMatchObject({ error: "no_permission" });
+    expect(paid.json().message).toMatch(/can't see the store's sales.*"View sales and revenue"/);
+    expect((await zget(t.access_token, "/zapier/samples/order_paid")).statusCode).toBe(403);
+  });
+
   it("a trigger needs its data permission: advertising for ad triggers", async () => {
     const { ws, store } = await business("owner-p", "owner@perm.test", "Perm", "perm.myshopify.com");
     const manager = await signIn(ctx, "manager-p", "manager@perm.test");
@@ -385,6 +447,62 @@ describe("Zapier's triggers (REST hooks)", () => {
     const { ws, store } = await business("owner-q", "owner@quiet.test", "Quiet", "quiet.myshopify.com");
     await raiseAlert({ workspaceId: ws, storeId: store.id, severity: "warning", code: "webhook_failed", message: "x" }, ctx.mailer, ctx.deps.fetchImpl, ctx.deps.queues);
     expect(await systemDb.zapierEvent.count()).toBe(0);
+  });
+});
+
+describe("the new triggers' samples", () => {
+  it("are the store's own: integrations from its audit log, its ad accounts' last syncs, its paid orders; each with the payload's version", async () => {
+    const { owner, ws, store } = await business("owner-sa", "owner@samples.test", "Samples", "samples.myshopify.com");
+    const other = await createStore(ws, "other-samples.myshopify.com", ["read_orders"], { name: "Other" });
+    const t = await connect(owner.headers, ws, store.id);
+    await audit({ workspaceId: ws, actorUserId: owner.user.id, action: "ads.connected", targetType: "store", targetId: store.id, metadata: { provider: "meta", accounts: 1 } });
+    await audit({ workspaceId: ws, actorUserId: owner.user.id, action: "ads.connected", targetType: "store", targetId: other.id, metadata: { provider: "google", accounts: 3 } });
+    const connected = (await zget(t.access_token, "/zapier/samples/integration_connected")).json();
+    // Newest first: Meta Ads, then Zapier itself (connect() above); never the other store's Google Ads.
+    expect(connected.map((e: { data: { integration: string } }) => e.data.integration)).toEqual(["meta_ads", "zapier"]);
+    expect(connected[0]).toMatchObject({ event: "integration_connected", schema_version: 1, store: { id: store.id }, data: { integration_name: "Meta Ads", accounts: 1 } });
+    expect((await zget(t.access_token, "/zapier/samples/integration_disconnected")).json()).toEqual([]);
+
+    const syncedAt = new Date("2026-10-28T09:05:00Z");
+    const conn = await systemDb.adConnection.create({
+      data: { workspaceId: ws, storeId: store.id, provider: "meta", accountId: "act_5", accountName: "Ads", currency: "AUD", accessTokenEnc: "x", tokenKeyVersion: 1, lastSyncedAt: syncedAt, syncedThrough: "2026-10-28" },
+    });
+    expect((await zget(t.access_token, "/zapier/samples/sync_completed")).json()).toEqual([
+      {
+        id: `sync_completed:${conn.id}:2026-10-28T09`,
+        event: "sync_completed",
+        schema_version: 1,
+        occurred_at: syncedAt.toISOString(),
+        store: { id: store.id, name: "Samples", shop_domain: "samples.myshopify.com" },
+        data: { integration: "meta_ads", integration_name: "Meta Ads", connection_id: conn.id, account_id: "act_5", account_name: "Ads", synced_at: syncedAt.toISOString(), data_through: "2026-10-28" },
+      },
+    ]);
+
+    const order = await systemDb.order.create({
+      data: {
+        workspaceId: ws,
+        storeId: store.id,
+        shopifyId: "900",
+        name: "#1900",
+        currency: "AUD",
+        localDay: "2026-10-28",
+        shopifyCreatedAt: syncedAt,
+        shopifyUpdatedAt: syncedAt,
+        financialStatus: "paid",
+        subtotal: 40,
+        totalDiscounts: 0,
+        totalTax: 4,
+        totalShipping: 5,
+        totalPrice: 49,
+        customerKey: "secret-customer-key",
+        discountCodes: ["SECRET-CODE"],
+      },
+    });
+    await systemDb.orderLineItem.create({ data: { workspaceId: ws, storeId: store.id, orderId: order.id, shopifyId: "1", title: "Mug", quantity: 2, price: 20, discount: 0 } });
+    const paid = (await zget(t.access_token, "/zapier/samples/order_paid")).json();
+    expect(paid).toHaveLength(1);
+    expect(paid[0]).toMatchObject({ id: `order_paid:${store.id}:900`, schema_version: 1, data: { order_name: "#1900", total_price: 49, items: 2, line_items: [{ title: "Mug", quantity: 2, price: 20 }] } });
+    expect(JSON.stringify(paid)).not.toMatch(/secret-customer-key|SECRET-CODE/);
   });
 });
 
@@ -457,6 +575,40 @@ describe("Settings → Integrations' Zapier card", () => {
     expect(await systemDb.zapierDelivery.count({ where: { status: "cancelled", errorCode: "grant_revoked" } })).toBe(1);
     expect(await systemDb.auditLog.count({ where: { workspaceId: ws, action: "zapier.disconnected" } })).toBe(1);
     expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/zapier`, headers: owner.headers })).json().connections).toEqual([]);
+  });
+
+  it("Retry sends a failed event again: owners and admins only, a failed one only", async () => {
+    const { owner, ws, store } = await business("owner-rt", "owner@retry.test", "Retry", "retry.myshopify.com");
+    const t = await connect(owner.headers, ws, store.id);
+    await zpost(t.access_token, "/zapier/hooks", { event: "alert_raised", targetUrl: HOOK });
+    await raiseAlert({ workspaceId: ws, storeId: store.id, severity: "warning", code: "webhook_failed", message: "x" }, ctx.mailer, ctx.deps.fetchImpl);
+    const d = await systemDb.zapierDelivery.findFirstOrThrow();
+    const url = `/workspaces/${ws}/stores/${store.id}/zapier/deliveries/${d.id}/retry`;
+    const retry = (headers: Record<string, string>, u = url) => ctx.app.inject({ method: "POST", url: u, headers });
+
+    // Still being sent: nothing to retry.
+    expect((await retry(owner.headers)).statusCode).toBe(409);
+    await systemDb.zapierDelivery.update({ where: { id: d.id }, data: { status: "failed", errorCode: "rejected", responseStatus: 400, attempts: 1 } });
+    const card = (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/zapier`, headers: owner.headers })).json();
+    expect(card.deliveries[0]).toMatchObject({ id: d.id, label: "Failed", retryable: true });
+
+    // Someone who may manage integrations but isn't an owner or admin: refused.
+    const manager = await signIn(ctx, "manager-rt", "manager@retry.test");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: manager.user.id, role: "manager", permissions: ["integrations.status", "integrations.manage"] } });
+    expect((await retry(manager.headers)).statusCode).toBe(403);
+
+    ctx.deps.queues.clear();
+    const ok = await retry(owner.headers);
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(await systemDb.zapierDelivery.findUniqueOrThrow({ where: { id: d.id } })).toMatchObject({ status: "pending", attempts: 0, errorCode: null });
+    expect(ctx.deps.queues.sent.sync.filter((j) => (j as unknown as { deliveryId?: string }).deliveryId === d.id)).toHaveLength(1);
+    expect(await systemDb.auditLog.count({ where: { workspaceId: ws, action: "zapier.delivery_retried", actorUserId: owner.user.id } })).toBe(1);
+    expect((await retry(owner.headers)).json().error).toBe("not_failed");
+    expect((await retry(owner.headers, `/workspaces/${ws}/stores/${store.id}/zapier/deliveries/nope/retry`)).statusCode).toBe(404);
+
+    // Another business's owner: never found.
+    const stranger = await business("owner-rt2", "owner@retry2.test", "Retry2", "retry2.myshopify.com");
+    expect((await retry(stranger.owner.headers, `/workspaces/${stranger.ws}/stores/${stranger.store.id}/zapier/deliveries/${d.id}/retry`)).statusCode).toBe(404);
   });
 
   it("says plainly that Zapier isn't set up while the owner hasn't configured it", async () => {

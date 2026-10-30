@@ -8,7 +8,6 @@ import {
   campaignReport,
   cancelCampaign,
   checkConnection,
-  cloudApiMissing,
   confirmTestVerification,
   connectCloudApi,
   connectCloudApiWithToken,
@@ -19,12 +18,14 @@ import {
   deleteWaTemplate,
   disconnectWhatsapp,
   ensureCustomerWebhook,
+  evolutionConfigured,
   estimateWaAudience,
   launchCampaign,
   metaSignupConfig,
-  tokenConnectAllowed,
+  pairingState,
   pauseAutomation,
   removeWaSuppression,
+  restartConnection,
   retryMessage,
   saveAutomation,
   saveCampaign,
@@ -34,11 +35,13 @@ import {
   setAutomationPaused,
   setConsentByMerchant,
   storeGraphql,
+  startPairing,
   startTestVerification,
   submitTemplateToMeta,
   templateUsable,
   templateUsage,
   testAutomation,
+  tokenConnectAllowed,
   triggerAvailability,
   updateWaTemplate,
   waConnectionView,
@@ -77,7 +80,8 @@ import { limit, LIMITS } from "../rateLimit.js";
  *  - change what customers receive (settings, templates, automations, campaigns, sends): the
  *    store's owners and admins (stores:manage), signed in themselves; a shared link never can;
  *  - connect and disconnect the number: "Manage integrations", signed in themselves.
- * Meta's tokens, the app secret and full numbers are never in an answer.
+ * Instance keys, webhook keys, QR codes (except to the person pairing), tokens and full numbers are
+ * never in an answer.
  */
 const base = "/workspaces/:ws/stores/:storeId/whatsapp";
 const idParam = z.string().min(1).max(40);
@@ -170,7 +174,7 @@ function campaignView(c: WappCampaign, report?: Awaited<ReturnType<typeof campai
 const messageFilters = z.object({
   status: z.enum(["waiting", "sent", "delivered", "read", "failed", "not_sent", "received", ...WA_MESSAGE_STATUSES]).optional(),
   direction: z.enum(["out", "in"]).optional(),
-  source: z.enum(["automation", "campaign", "manual", "test", "verification", "team_alert", "reply", "inbound"]).optional(),
+  source: z.enum(["automation", "campaign", "manual", "zapier", "test", "verification", "team_alert", "reply", "inbound"]).optional(),
   automationId: idParam.optional(),
   campaignId: idParam.optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -202,7 +206,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const can = waCan(a);
     // Settings → Integrations, for someone who may see only how connections stand: the connection, nothing else.
     if (!allows(a.access, "marketing.campaigns")) {
-      return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain }, platform: { cloudApi: { missing: cloudApiMissing() } }, connection: waConnectionView(await connectionOf(store.id)), can });
+      return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain }, platform: { evolution: evolutionConfigured() }, connection: waConnectionView(await connectionOf(store.id)), can });
     }
     const overview = await whatsappOverview(store, { contacts: seesContacts(a) });
     return c.json({
@@ -217,21 +221,29 @@ export function whatsappRoutes(app: App, deps: Deps) {
   });
 
   // ---------------------------------------------------------------------------
-  // Connecting (Steps 1-2): Meta's Embedded Signup only
+  // Connecting (Steps 1-2)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Linking a phone with a QR code (POST /connection, its pairing poll, Reconnect) was retired on
-   * 2026-10-28. A page loaded before then may still ask: it is told so, in words it shows.
-   */
-  for (const [method, path] of [["POST", `${base}/connection`], ["GET", `${base}/connection/pairing`], ["POST", `${base}/connection/reconnect`]] as const) {
-    app.on(method, path, async (c) => {
-      const { ws, storeId } = c.req.param();
-      await requireConnect(c, deps, ws);
-      await waStore(ws, storeId);
-      throw new WhatsappError("bizinsights no longer links a WhatsApp phone with a QR code. Reload the page and connect WhatsApp Business with Meta instead.", 410, "qr_linking_retired");
-    });
-  }
+  app.post(`${base}/connection`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const d = z.object({ method: z.enum(["qr", "code"]).default("qr"), phone: z.string().trim().max(32).nullable().optional(), country: z.string().trim().length(2).nullable().optional() }).parse(await body(c));
+    const pairing = await startPairing(deps, { store, userId: a.user.id, method: d.method, phone: d.phone, country: d.country, ip: clientIp(c) });
+    return c.json({ pairing }, 201, { "cache-control": "no-store" });
+  });
+
+  /** What the page polls while the phone scans: the provider's current code, or the state it reached. */
+  app.get(`${base}/connection/pairing`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-pairing:${store.id}`, LIMITS.waPairing);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ pairing: await pairingState(deps, conn) }, 200, { "cache-control": "no-store" });
+  });
 
   app.post(`${base}/connection/cloud`, async (c) => {
     const { ws, storeId } = c.req.param();
@@ -265,6 +277,16 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const conn = await connectionOf(store.id);
     if (!conn) throw new HttpError(404, "Not connected", "not_connected");
     return c.json({ connection: waConnectionView(await checkConnection(deps, conn)) });
+  });
+
+  app.post(`${base}/connection/reconnect`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await restartConnection(deps, conn, { userId: a.user.id, ip: clientIp(c) })) });
   });
 
   app.delete(`${base}/connection`, async (c) => {
@@ -428,7 +450,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
-  /** Submit a template for Meta's review. */
+  /** Cloud API: submit a template for Meta's review. */
   app.post(`${base}/templates/:id/submit`, async (c) => {
     const { ws, storeId, id } = c.req.param();
     await requireManage(c, deps, ws);
@@ -437,7 +459,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const conn = await connectionOf(store.id);
     const t = await systemDb.wappTemplate.findFirst({ where: { id: idParam.parse(id), storeId: store.id } });
     if (!t) throw new HttpError(404, "Not found", "not_found");
-    if (!conn || conn.provider !== "cloud_api" || conn.status !== "connected") throw new WhatsappError("Connect WhatsApp first: templates are submitted to Meta through your WhatsApp Business account.", 409, "not_cloud_api");
+    if (!conn || conn.provider !== "cloud_api" || conn.status !== "connected") throw new WhatsappError("Templates are reviewed by Meta only on a Cloud API connection.", 409, "not_cloud_api");
     const updated = await submitTemplateToMeta(deps, conn, t, waSampleValues(store.name) as Record<string, string>);
     return c.json({ template: templateView(updated, conn) });
   });
