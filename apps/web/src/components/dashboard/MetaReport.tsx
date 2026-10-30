@@ -362,7 +362,6 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const cto = ended ? ov.previous.to : null;
   const chosen = meta.find((a) => a.id === connection) ?? meta[0];
   const drill = useReportDrill("adset", isMetaObjectId, chosen?.id);
-  useDrillFocus(drill, "d-meta-report");
   // Down from a campaign: its ad sets; from an ad set: its ads (in its campaign, when known).
   const asked: { level: MetaReportView; campaign?: string; adset?: string } = drill.child
     ? { level: "ad", ...(drill.campaign ? { campaign: drill.campaign } : {}), adset: drill.child }
@@ -370,6 +369,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
       ? { level: "adset", campaign: drill.campaign }
       : { level };
   const drillKey = `${drill.campaign ?? "-"}:${drill.child ?? "-"}`;
+  useDrillFocus(drill, "d-meta-report", !!error || answer?.drill === drillKey);
   // The question asked of the API: the page's read, and its download (format=csv) of the same answer.
   const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) })}` : null;
   const asking = useRef(path);

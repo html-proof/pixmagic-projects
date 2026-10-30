@@ -205,7 +205,6 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const cto = ended ? ov.previous.to : null;
   const chosen = google.find((a) => a.id === connection) ?? google[0];
   const drill = useReportDrill("adgroup", isGoogleId, chosen?.id);
-  useDrillFocus(drill, "d-google-report");
   // Each campaign's type (Performance Max has asset groups, not ad groups), from its row: a campaign
   // opened by a link is looked up on the campaign list first. Null: not on it (no activity in the dates,
   // or past the 200 that spent most), so its type isn't known.
@@ -229,6 +228,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       ? { level: view !== "rows" ? view : channel === "PERFORMANCE_MAX" ? "asset_group" : "ad_group", campaign: drill.campaign }
       : { level: lookingUp ? "campaign" : level };
   const drillKey = `${asked.campaign ?? "-"}:${asked.adGroup ?? "-"}`;
+  useDrillFocus(drill, "d-google-report", !!error || (!lookingUp && answer?.drill === drillKey));
   // The question asked of the API: the page's read, and its download (format=csv) of the same answer.
   const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/google/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) })}` : null;
   const asking = useRef(path);

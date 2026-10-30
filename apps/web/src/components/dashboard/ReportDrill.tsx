@@ -93,26 +93,33 @@ const LANDING = '[aria-current="page"], [role="tab"][aria-selected="true"]';
  * A step down or up swaps the panel's table, the row or crumb pressed included, for a placeholder while
  * the next level loads, so focus would drop to the page. After each step (`drill.moved`) it goes to where
  * the step landed in the panel (`panelId`) instead, once that is on screen (a panel whose level tabs come
- * with its answer: then), unless the person has put focus somewhere else meanwhile.
+ * with its answer: then), unless the person has put focus somewhere else meanwhile. A landing that comes
+ * only later takes focus from the page alone, not from a control in the panel, and without scrolling to
+ * it; and the step is over once the panel shows its answer or its error (`settled`) with nowhere to land.
  */
-export function useDrillFocus(drill: Pick<ReportDrill, "moved">, panelId: string): void {
-  const pending = useRef(false);
+export function useDrillFocus(drill: Pick<ReportDrill, "moved">, panelId: string, settled: boolean): void {
+  const pending = useRef<"now" | "later" | null>(null);
   useEffect(() => {
-    if (drill.moved) pending.current = true;
+    if (drill.moved) pending.current = "now";
   }, [drill.moved]);
   // After every render: the landing may come only with the answer.
   useEffect(() => {
-    if (!pending.current) return;
+    const step = pending.current;
+    if (!step) return;
     const panel = document.getElementById(panelId);
     const active = document.activeElement;
-    if (!panel || (active && active !== document.body && !panel.contains(active))) {
-      pending.current = false;
+    const onPage = !active || active === document.body;
+    if (!panel || (!onPage && (step === "later" || !panel.contains(active)))) {
+      pending.current = null;
       return;
     }
     const landing = panel.querySelector<HTMLElement>(LANDING);
-    if (!landing) return;
-    pending.current = false;
-    landing.focus();
+    if (!landing) {
+      pending.current = settled ? null : "later";
+      return;
+    }
+    pending.current = null;
+    landing.focus(step === "later" ? { preventScroll: true } : undefined);
   });
 }
 

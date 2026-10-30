@@ -380,6 +380,9 @@ export function demoCampaignDays(ctx: Pick<DemoContext, "epoch">, c: DemoCampaig
   return { start: addDays(ctx.epoch, -c.startedDaysBefore), end: c.pausedDaysBefore === null ? null : addDays(ctx.epoch, -c.pausedDaysBefore) };
 }
 
+/** Where `day` sits in the 90 days up to the epoch: 0 at their start, 1 at the epoch, beyond 1 after it. */
+const trendAt = (ctx: DemoContext, day: string) => 1 - (daysBetweenInclusive(day, ctx.epoch) - 1) / (DEMO_HISTORY_DAYS - 1);
+
 /**
  * One campaign's figures for one day, as Google would report them (AdDayRow): null on a day before
  * the campaign started or after it was paused. Impressions follow the campaign's base, the weekday, a
@@ -388,9 +391,6 @@ export function demoCampaignDays(ctx: Pick<DemoContext, "epoch">, c: DemoCampaig
  * the daily budget (as Google's overdelivery does). Every figure is consistent with the others: the
  * rates the page works out (CTR, CPC, conversion rate, ROAS) are true of the row.
  */
-/** Where `day` sits in the 90 days up to the epoch: 0 at their start, 1 at the epoch, beyond 1 after it. */
-const trendAt = (ctx: DemoContext, day: string) => 1 - (daysBetweenInclusive(day, ctx.epoch) - 1) / (DEMO_HISTORY_DAYS - 1);
-
 export function demoCampaignDay(ctx: DemoContext, c: DemoCampaign, day: string): AdDayRow | null {
   const { start, end } = demoCampaignDays(ctx, c);
   if (day < start || (end !== null && day > end)) return null;
