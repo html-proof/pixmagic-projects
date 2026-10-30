@@ -12,7 +12,7 @@ import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
-import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
+import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
@@ -521,6 +521,10 @@ export default function DashboardPage() {
           <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
         </section>
       )}
+
+      {/* How the dates' orders went (the owner, 2026-10-30): completed, awaiting payment and
+          unsuccessful, checkouts left, and what was sent. Not for dates before the imported orders. */}
+      {ov && m?.order_outcomes && !notImported && <OrdersAtAGlance ov={ov} period={periodWords(dates, shown)} onOpen={detail.open} />}
 
       {ov && s && (
         <div className="grid gap-4 xl:grid-cols-3">

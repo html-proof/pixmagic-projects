@@ -8,8 +8,8 @@ import { declaredScopes, optionalScopesFor } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
-import { funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
-import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
+import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
+import { channels, discountCodes, fulfillment, orderOutcomes, orderTiming, recentOrders, traffic } from "./orders.js";
 import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
 import { productPerformance } from "./products.js";
 import { shopifyModules } from "./shopify.js";
@@ -250,6 +250,12 @@ export async function storeOverview(
   if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);
   if (enabled.has("discount_codes")) modules.discount_codes = await discountCodes(tx, scope, range);
   if (enabled.has("recent_orders")) modules.recent_orders = await recentOrders(tx, scope, range, store.timezone);
+  // Not a capability of its own: the store's orders (read_orders), and checkouts left once the
+  // storefront pixel is on (the funnel's capability, whether or not this member sees the funnel).
+  const on = (id: string) => capabilities.some((c) => c.id === id && c.enabled);
+  if (on("recent_orders") && sees("order_outcomes")) {
+    modules.order_outcomes = await orderOutcomes(tx, scope, range, on("funnel") ? await checkoutsLeft(tx, scope, range, store) : null);
+  }
   if (enabled.has("inventory")) modules.inventory = await inventory(tx, store, today);
   if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 

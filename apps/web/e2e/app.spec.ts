@@ -550,6 +550,10 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
     await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00", { timeout: 5000 });
   }).toPass({ timeout: 30_000 });
   await expect(page.getByTestId("metric-Orders")).toContainText("1");
+  // How it went (Orders at a glance): through, none unsuccessful; checkouts left need the storefront pixel.
+  await expect(page.getByTestId("glance-completed")).toContainText("1");
+  await expect(page.getByTestId("glance-unsuccessful")).toContainText("None cancelled, failed or refunded");
+  await expect(page.getByTestId("glance-checkouts")).toContainText("Not tracked");
   await expect(page.getByTestId("metric-Average order value")).toContainText("$100.00");
   await expect(page.getByRole("heading", { name: "Top products" })).toHaveCount(0);
 
