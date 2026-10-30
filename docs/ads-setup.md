@@ -568,12 +568,25 @@ listed; bizinsights reads them through the manager (`login-customer-id`).
 
 ### The Google Ads report (dashboard → Ads → "Google Ads report")
 
-`GET /api/workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country&from=&to=`
-(add `cfrom=&cto=` to compare with another range): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
+`GET /api/workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country|asset_group|ad&from=&to=`
+(add `cfrom=&cto=` to compare with another range, `campaign=` / `adGroup=` to go down from one: below): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
 conversion, conversion value and ROAS, with the account's totals on top. Campaigns show status, type and daily budget;
 countries are where the viewers were (`user_location_view`). Asked of Google for exactly those dates, in the account's
 time zone and currency, counted against the operations budget, cached 10 minutes (ranges including today) or an hour,
 and limited to 30 reports per 10 minutes.
+
+**Down from a campaign** ([advertising.md](advertising.md), "Down from a campaign"): `level=ad_group&campaign=<id>`
+(its ad groups), `level=asset_group&campaign=<id>` (a Performance Max campaign's asset groups, `FROM asset_group`, which
+it has instead of ad groups: <https://developers.google.com/google-ads/api/performance-max/asset-group-reporting>) and
+`level=ad&adGroup=<id>` (with `campaign=` too when known; `FROM ad_group_ad`: each ad's id, name, type and status, never
+its text or final URLs). `asset_group` needs `campaign` and `ad` needs `adGroup`; campaigns, devices and countries take
+neither (400 otherwise, `googleParentFits`). The ids are Google's own (digits only: they go into the GAQL text, so
+anything else is refused before a query, as the dates are) or, on the demo, the demo's (`demo-…`). Such a report is
+**one operation**: the account's totals aren't asked for, and the top row is the rows added up (every one Google
+returned, the ones past the 200 listed too), labelled as such rather than as the campaign's own row. Cache keys are
+`ads-greport:v3:<connection>:<level>:<campaign|->:<adGroup|->:<from>:<to>`; v3 because the rows gained `campaignId`,
+`adGroupId`, `adGroupName` and `adType`. Most ad types have no `ad.name` (responsive search ads among them): such an ad
+is named by its type and id ("Responsive search ad 7001").
 
 ## 3. Google AdSense
 
@@ -614,7 +627,7 @@ not money paid.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 
-`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (and `cfrom=&cto=` to compare):
+`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (and `cfrom=&cto=` to compare; `campaign=` / `adset=` to go down from one: below):
 by **campaign, ad set or ad**, or the whole account split by **placement, device, country, age or gender**: spent,
 impressions, reach, frequency, link clicks, link click rate, cost per link click, CPM, purchases, cost per purchase,
 purchase value and ROAS, with each row's delivery status. Asked of Meta for exactly the dates picked (reach can't be
@@ -634,6 +647,19 @@ call on the others. A field list Meta refuses (a version that doesn't know one) 
 a list that can't be read in time leaves the settings and counts unknown, never the report broken. The table filters
 by delivery status (all, active, paused, other) and, on the campaign level, by objective, on the rows already read:
 the account's totals always cover every row.
+
+**Down from a campaign**: `level=adset&campaign=<id>` (its ad sets) and `level=ad&adset=<id>` (an ad set's ads; with
+`campaign=` too when known, and both must hold), Meta's own ids (digits); a campaign, or a split of the account, takes
+neither (400, `metaParentFits`). Still read from `act_<id>/insights`, with `filtering` holding `campaign.id` /
+`adset.id` (`IN`) next to the every-status filter, never from the campaign's own insights edge, so an id from another
+ad account the same login can read reports nothing here; rows Meta returned for another parent would be dropped too. A
+refused parameter drops the status filter and the sort, never the parent filter, so the account's rows are never shown
+as one campaign's (with the status filter dropped, Meta may leave out paused or archived ones, as on the account's own
+lists). The totals are the parent's own row (level campaign or ad set, filtered to it): its reach and frequency, still
+two insights reads. Statuses and settings come from the parent's own list (`GET /{campaign}/adsets`, `/{ad set}/ads`
+with every `effective_status`), read only when the account's insights returned rows under it; the account's campaigns
+aren't counted (`campaigns: null`). Rows now carry `campaignId` and `adsetId`; cache keys moved to
+`ads-report:v3:<connection>:<level>:<campaign|->:<adset|->:<from>:<to>[:figures]`.
 
 ## Next to the store's own sales (dashboard → Ads)
 

@@ -70,12 +70,17 @@ import {
   allows,
   daysBetweenInclusive,
   GOOGLE_REPORT_LEVELS,
+  googleParentFits,
   googleReportMetrics,
   isAdAccountStatus,
   isAdErrorCode,
   isDay,
+  isDemoObjectId,
+  isGoogleObjectId,
+  isMetaObjectId,
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
+  metaParentFits,
   metaReportMetrics,
   randomToken,
   safeEqual,
@@ -424,6 +429,17 @@ const reportDates = z
   .refine((v) => (v.cfrom === undefined) === (v.cto === undefined), "cfrom and cto go together")
   .refine((v) => !v.cfrom || !v.cto || v.cfrom <= v.cto, "cfrom is after cto")
   .refine((v) => !v.cfrom || !v.cto || daysBetweenInclusive(v.cfrom, v.cto) <= MAX_CUSTOM_DAYS, "Compare up to a year at a time");
+
+/**
+ * A drill-down's ids in a report's query: Meta's campaign and ad set ids (digits); Google Ads' campaign
+ * and ad group ids (digits, or the demo's own "demo-…", which only a demo connection takes: checked once
+ * the connection is known).
+ */
+const metaObjectId = z.string().refine(isMetaObjectId, "must be one of Meta's ids (digits)");
+const googleObjectId = z.string().refine((v) => isGoogleObjectId(v) || isDemoObjectId(v), "must be one of Google Ads' ids");
+
+/** The part of a report's cache key that says what it was under: "-" for the whole account. */
+const parentKey = (...ids: Array<string | undefined>) => ids.map((id) => id ?? "-").join(":");
 
 interface ReportRange {
   from: string;
@@ -850,14 +866,20 @@ export function adsRoutes(app: App, deps: Deps) {
    * frequency, link clicks, purchases and their value, asked of Meta for exactly those dates; with
    * cfrom/cto, the same for the comparison's dates. Read-only, and cached briefly so the dashboard's
    * polling doesn't spend Meta's rate limit. Both ranges are read at once, within one deadline that
-   * fits the request's time.
+   * fits the request's time. A drill-down: `campaign` (its ad sets or ads) and `adset` (its ads), each
+   * Meta's own id; the totals are then the campaign's or ad set's own (metaReport).
    */
   app.get("/workspaces/:ws/stores/:storeId/ads/meta/report", async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await storeInWorkspace(ws, storeId);
     // Meta keeps 37 months of insights; a year at a time is what the dashboard asks for.
-    const q = z.object({ level: z.enum(META_REPORT_VIEWS).default("campaign") }).and(reportDates).parse(c.req.query());
+    const q = z
+      .object({ level: z.enum(META_REPORT_VIEWS).default("campaign"), campaign: metaObjectId.optional(), adset: metaObjectId.optional() })
+      .refine((v) => metaParentFits(v.level, v), "Only a campaign's ad sets or ads, or an ad set's ads, are read under it")
+      .and(reportDates)
+      .parse(c.req.query());
+    const parent = { ...(q.campaign !== undefined ? { campaign: q.campaign } : {}), ...(q.adset !== undefined ? { adset: q.adset } : {}) };
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id: q.connection, workspaceId: ws, storeId, provider: "meta" } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
     if (conn.status === "reconnect") throw new HttpError(409, ACCESS_ENDED.meta, "reconnect");
@@ -865,13 +887,14 @@ export function adsRoutes(app: App, deps: Deps) {
     const today = adToday(conn);
     const deadline = Date.now() + META_REPORT_JOB.budgetMs;
     // Days that are over change little (Meta still revises purchases for a while); today's keep coming in.
-    // The key's version moves whenever a report gains figures, so none cached without them is read back.
+    // The key's version moves whenever a report gains figures (v3: the rows' campaign and ad set ids), so
+    // none cached without them is read back; a drill-down's parent is part of what was asked.
     const { reports, cached } = await readRanges<MetaReport>(
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-report:v2:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
-      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, ...(r.compare ? { statuses: false } : {}) }),
+      (r) => `ads-report:v3:${conn.id}:${q.level}:${parentKey(q.campaign, q.adset)}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
+      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent, ...(r.compare ? { statuses: false } : {}) }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "meta", conn.id);
@@ -884,28 +907,38 @@ export function adsRoutes(app: App, deps: Deps) {
    * The Google Ads report for one connected account and range: campaigns (with status, type and
    * daily budget), ad groups, devices or countries, asked of Google for exactly those dates; with
    * cfrom/cto, the comparison's too. Read-only, cached briefly, and counted against bizinsights' daily
-   * allowance of Google Ads API operations like the syncs.
+   * allowance of Google Ads API operations like the syncs. A drill-down: `campaign` (its ad groups, or a
+   * Performance Max campaign's asset groups) and `adGroup` (its ads); one operation a range, with the
+   * rows added up as the totals (googleReport).
    */
   app.get("/workspaces/:ws/stores/:storeId/ads/google/report", async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await storeInWorkspace(ws, storeId);
-    const q = z.object({ level: z.enum(GOOGLE_REPORT_LEVELS).default("campaign") }).and(reportDates).parse(c.req.query());
+    const q = z
+      .object({ level: z.enum(GOOGLE_REPORT_LEVELS).default("campaign"), campaign: googleObjectId.optional(), adGroup: googleObjectId.optional() })
+      .refine((v) => googleParentFits(v.level, v), "Asset groups are read under a campaign, ads under an ad group, and campaigns, devices and countries for the whole account")
+      .and(reportDates)
+      .parse(c.req.query());
+    const parent = { ...(q.campaign !== undefined ? { campaign: q.campaign } : {}), ...(q.adGroup !== undefined ? { adGroup: q.adGroup } : {}) };
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id: q.connection, workspaceId: ws, storeId, provider: "google" } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
+    // Google's own ids for a real account (they go into its query), the demo's for the demo.
+    if (!Object.values(parent).every(isDemoConnection(conn) ? isDemoObjectId : isGoogleObjectId)) throw new HttpError(400, "That campaign or ad group isn't one this account has.", "validation");
     if (conn.status === "reconnect") throw new HttpError(409, ACCESS_ENDED.google, "reconnect");
     const account = { id: conn.id, accountId: conn.accountId, name: conn.accountName, currency: conn.currency, timezone: conn.timezone };
     const today = adToday(conn);
     // Both ranges' calls end within one deadline, so the answer comes within the request's time.
     const deadline = Date.now() + AD_REPORT_BUDGET_MS;
     // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
-    // The key's version moves whenever a report gains figures, so none cached without them is read back.
+    // The key's version moves whenever a report gains figures (v3: the rows' campaign and ad group ids), so
+    // none cached without them is read back; a drill-down's parent is part of what was asked.
     const { reports, cached } = await readRanges<GoogleReport>(
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-greport:v2:${conn.id}:${q.level}:${r.from}:${r.to}`,
-      (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline }),
+      (r) => `ads-greport:v3:${conn.id}:${q.level}:${parentKey(q.campaign, q.adGroup)}:${r.from}:${r.to}`,
+      (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "google", conn.id);

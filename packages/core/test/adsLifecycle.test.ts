@@ -399,6 +399,68 @@ describe("live reports", () => {
     expect(g.rows[0]).toMatchObject({ id: "55", name: "Shoes", campaignName: "Brand", status: "ENABLED", spend: 4 });
   });
 
+  it("Google, down from a campaign: its ad groups, a Performance Max campaign's asset groups, an ad group's ads; one query each, the rows added up as the totals", async () => {
+    const queries: string[] = [];
+    const f = fake(async (_u, init) => {
+      const query = queryOf(init);
+      queries.push(query);
+      if (query.includes("FROM ad_group_ad")) {
+        return json([
+          {
+            results: [
+              { campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "ENABLED", ad: { id: "7001", type: "RESPONSIVE_SEARCH_AD" } }, metrics: { costMicros: "3000000", impressions: "300", clicks: "30" } },
+              { campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "PAUSED", ad: { id: "7002", type: "RESPONSIVE_SEARCH_AD" } }, metrics: { costMicros: "1000000", impressions: "100", clicks: "5" } },
+            ],
+          },
+        ]);
+      }
+      if (query.includes("FROM asset_group")) return json([{ results: [{ campaign: { id: "12", name: "PMax" }, assetGroup: { id: "901", name: "Summer", status: "ENABLED" }, metrics: { costMicros: "2500000", impressions: "50" } }] }]);
+      return json([{ results: [{ campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes", status: "ENABLED" }, metrics: { costMicros: "4000000", impressions: "400", clicks: "35" } }] }]);
+    });
+    const during = "segments.date BETWEEN '2026-10-01' AND '2026-10-07'";
+    const groups = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "ad_group", "2026-10-01", "2026-10-07", 200, { campaign: "11" });
+    expect(queries).toEqual([`SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group.status, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM ad_group WHERE ${during} AND campaign.id = 11`]);
+    expect(groups.rows[0]).toMatchObject({ id: "55", campaignId: "11", campaignName: "Brand" });
+    // Not the account's totals (no customer query): the campaign's ad groups added up.
+    expect(groups.totals).toMatchObject({ spend: 4, impressions: 400, clicks: 35 });
+
+    queries.length = 0;
+    const assets = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "asset_group", "2026-10-01", "2026-10-07", 200, { campaign: "12" });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("FROM asset_group WHERE");
+    expect(queries[0]).toContain("AND campaign.id = 12");
+    expect(assets.rows.map((r) => [r.id, r.name, r.campaignId])).toEqual([["901", "Summer", "12"]]);
+
+    queries.length = 0;
+    const ads = await googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "ad", "2026-10-01", "2026-10-07", 1, { campaign: "11", adGroup: "55" });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatch(/^SELECT campaign\.id, campaign\.name, ad_group\.id, ad_group\.name, ad_group_ad\.ad\.id, ad_group_ad\.ad\.name, ad_group_ad\.ad\.type, ad_group_ad\.status, metrics\./);
+    expect(queries[0]).toContain(`FROM ad_group_ad WHERE ${during} AND campaign.id = 11 AND ad_group.id = 55`);
+    // The ad's text and links are never asked for.
+    expect(queries[0]).not.toMatch(/headline|description|final_url/);
+    expect(ads.rows).toEqual([expect.objectContaining({ id: "7001", name: "Responsive search ad 7001", adGroupId: "55", adType: "RESPONSIVE_SEARCH_AD", status: "ENABLED" })]);
+    // One row shown of two: the totals still add up every one Google returned.
+    expect(ads.truncated).toBe(true);
+    expect(ads.totals).toMatchObject({ spend: 4, impressions: 400, clicks: 35 });
+  });
+
+  it("Google: an id that isn't Google's, or a level that can't be under it, is refused before any query", async () => {
+    const f = fake(async () => json([{ results: [] }]));
+    const asked: Array<[Parameters<typeof googleReport>[3], { campaign?: string; adGroup?: string }]> = [
+      ["ad_group", { campaign: "1 OR 1=1" }],
+      ["ad", { adGroup: "55) OR (1=1" }],
+      ["ad", { adGroup: "demo-c2-core" }],
+      ["ad", { campaign: "11" }],
+      ["asset_group", {}],
+      ["campaign", { campaign: "11" }],
+      ["device", { campaign: "11" }],
+    ];
+    for (const [level, parent] of asked) {
+      await expect(googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, level, "2026-10-01", "2026-10-07", 200, parent)).rejects.toMatchObject({ status: 400 });
+    }
+    expect(f.calls).toHaveLength(0);
+  });
+
   it("Meta: the whole account split by placement, device and country", async () => {
     const f = fake((u) => {
       if (u.searchParams.get("breakdowns") === "publisher_platform,platform_position") {

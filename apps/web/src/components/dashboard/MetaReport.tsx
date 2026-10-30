@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  isMetaObjectId,
   metaAttributionLabel,
   metaObjectiveLabel,
   metaStatusGroup,
@@ -19,6 +20,7 @@ import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api"
 import { Definitions } from "./AdsCommon";
 import { fmtDay, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Badge, Delta, NeutralDelta, Panel, type Tone } from "./Primitives";
+import { DrillCrumbs, OpenRow, useReportDrill } from "./ReportDrill";
 import { ReportChange, reportChange } from "./ReportCompare";
 import type { AdsModule, Overview } from "./types";
 
@@ -30,7 +32,9 @@ import type { AdsModule, Overview } from "./types";
 // carries the dates compared with (`comparison`), the figures at a glance and each row show their
 // change; the dates picked must have ended, so a day still running is never set against whole days.
 // Each campaign, ad set or ad also brings what it is set to at Meta (objective, budget, schedule,
-// bidding, an ad's preview), and the account's campaigns are counted by state.
+// bidding, an ad's preview), and the account's campaigns are counted by state. A campaign opens to
+// its ad sets, an ad set to its ads (?campaign=&adset=, ReportDrill), with that campaign's or ad
+// set's own totals in place of the account's.
 // ---------------------------------------------------------------------------
 
 interface Report {
@@ -175,12 +179,13 @@ function Kpi({ label, value, change, before, note, testid }: { label: string; va
   );
 }
 
-function Glance({ r, money, cached, timezone }: { r: Report; money: (n: number | null) => string; cached: boolean; timezone: string | null }) {
+function Glance({ r, money, cached, timezone, drilled }: { r: Report; money: (n: number | null) => string; cached: boolean; timezone: string | null; drilled: boolean }) {
   const show = (kind: (typeof KPIS)[number]["kind"], v: number | null) =>
     v === null ? NA : kind === "money" ? money(v) : kind === "count" ? fmtNum(v) : kind === "rate" ? fmtPct(v) : kind === "times" ? fmtTimes(v) : freq(v);
   const cmp = r.comparison;
   const label = cmp ? `vs ${fmtSpan(cmp.since, cmp.until)}` : "vs before";
-  const counts = r.campaigns;
+  // The account's campaigns by state: not a campaign's or an ad set's figure, so not shown down from one.
+  const counts = drilled ? undefined : r.campaigns;
   return (
     <div className="mb-4" data-testid="meta-report-glance">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
@@ -302,7 +307,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const [level, setLevel] = useState<MetaReportView>("campaign");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [objectiveFilter, setObjectiveFilter] = useState("all");
-  const [answer, setAnswer] = useState<Answer | null>(null);
+  const [answer, setAnswer] = useState<{ drill: string; a: Answer } | null>(null);
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const { from, to } = ov.range;
@@ -311,15 +316,28 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const cfrom = ended ? ov.previous.from : null;
   const cto = ended ? ov.previous.to : null;
   const chosen = meta.find((a) => a.id === connection) ?? meta[0];
+  const drill = useReportDrill("adset", isMetaObjectId, chosen?.id);
+  // Down from a campaign: its ad sets; from an ad set: its ads (in its campaign, when known).
+  const asked: { level: MetaReportView; campaign?: string; adset?: string } = drill.child
+    ? { level: "ad", ...(drill.campaign ? { campaign: drill.campaign } : {}), adset: drill.child }
+    : drill.campaign
+      ? { level: "adset", campaign: drill.campaign }
+      : { level };
+  const drillKey = `${drill.campaign ?? "-"}:${drill.child ?? "-"}`;
+  // Each list opened starts with every row shown: a filter picked on the campaigns isn't the ad sets'.
+  useEffect(() => {
+    setStatusFilter("all");
+    setObjectiveFilter("all");
+  }, [drillKey]);
 
   useEffect(() => {
-    if (!chosen) return;
+    if (!chosen || !drill.ready) return;
     let live = true;
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ connection: chosen.id, level, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) });
+    const qs = new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) });
     api<Answer>(`/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${qs}`)
-      .then((a) => live && setAnswer(a))
+      .then((a) => live && setAnswer({ drill: drillKey, a }))
       .catch((e: unknown) => {
         if (!live) return;
         setAnswer(null);
@@ -330,14 +348,16 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
       live = false;
     };
     // The account's status changes on every poll; only a different question asks Meta again.
-  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace.id, ov.store.id, chosen?.id, drill.ready, asked.level, drillKey, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!chosen) return null;
-  const r = answer?.report;
-  const currency = answer?.account.currency ?? chosen.currency ?? "USD";
+  // Another campaign's or ad set's rows are never shown under this one's name while it loads.
+  const r = answer?.drill === drillKey ? answer.a.report : undefined;
+  const shown = r ? answer!.a : null;
+  const currency = shown?.account.currency ?? chosen.currency ?? "USD";
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));
   const attribution = (r?.attribution ?? []).map(metaAttributionLabel).filter(Boolean).join("; ");
-  const includesToday = !!answer && to >= answer.today;
+  const includesToday = !!shown && to >= shown.today;
   const cmp = r?.comparison;
   const before = new Map((cmp?.rows ?? []).map((row) => [row.id, row]));
   const objects = !!r && OBJECT_LEVELS.has(r.level);
@@ -351,12 +371,27 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   });
   const filtered = !!r && rows.length !== r.rows.length;
   const countBy = (g: StatusFilter) => (g === "all" ? (r?.rows.length ?? 0) : (r?.rows.filter((row) => metaStatusGroup(row.status) === g).length ?? 0));
+  // What was opened, by the name the row clicked gave, else as Meta names it on the rows under it.
+  const campaignName = drill.campaign ? (drill.nameOf(drill.campaign) ?? r?.rows.find((row) => row.campaignId === drill.campaign)?.campaignName ?? `Campaign ${drill.campaign}`) : null;
+  const adsetName = drill.child ? (drill.nameOf(drill.child) ?? r?.rows.find((row) => row.adsetId === drill.child)?.adsetName ?? `Ad set ${drill.child}`) : null;
+  const whole = drill.child ? "ad set" : drill.campaign ? "campaign" : "ad account";
+  const top = () => {
+    drill.top();
+    setLevel("campaign");
+  };
+  /** Open a campaign's ad sets, or an ad set's ads: only rows with Meta's own ids (never "unknown"). */
+  const opens = (row: MetaReportRow): (() => void) | null => {
+    if (!isMetaObjectId(row.id)) return null;
+    if (r?.level === "campaign") return () => drill.go({ id: row.id, name: row.name });
+    if (r?.level === "adset") return () => drill.go(row.campaignId ? { id: row.campaignId, name: row.campaignName ?? `Campaign ${row.campaignId}` } : null, { id: row.id, name: row.name });
+    return null;
+  };
 
   return (
     <Panel
       id="d-meta-report"
       title="Meta Ads report"
-      help={`${fmtRange(from, to)}, straight from Meta${answer?.account.timezone ? ` (days in the ad account's time zone, ${answer.account.timezone})` : ""}. In ${currency}. Read-only.`}
+      help={`${fmtRange(from, to)}, straight from Meta${shown?.account.timezone ? ` (days in the ad account's time zone, ${shown.account.timezone})` : ""}. In ${currency}. Read-only.`}
       aside={
         meta.length > 1 ? (
           <label className="flex items-center gap-2 text-xs text-muted">
@@ -374,6 +409,16 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
         )
       }
     >
+      {drill.open && (
+        <DrillCrumbs
+          testid="meta-report-crumbs"
+          steps={[
+            { label: "All campaigns", onClick: top },
+            ...(campaignName ? [{ label: campaignName, onClick: drill.up }] : []),
+            ...(adsetName ? [{ label: adsetName }] : []),
+          ]}
+        />
+      )}
       {error ? (
         <Alert kind={error.reconnect ? "error" : "info"}>
           {error.message}{" "}
@@ -391,25 +436,28 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
             <p className="mb-2 text-xs text-muted">Today&apos;s numbers are still coming in: Meta updates them through the day, and can revise purchases for some days afterwards.</p>
           )}
           <div className={loading ? "opacity-60" : ""} aria-busy={loading}>
-            <Glance r={r} money={money} cached={answer!.cached} timezone={answer!.account.timezone} />
+            <Glance r={r} money={money} cached={shown!.cached} timezone={shown!.account.timezone} drilled={drill.open} />
           </div>
 
           <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <div role="tablist" aria-label="Report level" className="inline-flex flex-wrap rounded-lg border border-border p-0.5">
-              {LEVELS.map((l) => (
-                <button
-                  key={l.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={level === l.id}
-                  className={`rounded-md px-3 py-1 text-sm ${level === l.id ? "bg-surface font-semibold shadow-sm" : "text-muted"}`}
-                  onClick={() => setLevel(l.id)}
-                  data-testid={`meta-report-${l.id}`}
-                >
-                  {l.label}
-                </button>
-              ))}
-            </div>
+            {/* Down from a campaign or an ad set, the breadcrumb above says where; the levels are the whole account's. */}
+            {!drill.open && (
+              <div role="tablist" aria-label="Report level" className="inline-flex flex-wrap rounded-lg border border-border p-0.5">
+                {LEVELS.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={level === l.id}
+                    className={`rounded-md px-3 py-1 text-sm ${level === l.id ? "bg-surface font-semibold shadow-sm" : "text-muted"}`}
+                    onClick={() => setLevel(l.id)}
+                    data-testid={`meta-report-${l.id}`}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {objects && (
               <div className="inline-flex flex-wrap items-center gap-1" role="group" aria-label="Delivery status" data-testid="meta-report-status-filter">
                 {STATUS_FILTERS.map(([g, label]) => (
@@ -455,8 +503,8 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                 </tr>
               </thead>
               <tbody>
-                <tr className="border-t border-border bg-surface font-medium">
-                  <td className="px-2 py-2">Whole ad account</td>
+                <tr className="border-t border-border bg-surface font-medium" data-testid="meta-report-whole">
+                  <td className="px-2 py-2">Whole {whole}</td>
                   <Cells m={r.totals} money={money} />
                   {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
                   {cmp && <ReportChange value={reportChange(r.totals.purchases, cmp.totals.purchases)} />}
@@ -472,15 +520,22 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                 {rows.map((row) => {
                   const s = statusOf(row.status);
                   const was = before.get(row.id);
+                  const open = opens(row);
+                  // Down from a campaign or an ad set, the breadcrumb names them; on the account's own lists, each row does.
+                  const parents = drill.open ? [] : [row.campaignName, row.adsetName].filter(Boolean);
                   return (
-                    <tr key={row.id} className="border-t border-border">
+                    <tr key={row.id} className="border-t border-border" data-testid="meta-report-row">
                       <td className="max-w-[22rem] px-2 py-2">
-                        <span className="block truncate font-medium" title={row.name}>
-                          {row.name}
-                        </span>
+                        {open ? (
+                          <OpenRow name={row.name} what={r.level === "campaign" ? "ad sets" : "ads"} onClick={open} testid="meta-report-open" />
+                        ) : (
+                          <span className="block truncate font-medium" title={row.name}>
+                            {row.name}
+                          </span>
+                        )}
                         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
                           {s && <Badge tone={s.tone}>{s.label}</Badge>}
-                          {(row.adsetName ?? row.campaignName) && <span className="truncate">{[row.campaignName, row.adsetName].filter(Boolean).join(" › ")}</span>}
+                          {parents.length > 0 && <span className="truncate">{parents.join(" › ")}</span>}
                         </span>
                         {row.details && <DetailsLine level={r.level} d={row.details} money={money} />}
                       </td>
@@ -493,12 +548,24 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
               </tbody>
             </table>
           </div>
-          {r.rows.length === 0 && <p className="mt-2 text-sm text-muted">Nothing in this ad account was shown to anyone in these dates.</p>}
-          {r.rows.length > 0 && rows.length === 0 && <p className="mt-2 text-sm text-muted">Nothing matches these filters. The account&apos;s totals above cover every row.</p>}
-          {filtered && rows.length > 0 && <p className="mt-2 text-xs text-muted">Showing {rows.length} of {r.rows.length}; the account&apos;s totals above cover every row.</p>}
+          {r.rows.length === 0 && <p className="mt-2 text-sm text-muted">Nothing in this {whole} was shown to anyone in these dates.</p>}
+          {r.rows.length > 0 && rows.length === 0 && <p className="mt-2 text-sm text-muted">Nothing matches these filters. The {whole}&apos;s totals above cover every row.</p>}
+          {filtered && rows.length > 0 && (
+            <p className="mt-2 text-xs text-muted">
+              Showing {rows.length} of {r.rows.length}; the {whole}&apos;s totals above cover every row.
+            </p>
+          )}
           {r.truncated && <p className="mt-2 text-xs text-muted">Showing the {r.rows.length} that spent most.</p>}
           <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted">
-            <li>Reach counts each person once over the whole period, so the rows don&apos;t add up to the account&apos;s reach. Frequency is impressions per person reached.</li>
+            <li>Reach counts each person once over the whole period, so the rows don&apos;t add up to the {whole}&apos;s reach. Frequency is impressions per person reached.</li>
+            {drill.open ? (
+              <li>
+                The {whole}&apos;s own totals and its {r.level === "ad" ? "ads" : "ad sets"}, asked of Meta for exactly these dates. They can differ a little from the campaign&apos;s figures on Campaign
+                comparison, which are its days as stored at the last sync: Meta revises purchases for some days afterwards.
+              </li>
+            ) : (
+              (r.level === "campaign" || r.level === "adset") && <li>Press {r.level === "campaign" ? "a campaign" : "an ad set"} to see its {r.level === "campaign" ? "ad sets" : "ads"}.</li>
+            )}
             {objects && <li>Status, objective, budget and schedule are as Meta lists them now, not as they were in the dates picked. Budgets are in the ad account&apos;s currency.</li>}
             {r.level === "device" && <li>Devices are the ones the ads were shown on.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were.</li>}
@@ -512,7 +579,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
               Purchases and purchase value are Meta&apos;s own count of sales it credits to these ads
               {attribution ? ` (${attribution})` : ""}. They are not your Shopify orders, and they aren&apos;t added into your store&apos;s sales.
             </li>
-            {answer && <li>{answer.cached ? "Fetched from Meta in the last few minutes." : "Fetched from Meta just now."}</li>}
+            {shown && <li>{shown.cached ? "Fetched from Meta in the last few minutes." : "Fetched from Meta just now."}</li>}
           </ul>
           <Definitions items={DEFINITIONS} />
         </>

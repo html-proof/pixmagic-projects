@@ -614,6 +614,76 @@ describe("the Google Ads report", () => {
     }
   });
 
+  it("opens one campaign's ad groups and one ad group's ads: one operation each, cached apart, Google's own ids only", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const drill: string[] = [];
+    const google = googlePlatform(seen);
+    ctx.setFetch(async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("googleAds:searchStream")) {
+        const query = (JSON.parse(String(init?.body)) as { query: string }).query;
+        const metrics = (cost: string) => ({ costMicros: cost, impressions: "1000", clicks: "20", conversions: 1, conversionsValue: 50 });
+        if (query.includes("FROM ad_group_ad")) {
+          drill.push(query);
+          return json([{ results: [{ campaign: { id: "7", name: "Search - brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "ENABLED", ad: { id: "7001", type: "RESPONSIVE_SEARCH_AD" } }, metrics: metrics("20000000") }] }]);
+        }
+        if (query.includes("FROM ad_group")) {
+          drill.push(query);
+          if (!query.includes("campaign.id = 7")) return json([{ results: [] }]);
+          return json([
+            {
+              results: [
+                { campaign: { id: "7", name: "Search - brand" }, adGroup: { id: "55", name: "Shoes", status: "ENABLED" }, metrics: metrics("20000000") },
+                { campaign: { id: "7", name: "Search - brand" }, adGroup: { id: "56", name: "Boots", status: "PAUSED" }, metrics: metrics("10000000") },
+              ],
+            },
+          ]);
+        }
+      }
+      return google(input, init);
+    });
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad_group", campaign: "7" }), headers });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.report.rows.map((r: { id: string; campaignId: string; status: string }) => [r.id, r.campaignId, r.status])).toEqual([
+      ["55", "7", "ENABLED"],
+      ["56", "7", "PAUSED"],
+    ]);
+    // The ad groups added up, every one Google returned: no query for the account's totals.
+    expect(body.report.totals).toMatchObject({ spend: 30, impressions: 2000, clicks: 40, conversions: 2 });
+    expect(drill).toHaveLength(1);
+    expect(drill[0]).toContain("FROM ad_group WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7");
+    expect(seen.reportQueries).toEqual([]);
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 1);
+    // Asked again: from the cache. Another campaign: its own report, never the first one's.
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad_group", campaign: "7" }), headers })).json().cached).toBe(true);
+    const other = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad_group", campaign: "8" }), headers });
+    expect(other.json()).toMatchObject({ cached: false, report: { rows: [], totals: { spend: 0 } } });
+    expect(drill).toHaveLength(2);
+    // One ad group's ads, named as Google leaves them (type and id).
+    const ads = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad", campaign: "7", adGroup: "55" }), headers });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.rows).toEqual([expect.objectContaining({ id: "7001", name: "Responsive search ad 7001", adGroupId: "55", adType: "RESPONSIVE_SEARCH_AD", spend: 20 })]);
+    expect(drill[2]).toContain("FROM ad_group_ad WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7 AND ad_group.id = 55");
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 3);
+
+    // Ids that aren't Google's (the demo's included, on a real account), and levels that can't be under what's given: refused, Google not asked.
+    const bad: Array<Record<string, string>> = [
+      { level: "ad_group", campaign: "7 OR 1=1" },
+      { level: "ad", adGroup: "demo-c2-core" },
+      { level: "ad", campaign: "7" },
+      { level: "asset_group" },
+      { level: "campaign", campaign: "7" },
+      { level: "device", campaign: "7" },
+    ];
+    for (const q of bad) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    expect(drill).toHaveLength(3);
+    expect(seen.reportQueries).toEqual([]);
+  });
+
   it("access Google took back marks the account 'reconnect' and says so, instead of showing old numbers", async () => {
     ctx.setFetch(googlePlatform(fresh()));
     await connect("google");

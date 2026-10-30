@@ -36,6 +36,12 @@ describe("the demo source", () => {
     const report = await src.report("campaign", "2026-09-01", "2026-09-30");
     expect(report.rows.length).toBeGreaterThan(0);
     expect(report.truncated).toBe(false);
+    // Down from a campaign to its ad groups and an ad group's ads: generated too.
+    const groups = await src.report("ad_group", "2026-09-01", "2026-09-30", { campaign: "demo-c2" });
+    expect(groups.rows.map((r) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
+    const ads = await src.report("ad", "2026-09-01", "2026-09-30", { campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(ads.rows.length).toBeGreaterThan(0);
+    expect(ads.rows.every((r) => r.adGroupId === "demo-c2-core")).toBe(true);
   });
 
   it("takes its epoch from the day the demo was connected, in the account's own zone", () => {
@@ -79,5 +85,10 @@ describe("the production source", () => {
     const src = googleAdsSource({ ...demoConn, isDemo: false, accountId: "1234567890" }, { cfg: { clientId: "id", clientSecret: "secret", version: "v25", fetchImpl }, accessToken: "token" });
     expect(await src.campaignDays("2026-09-01", "2026-09-07")).toEqual([]);
     expect(asked).toBe(1);
+    // A drill-down is one query, and only for Google's own ids.
+    expect((await src.report("ad", "2026-09-01", "2026-09-07", { adGroup: "55" })).rows).toEqual([]);
+    expect(asked).toBe(2);
+    await expect(src.report("ad", "2026-09-01", "2026-09-07", { adGroup: "demo-c2-core" })).rejects.toMatchObject({ status: 400 });
+    expect(asked).toBe(2);
   });
 });

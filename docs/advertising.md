@@ -9,10 +9,10 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 | Page | Path | What it shows |
 | --- | --- | --- |
 | Overview | `/advertising` | Every spend platform together: ad spend, the platforms' own purchases, purchase value and ROAS, the store's Shopify net sales per unit of spend (MER) and AdSense's estimated earnings on a tile of their own; then Shopify's sales against the spend, the platform cards, the daily charts and the platforms side by side. |
-| Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report. |
-| Google Ads | `/advertising/google` | The same for Google Ads, and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
+| Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report, which opens a campaign to its ad sets and an ad set to its ads ("Down from a campaign", below). |
+| Google Ads | `/advertising/google` | The same for Google Ads (a campaign opens to its ad groups, a Performance Max campaign to its asset groups, an ad group to its ads), and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
 | AdSense | `/advertising/adsense` | AdSense's earnings by site from the stored days, each figure marked Estimated or Final; and AdSense's live report by country, device type or ad unit, with ad requests, coverage and Active View viewability (read when opened and cached briefly, never stored with the days). |
-| Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change. Needs "View campaigns". |
+| Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change; a campaign's name opens it in its platform's live report. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
 
 The stored days behind these pages are kept current by the syncs: one sync per account at a time, and Meta's
@@ -35,7 +35,8 @@ Try again in a minute." without asking Meta, as it does when Meta throttles one 
   the page and kept in the address too.
 - **Campaign and campaign status** (Campaign comparison): find a campaign by part of its name or its id,
   and keep only one status group: Active, Paused, Removed or archived, Other (in review, with issues...), or
-  Status not read yet. The status is the platform's own word as of the account's last sync (Google's
+  Status not read yet. A campaign's name links to its platform's page with `?account=<its connection>&campaign=<its id>`,
+  which opens it in the live report (none for Meta's "Other campaigns" row, which is no campaign). The status is the platform's own word as of the account's last sync (Google's
   `campaign.status`, read with the daily figures; Meta's `effective_status`, read from the account's
   campaign list alongside its insights, best effort), kept per campaign in `ad_campaigns` and grouped by
   `campaignStatusGroup` (@app/shared/ads). A filter only picks rows: share of spend stays of all spend,
@@ -48,6 +49,34 @@ Try again in a minute." without asking Meta, as it does when Meta throttles one 
   (`seesTopic(access, "ads", offers)`), the area's pages need "View advertising analytics" (and the
   campaign comparison "View campaigns", `PAGE_NEED` in apps/web/src/lib/access.ts), and the API leaves
   out what isn't granted.
+
+## Down from a campaign
+
+The Meta and Google Ads live reports (`MetaReport.tsx`, `GoogleReport.tsx`, with `ReportDrill.tsx`) open a campaign's
+row to what is under it, and that to its ads:
+
+| Platform | A campaign opens to | Which opens to | Totals on top |
+| --- | --- | --- | --- |
+| Meta Ads | its ad sets (`level=adset&campaign=`) | an ad set's ads (`level=ad&campaign=&adset=`) | **Whole campaign** / **Whole ad set**: Meta's own row for it (reach counts each person once). |
+| Google Ads | its ad groups (`level=ad_group&campaign=`); a Performance Max campaign, which has none, its asset groups (`level=asset_group&campaign=`) | an ad group's ads (`level=ad&campaign=&adGroup=`) | **All ad groups / asset groups / ads in this campaign or ad group**: the rows added up, every one Google returned. Not Google's own row for the campaign, and said so. |
+
+- The view is in the address bar beside the dates and the account: `?campaign=<id>` and `?adset=<id>` (Meta) or
+  `?adgroup=<id>` (Google), so a link reproduces it (`REPORT_DRILL_PARAMS` in `useAdvertising.ts`). The ids are
+  the platform's own (digits; the Google Ads demo's `demo-…`); names come from the row clicked, else from the rows
+  under it, else "Campaign <id>". A breadcrumb ("All campaigns › campaign › ad set") goes back up; the level tabs
+  hide while one is open. Picking another ad account, or another store, starts from all campaigns again.
+- A Google campaign opened from a link (Campaign comparison) is first looked up on the account's campaign list
+  (usually cached) for its type, so a Performance Max campaign goes to its asset groups.
+- The rows are each platform's live figures for exactly the dates on screen, in the ad account's currency and own time
+  zone, read and cached as the rest of the report (10 minutes with today, an hour otherwise; a drill-down's key holds
+  its parent). They can differ a little from Campaign comparison's stored days (Meta revises purchases for a few
+  days; Google its conversions). Nothing below a campaign is stored.
+- What each read costs: Meta, two insights reads (the parent's own row and its children, from the ad account's insights
+  filtered to the campaign or ad set) and one list call for the statuses (the campaign's or ad set's own list, not the
+  account's); the account's campaigns aren't counted down there. Google, one operation (no account totals query).
+  The demo makes no call at all ([ads-demo.md](ads-demo.md)).
+- Ads: Meta names every ad; most Google ad types have no name, so a Google ad reads as its type and id
+  ("Responsive search ad 7001", `googleAdName`). Neither platform's ad text, images or links are read.
 
 ## Printing
 

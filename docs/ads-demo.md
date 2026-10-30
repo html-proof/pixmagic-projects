@@ -50,7 +50,10 @@ a separate mode that never falls back to the demo.
   zone), so figures never shift as days pass. Also here: the splits by device, country (home country
   by currency, Google's geo target ids), age group and audience segment, each scaled to add up to the
   totals exactly; the live report by campaign, ad group (two per campaign, none for Performance Max),
-  device and country; and the simulated store next to the demo (modeled attribution).
+  device and country, and down from a campaign: its two ad groups, a Performance Max campaign's two
+  asset groups, an ad group's two or three ads (unnamed, as most Google ad types are, so named by
+  their type and a stable id from the seed), each level split from the one above so it adds up to it
+  to the cent; and the simulated store next to the demo (modeled attribution).
 - **Source adapter** (`packages/core/src/ads/googleAdsSource.ts`): `GoogleAdsSource` answers
   `campaignDays`, `accountHealth` and `report`; `GoogleAdsDemoProvider` from the generator,
   `GoogleAdsProductionProvider` from Google's API with the OAuth client and the person's token.
@@ -104,8 +107,9 @@ changes "Manage integrations" (`integrations.manage`).
 | `GET /analytics` | Everything the analytics page shows, for `?connection=` (the demo by default) and the dashboard's date query (`preset`, `from`, `to`, `compare`, `cfrom`, `cto`). |
 | `GET /analytics/overview`, `/campaigns` (`q`, `status`, `type`, `sort`, `dir`, `page`, `pageSize`), `/performance`, `/conversions`, `/devices`, `/audience`, `/recommendations`, `/combined` | Slices of the same. Also under `/demo/…` (the brief's names). |
 
-The existing `GET …/ads/google/report` (campaign, ad group, device, country) answers for the demo
-too, generated instead of fetched.
+The existing `GET …/ads/google/report` (campaign, ad group, device, country, and down from a
+campaign with `campaign=` / `adGroup=`, the demo's own ids such as `demo-c2` and `demo-c2-core`)
+answers for the demo too, generated instead of fetched: a Google-shaped id is refused there (400).
 
 A connect answer:
 

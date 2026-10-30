@@ -156,6 +156,29 @@ describe("live reports per connection", () => {
     expect(recorded.every((r) => (r.failure as { status: string }).status === "error")).toBe(true);
   });
 
+  it("Google: a drill-down (one campaign's ad groups, one ad group's ads) is one counted operation, not two", async () => {
+    const coord = memoryCoord();
+    const queries: string[] = [];
+    const google: FetchLike = async (_input, init) => {
+      queries.push((JSON.parse(String(init?.body)) as { query: string }).query);
+      return json([{ results: [{ campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, metrics: { costMicros: "1000000", impressions: "10", clicks: "1" } }] }]);
+    };
+    const account = conn({ provider: "google", accountId: "111" });
+    const r = await googleReportForConnection(account, "ad_group", "2026-10-01", "2026-10-07", google, { coord, parent: { campaign: "11" } });
+    expect(r.rows).toEqual([expect.objectContaining({ id: "55", campaignId: "11" })]);
+    expect(queries).toHaveLength(1);
+    expect(await googleAdsOperationsToday(coord)).toBe(1);
+    // The whole account's ad groups: the account's totals too, two.
+    await googleReportForConnection(account, "ad_group", "2026-10-01", "2026-10-07", google, { coord });
+    expect(await googleAdsOperationsToday(coord)).toBe(3);
+    // The demo's drill-down: generated, nothing fetched or counted.
+    const demo = conn({ provider: "google", isDemo: true, accountId: "DEMO-ADS-001", demoSeed: 7, timezone: "UTC", createdAt: new Date("2026-10-20T00:00:00Z") });
+    const ads = await googleReportForConnection(demo, "ad", "2026-10-01", "2026-10-07", google, { coord, parent: { campaign: "demo-c2", adGroup: "demo-c2-core" } });
+    expect(ads.rows.length).toBeGreaterThan(0);
+    expect(queries).toHaveLength(3);
+    expect(await googleAdsOperationsToday(coord)).toBe(3);
+  });
+
   it("Google and AdSense: a report ends by its deadline, as 'busy' (try again), and the operations it started are still counted", async () => {
     const coord = memoryCoord();
     let calls = 0;

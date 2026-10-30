@@ -27,7 +27,15 @@ import {
   fromMetaRangeInsight,
   metaAttributionLabel,
   metaReportMetrics,
+  googleAdName,
+  googleAdTypeLabel,
   googleCustomerId,
+  googleParentFits,
+  googleReportRows,
+  googleReportTotals,
+  isGoogleObjectId,
+  isMetaObjectId,
+  metaParentFits,
   metaAccountId,
   previousRange,
   siteTotals,
@@ -145,6 +153,72 @@ describe("ad platform rows", () => {
     expect(googleCustomerId("123-456-7890")).toBe("1234567890");
     expect(metaAccountId("42")).toBe("act_42");
     expect(metaAccountId("act_42")).toBe("act_42");
+  });
+});
+
+describe("the Google Ads report, down from a campaign", () => {
+  it("names each ad group's, asset group's and ad's campaign (and an ad's ad group) by id, so a row can be opened", () => {
+    const groups = googleReportRows("ad_group", [
+      { campaign: { id: "11", name: "Brand" }, adGroup: { id: 55, name: "Shoes", status: "ENABLED" }, metrics: { costMicros: "4000000", impressions: "100", clicks: "5" } },
+    ]);
+    expect(groups[0]).toMatchObject({ id: "55", name: "Shoes", campaignId: "11", campaignName: "Brand", adGroupId: null, adType: null, status: "ENABLED", spend: 4 });
+    const assets = googleReportRows("asset_group", [
+      { campaign: { id: "12", name: "PMax" }, assetGroup: { id: "901", name: "Summer", status: "PAUSED" }, metrics: { costMicros: "1500000" } },
+      { campaign: { id: "12", name: "PMax" }, assetGroup: { id: "902", name: "Winter", status: "ENABLED" }, metrics: { costMicros: "2500000" } },
+    ]);
+    expect(assets.map((r) => [r.id, r.name, r.campaignId, r.status, r.spend])).toEqual([
+      ["902", "Winter", "12", "ENABLED", 2.5],
+      ["901", "Summer", "12", "PAUSED", 1.5],
+    ]);
+  });
+
+  it("names an ad by Google's own name, or, as most ad types have none, by its type and id", () => {
+    const ads = googleReportRows("ad", [
+      {
+        campaign: { id: "11", name: "Brand" },
+        adGroup: { id: "55", name: "Shoes" },
+        adGroupAd: { status: "ENABLED", ad: { id: "7001", type: "RESPONSIVE_SEARCH_AD" } },
+        metrics: { costMicros: "3000000", impressions: "300", clicks: "30", conversions: 1.5, conversionsValue: 60 },
+      },
+      { campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, adGroupAd: { status: "PAUSED", ad: { id: 7002, name: " Spring video ", type: "VIDEO_AD" } }, metrics: { costMicros: "1000000" } },
+      { campaign: { id: "11" }, adGroup: { id: "55" }, adGroupAd: { ad: { id: "7003", name: "", type: "UNKNOWN" } }, metrics: { costMicros: "500000" } },
+    ]);
+    expect(ads.map((r) => [r.id, r.name, r.adType, r.status, r.campaignId, r.adGroupId, r.adGroupName])).toEqual([
+      ["7001", "Responsive search ad 7001", "RESPONSIVE_SEARCH_AD", "ENABLED", "11", "55", "Shoes"],
+      ["7002", "Spring video", "VIDEO_AD", "PAUSED", "11", "55", "Shoes"],
+      ["7003", "Ad 7003", "UNKNOWN", null, "11", "55", null],
+    ]);
+    expect(ads[0]).toMatchObject({ spend: 3, cpc: 0.1, conversions: 1.5, roas: 20 });
+    expect(googleAdTypeLabel("RESPONSIVE_DISPLAY_AD")).toBe("Responsive display ad");
+    expect(googleAdName(null, null, "9")).toBe("Ad 9");
+  });
+
+  it("adds every row up for a drill-down's totals, in micros, with the rates worked out from the sums", () => {
+    const totals = googleReportTotals([
+      { metrics: { costMicros: "1005000", impressions: "100", clicks: "4", conversions: 1, conversionsValue: 10 } },
+      { metrics: { costMicros: "2005000", impressions: "300", clicks: "6", conversions: 0.5, conversionsValue: 5 } },
+      {},
+    ]);
+    expect(totals).toMatchObject({ spend: 3.01, impressions: 400, clicks: 10, ctr: 0.025, conversions: 1.5, conversionValue: 15 });
+    expect(googleReportTotals([])).toMatchObject({ spend: 0, impressions: 0, ctr: null, roas: null });
+  });
+
+  it("opens ad groups (one campaign's or the account's), asset groups only under a campaign, ads only under an ad group", () => {
+    expect(googleParentFits("ad_group", {})).toBe(true);
+    expect(googleParentFits("ad_group", { campaign: "1" })).toBe(true);
+    expect(googleParentFits("ad_group", { adGroup: "2" })).toBe(false);
+    expect(googleParentFits("asset_group", { campaign: "1" })).toBe(true);
+    expect(googleParentFits("asset_group", {})).toBe(false);
+    expect(googleParentFits("ad", { adGroup: "2" })).toBe(true);
+    expect(googleParentFits("ad", { campaign: "1", adGroup: "2" })).toBe(true);
+    expect(googleParentFits("ad", { campaign: "1" })).toBe(false);
+    expect(googleParentFits("ad", {})).toBe(false);
+    for (const level of ["campaign", "device", "country"] as const) {
+      expect(googleParentFits(level, {})).toBe(true);
+      expect(googleParentFits(level, { campaign: "1" })).toBe(false);
+    }
+    expect(isGoogleObjectId("12345678901")).toBe(true);
+    for (const bad of ["1 OR 1=1", "1;", "demo-c1", "", "1".repeat(21)]) expect(isGoogleObjectId(bad)).toBe(false);
   });
 });
 
@@ -439,9 +513,24 @@ describe("the Meta Ads report's numbers", () => {
 
   it("names rows by their level and keeps the campaign and ad set they sit in", () => {
     const row = { campaign_id: "1", campaign_name: "Spring", adset_id: "2", adset_name: "Women 25-34", ad_id: "3", ad_name: "Carousel", attribution_setting: "7d_click_1d_view" };
-    expect(fromMetaRangeInsight("campaign", row)).toMatchObject({ id: "1", name: "Spring", campaignName: null, adsetName: null });
-    expect(fromMetaRangeInsight("adset", row)).toMatchObject({ id: "2", name: "Women 25-34", campaignName: "Spring", adsetName: null, attribution: "7d_click_1d_view" });
-    expect(fromMetaRangeInsight("ad", row)).toMatchObject({ id: "3", name: "Carousel", campaignName: "Spring", adsetName: "Women 25-34", status: null });
+    expect(fromMetaRangeInsight("campaign", row)).toMatchObject({ id: "1", name: "Spring", campaignId: null, campaignName: null, adsetId: null, adsetName: null });
+    expect(fromMetaRangeInsight("adset", row)).toMatchObject({ id: "2", name: "Women 25-34", campaignId: "1", campaignName: "Spring", adsetId: null, adsetName: null, attribution: "7d_click_1d_view" });
+    expect(fromMetaRangeInsight("ad", row)).toMatchObject({ id: "3", name: "Carousel", campaignId: "1", campaignName: "Spring", adsetId: "2", adsetName: "Women 25-34", status: null });
+    // A row Meta sent without its parents' ids can't be opened or kept to one campaign: unknown, never made up.
+    expect(fromMetaRangeInsight("ad", { ad_id: "3" })).toMatchObject({ campaignId: null, adsetId: null });
+  });
+
+  it("opens a campaign's ad sets or ads and an ad set's ads, nothing else, by Meta's own ids", () => {
+    expect(metaParentFits("adset", { campaign: "1" })).toBe(true);
+    expect(metaParentFits("ad", { campaign: "1" })).toBe(true);
+    expect(metaParentFits("ad", { campaign: "1", adset: "2" })).toBe(true);
+    expect(metaParentFits("ad", { adset: "2" })).toBe(true);
+    expect(metaParentFits("campaign", { campaign: "1" })).toBe(false);
+    expect(metaParentFits("adset", { adset: "2" })).toBe(false);
+    expect(metaParentFits("placement", { campaign: "1" })).toBe(false);
+    for (const level of ["campaign", "adset", "ad", "country"] as const) expect(metaParentFits(level, {})).toBe(true);
+    expect(isMetaObjectId("120210000000000001")).toBe(true);
+    for (const bad of ["", "1 OR 1=1", "act_1", "-1", "1".repeat(31), 12]) expect(isMetaObjectId(bad)).toBe(false);
   });
 
   it("puts Meta's attribution settings into words", () => {

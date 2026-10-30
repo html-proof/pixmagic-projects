@@ -16,6 +16,7 @@ import {
   demoReport,
   demoStoreDays,
   demoStoreTotals,
+  isDemoObjectId,
   isDemoSeed,
   newDemoSeed,
   type DemoContext,
@@ -188,6 +189,62 @@ describe("the live report", () => {
     expect(groups.rows.filter((r) => r.campaignName === "Search Advertising")).toHaveLength(2);
     expect(demoReport(ctx, "device", since, until).rows.map((r) => r.name).sort()).toEqual(["Computers", "Phones", "Tablets"]);
     expect(demoReport(ctx, "country", since, until).rows[0]!.name).toBe("India");
+  });
+});
+
+describe("the live report, down from a campaign", () => {
+  const campaigns = demoReport(ctx, "campaign", since, until).rows;
+  const campaign = (id: string) => campaigns.find((r) => r.id === id)!;
+  const cents = (n: number) => Math.round(n * 100);
+  const added = (rows: Array<{ spend: number; impressions: number; clicks: number; conversions: number; conversionValue: number }>) => ({
+    spend: cents(rows.reduce((a, r) => a + r.spend, 0)),
+    impressions: rows.reduce((a, r) => a + r.impressions, 0),
+    clicks: rows.reduce((a, r) => a + r.clicks, 0),
+    conversions: rows.reduce((a, r) => a + r.conversions, 0),
+    conversionValue: cents(rows.reduce((a, r) => a + r.conversionValue, 0)),
+  });
+  const own = (r: { spend: number; impressions: number; clicks: number; conversions: number; conversionValue: number }) => added([r]);
+
+  it("a campaign's ad groups add up to it exactly, and its totals are theirs", () => {
+    const groups = demoReport(ctx, "ad_group", since, until, { campaign: "demo-c2" });
+    expect(groups.rows.map((r) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
+    expect(groups.rows.every((r) => r.campaignId === "demo-c2" && r.campaignName === "Search Advertising")).toBe(true);
+    expect(added(groups.rows)).toEqual(own(campaign("demo-c2")));
+    expect(own(groups.totals)).toEqual(own(campaign("demo-c2")));
+    // The same groups, with the same figures, as on the whole account's list.
+    const all = demoReport(ctx, "ad_group", since, until).rows.filter((r) => r.campaignId === "demo-c2");
+    expect(all).toEqual(groups.rows);
+  });
+
+  it("a Performance Max campaign has asset groups instead, adding up to it; other campaigns have none", () => {
+    const pmax = demoReport(ctx, "asset_group", since, until, { campaign: "demo-c7" });
+    expect(pmax.rows).toHaveLength(2);
+    expect(pmax.rows.every((r) => r.campaignId === "demo-c7" && r.status === "ENABLED")).toBe(true);
+    expect(added(pmax.rows)).toEqual(own(campaign("demo-c7")));
+    expect(demoReport(ctx, "ad_group", since, until, { campaign: "demo-c7" }).rows).toEqual([]);
+    expect(demoReport(ctx, "asset_group", since, until, { campaign: "demo-c2" }).rows).toEqual([]);
+  });
+
+  it("an ad group's ads add up to it exactly, named by their type and id as Google names unnamed ads", () => {
+    const group = demoReport(ctx, "ad_group", since, until, { campaign: "demo-c2" }).rows.find((r) => r.id === "demo-c2-core")!;
+    const ads = demoReport(ctx, "ad", since, until, { campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(ads.rows.length).toBeGreaterThanOrEqual(2);
+    expect(ads.rows.length).toBeLessThanOrEqual(3);
+    for (const a of ads.rows) {
+      expect(a).toMatchObject({ campaignId: "demo-c2", adGroupId: "demo-c2-core", adGroupName: "Search Advertising · Core", adType: "RESPONSIVE_SEARCH_AD", name: `Responsive search ad ${a.id}` });
+      expect(a.clicks).toBeLessThanOrEqual(a.impressions);
+    }
+    expect(added(ads.rows)).toEqual(own(group));
+    expect(own(ads.totals)).toEqual(own(group));
+    // The same seed, the same ads; an ad group of another campaign gives none.
+    expect(demoReport(ctx, "ad", since, until, { campaign: "demo-c2", adGroup: "demo-c2-core" })).toEqual(ads);
+    expect(demoReport(ctx, "ad", since, until, { campaign: "demo-c3", adGroup: "demo-c2-core" }).rows).toEqual([]);
+  });
+
+  it("names only its own ids as the demo's", () => {
+    expect(isDemoObjectId("demo-c2")).toBe(true);
+    expect(isDemoObjectId("demo-c2-core")).toBe(true);
+    for (const bad of ["demo-", "demo-C2", "c2", "demo-c2' OR 1=1", "12345"]) expect(isDemoObjectId(bad)).toBe(false);
   });
 });
 

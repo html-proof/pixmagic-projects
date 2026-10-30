@@ -1,15 +1,18 @@
 /**
  * Google Ads API: the accounts a login reaches (directly or under a manager account), daily numbers
- * per campaign, and the report by campaign, ad group, device or country. Read-only GAQL.
+ * per campaign, and the report by campaign, ad group, device or country, down to one campaign's ad
+ * groups (or asset groups) and one ad group's ads. Read-only GAQL.
  */
 import {
   AD_ERROR_OURS,
   fromGoogleAdsRow,
   googleAccountStatus,
   googleCustomerId,
-  googleReportMetrics,
+  googleParentFits,
   googleReportRows,
+  googleReportTotals,
   isDay,
+  isGoogleObjectId,
   withGooglePurchases,
   type AdDayRow,
   type GoogleAdsRow,
@@ -17,6 +20,7 @@ import {
   type GoogleReportApiRow,
   type GoogleReportLevel,
   type GoogleReportMetrics,
+  type GoogleReportParent,
   type GoogleReportRow,
 } from "@app/shared";
 import { logger } from "../logger.js";
@@ -365,7 +369,10 @@ export interface GoogleReport {
   level: GoogleReportLevel;
   since: string;
   until: string;
-  /** The whole account's totals for the range. */
+  /**
+   * The whole account's totals for the range. Under a parent (a campaign's ad groups, an ad group's
+   * ads): every row Google reported there added up, the ones past `maxRows` included.
+   */
   totals: GoogleReportMetrics;
   /** Biggest spend first. */
   rows: GoogleReportRow[];
@@ -375,14 +382,35 @@ export interface GoogleReport {
 
 const GOOGLE_METRICS = "metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value";
 
-/** The query for each level. Without segments.date in SELECT, Google sums the metrics over the range. */
-function googleReportQuery(level: GoogleReportLevel, since: string, until: string): string {
+/**
+ * A drill-down's parent, checked: a level it fits (googleParentFits), and Google's own ids, digits
+ * only, since they go into the query text (as the dates do). Null for the whole account.
+ */
+function checkedParent(level: GoogleReportLevel, parent: GoogleReportParent): GoogleReportParent | null {
+  if (!googleParentFits(level, parent)) throw new AdsApiError(`Google's ${level} report can't be read ${parent.campaign === undefined && parent.adGroup === undefined ? "for the whole account" : "under that campaign or ad group"}`, 400);
+  if (![parent.campaign, parent.adGroup].every((id) => id === undefined || isGoogleObjectId(id))) throw new AdsApiError("Invalid Google Ads campaign or ad group id", 400);
+  return parent.campaign === undefined && parent.adGroup === undefined ? null : parent;
+}
+
+/**
+ * The query for each level. Without segments.date in SELECT, Google sums the metrics over the range.
+ * Under a parent, only its rows: a campaign's ad groups, a Performance Max campaign's asset groups
+ * (it has no ad groups: https://developers.google.com/google-ads/api/performance-max/asset-group-reporting),
+ * an ad group's ads (their id, name, type and status; never their text or links).
+ */
+function googleReportQuery(level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent | null): string {
   const during = `segments.date BETWEEN '${since}' AND '${until}'`;
+  const inCampaign = parent?.campaign !== undefined ? ` AND campaign.id = ${parent.campaign}` : "";
+  const inAdGroup = parent?.adGroup !== undefined ? ` AND ad_group.id = ${parent.adGroup}` : "";
   switch (level) {
     case "campaign":
       return `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, ${GOOGLE_METRICS} FROM campaign WHERE ${during}`;
     case "ad_group":
-      return `SELECT campaign.name, ad_group.id, ad_group.name, ad_group.status, ${GOOGLE_METRICS} FROM ad_group WHERE ${during}`;
+      return `SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group.status, ${GOOGLE_METRICS} FROM ad_group WHERE ${during}${inCampaign}`;
+    case "asset_group":
+      return `SELECT campaign.id, campaign.name, asset_group.id, asset_group.name, asset_group.status, ${GOOGLE_METRICS} FROM asset_group WHERE ${during}${inCampaign}`;
+    case "ad":
+      return `SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.type, ad_group_ad.status, ${GOOGLE_METRICS} FROM ad_group_ad WHERE ${during}${inCampaign}${inAdGroup}`;
     case "device":
       return `SELECT segments.device, ${GOOGLE_METRICS} FROM customer WHERE ${during}`;
     case "country":
@@ -411,7 +439,11 @@ async function googleCountryCodes(c: GoogleConfig, accessToken: string, account:
 
 /**
  * The Google Ads report for one account and range, by campaign, ad group, device or country, plus
- * the account's own totals. Read-only GAQL; dates are validated before they go into the query.
+ * the account's own totals. Read-only GAQL; dates and ids are validated before they go into the query.
+ *
+ * Under a parent (`parent`: one campaign's ad groups or asset groups, one ad group's ads) it is one
+ * operation, not two: the account's totals aren't asked for, and the totals are the rows added up,
+ * every one Google returned (the page says so: they are not the campaign's own row).
  */
 export async function googleReport(
   c: GoogleConfig,
@@ -421,11 +453,13 @@ export async function googleReport(
   since: string,
   until: string,
   maxRows = 200,
+  parent: GoogleReportParent = {},
 ): Promise<GoogleReport> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
+  const drill = checkedParent(level, parent);
   const [totalRows, raw] = await Promise.all([
-    googleSearch<GoogleReportApiRow>(c, accessToken, account.accountId, `SELECT ${GOOGLE_METRICS} FROM customer WHERE segments.date BETWEEN '${since}' AND '${until}'`, account.loginCustomerId),
-    googleSearch<GoogleReportApiRow>(c, accessToken, account.accountId, googleReportQuery(level, since, until), account.loginCustomerId),
+    drill ? null : googleSearch<GoogleReportApiRow>(c, accessToken, account.accountId, `SELECT ${GOOGLE_METRICS} FROM customer WHERE segments.date BETWEEN '${since}' AND '${until}'`, account.loginCustomerId),
+    googleSearch<GoogleReportApiRow>(c, accessToken, account.accountId, googleReportQuery(level, since, until, drill), account.loginCustomerId),
   ]);
   let countries = new Map<string, string>();
   if (level === "country") {
@@ -437,8 +471,8 @@ export async function googleReport(
   }
   const all = googleReportRows(level, raw, countries);
   const rows = all.slice(0, maxRows);
-  const totals = googleReportRows("device", totalRows.map((r) => ({ ...r, segments: { device: "ALL" } })))[0];
-  return { level, since, until, totals: totals ?? googleReportMetrics({}), rows, truncated: all.length > rows.length };
+  // The account's totals row, or under a parent every row of it; none: nothing ran in the range, so zero.
+  return { level, since, until, totals: googleReportTotals(totalRows ?? raw), rows, truncated: all.length > rows.length };
 }
 
 /**

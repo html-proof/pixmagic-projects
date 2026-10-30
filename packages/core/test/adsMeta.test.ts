@@ -677,3 +677,97 @@ describe("the Meta Ads report", () => {
     expect(r.totals.reach).toBe(600);
   });
 });
+
+describe("the Meta Ads report, down from a campaign or an ad set", () => {
+  const campaignFilter = { field: "campaign.id", operator: "IN", value: ["11"] };
+
+  it("one campaign's ad sets: the account's insights filtered to it, the campaign's own row as the totals, statuses from its own list", async () => {
+    const f = fake((u) => {
+      if (u.pathname === "/v25.0/11/adsets") {
+        expect(JSON.parse(u.searchParams.get("effective_status")!)).toEqual(expect.arrayContaining(["ARCHIVED", "DELETED", "CAMPAIGN_PAUSED"]));
+        return json({ data: [{ id: "21", effective_status: "ACTIVE", daily_budget: "1000" }, { id: "22", effective_status: "CAMPAIGN_PAUSED" }] });
+      }
+      // Always the ad account's own insights, never the campaign's: an id another account owns reports nothing here.
+      expect(u.pathname).toBe("/v25.0/act_1/insights");
+      const filtering = JSON.parse(u.searchParams.get("filtering")!);
+      expect(filtering[0]).toEqual(campaignFilter);
+      if (level(u) === "campaign") {
+        expect(filtering[1]).toMatchObject({ field: "campaign.effective_status", operator: "IN" });
+        return json({ data: [{ campaign_id: "11", campaign_name: "Spring", spend: "30", impressions: "3000", reach: "1200" }] });
+      }
+      expect(level(u)).toBe("adset");
+      expect(filtering[1]).toMatchObject({ field: "adset.effective_status", operator: "IN", value: expect.arrayContaining(["ARCHIVED", "DELETED"]) });
+      expect(u.searchParams.get("fields")).toContain("campaign_id,campaign_name,adset_id,adset_name");
+      return json({
+        data: [
+          // Another campaign's row, were Meta ever to answer without the filter: never shown as this one's.
+          { campaign_id: "99", campaign_name: "Other", adset_id: "91", adset_name: "Elsewhere", spend: "50" },
+          { campaign_id: "11", campaign_name: "Spring", adset_id: "21", adset_name: "Women", spend: "20", reach: "800" },
+          { campaign_id: "11", campaign_name: "Spring", adset_id: "22", adset_name: "Men", spend: "10", reach: "500" },
+        ],
+      });
+    });
+    const r = await metaReport(meta(f.fetchImpl), "T", "1", "adset", "2026-10-01", "2026-10-07", 200, { parent: { campaign: "11" }, currency: "USD" });
+    expect(r.rows.map((x) => [x.id, x.name, x.campaignId, x.campaignName, x.status])).toEqual([
+      ["21", "Women", "11", "Spring", "ACTIVE"],
+      ["22", "Men", "11", "Spring", "CAMPAIGN_PAUSED"],
+    ]);
+    expect(r.rows[0]!.details).toMatchObject({ dailyBudget: 10 });
+    // The campaign's own reach (people counted once), not its ad sets' added up (1,300), nor the account's.
+    expect(r.totals).toMatchObject({ spend: 30, reach: 1200 });
+    // About one campaign: the account's campaigns aren't counted, and neither the account's lists nor its totals are read.
+    expect(r.campaigns).toBeNull();
+    expect(f.calls.some((c) => /\/act_1\/(adsets|campaigns)$/.test(c.url.pathname))).toBe(false);
+    expect(f.calls.filter((c) => c.url.pathname.endsWith("/insights")).map((c) => level(c.url)).sort()).toEqual(["adset", "campaign"]);
+  });
+
+  it("one ad set's ads: its own row as the totals, its own list for the statuses; nothing in the dates, no list call at all", async () => {
+    const f = fake((u) => {
+      if (u.pathname === "/v25.0/21/ads") return json({ data: [{ id: "31", effective_status: "ADSET_PAUSED", preview_shareable_link: "https://fb.me/x" }] });
+      const filtering = JSON.parse(u.searchParams.get("filtering")!);
+      expect(filtering.slice(0, 2)).toEqual([campaignFilter, { field: "adset.id", operator: "IN", value: ["21"] }]);
+      if (level(u) === "adset") return json({ data: [{ campaign_id: "11", adset_id: "21", adset_name: "Women", spend: "20", reach: "800" }] });
+      expect(level(u)).toBe("ad");
+      return json({ data: [{ campaign_id: "11", campaign_name: "Spring", adset_id: "21", adset_name: "Women", ad_id: "31", ad_name: "Carousel", spend: "20" }] });
+    });
+    const ads = await metaReport(meta(f.fetchImpl), "T", "1", "ad", "2026-10-01", "2026-10-07", 200, { parent: { campaign: "11", adset: "21" } });
+    expect(ads.rows.map((x) => [x.id, x.campaignId, x.adsetId, x.adsetName, x.status])).toEqual([["31", "11", "21", "Women", "ADSET_PAUSED"]]);
+    expect(ads.totals).toMatchObject({ spend: 20, reach: 800 });
+    const quiet = fake((u) => (u.pathname.endsWith("/insights") ? json({ data: [] }) : json({ error: { message: "unexpected" } }, 400)));
+    const none = await metaReport(meta(quiet.fetchImpl), "T", "1", "ad", "2026-10-01", "2026-10-07", 200, { parent: { adset: "21" } });
+    expect(none.rows).toEqual([]);
+    expect(none.totals.spend).toBe(0);
+    expect(quiet.calls.every((c) => c.url.pathname === "/v25.0/act_1/insights")).toBe(true);
+  });
+
+  it("Meta refusing the status filter or the sort: asked again without them, never without the campaign", async () => {
+    const f = fake((u) => {
+      if (u.searchParams.has("sort")) return json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400);
+      return json({ data: [{ campaign_id: "11", adset_id: "21", adset_name: "Women", spend: "5" }] });
+    });
+    expect(await metaRangeInsights(meta(f.fetchImpl), "T", "1", "adset", "2026-10-01", "2026-10-07", 2000, undefined, { parent: { campaign: "11" } })).toHaveLength(1);
+    expect(f.calls.map((c) => JSON.parse(c.url.searchParams.get("filtering")!))).toEqual([[campaignFilter, expect.objectContaining({ field: "adset.effective_status" })], [campaignFilter]]);
+    // Meta refusing the campaign filter itself: an error, never the account's every ad set under the campaign's name.
+    const refused = fake(() => json({ error: { message: "(#100) Filtering field campaign.id is invalid", code: 100 } }, 400));
+    await expect(metaRangeInsights(meta(refused.fetchImpl), "T", "1", "adset", "2026-10-01", "2026-10-07", 2000, undefined, { parent: { campaign: "11" } })).rejects.toBeInstanceOf(AdsApiError);
+    expect(refused.calls).toHaveLength(2);
+    expect(refused.calls.every((c) => JSON.parse(c.url.searchParams.get("filtering")!)[0].field === "campaign.id")).toBe(true);
+  });
+
+  it("an id that isn't Meta's, or a level that can't be under it, is refused before Meta is asked", async () => {
+    const f = fake(() => json({ data: [] }));
+    const asked = [
+      ["adset", { campaign: "1 OR 1=1" }],
+      ["ad", { adset: "act_1" }],
+      ["campaign", { campaign: "11" }],
+      ["adset", { adset: "21" }],
+      ["country", { campaign: "11" }],
+    ] as const;
+    for (const [view, parent] of asked) {
+      const err = await failureOf(metaReport(meta(f.fetchImpl), "T", "1", view, "2026-10-01", "2026-10-07", 200, { parent }));
+      expect(err).toBeInstanceOf(AdsApiError);
+      expect((err as AdsApiError).status).toBe(400);
+    }
+    expect(f.calls).toHaveLength(0);
+  });
+});

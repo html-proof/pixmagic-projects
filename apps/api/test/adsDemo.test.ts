@@ -203,6 +203,28 @@ describe("the demo's figures", () => {
     expect(fetched).toEqual([]);
   });
 
+  it("open a campaign's ad groups, a Performance Max campaign's asset groups and an ad group's ads, all without Google", async () => {
+    await connectAndSync();
+    const row = await demoRow();
+    const today = localDay(new Date(), "Australia/Melbourne");
+    const report = (q: Record<string, string>) => get(`/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection: row.id, from: addDays(today, -7), to: today, ...q })}`);
+    const campaign = (await report({ level: "campaign" })).json().report.rows.find((r: { id: string }) => r.id === "demo-c2");
+    const groups = await report({ level: "ad_group", campaign: "demo-c2" });
+    expect(groups.statusCode).toBe(200);
+    expect(groups.json().report.rows.map((r: { id: string }) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
+    // Split from the campaign: its ad groups add up to it.
+    expect(groups.json().report.totals.spend).toBeCloseTo(campaign.spend, 2);
+    const ads = await report({ level: "ad", campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.rows.length).toBeGreaterThanOrEqual(2);
+    expect(ads.json().report.rows.every((r: { adGroupId: string; adType: string }) => r.adGroupId === "demo-c2-core" && r.adType === "RESPONSIVE_SEARCH_AD")).toBe(true);
+    const assets = await report({ level: "asset_group", campaign: "demo-c7" });
+    expect(assets.json().report.rows).toHaveLength(2);
+    // The demo's ids only: a Google-shaped id isn't one of the demo's.
+    expect((await report({ level: "ad_group", campaign: "12345" })).statusCode).toBe(400);
+    expect(fetched).toEqual([]);
+  });
+
   it("the analytics: consistent figures, every section, the demo said on it", async () => {
     await connectAndSync();
     const res = await get(`${base}/analytics?preset=30d`);

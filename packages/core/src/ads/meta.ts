@@ -11,12 +11,14 @@ import {
   fromMetaRangeInsight,
   isDay,
   isMetaBreakdown,
+  isMetaObjectId,
   META_BREAKDOWN_PARAM,
   META_OBJECT_FIELDS,
   metaAccountId,
   metaAccountStatus,
   metaCountCampaign,
   metaObjectDetails,
+  metaParentFits,
   metaReportMetrics,
   noMetaCampaignCounts,
   type AdAccountStatus,
@@ -29,6 +31,7 @@ import {
   type MetaReportBreakdown,
   type MetaReportLevel,
   type MetaReportMetrics,
+  type MetaReportParent,
   type MetaReportRow,
   type MetaReportView,
 } from "@app/shared";
@@ -459,7 +462,29 @@ const EVERY_STATUS: Record<MetaReportLevel, string[]> = {
   adset: ["ACTIVE", "PAUSED", "DELETED", "CAMPAIGN_PAUSED", "ARCHIVED", "IN_PROCESS", "WITH_ISSUES"],
   ad: ["ACTIVE", "PAUSED", "DELETED", "PENDING_REVIEW", "DISAPPROVED", "PREAPPROVED", "PENDING_BILLING_INFO", "CAMPAIGN_PAUSED", "ARCHIVED", "ADSET_PAUSED", "IN_PROCESS", "WITH_ISSUES"],
 };
-const everyStatus = (level: MetaReportLevel) => JSON.stringify([{ field: `${level}.effective_status`, operator: "IN", value: EVERY_STATUS[level] }]);
+type InsightsFilter = { field: string; operator: "IN"; value: string[] };
+const statusFilter = (level: MetaReportLevel): InsightsFilter => ({ field: `${level}.effective_status`, operator: "IN", value: EVERY_STATUS[level] });
+const everyStatus = (level: MetaReportLevel) => JSON.stringify([statusFilter(level)]);
+
+/** A drill-down: given at all (an empty parent is the whole account). */
+const drillOf = (parent: MetaReportParent | undefined): MetaReportParent | null => (parent && (parent.campaign !== undefined || parent.adset !== undefined) ? parent : null);
+
+/**
+ * A drill-down's filter: only the rows of one campaign and/or ad set, in the same `filtering` list as
+ * the status filter. The ids are checked as Meta's (digits) first.
+ */
+function parentFilter(parent: MetaReportParent | null): InsightsFilter[] {
+  if (!parent) return [];
+  if (![parent.campaign, parent.adset].every((id) => id === undefined || isMetaObjectId(id))) throw new AdsApiError("Invalid Meta campaign or ad set id", 400);
+  return [
+    ...(parent.campaign !== undefined ? [{ field: "campaign.id", operator: "IN" as const, value: [parent.campaign] }] : []),
+    ...(parent.adset !== undefined ? [{ field: "adset.id", operator: "IN" as const, value: [parent.adset] }] : []),
+  ];
+}
+
+/** Whether a row read under `parent` is its: Meta's filter already says so; this keeps it so if Meta ever answered without it. */
+const inParent = (parent: MetaReportParent | null) => (r: MetaRangeInsight) =>
+  !parent || ((parent.campaign === undefined || r.campaign_id === parent.campaign) && (parent.adset === undefined || r.adset_id === parent.adset));
 
 /** Pages of daily rows read at most per window (25,000 campaign-days); past that the window is split. */
 const DAILY_MAX_PAGES = 50;
@@ -678,10 +703,11 @@ async function metaJobRows<R>(
 }
 
 const RANGE_FIELDS = "spend,impressions,reach,frequency,clicks,inline_link_clicks,actions,action_values";
+/** Each level's own id and name, and its parents' (so a row can be opened, and kept to the campaign or ad set asked for). */
 const LEVEL_FIELDS: Record<MetaReportLevel, string> = {
   campaign: "campaign_id,campaign_name",
-  adset: "campaign_name,adset_id,adset_name,attribution_setting",
-  ad: "campaign_name,adset_name,ad_id,ad_name,attribution_setting",
+  adset: "campaign_id,campaign_name,adset_id,adset_name,attribution_setting",
+  ad: "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,attribution_setting",
 };
 
 /**
@@ -711,6 +737,13 @@ export interface MetaLiveReportOptions {
   statuses?: boolean;
   /** The ad account's currency, for the budgets in each row's settings. */
   currency?: string | null;
+  /**
+   * A drill-down: only the ad sets or ads of this campaign, or the ads of this ad set (metaParentFits).
+   * Still read from the ad account's own insights (act_<id>/insights, filtered by campaign.id or
+   * adset.id), never from the campaign's or ad set's, so an id from another account the same login
+   * can read reports nothing here.
+   */
+  parent?: MetaReportParent;
 }
 
 /**
@@ -738,7 +771,9 @@ export async function metaRangeInsights(
 
 /**
  * metaRangeInsights, saying whether Meta had more rows than `maxRows`. Every call is made within
- * `opts.deadline`. `asJob`: the range is already known to be too heavy for one answer.
+ * `opts.deadline`. `asJob`: the range is already known to be too heavy for one answer. A drill-down's
+ * filter (`opts.parent`) is part of every try: a refused parameter drops the status filter and the
+ * sort, never it, so the account's rows are never read as one campaign's.
  */
 async function metaRangeRead(
   c: MetaConfig,
@@ -754,6 +789,9 @@ async function metaRangeRead(
   asJob = false,
 ): Promise<{ rows: MetaRangeInsight[]; more: boolean }> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
+  const parent = drillOf(opts.parent);
+  if (parent && (level === "account" || breakdown)) throw new AdsApiError("Only campaigns, ad sets and ads are read under a campaign or ad set", 400);
+  const filters = [...parentFilter(parent), ...(extras && level !== "account" ? [statusFilter(level)] : [])];
   const act = metaAccountId(accountId);
   const pageSize = Math.min(500, Math.max(1, maxRows));
   const params: Record<string, string> = {
@@ -761,7 +799,7 @@ async function metaRangeRead(
     time_range: JSON.stringify({ since, until }),
     fields: level === "account" ? RANGE_FIELDS : `${LEVEL_FIELDS[level]},${RANGE_FIELDS}`,
     ...(breakdown && level === "account" ? { breakdowns: META_BREAKDOWN_PARAM[breakdown] } : {}),
-    ...(extras && level !== "account" ? { filtering: everyStatus(level) } : {}),
+    ...(filters.length ? { filtering: JSON.stringify(filters) } : {}),
     // Biggest spend first, so the rows read before the cap are the ones that spent most.
     ...(extras ? { sort: JSON.stringify(["spend_descending"]) } : {}),
     use_unified_attribution_setting: "true",
@@ -780,7 +818,8 @@ async function metaRangeRead(
       }
       if (first !== null) {
         const read = await metaPagesFrom(c, accessToken, first, maxPages, limit);
-        return { rows: read.rows.slice(0, maxRows), more: read.more || read.rows.length > maxRows };
+        const rows = read.rows.filter(inParent(parent));
+        return { rows: rows.slice(0, maxRows), more: read.more || rows.length > maxRows };
       }
     }
     job = true;
@@ -792,7 +831,8 @@ async function metaRangeRead(
       allowMore: true,
       limit,
     });
-    return { rows: rows.rows.slice(0, maxRows), more: rows.more || rows.rows.length > maxRows };
+    const mine = rows.rows.filter(inParent(parent));
+    return { rows: mine.slice(0, maxRows), more: rows.more || mine.length > maxRows };
   } catch (err) {
     // Meta refusing the status filter or the sort: the report still comes, without them. A range that
     // already went to a job goes straight to one again: its synchronous try would only time out again.
@@ -804,7 +844,7 @@ async function metaRangeRead(
   }
 }
 
-/** The ad account's edge that lists each level's objects. */
+/** The edge that lists each level's objects, on the ad account (or, in a drill-down, on the campaign or ad set). */
 const LEVEL_EDGE: Record<MetaReportLevel, string> = { campaign: "campaigns", adset: "adsets", ad: "ads" };
 /** Pages of campaigns, ad sets or ads read at most for their statuses and settings (5,000). */
 const STATUS_PAGES = 10;
@@ -827,7 +867,10 @@ export interface MetaListing {
  * (https://developers.facebook.com/docs/graph-api/changelog/version26.0); one list page also costs one
  * call where a lookup counted each id. A field list Meta refuses (code 100: a field this version
  * doesn't know) is asked again as the status alone; a page after the first that fails ends the look
- * with what was found so far. `deadline` as a live report's; `currency` for the budgets.
+ * with what was found so far. `deadline` as a live report's; `currency` for the budgets. `under`: a
+ * campaign's or ad set's id, whose own list (GET /{campaign}/adsets or /ads, /{ad set}/ads, which take
+ * the same effective_status) is read instead of the whole account's: shorter, for a drill-down. Only
+ * for a parent the account's own insights just returned rows under (metaReport), so it is the account's.
  */
 export async function metaListed(
   c: MetaConfig,
@@ -835,7 +878,7 @@ export async function metaListed(
   accountId: string,
   level: MetaReportLevel,
   ids: string[],
-  opts: { deadline?: number; currency?: string | null; count?: boolean } = {},
+  opts: { deadline?: number; currency?: string | null; count?: boolean; under?: string } = {},
 ): Promise<MetaListing> {
   const objects: MetaListing["objects"] = new Map();
   const counts = level === "campaign" && opts.count ? noMetaCampaignCounts() : null;
@@ -843,9 +886,12 @@ export async function metaListed(
   if (!wanted.size && !counts) return { objects, counts };
   const act = metaAccountId(accountId);
   if (!/^act_\d{1,30}$/.test(act)) throw new AdsApiError(`Invalid Meta ad account ${accountId}`, 400);
+  // The account's own campaign count needs the account's list.
+  if (opts.under !== undefined && (!isMetaObjectId(opts.under) || counts)) throw new AdsApiError(`Invalid Meta campaign or ad set ${opts.under}`, 400);
+  const owner = opts.under ?? act;
   const limit = opts.deadline === undefined ? undefined : { deadline: opts.deadline };
   type Page = { data?: MetaListedObject[]; paging?: { next?: string } };
-  const first = (fields: string) => metaGet<Page>(c, `${act}/${LEVEL_EDGE[level]}`, { fields, effective_status: JSON.stringify(EVERY_STATUS[level]), limit: "500" }, accessToken, limit);
+  const first = (fields: string) => metaGet<Page>(c, `${owner}/${LEVEL_EDGE[level]}`, { fields, effective_status: JSON.stringify(EVERY_STATUS[level]), limit: "500" }, accessToken, limit);
   let page: Page;
   try {
     page = await first(META_OBJECT_FIELDS[level]);
@@ -928,7 +974,10 @@ export interface MetaReport {
   level: MetaReportView;
   since: string;
   until: string;
-  /** The account's own totals: reach and frequency count each person once over the whole range. */
+  /**
+   * The account's own totals, or a drill-down's parent's (the campaign's, the ad set's): reach and
+   * frequency count each person once over the whole range.
+   */
   totals: MetaReportMetrics;
   /** Biggest spend first. */
   rows: MetaReportRow[];
@@ -936,7 +985,7 @@ export interface MetaReport {
   truncated: boolean;
   /** The attribution settings the rows were reported with. */
   attribution: string[];
-  /** How many campaigns the account has in each state at Meta now (its whole list); null when not read. */
+  /** How many campaigns the account has in each state at Meta now (its whole list); null when not read, and in a drill-down. */
   campaigns: MetaCampaignCounts | null;
 }
 
@@ -944,6 +993,11 @@ export interface MetaReport {
  * By campaign, ad set or ad (with each one's delivery status and settings), or the whole account split
  * by placement, device, country, age or gender; with the account's campaigns counted by state.
  * Range-based: a comparison asks for its own range with a second call.
+ *
+ * A drill-down (`opts.parent`): one campaign's ad sets or ads, one ad set's ads, read from the account's
+ * insights filtered to it. Its totals are the parent's own row, read the same way (level campaign or ad
+ * set, filtered to it), in place of the account's: still two insights reads. The rows' statuses come from
+ * the parent's own list rather than the account's, and the account's campaigns aren't counted.
  */
 export async function metaReport(
   c: MetaConfig,
@@ -956,9 +1010,16 @@ export async function metaReport(
   opts: MetaLiveReportOptions = {},
 ): Promise<MetaReport> {
   const breakdown = isMetaBreakdown(level) ? level : null;
-  const live = { ...opts, deadline: opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs };
+  const parent = drillOf(opts.parent);
+  if (parent && !metaParentFits(level, parent)) throw new AdsApiError(`Meta's ${level} report can't be read under that campaign or ad set`, 400);
+  // Checked before any call: an id that isn't Meta's is refused, not asked.
+  parentFilter(parent);
+  const live = { ...opts, parent: parent ?? undefined, deadline: opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs };
   const [account, raw] = await Promise.all([
-    metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, undefined, live),
+    // A drill-down's totals: its parent's own row (the deepest parent's level, filtered to it).
+    parent
+      ? metaRangeRead(c, accessToken, accountId, parent.adset !== undefined ? "adset" : "campaign", since, until, 2000, undefined, live)
+      : metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, undefined, live),
     breakdown ? metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, breakdown, live) : metaRangeRead(c, accessToken, accountId, level as MetaReportLevel, since, until, 2000, undefined, live),
   ]);
   const all = (breakdown === "device" ? mergeMetaDeviceRows(raw.rows) : raw.rows)
@@ -978,7 +1039,12 @@ export async function metaReport(
       });
     if (!breakdown) {
       const lvl = level as MetaReportLevel;
-      const listing = timeLeft() ? await quiet(metaListed(c, accessToken, accountId, lvl, rows.map((r) => r.id), { deadline: live.deadline, currency: opts.currency, count: lvl === "campaign" })) : null;
+      // A drill-down's rows are in its parent's own list: the deepest parent, which the rows just read
+      // from the account's insights are in (with no rows, metaListed asks nothing).
+      const under = parent ? (parent.adset ?? parent.campaign) : undefined;
+      const listing = timeLeft()
+        ? await quiet(metaListed(c, accessToken, accountId, lvl, rows.map((r) => r.id), { deadline: live.deadline, currency: opts.currency, count: lvl === "campaign", ...(under ? { under } : {}) }))
+        : null;
       for (const r of rows) {
         const o = listing?.objects.get(r.id);
         r.status = o?.status ?? null;
@@ -986,8 +1052,9 @@ export async function metaReport(
       }
       campaigns = listing?.counts ?? null;
     }
-    // The campaign counts come with the campaign list; every other cut reads the list for them alone.
-    if (level !== "campaign" && timeLeft()) campaigns = await quiet(metaCampaignCounts(c, accessToken, accountId, { deadline: live.deadline }));
+    // The campaign counts come with the campaign list; every other cut of the whole account reads the
+    // list for them alone. A drill-down is about one campaign: the account's aren't counted.
+    if (level !== "campaign" && !parent && timeLeft()) campaigns = await quiet(metaCampaignCounts(c, accessToken, accountId, { deadline: live.deadline }));
   } else if (!breakdown) {
     for (const r of rows) {
       r.status = null;
