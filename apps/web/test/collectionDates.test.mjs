@@ -20,7 +20,7 @@ const load = async (path, deps = {}) => {
   return exports;
 };
 const shared = await load("../../../packages/shared/src/dates.ts");
-const { collectionSalesParams } = await load("../src/components/dashboard/collectionDates.ts", { "@app/shared": shared });
+const { collectionSalesParams } = await load("../src/components/dashboard/collectionDates.ts", { "@app/shared/dates": shared });
 
 /** What the route answers the panel's question with (apps/api/src/routes/dashboard.ts resolveQueryDates). */
 function routeDates(params, now) {

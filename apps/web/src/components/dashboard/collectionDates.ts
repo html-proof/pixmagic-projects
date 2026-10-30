@@ -1,4 +1,4 @@
-import { addDays, daysBetweenInclusive, type CompareMode } from "@app/shared";
+import { addDays, daysBetweenInclusive, type CompareMode } from "@app/shared/dates";
 
 /**
  * The dashboard's dates as Sales by collection asks for them (GET …/analytics/collections/sales).
