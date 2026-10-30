@@ -46,7 +46,7 @@ export function exportRoutes(app: App, deps: Deps) {
     // Headers set on the context (the access fingerprint) go with it, as with any other answer.
     c.header("content-type", "text/csv; charset=utf-8");
     c.header("content-disposition", `attachment; filename="${filename}"`);
-    c.header("content-length", String(csv.length));
+    c.header("content-length", String(Buffer.byteLength(csv, "utf8")));
     return c.body(csv as unknown as ArrayBuffer, 200);
   });
 
@@ -75,7 +75,7 @@ export function exportRoutes(app: App, deps: Deps) {
     const filename = `bizinsights-${report.shop.replace(/\.myshopify\.com$/, "")}-shopify-check-${report.generatedAt.slice(0, 10)}.csv`.replace(/[^A-Za-z0-9._-]/g, "_");
     c.header("content-type", "text/csv; charset=utf-8");
     c.header("content-disposition", `attachment; filename="${filename}"`);
-    c.header("content-length", String(csv.length));
+    c.header("content-length", String(Buffer.byteLength(csv, "utf8")));
     return c.body(csv as unknown as ArrayBuffer, 200);
   });
 }
