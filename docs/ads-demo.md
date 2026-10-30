@@ -49,7 +49,10 @@ a separate mode that never falls back to the demo.
   the 90-day trends are relative to the demo's **epoch**, the day it was connected (in its own time
   zone), so figures never shift as days pass. Also here: the splits by device, country (home country
   by currency, Google's geo target ids), age group and audience segment, each scaled to add up to the
-  totals exactly; the live report by campaign, ad group (two per campaign, none for Performance Max),
+  totals exactly; the live report by campaign (with the fields a real campaign row has: Google's primary
+  status and its reasons from `demoPrimaryStatus`, Paused for the paused one, Limited by budget where an
+  ordinary day's clicks would cost more than the daily budget, so its spend is held down, Eligible
+  otherwise; and a `DAILY` budget, never a total), ad group (two per campaign, none for Performance Max),
   device and country, and down from a campaign: its two ad groups, a Performance Max campaign's two
   asset groups, an ad group's two or three ads (unnamed, as most Google ad types are, so named by
   their type and a stable id from the seed), each level split from the one above so it adds up to it

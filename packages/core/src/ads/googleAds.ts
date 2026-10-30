@@ -412,7 +412,12 @@ function googleReportQuery(level: GoogleReportLevel, since: string, until: strin
   const inAdGroup = parent?.adGroup !== undefined ? ` AND ad_group.id = ${parent.adGroup}` : "";
   switch (level) {
     case "campaign":
-      return `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, ${GOOGLE_METRICS} FROM campaign WHERE ${during}`;
+      // With why each campaign isn't serving in full now (primary_status and its reasons) and its budget: a
+      // daily amount, or one total for its own dates (period CUSTOM_PERIOD, total_amount_micros). Same query.
+      return (
+        `SELECT campaign.id, campaign.name, campaign.status, campaign.primary_status, campaign.primary_status_reasons, campaign.advertising_channel_type, ` +
+        `campaign_budget.period, campaign_budget.amount_micros, campaign_budget.total_amount_micros, ${GOOGLE_METRICS} FROM campaign WHERE ${during}`
+      );
     case "ad_group":
       return `SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group.status, ${GOOGLE_METRICS} FROM ad_group WHERE ${during}${inCampaign}`;
     case "asset_group":

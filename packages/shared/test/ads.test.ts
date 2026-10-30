@@ -29,6 +29,7 @@ import {
   metaReportMetrics,
   googleAdName,
   googleAdTypeLabel,
+  googleCampaignStatus,
   googleCustomerId,
   googleMatchTypeLabel,
   googleParentFits,
@@ -49,6 +50,7 @@ import {
   adsenseReportTotals,
   adStatusCode,
   adsVsSales,
+  META_ATTRIBUTION_WINDOWS,
   META_BREAKDOWN_PARAM,
   META_OBJECT_FIELDS,
   metaBudget,
@@ -279,6 +281,43 @@ describe("the Google Ads report's keywords and search terms", () => {
     const countries = googleReportRows("country", [{ userLocationView: { countryCriterionId: "2840" }, metrics: { costMicros: "1000000" } }], new Map([["2840", "US"]]));
     expect(countries[0]).toMatchObject({ id: "2840", name: "United States", matchType: null, qualityScore: null });
     expect(googleReportRows("campaign", [{ campaign: { id: "1", name: "Brand" } }])[0]).toMatchObject({ matchType: null, qualityScore: null });
+  });
+});
+
+describe("a Google campaign's delivery and budget", () => {
+  it("keeps Google's primary status and reasons, and its budget per day or as one total, never both", () => {
+    const rows = googleReportRows("campaign", [
+      {
+        campaign: { id: "1", name: "Brand", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED", "UNKNOWN"] },
+        campaignBudget: { period: "DAILY", amountMicros: "40000000" },
+        metrics: { costMicros: "9000000" },
+      },
+      // A campaign total budget: Google gives total_amount_micros, not amount_micros.
+      { campaign: { id: "2", name: "Launch", status: "ENABLED", primaryStatus: "ELIGIBLE" }, campaignBudget: { period: "CUSTOM_PERIOD", totalAmountMicros: "500000000" }, metrics: { costMicros: "8000000" } },
+      // Neither status nor budget given: unknown, never a made-up one.
+      { campaign: { id: "3", name: "Old", status: "PAUSED", primaryStatus: "UNSPECIFIED" }, metrics: { costMicros: "1000000" } },
+    ]);
+    expect(rows.map((r) => [r.id, r.primaryStatus, r.primaryStatusReasons, r.budgetPeriod, r.dailyBudget, r.totalBudget])).toEqual([
+      ["1", "LIMITED", ["BUDGET_CONSTRAINED"], "DAILY", 40, null],
+      ["2", "ELIGIBLE", [], "CUSTOM_PERIOD", null, 500],
+      ["3", null, [], null, null, null],
+    ]);
+    // Every other level has none of them.
+    expect(googleReportRows("ad_group", [{ campaign: { id: "1" }, adGroup: { id: "5" }, metrics: {} }])[0]).toMatchObject({ primaryStatus: null, primaryStatusReasons: [], budgetPeriod: null, totalBudget: null });
+  });
+
+  it("words the status and its most telling reason first, leaving out the reasons that only say the status again", () => {
+    expect(googleCampaignStatus("LIMITED", ["SEARCH_VOLUME_LIMITED", "BUDGET_CONSTRAINED"])).toEqual({ label: "Limited", reasons: ["limited by budget", "missing some relevant searches"] });
+    expect(googleCampaignStatus("ELIGIBLE", [])).toEqual({ label: "Eligible", reasons: [] });
+    expect(googleCampaignStatus("LEARNING", ["BIDDING_STRATEGY_LEARNING"])).toEqual({ label: "Learning", reasons: ["bid strategy learning"] });
+    expect(googleCampaignStatus("NOT_ELIGIBLE", ["HAS_ADS_DISAPPROVED", "NO_AD_GROUP_ADS"])).toEqual({ label: "Not eligible", reasons: ["no ads that can run", "some ads disapproved"] });
+    expect(googleCampaignStatus("PAUSED", ["CAMPAIGN_PAUSED"])).toEqual({ label: "Paused", reasons: [] });
+    expect(googleCampaignStatus("ENDED", ["CAMPAIGN_ENDED"])).toEqual({ label: "Ended", reasons: [] });
+    expect(googleCampaignStatus("PENDING", ["CAMPAIGN_PENDING"])).toEqual({ label: "Pending", reasons: ["start date still to come"] });
+    // A reason newer than the list reads as Google words it.
+    expect(googleCampaignStatus("LIMITED", ["SOME_NEW_REASON"])).toEqual({ label: "Limited", reasons: ["some new reason"] });
+    // No status from Google: the campaign's own status shows instead.
+    for (const none of [null, undefined, "UNKNOWN", "UNSPECIFIED"]) expect(googleCampaignStatus(none, ["BUDGET_CONSTRAINED"])).toBeNull();
   });
 });
 
@@ -561,7 +600,34 @@ describe("the Meta Ads report's numbers", () => {
       costPerPurchase: 25,
       roas: 4,
       leads: 3,
+      // No window was asked for: none is reported, never 0.
+      byWindow: {
+        "1d_click": { purchases: null, purchaseValue: null, costPerPurchase: null, roas: null },
+        "7d_click": { purchases: null, purchaseValue: null, costPerPurchase: null, roas: null },
+        "1d_view": { purchases: null, purchaseValue: null, costPerPurchase: null, roas: null },
+      },
     });
+  });
+
+  it("reads each attribution window's purchases from the same action as the ad set's own setting, and says not reported where Meta gave none", () => {
+    const m = metaReportMetrics({
+      spend: "100",
+      actions: [
+        // The ad set's own setting (value), and each window Meta reported, as keys of the action.
+        { action_type: "omni_purchase", value: "8", "1d_click": "5", "7d_click": "7" },
+        { action_type: "purchase", value: "8", "1d_click": "5", "7d_click": "7", "1d_view": "1" },
+      ],
+      action_values: [{ action_type: "omni_purchase", value: "400", "1d_click": "250", "7d_click": "350", "1d_view": "" }],
+    });
+    expect(m).toMatchObject({ purchases: 8, purchaseValue: 400, costPerPurchase: 12.5, roas: 4 });
+    expect(m.byWindow["1d_click"]).toEqual({ purchases: 5, purchaseValue: 250, costPerPurchase: 20, roas: 2.5 });
+    expect(m.byWindow["7d_click"]).toEqual({ purchases: 7, purchaseValue: 350, costPerPurchase: 14.29, roas: 3.5 });
+    // omni_purchase is the action counted; it has no 1-day view figure, and purchase's isn't borrowed for it.
+    expect(m.byWindow["1d_view"]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
+    // A window with purchases but nothing spent: no cost per purchase or return to work out.
+    expect(metaReportMetrics({ spend: "0", actions: [{ action_type: "purchase", value: "1", "1d_click": "0" }] }).byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: null, costPerPurchase: null, roas: null });
+    expect([...META_ATTRIBUTION_WINDOWS]).toEqual(["1d_click", "7d_click", "1d_view"]);
+    expect(META_ATTRIBUTION_WINDOWS.map(metaAttributionLabel)).toEqual(["1-day click", "7-day click", "1-day view"]);
   });
 
   it("says 'unknown' rather than zero when Meta leaves a figure out, and never divides by zero", () => {

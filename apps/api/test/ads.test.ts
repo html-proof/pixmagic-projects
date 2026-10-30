@@ -671,6 +671,8 @@ describe("the Meta Ads report", () => {
         calls.push(`insights:${u.searchParams.get("level")}`);
         if (opts.revoked) return json({ error: { message: "Error validating access token: The user has not authorized application", code: 190 } }, 400);
         expect(u.searchParams.get("use_unified_attribution_setting")).toBe("true");
+        // Meta's count under each fixed window too, beside each ad set's own setting.
+        expect(JSON.parse(u.searchParams.get("action_attribution_windows")!)).toEqual(["1d_click", "7d_click", "1d_view"]);
         expect(JSON.parse(u.searchParams.get("time_range")!)).toEqual({ since: "2026-09-01", until: "2026-09-30" });
         expect(u.searchParams.get("time_increment")).toBeNull();
         const level = u.searchParams.get("level");
@@ -685,10 +687,10 @@ describe("the Meta Ads report", () => {
                 clicks: "300",
                 inline_link_clicks: "200",
                 actions: [
-                  { action_type: "omni_purchase", value: "6" },
+                  { action_type: "omni_purchase", value: "6", "1d_click": "4", "7d_click": "6" },
                   { action_type: "purchase", value: "6" },
                 ],
-                action_values: [{ action_type: "omni_purchase", value: "482" }],
+                action_values: [{ action_type: "omni_purchase", value: "482", "1d_click": "300", "7d_click": "482" }],
               },
             ],
           });
@@ -740,6 +742,12 @@ describe("the Meta Ads report", () => {
     // Reach for the account is Meta's own, de-duplicated figure: not 3500 + 900.
     expect(body.report.totals).toMatchObject({ spend: 120.5, impressions: 10000, reach: 4000, frequency: 2.5, linkClicks: 200, purchases: 6, purchaseValue: 482, cpm: 12.05, costPerLinkClick: 0.6 });
     expect(body.report.totals.roas).toBeCloseTo(4, 1);
+    // Each window's own count, from the same purchase action; one Meta gave no figure for is not reported, never 0.
+    expect(body.report.totals.byWindow).toMatchObject({
+      "1d_click": { purchases: 4, purchaseValue: 300 },
+      "7d_click": { purchases: 6, purchaseValue: 482 },
+      "1d_view": { purchases: null, purchaseValue: null, costPerPurchase: null, roas: null },
+    });
     expect(body.report.rows.map((r: { id: string; name: string; status: string; spend: number }) => [r.id, r.name, r.status, r.spend])).toEqual([
       ["11", "Spring sale", "ACTIVE", 100],
       ["12", "Retarget", "CAMPAIGN_PAUSED", 20.5],
@@ -1358,7 +1366,19 @@ describe("the Meta Ads report compared with other dates", () => {
       const range = JSON.parse(u.searchParams.get("time_range")!) as { since: string; until: string };
       asked.push(`${u.searchParams.get("level")}:${range.since}`);
       if (u.searchParams.get("level") === "account") return json({ data: [{ spend: spend[range.since], impressions: "1000", reach: "400" }] });
-      return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", spend: spend[range.since], impressions: "1000", reach: "400", inline_link_clicks: "10" }] });
+      return json({
+        data: [
+          {
+            campaign_id: "11",
+            campaign_name: "Spring sale",
+            spend: spend[range.since],
+            impressions: "1000",
+            reach: "400",
+            inline_link_clicks: "10",
+            actions: [{ action_type: "omni_purchase", value: "3", "1d_click": range.since === "2026-09-01" ? "2" : "1" }],
+          },
+        ],
+      });
     }
     if (u.pathname.endsWith("/act_1/campaigns")) {
       asked.push("statuses");
@@ -1380,6 +1400,10 @@ describe("the Meta Ads report compared with other dates", () => {
     expect(body.cached).toBe(false);
     expect(body.report).toMatchObject({ since: "2026-09-01", until: "2026-09-30", totals: { spend: 100 }, rows: [{ id: "11", name: "Spring sale", status: "ACTIVE", spend: 100 }] });
     expect(body.report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-30", totals: { spend: 80, reach: 400 }, rows: [{ id: "11", spend: 80, linkClicks: 10 }] });
+    // Each window's purchases are among the figures compared, so the window picked compares like with like.
+    expect(body.report.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 2 });
+    expect(body.report.comparison.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 1 });
+    expect(body.report.comparison.totals.byWindow["1d_click"]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
     // Only figures beside each id: no names or statuses again.
     expect(body.report.comparison.rows[0].name).toBeUndefined();
     // Delivery statuses are read for the report's own rows only (they're list calls on Meta's rate limit).

@@ -13,8 +13,10 @@ import {
   demoCampaignRows,
   demoHomeCountry,
   demoMoney,
+  demoPrimaryStatus,
   demoReport,
   demoStoreDays,
+  eachDay,
   demoStoreTotals,
   isDemoObjectId,
   isDemoSeed,
@@ -181,6 +183,23 @@ describe("the live report", () => {
     expect(search).toMatchObject({ name: "Search Advertising", status: "ENABLED", channel: "SEARCH" });
     expect(search.dailyBudget).toBe(demoMoney(60, "INR"));
     expect(report.rows.find((r) => r.id === "demo-c6")!.status).toBe("PAUSED");
+  });
+
+  it("rates each campaign's delivery as Google's primary status does, from its own figures, with a daily budget each", () => {
+    const rows = demoReport(ctx, "campaign", since, until).rows;
+    const of = (id: string) => rows.find((r) => r.id === id)!;
+    // Search Advertising's clicks would cost more than its budget every ordinary day: its spend is held at the cap.
+    expect(of("demo-c2")).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null });
+    for (const day of eachDay(since, until)) {
+      const d = demoCampaignDay(ctx, DEMO_CAMPAIGNS.find((c) => c.id === "demo-c2")!, day);
+      if (d) expect(d.spend).toBeCloseTo(demoMoney(60 * 1.6, ctx.currency), 1);
+    }
+    expect(of("demo-c1")).toMatchObject({ primaryStatus: "ELIGIBLE", primaryStatusReasons: [] });
+    expect(of("demo-c6")).toMatchObject({ primaryStatus: "PAUSED", primaryStatusReasons: ["CAMPAIGN_PAUSED"] });
+    expect(rows.every((r) => r.budgetPeriod === "DAILY" && r.dailyBudget !== null && r.totalBudget === null)).toBe(true);
+    for (const c of DEMO_CAMPAIGNS) expect(demoPrimaryStatus(c).primaryStatus).toBe(of(c.id).primaryStatus);
+    // Below a campaign, none of it.
+    expect(demoReport(ctx, "ad_group", since, until).rows.every((r) => r.primaryStatus === null && r.budgetPeriod === null)).toBe(true);
   });
 
   it("gives Performance Max no ad groups, and names devices and countries as Google does", () => {

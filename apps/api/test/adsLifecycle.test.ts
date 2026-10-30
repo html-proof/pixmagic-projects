@@ -105,7 +105,17 @@ function googlePlatform(seen: GoogleSeen, opts: { refreshToken?: string | null; 
           },
         ]);
       }
-      return json([{ results: [{ campaign: { id: "7", name: "Search - brand", status: "ENABLED", advertisingChannelType: "SEARCH" }, campaignBudget: { amountMicros: "10000000" }, metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 } }] }]);
+      return json([
+        {
+          results: [
+            {
+              campaign: { id: "7", name: "Search - brand", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], advertisingChannelType: "SEARCH" },
+              campaignBudget: { period: "DAILY", amountMicros: "10000000" },
+              metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 },
+            },
+          ],
+        },
+      ]);
     }
     if (u.host === "adsense.googleapis.com" && u.pathname === "/v2/accounts") return json({ accounts: [{ name: "accounts/pub-77", displayName: "Shop site", timeZone: { id: "UTC" }, state: "READY" }] });
     return json({ error: { message: `unexpected ${u.host}${u.pathname}` } }, 400);
@@ -626,6 +636,9 @@ describe("the Google Ads report", () => {
     expect(body.account).toMatchObject({ accountId: "111", currency: "USD" });
     expect(body.report.totals).toMatchObject({ spend: 30, impressions: 3000, clicks: 60, conversions: 3, conversionValue: 150, roas: 5 });
     expect(body.report.rows).toEqual([expect.objectContaining({ id: "7", name: "Search - brand", status: "ENABLED", channel: "SEARCH", dailyBudget: 10, spend: 30, cpc: 0.5 })]);
+    // Why it isn't serving in full, and its budget's kind, Google's word now: from the same campaign query.
+    expect(body.report.rows[0]).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null });
+    expect(seen.reportQueries.find((q) => q.includes("FROM campaign "))).toContain("campaign.primary_status, campaign.primary_status_reasons");
     expect(seen.reportQueries.every((q) => q.includes("BETWEEN '2026-09-01' AND '2026-09-30'"))).toBe(true);
     expect(res.body).not.toContain("G_ACCESS");
     const again = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
@@ -989,7 +1002,7 @@ describe("the Google Ads report's keywords and search terms", () => {
     expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 6);
 
     // Search terms come by campaign, never by ad group; ids are Google's.
-    for (const q of [{ level: "search_term", adGroup: "55" }, { level: "keyword", campaign: "7 OR 1=1" }, { level: "keyword", adGroup: "demo-c2-core" }]) {
+    for (const q of [{ level: "search_term", adGroup: "55" }, { level: "keyword", campaign: "7 OR 1=1" }, { level: "keyword", adGroup: "demo-c2-core" }] as Array<Record<string, string>>) {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
     }
     expect(seen.reportQueries).toHaveLength(6);

@@ -242,6 +242,8 @@ describe("Meta's daily campaign numbers add up to the account's own total", () =
       if (level(u) === "campaign") {
         expect(u.searchParams.get("fields")).toBe("campaign_id,campaign_name,spend,impressions,clicks,inline_link_clicks,actions,action_values");
         expect(JSON.parse(filtering!)).toEqual([{ field: "campaign.effective_status", operator: "IN", value: ["ACTIVE", "PAUSED", "DELETED", "ARCHIVED", "IN_PROCESS", "WITH_ISSUES"] }]);
+        // The stored days are each ad set's own setting only: the fixed windows are the live report's.
+        expect(u.searchParams.has("action_attribution_windows")).toBe(false);
         return json({
           data: [
             { campaign_id: "1", campaign_name: "Live", date_start: "2026-10-01", spend: "10.00", impressions: "100", clicks: "9", inline_link_clicks: "4", actions: purchase(1), action_values: purchase(30) },
@@ -459,14 +461,48 @@ describe("the Meta Ads report", () => {
     expect(one.calls[0]!.url.searchParams.get("limit")).toBe("1");
   });
 
-  it("Meta refusing the filter or the sort: the report comes without them", async () => {
+  it("Meta refusing the filter, the sort or the attribution windows: the report comes without them", async () => {
     const f = fake((u) => {
       if (u.searchParams.has("sort")) return json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400);
-      return json({ data: [{ campaign_id: "1", campaign_name: "A", spend: "5" }] });
+      return json({ data: [{ campaign_id: "1", campaign_name: "A", spend: "5", actions: [{ action_type: "omni_purchase", value: "1" }] }] });
     });
     const rows = await metaRangeInsights(meta(f.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07");
     expect(rows).toHaveLength(1);
     expect(f.calls.map((c) => c.url.searchParams.has("filtering"))).toEqual([true, false]);
+    // A read on its own (the figure check against the stored days) is asked as the sync asks: no windows.
+    expect(f.calls.some((c) => c.url.searchParams.has("action_attribution_windows"))).toBe(false);
+    // The live report asks for them, and asked again without them: each window's purchases are not reported,
+    // never 0; the ad set's own setting's stay.
+    f.calls.length = 0;
+    const r = await metaReport(meta(f.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { statuses: false });
+    expect(f.calls.map((c) => [c.url.searchParams.get("level"), c.url.searchParams.has("action_attribution_windows")]).sort()).toEqual([
+      ["account", false],
+      ["account", true],
+      ["campaign", false],
+      ["campaign", true],
+    ]);
+    expect(r.rows[0]).toMatchObject({ purchases: 1, byWindow: { "1d_click": { purchases: null, purchaseValue: null }, "7d_click": { purchases: null }, "1d_view": { purchases: null } } });
+  });
+
+  it("asks for 1-day click, 7-day click and 1-day view beside each ad set's own setting, on the totals and the rows alike", async () => {
+    const f = fake((u) => {
+      // Each ad set's own setting stays what `value` is.
+      expect(u.searchParams.get("use_unified_attribution_setting")).toBe("true");
+      expect(JSON.parse(u.searchParams.get("action_attribution_windows")!)).toEqual(["1d_click", "7d_click", "1d_view"]);
+      const actions = (n: number) => [{ action_type: "omni_purchase", value: String(n), "1d_click": String(n - 2), "7d_click": String(n - 1) }];
+      if (level(u) === "account") return json({ data: [{ spend: "50", actions: actions(6), action_values: [{ action_type: "omni_purchase", value: "300", "1d_click": "200", "7d_click": "250", "1d_view": "40" }] }] });
+      return json({ data: [{ campaign_id: "1", campaign_name: "Spring", spend: "50", actions: actions(6), action_values: [{ action_type: "omni_purchase", value: "300", "1d_click": "200" }] }] });
+    });
+    const r = await metaReport(meta(f.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { statuses: false });
+    expect(f.calls).toHaveLength(2);
+    expect(r.totals).toMatchObject({ purchases: 6, purchaseValue: 300, roas: 6 });
+    expect(r.totals.byWindow).toEqual({
+      "1d_click": { purchases: 4, purchaseValue: 200, costPerPurchase: 12.5, roas: 4 },
+      "7d_click": { purchases: 5, purchaseValue: 250, costPerPurchase: 10, roas: 5 },
+      // A view-through value with no view-through count: the count isn't reported, so neither is its cost.
+      "1d_view": { purchases: null, purchaseValue: 40, costPerPurchase: null, roas: 0.8 },
+    });
+    expect(r.rows[0]!.byWindow["7d_click"]).toEqual({ purchases: 5, purchaseValue: null, costPerPurchase: 10, roas: null });
   });
 
   it("a range too heavy to answer at once runs as a report job; not done in time, the person is told it's being prepared", async () => {
@@ -647,8 +683,8 @@ describe("the Meta Ads report", () => {
             frequency: "1.5",
             clicks: "12",
             inline_link_clicks: "8",
-            actions: [{ action_type: "omni_purchase", value: "2" }, { action_type: "lead", value: "1" }],
-            action_values: [{ action_type: "omni_purchase", value: "50" }],
+            actions: [{ action_type: "omni_purchase", value: "2", "1d_click": "1", "7d_click": "2" }, { action_type: "lead", value: "1" }],
+            action_values: [{ action_type: "omni_purchase", value: "50", "7d_click": "50" }],
           },
           {
             publisher_platform: "instagram",
@@ -659,8 +695,9 @@ describe("the Meta Ads report", () => {
             frequency: "1.33",
             clicks: "5",
             inline_link_clicks: "4",
-            actions: [{ action_type: "omni_purchase", value: "1" }],
-            action_values: [{ action_type: "omni_purchase", value: "30" }],
+            // No 1-day click figure on this platform's purchases.
+            actions: [{ action_type: "omni_purchase", value: "1", "7d_click": "1" }],
+            action_values: [{ action_type: "omni_purchase", value: "30", "7d_click": "30" }],
           },
           { publisher_platform: "facebook", impression_device: "desktop", spend: "10", impressions: "500", reach: "300", frequency: "1.67", clicks: "9", inline_link_clicks: "6" },
         ],
@@ -675,6 +712,11 @@ describe("the Meta Ads report", () => {
     ]);
     // The account's own totals still come from Meta, de-duplicated.
     expect(r.totals.reach).toBe(600);
+    // Each window added up across the platforms too; one a platform gave no figure for is unknown for the device, not a part left out.
+    const iphone = r.rows.find((x) => x.id === "iphone")!;
+    expect(iphone.byWindow["7d_click"]).toEqual({ purchases: 3, purchaseValue: 80, costPerPurchase: 3.33, roas: 8 });
+    expect(iphone.byWindow["1d_click"]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
+    expect(r.rows.find((x) => x.id === "desktop")!.byWindow["7d_click"].purchases).toBeNull();
   });
 });
 

@@ -65,7 +65,7 @@ const campaignsQuery = analyticsQuery.extend({
 /** A live report's rows as the analytics page's split rows (share of the report's spend). */
 function splitRows(report: GoogleReport): DemoBreakdownRow[] {
   const total = report.totals.spend;
-  return report.rows.map(({ campaignId: _ci, campaignName: _c, adGroupId: _gi, adGroupName: _g, adType: _t, status: _s, channel: _ch, dailyBudget: _b, matchType: _m, qualityScore: _q, ...row }: GoogleReportRow) => ({
+  return report.rows.map(({ campaignId: _ci, campaignName: _c, adGroupId: _gi, adGroupName: _g, adType: _t, status: _s, channel: _ch, primaryStatus: _ps, primaryStatusReasons: _pr, budgetPeriod: _bp, dailyBudget: _b, totalBudget: _tb, matchType: _m, qualityScore: _q, ...row }: GoogleReportRow) => ({
     ...row,
     share: total > 0 ? row.spend / total : null,
   }));

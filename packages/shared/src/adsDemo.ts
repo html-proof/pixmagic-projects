@@ -17,6 +17,7 @@ import {
   countryName,
   googleAdName,
   googleReportMetrics,
+  googleRowBlank,
   isGoogleDetailLevel,
   minorUnitsPerUnit,
   type AdDayRow,
@@ -446,6 +447,18 @@ export function demoCampaignRows(ctx: DemoContext, since: string, until: string)
   return rows;
 }
 
+/**
+ * A demo campaign's delivery as Google's campaign.primary_status would rate it now (not for any dates):
+ * paused when it is; limited by budget when an ordinary day's clicks would cost more than its daily budget
+ * (its days' spend is held down by the budget, demoCampaignDay); otherwise eligible. Every demo budget is a
+ * daily one.
+ */
+export function demoPrimaryStatus(c: DemoCampaign): { primaryStatus: string; primaryStatusReasons: string[] } {
+  if (c.status === "PAUSED") return { primaryStatus: "PAUSED", primaryStatusReasons: ["CAMPAIGN_PAUSED"] };
+  const p = c.profile;
+  return p.impressions * p.ctr * p.cpcUsd > c.dailyBudgetUsd ? { primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] } : { primaryStatus: "ELIGIBLE", primaryStatusReasons: [] };
+}
+
 /** A campaign as the campaign table and the report list it: its settings, in the account's currency. */
 export interface DemoCampaignFacts {
   id: string;
@@ -797,7 +810,7 @@ function searchTermsOf(ctx: DemoContext, c: DemoCampaign, t: Sums): Array<{ term
  */
 export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): DemoReport {
   const rows = demoCampaignRows(ctx, since, until);
-  const blank = { campaignId: null, campaignName: null, adGroupId: null, adGroupName: null, adType: null, status: null, channel: null, dailyBudget: null, matchType: null, qualityScore: null };
+  const blank = googleRowBlank();
   const ofCampaign = (c: DemoCampaign) => sums(rows.filter((r) => r.campaignId === c.id));
   const picked = DEMO_CAMPAIGNS.filter((c) => parent.campaign === undefined || parent.campaign === c.id);
   const inCampaign = (c: DemoCampaign) => ({ campaignId: c.id, campaignName: c.name, status: c.status });
@@ -811,7 +824,17 @@ export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: st
   if (level === "campaign") {
     out = DEMO_CAMPAIGNS.map((c) => {
       const facts = demoCampaignFacts(ctx, c);
-      return { ...blank, id: c.id, name: c.name, status: c.status, channel: c.type, dailyBudget: facts.dailyBudget, ...demoReportMetrics(ofCampaign(c)) };
+      return {
+        ...blank,
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        channel: c.type,
+        ...demoPrimaryStatus(c),
+        budgetPeriod: "DAILY",
+        dailyBudget: facts.dailyBudget,
+        ...demoReportMetrics(ofCampaign(c)),
+      };
     });
   } else if (level === "ad_group") {
     // Performance Max campaigns have no ad groups, as at Google.

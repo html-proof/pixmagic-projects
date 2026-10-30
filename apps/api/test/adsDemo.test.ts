@@ -200,6 +200,9 @@ describe("the demo's figures", () => {
     expect(names).not.toContain("Website Traffic");
     expect(names).toHaveLength(DEMO_CAMPAIGNS.length - 1);
     expect(res.json().report.rows[0]).toHaveProperty("dailyBudget");
+    // A real account's campaign fields: Google's primary status and its reasons, and the budget's period.
+    const search = res.json().report.rows.find((r: { id: string }) => r.id === "demo-c2");
+    expect(search).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null });
     expect(fetched).toEqual([]);
   });
 

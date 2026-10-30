@@ -5,6 +5,7 @@ import {
   adErrorMessage,
   googleAdName,
   googleAdTypeLabel,
+  googleCampaignStatus,
   googleMatchTypeLabel,
   isGoogleDetailLevel,
   isGoogleObjectId,
@@ -25,8 +26,9 @@ import { ReportChange, reportChange } from "./ReportCompare";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// The Google Ads report: campaigns (with status, type and budget), ad groups, devices and countries
-// for the dates picked, asked of Google for exactly those dates (GET .../ads/google/report).
+// The Google Ads report: campaigns (with Google's delivery status and why, type and budget), ad
+// groups, devices and countries for the dates picked, asked of Google for exactly those dates (GET
+// .../ads/google/report).
 // Read-only: there is nothing here that changes a campaign. When the answer carries the dates
 // compared with (`comparison`), each row shows its change; the dates picked must have ended, so
 // a day still running is never set against whole days. A campaign opens to its ad groups (a
@@ -102,6 +104,26 @@ function statusOf(s: string | null): { label: string; tone: Tone } | null {
   if (s === "PAUSED") return { label: "Paused", tone: "neutral" };
   if (s === "REMOVED") return { label: "Removed", tone: "neutral" };
   return { label: s.toLowerCase().replace(/_/g, " "), tone: "neutral" };
+}
+
+/** How worried to be about a campaign's primary status: serving in full, held back, or not serving at all. */
+const DELIVERY_TONE: Record<string, Tone> = { ELIGIBLE: "good", LIMITED: "warn", MISCONFIGURED: "warn", NOT_ELIGIBLE: "danger" };
+
+/**
+ * A row's badge and, for a campaign, why: Google's primary status when it gave one (Eligible, Limited, Learning,
+ * Not eligible...), else the row's own status (ad groups, ads, keywords; campaigns cached before it was read).
+ */
+function deliveryOf(row: GoogleReportRow): { badge: { label: string; tone: Tone } | null; why: string | null } {
+  const d = googleCampaignStatus(row.primaryStatus, row.primaryStatusReasons);
+  if (!d) return { badge: statusOf(row.status), why: null };
+  return { badge: { label: d.label, tone: DELIVERY_TONE[row.primaryStatus ?? ""] ?? "neutral" }, why: d.reasons.length ? d.reasons.join(", ") : null };
+}
+
+/** A campaign's budget as set at Google: per day, or one total for the campaign's own dates; nothing when it has none. */
+function budgetWords(row: GoogleReportRow, money: (n: number | null) => string): string | null {
+  // Rows cached before total budgets were read have no totalBudget.
+  if (row.totalBudget != null) return `budget ${money(row.totalBudget)} total`;
+  return row.dailyBudget !== null ? `budget ${money(row.dailyBudget)} a day` : null;
 }
 
 /** Google's campaign types in everyday words. */
@@ -388,15 +410,17 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                   </tr>
                 )}
                 {r.rows.map((row) => {
-                  const s = statusOf(row.status);
+                  const { badge: s, why } = deliveryOf(row);
                   // An ad named by Google says its type in its name already (googleAdName); one with its own name, beside it.
                   const ownName = row.adType !== null && row.name !== googleAdName(null, row.adType, row.id);
                   const details = [
+                    // Why a campaign isn't serving in full ("limited by budget"), first.
+                    why,
                     drill.open ? null : row.campaignName,
                     // A keyword's ad group, unless it's the one opened.
                     r.level === "keyword" && !drill.child ? row.adGroupName : null,
                     row.channel ? (CHANNEL[row.channel] ?? row.channel.toLowerCase().replace(/_/g, " ")) : null,
-                    row.dailyBudget !== null ? `budget ${money(row.dailyBudget)} a day` : null,
+                    budgetWords(row, money),
                     ownName ? googleAdTypeLabel(row.adType) : null,
                     // Rows cached before keywords were read have neither.
                     googleMatchTypeLabel(row.matchType),
@@ -417,7 +441,11 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                         {(s || details.length > 0) && (
                           <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
                             {s && <Badge tone={s.tone}>{s.label}</Badge>}
-                            {details.length > 0 && <span className="truncate">{details.join(" · ")}</span>}
+                            {details.length > 0 && (
+                              <span className="truncate" title={details.join(" · ")}>
+                                {details.join(" · ")}
+                              </span>
+                            )}
                           </span>
                         )}
                       </td>
@@ -479,6 +507,13 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                   .
                 </li>
               )
+            )}
+            {r.level === "campaign" && (
+              <li>
+                A campaign&apos;s status is Google&apos;s own rating of whether it can show ads now (Eligible; Limited, with why, such as limited by budget; Learning, while its
+                bid strategy adjusts to a change; Not eligible; Pending; Ended; Paused), and its budget is the one set now, per day or one total for the campaign&apos;s own
+                dates. Neither is for the dates picked.
+              </li>
             )}
             {r.level === "ad" && <li>An ad without a name of its own at Google (most kinds, responsive search ads among them) is named by its type and Google&apos;s id for it.</li>}
             {r.level === "keyword" && <li>Quality Score is Google&apos;s rating of a keyword now (1 to 10), not for the dates picked; none shows where Google has too little data to give one.</li>}

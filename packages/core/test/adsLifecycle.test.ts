@@ -339,8 +339,18 @@ describe("live reports", () => {
       return json([
         {
           results: [
-            { campaign: { id: "1", name: "Brand", status: "ENABLED", advertisingChannelType: "SEARCH" }, campaignBudget: { amountMicros: "20000000" }, metrics: { costMicros: "2500000", impressions: "200", clicks: "10", conversions: 0, conversionsValue: 0 } },
-            { campaign: { id: "2", name: "PMax", status: "PAUSED", advertisingChannelType: "PERFORMANCE_MAX" }, campaignBudget: { amountMicros: "50000000" }, metrics: { costMicros: "10000000", impressions: "800", clicks: "40", conversions: 2, conversionsValue: 100 } },
+            {
+              campaign: { id: "1", name: "Brand", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], advertisingChannelType: "SEARCH" },
+              campaignBudget: { period: "DAILY", amountMicros: "20000000" },
+              metrics: { costMicros: "2500000", impressions: "200", clicks: "10", conversions: 0, conversionsValue: 0 },
+            },
+            {
+              campaign: { id: "2", name: "PMax", status: "PAUSED", primaryStatus: "PAUSED", primaryStatusReasons: ["CAMPAIGN_PAUSED"], advertisingChannelType: "PERFORMANCE_MAX" },
+              campaignBudget: { period: "DAILY", amountMicros: "50000000" },
+              metrics: { costMicros: "10000000", impressions: "800", clicks: "40", conversions: 2, conversionsValue: 100 },
+            },
+            // A campaign total budget (CUSTOM_PERIOD): the whole amount, no daily one.
+            { campaign: { id: "3", name: "Launch", status: "ENABLED", primaryStatus: "ELIGIBLE", advertisingChannelType: "SEARCH" }, campaignBudget: { period: "CUSTOM_PERIOD", totalAmountMicros: "300000000" }, metrics: {} },
           ],
         },
       ]);
@@ -350,9 +360,21 @@ describe("live reports", () => {
     expect(r.rows.map((x) => [x.name, x.status, x.channel, x.dailyBudget, x.spend])).toEqual([
       ["PMax", "PAUSED", "PERFORMANCE_MAX", 50, 10],
       ["Brand", "ENABLED", "SEARCH", 20, 2.5],
+      ["Launch", "ENABLED", "SEARCH", null, 0],
+    ]);
+    expect(r.rows.map((x) => [x.name, x.primaryStatus, x.primaryStatusReasons, x.budgetPeriod, x.totalBudget])).toEqual([
+      ["PMax", "PAUSED", ["CAMPAIGN_PAUSED"], "DAILY", null],
+      ["Brand", "LIMITED", ["BUDGET_CONSTRAINED"], "DAILY", null],
+      ["Launch", "ELIGIBLE", [], "CUSTOM_PERIOD", 300],
     ]);
     expect(r.rows[1]!.costPerConversion).toBeNull();
     expect(queries.every((q) => q.includes("segments.date BETWEEN '2026-10-01' AND '2026-10-07'"))).toBe(true);
+    // The delivery status and both kinds of budget come with the campaigns, in the same query: two operations, as before.
+    expect(queries).toHaveLength(2);
+    const campaigns = queries.find((q) => q.includes("FROM campaign "))!;
+    for (const field of ["campaign.primary_status", "campaign.primary_status_reasons", "campaign_budget.period", "campaign_budget.amount_micros", "campaign_budget.total_amount_micros"]) {
+      expect(campaigns).toContain(`${field},`);
+    }
     await expect(googleReport(google(f.fetchImpl), "AT", { accountId: "111" }, "campaign", "2026-10-01' OR 1=1", "2026-10-07")).rejects.toThrow("Invalid date range");
   });
 

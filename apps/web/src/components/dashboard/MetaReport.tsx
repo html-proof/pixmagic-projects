@@ -3,10 +3,12 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   isMetaObjectId,
+  META_ATTRIBUTION_WINDOWS,
   metaAttributionLabel,
   metaObjectiveLabel,
   metaStatusGroup,
   metaWords,
+  type MetaAttributionWindow,
   type MetaCampaignCounts,
   type MetaObjectDetails,
   type MetaReportMetrics,
@@ -34,7 +36,9 @@ import type { AdsModule, Overview } from "./types";
 // Each campaign, ad set or ad also brings what it is set to at Meta (objective, budget, schedule,
 // bidding, an ad's preview), and the account's campaigns are counted by state. A campaign opens to
 // its ad sets, an ad set to its ads (?campaign=&adset=, ReportDrill), with that campaign's or ad
-// set's own totals in place of the account's.
+// set's own totals in place of the account's. Purchases, their value, ROAS and cost per purchase
+// follow each ad set's own attribution setting, or one fixed window picked (Attribution): Meta's
+// count under it, "Not reported" where Meta gave none.
 // ---------------------------------------------------------------------------
 
 interface Report {
@@ -100,10 +104,38 @@ function statusOf(s: string | null): { label: string; tone: Tone } | null {
 }
 
 const NA = "—";
+const NOT_REPORTED = "Not reported";
 const freq = (n: number | null) => (n === null ? NA : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n));
 
-function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) => string }) {
+/** Whose purchases: each ad set's own attribution setting (Meta's `value`, the default), or one fixed window. */
+type Attribution = "setting" | MetaAttributionWindow;
+const ATTRIBUTIONS: Array<[Attribution, string]> = [["setting", "Each ad set's own setting"], ...META_ATTRIBUTION_WINDOWS.map((w): [Attribution, string] => [w, metaAttributionLabel(w) ?? w])];
+const attributionLabel = (at: Attribution) => ATTRIBUTIONS.find(([a]) => a === at)?.[1] ?? at;
+
+type PurchaseKey = "purchases" | "purchaseValue" | "costPerPurchase" | "roas";
+const isPurchaseKey = (k: string): k is PurchaseKey => k === "purchases" || k === "purchaseValue" || k === "costPerPurchase" || k === "roas";
+
+/**
+ * A purchase figure under the attribution picked: the ad set's own setting's, or one window's. Undefined:
+ * Meta gave no figure for that window (Not reported), as in answers cached before the windows were read.
+ * Null: no figure to work out (a cost with no purchases, a return with no spend), "—" as elsewhere.
+ */
+function purchaseFigure(m: Partial<MetaReportMetrics> | undefined, key: PurchaseKey, at: Attribution): number | null | undefined {
+  if (!m) return undefined;
+  if (at === "setting") return m[key];
+  const w = m.byWindow?.[at];
+  if (!w || (key === "purchases" || key === "costPerPurchase" ? w.purchases : w.purchaseValue) === null) return undefined;
+  return w[key];
+}
+
+const notReported = <span className="text-xs text-muted">{NOT_REPORTED}</span>;
+
+function Cells({ m, money, at }: { m: MetaReportMetrics; money: (n: number | null) => string; at: Attribution }) {
   const td = "px-2 py-2 text-right tabular-nums";
+  const p = (key: PurchaseKey, show: (n: number | null) => string) => {
+    const v = purchaseFigure(m, key, at);
+    return v === undefined ? notReported : show(v);
+  };
   return (
     <>
       <td className={td}>{money(m.spend)}</td>
@@ -116,15 +148,17 @@ function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) =
       <td className={td}>{money(m.cpm)}</td>
       <td className={td}>{fmtNum(m.landingPageViews)}</td>
       <td className={td}>{money(m.costPerLandingPageView)}</td>
-      <td className={td}>{fmtNum(m.purchases)}</td>
-      <td className={td}>{money(m.costPerPurchase)}</td>
-      <td className={td}>{money(m.purchaseValue)}</td>
-      <td className={td}>{fmtTimes(m.roas)}</td>
+      <td className={td}>{p("purchases", (n) => (n === null ? NA : fmtNum(n)))}</td>
+      <td className={td}>{p("costPerPurchase", money)}</td>
+      <td className={td}>{p("purchaseValue", money)}</td>
+      <td className={td}>{p("roas", fmtTimes)}</td>
     </>
   );
 }
 
 const HEADINGS = ["Spent", "Impressions", "Reach", "Frequency", "Link clicks", "Link click rate", "Per link click", "Per 1,000 impressions", "Landing page views", "Per landing page view", "Purchases", "Per purchase", "Purchase value", "Purchase ROAS"];
+/** The purchase columns' headings say the window picked. */
+const headingsFor = (at: Attribution) => (at === "setting" ? HEADINGS : HEADINGS.map((h, i) => (i >= HEADINGS.length - 4 ? `${h} (${attributionLabel(at)})` : h)));
 
 const DEFINITIONS: Array<[string, string]> = [
   ["Reach", "People who saw an ad at least once in these dates, each counted once."],
@@ -135,7 +169,11 @@ const DEFINITIONS: Array<[string, string]> = [
   ["Per 1,000 impressions", "Spend × 1,000 ÷ impressions (CPM)."],
   ["Landing page views", "Link clicks after which your page loaded, as Meta's pixel saw it. Meta's count, not your store's sessions or visitors: a visit Meta can't see isn't counted, and one person can land twice."],
   ["Per landing page view", "Spend ÷ landing page views."],
-  ["Purchases", "Purchases Meta credits to these ads, by each ad set's own attribution setting: Meta's count, not your Shopify orders."],
+  ["Purchases", "Purchases Meta credits to these ads, by each ad set's own attribution setting unless another is picked: Meta's count, not your Shopify orders."],
+  [
+    "Attribution",
+    "Which purchases Meta credits to the ads. Each ad set's own setting is what Ads Manager shows by default (for example 7-day click, 1-day view). 1-day and 7-day click: purchases within 1 or 7 days of someone clicking an ad. 1-day view: within a day of someone seeing an ad without clicking it. Each is Meta's own count under that window, for every ad set alike; Not reported where Meta gave no figure for it.",
+  ],
   ["Per purchase", "Spend ÷ the purchases Meta credits to the ads (cost per result, when the result is a purchase)."],
   ["Purchase ROAS", "Purchase value ÷ spend: Meta's own return on ad spend."],
   ["Active campaigns", "Campaigns delivering now, of every campaign in the ad account (archived and deleted ones included), as Meta lists them at this moment."],
@@ -151,7 +189,7 @@ const DEFINITIONS: Array<[string, string]> = [
  * How each figure reads as news: `neutral` ones (spend, how many people were reached) are neither
  * good nor bad by themselves; `invert` ones are costs, where lower is better.
  */
-const KPIS: Array<{ key: keyof MetaReportMetrics; label: string; kind: "money" | "count" | "rate" | "times" | "frequency"; neutral?: boolean; invert?: boolean }> = [
+const KPIS: Array<{ key: Exclude<keyof MetaReportMetrics, "byWindow">; label: string; kind: "money" | "count" | "rate" | "times" | "frequency"; neutral?: boolean; invert?: boolean }> = [
   { key: "spend", label: "Spent", kind: "money", neutral: true },
   { key: "impressions", label: "Impressions", kind: "count", neutral: true },
   { key: "reach", label: "Reach", kind: "count", neutral: true },
@@ -179,25 +217,28 @@ function Kpi({ label, value, change, before, note, testid }: { label: string; va
   );
 }
 
-function Glance({ r, money, cached, timezone, drilled }: { r: Report; money: (n: number | null) => string; cached: boolean; timezone: string | null; drilled: boolean }) {
-  const show = (kind: (typeof KPIS)[number]["kind"], v: number | null) =>
-    v === null ? NA : kind === "money" ? money(v) : kind === "count" ? fmtNum(v) : kind === "rate" ? fmtPct(v) : kind === "times" ? fmtTimes(v) : freq(v);
+function Glance({ r, money, cached, timezone, drilled, at }: { r: Report; money: (n: number | null) => string; cached: boolean; timezone: string | null; drilled: boolean; at: Attribution }) {
+  // Undefined: a window's figure Meta didn't give (purchaseFigure).
+  const show = (kind: (typeof KPIS)[number]["kind"], v: number | null | undefined) =>
+    v === undefined ? NOT_REPORTED : v === null ? NA : kind === "money" ? money(v) : kind === "count" ? fmtNum(v) : kind === "rate" ? fmtPct(v) : kind === "times" ? fmtTimes(v) : freq(v);
   const cmp = r.comparison;
   const label = cmp ? `vs ${fmtSpan(cmp.since, cmp.until)}` : "vs before";
   // The account's campaigns by state: not a campaign's or an ad set's figure, so not shown down from one.
   const counts = drilled ? undefined : r.campaigns;
+  const figure = (m: Partial<MetaReportMetrics> | undefined, key: (typeof KPIS)[number]["key"]) => (isPurchaseKey(key) ? purchaseFigure(m, key, at) : (m?.[key] ?? null));
   return (
     <div className="mb-4" data-testid="meta-report-glance">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
         {KPIS.map((k) => {
-          const now = r.totals[k.key];
-          const was = cmp ? (cmp.totals[k.key] ?? null) : null;
+          const now = figure(r.totals, k.key);
+          const was = cmp ? figure(cmp.totals, k.key) : null;
           const change = cmp ? reportChange(now, was) : null;
           return (
             <Kpi
               key={k.key}
               testid={`meta-kpi-${k.key}`}
-              label={k.label}
+              // A window's figures say which: Meta's count under it.
+              label={isPurchaseKey(k.key) && at !== "setting" ? `${k.label.replace(/ \(Meta's count\)$/, "")} (Meta's count, ${attributionLabel(at)})` : k.label}
               value={show(k.kind, now)}
               change={
                 !cmp ? undefined : change === null ? (
@@ -307,6 +348,8 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const [level, setLevel] = useState<MetaReportView>("campaign");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [objectiveFilter, setObjectiveFilter] = useState("all");
+  // Kept down from a campaign and across levels: it is how the purchases are counted, not a filter.
+  const [at, setAt] = useState<Attribution>("setting");
   const [answer, setAnswer] = useState<{ drill: string; a: Answer } | null>(null);
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -436,7 +479,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
             <p className="mb-2 text-xs text-muted">Today&apos;s numbers are still coming in: Meta updates them through the day, and can revise purchases for some days afterwards.</p>
           )}
           <div className={loading ? "opacity-60" : ""} aria-busy={loading}>
-            <Glance r={r} money={money} cached={shown!.cached} timezone={shown!.account.timezone} drilled={drill.open} />
+            <Glance r={r} money={money} cached={shown!.cached} timezone={shown!.account.timezone} drilled={drill.open} at={at} />
           </div>
 
           <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -486,6 +529,16 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                 </select>
               </label>
             )}
+            <label className="flex items-center gap-2 text-xs text-muted">
+              Attribution
+              <select className="input h-8 py-0 text-sm" value={at} onChange={(e) => setAt(e.target.value as Attribution)} data-testid="meta-report-attribution">
+                {ATTRIBUTIONS.map(([a, label]) => (
+                  <option key={a} value={a}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className={`-mx-1 overflow-x-auto ${loading ? "opacity-60" : ""}`} aria-busy={loading}>
@@ -493,7 +546,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
               <thead className="text-left text-xs text-muted">
                 <tr>
                   <th className="px-2 pb-2 font-normal">{LEVELS.find((l) => l.id === r.level)!.one}</th>
-                  {HEADINGS.map((h) => (
+                  {headingsFor(at).map((h) => (
                     <th key={h} className="px-2 pb-2 text-right font-normal">
                       {h}
                     </th>
@@ -505,14 +558,14 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
               <tbody>
                 <tr className="border-t border-border bg-surface font-medium" data-testid="meta-report-whole">
                   <td className="px-2 py-2">Whole {whole}</td>
-                  <Cells m={r.totals} money={money} />
+                  <Cells m={r.totals} money={money} at={at} />
                   {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
-                  {cmp && <ReportChange value={reportChange(r.totals.purchases, cmp.totals.purchases)} />}
+                  {cmp && <ReportChange value={reportChange(purchaseFigure(r.totals, "purchases", at), purchaseFigure(cmp.totals, "purchases", at))} />}
                 </tr>
                 {cmp && (
                   <tr className="border-t border-border text-muted" data-testid="meta-report-before">
                     <td className="px-2 py-2">Before ({fmtSpan(cmp.since, cmp.until)})</td>
-                    <Cells m={cmp.totals} money={money} />
+                    <Cells m={cmp.totals} money={money} at={at} />
                     <td />
                     <td />
                   </tr>
@@ -539,9 +592,9 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                         </span>
                         {row.details && <DetailsLine level={r.level} d={row.details} money={money} />}
                       </td>
-                      <Cells m={row} money={money} />
+                      <Cells m={row} money={money} at={at} />
                       {cmp && <ReportChange value={reportChange(row.spend, was?.spend)} neutral />}
-                      {cmp && <ReportChange value={reportChange(row.purchases, was?.purchases)} />}
+                      {cmp && <ReportChange value={reportChange(purchaseFigure(row, "purchases", at), purchaseFigure(was, "purchases", at))} />}
                     </tr>
                   );
                 })}
@@ -575,10 +628,18 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
             ) : !ended ? (
               <li>Changes show once the dates picked are over: today is still running, so it isn&apos;t set against whole days.</li>
             ) : null}
-            <li>
-              Purchases and purchase value are Meta&apos;s own count of sales it credits to these ads
-              {attribution ? ` (${attribution})` : ""}. They are not your Shopify orders, and they aren&apos;t added into your store&apos;s sales.
-            </li>
+            {at === "setting" ? (
+              <li>
+                Purchases and purchase value are Meta&apos;s own count of sales it credits to these ads, by each ad set&apos;s own attribution setting
+                {attribution ? ` (${attribution})` : ""}. They are not your Shopify orders, and they aren&apos;t added into your store&apos;s sales.
+              </li>
+            ) : (
+              <li>
+                Purchases, purchase value, ROAS and cost per purchase are Meta&apos;s own count under {attributionLabel(at).toLowerCase()} attribution, the same window for every
+                ad set{attribution ? ` (whatever each is set to: ${attribution})` : ""}; Not reported where Meta gave no figure for it. They are not your Shopify orders,
+                and they aren&apos;t added into your store&apos;s sales.
+              </li>
+            )}
             {shown && <li>{shown.cached ? "Fetched from Meta in the last few minutes." : "Fetched from Meta just now."}</li>}
           </ul>
           <Definitions items={DEFINITIONS} />

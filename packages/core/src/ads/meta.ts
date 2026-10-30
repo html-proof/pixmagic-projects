@@ -12,6 +12,7 @@ import {
   isDay,
   isMetaBreakdown,
   isMetaObjectId,
+  META_ATTRIBUTION_WINDOWS,
   META_BREAKDOWN_PARAM,
   META_OBJECT_FIELDS,
   metaAccountId,
@@ -744,6 +745,12 @@ export interface MetaLiveReportOptions {
    * can read reports nothing here.
    */
   parent?: MetaReportParent;
+  /**
+   * Also ask for Meta's count under each fixed attribution window (META_ATTRIBUTION_WINDOWS), beside each
+   * ad set's own setting: the live report does (metaReport). Off elsewhere, so a read checked against the
+   * stored days (each ad set's own setting) is asked exactly as the sync asks.
+   */
+  windows?: boolean;
 }
 
 /**
@@ -772,8 +779,9 @@ export async function metaRangeInsights(
 /**
  * metaRangeInsights, saying whether Meta had more rows than `maxRows`. Every call is made within
  * `opts.deadline`. `asJob`: the range is already known to be too heavy for one answer. A drill-down's
- * filter (`opts.parent`) is part of every try: a refused parameter drops the status filter and the
- * sort, never it, so the account's rows are never read as one campaign's.
+ * filter (`opts.parent`) is part of every try: a refused parameter drops the status filter, the sort
+ * and the fixed attribution windows, never it, so the account's rows are never read as one campaign's
+ * (and the windows' figures are then not reported, never 0).
  */
 async function metaRangeRead(
   c: MetaConfig,
@@ -802,7 +810,10 @@ async function metaRangeRead(
     ...(filters.length ? { filtering: JSON.stringify(filters) } : {}),
     // Biggest spend first, so the rows read before the cap are the ones that spent most.
     ...(extras ? { sort: JSON.stringify(["spend_descending"]) } : {}),
+    // Each action's `value` follows each ad set's own attribution setting, as Ads Manager shows it...
     use_unified_attribution_setting: "true",
+    // ...and carries Meta's count under each fixed window too, as keys beside it (1d_click...).
+    ...(extras && opts.windows ? { action_attribution_windows: JSON.stringify(META_ATTRIBUTION_WINDOWS) } : {}),
     limit: String(pageSize),
   };
   const maxPages = Math.ceil(maxRows / pageSize);
@@ -834,10 +845,10 @@ async function metaRangeRead(
     const mine = rows.rows.filter(inParent(parent));
     return { rows: mine.slice(0, maxRows), more: rows.more || mine.length > maxRows };
   } catch (err) {
-    // Meta refusing the status filter or the sort: the report still comes, without them. A range that
-    // already went to a job goes straight to one again: its synchronous try would only time out again.
+    // Meta refusing the status filter, the sort or the windows: the report still comes, without them. A range
+    // that already went to a job goes straight to one again: its synchronous try would only time out again.
     if (extras && refusedParameter(err)) {
-      logger.warn({ err, act, level }, "meta: a report parameter was refused; asking without the status filter and sort");
+      logger.warn({ err, act, level }, "meta: a report parameter was refused; asking without the status filter, sort and attribution windows");
       return metaRangeRead(c, accessToken, accountId, level, since, until, maxRows, breakdown, opts, false, job);
     }
     throw err;
@@ -936,9 +947,10 @@ export async function metaCampaignCounts(c: MetaConfig, accessToken: string, acc
 /**
  * The device split is read with publisher_platform, the combination Meta documents impression_device
  * in (META_BREAKDOWN_PARAM), so it comes as one row per platform and device: here they are added up
- * into one row per device. Spend, impressions, clicks and each action's count and value add up; reach
- * and frequency count people, who may have seen the ads on several platforms, so a device made of more
- * than one row has them unknown.
+ * into one row per device. Spend, impressions, clicks and each action's count and value add up, under
+ * each attribution window too (a window one platform's action has no figure for leaves it unknown for
+ * the device, not counted as none); reach and frequency count people, who may have seen the ads on
+ * several platforms, so a device made of more than one row has them unknown.
  */
 export function mergeMetaDeviceRows(rows: MetaRangeInsight[]): MetaRangeInsight[] {
   const byDevice = new Map<string, MetaRangeInsight[]>();
@@ -947,10 +959,28 @@ export function mergeMetaDeviceRows(rows: MetaRangeInsight[]): MetaRangeInsight[
     byDevice.set(device, [...(byDevice.get(device) ?? []), r]);
   }
   const total = (list: MetaRangeInsight[], k: "spend" | "impressions" | "clicks" | "inline_link_clicks") => String(list.reduce((a, r) => a + (Number(r[k] ?? 0) || 0), 0));
+  type Action = NonNullable<MetaRangeInsight["actions"]>[number];
   const actions = (list: MetaRangeInsight[], k: "actions" | "action_values") => {
-    const by = new Map<string, number>();
-    for (const r of list) for (const a of r[k] ?? []) by.set(a.action_type, (by.get(a.action_type) ?? 0) + (Number(a.value) || 0));
-    return by.size ? [...by].map(([action_type, value]) => ({ action_type, value: String(value) })) : undefined;
+    // Per action type: its value, and each window's figure (null once a row's action had none for it).
+    const by = new Map<string, { value: number; windows: Map<string, number | null> }>();
+    for (const r of list) {
+      for (const a of r[k] ?? []) {
+        const s = by.get(a.action_type) ?? { value: 0, windows: new Map<string, number | null>() };
+        s.value += Number(a.value) || 0;
+        for (const w of META_ATTRIBUTION_WINDOWS) {
+          const v = a[w] === undefined || a[w] === "" ? null : Number(a[w]);
+          const sum = s.windows.has(w) ? s.windows.get(w)! : 0;
+          s.windows.set(w, sum === null || v === null || !Number.isFinite(v) ? null : sum + v);
+        }
+        by.set(a.action_type, s);
+      }
+    }
+    return by.size
+      ? [...by].map(([action_type, s]): Action => {
+          const windows = Object.fromEntries([...s.windows].filter((e): e is [string, number] => e[1] !== null).map(([w, v]) => [w, String(v)]));
+          return { action_type, value: String(s.value), ...windows };
+        })
+      : undefined;
   };
   return [...byDevice].map(([device, list]) => {
     if (list.length === 1) {
@@ -1014,7 +1044,7 @@ export async function metaReport(
   if (parent && !metaParentFits(level, parent)) throw new AdsApiError(`Meta's ${level} report can't be read under that campaign or ad set`, 400);
   // Checked before any call: an id that isn't Meta's is refused, not asked.
   parentFilter(parent);
-  const live = { ...opts, parent: parent ?? undefined, deadline: opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs };
+  const live = { ...opts, windows: true, parent: parent ?? undefined, deadline: opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs };
   const [account, raw] = await Promise.all([
     // A drill-down's totals: its parent's own row (the deepest parent's level, filtered to it).
     parent

@@ -900,7 +900,8 @@ export function adsRoutes(app: App, deps: Deps) {
 
   /**
    * The Meta Ads report for one connected account and range: campaigns, ad sets or ads with reach,
-   * frequency, link clicks, purchases and their value, asked of Meta for exactly those dates; with
+   * frequency, link clicks, purchases and their value (by each ad set's own attribution setting, and
+   * under 1-day click, 7-day click and 1-day view), asked of Meta for exactly those dates; with
    * cfrom/cto, the same for the comparison's dates. Read-only, and cached briefly so the dashboard's
    * polling doesn't spend Meta's rate limit. Both ranges are read at once, within one deadline that
    * fits the request's time. A drill-down: `campaign` (its ad sets or ads) and `adset` (its ads), each
@@ -924,8 +925,9 @@ export function adsRoutes(app: App, deps: Deps) {
     const today = adToday(conn);
     const deadline = Date.now() + META_REPORT_JOB.budgetMs;
     // Days that are over change little (Meta still revises purchases for a while); today's keep coming in.
-    // The key's version moves whenever a report gains figures (v3: the rows' campaign and ad set ids), so
-    // none cached without them is read back; a drill-down's parent is part of what was asked.
+    // The key's version moves whenever a report gains figures (v3: the rows' campaign and ad set ids, and the
+    // purchases under each attribution window), so none cached without them is read back; a drill-down's
+    // parent is part of what was asked.
     const { reports, cached } = await readRanges<MetaReport>(
       deps,
       rangesOf(q),
@@ -941,8 +943,8 @@ export function adsRoutes(app: App, deps: Deps) {
   });
 
   /**
-   * The Google Ads report for one connected account and range: campaigns (with status, type and
-   * daily budget), ad groups, devices or countries, asked of Google for exactly those dates; with
+   * The Google Ads report for one connected account and range: campaigns (with status, primary status
+   * and its reasons, type and budget), ad groups, devices or countries, asked of Google for exactly those dates; with
    * cfrom/cto, the comparison's too. Read-only, cached briefly, and counted against bizinsights' daily
    * allowance of Google Ads API operations like the syncs. A drill-down: `campaign` (its ad groups, or a
    * Performance Max campaign's asset groups) and `adGroup` (its ads); one operation a range, with the
@@ -976,9 +978,9 @@ export function adsRoutes(app: App, deps: Deps) {
     // Both ranges' calls end within one deadline, so the answer comes within the request's time.
     const deadline = Date.now() + AD_REPORT_BUDGET_MS;
     // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
-    // The key's version moves whenever a report gains figures (v4: the rows' match type and Quality Score;
-    // v3 their campaign and ad group ids), so none cached without them is read back; a drill-down's parent
-    // is part of what was asked.
+    // The key's version moves whenever a report gains figures (v4: the rows' match type and Quality Score, and
+    // a campaign's primary status and total budget; v3 their campaign and ad group ids), so none cached without
+    // them is read back; a drill-down's parent is part of what was asked.
     const detail = isGoogleDetailLevel(q.level);
     const { reports, cached } = await readRanges<GoogleReport>(
       deps,

@@ -9,8 +9,8 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 | Page | Path | What it shows |
 | --- | --- | --- |
 | Overview | `/advertising` | Every spend platform together: ad spend, the platforms' own purchases, purchase value and ROAS, the store's Shopify net sales per unit of spend (MER) and AdSense's estimated earnings on a tile of their own; then Shopify's sales against the spend, the platform cards, the daily charts and the platforms side by side. |
-| Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report, which opens a campaign to its ad sets and an ad set to its ads ("Down from a campaign", below). |
-| Google Ads | `/advertising/google` | The same for Google Ads (a campaign opens to its ad groups, a Performance Max campaign to its asset groups, an ad group to its ads), with **Keywords** and **Search terms** tabs for the account and for an opened campaign or ad group ("Keywords and search terms", below), and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
+| Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report, which opens a campaign to its ad sets and an ad set to its ads ("Down from a campaign", below) and counts purchases by each ad set's own setting or one attribution window ("Meta attribution windows"). |
+| Google Ads | `/advertising/google` | The same for Google Ads, each campaign with Google's delivery status and its budget ("Google campaign delivery and budgets") (a campaign opens to its ad groups, a Performance Max campaign to its asset groups, an ad group to its ads), with **Keywords** and **Search terms** tabs for the account and for an opened campaign or ad group ("Keywords and search terms", below), and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
 | AdSense | `/advertising/adsense` | AdSense's earnings by site from the stored days, each figure marked Estimated or Final; and AdSense's live report by country, device type or ad unit, with ad requests, coverage and Active View viewability (read when opened and cached briefly, never stored with the days). |
 | Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change; a campaign's name opens it in its platform's live report. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
@@ -101,6 +101,52 @@ campaign whose type isn't known), search terms for Search, Shopping and Performa
   none are read once bizinsights has used 70% of the day's shared allowance, so the syncs keep the dashboard's figures
   current; either case is said in words on the tab ([ads-setup.md](ads-setup.md), "Keywords and search terms"). The
   demo's are generated ([ads-demo.md](ads-demo.md)) and never limited.
+
+## Google campaign delivery and budgets
+
+The Google Ads report's **Campaigns** tab says, under each campaign's name, whether Google can show its ads and why
+not in full, and what its budget is. Both come with the campaigns' own query (`googleReportQuery`, level `campaign`):
+no extra operation.
+
+- **Status**: Google's `campaign.primary_status` (Google Ads API v25, `CampaignPrimaryStatusEnum`) in words:
+  Eligible, Limited, Learning, Not eligible, Pending, Misconfigured, Ended, Paused, Removed
+  (`googleCampaignStatus` in @app/shared/ads). Beside it, its reasons (`campaign.primary_status_reasons`) in words,
+  the most telling first: "limited by budget" (`BUDGET_CONSTRAINED`), "bid strategy learning", "some ads
+  disapproved"... Reasons that only say the status again (`CAMPAIGN_PAUSED`, `CAMPAIGN_REMOVED`, `CAMPAIGN_ENDED`)
+  aren't repeated; one newer than the list reads as Google words it. Where Google gives no primary status (UNKNOWN),
+  the campaign's own status shows as before (Active, Paused, Removed). Ad groups, ads and keywords keep their own
+  status.
+- **Budget**: "budget A$40.00 a day" for a daily budget (`campaign_budget.amount_micros`, period `DAILY`), "budget
+  A$500.00 total" for a campaign total budget, which covers the campaign's own start and end dates
+  (`total_amount_micros`, period `CUSTOM_PERIOD`; Google sets one amount or the other). Nothing when Google gives
+  neither. A shared budget reads as its own amount, which several campaigns draw on.
+- Both are Google's now, not for the dates picked, and the page says so. Neither is stored: Campaign comparison still
+  shows the status the daily sync stores (`campaign.status`), and Account analytics' budgets and spend against budget
+  are still the demo's only, since a real account's would need them stored first (a schema change, not made yet).
+- The demo's campaigns carry the same fields ([ads-demo.md](ads-demo.md)).
+
+## Meta attribution windows
+
+The Meta Ads report's **Attribution** choice says how its purchases are counted: **Each ad set's own setting** (the
+default, as Ads Manager shows them, for example 7-day click, 1-day view), **1-day click**, **7-day click** or **1-day
+view**. It switches purchases, purchase value, purchase ROAS and cost per purchase in the figures at a glance, the
+table (whose purchase headings name the window) and the "Purchases vs before" change, on every level and split.
+
+- Meta is asked once for all of them: every live-report read sends `use_unified_attribution_setting=true` (each
+  action's `value`: the ad set's own setting) and `action_attribution_windows=["1d_click","7d_click","1d_view"]`
+  (`META_ATTRIBUTION_WINDOWS`), which Meta answers as keys of the same names on each action (AdsActionStats). No
+  extra call. Those are the windows Meta's insights still report on; 7-day and 28-day view aren't offered.
+- A window's figures are read from the same purchase action as the default (`omni_purchase` first, never added to
+  the others), so every window counts the same thing. A window Meta gives no figure for, on a row or the totals,
+  reads **Not reported**, never 0; so does its cost per purchase (count missing) or its ROAS (value missing). A
+  device made of several platforms' rows has a window only when every platform's purchase action had it.
+- Each is Meta's own count under that window, the same window for every ad set, labelled so ("Purchases (Meta's
+  count, 1-day click)"): not Shopify orders, never added to the store's sales. A window's figures can be higher or
+  lower than the default's, which mixes each ad set's own setting.
+- Meta refusing a parameter of the read: asked again without the status filter, the sort and the windows, so the
+  report still comes, with every window Not reported. The stored daily figures (Campaign comparison, the overview)
+  stay each ad set's own setting: the windows are the live report's only (`windows` in `MetaLiveReportOptions`), and
+  neither the syncs nor the daily "Checked against Meta" read asks for them.
 
 ## Printing
 

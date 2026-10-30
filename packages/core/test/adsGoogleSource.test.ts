@@ -36,6 +36,9 @@ describe("the demo source", () => {
     const report = await src.report("campaign", "2026-09-01", "2026-09-30");
     expect(report.rows.length).toBeGreaterThan(0);
     expect(report.truncated).toBe(false);
+    // The fields a real account's campaigns carry: Google's primary status and its reasons, and the budget's period.
+    expect(report.rows.every((r) => r.primaryStatus !== null && Array.isArray(r.primaryStatusReasons) && r.budgetPeriod === "DAILY" && r.totalBudget === null)).toBe(true);
+    expect(report.rows.find((r) => r.id === "demo-c2")).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] });
     // Down from a campaign to its ad groups and an ad group's ads: generated too.
     const groups = await src.report("ad_group", "2026-09-01", "2026-09-30", { campaign: "demo-c2" });
     expect(groups.rows.map((r) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
