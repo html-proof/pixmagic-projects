@@ -1,6 +1,6 @@
-// What CI counts as code. ci.yml ignores Markdown files and docs/ (paths-ignore: a change of only
-// those starts no run), so two commits that differ only there test the same: a job that passed on
-// one has passed on the other. ci.yml's job "Already passed on this code?" records and looks up
+// What CI counts as code. ci.yml ignores Markdown files and docs/ (a push to main of only those
+// starts no run, and a pull request of only those skips its checks), so two commits that differ
+// only there test the same: a job that passed on one has passed on the other. ci.yml's job "Already passed on this code?" records and looks up
 // passes by codeKey, and stop-when-superseded.mjs lets a pull request's run carry on after a newer
 // push when the code that push's run would test is this run's (codeEntries, both sides).
 import { createHash } from "node:crypto";
