@@ -132,7 +132,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   const salesTabs = guest.getByTestId("area-tabs-sales");
   await expect(salesTabs.getByRole("link")).toHaveText(["Top products", "Customers"]);
   await salesTabs.getByRole("link", { name: "Customers" }).click();
-  await expect(guest.getByRole("heading", { name: "Customers", level: 2 })).toBeVisible();
+  await expect(guest.getByRole("heading", { name: "Customers", exact: true, level: 2 })).toBeVisible();
   await guest.getByRole("button", { name: "Close details" }).click();
   // Opened from the link: their notifications, but no account pages (they never signed in to one).
   await nav.getByRole("link", { name: "Settings" }).click();
