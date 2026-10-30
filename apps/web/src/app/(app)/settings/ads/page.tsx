@@ -102,6 +102,11 @@ export default function AdAccountsPage() {
               </Link>{" "}
               and refresh by themselves. bizinsights only reads: it can&apos;t create, change or pause your ads, or spend money.
             </p>
+            <p className="mt-2 text-sm text-muted">
+              Paid YouTube and Display ads belong to Google Ads. Facebook and Instagram ads belong to Meta Ads.
+              AdSense reports website ad earnings separately from advertising spend. Impressions count ad displays;
+              clicks count ad interactions, and do not necessarily equal visits to your website.
+            </p>
             <p className="mt-2 text-sm">
               For <strong>{storeName}</strong>
               {stores.length > 1 ? <span className="text-muted"> (switch store at the top of the page)</span> : null}

@@ -185,7 +185,10 @@ export function AdPlatformCard({
         </p>
       )}
       {notes}
-      {hub && store && answer && <p className="text-xs text-muted">Turns on: {P.features.join(" · ")}</p>}
+      {store && answer && <p className="text-xs text-muted">Reports: {P.features.join(" · ")}</p>}
+      {connections.some((c) => !c.demo) && (
+        <p className="text-xs text-muted">Only authorized accounts are included. Results follow the platform's reporting delays and the dates available for each account.</p>
+      )}
     </IntegrationCard>
   );
 }
