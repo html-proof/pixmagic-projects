@@ -602,6 +602,23 @@ describe("staff and integrations permissions", () => {
   });
 });
 
+describe("the invitation panel's catalog", () => {
+  it("says which permissions show nothing yet, from the data the connected stores granted", async () => {
+    const owner = await signIn(ctx, "owner-catalog", "owner@catalog.test");
+    const ws = await createWorkspace(ctx, owner.headers, "Catalog");
+    const store = await createStore(ws, "catalog.myshopify.com", ["read_orders", "read_products"]);
+    const available = async () => {
+      const c = ok<{ modules: Array<{ permissions: Array<{ key: string; available: boolean }> }> }>(await call("GET", `/workspaces/${ws}/team/catalog`, owner.headers));
+      return Object.fromEntries(c.modules.flatMap((m) => m.permissions).map((p) => [p.key, p.available]));
+    };
+    // Shopify's abandoned checkouts need the orders alone; who left them needs the customers.
+    expect(await available()).toMatchObject({ "analytics.abandonment": true, "customers.contact": false, "analytics.conversion": false });
+    // Shopify's own sessions and visitors show conversion without the pixel's funnel.
+    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: ["read_orders", "read_products", "read_reports"] } });
+    expect(await available()).toMatchObject({ "analytics.conversion": true });
+  });
+});
+
 describe("retention", () => {
   it("removes invitations 90 days after they ended and member audit entries after two years", async () => {
     const b = await business();
