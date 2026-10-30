@@ -61,9 +61,14 @@ const note = (text: string): Cell[] => ["Note", text];
 export interface LiveReportCsvOptions {
   currency: string | null;
   timezone: string | null;
+  /** The ad account's today: dates reaching it are still coming in, and the file says so, as the page does. */
+  today?: string | null;
   /** Generated figures (the Google Ads demo). */
   demo?: boolean;
 }
+
+/** Whether the dates reach the ad account's today, whose figures are still coming in. */
+const reachesToday = (until: string, opts: LiveReportCsvOptions) => !!opts.today && until >= opts.today;
 
 type Column<T> = [label: string, cell: (x: T) => Cell];
 
@@ -165,8 +170,9 @@ export function metaReportTable(report: MetaReport, compared: MetaReport | null,
     demo: !!opts.demo,
     notes: [
       `Meta's figures for ${report.since} to ${report.until}${opts.timezone ? `, days in the ad account's time zone (${opts.timezone})` : ""}, as Meta reported them.`,
+      ...(reachesToday(report.until, opts) ? ["Today's numbers are still coming in: Meta updates them through the day, and can revise purchases for some days afterwards."] : []),
       `Reach counts each person once over the dates, so the rows don't add up to the ${whole}'s reach.`,
-      "Purchases and purchase value are Meta's own count of sales it credits to the ads, under the attribution each column names: not Shopify orders, and never added to the store's sales. Not reported: Meta gave no figure under that window.",
+      "Purchases and purchase value are Meta's own count of sales it credits to the ads, under the attribution each column names: not Shopify orders, and never added to the store's sales. Not reported: no figure from Meta under that window (Meta refused the windows for this read, or its figure couldn't be read).",
       ...(compared ? [`Changes compare with ${compared.since} to ${compared.until}, as Meta reports those dates now.`] : []),
       ...(report.rows.length === 0 ? [`Nothing in this ${whole} was shown to anyone in these dates.`] : []),
     ],
@@ -186,23 +192,26 @@ const GOOGLE_ONE: Record<GoogleReportLevel, string> = {
   search_term: "Search term",
 };
 
-/** Google's figures, as its report and the analytics page show them (every conversion action, Google's own count). */
-const GOOGLE_FIGURES: Array<[label: string, key: keyof GoogleReportMetrics, kind: "money" | "count" | "rate" | "times"]> = [
+/** Whose count the conversions are: Google's, or for the demo, whose figures nobody counted, simulated. */
+const counted = (demo: boolean) => (demo ? "simulated" : "Google's count");
+
+/** Google's figures, as its report and the analytics page show them (every conversion action, Google's own count; the demo's simulated). */
+const googleFigures = (demo: boolean): Array<[label: string, key: keyof GoogleReportMetrics, kind: "money" | "count" | "rate" | "times"]> => [
   ["Spend", "spend", "money"],
   ["Impressions", "impressions", "count"],
   ["Clicks", "clicks", "count"],
   ["Click-through rate (%)", "ctr", "rate"],
   ["Cost per click", "cpc", "money"],
   ["Cost per 1,000 impressions", "cpm", "money"],
-  ["Conversions (Google's count, all conversion actions)", "conversions", "count"],
+  [`Conversions (${counted(demo)}, all conversion actions)`, "conversions", "count"],
   ["Conversion rate (%)", "conversionRate", "rate"],
   ["Cost per conversion", "costPerConversion", "money"],
-  ["Conversion value (Google's count)", "conversionValue", "money"],
+  [`Conversion value (${counted(demo)})`, "conversionValue", "money"],
   ["Conversion value / cost", "roas", "times"],
 ];
-const figure = (kind: (typeof GOOGLE_FIGURES)[number][2], v: number | null): Cell => (kind === "rate" ? rate(v) : kind === "times" ? times(v) : v);
-const googleMetrics = (money: (label: string) => string): Array<Column<GoogleReportMetrics>> =>
-  GOOGLE_FIGURES.map(([label, key, kind]): Column<GoogleReportMetrics> => [kind === "money" ? money(label) : label, (m) => figure(kind, m[key])]);
+const figure = (kind: ReturnType<typeof googleFigures>[number][2], v: number | null): Cell => (kind === "rate" ? rate(v) : kind === "times" ? times(v) : v);
+const googleMetrics = (money: (label: string) => string, demo: boolean): Array<Column<GoogleReportMetrics>> =>
+  googleFigures(demo).map(([label, key, kind]): Column<GoogleReportMetrics> => [kind === "money" ? money(label) : label, (m) => figure(kind, m[key])]);
 
 /** The top row's name, as the page writes it: the account's, or what an opened campaign or ad group adds up to. */
 function googleTop(level: GoogleReportLevel, parent: GoogleReportParent): string {
@@ -216,6 +225,9 @@ function googleTop(level: GoogleReportLevel, parent: GoogleReportParent): string
 export function googleReportTable(report: GoogleReport, compared: GoogleReport | null, parent: GoogleReportParent, opts: LiveReportCsvOptions): CsvTable {
   const level = report.level;
   const money = inCurrency(opts.currency);
+  const demo = !!opts.demo;
+  // The demo's facts are generated too: nothing is "at Google" or rated by it.
+  const atGoogle = (what: string) => (demo ? `${what} now (simulated)` : `${what} at Google now`);
   const under = level !== "campaign" && level !== "device" && level !== "country";
   const col = (label: string, cell: (r: GoogleReportRow) => Cell): Column<GoogleReportRow> => [label, cell];
   const describe: Array<Column<GoogleReportRow>> = [
@@ -224,10 +236,10 @@ export function googleReportTable(report: GoogleReport, compared: GoogleReport |
     ...(level === "ad" || level === "keyword" ? [col("Ad group", (r) => r.adGroupName)] : []),
     ...(level === "campaign" || level === "search_term" ? [col("Campaign type", (r) => googleChannelLabel(r.channel))] : []),
     // Google's own word (ENABLED, PAUSED, REMOVED), and a campaign's delivery as Google rates it: now, not for the dates.
-    ...(level !== "device" && level !== "country" && level !== "search_term" ? [col("Status at Google now", (r) => r.status)] : []),
+    ...(level !== "device" && level !== "country" && level !== "search_term" ? [col(atGoogle("Status"), (r) => r.status)] : []),
     ...(level === "campaign"
       ? [
-          col("Delivery at Google now", (r) => googleCampaignStatus(r.primaryStatus, r.primaryStatusReasons)?.label ?? null),
+          col(atGoogle("Delivery"), (r) => googleCampaignStatus(r.primaryStatus, r.primaryStatusReasons)?.label ?? null),
           col("Why", (r) => googleCampaignStatus(r.primaryStatus, r.primaryStatusReasons)?.reasons.join("; ") || null),
           col(money("Daily budget now"), (r) => r.dailyBudget),
           col(money("Total budget now"), (r) => r.totalBudget ?? null),
@@ -238,36 +250,59 @@ export function googleReportTable(report: GoogleReport, compared: GoogleReport |
       ? [
           col("Match type", (r) => googleMatchTypeLabel(r.matchType)),
           // Google gives none with too little data: said, never a score.
-          col("Quality Score now (1 to 10)", (r) => r.qualityScore ?? "Not rated by Google"),
+          col("Quality Score now (1 to 10)", (r) => r.qualityScore ?? (demo ? "Not rated" : "Not rated by Google")),
         ]
       : []),
   ];
   const detail = isGoogleDetailLevel(level);
   const drilled = parent.campaign !== undefined || parent.adGroup !== undefined;
+  const scope = parent.adGroup !== undefined ? "ad group" : "campaign";
+  const ownRow = demo ? "The top row is the demo's own row for it." : "The top row is Google's own row for it.";
+  const rowsOf = level === "asset_group" ? "asset groups" : level === "ad" ? "ads" : "ad groups";
   return liveTable(report, compared, {
     one: GOOGLE_ONE[level],
     top: googleTop(level, parent),
     describe,
-    metrics: googleMetrics(money),
+    metrics: googleMetrics(money, demo),
     change: [
       ["Spend", money("Spend before"), (m) => m.spend],
-      ["Conversions", "Conversions before (Google's count)", (m) => m.conversions],
+      ["Conversions", `Conversions before (${counted(demo)})`, (m) => m.conversions],
     ],
-    demo: !!opts.demo,
+    demo,
     notes: [
-      opts.demo
+      demo
         ? `Generated by bizinsights for the Google Ads demo, for ${report.since} to ${report.until}: simulated, nothing read from Google.`
         : `Google's figures for ${report.since} to ${report.until}${opts.timezone ? `, days in the ad account's time zone (${opts.timezone})` : ""}, as Google reported them.`,
+      ...(!demo && reachesToday(report.until, opts) ? ["Today's numbers are still coming in: Google takes up to a few hours to report clicks and spend, and longer for conversions."] : []),
       ...(level === "keyword"
-        ? ["The top row is Google's own row for it. Keywords belong to Search campaigns, so spend without a keyword (Shopping, Performance Max, Display, YouTube) is in the top row but in none of these rows."]
+        ? [
+            drilled
+              ? // One campaign's or ad group's keywords (a Search campaign's): what its row has beyond them is search traffic without a keyword.
+                `${ownRow} Spend in this ${scope} without a keyword (dynamic search ads, AI Max keyword-free matching, or a campaign type with no keywords) is in the top row but in none of these rows.`
+              : `${ownRow} Keywords belong to Search campaigns, so spend without a keyword (Shopping, Performance Max, Display, YouTube) is in the top row but in none of these rows.`,
+          ]
         : level === "search_term"
-          ? ["The top row is Google's own row for it. Google lists only the terms enough people searched, and other placements have none, so the terms add up to less than the top row."]
+          ? [`${ownRow} Google lists only the terms enough people searched, and other placements have none, so the terms add up to less than the top row.`]
           : drilled
-            ? ["The top row adds up every row Google reported for these dates (not Google's own row for it)."]
+            ? [`The top row adds up every row ${demo ? "the demo has" : "Google reported"} for these dates (not ${demo ? "the demo's" : "Google's"} own row for it).`]
             : []),
-      "Conversions and their value are Google's own count of every conversion action it's set to count (purchases, and also leads, sign-ups or calls): not Shopify orders, and never added to the store's sales.",
-      ...(compared ? [`Changes compare with ${compared.since} to ${compared.until}, as Google reports those dates now.`] : []),
-      ...(report.rows.length === 0 && !detail ? [`Nothing in this ${drilled ? (parent.adGroup !== undefined ? "ad group" : "campaign") : "ad account"} was shown to anyone in these dates.`] : []),
+      demo
+        ? "Conversions and their value are simulated, standing for what Google counts: every conversion action it's set to count (purchases, and also leads, sign-ups or calls). Not Shopify orders, and never added to the store's sales."
+        : "Conversions and their value are Google's own count of every conversion action it's set to count (purchases, and also leads, sign-ups or calls): not Shopify orders, and never added to the store's sales.",
+      ...(compared ? [`Changes compare with ${compared.since} to ${compared.until}, as ${demo ? "the demo has them" : "Google reports those dates now"}.`] : []),
+      // Down from a campaign or an ad group the top row is these rows added up: none listed says nothing of whether
+      // the campaign itself ran. The whole account's top row is its own, so nothing there means nothing ran.
+      ...(report.rows.length === 0 && !detail
+        ? [
+            drilled
+              ? `${demo ? "The demo has" : "Google reported"} no ${rowsOf} with any activity in this ${scope} for these dates.`
+              : report.totals.impressions === 0 && report.totals.spend === 0
+                ? "Nothing in this ad account was shown to anyone in these dates."
+                : level === "ad_group"
+                  ? "No ad groups had any activity in these dates: Performance Max campaigns have no ad groups, so their spend is in the top row."
+                  : `${demo ? "The demo has" : "Google has"} no split at this level for these dates; the account's activity is in the top row.`,
+          ]
+        : []),
     ],
   });
 }
@@ -311,7 +346,7 @@ const splitRows = (rows: DemoBreakdownRow[], metrics: Array<Column<GoogleReportM
  */
 export function googleAnalyticsTable(part: GoogleAnalyticsPart, a: GoogleAdsAnalytics): CsvTable {
   const money = inCurrency(a.account.currency);
-  const metrics = googleMetrics(money);
+  const metrics = googleMetrics(money, !!a.account.demo);
   const rows: Cell[][] = a.account.demo ? [simulatedRow()] : [];
   const covered = coveredPart(a.coverage, a.range);
   const coverage = !covered
@@ -325,7 +360,7 @@ export function googleAnalyticsTable(part: GoogleAnalyticsPart, a: GoogleAdsAnal
       const { current, previous, deltas } = a.overview;
       // The page compares only with days the account has stored in full.
       const why = previous ? null : `Not compared: ${a.previous.from} to ${a.previous.to} aren't all stored for this account.`;
-      for (const [label, key, kind] of GOOGLE_FIGURES) {
+      for (const [label, key, kind] of googleFigures(!!a.account.demo)) {
         const heading = kind === "money" ? money(label) : label;
         if (!covered) rows.push([heading, "Not stored", null, null, coverage]);
         else rows.push([heading, figure(kind, current[key]), previous ? figure(kind, previous[key]) : "Not compared", previous ? pct(deltas[key]) : null, [coverage, why].filter(Boolean).join(" ") || null]);

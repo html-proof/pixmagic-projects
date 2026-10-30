@@ -28,44 +28,92 @@ export interface ReportDrill {
   up: () => void;
   /** Back to the whole account. */
   top: () => void;
+  /** How many steps (go, up, top) the person has taken: useDrillFocus moves focus to where each one lands. */
+  moved: number;
 }
 
 /**
  * The drill-down of one panel, for the connection `connectionId`: a campaign's ids belong to one ad
  * account, so picking another account starts from all its campaigns (the store's change clears the
- * address in useAdvertising, REPORT_DRILL_PARAMS).
+ * address in useAdvertising, REPORT_DRILL_PARAMS). The drill is the account's it was opened on: from
+ * the render the account changes in, it reads as closed, so the panel's first question of the other
+ * account is already about all of it, never the old campaign's rows asked of an account that hasn't it.
  */
 export function useReportDrill(childParam: "adset" | "adgroup", valid: (v: string) => v is string, connectionId: string | undefined): ReportDrill {
   const [campaign, setCampaign] = useQueryParam("campaign", valid);
   const [child, setChild] = useQueryParam(childParam, valid);
   const [names, setNames] = useState<Record<string, string>>({});
   const [ready, setReady] = useState(false);
+  const [moved, setMoved] = useState(0);
   // After the address-bar reads above (effects run in order, and their updates land together).
   useEffect(() => setReady(true), []);
-  const top = useCallback(() => {
+  const clear = useCallback(() => {
     setCampaign(null);
     setChild(null);
   }, [setCampaign, setChild]);
-  const shown = useRef(connectionId);
+  // The account the drill belongs to; another one picked closes it (in the same flush as its address).
+  const [openedOn, setOpenedOn] = useState(connectionId);
+  const otherAccount = openedOn !== undefined && connectionId !== openedOn;
   useEffect(() => {
-    if (shown.current !== undefined && connectionId !== shown.current) top();
-    shown.current = connectionId;
-  }, [connectionId, top]);
+    if (connectionId === openedOn) return;
+    if (openedOn !== undefined) clear();
+    setOpenedOn(connectionId);
+  }, [connectionId, openedOn, clear]);
+  const shownCampaign = otherAccount ? null : campaign;
+  const shownChild = otherAccount ? null : child;
   return {
     ready,
-    campaign,
-    child,
-    open: campaign !== null || child !== null,
+    campaign: shownCampaign,
+    child: shownChild,
+    open: shownCampaign !== null || shownChild !== null,
     nameOf: (id) => (id === null ? null : (names[id] ?? null)),
     learn: (more) => setNames((n) => ({ ...more, ...n })),
     go: (c, ch) => {
       setCampaign(c?.id ?? null);
       setChild(ch?.id ?? null);
       setNames((n) => ({ ...n, ...(c ? { [c.id]: c.name } : {}), ...(ch ? { [ch.id]: ch.name } : {}) }));
+      setMoved((m) => m + 1);
     },
-    up: () => setChild(null),
-    top,
+    up: () => {
+      setChild(null);
+      setMoved((m) => m + 1);
+    },
+    top: () => {
+      clear();
+      setMoved((m) => m + 1);
+    },
+    moved,
   };
+}
+
+/** Where a step lands: the crumb now current, or (back at the whole account) the level picked. */
+const LANDING = '[aria-current="page"], [role="tab"][aria-selected="true"]';
+
+/**
+ * A step down or up swaps the panel's table, the row or crumb pressed included, for a placeholder while
+ * the next level loads, so focus would drop to the page. After each step (`drill.moved`) it goes to where
+ * the step landed in the panel (`panelId`) instead, once that is on screen (a panel whose level tabs come
+ * with its answer: then), unless the person has put focus somewhere else meanwhile.
+ */
+export function useDrillFocus(drill: Pick<ReportDrill, "moved">, panelId: string): void {
+  const pending = useRef(false);
+  useEffect(() => {
+    if (drill.moved) pending.current = true;
+  }, [drill.moved]);
+  // After every render: the landing may come only with the answer.
+  useEffect(() => {
+    if (!pending.current) return;
+    const panel = document.getElementById(panelId);
+    const active = document.activeElement;
+    if (!panel || (active && active !== document.body && !panel.contains(active))) {
+      pending.current = false;
+      return;
+    }
+    const landing = panel.querySelector<HTMLElement>(LANDING);
+    if (!landing) return;
+    pending.current = false;
+    landing.focus();
+  });
 }
 
 /** "All campaigns › Spring sale › Women 25-34": each step but the last goes back up. */
@@ -80,7 +128,7 @@ export function DrillCrumbs({ steps, testid }: { steps: Array<{ label: string; o
               {s.label}
             </button>
           ) : (
-            <span aria-current="page" className="truncate font-medium" title={s.label}>
+            <span aria-current="page" tabIndex={-1} className="truncate font-medium" title={s.label}>
               {s.label}
             </span>
           )}

@@ -72,7 +72,14 @@ export class GoogleAdsDemoProvider implements GoogleAdsSource {
     return { status: "active", detail: DEMO_ACCOUNT_STATUS_DETAIL, name: DEMO_ACCOUNT_NAME, currency: this.context.currency, timezone: this.conn.timezone ?? DEMO_DEFAULT_TIMEZONE };
   }
   async report(level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): Promise<GoogleReport> {
-    return demoReport(this.context, level, since, until, parent);
+    // A campaign's primary status is rated as of the account's today, as Google's is now.
+    let today: string;
+    try {
+      today = localDay(new Date(), this.conn.timezone || DEMO_DEFAULT_TIMEZONE);
+    } catch {
+      today = localDay(new Date(), "UTC");
+    }
+    return demoReport(this.context, level, since, until, parent, today);
   }
 }
 

@@ -615,10 +615,11 @@ never by a sync, the worker, an export or Zapier, and nothing is stored.
 - **Guards** (real accounts; the demo has none, it costs nothing): checked only when a range isn't cached, after the
   usual 30 reports per 10 minutes. (1) Past **70%** of the day's allowance (`GOOGLE_ADS_DETAIL_SHARE`) the answer is
   503 `google_detail_paused`, Google asked nothing, so these screens never hold back the scheduled syncs (80%); while
-  Google says the allowance is used up, the answer is the usual `quota_exhausted`. (2) **25 uncached reads per ad
+  Google says the allowance is used up, the answer is the usual `quota_exhausted`, before (2) is counted. (2) **25 uncached reads per ad
   account a day** (`LIMITS.adsGoogleDetail`, key `rl:ads-gdetail:<connection>`): 429 `google_detail_limit`, Retry-After
   a day. One account spends at most about 100 operations a day here, under 4% of Explorer's 2,880.
-- **Cache**: 30 minutes when the range includes today, **6 hours** otherwise (other levels: 10 minutes / an hour), as
+- **Cache**: 30 minutes when the range ends today or yesterday (Google may still be finishing yesterday just after
+  midnight), **6 hours** otherwise (other levels: 10 minutes / an hour), as
   switching back to the tab on the same dates is the common case.
 - Explorer access allows these reads: its restrictions are on account creation, user management, Keyword Planner,
   audience and reach planning and billing (<https://developers.google.com/google-ads/api/docs/api-policy/access-levels>).

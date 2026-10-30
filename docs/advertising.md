@@ -65,9 +65,18 @@ row to what is under it, and that to its ads:
   the platform's own (digits; the Google Ads demo's `demo-…`); names come from the row clicked, else from the rows
   under it, else "Campaign <id>". A breadcrumb ("All campaigns › campaign › ad set") goes back up; the level tabs
   hide while one is open (on Google Ads, the opened campaign's or ad group's own tabs show instead: its rows, its
-  keywords, its search terms). Picking another ad account, or another store, starts from all campaigns again.
+  keywords, its search terms). Picking another ad account, or another store, starts from all campaigns again:
+  the drill belongs to the account it was opened on, so the first read of the other account is already of all of
+  it, never the old campaign's rows asked of an account that hasn't it.
+- Each step down or up (a row opened, a crumb pressed) moves keyboard focus to where it landed: the crumb now
+  current, or back at the top the level tab picked (Meta's, once its answer shows them), as the table and the
+  button pressed are swapped for a placeholder while the next level loads (`useDrillFocus`).
 - A Google campaign opened from a link (Campaign comparison) is first looked up on the account's campaign list
-  (usually cached) for its type, so a Performance Max campaign goes to its asset groups.
+  (usually cached) for its type, so a Performance Max campaign goes to its asset groups. One not on that list (no
+  activity in the dates, or past the 200 that spent most) has a type that isn't known: it opens to its ad groups
+  with **Asset groups** beside them, and once its asset groups come back it reads as Performance Max. With none of
+  its ad groups listed, the page says Google reported none with any activity, never that the campaign didn't run:
+  the top row is then those rows added up, not the campaign's own.
 - The rows are each platform's live figures for exactly the dates on screen, in the ad account's currency and own time
   zone, read and cached as the rest of the report (10 minutes with today, an hour otherwise; a drill-down's key holds
   its parent). They can differ a little from Campaign comparison's stored days (Meta revises purchases for a few
@@ -84,7 +93,10 @@ row to what is under it, and that to its ads:
 The Google Ads report's **Keywords** and **Search terms** tabs: for the whole account, and, once a campaign or ad
 group is opened, beside its own rows (a campaign: "Ad groups / Keywords / Search terms", a Performance Max one
 "Asset groups / Search terms"; an ad group: "Ads / Keywords"). Keywords show only for Search campaigns (and a
-campaign whose type isn't known), search terms for Search, Shopping and Performance Max ones.
+campaign whose type isn't known), search terms for Search, Shopping and Performance Max ones. Opened from a
+campaign or ad group, what its own row has beyond its keywords is search traffic without one (dynamic search ads,
+AI Max keyword-free matching), and the page says so; the whole account's says other campaign types (Shopping,
+Performance Max, Display, YouTube), which have no keywords.
 
 - **Keywords**: each ad group's keywords with their match type (Exact, Phrase, Broad), status, Google's Quality Score
   (1 to 10, its rating now rather than for the dates; none when Google gives none) and the report's usual figures.
@@ -97,7 +109,7 @@ campaign whose type isn't known), search terms for Search, Shopping and Performa
   comparison matches the same keyword or term: one that wasn't among the earlier dates' 200 shows "—".
 - Conversions are Google's own count, on every conversion action, as on the report's other tabs: not Shopify orders.
 - **Cost and limits**: read only when the tab is pressed, two Google Ads operations (four with a comparison), kept 6
-  hours (30 minutes when the dates include today). Each ad account may read them from Google 25 times a day, and
+  hours (30 minutes when the dates end today or yesterday, which Google may still be finishing). Each ad account may read them from Google 25 times a day, and
   none are read once bizinsights has used 70% of the day's shared allowance, so the syncs keep the dashboard's figures
   current; either case is said in words on the tab ([ads-setup.md](ads-setup.md), "Keywords and search terms"). The
   demo's are generated ([ads-demo.md](ads-demo.md)) and never limited.
@@ -137,14 +149,17 @@ table (whose purchase headings name the window) and the "Purchases vs before" ch
   (`META_ATTRIBUTION_WINDOWS`), which Meta answers as keys of the same names on each action (AdsActionStats). No
   extra call. Those are the windows Meta's insights still report on; 7-day and 28-day view aren't offered.
 - A window's figures are read from the same purchase action as the default (`omni_purchase` first, never added to
-  the others), so every window counts the same thing. A window Meta gives no figure for, on a row or the totals,
-  reads **Not reported**, never 0; so does its cost per purchase (count missing) or its ROAS (value missing). A
-  device made of several platforms' rows has a window only when every platform's purchase action had it.
+  the others), so every window counts the same thing. Meta leaves out what it counted none of: a row with no
+  purchase action, or a purchase action without a window's key, reads 0 under that window once the windows were
+  asked for and answered, as the default reads 0 for a row with no purchase action (`windows` on
+  `metaReportMetrics`, set from what the read actually sent). A figure Meta gave that can't be read reads **Not
+  reported**, never 0; so does its cost per purchase (count) or its ROAS (value). A device made of several
+  platforms' rows adds each window up; a platform's action without it adds nothing.
 - Each is Meta's own count under that window, the same window for every ad set, labelled so ("Purchases (Meta's
   count, 1-day click)"): not Shopify orders, never added to the store's sales. A window's figures can be higher or
   lower than the default's, which mixes each ad set's own setting.
 - Meta refusing a parameter of the read: asked again without the status filter, the sort and the windows, so the
-  report still comes, with every window Not reported. The stored daily figures (Campaign comparison, the overview)
+  report still comes, with every window Not reported (and so does an answer cached before the windows were read). The stored daily figures (Campaign comparison, the overview)
   stay each ad set's own setting: the windows are the live report's only (`windows` in `MetaLiveReportOptions`), and
   neither the syncs nor the daily "Checked against Meta" read asks for them.
 
@@ -196,15 +211,18 @@ per person), and is in the audit log as `report.exported`.
   level: campaigns, ad sets, ad groups, asset groups, ads, keywords, search terms and the splits, down from
   a campaign or ad group too. Built from the answer the page shows, read back from the report's cache: the
   platform is never asked for a download. An answer no longer kept (10 minutes to 6 hours, as above)
-  answers `409 report_expired`; the page then reads the report again, as a refresh would, shows it and
-  downloads that. The file holds every row of the answer whatever the page's filters show, with the top
+  answers `409 report_expired`, looked up before the download is counted, so it uses none of the person's
+  30; the page then reads the report again, as a refresh would, shows it and downloads that. The file holds every row of the answer whatever the page's filters show, with the top
   row (**Whole ad account**, **Whole campaign**, **All ad groups in this campaign**...) and, with dates
   compared, a **Before** row and each row's spend and purchases (Meta) or conversions (Google) then and
   their change. Meta's file has purchases under each ad set's own setting and under each fixed window
   side by side (**Not reported** where Meta gave none, as is reach Meta didn't give); a row the dates
   compared with don't list says **Not listed for the dates compared**. Statuses, budgets and Google's
   delivery and Quality Score are as the platform lists them now, labelled so; a keyword Google gives no
-  Quality Score reads **Not rated by Google**. The audit entry: `section: "ads_live_report"`, the
+  Quality Score reads **Not rated by Google**. Dates reaching the ad account's today add the page's note
+  that today's numbers are still coming in. Down from a campaign or ad group with none of its rows listed,
+  the note says what the platform reported (no ad groups with any activity), never that nothing ran, as
+  the top row is then those rows added up. The audit entry: `section: "ads_live_report"`, the
   `platform`, `level`, `account` (the ad connection), the campaign, ad set or ad group opened, and the dates.
 - **Account analytics** (`/advertising/google/analytics`): a **Section** picked and **Download CSV**, `GET
   …/ads/google/analytics/export?part=overview|campaigns|days|weeks|months|devices|audience|recommendations|combined`
@@ -216,6 +234,9 @@ per person), and is in the audit log as `report.exported`.
   `section: "google_ads_analytics"`, the `part`, `platform: "google"`, `account` and the dates.
 - **The demo** (Google Ads, [ads-demo.md](ads-demo.md)): its files are named `…-demo-simulated-…`, their
   first row reads **Simulated data** with the demo's disclaimer, and the audit entry has `demo: true`.
+  Nothing in them is called Google's: **Conversions (simulated, all conversion actions)**, **Status now
+  (simulated)**, **Delivery now (simulated)**, a Quality Score not given reads **Not rated**, and the
+  notes say the demo's rows, not Google's.
 - Money columns name the ad account's currency ("Spend (USD)"); rates are percentages ("Link click rate
   (%)"); purchases and conversions are each platform's own count, said in their headings, never Shopify
   orders.

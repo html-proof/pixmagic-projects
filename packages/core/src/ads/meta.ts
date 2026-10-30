@@ -777,7 +777,8 @@ export async function metaRangeInsights(
 }
 
 /**
- * metaRangeInsights, saying whether Meta had more rows than `maxRows`. Every call is made within
+ * metaRangeInsights, saying whether Meta had more rows than `maxRows`, and whether the rows came with the
+ * fixed attribution windows (`windows`: asked for, and not dropped below). Every call is made within
  * `opts.deadline`. `asJob`: the range is already known to be too heavy for one answer. A drill-down's
  * filter (`opts.parent`) is part of every try: a refused parameter drops the status filter, the sort
  * and the fixed attribution windows, never it, so the account's rows are never read as one campaign's
@@ -795,7 +796,7 @@ async function metaRangeRead(
   opts: MetaLiveReportOptions & { deadline: number },
   extras = true,
   asJob = false,
-): Promise<{ rows: MetaRangeInsight[]; more: boolean }> {
+): Promise<{ rows: MetaRangeInsight[]; more: boolean; windows: boolean }> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const parent = drillOf(opts.parent);
   if (parent && (level === "account" || breakdown)) throw new AdsApiError("Only campaigns, ad sets and ads are read under a campaign or ad set", 400);
@@ -818,6 +819,7 @@ async function metaRangeRead(
   };
   const maxPages = Math.ceil(maxRows / pageSize);
   const limit: CallLimit = { deadline: opts.deadline };
+  const windows = "action_attribution_windows" in params;
   let job = asJob;
   try {
     if (!job) {
@@ -830,7 +832,7 @@ async function metaRangeRead(
       if (first !== null) {
         const read = await metaPagesFrom(c, accessToken, first, maxPages, limit);
         const rows = read.rows.filter(inParent(parent));
-        return { rows: rows.slice(0, maxRows), more: read.more || rows.length > maxRows };
+        return { rows: rows.slice(0, maxRows), more: read.more || rows.length > maxRows, windows };
       }
     }
     job = true;
@@ -843,7 +845,7 @@ async function metaRangeRead(
       limit,
     });
     const mine = rows.rows.filter(inParent(parent));
-    return { rows: mine.slice(0, maxRows), more: rows.more || mine.length > maxRows };
+    return { rows: mine.slice(0, maxRows), more: rows.more || mine.length > maxRows, windows };
   } catch (err) {
     // Meta refusing the status filter, the sort or the windows: the report still comes, without them. A range
     // that already went to a job goes straight to one again: its synchronous try would only time out again.
@@ -948,9 +950,10 @@ export async function metaCampaignCounts(c: MetaConfig, accessToken: string, acc
  * The device split is read with publisher_platform, the combination Meta documents impression_device
  * in (META_BREAKDOWN_PARAM), so it comes as one row per platform and device: here they are added up
  * into one row per device. Spend, impressions, clicks and each action's count and value add up, under
- * each attribution window too (a window one platform's action has no figure for leaves it unknown for
- * the device, not counted as none); reach and frequency count people, who may have seen the ads on
- * several platforms, so a device made of more than one row has them unknown.
+ * each attribution window too (Meta leaves out a window it counted none under, so a platform's action
+ * without one adds nothing to it; a figure that can't be read leaves it unknown for the device); reach and
+ * frequency count people, who may have seen the ads on several platforms, so a device made of more than
+ * one row has them unknown.
  */
 export function mergeMetaDeviceRows(rows: MetaRangeInsight[]): MetaRangeInsight[] {
   const byDevice = new Map<string, MetaRangeInsight[]>();
@@ -961,14 +964,15 @@ export function mergeMetaDeviceRows(rows: MetaRangeInsight[]): MetaRangeInsight[
   const total = (list: MetaRangeInsight[], k: "spend" | "impressions" | "clicks" | "inline_link_clicks") => String(list.reduce((a, r) => a + (Number(r[k] ?? 0) || 0), 0));
   type Action = NonNullable<MetaRangeInsight["actions"]>[number];
   const actions = (list: MetaRangeInsight[], k: "actions" | "action_values") => {
-    // Per action type: its value, and each window's figure (null once a row's action had none for it).
+    // Per action type: its value, and each window's figure (null once a row's action had one that can't be read).
     const by = new Map<string, { value: number; windows: Map<string, number | null> }>();
     for (const r of list) {
       for (const a of r[k] ?? []) {
         const s = by.get(a.action_type) ?? { value: 0, windows: new Map<string, number | null>() };
         s.value += Number(a.value) || 0;
         for (const w of META_ATTRIBUTION_WINDOWS) {
-          const v = a[w] === undefined || a[w] === "" ? null : Number(a[w]);
+          if (a[w] === undefined) continue;
+          const v = a[w] === null || a[w] === "" ? null : Number(a[w]);
           const sum = s.windows.has(w) ? s.windows.get(w)! : 0;
           s.windows.set(w, sum === null || v === null || !Number.isFinite(v) ? null : sum + v);
         }
@@ -977,7 +981,8 @@ export function mergeMetaDeviceRows(rows: MetaRangeInsight[]): MetaRangeInsight[
     }
     return by.size
       ? [...by].map(([action_type, s]): Action => {
-          const windows = Object.fromEntries([...s.windows].filter((e): e is [string, number] => e[1] !== null).map(([w, v]) => [w, String(v)]));
+          // A window that can't be read stays so (""): not reported, never taken for none.
+          const windows = Object.fromEntries([...s.windows].map(([w, v]) => [w, v === null ? "" : String(v)]));
           return { action_type, value: String(s.value), ...windows };
         })
       : undefined;
@@ -1053,7 +1058,7 @@ export async function metaReport(
     breakdown ? metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, breakdown, live) : metaRangeRead(c, accessToken, accountId, level as MetaReportLevel, since, until, 2000, undefined, live),
   ]);
   const all = (breakdown === "device" ? mergeMetaDeviceRows(raw.rows) : raw.rows)
-    .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r) : fromMetaRangeInsight(level as MetaReportLevel, r)))
+    .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r, raw.windows) : fromMetaRangeInsight(level as MetaReportLevel, r, raw.windows)))
     .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
   const rows = all.slice(0, maxRows);
   let campaigns: MetaCampaignCounts | null = null;
@@ -1096,7 +1101,7 @@ export async function metaReport(
     since,
     until,
     // No row at all: nothing was shown in the range, so nobody was reached.
-    totals: metaReportMetrics(account.rows[0] ?? { reach: "0" }),
+    totals: metaReportMetrics(account.rows[0] ?? { reach: "0" }, account.windows),
     rows,
     truncated: all.length > rows.length || raw.more,
     attribution: [...new Set(all.map((r) => r.attribution).filter((a): a is string => !!a))],

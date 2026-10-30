@@ -13,7 +13,7 @@ import {
   pauseGoogleAds,
   type FetchLike,
 } from "@app/core";
-import { adErrorMessage, pkceChallenge } from "@app/shared";
+import { addDays, adErrorMessage, pkceChallenge } from "@app/shared";
 import { clean, createStore, createWorkspace, deletionCode, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -1050,6 +1050,46 @@ describe("the Google Ads report's keywords and search terms", () => {
     expect(exhausted.statusCode).toBe(503);
     expect(exhausted.json().error).toBe("quota_exhausted");
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+
+  it("while Google says the allowance is used up, asking for them uses none of the ad account's reads for the day", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    await pauseGoogleAds(ctx.deps.coord, null);
+    // More tries than the account's 25: each answers that the allowance is used up, never the account's cap.
+    for (let i = 0; i < 26; i++) {
+      const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: i % 2 ? "search_term" : "keyword" }), headers });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "quota_exhausted", message: adErrorMessage("quota_exhausted", "google") });
+    }
+    expect(seen.reportQueries).toEqual([]);
+    // The pause over: none of the account's reads was used.
+    await ctx.deps.coord.take("google-ads-paused");
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).statusCode).toBe(200);
+  });
+
+  it("dates ending yesterday are kept only as briefly as dates with today: Google may still be filling yesterday", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const first = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers });
+    const today = first.json().today as string;
+    const url = reportUrl(conn.id, { level: "keyword", from: addDays(today, -7), to: addDays(today, -1) });
+    expect((await ctx.app.inject({ method: "GET", url, headers })).json().cached).toBe(false);
+    const asked = seen.reportQueries.length;
+    // An hour later: read from Google again, where dates that ended earlier are still kept (6 hours).
+    const now = Date.now();
+    const later = vi.spyOn(Date, "now").mockReturnValue(now + 3600_000);
+    try {
+      expect((await ctx.app.inject({ method: "GET", url, headers })).json().cached).toBe(false);
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).json().cached).toBe(true);
+    } finally {
+      later.mockRestore();
+    }
+    expect(seen.reportQueries).toHaveLength(asked + 2);
   });
 });
 

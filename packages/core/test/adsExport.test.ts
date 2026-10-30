@@ -43,14 +43,54 @@ describe("the Google Ads report's CSV", () => {
     expect(t.rows.map((r) => r[1])).toContain("Only the 1 that spent most are listed.");
   });
 
-  it("keywords Google gives no Quality Score for say so; the demo's file says it is simulated first", () => {
+  it("keywords Google gives no Quality Score for say so; down from a campaign, what its own row has beyond them is search traffic without a keyword", () => {
+    const kw = [row("2~5", "running shoes", 4, { matchType: "PHRASE", qualityScore: null, status: "ENABLED" })];
+    const t = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, null, { campaign: "1" }, { currency: "AUD", timezone: null });
+    expect(t.rows[0]![0]).toBe("Whole campaign");
+    expect(t.rows[1]![t.header.indexOf("Quality Score now (1 to 10)")]).toBe("Not rated by Google");
+    expect(t.rows[1]![t.header.indexOf("Match type")]).toBe("Phrase match");
+    const notes = t.rows.filter((r) => r[0] === "Note").map((r) => r[1]);
+    expect(notes).toContainEqual(expect.stringMatching(/^The top row is Google's own row for it\. Spend in this campaign without a keyword \(dynamic search ads/));
+    // Not blamed on campaign types an opened Search campaign can't be.
+    expect(notes.join(" ")).not.toContain("(Shopping, Performance Max, Display, YouTube)");
+    // The whole account's keywords: there, other campaign types are what has no keyword.
+    const account = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, null, {}, { currency: "AUD", timezone: null });
+    expect(account.rows.map((r) => r[1]).join(" ")).toContain("(Shopping, Performance Max, Display, YouTube)");
+  });
+
+  it("the demo's file says it is simulated first, and calls none of its figures or facts Google's", () => {
     const kw = [row("2~5", "running shoes", 4, { matchType: "PHRASE", qualityScore: null, status: "ENABLED" })];
     const t = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, null, { campaign: "1" }, { currency: "AUD", timezone: null, demo: true });
     expect(t.rows[0]![0]).toBe("Simulated data");
     expect(t.rows[1]![0]).toBe("Whole campaign");
-    const qs = t.header.indexOf("Quality Score now (1 to 10)");
-    expect(t.rows[2]![qs]).toBe("Not rated by Google");
-    expect(t.rows[2]![t.header.indexOf("Match type")]).toBe("Phrase match");
+    expect(t.header).toContain("Conversions (simulated, all conversion actions)");
+    expect(t.header).toContain("Conversion value (AUD; simulated)");
+    expect(t.header).toContain("Status now (simulated)");
+    expect(t.rows[2]![t.header.indexOf("Quality Score now (1 to 10)")]).toBe("Not rated");
+    const text = [...t.header, ...t.rows.flat()].join(" ");
+    expect(text).not.toMatch(/Google's count|Google's own|at Google now|rated by Google/);
+    expect(t.rows.filter((r) => r[0] === "Note").map((r) => r[1])).toContainEqual(expect.stringMatching(/^Conversions and their value are simulated/));
+  });
+
+  it("dates reaching today say their figures are still coming in, as the page does; past dates don't", () => {
+    const report = (until: string) => ({ level: "campaign" as const, since: "2026-10-01", until, totals: g(9), rows: [row("7", "Brand", 9)], truncated: false });
+    const notes = (until: string, today?: string) => googleReportTable(report(until), null, {}, { currency: "USD", timezone: "UTC", today }).rows.filter((r) => r[0] === "Note").map((r) => r[1]);
+    expect(notes("2026-10-30", "2026-10-30")).toContainEqual(expect.stringMatching(/^Today's numbers are still coming in: Google/));
+    expect(notes("2026-10-29", "2026-10-30").join(" ")).not.toContain("still coming in");
+    expect(notes("2026-10-30").join(" ")).not.toContain("still coming in");
+  });
+
+  it("down from a campaign with no ad groups listed: what Google reported, never that the campaign didn't run", () => {
+    const t = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: g(0), rows: [], truncated: false }, null, { campaign: "7" }, { currency: "USD", timezone: null });
+    const notes = t.rows.filter((r) => r[0] === "Note").map((r) => r[1]);
+    expect(notes).toContain("Google reported no ad groups with any activity in this campaign for these dates.");
+    expect(notes.join(" ")).not.toContain("shown to anyone");
+    // The whole account's top row is its own: nothing there is nothing shown.
+    const none = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: { ...g(0), impressions: 0 }, rows: [], truncated: false }, null, {}, { currency: "USD", timezone: null });
+    expect(none.rows.map((r) => r[1])).toContain("Nothing in this ad account was shown to anyone in these dates.");
+    // ...and an account that ran with no ad group listed says where its spend is.
+    const pmax = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: g(30), rows: [], truncated: false }, null, {}, { currency: "USD", timezone: null });
+    expect(pmax.rows.map((r) => r[1]).join(" ")).toContain("Performance Max campaigns have no ad groups");
   });
 });
 
@@ -73,6 +113,10 @@ describe("the Meta Ads report's CSV", () => {
     // An answer without the windows (cached before they were read) has none of their figures: Not reported, never 0.
     expect(t.rows[1]![t.header.indexOf("Purchases (Meta's count, 1-day click)")]).toBe("Not reported");
     expect(t.rows[1]![t.header.indexOf("Purchases (Meta's count, each ad set's own setting)")]).toBe(1);
+    // Dates reaching the ad account's today: still coming in, as the page says.
+    expect(t.rows.map((r) => r[1]).join(" ")).not.toContain("still coming in");
+    const live = metaReportTable({ ...report, until: "2026-10-30" }, null, {}, { currency: "USD", timezone: "UTC", today: "2026-10-30" });
+    expect(live.rows.filter((r) => r[0] === "Note").map((r) => r[1])).toContainEqual(expect.stringMatching(/^Today's numbers are still coming in: Meta/));
   });
 });
 

@@ -609,25 +609,41 @@ describe("the Meta Ads report's numbers", () => {
     });
   });
 
-  it("reads each attribution window's purchases from the same action as the ad set's own setting, and says not reported where Meta gave none", () => {
-    const m = metaReportMetrics({
-      spend: "100",
-      actions: [
-        // The ad set's own setting (value), and each window Meta reported, as keys of the action.
-        { action_type: "omni_purchase", value: "8", "1d_click": "5", "7d_click": "7" },
-        { action_type: "purchase", value: "8", "1d_click": "5", "7d_click": "7", "1d_view": "1" },
-      ],
-      action_values: [{ action_type: "omni_purchase", value: "400", "1d_click": "250", "7d_click": "350", "1d_view": "" }],
-    });
+  it("reads each attribution window's purchases from the same action as the ad set's own setting, and says not reported where Meta's figure can't be read", () => {
+    const m = metaReportMetrics(
+      {
+        spend: "100",
+        actions: [
+          // The ad set's own setting (value), and each window Meta reported, as keys of the action.
+          { action_type: "omni_purchase", value: "8", "1d_click": "5", "7d_click": "7" },
+          { action_type: "purchase", value: "8", "1d_click": "5", "7d_click": "7", "1d_view": "1" },
+        ],
+        action_values: [{ action_type: "omni_purchase", value: "400", "1d_click": "250", "7d_click": "350", "1d_view": "" }],
+      },
+      true,
+    );
     expect(m).toMatchObject({ purchases: 8, purchaseValue: 400, costPerPurchase: 12.5, roas: 4 });
     expect(m.byWindow["1d_click"]).toEqual({ purchases: 5, purchaseValue: 250, costPerPurchase: 20, roas: 2.5 });
     expect(m.byWindow["7d_click"]).toEqual({ purchases: 7, purchaseValue: 350, costPerPurchase: 14.29, roas: 3.5 });
-    // omni_purchase is the action counted; it has no 1-day view figure, and purchase's isn't borrowed for it.
-    expect(m.byWindow["1d_view"]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
+    // omni_purchase is the action counted, and purchase's 1-day view figure isn't borrowed for it: Meta left
+    // that window out of the count (none), and its value can't be read (not reported).
+    expect(m.byWindow["1d_view"]).toEqual({ purchases: 0, purchaseValue: null, costPerPurchase: null, roas: null });
     // A window with purchases but nothing spent: no cost per purchase or return to work out.
-    expect(metaReportMetrics({ spend: "0", actions: [{ action_type: "purchase", value: "1", "1d_click": "0" }] }).byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: null, costPerPurchase: null, roas: null });
+    expect(metaReportMetrics({ spend: "0", actions: [{ action_type: "purchase", value: "1", "1d_click": "0" }] }, true).byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: null });
     expect([...META_ATTRIBUTION_WINDOWS]).toEqual(["1d_click", "7d_click", "1d_view"]);
     expect(META_ATTRIBUTION_WINDOWS.map(metaAttributionLabel)).toEqual(["1-day click", "7-day click", "1-day view"]);
+  });
+
+  it("reads no purchase under a window as none once the windows were asked for, as under each ad set's own setting", () => {
+    // Spent with no purchase: Meta lists no purchase action. Each ad set's setting reads 0, and so does every window.
+    const none = metaReportMetrics({ spend: "40", actions: [{ action_type: "link_click", value: "9", "7d_click": "9" }] }, true);
+    expect(none).toMatchObject({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
+    for (const w of META_ATTRIBUTION_WINDOWS) expect(none.byWindow[w]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
+    // The same answer read without the windows (not asked, or Meta refused them): not reported, never 0.
+    for (const w of META_ATTRIBUTION_WINDOWS) expect(metaReportMetrics({ spend: "40" }).byWindow[w]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
+    // The rows of a report read with them carry the same reading.
+    expect(fromMetaRangeInsight("campaign", { campaign_id: "1", spend: "40" }, true).byWindow["1d_view"].purchases).toBe(0);
+    expect(fromMetaRangeInsight("campaign", { campaign_id: "1", spend: "40" }).byWindow["1d_view"].purchases).toBeNull();
   });
 
   it("says 'unknown' rather than zero when Meta leaves a figure out, and never divides by zero", () => {

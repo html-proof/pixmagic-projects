@@ -490,8 +490,8 @@ describe("the Meta Ads report", () => {
       expect(u.searchParams.get("use_unified_attribution_setting")).toBe("true");
       expect(JSON.parse(u.searchParams.get("action_attribution_windows")!)).toEqual(["1d_click", "7d_click", "1d_view"]);
       const actions = (n: number) => [{ action_type: "omni_purchase", value: String(n), "1d_click": String(n - 2), "7d_click": String(n - 1) }];
-      if (level(u) === "account") return json({ data: [{ spend: "50", actions: actions(6), action_values: [{ action_type: "omni_purchase", value: "300", "1d_click": "200", "7d_click": "250", "1d_view": "40" }] }] });
-      return json({ data: [{ campaign_id: "1", campaign_name: "Spring", spend: "50", actions: actions(6), action_values: [{ action_type: "omni_purchase", value: "300", "1d_click": "200" }] }] });
+      if (level(u) === "account") return json({ data: [{ spend: "50", actions: actions(6), action_values: [{ action_type: "omni_purchase", value: "300", "1d_click": "200", "7d_click": "250" }] }] });
+      return json({ data: [{ campaign_id: "1", campaign_name: "Spring", spend: "50", actions: actions(6), action_values: [{ action_type: "omni_purchase", value: "300", "1d_click": "200", "7d_click": "" }] }] });
     });
     const r = await metaReport(meta(f.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { statuses: false });
     expect(f.calls).toHaveLength(2);
@@ -499,9 +499,10 @@ describe("the Meta Ads report", () => {
     expect(r.totals.byWindow).toEqual({
       "1d_click": { purchases: 4, purchaseValue: 200, costPerPurchase: 12.5, roas: 4 },
       "7d_click": { purchases: 5, purchaseValue: 250, costPerPurchase: 10, roas: 5 },
-      // A view-through value with no view-through count: the count isn't reported, so neither is its cost.
-      "1d_view": { purchases: null, purchaseValue: 40, costPerPurchase: null, roas: 0.8 },
+      // No view-through purchase: Meta leaves the window out, which is none, as under each ad set's own setting.
+      "1d_view": { purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 },
     });
+    // A value Meta gave that can't be read: not reported, so neither is its return.
     expect(r.rows[0]!.byWindow["7d_click"]).toEqual({ purchases: 5, purchaseValue: null, costPerPurchase: 10, roas: null });
   });
 
@@ -695,8 +696,8 @@ describe("the Meta Ads report", () => {
             frequency: "1.33",
             clicks: "5",
             inline_link_clicks: "4",
-            // No 1-day click figure on this platform's purchases.
-            actions: [{ action_type: "omni_purchase", value: "1", "7d_click": "1" }],
+            // No 1-day click purchase on this platform (Meta leaves the window out), and a 1-day view figure that can't be read.
+            actions: [{ action_type: "omni_purchase", value: "1", "7d_click": "1", "1d_view": "" }],
             action_values: [{ action_type: "omni_purchase", value: "30", "7d_click": "30" }],
           },
           { publisher_platform: "facebook", impression_device: "desktop", spend: "10", impressions: "500", reach: "300", frequency: "1.67", clicks: "9", inline_link_clicks: "6" },
@@ -712,11 +713,13 @@ describe("the Meta Ads report", () => {
     ]);
     // The account's own totals still come from Meta, de-duplicated.
     expect(r.totals.reach).toBe(600);
-    // Each window added up across the platforms too; one a platform gave no figure for is unknown for the device, not a part left out.
+    // Each window added up across the platforms too: a platform without it adds none; one whose figure can't be read leaves it unknown for the device.
     const iphone = r.rows.find((x) => x.id === "iphone")!;
     expect(iphone.byWindow["7d_click"]).toEqual({ purchases: 3, purchaseValue: 80, costPerPurchase: 3.33, roas: 8 });
-    expect(iphone.byWindow["1d_click"]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
-    expect(r.rows.find((x) => x.id === "desktop")!.byWindow["7d_click"].purchases).toBeNull();
+    expect(iphone.byWindow["1d_click"]).toEqual({ purchases: 1, purchaseValue: 0, costPerPurchase: 10, roas: 0 });
+    expect(iphone.byWindow["1d_view"].purchases).toBeNull();
+    // Computers had no purchase: none under each window, as under each ad set's own setting.
+    expect(r.rows.find((x) => x.id === "desktop")!.byWindow["7d_click"]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
   });
 });
 

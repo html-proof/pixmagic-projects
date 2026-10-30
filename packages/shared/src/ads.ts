@@ -621,12 +621,16 @@ function firstAction(actions: MetaAction[] | undefined, types: string[]): number
 
 /**
  * The same action's figure under one window (the window's key on the action firstAction picks, so every
- * window counts the same thing). Null when Meta gave none there (no such action, or the action without
- * that window's key): not reported, never taken for 0.
+ * window counts the same thing). `asked`: Meta was asked for the windows and answered with them. It
+ * leaves out what it counted none of, an action as a window's key on one, so then a missing one is 0, as
+ * firstAction reads a missing action. Null (not reported, never taken for 0) when the windows weren't
+ * asked or were refused, or a figure Meta gave can't be read.
  */
-function windowAction(actions: MetaAction[] | undefined, types: string[], window: MetaAttributionWindow): number | null {
+function windowAction(actions: MetaAction[] | undefined, types: string[], window: MetaAttributionWindow, asked: boolean): number | null {
+  if (!asked) return null;
   const v = pickAction(actions, types)?.[window];
-  if (v === undefined || v === null || v === "") return null;
+  if (v === undefined) return 0;
+  if (v === null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -791,7 +795,10 @@ export interface MetaReportMetrics {
   byWindow: Record<MetaAttributionWindow, MetaWindowPurchases>;
 }
 
-/** Purchases, their value, cost per purchase and ROAS under one attribution window; each null when Meta gave no figure for it. */
+/**
+ * Purchases, their value, cost per purchase and ROAS under one attribution window. Each null when not
+ * reported: the windows weren't asked for or Meta refused them, or its figure couldn't be read.
+ */
 export interface MetaWindowPurchases {
   purchases: number | null;
   purchaseValue: number | null;
@@ -1030,7 +1037,12 @@ const num = (s: string | undefined) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
+/**
+ * One range's figures from Meta's row. `windows`: the row was read with the fixed attribution windows
+ * (action_attribution_windows) and Meta answered with them, so a purchase missing under one is none, as it
+ * is under each ad set's own setting; without them, every window's figures are null (not reported).
+ */
+export function metaReportMetrics(r: MetaRangeInsight, windows = false): MetaReportMetrics {
   const spend = r2(num(r.spend));
   const impressions = Math.round(num(r.impressions));
   const linkClicks = Math.round(num(r.inline_link_clicks));
@@ -1045,8 +1057,8 @@ export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
   const cplpv = ratio(spend, landingPageViews);
   const byWindow = Object.fromEntries(
     META_ATTRIBUTION_WINDOWS.map((w): [MetaAttributionWindow, MetaWindowPurchases] => {
-      const n = windowAction(r.actions, META_PURCHASE, w);
-      const value = windowAction(r.action_values, META_PURCHASE, w);
+      const n = windowAction(r.actions, META_PURCHASE, w, windows);
+      const value = windowAction(r.action_values, META_PURCHASE, w, windows);
       const cost = n === null ? null : ratio(spend, n);
       return [w, { purchases: n, purchaseValue: value === null ? null : r2(value), costPerPurchase: cost === null ? null : r2(cost), roas: value === null ? null : ratio(r2(value), spend) }];
     }),
@@ -1072,7 +1084,7 @@ export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
   };
 }
 
-export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight): MetaReportRow {
+export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight, windows = false): MetaReportRow {
   const id = (level === "campaign" ? r.campaign_id : level === "adset" ? r.adset_id : r.ad_id) ?? "unknown";
   const name = (level === "campaign" ? r.campaign_name : level === "adset" ? r.adset_name : r.ad_name) ?? id;
   return {
@@ -1084,7 +1096,7 @@ export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight
     adsetName: level === "ad" ? (r.adset_name ?? null) : null,
     status: null,
     attribution: r.attribution_setting ?? null,
-    ...metaReportMetrics(r),
+    ...metaReportMetrics(r, windows),
   };
 }
 
@@ -1118,8 +1130,8 @@ export function countryName(code: string | null | undefined): string {
   }
 }
 
-/** One placement, device or country of a whole-account split. */
-export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: MetaRangeInsight): MetaReportRow {
+/** One placement, device or country of a whole-account split (`windows` as in metaReportMetrics). */
+export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: MetaRangeInsight, windows = false): MetaReportRow {
   let id: string;
   let name: string;
   if (breakdown === "placement") {
@@ -1140,7 +1152,7 @@ export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: Meta
     id = r.country ?? "unknown";
     name = r.country ? countryName(r.country) : "Unknown";
   }
-  return { id, name, campaignId: null, campaignName: null, adsetId: null, adsetName: null, status: null, attribution: r.attribution_setting ?? null, ...metaReportMetrics(r) };
+  return { id, name, campaignId: null, campaignName: null, adsetId: null, adsetName: null, status: null, attribution: r.attribution_setting ?? null, ...metaReportMetrics(r, windows) };
 }
 
 /** "7d_click_1d_view" → "7-day click, 1-day view"; anything unrecognised is shown as Meta wrote it. */

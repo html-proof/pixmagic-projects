@@ -388,6 +388,9 @@ export function demoCampaignDays(ctx: Pick<DemoContext, "epoch">, c: DemoCampaig
  * the daily budget (as Google's overdelivery does). Every figure is consistent with the others: the
  * rates the page works out (CTR, CPC, conversion rate, ROAS) are true of the row.
  */
+/** Where `day` sits in the 90 days up to the epoch: 0 at their start, 1 at the epoch, beyond 1 after it. */
+const trendAt = (ctx: DemoContext, day: string) => 1 - (daysBetweenInclusive(day, ctx.epoch) - 1) / (DEMO_HISTORY_DAYS - 1);
+
 export function demoCampaignDay(ctx: DemoContext, c: DemoCampaign, day: string): AdDayRow | null {
   const { start, end } = demoCampaignDays(ctx, c);
   if (day < start || (end !== null && day > end)) return null;
@@ -398,8 +401,7 @@ export function demoCampaignDay(ctx: DemoContext, c: DemoCampaign, day: string):
   const ramp = Math.min(1, (age + 1) / 7);
   const wd = weekdayOf(day);
   const weekend = wd === 0 || wd === 6 ? p.weekend : 1;
-  // Where the day sits in the 90 days up to the epoch: 0 at their start, 1 at the epoch, beyond 1 after it.
-  const pos = 1 - (daysBetweenInclusive(day, ctx.epoch) - 1) / (DEMO_HISTORY_DAYS - 1);
+  const pos = trendAt(ctx, day);
   const trend = Math.max(0.3, 1 + p.trend * pos);
   const phase = demoRng(ctx.seed, `${c.id}:phase`)() * Math.PI * 2;
   const wave = 1 + 0.08 * Math.sin((2 * Math.PI * dayIndex(day)) / 28 + phase);
@@ -448,15 +450,19 @@ export function demoCampaignRows(ctx: DemoContext, since: string, until: string)
 }
 
 /**
- * A demo campaign's delivery as Google's campaign.primary_status would rate it now (not for any dates):
- * paused when it is; limited by budget when an ordinary day's clicks would cost more than its daily budget
- * (its days' spend is held down by the budget, demoCampaignDay); otherwise eligible. Every demo budget is a
- * daily one.
+ * A demo campaign's delivery as Google's campaign.primary_status would rate it on `today` (not for any dates):
+ * paused when it is; limited by budget when an ordinary day's clicks then would cost more than its daily
+ * budget (its days' spend is held down by the budget, demoCampaignDay); otherwise eligible. An ordinary day
+ * is demoCampaignDay's on `today` without its noise, weekday, ramp or wave: its base with its trends as of
+ * that day, so the rating follows what its days spend then. Every demo budget is a daily one.
  */
-export function demoPrimaryStatus(c: DemoCampaign): { primaryStatus: string; primaryStatusReasons: string[] } {
+export function demoPrimaryStatus(ctx: DemoContext, c: DemoCampaign, today: string): { primaryStatus: string; primaryStatusReasons: string[] } {
   if (c.status === "PAUSED") return { primaryStatus: "PAUSED", primaryStatusReasons: ["CAMPAIGN_PAUSED"] };
   const p = c.profile;
-  return p.impressions * p.ctr * p.cpcUsd > c.dailyBudgetUsd ? { primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] } : { primaryStatus: "ELIGIBLE", primaryStatusReasons: [] };
+  const pos = trendAt(ctx, today);
+  const clicks = p.impressions * Math.max(0.3, 1 + p.trend * pos) * p.ctr;
+  const cost = clicks * p.cpcUsd * Math.max(0.2, 1 + p.cpcTrend * pos);
+  return cost > c.dailyBudgetUsd ? { primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] } : { primaryStatus: "ELIGIBLE", primaryStatusReasons: [] };
 }
 
 /** A campaign as the campaign table and the report list it: its settings, in the account's currency. */
@@ -806,9 +812,10 @@ function searchTermsOf(ctx: DemoContext, c: DemoCampaign, t: Sums): Array<{ term
  * The live report for `level` and [since, until]. Under a parent (googleParentFits): one campaign's ad
  * groups or asset groups, one ad group's ads, with the totals those rows added up, as Google's report
  * gives them (googleReport in core); keywords and search terms for the account, one campaign or (keywords)
- * one ad group, with that scope's own figures on top, which they add up to less than.
+ * one ad group, with that scope's own figures on top, which they add up to less than. A campaign's primary
+ * status is as of `today` (the account's; its epoch when not given), as Google's is now, whatever the dates.
  */
-export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): DemoReport {
+export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}, today = ctx.epoch): DemoReport {
   const rows = demoCampaignRows(ctx, since, until);
   const blank = googleRowBlank();
   const ofCampaign = (c: DemoCampaign) => sums(rows.filter((r) => r.campaignId === c.id));
@@ -830,7 +837,7 @@ export function demoReport(ctx: DemoContext, level: GoogleReportLevel, since: st
         name: c.name,
         status: c.status,
         channel: c.type,
-        ...demoPrimaryStatus(c),
+        ...demoPrimaryStatus(ctx, c, today),
         budgetPeriod: "DAILY",
         dailyBudget: facts.dailyBudget,
         ...demoReportMetrics(ofCampaign(c)),

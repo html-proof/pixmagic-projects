@@ -742,11 +742,11 @@ describe("the Meta Ads report", () => {
     // Reach for the account is Meta's own, de-duplicated figure: not 3500 + 900.
     expect(body.report.totals).toMatchObject({ spend: 120.5, impressions: 10000, reach: 4000, frequency: 2.5, linkClicks: 200, purchases: 6, purchaseValue: 482, cpm: 12.05, costPerLinkClick: 0.6 });
     expect(body.report.totals.roas).toBeCloseTo(4, 1);
-    // Each window's own count, from the same purchase action; one Meta gave no figure for is not reported, never 0.
+    // Each window's own count, from the same purchase action; one Meta left out counted none.
     expect(body.report.totals.byWindow).toMatchObject({
       "1d_click": { purchases: 4, purchaseValue: 300 },
       "7d_click": { purchases: 6, purchaseValue: 482 },
-      "1d_view": { purchases: null, purchaseValue: null, costPerPurchase: null, roas: null },
+      "1d_view": { purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 },
     });
     expect(body.report.rows.map((r: { id: string; name: string; status: string; spend: number }) => [r.id, r.name, r.status, r.spend])).toEqual([
       ["11", "Spring sale", "ACTIVE", 100],
@@ -1403,7 +1403,8 @@ describe("the Meta Ads report compared with other dates", () => {
     // Each window's purchases are among the figures compared, so the window picked compares like with like.
     expect(body.report.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 2 });
     expect(body.report.comparison.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 1 });
-    expect(body.report.comparison.totals.byWindow["1d_click"]).toEqual({ purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
+    // The account's row had no purchase: none under the window, as under each ad set's own setting.
+    expect(body.report.comparison.totals.byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
     // Only figures beside each id: no names or statuses again.
     expect(body.report.comparison.rows[0].name).toBeUndefined();
     // Delivery statuses are read for the report's own rows only (they're list calls on Meta's rate limit).

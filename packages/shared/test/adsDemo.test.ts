@@ -197,7 +197,19 @@ describe("the live report", () => {
     expect(of("demo-c1")).toMatchObject({ primaryStatus: "ELIGIBLE", primaryStatusReasons: [] });
     expect(of("demo-c6")).toMatchObject({ primaryStatus: "PAUSED", primaryStatusReasons: ["CAMPAIGN_PAUSED"] });
     expect(rows.every((r) => r.budgetPeriod === "DAILY" && r.dailyBudget !== null && r.totalBudget === null)).toBe(true);
-    for (const c of DEMO_CAMPAIGNS) expect(demoPrimaryStatus(c).primaryStatus).toBe(of(c.id).primaryStatus);
+    for (const c of DEMO_CAMPAIGNS) expect(demoPrimaryStatus(ctx, c, ctx.epoch).primaryStatus).toBe(of(c.id).primaryStatus);
+    // Rated from what its days spend now, its trends included: the Shopping campaign's recent days cost more
+    // than its 80 a day (its base figures alone wouldn't), so it is limited by budget, never Eligible beside them.
+    expect(of("demo-c3")).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] });
+    const shopping = DEMO_CAMPAIGNS.find((c) => c.id === "demo-c3")!;
+    const recent = eachDay(addDays(until, -13), until).map((day) => demoCampaignDay(ctx, shopping, day)!.spend);
+    expect(recent.reduce((a, b) => a + b, 0) / recent.length).toBeGreaterThan(demoMoney(80, ctx.currency));
+    // The one still eligible spends within its budget on those days.
+    const brand = DEMO_CAMPAIGNS.find((c) => c.id === "demo-c1")!;
+    const brandDays = eachDay(addDays(until, -13), until).map((day) => demoCampaignDay(ctx, brand, day)!.spend);
+    expect(brandDays.reduce((a, b) => a + b, 0) / brandDays.length).toBeLessThan(demoMoney(40, ctx.currency));
+    // Its status is as of the account's today, whatever the dates picked.
+    expect(demoReport(ctx, "campaign", addDays(since, -60), addDays(since, -30)).rows.find((r) => r.id === "demo-c3")!.primaryStatus).toBe("LIMITED");
     // Below a campaign, none of it.
     expect(demoReport(ctx, "ad_group", since, until).rows.every((r) => r.primaryStatus === null && r.budgetPeriod === null)).toBe(true);
   });

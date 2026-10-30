@@ -23,7 +23,7 @@ import { saveApiFile } from "@/lib/download";
 import { Definitions } from "./AdsCommon";
 import { fmtDay, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Badge, Delta, NeutralDelta, Panel, type Tone } from "./Primitives";
-import { DrillCrumbs, OpenRow, useReportDrill } from "./ReportDrill";
+import { DrillCrumbs, OpenRow, useDrillFocus, useReportDrill } from "./ReportDrill";
 import { ReportChange, reportChange } from "./ReportCompare";
 import { CsvButton } from "./ReportDownload";
 import type { AdsModule, Overview } from "./types";
@@ -362,6 +362,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const cto = ended ? ov.previous.to : null;
   const chosen = meta.find((a) => a.id === connection) ?? meta[0];
   const drill = useReportDrill("adset", isMetaObjectId, chosen?.id);
+  useDrillFocus(drill, "d-meta-report");
   // Down from a campaign: its ad sets; from an ad set: its ads (in its campaign, when known).
   const asked: { level: MetaReportView; campaign?: string; adset?: string } = drill.child
     ? { level: "ad", ...(drill.campaign ? { campaign: drill.campaign } : {}), adset: drill.child }

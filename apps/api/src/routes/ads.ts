@@ -68,6 +68,7 @@ import {
   AD_LOGIN_REASONS,
   AD_PROVIDERS,
   ADSENSE_REPORT_LEVELS,
+  addDays,
   adErrorMessage,
   adStatusCode,
   allows,
@@ -497,7 +498,8 @@ async function readRanges<T>(
  * A live report's download (`format=csv`): the answer the page shows, so every range is read back from
  * where the page's read cached it, and the platform isn't asked again. One no longer kept (they last 10
  * minutes to 6 hours) answers report_expired: the page then reads the report again, as a refresh
- * would, and downloads what it shows.
+ * would, and downloads what it shows. Read before the download is counted (sendCsv), so an answer no
+ * longer kept doesn't use one of the person's downloads: only a cache read, nothing is asked.
  */
 async function cachedRanges<T>(deps: Deps, ranges: ReportRange[], key: (r: ReportRange) => string, name: string): Promise<T[]> {
   const cached = await Promise.all(ranges.map((r) => deps.coord.peek(key(r))));
@@ -517,7 +519,8 @@ function mayDownload(a: WorkspaceAccess): void {
  * Send one of those downloads: at most LIMITS.dashboardExports in 10 minutes with the dashboard's own
  * (one allowance per person), in the audit log as report.exported with what was downloaded (as
  * routes/exports.ts does), and sent as an attachment. `read` builds the table once the allowance is
- * checked, so a download over it reads nothing.
+ * checked, so a download over it reads nothing (a live report's cached answer is looked up before, so
+ * one no longer kept isn't counted as a download: cachedRanges).
  */
 export async function sendCsv(c: Ctx, deps: Deps, a: WorkspaceAccess, storeId: string, read: () => Promise<{ name: string; table: CsvTable; metadata: Record<string, unknown> }>) {
   await limit(deps.coord, `rl:dashboard-export:${a.user?.id ?? a.workspaceId}`, LIMITS.dashboardExports, "Too many downloads. Wait a few minutes and try again.");
@@ -548,12 +551,14 @@ function liveReportFile(platform: "meta" | "google", conn: AdConnection, level: 
  * Before Google is asked for keywords or search terms (never for a cached answer or the demo's):
  * bizinsights' daily Google Ads operations aren't past the share these reports may use
  * (GOOGLE_ADS_DETAIL_SHARE: the syncs keep the rest), and this ad account hasn't had its
- * LIMITS.adsGoogleDetail for the day. While Google says the allowance is used up, the report itself
- * answers that (quota_exhausted).
+ * LIMITS.adsGoogleDetail for the day. While Google says the allowance is used up, the answer is the
+ * report's own (quota_exhausted), given before the account's count: Google isn't asked, so none of the
+ * account's reads is used.
  */
 async function googleDetailAllowed(deps: Deps, connectionId: string): Promise<void> {
   const budget = await googleAdsBudget(deps.coord);
-  if (!budget.paused && !googleAdsBudgetAllows(budget, "detail")) {
+  if (budget.paused) throw new HttpError(503, adErrorMessage("quota_exhausted", "google")!, "quota_exhausted");
+  if (!googleAdsBudgetAllows(budget, "detail")) {
     throw new HttpError(503, "Keyword and search-term reports are paused for a few hours so your Google Ads figures keep syncing: bizinsights has used most of today's Google Ads allowance. Reports already read stay available.", "google_detail_paused", 3600);
   }
   await limit(
@@ -988,9 +993,9 @@ export function adsRoutes(app: App, deps: Deps) {
     // parent is part of what was asked.
     const key = (r: ReportRange) => `ads-report:v3:${conn.id}:${q.level}:${parentKey(q.campaign, q.adset)}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`;
     if (csv) {
+      const [report, compared] = await cachedRanges<MetaReport>(deps, rangesOf(q), key, "Meta Ads");
       return sendCsv(c, deps, access, storeId, async () => {
-        const [report, compared] = await cachedRanges<MetaReport>(deps, rangesOf(q), key, "Meta Ads");
-        const table = metaReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone });
+        const table = metaReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, today });
         return { ...liveReportFile("meta", conn, q.level, parent, q), table };
       });
     }
@@ -1019,7 +1024,8 @@ export function adsRoutes(app: App, deps: Deps) {
    * Keywords and search terms (`level=keyword|search_term`, for the account, one campaign or (keywords)
    * one ad group): only when someone opens them, two operations a range, held to their own share of the
    * day's allowance and to LIMITS.adsGoogleDetail reads per ad account a day (googleDetailAllowed), and
-   * cached longer (30 minutes with today, 6 hours without). The demo's are generated, with neither guard.
+   * cached longer (30 minutes while the range ends today or yesterday, which Google may still be finishing;
+   * 6 hours once it ended before that). The demo's are generated, with neither guard.
    *
    * `format=csv` downloads the answer on screen at any level (cachedRanges, googleReportTable), never
    * asking Google, for a member who may also export reports; in the audit log. The demo's file says
@@ -1056,9 +1062,9 @@ export function adsRoutes(app: App, deps: Deps) {
     const detail = isGoogleDetailLevel(q.level);
     const key = (r: ReportRange) => `ads-greport:v4:${conn.id}:${q.level}:${parentKey(q.campaign, q.adGroup)}:${r.from}:${r.to}`;
     if (csv) {
+      const [report, compared] = await cachedRanges<GoogleReport>(deps, rangesOf(q), key, "Google Ads");
       return sendCsv(c, deps, access, storeId, async () => {
-        const [report, compared] = await cachedRanges<GoogleReport>(deps, rangesOf(q), key, "Google Ads");
-        const table = googleReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, demo: isDemoConnection(conn) });
+        const table = googleReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, today, demo: isDemoConnection(conn) });
         return { ...liveReportFile("google", conn, q.level, parent, q), table };
       });
     }
@@ -1069,8 +1075,9 @@ export function adsRoutes(app: App, deps: Deps) {
       key,
       (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
-      // Keywords and search terms cost the most to read and are opened again and again on the same dates.
-      detail ? { ttl: (r) => (r.to >= today ? 1800 : 21_600), ...(isDemoConnection(conn) ? {} : { onMiss: () => googleDetailAllowed(deps, conn.id) }) } : {},
+      // Keywords and search terms cost the most to read and are opened again and again on the same dates. A
+      // range ending yesterday is kept as briefly as one with today: just after midnight, Google is still filling it.
+      detail ? { ttl: (r) => (r.to >= addDays(today, -1) ? 1800 : 21_600), ...(isDemoConnection(conn) ? {} : { onMiss: () => googleDetailAllowed(deps, conn.id) }) } : {},
     ).catch((err: unknown) => {
       throw reportFailure(err, "google", conn.id);
     });
