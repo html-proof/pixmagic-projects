@@ -58,7 +58,8 @@ test("the owner keeps the store's costs, and the dashboard counts them without c
   await expect(page.getByTestId("profit-left")).toHaveText("$380.00");
   await expect(page.getByTestId("profit-note")).toContainText("Not net profit");
   await expect(page.getByTestId("profit-note")).toContainText("Shopify's profit report");
-  await expect(profit.getByText("Your costs", { exact: true })).toBeVisible();
+  // The legend's row (the ring's slice carries the same name as its <title>).
+  await expect(profit.getByRole("listitem").filter({ hasText: /^Your costs/ })).toContainText("$120.00");
 
   // Removed: it stops counting.
   await page.goto("/settings/costs");
