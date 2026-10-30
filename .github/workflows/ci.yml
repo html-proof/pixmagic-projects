@@ -192,8 +192,10 @@ jobs:
       pull-requests: read
       statuses: write
       actions: write
-    # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
-    timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
+    # A busy PC runs the integration tests 2-3 times slower than a GitHub runner. On 2026-10-30 they
+    # took 29-36 minutes on the PC (the whole job 34-41), and 39 while other work held its memory,
+    # which cut main's run for #298 off at 45 minutes with every test passed.
+    timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 75 || 30 }}
     services:
       postgres:
         # An empty image skips the container (service containers need a Linux runner).

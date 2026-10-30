@@ -174,6 +174,12 @@ const report = () => ({
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
     inventory: { current: { trackedVariants: 1, unitsInStock: 2, stockValueAtCost: 80, variantsWithCost: 1, retailValue: 200, outOfStock: 0, lowStock: 1 }, lowStockItems: [] },
     recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }], cancelledInRange: 2 },
+    order_outcomes: {
+      orders: 5,
+      outcome: { completed: 3, awaitingPayment: 1, unsuccessful: 1, cancelled: 1, paymentFailed: 0, refunded: 0 },
+      shipping: { orders: 4, sent: 2, partlySent: 0, notSent: 2, items: 9, itemsSent: 4 },
+      checkouts: { started: 6, completed: 3, left: 3, from: null },
+    },
     traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
@@ -290,6 +296,19 @@ describe("redactOverview", () => {
     expect(lines.modules.sales_overview.year.months[0]).toEqual(withoutRefunds);
     // The original is untouched.
     expect(report().modules.sales_overview.year.months[0]!.refunds).toBe(10);
+  });
+
+  it("shows how the dates' orders went part by part: payments with cancellations, shipping, checkouts left", () => {
+    const parts = (keys: string[]) => Object.keys(redactOverview(report(), member(keys)).modules.order_outcomes ?? {}).sort();
+    expect(parts(["orders.list"])).toEqual(["orders"]);
+    // Unsuccessful orders are mostly cancelled ones: payment status alone doesn't show them.
+    expect(parts(["orders.list", "orders.payments"])).toEqual(["orders"]);
+    expect(parts(["orders.list", "orders.payments", "orders.cancellations"])).toEqual(["orders", "outcome"]);
+    expect(parts(["orders.fulfillment"])).toEqual(["orders", "shipping"]);
+    // Checkouts left alone don't tell how many orders the store took.
+    expect(parts(["analytics.abandonment"])).toEqual(["checkouts"]);
+    expect(parts(["products.performance"])).toEqual([]);
+    expect(redactOverview(report(), member([...LEGACY_GRANTS.viewer, "orders.payments", "orders.cancellations", "orders.fulfillment", "analytics.abandonment"])).modules.order_outcomes).toEqual(report().modules.order_outcomes);
   });
 
   it("keeps them once granted", () => {

@@ -38,7 +38,7 @@ export function AdvertisingHero({ children }: { children?: ReactNode }) {
         </span>
         <div className="min-w-0">
           <h1 id="ads-hero-h" className="text-2xl font-semibold tracking-tight">
-            Advertising integrations
+            Ad accounts
           </h1>
           <p className="mt-1.5 max-w-2xl text-sm text-muted">
             Connect your ad accounts to see Google Ads, Meta Ads and AdSense next to your Shopify sales, all in one place. bizinsights only reads: it can&apos;t create, change or pause

@@ -16,7 +16,7 @@ const PERIODS = [
   [90, "Last 90 days"],
 ] as const;
 
-/** Settings → Email integrations → Overview: every number here is counted from what was actually sent. */
+/** Marketing → Email → Overview: every number here is counted from what was actually sent. */
 export default function EmailOverviewPage() {
   const { base, manage } = useEmail();
   const [days, setDays] = useState<number>(30);
@@ -36,7 +36,7 @@ export default function EmailOverviewPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Email integrations"
+        title="Email"
         sub="Send emails from your own Gmail, Microsoft 365 or SMTP accounts, automatically, when things happen in your business."
         actions={
           <select aria-label="Period" className="input w-auto" value={days} onChange={(e) => setDays(Number(e.target.value))}>

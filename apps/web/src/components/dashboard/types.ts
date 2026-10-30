@@ -5,6 +5,7 @@ import type { CompareMode } from "@app/shared/dates";
 import type { ExpenseTotals } from "@app/shared/expenses";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
+import type { OrderOutcomes } from "@app/shared/orders";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
 
@@ -621,6 +622,8 @@ export interface Overview {
     discount_codes?: DiscountCodesModule;
     /** The latest orders placed in the dates; `cancelledInRange`: orders cancelled in them (needs "View cancellations"). */
     recent_orders?: { items: RecentOrder[]; cancelledInRange?: number };
+    /** How the dates' orders went: completed, awaiting payment, unsuccessful, sent, and checkouts left (Orders at a glance). */
+    order_outcomes?: OrderOutcomes;
     inventory?: InventoryModule;
     catalog?: CatalogModule;
     ads?: AdsModule;

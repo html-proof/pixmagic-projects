@@ -3,73 +3,55 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  BadgePercent,
   Bell,
   Boxes,
   Briefcase,
   ChartColumn,
   ChevronDown,
   CircleCheck,
-  Funnel,
-  Gauge,
   Headset,
   Info,
-  LayoutDashboard,
   LifeBuoy,
   LogOut,
   Mail,
   Megaphone,
   Menu,
-  MessageCircle,
   MessageCircleMore,
-  MessageSquareText,
   OctagonAlert,
-  Package,
-  Plug,
-  ReceiptText,
   Search,
   Settings,
-  Sheet,
   ShieldCheck,
-  UserCog,
-  ShoppingBag,
   Store,
   TriangleAlert,
-  Truck,
   UserRound,
-  Users,
-  UsersRound,
-  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { canManage, useApp } from "@/components/AppContext";
+import { areaOf, AreaTabs, topicPlace, useAreas, type Place } from "@/components/AreaNav";
 import { BrandLogo } from "@/components/Brand";
-import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { CommandPalette, type PaletteItem } from "@/components/CommandPalette";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
-import { openView, topicInfo, TOPICS, useCurrentView, type Topic } from "@/components/dashboard/topics";
+import { openView, useCurrentView, type Topic } from "@/components/dashboard/topics";
 import { setSharedTab, useApi } from "@/lib/api";
 import { closeSharedDashboard } from "@/components/team/AccessStates";
 import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
-import { AUTOMATIONS_HUB } from "@/lib/features";
 import { notesSeenKey, readLocal, writeLocal } from "@/lib/storage";
 import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/alerts";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
-import { staffAccess } from "@app/shared/staff";
 import { Alert } from "@/components/ui";
-import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } from "@/lib/access";
+import { canOpenPage, landingPath, seesTopic, TOPIC_PAGE } from "@/lib/access";
 
 // ---------------------------------------------------------------------------
 // The signed-in frame, in the owner's design (2026-10-24): a dark sidebar down the whole left side
-// (logo, the dashboard's topics and the other areas, help, and the account at its foot) beside a
-// top bar over the page (store, search, notifications). On a phone the sidebar slides in from the
-// menu button and the account sits in the top bar. Topics open the dashboard's detail panels
-// (?view=…), the same ones its cards open; advertising (/advertising) and the shopping funnel (/funnel)
-// have pages of their own.
+// (logo, the six areas, help, and the account at its foot) beside a top bar over the page (store,
+// search, notifications). On a phone the sidebar slides in from the menu button and the account
+// sits in the top bar. The areas and the tabs of Sales and Marketing: components/AreaNav.tsx. Sales'
+// tabs open the dashboard's detail panels (?view=…), the same ones its cards open; Visitors (/funnel)
+// and Ads (/advertising) are pages of their own.
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";
@@ -86,8 +68,6 @@ function goToTopic(topic: Topic, path: string, push: (href: string) => void) {
 interface NavItem {
   label: string;
   icon: LucideIcon;
-  /** A brand's own mark in place of the icon (Google Ads, Meta Ads). */
-  glyph?: ReactNode;
   href: string;
   topic?: Topic;
   active: boolean;
@@ -112,11 +92,7 @@ function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void
         item.active ? "bg-nav-active text-white shadow-sm" : "text-white/75 hover:bg-white/[0.07] hover:text-white"
       }`}
     >
-      {item.glyph ? (
-        <span aria-hidden className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">{item.glyph}</span>
-      ) : (
-        <Icon aria-hidden className={`h-[18px] w-[18px] shrink-0 ${item.active ? "text-white" : "text-white/60 group-hover:text-white"}`} strokeWidth={1.8} />
-      )}
+      <Icon aria-hidden className={`h-[18px] w-[18px] shrink-0 ${item.active ? "text-white" : "text-white/60 group-hover:text-white"}`} strokeWidth={1.8} />
       <span className="truncate">{item.label}</span>
     </Link>
   );
@@ -139,65 +115,14 @@ function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem
 }
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const path = usePathname().replace(/\/$/, "");
+  const path = usePathname();
   const view = useCurrentView();
-  const { me, workspace, access, allowed, offers } = useApp();
-  const onDash = isDashboard(path);
+  const { me, workspace, access } = useApp();
   const full = hasFullAccess(access.role);
+  const here = areaOf(path, view);
   // Only what this member was granted (Team & Access), of what the workspace offers; the API refuses
   // the rest whatever the menu shows.
-  const topic = (t: Topic, label: string, icon: LucideIcon): NavItem[] => (seesTopic(access, t, offers) ? [{ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t }] : []);
-  const area = (href: string, label: string, icon: LucideIcon): NavItem => ({ label, icon, href, active: path === href || path.startsWith(`${href}/`) });
-  const within = (href: string) => path === href || path.startsWith(`${href}/`);
-  // Each platform's own pages light up its own entry, not Advertising's as well.
-  const adsPlatform = within("/advertising/google") || within("/advertising/meta");
-  const ads = seesTopic(access, "ads", offers);
-
-  const main: NavItem[] = [
-    ...(showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : []),
-    ...topic("overview", "Business Overview", Gauge),
-    // The Profit sheet: every figure a column per day, week or month, with the business events (/sheet).
-    ...(allowed("analytics.sales") ? [area("/sheet", "Profit sheet", Sheet)] : []),
-    ...topic("sales", "Sales & Orders", ShoppingBag),
-    ...topic("products", "Products", Package),
-    // The Inventory section (stock per location, alerts, changes). It takes the place of the
-    // dashboard's Stock panel in the menu for whoever can open it; the panel stays on the dashboard.
-    ...(offers("inventory") && allowed("inventory.view") ? [area("/inventory", "Inventory", Boxes)] : []),
-    ...topic("customers", "Customers", UsersRound),
-    // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
-    ...(ads ? [{ ...area("/advertising", "Advertising", Megaphone), active: within("/advertising") && !adsPlatform }] : []),
-    ...topic("discounts", "Discounts", BadgePercent),
-    // The Shopping Funnel: a page of its own (/funnel), shown to whoever the dashboard's shoppers panel was.
-    ...(seesTopic(access, "shoppers", offers) ? [area("/funnel", "Shopping Funnel", Funnel)] : []),
-  ];
-  const inventory = offers("inventory") && allowed("inventory.view");
-  const store: NavItem[] = [
-    ...topic("orders", "Orders", ReceiptText),
-    ...(inventory ? [] : topic("stock", "Stock", Boxes)),
-    ...topic("shipping", "Shipping", Truck),
-    ...topic("channels", "Sales channels", Store),
-    ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
-    ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
-  ];
-  // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
-  const automationsHub = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
-  const marketing: NavItem[] = [
-    ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
-    // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
-    ...(automationsHub ? [area("/automations", "Automations", Workflow)] : []),
-    ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
-    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/dashboard/whatsapp-automation", "WhatsApp", MessageCircle)] : []),
-  ];
-  const settings: NavItem[] = [
-    ...(allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
-    ...(allowed("members:manage") ? [area("/team", "Team & Access", ShieldCheck)] : []),
-    // Opened from a shared link: no account to manage, only their notifications for this workspace.
-    me.shared
-      ? area("/settings/notifications", "Notifications", Bell)
-      : full
-        ? { ...area("/settings", "Business Settings", Settings), href: "/settings/profile", active: within("/settings") && !within("/settings/integrations") }
-        : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
-  ];
+  const items: NavItem[] = useAreas().map((a) => ({ label: a.label, icon: a.icon, href: a.href, topic: a.topic, active: a.id === here }));
 
   return (
     <nav aria-label="App" className="flex flex-1 flex-col gap-4 px-3 pb-4 pt-2">
@@ -213,10 +138,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           )}
         </div>
       )}
-      <NavGroup items={main} onNavigate={onNavigate} />
-      <NavGroup title="Store" items={store} onNavigate={onNavigate} />
-      <NavGroup title="Marketing & integrations" items={marketing} onNavigate={onNavigate} />
-      <NavGroup title="Settings" items={settings} onNavigate={onNavigate} />
+      <NavGroup items={items} onNavigate={onNavigate} />
       <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.05] p-4">
         <div className="flex items-start gap-3">
           <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
@@ -396,12 +318,19 @@ function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" }) {
             <>
               <Link href="/settings/profile" className={menuItem}>
                 <UserRound aria-hidden className="h-4 w-4 text-muted" />
-                Your profile
+                Profile
               </Link>
               <Link href="/settings/security" className={menuItem}>
                 <ShieldCheck aria-hidden className="h-4 w-4 text-muted" />
                 Sign-in &amp; security
               </Link>
+              {/* Also an employee somewhere: their clock-in portal. */}
+              {!!me.employments?.length && (
+                <Link href="/portal" className={menuItem}>
+                  <Briefcase aria-hidden className="h-4 w-4 text-muted" />
+                  My work
+                </Link>
+              )}
             </>
           )}
           <div className="my-1 border-t border-border" />
@@ -564,35 +493,6 @@ function HelpBubble() {
   );
 }
 
-const TOPIC_ICON: Record<Topic, LucideIcon> = {
-  overview: Gauge,
-  sales: ShoppingBag,
-  ads: Megaphone,
-  adsense: Megaphone,
-  products: Package,
-  shoppers: Funnel,
-  timing: ChartColumn,
-  channels: Store,
-  shipping: Truck,
-  stock: Boxes,
-  discounts: BadgePercent,
-  customers: UsersRound,
-  orders: ReceiptText,
-};
-
-const TOPIC_WORDS: Partial<Record<Topic, string>> = {
-  overview: "health report summary print",
-  sales: "orders revenue net gross refunds",
-  products: "best sellers catalog",
-  shoppers: "analytics visits conversion funnel",
-  timing: "busiest hours days",
-  ads: "marketing meta google campaigns spend",
-  adsense: "earnings adsense",
-  customers: "returning contacts",
-  orders: "recent latest",
-  stock: "inventory low sold out",
-};
-
 function useMac() {
   const [mac, setMac] = useState(false);
   useEffect(() => setMac(/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)), []);
@@ -683,6 +583,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { me, workspace, workspaces, setWorkspaceId, access, allowed, offers } = useApp();
   const router = useRouter();
   const path = usePathname();
+  const here = areaOf(path, useCurrentView());
   const allowedHere = useAccessGuard();
   const [drawer, setDrawer] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -706,53 +607,51 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [drawer]);
 
+  const areas = useAreas();
   const items = useMemo<PaletteItem[]>(() => {
     const go = (href: string) => () => router.push(href);
-    const staff = offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0;
     const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null, !!me.shared, offers);
+    const place = (group: string, p: Place): PaletteItem => ({
+      id: p.id,
+      label: p.label,
+      group,
+      icon: p.icon,
+      keywords: p.keywords,
+      go: p.topic ? () => goToTopic(p.topic!, window.location.pathname, (href) => router.push(href)) : go(p.href),
+    });
+    // The pages inside an area's places, found by name too: each ad platform's, every stock list, and
+    // the settings pages that open from Connections.
+    const inside: Record<string, PaletteItem[]> = {
+      sales: seesTopic(access, "ads", offers)
+        ? [
+            { id: "advertising-meta", label: "Meta Ads", group: "Sales", icon: Megaphone, keywords: "facebook instagram ads spend purchases roas advertising", go: go("/advertising/meta") },
+            { id: "advertising-google", label: "Google Ads", group: "Sales", icon: Megaphone, keywords: "google ads spend conversions roas advertising", go: go("/advertising/google") },
+            { id: "google-ads", label: "Google Ads analytics", group: "Sales", icon: Megaphone, keywords: "google ads demo campaigns devices audience recommendations", go: go("/advertising/google/analytics") },
+            ...(seesTopic(access, "adsense", offers) ? [place("Sales", topicPlace("adsense"))] : []),
+            ...(allowed("marketing.campaigns") ? [{ id: "advertising-campaigns", label: "Campaign comparison", group: "Sales", icon: Megaphone, keywords: "campaigns meta google side by side advertising", go: go("/advertising/campaigns") }] : []),
+            { id: "advertising-reports", label: "Ad reports", group: "Sales", icon: Megaphone, keywords: "advertising csv export download ads", go: go("/advertising/reports") },
+          ]
+        : [],
+      stock:
+        offers("inventory") && allowed("inventory.view")
+          ? [
+              { id: "inventory-stock", label: "All stock", group: "Stock", icon: Boxes, keywords: "inventory products variants sku barcode", go: go("/inventory/stock") },
+              { id: "inventory-low", label: "Low stock", group: "Stock", icon: TriangleAlert, keywords: "inventory running low restock reorder", go: go("/inventory/low-stock") },
+              { id: "inventory-out", label: "Out of stock", group: "Stock", icon: OctagonAlert, keywords: "inventory sold out", go: go("/inventory/out-of-stock") },
+              ...(allowed("inventory.history") ? [{ id: "inventory-movements", label: "Stock movements", group: "Stock", icon: Boxes, keywords: "inventory history adjustments audit", go: go("/inventory/movements") }] : []),
+              { id: "inventory-locations", label: "Locations", group: "Stock", icon: Store, keywords: "inventory warehouses shops", go: go("/inventory/locations") },
+              { id: "inventory-reports", label: "Stock reports", group: "Stock", icon: ChartColumn, keywords: "inventory trends turnover sell-through", go: go("/inventory/reports") },
+              { id: "inventory-settings", label: "Stock settings", group: "Stock", icon: Settings, keywords: "inventory thresholds alerts low stock", go: go("/inventory/settings") },
+            ]
+          : [],
+      settings: SETTINGS_PAGES.filter((s) => s.inMenu === false && s.slug !== "email" && page(`/settings/${s.slug}`)).map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
+    };
     return [
-      ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
-      ...(allowed("analytics.sales")
-        ? [{ id: "sheet", label: "Profit sheet", group: "Insights", icon: Sheet, keywords: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer", go: go("/sheet") }]
-        : []),
-      ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
-        (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
-      ),
-      ...(offers("inventory") && allowed("inventory.view")
-        ? [
-            { id: "inventory", label: "Inventory", group: "Inventory", icon: Boxes, keywords: "stock levels warehouse locations sku", go: go("/inventory") },
-            { id: "inventory-stock", label: "All stock", group: "Inventory", icon: Boxes, keywords: "inventory products variants sku barcode", go: go("/inventory/stock") },
-            { id: "inventory-low", label: "Low stock", group: "Inventory", icon: TriangleAlert, keywords: "inventory running low restock reorder", go: go("/inventory/low-stock") },
-            { id: "inventory-out", label: "Out of stock", group: "Inventory", icon: OctagonAlert, keywords: "inventory sold out", go: go("/inventory/out-of-stock") },
-            ...(allowed("inventory.history") ? [{ id: "inventory-movements", label: "Inventory movements", group: "Inventory", icon: Boxes, keywords: "stock history adjustments audit", go: go("/inventory/movements") }] : []),
-            { id: "inventory-locations", label: "Locations", group: "Inventory", icon: Store, keywords: "inventory warehouses shops", go: go("/inventory/locations") },
-            { id: "inventory-reports", label: "Inventory reports", group: "Inventory", icon: ChartColumn, keywords: "stock trends turnover sell-through", go: go("/inventory/reports") },
-            { id: "inventory-settings", label: "Stock settings", group: "Inventory", icon: Settings, keywords: "thresholds alerts low stock", go: go("/inventory/settings") },
-          ]
-        : []),
-      ...(seesTopic(access, "ads", offers)
-        ? [
-            { id: "advertising-meta", label: "Meta Ads", group: "Advertising", icon: Megaphone, keywords: "facebook instagram ads spend purchases roas", go: go("/advertising/meta") },
-            { id: "advertising-google", label: "Google Ads", group: "Advertising", icon: Megaphone, keywords: "google ads spend conversions roas", go: go("/advertising/google") },
-            { id: "google-ads", label: "Google Ads analytics", group: "Advertising", icon: Megaphone, keywords: "google ads demo campaigns devices audience recommendations", go: go("/advertising/google/analytics") },
-            ...(allowed("marketing.campaigns") ? [{ id: "advertising-campaigns", label: "Campaign comparison", group: "Advertising", icon: Megaphone, keywords: "campaigns meta google side by side", go: go("/advertising/campaigns") }] : []),
-            { id: "advertising-reports", label: "Advertising reports", group: "Advertising", icon: Megaphone, keywords: "csv export download ads", go: go("/advertising/reports") },
-          ]
-        : []),
-      ...(AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")))
-        ? [{ id: "automations", label: "Automations", group: "Marketing", icon: Workflow, keywords: "automation workflow trigger sms email whatsapp message history delivery", go: go("/automations") }]
-        : []),
-      ...(offers("sms") && allowed("marketing.campaigns")
-        ? [{ id: "messaging", label: "Customer Messaging", group: "Marketing", icon: MessageSquareText, keywords: "sms text messages campaigns automations templates opt-out", go: go("/messaging") }]
-        : []),
-      ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/dashboard/whatsapp-automation") }] : []),
-      ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
-      ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
-      ...(allowed("members:manage") ? [{ id: "team", label: "Team & Access", group: "Settings", icon: ShieldCheck, keywords: "members invite users roles permissions share", go: go("/team") }] : []),
-      ...SETTINGS_PAGES.filter((s) => !s.href && page(`/settings/${s.slug}`)).map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
+      ...areas.flatMap((a) => [...a.places.map((p) => place(a.label, p)), ...(inside[a.id] ?? [])]),
+      ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Your account", icon: Briefcase, keywords: "employee clock in timesheets pay", go: go("/portal") }] : []),
       { id: "help", label: "Help centre", group: "Help", icon: Headset, keywords: "support contact faq", go: go("/support") },
     ];
-  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed, offers]);
+  }, [router, areas, workspace.staffRole, me.employments, me.shared, access, allowed, offers]);
 
   return (
     <div className="min-h-dvh lg:flex">
@@ -802,6 +701,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="px-4 pb-24 pt-6 sm:px-6 lg:px-8 lg:pt-2">
           <div className="mx-auto max-w-[90rem]">
             <AccessNotice />
+            {/* Sales' and Marketing's tabs over their pages (the dashboard's panels carry Sales' own). */}
+            {allowedHere && !isDashboard(path) && (here === "sales" || here === "marketing") && <AreaTabs id={here} className="mb-5" />}
             {allowedHere ? children : <p className="text-muted">Loading…</p>}
           </div>
         </main>

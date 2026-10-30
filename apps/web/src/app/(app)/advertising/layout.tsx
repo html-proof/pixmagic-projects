@@ -29,12 +29,12 @@ export default function AdvertisingLayout({ children }: { children: ReactNode })
   });
   return (
     <ToastProvider>
-      <SectionLayout title="Advertising" icon={<Megaphone aria-hidden className="h-[18px] w-[18px] text-accent" />} items={items}>
+      <SectionLayout title="Ads" icon={<Megaphone aria-hidden className="h-[18px] w-[18px] text-accent" />} items={items}>
         {storesStatus !== "ready" ? (
           <StoresPending />
         ) : !store ? (
           <div className="card">
-            <h1 className="text-lg font-semibold">Advertising</h1>
+            <h1 className="text-lg font-semibold">Ads</h1>
             <p className="mt-1 text-sm text-muted">Connect a Shopify store first: ad accounts are connected to a store, and set against its sales.</p>
             {canManage(workspace.role) && (
               <Link href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`} className="btn-primary mt-3 inline-flex">

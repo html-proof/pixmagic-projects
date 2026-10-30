@@ -1,6 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, type ReactNode } from "react";
+import { areaOf, AreaTabs, useAreas } from "@/components/AreaNav";
 import { fmtRange } from "./format";
 import { Icon, type IconName } from "./Icons";
 import { topicInfo, type Topic } from "./topics";
@@ -35,6 +36,7 @@ function DetailSheet({
   children,
   exportHref,
   canPrint,
+  tabs,
 }: {
   title: string;
   icon: IconName;
@@ -44,6 +46,8 @@ function DetailSheet({
   /** This section as CSV, for someone allowed to download it ("Export approved reports"). */
   exportHref: string | null;
   canPrint: boolean;
+  /** The tabs of the area the panel belongs to, under its title. */
+  tabs?: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const closeBtn = useRef<HTMLButtonElement>(null);
@@ -109,6 +113,11 @@ function DetailSheet({
             <Icon name="close" />
           </button>
         </header>
+        {tabs && (
+          <div className="bg-surface px-2 sm:px-4" data-print-hide>
+            {tabs}
+          </div>
+        )}
         <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-6" data-print-scroll>{children}</div>
       </div>
     </div>
@@ -136,6 +145,9 @@ export function TopicDetail({
   onOpen: (t: Topic) => void;
 }) {
   const range = fmtRange(ov.range.from, ov.range.to);
+  // Every Sales place one tap away (Stock's panel stands alone), for whoever has more than one.
+  const sales = useAreas().find((a) => a.id === "sales");
+  const tabbed = areaOf("/dashboard", topic) === "sales" && (sales?.places.length ?? 0) > 1;
   const period: Record<Topic, string> = {
     overview: `${range} · ${ov.store.name ?? ov.store.shopDomain}`,
     sales: range,
@@ -153,7 +165,16 @@ export function TopicDetail({
   };
   return (
     // Keyed by topic so moving from the overview to another topic starts at the top of the panel.
-    <DetailSheet key={topic} title={topicInfo(topic).title} icon={topicInfo(topic).icon} period={period[topic]} onClose={onClose} exportHref={exportHref} canPrint={canPrint}>
+    <DetailSheet
+      key={topic}
+      title={topicInfo(topic).title}
+      icon={topicInfo(topic).icon}
+      period={period[topic]}
+      onClose={onClose}
+      exportHref={exportHref}
+      canPrint={canPrint}
+      tabs={tabbed ? <AreaTabs id="sales" /> : null}
+    >
       <TopicContents topic={topic} ov={ov} currency={currency} contactsOn={contactsOn} onOpen={onOpen} />
     </DetailSheet>
   );

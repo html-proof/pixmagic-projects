@@ -55,9 +55,11 @@ test("an owner shares Customers and Products with a client, changes it while the
   const ws = await createWorkspace(page, "Acme Goods");
   await insertStore(ws, `team-${Date.now()}.myshopify.com`, ["read_orders", "read_products", "read_customers"]);
   await page.goto("/dashboard");
-  await sidebar(page).getByRole("link", { name: "Team & Access" }).click();
+  // Settings → People & access.
+  await sidebar(page).getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: "People & access" }).click();
   await expect(page).toHaveURL(/\/team/);
-  await expect(page.getByRole("heading", { name: "Team & Access" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "People & access" })).toBeVisible();
   await expect(page.getByTestId("summary-total")).toContainText("1 member in the team");
 
   // ---- Invite: Custom, Customers (list only) and Products (select all), with a message.
@@ -114,19 +116,28 @@ test("an owner shares Customers and Products with a client, changes it while the
   // The token left the address bar before anything else on the page ran.
   expect(guest.url()).not.toContain("token=");
 
-  // ---- Their sidebar: the shared areas and their account, nothing else.
+  // ---- Their sidebar: the shared areas and their notifications, nothing else.
   const nav = sidebar(guest);
   await expect(guest.getByTestId("member-badge")).toContainText("Acme Goods");
   await expect(guest.getByTestId("member-badge")).toContainText("View only");
-  await expect(nav.getByRole("link", { name: "Products" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Customers" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Sales" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Stock" })).toBeVisible();
-  // Opened from the link: their notifications, but no account pages (they never signed in to one).
-  await expect(nav.getByRole("link", { name: "Notifications" })).toBeVisible();
   await expect(guest.getByTestId("member-badge")).toContainText("no sign-in needed");
-  for (const hidden of ["Sales & Orders", "Advertising", "Discounts", "Analytics", "Team & Access", "Settings", "WhatsApp", "Business Overview", "My Account"]) {
+  for (const hidden of ["Marketing", "Staff"]) {
     await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
   }
+  // Sales holds only the two parts shared: Top products and Customers, as tabs.
+  await nav.getByRole("link", { name: "Sales" }).click();
+  const salesTabs = guest.getByTestId("area-tabs-sales");
+  await expect(salesTabs.getByRole("link")).toHaveText(["Top products", "Customers"]);
+  await salesTabs.getByRole("link", { name: "Customers" }).click();
+  await expect(guest.getByRole("heading", { name: "Customers", exact: true, level: 2 })).toBeVisible();
+  await guest.getByRole("button", { name: "Close details" }).click();
+  // Opened from the link: their notifications, but no account pages (they never signed in to one).
+  await nav.getByRole("link", { name: "Settings" }).click();
+  await expect(guest).toHaveURL(/\/settings\/notifications/);
+  await expect(guest.getByRole("navigation", { name: "Settings" }).getByRole("link")).toHaveText(["Notifications"]);
   const { rows } = await db.query("SELECT m.role, m.permissions FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1", [client]);
   expect(rows).toEqual([{ role: "custom", permissions: ["customers.list", "products.view", "products.performance", "products.inventory"] }]);
 
@@ -150,7 +161,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   // An address with no page at all is the not-found page, outside the app: nothing of the workspace.
   await guest.goto("/dashboard/setting");
   await expect(guest.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  await expect(sidebar(guest).getByRole("link", { name: "Products" })).toHaveCount(0);
+  await expect(sidebar(guest).getByRole("link", { name: "Sales" })).toHaveCount(0);
   // And their APIs refuse the shared session outright, whatever the page would have done.
   const adminApis = await guest.evaluate(
     async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees", "email/accounts"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
@@ -164,12 +175,12 @@ test("an owner shares Customers and Products with a client, changes it while the
   await asNewVisitor(phone);
   await phone.goto(link);
   await expect(phone).toHaveURL(/\/dashboard/);
-  await expect(sidebar(phone).getByRole("link", { name: "Products" })).toBeVisible();
+  await expect(sidebar(phone).getByRole("link", { name: "Sales" })).toBeVisible();
   await ctx2.close();
 
   // ---- The owner swaps Customers for Marketing (advertising); the client's screen follows by itself.
-  await guest.goto("/dashboard");
-  await expect(nav.getByRole("link", { name: "Customers" })).toBeVisible();
+  await guest.goto("/dashboard?view=products");
+  await expect(salesTabs.getByRole("link", { name: "Customers" })).toBeVisible();
   await page.reload();
   const member = page.getByTestId("team-row").filter({ hasText: client }).filter({ visible: true });
   await expect(member).toContainText("Active");
@@ -183,8 +194,8 @@ test("an owner shares Customers and Products with a client, changes it while the
   await edit.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText(`Access for ${client} updated.`)).toBeVisible();
 
-  await expect(nav.getByRole("link", { name: "Advertising" })).toBeVisible({ timeout: 15_000 });
-  await expect(nav.getByRole("link", { name: "Customers" })).toHaveCount(0);
+  await expect(salesTabs.getByRole("link", { name: "Ads", exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(salesTabs.getByRole("link", { name: "Customers" })).toHaveCount(0);
   await expect(guest.getByTestId("access-notice")).toContainText("was just updated");
   // And the API refuses what was taken away, straight away.
   const refused = await guest.evaluate(async (w) => (await fetch(`/api/workspaces/${w}/stores`)).status, ws);
@@ -233,7 +244,7 @@ test("a member with nothing shared sees No access assigned, and the team page wo
   ] as const) {
     await page.setViewportSize({ width, height });
     await page.goto("/team");
-    await expect(page.getByRole("heading", { name: "Team & Access" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "People & access" })).toBeVisible();
     await expect(page.getByTestId(cards ? "team-cards" : "team-table")).toBeVisible();
     await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: nobody })).toBeVisible();
     // Nothing runs off the side of the screen.
@@ -279,8 +290,9 @@ test("a browser signed in to another account opens a shared link: the account st
   await expect(shared.getByTestId("member-badge")).toContainText("Shared Co");
   await expect(shared.getByTestId("member-badge")).toContainText("View only");
   const nav = sidebar(shared);
-  await expect(nav.getByRole("link", { name: "Products" })).toBeVisible();
-  for (const hidden of ["Sales & Orders", "Customers", "Advertising", "Team & Access", "Settings"]) await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
+  // One part shared (Top products): Sales opens it, with no tabs; Settings holds their notifications.
+  await expect(nav.getByRole("link", { name: "Sales" })).toBeVisible();
+  for (const hidden of ["Home", "Marketing", "Stock", "Staff"]) await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
   // Nothing can be changed from it, whatever is tried.
   const tryInvite = await shared.evaluate(async (w) => {
     const r = await fetch(`/api/workspaces/${w}/team/invitations`, { method: "POST", headers: { "content-type": "application/json", "x-bi-context": "shared" }, body: JSON.stringify({ email: "x@example.com", role: "viewer", permissions: [] }) });
@@ -322,7 +334,7 @@ test("a browser signed in to another account opens a shared link: the account st
   await expect(page.getByText(`Access for ${client} renewed`)).toBeVisible();
   await shared.goto(link);
   await expect(shared).toHaveURL(/\/dashboard/);
-  await expect(sidebar(shared).getByRole("link", { name: "Products" })).toBeVisible();
+  await expect(sidebar(shared).getByRole("link", { name: "Sales" })).toBeVisible();
 
   // ---- Closing the shared dashboard leaves their own account signed in. The tab goes to the
   // homepage, which sends a signed-in browser straight on to its own dashboard: so this one ends

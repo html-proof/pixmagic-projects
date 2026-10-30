@@ -8,6 +8,7 @@ import {
   FUNNEL_DEVICES,
   funnelInsights,
   funnelTransitions,
+  FUNNEL_STEPS,
   PURCHASED_STEP,
   reachedCounts,
   segmentFunnel,
@@ -31,6 +32,8 @@ import { localMoment, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js
 // ---------------------------------------------------------------------------
 
 const TOP_PAGES = 8;
+/** The funnel step a visit reaches by starting a checkout. */
+const CHECKOUT_STEP = FUNNEL_STEPS.indexOf("started_checkout");
 const isSection = (s: string | null): s is SiteSection => s !== null && (SITE_SECTIONS as readonly string[]).includes(s);
 
 /**
@@ -134,6 +137,29 @@ export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, p
     previous: { visits: prevVisits, conversionRate: prevConversion, imported, reached: prevReached },
     deltas: { visits: imported ? delta(summary.visits, prevVisits) : null, conversionRate: imported ? delta(summary.conversionRate, prevConversion) : null },
   };
+}
+
+/**
+ * Shoppers who started a checkout in the range, and how many bought or left (`OrderOutcomes.checkouts`
+ * in @app/shared): visits whose furthest step is the checkout or the purchase, one per shopper per
+ * day as the funnel counts them. Only from when the pixel counted every visit (`visitsHistoryStart`);
+ * null when that is after the range or nothing was recorded, which isn't the same as none.
+ */
+export async function checkoutsLeft(tx: Tx, { ws, storeId }: Scope, range: DateRange, store: Pick<Store, "timezone" | "pixelInstalledAt">) {
+  const [first] = await tx.$queryRaw<Array<{ day: string | null }>>`
+    SELECT MIN(day) AS day FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId}`;
+  const historyFrom = visitsHistoryStart(store.pixelInstalledAt, store.timezone, first?.day ?? null);
+  if (!historyFrom || range.to < historyFrom) return null;
+  // The day tracking began on was only partly counted: from the day after.
+  const from = historyFrom > range.from ? historyFrom : null;
+  const [row] = await tx.$queryRaw<Array<{ started: number; completed: number }>>`
+    SELECT (COUNT(*) FILTER (WHERE v.furthest_step >= ${CHECKOUT_STEP}))::int AS started,
+           (COUNT(*) FILTER (WHERE v.furthest_step = ${PURCHASED_STEP}))::int AS completed
+    FROM funnel_visits v
+    WHERE v.workspace_id = ${ws} AND v.store_id = ${storeId} AND v.day BETWEEN ${from ?? range.from} AND ${range.to}`;
+  const started = row?.started ?? 0;
+  const completed = row?.completed ?? 0;
+  return { started, completed, left: started - completed, from };
 }
 
 /** What the Shopping Funnel page asks beyond the dashboard's funnel. */
