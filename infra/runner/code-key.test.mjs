@@ -6,7 +6,8 @@ import { CI_IGNORES, codeEntries, codeKey, ignoredByCi, listingEntries, treeEntr
 test("ignoredByCi is ci.yml's paths-ignore", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
   const lists = [...workflow.matchAll(/paths-ignore: (\[.*\])/g)].map((m) => JSON.parse(m[1]));
-  assert.equal(lists.length, 2, "push and pull_request");
+  // Pushes to main only: a pull request of only these still reports its checks (ci.yml, top).
+  assert.equal(lists.length, 1, "push to main");
   for (const list of lists) assert.deepEqual(list, CI_IGNORES, "change ignoredByCi with paths-ignore");
   for (const path of ["README.md", "apps/web/README.md", "docs/aws-deployment.md", "docs/images/flow.png"]) assert.ok(ignoredByCi(path), path);
   for (const path of ["apps/docs/page.ts", "notes.mdx", "docs.ts", "readme.md.ts", ".github/workflows/ci.yml"]) assert.ok(!ignoredByCi(path), path);

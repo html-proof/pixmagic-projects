@@ -8,6 +8,7 @@ import {
   customerFigures,
   customerHistoryStart,
   customersKnownDay,
+  recordedCustomerStart,
   type Cohort,
   type CohortCount,
   type CustomerFigures,
@@ -70,9 +71,11 @@ type CohortRaw = { cohort: string | null; month: string | null; first_buyers: nu
  * customers with them, as Shopify's customer reports leave them out (`customerCounts`); cancelled
  * orders count as order history, as they do for the returning-customer flag.
  *
- * - Where it starts (`customersFrom`, `customerHistoryStart`): the first whole day whose orders are
- *   all imported and linked to their customer. Shopify shares 60 days of orders without
- *   read_all_orders, and orders read before the store granted read_customers have no customer.
+ * - Where it starts (`customersFrom`): the first whole day whose orders are all imported and linked
+ *   to their customer. Shopify shares 60 days of orders without read_all_orders, and orders read
+ *   before the store granted read_customers have no customer. From the grant as recorded
+ *   (stores.customers_from, `recordedCustomerStart`), else inferred from the orders
+ *   (`inferredCustomerStart`: stores that granted it before it was recorded).
  * - A customer's first order is the one Shopify counts as their first purchase
  *   (`orders.is_returning_customer` false, settled from Shopify's own position of the order,
  *   `settleReturningCustomers`): known even when their earlier orders were never imported, so a
@@ -85,24 +88,15 @@ type CohortRaw = { cohort: string | null; month: string | null; first_buyers: nu
  * at most MAX_COHORT_MONTHS months of orders with a known customer.
  */
 export async function customerAnalytics(tx: Tx, scope: Scope, store: Store, range: DateRange, now: Date, view: CustomerAnalyticsView) {
-  const { ws, storeId } = scope;
   const today = localDay(now, store.timezone);
   const data = await importedData(tx, scope, store);
   // The first whole day imported: the day after the one the import window started on; with the
   // whole history (the epoch), the first order's day; unrecorded (older imports), the history's start.
   const window = store.ordersHistoryFrom;
   const wholeFrom = !window ? data.historyFrom : window.getTime() <= 0 ? data.oldestOrderDay : firstWholeDay(window, store.timezone);
-  // daily_store_metrics has a row a day (orders of gift cards only left out, as here): the cheap way
-  // to the days whose orders had a known customer and those whose orders had none (customersKnownDay).
-  // Before the first whole day, only the days with a known customer count: a few at most.
-  const days = wholeFrom
-    ? await tx.$queryRaw<Array<{ day: string; orders: number; with_customer: number }>>`
-        SELECT day, orders, orders_with_customer AS with_customer FROM daily_store_metrics
-        WHERE workspace_id = ${ws} AND store_id = ${storeId} AND orders > 0
-          AND (day >= ${wholeFrom} OR orders_with_customer > 0)`
-    : [];
-  const known = wholeFrom ? customersKnownDay(days.map((d) => ({ day: d.day, orders: num(d.orders), withCustomer: num(d.with_customer) })), wholeFrom) : null;
-  const customersFrom = customerHistoryStart(wholeFrom, known);
+  const customersFrom = store.customersFrom
+    ? recordedCustomerStart(wholeFrom, store.customersFrom, store.timezone)
+    : await inferredCustomerStart(tx, scope, wholeFrom);
   const about = {
     today,
     importing: store.status === "pending" || store.status === "syncing",
@@ -120,6 +114,23 @@ export async function customerAnalytics(tx: Tx, scope: Scope, store: Store, rang
   if (customersFrom === null || customersFrom > today) return { ...about, dates: null, cohorts: null };
   const rereadFrom = new Date(now.getTime() - SALES_REREAD_DAYS * 86_400_000);
   return { ...about, dates: await customerDates(tx, scope, range, customersFrom, view, rereadFrom), cohorts: await customerCohorts(tx, scope, today, customersFrom, view, rereadFrom) };
+}
+
+/**
+ * Where customers start on a store that granted read_customers before the grant was recorded
+ * (stores.customers_from null): the day orders began to carry their customer, read from the orders
+ * (`customersKnownDay`). daily_store_metrics has a row a day (orders of gift cards only left out, as
+ * here): the cheap way to the days whose orders had a known customer and those whose orders had
+ * none. Before the first whole day, only the days with a known customer count: a few at most.
+ */
+async function inferredCustomerStart(tx: Tx, { ws, storeId }: Scope, wholeFrom: string | null): Promise<string | null> {
+  if (!wholeFrom) return null;
+  const days = await tx.$queryRaw<Array<{ day: string; orders: number; with_customer: number }>>`
+    SELECT day, orders, orders_with_customer AS with_customer FROM daily_store_metrics
+    WHERE workspace_id = ${ws} AND store_id = ${storeId} AND orders > 0
+      AND (day >= ${wholeFrom} OR orders_with_customer > 0)`;
+  const known = customersKnownDay(days.map((d) => ({ day: d.day, orders: num(d.orders), withCustomer: num(d.with_customer) })), wholeFrom);
+  return customerHistoryStart(wholeFrom, known);
 }
 
 /** Net sales are shown only once every order counted has its sales read from Shopify. */

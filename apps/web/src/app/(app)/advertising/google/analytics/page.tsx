@@ -173,7 +173,7 @@ export default function GoogleAdsAnalyticsPage() {
           ) : (
             <p className="text-sm text-muted">Campaign figures need the &ldquo;View campaigns&rdquo; permission.</p>
           )}
-          <SpendingSection series={a.series} campaigns={a.campaigns} currency={currency} demo={demo} today={a.today} range={a.range} />
+          <SpendingSection series={a.series} campaigns={a.campaigns} settings={a.campaignSettings} currency={currency} demo={demo} today={a.today} range={a.range} />
           <ConversionsSection series={a.conversions.series} top={a.conversions.top} currency={currency} demo={demo} today={a.today} range={a.range} />
           <DevicesSection devices={a.devices} currency={currency} demo={demo} range={a.range} note={a.audience.note} />
           <AudienceSection audience={a.audience} currency={currency} demo={demo} range={a.range} />

@@ -38,7 +38,8 @@ Try again in a minute." without asking Meta, as it does when Meta throttles one 
   Status not read yet. A campaign's name links to its platform's page with `?account=<its connection>&campaign=<its id>`,
   which opens it in the live report (none for Meta's "Other campaigns" row, which is no campaign). The status is the platform's own word as of the account's last sync (Google's
   `campaign.status`, read with the daily figures; Meta's `effective_status`, read from the account's
-  campaign list alongside its insights, best effort), kept per campaign in `ad_campaigns` and grouped by
+  campaign list alongside its insights, best effort), kept per campaign in `ad_campaigns` (with Google's type,
+  primary status and budget, and Meta's budget: "Stored campaign facts", below) and grouped by
   `campaignStatusGroup` (@app/shared/ads). A filter only picks rows: share of spend stays of all spend,
   and the totals above stay every campaign's. The status is also a column of the `ads_campaigns` report.
 - The pages ask `GET /workspaces/:ws/stores/:storeId/overview?<dates>&parts=advertising[&platform=][&account=]`
@@ -132,10 +133,44 @@ no extra operation.
   A$500.00 total" for a campaign total budget, which covers the campaign's own start and end dates
   (`total_amount_micros`, period `CUSTOM_PERIOD`; Google sets one amount or the other). Nothing when Google gives
   neither. A shared budget reads as its own amount, which several campaigns draw on.
-- Both are Google's now, not for the dates picked, and the page says so. Neither is stored: Campaign comparison still
-  shows the status the daily sync stores (`campaign.status`), and Account analytics' budgets and spend against budget
-  are still the demo's only, since a real account's would need them stored first (a schema change, not made yet).
+- Both are Google's now, not for the dates picked, and the page says so. The live report reads them each time; the
+  sync stores them too ("Stored campaign facts", below), for Campaign comparison and Account analytics.
 - The demo's campaigns carry the same fields ([ads-demo.md](ads-demo.md)).
+
+## Stored campaign facts
+
+Each sync keeps, per campaign, what its platform says about it now beyond its status (`ad_campaigns`, migration
+`20261030180000_ad_campaign_settings`; `AdCampaignFacts` in @app/shared/ads):
+
+| Column | Google Ads | Meta Ads |
+| --- | --- | --- |
+| `status` | `campaign.status` (ENABLED, PAUSED, REMOVED) | `effective_status` (ACTIVE, CAMPAIGN_PAUSED, WITH_ISSUES...) |
+| `channel_type` | `campaign.advertising_channel_type` (SEARCH, SHOPPING, PERFORMANCE_MAX...) | none |
+| `primary_status`, `primary_status_reasons` | `campaign.primary_status` and its reasons | none |
+| `budget_period`, `budget_amount` | `campaign_budget.period` DAILY with `amount_micros`, or CUSTOM_PERIOD with `total_amount_micros` | the campaign's own `daily_budget` (DAILY) or `lifetime_budget` (LIFETIME), from minor units in the account's currency; none when its budgets are its ad sets' |
+
+- **No call of their own.** Google's are selected in the daily figures' own campaign query (`googleCampaignDays`), so
+  the Explorer allowance is spent as before and the syncs' 80% stop is unchanged. If Google refuses one of their fields,
+  the days are read with the plain query (one more operation, only then) and the facts stay as last read. Meta's
+  come from the campaign list the sync already reads for the status (`metaListed`, `META_OBJECT_FIELDS`); a list Meta
+  gives without its settings' fields leaves the budgets as last read. A fact not read stays as stored, and one never
+  read is null: the pages show "—", never a guess.
+- **As of the last sync, not for the dates.** A budget or status changed during the dates picked isn't followed; the
+  pages say so.
+- **During a deploy**, the new code runs for a minute or two before its migration: readers and the sync check the
+  columns exist first (`campaignFactsReady` in `packages/core/src/adConnections/campaigns.ts`) and leave the facts out
+  until they do.
+- **Campaign comparison** shows Google's primary status in words with its reasons (Limited: limited by budget), else the
+  platform's status; a **Type** column (Google's channel type) and a **Budget** column ("A$40.00 a day", "A$500.00
+  total", "A$900.00 lifetime"). The status filter still groups the platform's status (`campaignStatusGroup`). The
+  `ads_campaigns` report adds "Primary status (Google)", "Primary status reasons (Google)", "Campaign type (Google)",
+  "Budget" and "Budget period" after "Status", in the platform's own words.
+- **Account analytics** for a real account: each campaign with figures in the dates gets its type, status, primary
+  status and budget from `ad_campaigns` (the demo's from its generator, as before), so the type and status filters,
+  the recommendations (which skip paused and removed campaigns) and **Campaign budget comparison** work as they do for
+  the demo. Spend against budget is the daily budget Google states now × the days the campaign ran in the dates; a
+  campaign total budget is shown but not paced (it covers the campaign's own dates). `campaignSettings` in the answer
+  says where they came from (`generated` or `synced`, with `asOf`, the latest the sync read).
 
 ## Meta attribution windows
 

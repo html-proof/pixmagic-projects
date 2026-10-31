@@ -6,12 +6,13 @@
  *
  * Nothing here is a prediction: every figure is what the stored orders say happened, and a month
  * that hasn't come yet has no figure at all (never 0). Customers are known only from the day the
- * orders carry them (`customerHistoryStart`), so a cohort whose month began before that is marked
+ * orders carry them (`recordedCustomerStart` from the recorded grant, `customerHistoryStart` for a
+ * store that granted before it was recorded), so a cohort whose month began before that is marked
  * partial instead of being read as a small one.
  */
 // Without the ".js" the rest of the package uses, as ./sales does: a bundler importing this file
 // directly (@app/shared/customers) doesn't map "./dates.js" to dates.ts.
-import { addDays } from "./dates";
+import { addDays, firstWholeDay } from "./dates";
 
 /** How many first-order months the cohort table lists unless asked for another number, and at most. */
 export const COHORT_MONTHS = 12;
@@ -37,7 +38,9 @@ export const monthsBetween = (a: string, b: string): number => monthIndex(b) - m
 export const perCustomer = (total: number, customers: number): number | null => (customers > 0 ? total / customers : null);
 
 /**
- * The first store-local day from which every order's customer is known, or null while none is.
+ * The first store-local day from which every order's customer is known, or null while none is,
+ * inferred from the orders: for a store that granted read_customers before the grant was recorded
+ * (stores.customers_from null; `recordedCustomerStart` otherwise).
  *
  * - `wholeFrom`: the first day whose orders were all imported (the day after the one the import
  *   window started on, `firstWholeDay` of stores.orders_history_from; the store's own history start
@@ -60,6 +63,20 @@ export function customerHistoryStart(wholeFrom: string | null, known: { day: str
   // guests when orders were linked before the window's first whole day too).
   if (known.day <= wholeFrom || (!known.unlinkedBefore && (!known.unlinkedOn || known.linkedBefore))) return wholeFrom;
   return known.unlinkedOn ? addDays(known.day, 1) : known.day;
+}
+
+/**
+ * `customerHistoryStart` for a store whose grant of read_customers is recorded: `customersFrom`
+ * (stores.customers_from), from when every stored order carries its customer. That moment is part
+ * way through a day, which is only partly known (`firstWholeDay`); the epoch is the whole history
+ * read with customers. Never before `wholeFrom`, the first day whose orders are all imported; null
+ * while that isn't known.
+ */
+export function recordedCustomerStart(wholeFrom: string | null, customersFrom: Date, timeZone: string): string | null {
+  if (wholeFrom === null) return null;
+  if (customersFrom.getTime() <= 0) return wholeFrom;
+  const day = firstWholeDay(customersFrom, timeZone);
+  return day > wholeFrom ? day : wholeFrom;
 }
 
 /** One store-local day's orders (daily_store_metrics, gift cards only left out) and how many of them have a known customer. */

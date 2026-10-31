@@ -7,6 +7,7 @@ import {
   AD_ERROR_OURS,
   fromGoogleAdsRow,
   googleAccountStatus,
+  googleCampaignFacts,
   googleCustomerId,
   googleParentFits,
   googleReportRows,
@@ -318,9 +319,18 @@ export async function googleAdAccounts(c: GoogleConfig, accessToken: string, opt
   throw new AdsNoAccountsError(`Only manager accounts with no active ad account under them: ${ids.slice(0, 20).join(", ")}`, "manager_only");
 }
 
+/** Google refusing a query itself (a field it doesn't take): not lost access, throttling or an outage. */
+const queryRefused = (err: unknown) => err instanceof AdsApiError && err.status === 400 && err.errorCode === "provider_error";
+
+const DAY_METRICS = "segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value";
+/** What the campaign query reads about each campaign now, beyond its status: the facts kept in ad_campaigns (googleCampaignFacts). */
+const CAMPAIGN_FACTS = "campaign.advertising_channel_type, campaign.primary_status, campaign.primary_status_reasons, campaign_budget.period, campaign_budget.amount_micros, campaign_budget.total_amount_micros";
+
 /**
  * Cost, impressions, clicks, conversions and their value per campaign per day, and the purchases
- * among those conversions.
+ * among those conversions; each row also carries what Google says about its campaign now (channel
+ * type, primary status and reasons, budget: `campaignFacts`), selected in the same query, so they
+ * cost no operation of their own.
  *
  * Google's metrics.conversions counts every conversion action included in "Conversions" (leads,
  * sign-ups, calls, purchases...). Purchases are the conversions of actions in the PURCHASE category,
@@ -332,17 +342,24 @@ export async function googleCampaignDays(c: GoogleConfig, accessToken: string, a
   // The days go into the query text: only ever real YYYY-MM-DD days.
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const during = `segments.date BETWEEN '${since}' AND '${until}'`;
-  const rows = (
-    await googleSearch<GoogleAdsRow>(
-      c,
-      accessToken,
-      account.accountId,
-      `SELECT campaign.id, campaign.name, campaign.status, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE ${during}`,
-      account.loginCustomerId,
-    )
-  )
-    .map((r) => fromGoogleAdsRow(googleCustomerId(account.accountId), r))
-    .filter((r): r is AdDayRow => r !== null);
+  const search = (facts: boolean) =>
+    googleSearch<GoogleAdsRow>(c, accessToken, account.accountId, `SELECT campaign.id, campaign.name, campaign.status, ${facts ? `${CAMPAIGN_FACTS}, ` : ""}${DAY_METRICS} FROM campaign WHERE ${during}`, account.loginCustomerId);
+  let found: GoogleAdsRow[];
+  let facts = true;
+  try {
+    found = await search(true);
+  } catch (err) {
+    // Google refusing the facts' fields: the days are read without them (one more operation, only then),
+    // and the facts stored stay as last read. Anything else fails the sync as usual.
+    if (!queryRefused(err)) throw err;
+    logger.warn({ err, accountId: account.accountId }, "google ads: campaign facts refused; the days are read without them");
+    found = await search(false);
+    facts = false;
+  }
+  const rows = found.flatMap((r) => {
+    const row = fromGoogleAdsRow(googleCustomerId(account.accountId), r);
+    return row ? [facts ? { ...row, campaignFacts: googleCampaignFacts(r) } : row] : [];
+  });
   // Purchases are a part of conversions: with none counted in the window there are none to ask for.
   if (!rows.some((r) => r.conversions !== 0)) return rows.map((r) => ({ ...r, purchases: 0, purchaseValue: 0 }));
   let purchases: GooglePurchaseRow[];
@@ -357,7 +374,7 @@ export async function googleCampaignDays(c: GoogleConfig, accessToken: string, a
   } catch (err) {
     // Google refusing the query itself: the day's numbers still count, with purchases left unknown
     // (null) rather than the sync failed. Lost access, throttling and outages fail it as usual.
-    if (err instanceof AdsApiError && err.status === 400 && err.errorCode === "provider_error") {
+    if (queryRefused(err)) {
       logger.warn({ err, accountId: account.accountId }, "google ads: purchase query refused; purchases left unknown");
       return rows;
     }

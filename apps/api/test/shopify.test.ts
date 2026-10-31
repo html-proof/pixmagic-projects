@@ -88,6 +88,29 @@ describe("Shopify OAuth", () => {
     expect(replay.headers.location).toContain("error=state_expired");
   });
 
+  it("records from when orders carry their customer when the token brings read_customers, before the import that reads them", async () => {
+    const { res, cookie } = await startInstall();
+    const state = new URL(res.json().url).searchParams.get("state")!;
+    ctx.setFetch(async () =>
+      new Response(JSON.stringify({ access_token: "shpat_x", scope: "read_orders,read_customers", expires_in: 3600, refresh_token: "shprt_x", refresh_token_expires_in: 7_776_000 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const before = Date.now();
+    const cb = await ctx.app.inject({
+      method: "GET",
+      url: callbackUrl({ code: "authcode", shop: "demo-shop.myshopify.com", state, timestamp: String(Math.floor(Date.now() / 1000)) }),
+      headers: { cookie: `${cookie}; shopify_oauth_state=${state}` },
+    });
+    expect(cb.statusCode).toBe(302);
+    const store = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: "demo-shop.myshopify.com" } });
+    expect(store.customersFrom!.getTime()).toBeGreaterThanOrEqual(before);
+    // The worker moves it back to that import's window once it is in.
+    const orders = await systemDb.syncJob.findFirstOrThrow({ where: { storeId: store.id, kind: "orders" } });
+    expect(orders.createdAt.getTime()).toBeGreaterThanOrEqual(store.customersFrom!.getTime());
+  });
+
   it("puts a re-authorization's token on the store even when the connect goes no further", async () => {
     const { res, ws, cookie } = await startInstall();
     const store = await createStore(ws, "demo-shop.myshopify.com", ["read_orders"], { shopifyAppKey: "default" });
@@ -284,7 +307,7 @@ describe("Shopify OAuth", () => {
   it("revives a store uninstalled from another workspace, dropping its old data", async () => {
     const former = await signIn(ctx, "former", "former@x.com");
     const oldWs = await createWorkspace(ctx, former.headers, "Old");
-    const old = await createStore(oldWs, "demo-shop.myshopify.com", [], { status: "uninstalled", uninstalledAt: new Date(), lastSyncedAt: new Date(), pixelInstalled: true });
+    const old = await createStore(oldWs, "demo-shop.myshopify.com", ["read_orders", "read_customers"], { status: "uninstalled", uninstalledAt: new Date(), lastSyncedAt: new Date(), pixelInstalled: true, customersFrom: new Date("2026-01-01T00:00:00Z") });
     // Its old rows carry the old workspace_id, which RLS would hide from the new one.
     const base = { workspaceId: oldWs, storeId: old.id };
     await systemDb.product.create({ data: { ...base, shopifyId: "1", title: "Old tee", shopifyUpdatedAt: new Date() } });
@@ -303,7 +326,7 @@ describe("Shopify OAuth", () => {
     expect(cb.headers.location).toContain(`/onboarding?step=sync&store=${old.id}`);
 
     const store = await systemDb.store.findUniqueOrThrow({ where: { id: old.id } });
-    expect(store).toMatchObject({ workspaceId: ws, status: "syncing", uninstalledAt: null, lastSyncedAt: null, pixelInstalled: false });
+    expect(store).toMatchObject({ workspaceId: ws, status: "syncing", uninstalledAt: null, lastSyncedAt: null, pixelInstalled: false, customersFrom: null });
     expect(await systemDb.product.count({ where: { storeId: old.id } })).toBe(0);
     expect(await systemDb.productVariant.count({ where: { storeId: old.id } })).toBe(0);
     const jobs = await systemDb.syncJob.findMany({ where: { storeId: old.id } });
