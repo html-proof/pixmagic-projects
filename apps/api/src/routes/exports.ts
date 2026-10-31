@@ -90,7 +90,8 @@ export function exportRoutes(app: App, deps: Deps) {
    * The check against Shopify's own reports for the standard periods (core reports/shopifyCheck.ts):
    * every figure, ours next to Shopify's, classified. A financial report holding every line of the
    * sales breakdown and Shopify's gross profit, so it needs both "View financial reports" and the
-   * breakdown's own permission (the dashboard's breakdown, profit and check need that one alone);
+   * breakdown's own permission (the dashboard's breakdown and check need that one alone); the gross
+   * profit and cost of goods sold only for a member shown costs, as on the dashboard (`seesModule`);
    * a few a store per 10 minutes (each asks Shopify up to 21 times), in the audit log.
    * `format=csv` downloads it.
    */
@@ -105,7 +106,7 @@ export function exportRoutes(app: App, deps: Deps) {
     const report = await withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
       if (!store) throw new HttpError(404, "Not found", "not_found");
-      return shopifyCheckReport(tx, store, { coord: deps.coord, fetchImpl: deps.fetchImpl });
+      return shopifyCheckReport(tx, store, { coord: deps.coord, fetchImpl: deps.fetchImpl }, { profit: seesModule(a.access, "profit") });
     });
     await audit({ workspaceId: ws, actorUserId: a.user?.id ?? null, action: "report.exported", targetType: "store", targetId: storeId, metadata: { section: "shopify_check" }, ip: clientIp(c) }).catch(
       (err: unknown) => logger.warn({ err }, "audit failed"),
