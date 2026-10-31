@@ -90,9 +90,11 @@ export function exportRoutes(app: App, deps: Deps) {
    * The check against Shopify's own reports for the standard periods (core reports/shopifyCheck.ts):
    * every figure, ours next to Shopify's, classified. A financial report holding every line of the
    * sales breakdown and Shopify's gross profit, so it needs both "View financial reports" and the
-   * breakdown's own permission (the dashboard's breakdown and check need that one alone); the gross
-   * profit and cost of goods sold only for a member shown costs, as on the dashboard (`seesModule`);
-   * a few a store per 10 minutes (each asks Shopify up to 21 times), in the audit log.
+   * breakdown's own permission (the dashboard's breakdown and check need that one alone). As on the
+   * dashboard (`seesModule`), Shopify's gross profit and cost of goods sold only for a member shown
+   * costs, and its sessions, visitors and conversion rate (with the pixel's tracked visits) only for
+   * one shown conversion. A few a store per 10 minutes (each asks Shopify up to 21 times), in the
+   * audit log.
    * `format=csv` downloads it.
    */
   app.get("/workspaces/:ws/stores/:storeId/shopify-check", async (c) => {
@@ -107,7 +109,7 @@ export function exportRoutes(app: App, deps: Deps) {
     if (!store) throw new HttpError(404, "Not found", "not_found");
     // Our figures in short transactions with Shopify's calls between them, never inside one, and
     // all of those within one deadline, so the answer comes within the API's time limit.
-    const report = await shopifyCheckReport((read) => withTenant(ws, read), store, { coord: deps.coord, fetchImpl: deps.fetchImpl }, { deadline: Date.now() + SHOPIFY_CHECK_BUDGET_MS, profit: seesModule(a.access, "profit") });
+    const report = await shopifyCheckReport((read) => withTenant(ws, read), store, { coord: deps.coord, fetchImpl: deps.fetchImpl }, { deadline: Date.now() + SHOPIFY_CHECK_BUDGET_MS, profit: seesModule(a.access, "profit"), conversion: seesModule(a.access, "shopify_sessions") });
     await audit({ workspaceId: ws, actorUserId: a.user?.id ?? null, action: "report.exported", targetType: "store", targetId: storeId, metadata: { section: "shopify_check" }, ip: clientIp(c) }).catch(
       (err: unknown) => logger.warn({ err }, "audit failed"),
     );

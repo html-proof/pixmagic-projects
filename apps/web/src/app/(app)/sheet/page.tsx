@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { byStart, type BusinessEvent } from "@app/shared/businessEvents";
+import { seesModule } from "@app/shared/access";
 import { eventComparison } from "@app/shared/sheet";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { Skeleton } from "@/components/AppUi";
@@ -130,15 +131,20 @@ function SheetView() {
 
 /** What the sheet leaves out and why, in a line each: only what applies to this store and this member. */
 function Notes({ s }: { s: SheetState }) {
-  const { allowed } = useApp();
+  const { allowed, access } = useApp();
   const sheet = s.sheet!;
   const notes: string[] = [];
   if (!sheet.visitsTracked) notes.push("Store visits, and the rates worked out on them, need the bizinsights storefront pixel (Shopping Funnel), which this store doesn't share with you yet.");
   if (!sheet.ads && allowed("marketing.ads")) notes.push("Connect Meta Ads or Google Ads in Settings → Integrations to see your ad spend day by day beside your sales.");
   else if (sheet.ads && !sheet.comparable) notes.push(sheet.ads.demo ? "The Google Ads demo's figures are simulated, so they aren't set against your sales." : `Your ad accounts report in ${sheet.ads.currency}, not the store's ${s.ov!.store.currency}, so the spend isn't set against your sales.`);
   // Shopify's cost of goods sold comes for the dates whole, never by day; the owner's costs (Settings →
-  // Costs) are taken off on the dashboard, not here.
-  notes.push("The sheet stops at net sales less ad spend and never calls that profit: Shopify gives product costs only for the dates as a whole, not day by day, and your costs aren't taken off here. Business profit overview on the dashboard takes off the costs bizinsights knows.");
+  // Costs) are taken off on the dashboard, not here. Each is named only to a member the dashboard shows
+  // it to (Team & Access), so no one is sent to a panel for costs it won't take off for them.
+  const productCosts = seesModule(access, "profit");
+  const ownCosts = seesModule(access, "expenses");
+  const why = [productCosts && "Shopify gives product costs only for the dates as a whole, not day by day", ownCosts && "your costs aren't taken off here"].filter(Boolean);
+  const taken = [productCosts && "Shopify's product costs", ownCosts && "your costs"].filter(Boolean);
+  notes.push(`The sheet stops at net sales less ad spend and never calls that profit${why.length ? `: ${why.join(", and ")}` : ""}.${taken.length ? ` Business profit overview on the dashboard takes off ${taken.join(" and ")}.` : ""}`);
   return (
     <ul className="space-y-1 px-1 text-xs text-muted" data-testid="sheet-notes">
       {notes.map((n) => (

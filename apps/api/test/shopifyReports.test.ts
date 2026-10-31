@@ -231,6 +231,12 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
 
   it("needs financial reports access (it shows every sales figure and Shopify's profit)", async () => {
     const { ws, store } = await owner();
+    await withToken(store);
+    const asked: string[] = [];
+    ctx.setFetch(async (_url, init) => {
+      asked.push((JSON.parse(String(init?.body)) as { variables: { query: string } }).variables.query);
+      return nothing();
+    });
     const v = await signIn(ctx, "uv", "v@x.com");
     const m = await systemDb.membership.create({ data: { workspaceId: ws, userId: v.user.id, role: "custom", permissions: ["analytics.sales", "finance.breakdown"] } });
     const check = () => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/shopify-check`, headers: v.headers });
@@ -245,13 +251,24 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
       return new Set((res.json().periods as Array<{ rows: Array<{ metric: string }> }>).flatMap((p) => p.rows.map((r) => r.metric)));
     };
     // Shopify's gross profit and cost of goods sold are costs: not without "View costs and stock value".
+    // Its sessions, visitors and conversion rate are conversion data: not without that permission.
+    const conversionRows = ["Sessions", "Visitors", "Conversion rate"];
     const without = await metrics();
     expect(without.has("Net sales")).toBe(true);
     expect(without.has("Gross profit")).toBe(false);
     expect(without.has("Cost of goods sold")).toBe(false);
+    for (const metric of conversionRows) expect(without.has(metric), metric).toBe(false);
+    // Nor is Shopify asked for them on this member's behalf.
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.filter((q) => q.startsWith("FROM sessions") || q.includes("gross_profit"))).toEqual([]);
     await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "finance.breakdown", "finance.reports", "inventory.view", "inventory.costs"] } });
     const withCosts = await metrics();
     expect(withCosts.has("Gross profit")).toBe(true);
     expect(withCosts.has("Cost of goods sold")).toBe(true);
+    for (const metric of conversionRows) expect(withCosts.has(metric), metric).toBe(false);
+    await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "analytics.conversion", "finance.breakdown", "finance.reports"] } });
+    const withConversion = await metrics();
+    for (const metric of conversionRows) expect(withConversion.has(metric), metric).toBe(true);
+    expect(withConversion.has("Gross profit")).toBe(false);
   });
 });

@@ -51,7 +51,9 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   attribution, ad campaigns, discount amounts, import counts). Shopify's gross profit and cost of
   goods sold (the `profit` module, and those rows of `GET …/shopify-check`) need both the breakdown
   (`finance.breakdown`) and `inventory.costs` (`OVERVIEW_MODULE_ALSO_NEEDS`), so a legacy viewer,
-  analyst or API key holding only the breakdown doesn't get them.
+  analyst or API key holding only the breakdown doesn't get them. That check's sessions, visitors and
+  conversion rate rows (Shopify's, beside the pixel's tracked visits) need `analytics.conversion`, as
+  the `shopify_sessions` and `funnel` modules do. Shopify isn't asked for rows a member doesn't get.
 - `GET …/contacts` asks Shopify only for the lists the member may see and blanks names, contact
   details and order history per permission (`redactContact`).
 - WhatsApp, ads, email, staff and settings routes each ask for the permission that covers them; the

@@ -389,7 +389,9 @@ carries; nothing is estimated.
   when no sale of the dates had one, its cost of goods sold of 0 isn't a cost: product costs read "Not
   recorded in Shopify" and aren't taken off. Its share is called a **margin** only when the cost of
   every sale was taken off; with ad spend alone, or sales with no cost recorded, it is "of net sales",
-  since sales less ad spend is no margin.
+  since sales less ad spend is no margin. Team & Access: the Product costs line, here and in Expenses
+  breakdown, is only for a member shown Shopify's cost of goods sold ("View costs and stock value"
+  with the breakdown, `costsOn`); without it there is no net profit.
 - **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
   the owner's costs by category). The mock's shipping, software and other expenses come only from
   the owner's costs: nothing else holds them.
@@ -762,7 +764,8 @@ A period one of whose days isn't known (visits before the pixel, a day an ad acc
 for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit: product
 costs, shipping, fees and the owner's other costs aren't taken off day by day (Shopify gives product
 costs only for the dates as a whole; Business profit overview takes off the costs bizinsights knows),
-and the page says so.
+and the page says so, naming only the costs the member is shown: Shopify's product costs with "View
+costs and stock value" and the breakdown, the owner's costs with the breakdown.
 
 **Days shown** (`?days=`): every day, weekdays, weekends or any weekdays picked (`0,2,4`, Monday = 0).
 **Business events** (`?events=`): every day, the days with an event, those without, those with an
@@ -806,7 +809,9 @@ text, is never copied into it).
 Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given only when:
 
 - Shopify's cost of goods sold is known for the dates (its profit report: `read_reports`) and every
-  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0);
+  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0). A member not shown
+  Shopify's cost of goods sold (without "View costs and stock value": `seesModule(access, "profit")`
+  is false) gets no net profit either, since it would give the cost away (`product_costs_hidden`);
 - the connected ad accounts' spend is known for every day, in the store's currency. With no ad
   account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
   ads gets no net profit, since it would give the spend away;
