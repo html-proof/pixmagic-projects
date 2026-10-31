@@ -1276,6 +1276,53 @@ describe("where sales come from", () => {
   });
 });
 
+describe("Meta and Google advertising from the store's own orders", () => {
+  it("gives the Advertising pages each platform's Shopify sales with no ad account connected, compared, day by day, narrowed like the ad modules", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    const today = localDay(new Date(), TZ);
+    const day = (n: number) => addDays(today, n);
+    const at = (n: number) => `${day(n)}T16:00:00Z`;
+    await seedOrder(store, { id: "F1", createdAt: at(-3), subtotal: 100, traffic: { source: "facebook", medium: "paid", campaign: "Spring" } });
+    await seedOrder(store, { id: "I1", createdAt: at(-3), subtotal: 40, traffic: { source: "instagram", medium: "unpaid" } });
+    await seedOrder(store, { id: "G1", createdAt: at(-2), subtotal: 60, traffic: { source: "google", medium: "paid", campaign: "Brand" } });
+    await seedOrder(store, { id: "D1", createdAt: at(-2), subtotal: 80, traffic: { source: "direct", medium: "direct" } });
+    await seedOrder(store, { id: "P1", createdAt: at(-2), subtotal: 10 });
+    // The dates compared with (the six days before).
+    await seedOrder(store, { id: "F0", createdAt: at(-10), subtotal: 50, traffic: { source: "facebook", medium: "paid", campaign: "Spring" } });
+    const range = `preset=custom&from=${day(-6)}&to=${day(-1)}`;
+    const ask = async (qs: string) => (await overview(a.headers, ws, store.id, `${range}${qs}`)).json().modules;
+
+    const all = await ask("&parts=advertising");
+    // Nothing connected: no ad module, and the store's own record of each platform instead.
+    expect(all).not.toHaveProperty("ads");
+    const m = all.ads_from_shopify;
+    expect(m).toMatchObject({ currency: store.currency, storeSales: 290, pending: 1, compared: { from: day(-12), to: day(-7) } });
+    const [meta, google] = m.platforms;
+    expect(meta).toMatchObject({ provider: "meta", orders: 2, sales: 140, paidOrders: 1, paidSales: 100, previous: { orders: 1, sales: 50, paidOrders: 1, paidSales: 50 } });
+    expect(meta.share).toBeCloseTo(140 / 290);
+    expect(meta.deltas.sales).toBeCloseTo(1.8);
+    expect(meta.sources.map((s: { source: string; sales: number }) => [s.source, s.sales])).toEqual([
+      ["facebook", 100],
+      ["instagram", 40],
+    ]);
+    expect(meta.campaigns).toEqual([{ source: "facebook", label: "Facebook", campaign: "Spring", orders: 1, sales: 100, paidSales: 100 }]);
+    expect(meta.daily).toHaveLength(6);
+    expect(meta.daily.find((d: { day: string }) => d.day === day(-3))).toEqual({ day: day(-3), orders: 2, sales: 140, paidSales: 100 });
+    expect(meta.daily.find((d: { day: string }) => d.day === day(-2))).toEqual({ day: day(-2), orders: 0, sales: 0, paidSales: 0 });
+    expect(google).toMatchObject({ provider: "google", orders: 1, sales: 60, paidSales: 60, previous: { orders: 0, sales: 0 } });
+    // Nothing before to set a change against: none, rather than an infinite one.
+    expect(google.deltas.sales).toBeNull();
+
+    // One platform's page: that platform only. AdSense and one account have no such figures.
+    expect((await ask("&parts=advertising&platform=meta")).ads_from_shopify.platforms.map((p: { provider: string }) => p.provider)).toEqual(["meta"]);
+    expect(await ask("&parts=advertising&platform=adsense")).not.toHaveProperty("ads_from_shopify");
+    expect(await ask("&parts=advertising&account=some-account")).not.toHaveProperty("ads_from_shopify");
+    // The dashboard's own question doesn't compute them.
+    expect(await ask("")).not.toHaveProperty("ads_from_shopify");
+  });
+});
+
 
 describe("top 100 product performance", () => {
   const range = "dateFrom=2026-03-08&dateTo=2026-03-09";

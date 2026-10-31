@@ -557,6 +557,23 @@ ask the platform for exactly the dates picked, at the level picked, and carry fi
 The reports are cached briefly (10 minutes while they include today, an hour otherwise) under a
 versioned key (`ads-report:v2:`, `ads-greport:v2:`), moved whenever a report gains figures.
 
+### With no ad account connected: from the Shopify orders
+
+Reference implementation: `adsFromShopify` in `packages/shared/src/adsFromShopify.ts` and
+`adsFromShopifyModule` in `packages/core/src/reports/adsFromShopify.ts` (docs/advertising.md, "No ad
+account connected").
+
+| KPI | Formula | Notes |
+| --- | --- | --- |
+| Sales from Facebook and Instagram / Google and YouTube | net sales of the orders whose last visit's source is `facebook` or `instagram` (Meta) / `google` or `youtube` (Google Ads) | As "Where sales come from" counts them: the sales that happened in the range |
+| Orders | those orders placed in the range | Gift-card-only orders aside, as everywhere |
+| Share of your sales | the platform's sales ÷ the store's net sales over the range, every source together | Orders whose visit isn't read yet count in the whole, in no platform (`pending`) |
+| From links tagged as ads | the same for `traffic_medium = 'paid'` | An untagged Meta ad counts as a visit from Facebook or Instagram, not as an ad |
+| Change | (now − before) ÷ before, for the dates compared with | Only with their orders imported; a running day is cut at the same time of day (orders by processed time, sales by when they happened) |
+
+Each day of the range is given, a day before the store's imported orders as unknown (never 0). These are
+the store's last-click view and never added to, or shown as, a platform's own figures.
+
 ## Ad earnings (Google AdSense)
 
 Reference implementation: `adsenseTotals` and `fromAdsenseReport` in `packages/shared/src/ads.ts`, and

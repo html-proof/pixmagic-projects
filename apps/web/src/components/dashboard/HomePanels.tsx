@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
-import type { AdSpendProvider } from "@app/shared/ads";
+import { trafficSourcePlatform, type AdSpendProvider } from "@app/shared/ads";
 import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
 import type { OrderOutcomes } from "@app/shared/orders";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
@@ -17,7 +17,7 @@ import { LineChart } from "./LineChart";
 import { OrderName } from "./Modules";
 import { businessHealth } from "./Overview";
 import type { Topic } from "./topics";
-import type { AdsModule, Overview, RecentOrder } from "./types";
+import type { AdsModule, Overview, RecentOrder, TrafficModule } from "./types";
 
 // ---------------------------------------------------------------------------
 // The dashboard under its four headline numbers, in the owner's design (2026-10-24): sales against
@@ -492,13 +492,78 @@ export function SalesPerformance({ ov, currency, onOpen }: { ov: Overview; curre
 
 // ---- Advertising performance --------------------------------------------------------------------
 
-/** Each connected ad platform's spend, clicks and return on ad spend, one tab each. */
+/**
+ * Meta's and Google's sales as the store's own orders record them (the traffic module: the visit before
+ * each order came from Facebook or Instagram, Google or YouTube), for the card while no ad account is
+ * connected. Null without the traffic sources, or with no sale from either.
+ */
+function salesFromOrders(t: TrafficModule | undefined) {
+  if (!t) return null;
+  const by: Record<AdSpendProvider, { orders: number; sales: number; share: number | null }> = { meta: { orders: 0, sales: 0, share: null }, google: { orders: 0, sales: 0, share: null } };
+  for (const x of t.items) {
+    const p = trafficSourcePlatform(x.source);
+    if (!p) continue;
+    by[p].orders += x.orders;
+    by[p].sales += x.sales;
+    by[p].share = x.share === null ? by[p].share : (by[p].share ?? 0) + x.share;
+  }
+  return by.meta.orders + by.google.orders > 0 ? by : null;
+}
+
+/** Each connected ad platform's spend, clicks and return on ad spend, one tab each; with none, what the store's orders show of them. */
 export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: boolean }) {
   const ads = ov.modules.ads;
   const providers = (ads?.byProvider ?? []).filter((p) => p.accounts.length > 0);
   const [picked, setPicked] = useState<AdSpendProvider | null>(null);
   const p = providers.find((x) => x.provider === picked) ?? providers[0];
   const icon = <Disc icon={Megaphone} className="bg-sky-600 text-white dark:bg-sky-500" />;
+  const fromOrders = !ads || !p ? salesFromOrders(ov.modules.traffic) : null;
+  if (fromOrders) {
+    const money = (n: number) => fmtMoney(n, ov.store.currency);
+    return (
+      <HomeCard
+        id="advertising"
+        title="Advertising performance"
+        sub="No ad account is connected: these are your Shopify orders whose visit came from each platform."
+        icon={icon}
+        action={<DetailsLink href="/advertising" />}
+      >
+        <div className="grid grid-cols-2 gap-3 divide-x divide-border" data-testid="home-ads-from-orders">
+          {(["meta", "google"] as const).map((x, i) => {
+            const { name, Icon } = PROVIDER[x];
+            return (
+              <div key={x} className={i ? "pl-3" : ""}>
+                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold">
+                  <Icon size={16} />
+                  {name}
+                </p>
+                <Figure
+                  label={x === "meta" ? "Sales from Facebook and Instagram" : "Sales from Google and YouTube"}
+                  value={money(fromOrders[x].sales)}
+                  change={
+                    <span className="text-xs text-muted">
+                      {plural(fromOrders[x].orders, "order")}
+                      {fromOrders[x].share !== null && <> · {fmtPct(fromOrders[x].share)} of sales</>}
+                    </span>
+                  }
+                />
+              </div>
+            );
+          })}
+        </div>
+        <p className="mt-4 text-xs text-muted">
+          The visit Shopify recorded before each order (the last click). Connect Google Ads or Meta Ads to add what you spend, the clicks and the return on ad spend.
+        </p>
+        <div className="mt-3">
+          {manage ? (
+            <Link href="/settings/integrations" className="btn-primary text-xs">Connect ad accounts</Link>
+          ) : (
+            <p className="text-xs text-muted">A workspace admin can connect them.</p>
+          )}
+        </div>
+      </HomeCard>
+    );
+  }
   if (!ads || !p) {
     return (
       <HomeCard id="advertising" title="Advertising performance" sub="Ad spend, clicks and return on ad spend across your ad platforms." icon={icon}>

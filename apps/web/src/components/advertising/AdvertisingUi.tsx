@@ -167,8 +167,12 @@ export function AdvertisingBody({ s, what, children }: { s: AdvertisingState; wh
   );
 }
 
-/** Nothing of this platform (or of any) connected to the store, or every account hidden: where that's changed. */
-export function NotConnected({ ov, platform }: { ov: Overview; platform?: AdProvider }) {
+/**
+ * Nothing of this platform (or of any) connected to the store, or every account hidden: where that's
+ * changed. `compact`: a line above the platform's figures from the store's own orders (FromShopify.tsx)
+ * rather than the page's whole answer.
+ */
+export function NotConnected({ ov, platform, compact = false }: { ov: Overview; platform?: AdProvider; compact?: boolean }) {
   const { allowed } = useApp();
   const manage = allowed("integrations.manage");
   const n = ov.modules.ad_connections;
@@ -176,6 +180,17 @@ export function NotConnected({ ov, platform }: { ov: Overview; platform?: AdProv
   const hidden = !!n && n.hidden > 0 && (platform ? n[platform] > 0 : n.meta + n.google + n.adsense > 0);
   // The platform's sign-in is connected, and its ad accounts follow once the platform lists some: nothing to connect.
   const waiting = !hidden && !!platform && !!n?.waiting?.includes(platform);
+  if (waiting && compact) {
+    return (
+      <Banner testid="advertising-waiting" title={`${name} is connected`} body={`Its login doesn't reach an ad account yet: its figures follow here once one appears. Until then, these are from your Shopify orders.`}>
+        {manage && (
+          <Link className="btn-secondary h-9" href="/settings/ads">
+            See {name} in Settings
+          </Link>
+        )}
+      </Banner>
+    );
+  }
   if (waiting) {
     return (
       <div data-testid="advertising-waiting">
@@ -196,22 +211,38 @@ export function NotConnected({ ov, platform }: { ov: Overview; platform?: AdProv
   const body = hidden
     ? `This store's ${platform ? `${name} ` : "ad "}accounts are hidden from the dashboard. ${manage ? "Turn on the ones that belong to this store to see their figures here." : "Ask a workspace owner or admin to turn them on."}`
     : platform === "adsense"
-      ? `Connect Google AdSense to see what the ads on your site earn. Its earnings are money in, kept apart from what you spend on ads. ${manage ? "" : "Ask a workspace owner or admin to connect it."}`
+      ? `Connect Google AdSense to see what the ads on your site earn. Its earnings are money in, kept apart from what you spend on ads, and Shopify doesn't record them, so there's nothing to show from your orders. ${manage ? "" : "Ask a workspace owner or admin to connect it."}`
       : `Connect ${platform ? name : "Meta Ads or Google Ads"} to see what you spend and what the platform credits to its ads. bizinsights only reads: it never changes your ads. ${manage ? "" : "Ask a workspace owner or admin to connect it."}`;
+  const title = hidden ? "Hidden from the dashboard" : platform ? `No ${name} account is connected to this store` : "No ad accounts are connected to this store";
+  const action = manage ? (
+    // One platform's page goes to its card; the overview, to every platform on Settings → Integrations.
+    <Link className={compact ? "btn-primary h-9" : "btn-primary"} href={hidden || platform ? "/settings/ads" : "/settings/integrations"}>
+      {hidden ? "Manage ad accounts" : `Connect ${platform ? name : "advertising accounts"}`}
+    </Link>
+  ) : undefined;
+  if (compact) {
+    return (
+      <Banner testid="advertising-not-connected" title={title} body={`${body.trim()} Below, in the meantime: what your Shopify orders show.`}>
+        {action}
+      </Banner>
+    );
+  }
   return (
     <div data-testid="advertising-not-connected">
-      <EmptyState
-        title={hidden ? "Hidden from the dashboard" : platform ? `No ${name} account is connected to this store` : "No ad accounts are connected to this store"}
-        body={body.trim()}
-        action={
-          manage ? (
-            // One platform's page goes to its card; the overview, to every platform on Settings → Integrations.
-            <Link className="btn-primary" href={hidden || platform ? "/settings/ads" : "/settings/integrations"}>
-              {hidden ? "Manage ad accounts" : `Connect ${platform ? name : "advertising accounts"}`}
-            </Link>
-          ) : undefined
-        }
-      />
+      <EmptyState title={title} body={body.trim()} action={action} />
+    </div>
+  );
+}
+
+/** NotConnected as one line: what isn't connected, why it matters, and (`children`) the way to connect it. */
+function Banner({ testid, title, body, children }: { testid: string; title: string; body: string; children?: ReactNode }) {
+  return (
+    <div className="card flex flex-wrap items-center justify-between gap-3" data-testid={testid}>
+      <div className="min-w-0 max-w-3xl">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="mt-0.5 text-xs text-muted">{body}</p>
+      </div>
+      {children}
     </div>
   );
 }

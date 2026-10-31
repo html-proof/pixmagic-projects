@@ -163,6 +163,30 @@ table (whose purchase headings name the window) and the "Purchases vs before" ch
   stay each ad set's own setting: the windows are the live report's only (`windows` in `MetaLiveReportOptions`), and
   neither the syncs nor the daily "Checked against Meta" read asks for them.
 
+## No ad account connected: the Shopify orders stand in
+
+A spend platform with no account on the dashboard isn't an empty page. Its figures come from the
+store's own orders instead: the visit Shopify recorded before each order (docs/kpis.md, "Where sales
+come from") came from Facebook or Instagram (Meta Ads) or from Google or YouTube (Google Ads). That
+needs only `read_orders`, nothing to connect, and stays current with the store's own sync.
+
+- **Where:** the overview (both platforms while nothing is connected; beside connected platforms, the
+  others that sold anything), the Meta Ads and Google Ads pages (their platform), and the dashboard's
+  Advertising performance card (from the traffic module it already has). Each sits under one line that
+  says the platform isn't connected (or that its login waits for an ad account, or that its accounts are
+  hidden) with the way to connect it (`NotConnected compact` in components/advertising/AdvertisingUi.tsx).
+- **What:** per platform, its sales (net sales) and orders with the change on the dates compared with,
+  its share of the store's sales, the part from links tagged as ads, day by day, by site (Facebook and
+  Instagram; Google and YouTube) and by the campaign named in the links (utm_campaign). Never spend,
+  impressions or clicks, which only the platform knows, and never what the platform credits to its ads.
+- **API:** the module `ads_from_shopify` of `…/overview?parts=advertising` (`AdsView.fromShopify`; core
+  `adsFromShopifyModule` in packages/core/src/reports/adsFromShopify.ts, the figures in
+  `@app/shared/adsFromShopify`). Not for one account picked or for AdSense alone. Team & Access: "View
+  traffic sources"; its tagged-ad figures and campaigns also "View conversion attribution", as the traffic
+  module's.
+- **AdSense** has no stand-in: what ads shown on a site earn isn't in the orders, so its page only offers
+  to connect it, and says why.
+
 ## Printing
 
 Every Advertising page has **Print or save as PDF** (for whoever may export reports, and owners and

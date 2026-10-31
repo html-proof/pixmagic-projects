@@ -1,5 +1,6 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
+import type { AdsFromShopify } from "@app/shared/adsFromShopify";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
 import type { ExpenseTotals } from "@app/shared/expenses";
@@ -635,6 +636,12 @@ export interface Overview {
     ad_connections?: { meta: number; google: number; adsense: number; hidden: number; waiting?: string[] };
     /** Which platforms this server can connect (absent: none is set up). */
     ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
+    /**
+     * Meta's and Google's sales from the store's own orders (the Advertising pages only, `parts=advertising`):
+     * what they show of a platform with no ad account connected. Needs "View traffic sources"; its tagged-ad
+     * figures and campaigns, "View conversion attribution".
+     */
+    ads_from_shopify?: AdsFromShopify;
     /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
     shopify_sessions?: ShopifySessionsModule;
     profit?: ProfitModule;

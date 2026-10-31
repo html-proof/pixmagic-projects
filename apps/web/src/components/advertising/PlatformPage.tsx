@@ -5,13 +5,15 @@ import { AdsDetail } from "@/components/dashboard/AdsPanel";
 import { AdsenseDetail } from "@/components/dashboard/AdsensePanel";
 import { Explained } from "@/components/dashboard/Explain";
 import { AccountGone, AccountSelect, AdvertisingBody, AdvertisingHeader, DownloadCsv, NotConnected, PLATFORM } from "./AdvertisingUi";
+import { FromShopify } from "./FromShopify";
 import { useAccountChoices, useAdvertising } from "./useAdvertising";
 
 // ---------------------------------------------------------------------------
 // One platform's page in the Advertising area (Meta Ads, Google Ads, Google AdSense): the dashboard's
 // details for that platform's accounts alone, or one of them. One platform's spend is never set
 // against the store's whole sales here (the overview does that, for all of it); AdSense's earnings
-// sit next to the store's sales as on the dashboard, except for one account picked.
+// sit next to the store's sales as on the dashboard, except for one account picked. Meta Ads or
+// Google Ads with no account connected shows what the store's Shopify orders record of it instead.
 // ---------------------------------------------------------------------------
 
 const ABOUT: Record<AdProvider, string> = {
@@ -71,7 +73,10 @@ export function PlatformPage({ platform }: { platform: AdProvider }) {
               <Explained topic="ads" ov={ov} currency={ov.modules.ads.currency} />
             </>
           ) : (
-            <NotConnected ov={ov} platform={platform} />
+            <>
+              <NotConnected ov={ov} platform={platform} compact={!!ov.modules.ads_from_shopify} />
+              <FromShopify ov={ov} platforms={[platform]} />
+            </>
           )
         }
       </AdvertisingBody>
