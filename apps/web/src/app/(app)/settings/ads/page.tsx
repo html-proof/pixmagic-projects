@@ -99,6 +99,10 @@ export default function AdAccountsPage() {
   return (
     <div className="space-y-5">
       <AdvertisingHero>
+        <p className="max-w-2xl text-muted">
+          Paid YouTube and Display ads belong to Google Ads. Facebook and Instagram ads belong to Meta Ads. AdSense reports website ad earnings separately from advertising spend.
+          Impressions count ad displays; clicks count ad interactions, and do not necessarily equal visits to your website.
+        </p>
         <p>
           For <strong>{storeName}</strong>
           {stores.length > 1 ? <span className="text-muted"> (switch store at the top of the page)</span> : null}

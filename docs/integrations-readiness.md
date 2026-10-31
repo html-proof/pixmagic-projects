@@ -9,7 +9,89 @@ later that night: what the public sees on Continue with Google's screen, and the
 Meta rows re-read in the app dashboard on 2026-10-26 (the app's portfolio, Business Verification, App Review), and
 again late on 2026-10-26 after Meta verified the business (Access Verification, the API call counts). On 2026-10-28
 the ad sign-ins became bizinsights' own again: the Nango rows gave way to "Leaving Nango"; later that day, production
-showed the move off Nango done and Meta's redirect URI working. Status words:
+showed the move off Nango done and Meta's redirect URI working.
+
+The readiness check of 2026-10-22 below is older than those Meta rows: where they differ (the portfolio, Business
+Verification, App Review), the rows win.
+
+Readiness check, 2026-10-22: Google's live Verification Center for `insights-511119`
+still shows approved branding and unverified data access. **Prepare for verification**
+lists `adsense.readonly` and the unverified sensitive `adwords` scope; submission is
+disabled because the required demo video is missing (Video link: Not provided).
+No verification request was submitted during this check. A later live Meta check
+on 2026-10-22 showed `ads_read` and `public_profile` as **Ready for testing**, and
+Marketing API Access Tier as **Limited access**. Selecting `ads_read` → Actions →
+Add to App Review opens a prerequisite dialog: become a Tech Provider, complete
+business and access verification, then App Review. Meta explicitly says identifying
+as a Tech Provider cannot be reversed. After the owner's subsequent "complete it"
+confirmation, Continue was selected and Meta exposed Review → Verification and
+App Review. The App Review draft now contains only `ads_read` and `public_profile`:
+the unused page permissions, `business_management`, `ads_management`, and optional
+Marketing API Access Tier were removed from the draft (not from the app).
+The ads_read dashboard/analytics use case and factual explanation were saved and
+confirmed by reopening the form. Meta marks its API test calls Completed. The
+screencast and allowed-usage declaration remain incomplete; no declaration was
+accepted and nothing was submitted. Verification currently asks to connect a
+business portfolio, but the session offers only creation of a new portfolio;
+no duplicate business was created. Existing business ownership/access must be
+resolved before the business/access reviews can finish. The app dashboard displayed
+Published, which does not establish advanced permission approval. Business
+verification's current result was not confirmed.
+The website owner sign-in and Google's passkey identity check were subsequently
+completed. Advertising is available in the existing **bizinsights demo** workspace
+(the **My store** workspace denied the advertising route). A real Google Ads connect
+was attempted as sebanceo@gmail.com using the Google Ads permission that Google
+confirmed was already granted. The callback returned: the account is not ready
+to report because setup is unfinished, cancelled or suspended. No real Google Ads
+connection was created. The known client setup page loaded **Step 4: Set up billing**,
+with **Create new payments profile** still offered and no profile selected, confirming
+the billing prerequisite remains unfinished. An ad-blocker notice is also present.
+No billing, payment or campaign action was performed.
+The existing AdSense connection has synced through 2026-10-22, but its account health
+says **Needs attention in Google AdSense**. A working real Google Ads account and
+the required demonstration recording remain prerequisites for the review.
+The existing Google Ads campaign queries include paid YouTube and Display campaigns;
+these need no YouTube channel analytics connection. The existing AdSense connection
+reports publisher earnings, and Meta Ads reports authorized Facebook/Instagram ad
+accounts. The connection screens now explain these differences. Local validation:
+80 targeted core advertising tests passed, web typecheck and changed-file lint passed.
+Database-backed API checks could not start because the local test database was
+unavailable. No production deployment or real client-account connection was performed.
+
+**No-spend alternative (checked 2026-10-22):** Google officially supports test manager
+and client accounts with no billing and no ad serving. Earlier checklist entries
+requiring paid campaign delivery should not be read as a universal OAuth review
+requirement. Google's demo guidance requires the actual OAuth flow and functionality
+using the requested scopes; it does not promise acceptance of a particular test-account
+demo. A test integration must be disclosed as such, and cannot supply real spend,
+clicks or impressions. bizinsights' existing simulated **Try demo** mode is useful
+for product demonstrations but does not itself exercise Google OAuth or Google's API.
+Sources: https://developers.google.com/google-ads/api/docs/best-practices/test-accounts
+and https://support.google.com/cloud/answer/13804565?hl=en .
+
+The no-cost simulated demo is now connected in **bizinsights demo** →
+**bizinsights sync check** as **Demo Business Marketing**. Its analytics page shows
+campaigns, spending, clicks, conversions and charts with **DEMO DATA** labels; no
+Google authorization or verification occurred. The official Create a test manager
+account link was followed under the separate imeseban@gmail.com Google login.
+The manager creation form is prepared as **bizinsights API Test Manager**, Manage
+my accounts, India, India Time and INR. It is waiting at an unsolved reCAPTCHA;
+the manager's completed creation, test-account status and any client account have
+not been confirmed. No CAPTCHA was solved, payment entered or ad started.
+
+**AdSense follow-up, 2026-10-22:** The connected publisher account under
+sebanceo@gmail.com (`pub-8558633671852701`) explicitly showed deactivation for
+inactivity. **Reactivate account** was selected; Google advanced to **Let's get you
+started**, with Payments **We've got your info** and the required **Connect your site
+to AdSense** step. That step opens Add site with a blank Website field. No domain
+was submitted: the owner must identify the publisher website to monetize; the SaaS
+application's own domain must not be assumed. Refresh Google AdSense in bizinsights
+then completed a new successful sync, but account health still says Needs attention.
+The Meta developer account was confirmed as sebanceo@gmail.com; Verification still
+requires a business portfolio and offers only Create new account. Owner input is
+needed to locate the existing Zodiix portfolio or authorize creating a new one.
+
+Status words:
 
 - **Completed**: done and confirmed.
 - **Pending**: can be done now, or is waiting on a step that is under way.

@@ -60,7 +60,7 @@ const MANAGE = { label: "The Manage integrations permission here", icon: ShieldC
 export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
   google: {
     name: "Google Ads",
-    sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions and the campaigns behind them",
+    sub: "Paid ads on Google Search, Shopping, YouTube and the Display network, including Performance Max campaigns",
     button: "Continue with Google Ads",
     opening: "Opening Google…",
     Icon: GoogleAdsIcon,
@@ -84,7 +84,7 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
       icon: TrendingUp,
     },
     page: "/advertising/google",
-    how: "Google asks you to choose your Google account and allow access. If it can reach several ad accounts (an agency or manager account), you pick the ones for this store. bizinsights only reads reports: it can't create, change or pause ads, or spend money.",
+    how: "Choose the Google account that manages your advertising, then select the ad accounts for this store. This includes paid YouTube and Display campaigns managed in those accounts. Only accounts you authorize are imported; your personal search and watch history are not accessed. bizinsights reads reports without changing campaigns or spending money.",
     home: [{ url: "https://ads.google.com/", label: "Open ads.google.com" }],
     retry: "Choose another Google account",
   },
@@ -114,7 +114,7 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
       icon: Megaphone,
     },
     page: "/advertising/meta",
-    how: "Meta asks you to log in and choose the ad accounts to share. Access is read-only: bizinsights can't create, change or pause ads, or spend money.",
+    how: "Sign in with Facebook and authorize bizinsights to read the ad accounts you choose, including their Facebook and Instagram campaigns. You need access to those ad accounts; connecting a Facebook profile alone does not grant access to every business account. No app download is needed. bizinsights reads reports without changing campaigns or spending money.",
     home: [
       { url: "https://adsmanager.facebook.com/", label: "Open Ads Manager" },
       { url: "https://business.facebook.com/settings/ad-accounts", label: "Open Business settings" },
@@ -146,7 +146,7 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
       icon: ChartNoAxesCombined,
     },
     page: "/advertising/adsense",
-    how: "Google asks you to choose the Google account that owns your AdSense and allow read-only access to its reports. bizinsights can't change your sites, ads or payments.",
+    how: "Choose the Google account with access to your AdSense and allow read-only reporting. This connection shows earnings from ads displayed on your website. To see money you spend advertising on Google or YouTube, connect Google Ads instead. bizinsights can't change your sites, ads or payments.",
     home: [{ url: "https://adsense.google.com/", label: "Open AdSense" }],
     retry: "Choose another Google account",
   },
