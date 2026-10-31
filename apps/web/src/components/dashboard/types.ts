@@ -8,6 +8,7 @@ import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { OrderOutcomes } from "@app/shared/orders";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
+import type { TrafficSplit } from "@app/shared/traffic";
 
 /**
  * A month of `SalesOverview.year`: its lines of total sales (`MONTH_LINES`) and its refunds only for
@@ -276,6 +277,14 @@ export interface AdsModule extends AdFigures<AdTotals> {
       /** The platform's own word for the campaign's delivery now (Google's campaign.status, Meta's effective_status); null: not read yet. Absent from older answers. */
       status?: string | null;
       statusGroup?: CampaignStatusGroup | null;
+      /** Google's channel type (SEARCH, PERFORMANCE_MAX...) as of the last sync; null for Meta and while unread. Absent from older answers. */
+      channelType?: string | null;
+      /** Google's primary status (ELIGIBLE, LIMITED...) and its reasons as of the last sync; null and none for Meta and while unread. */
+      primaryStatus?: string | null;
+      primaryStatusReasons?: string[];
+      /** The budget as of the last sync, in the account's currency: DAILY, CUSTOM_PERIOD (Google: a total) or LIFETIME (Meta); null when none is known. */
+      budgetPeriod?: string | null;
+      budgetAmount?: number | null;
     }
   >;
   /** Ad spend divided by the store's net sales (same currency, every day known); null with a demo among the accounts. */
@@ -369,6 +378,11 @@ export interface TrafficModule {
   items: Array<{ id: string; source: string; label: string; orders: number; sales: number; paidOrders?: number; paidSales?: number; share: number | null }>;
   paid?: { orders: number; sales: number; share: number | null };
   campaigns?: Array<{ source: string; label: string; campaign: string; orders: number; sales: number }>;
+  /**
+   * Paid vs organic: the same sales by how each order's last visit came, as Shopify recorded it (last click).
+   * Every split, in order; Team & Access "View conversion attribution"; absent from older answers.
+   */
+  split?: Array<{ id: TrafficSplit; label: string; orders: number; sales: number; share: number | null }>;
   /** Orders whose source hasn't been read from Shopify yet. */
   pending: number;
 }

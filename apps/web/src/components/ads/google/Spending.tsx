@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { type AdsGranularity, type AdsPeriod, type CampaignAnalytics } from "@app/shared/adsAnalytics";
 import { ColumnsWithTotal, type Column } from "@/components/dashboard/ColumnsWithTotal";
-import { fmtDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday } from "@/components/dashboard/format";
+import { fmtDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtRelative, fmtSpan, fmtWeekday } from "@/components/dashboard/format";
+import type { CampaignSettingsSource } from "@/lib/googleAds";
 import { Quiet, Section, figureWriters } from "./ui";
 
 const GRANULARITY: Array<{ id: AdsGranularity; label: string }> = [
@@ -18,8 +19,27 @@ function tickOf(p: AdsPeriod, g: AdsGranularity, n: number, today: string): Colu
   return { top: fmtMonth(p.from.slice(0, 7), { short: true }), major: true };
 }
 
-/** Section 3: spend per day, week or month with the running total, the trend, and each campaign's spend against its budget. */
-export function SpendingSection({ series, campaigns, currency, demo, today, range }: { series: { day: AdsPeriod[]; week: AdsPeriod[]; month: AdsPeriod[] }; campaigns: CampaignAnalytics[] | null; currency: string; demo: boolean; today: string; range: { from: string; to: string } }) {
+/**
+ * Section 3: spend per day, week or month with the running total, the trend, and each campaign's spend against its
+ * budget: a demo's generated one, a real account's daily budget as Google states it at the last sync (`settings`).
+ */
+export function SpendingSection({
+  series,
+  campaigns,
+  settings,
+  currency,
+  demo,
+  today,
+  range,
+}: {
+  series: { day: AdsPeriod[]; week: AdsPeriod[]; month: AdsPeriod[] };
+  campaigns: CampaignAnalytics[] | null;
+  settings?: CampaignSettingsSource;
+  currency: string;
+  demo: boolean;
+  today: string;
+  range: { from: string; to: string };
+}) {
   const [g, setG] = useState<AdsGranularity>("day");
   const w = figureWriters(currency);
   const periods = series[g];
@@ -38,6 +58,8 @@ export function SpendingSection({ series, campaigns, currency, demo, today, rang
   const second = days.slice(mid).reduce((a, d) => a + d.spend, 0);
   const trend = mid > 0 && first > 0 ? (second - first) / first : null;
   const budgets = (campaigns ?? []).filter((c) => c.budget !== null);
+  const synced = settings?.source === "synced";
+  const totals = (campaigns ?? []).filter((c) => c.budgetPeriod === "CUSTOM_PERIOD").length;
   return (
     <Section
       id="spending"
@@ -96,9 +118,21 @@ export function SpendingSection({ series, campaigns, currency, demo, today, rang
       {campaigns && (
         <div className="mt-4">
           <h3 className="text-sm font-semibold">Campaign budget comparison</h3>
-          <p className="text-xs text-muted">Each campaign&apos;s daily budget over the days it ran in these dates, against what it spent.</p>
+          <p className="text-xs text-muted" data-testid="ga-budget-note">
+            {synced ? (
+              <>
+                Each campaign&apos;s daily budget as Google states it now{settings?.asOf ? ` (read ${fmtRelative(settings.asOf)})` : ""}, over the days it ran in these dates,
+                against what it spent. A budget changed during these dates isn&apos;t followed.
+                {totals > 0 ? ` ${totals === 1 ? "A campaign with a total budget isn't" : `${totals} campaigns with a total budget aren't`} paced here: it covers the campaign's own dates, not these.` : ""}
+              </>
+            ) : (
+              "Each campaign's daily budget over the days it ran in these dates, against what it spent."
+            )}
+          </p>
           {budgets.length === 0 ? (
-            <p className="mt-2 text-sm text-muted">No campaign budgets are known for this account.</p>
+            <p className="mt-2 text-sm text-muted">
+              {synced && !settings?.asOf ? "No campaign budgets have been read for this account yet: the next sync reads them from Google." : "No daily campaign budgets are known for this account."}
+            </p>
           ) : (
             <div className="-mx-1 mt-2 overflow-x-auto">
               <table className="w-full min-w-[40rem] text-sm" data-testid="ga-budget-table">

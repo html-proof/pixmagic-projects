@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ACCESS_CAPABILITY,
   ACCESS_KEYS,
   ACCESS_PERMISSIONS,
+  accessAvailable,
   addPermission,
   allows,
   linkSessionAccess,
@@ -19,6 +21,7 @@ import {
   seesModule,
   type MemberAccess,
 } from "../src/access";
+import { CAPABILITIES, resolveCapabilities } from "../src/capabilities";
 import { can } from "../src/roles";
 import { MONTH_LINES } from "../src/sales";
 import { staffAccess } from "../src/staff/access";
@@ -61,6 +64,33 @@ describe("the permission catalog", () => {
       expect(arrayFor("invitations", role)).toEqual([...LEGACY_GRANTS[role]]);
       expect(checkGrants(role, LEGACY_GRANTS[role]).ok).toBe(true);
     }
+  });
+});
+
+describe("what each permission shows (the invite panel's \"shows nothing for now\")", () => {
+  // The capability ids a store with these scopes has, as GET .../team/catalog reads them.
+  const enabled = (scopes: string[], pixelInstalled = false) => new Set(resolveCapabilities(scopes, { pixelInstalled }).filter((c) => c.enabled).map((c) => c.id));
+
+  it("names only store data the capability registry knows", () => {
+    const ids = new Set<string>(CAPABILITIES.map((c) => c.id));
+    for (const [key, data] of Object.entries(ACCESS_CAPABILITY)) for (const id of typeof data === "string" ? [data] : data) expect(ids.has(id), `${key}: ${id}`).toBe(true);
+  });
+
+  it("checkout abandonment shows Shopify's abandoned checkouts with orders alone, without customers", () => {
+    expect(accessAvailable("analytics.abandonment", enabled(["read_orders", "read_products"]))).toBe(true);
+    // The customer lists (who left a checkout) still need customers.
+    expect(accessAvailable("customers.contact", enabled(["read_orders", "read_products"]))).toBe(false);
+    expect(accessAvailable("analytics.abandonment", enabled(["read_products"]))).toBe(false);
+  });
+
+  it("conversion shows the pixel's funnel or Shopify's own sessions, either one", () => {
+    expect(accessAvailable("analytics.conversion", enabled(["read_orders"]))).toBe(false);
+    expect(accessAvailable("analytics.conversion", enabled(["read_orders", "read_reports"]))).toBe(true);
+    expect(accessAvailable("analytics.conversion", enabled(["read_orders", "write_pixels", "read_customer_events"], true))).toBe(true);
+  });
+
+  it("a permission with no store data of its own always shows something", () => {
+    expect(accessAvailable("staff.team", new Set())).toBe(true);
   });
 });
 
@@ -180,7 +210,7 @@ const report = () => ({
       shipping: { orders: 4, sent: 2, partlySent: 0, notSent: 2, items: 9, itemsSent: 4 },
       checkouts: { started: 6, completed: 3, left: 3, from: null },
     },
-    traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
+    traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], split: [{ id: "paid", label: "Paid ads", orders: 1, sales: 10, share: 1 }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
     ads: { currency: "USD", campaigns: [{ name: "c" }], current: { spend: 1 }, sales: { netSales: 10, orders: 1 }, sourced: [{ provider: "meta", orders: 1, sales: 10, salesPerSpend: 10 }] },
@@ -225,6 +255,7 @@ describe("redactOverview", () => {
     expect(out.modules.recent_orders).not.toHaveProperty("cancelledInRange");
     expect(out.modules.traffic).not.toHaveProperty("campaigns");
     expect(out.modules.traffic).not.toHaveProperty("paid");
+    expect(out.modules.traffic).not.toHaveProperty("split");
     expect(out.modules.traffic.items[0]).not.toHaveProperty("paidSales");
     expect(out.modules.discount_codes.items[0]).toEqual({ code: "SAVE", orders: 2 });
     expect(out.modules.ads).not.toHaveProperty("campaigns");
@@ -309,6 +340,26 @@ describe("redactOverview", () => {
     expect(parts(["analytics.abandonment"])).toEqual(["checkouts"]);
     expect(parts(["products.performance"])).toEqual([]);
     expect(redactOverview(report(), member([...LEGACY_GRANTS.viewer, "orders.payments", "orders.cancellations", "orders.fulfillment", "analytics.abandonment"])).modules.order_outcomes).toEqual(report().modules.order_outcomes);
+  });
+
+  it("gives Shopify's gross profit only with both the breakdown and the costs permission", () => {
+    const withProfit = () => ({ ...report(), capabilities: [...report().capabilities, { id: "profit" }], modules: { ...report().modules, profit: { status: "ready", current: { grossProfit: 900, costOfGoodsSold: 650 } }, shopify_check: { rows: [] } } });
+    const sees = (keys: string[]) => {
+      const out = redactOverview(withProfit(), member(keys));
+      return { profit: "profit" in out.modules, capability: out.capabilities.some((c) => c.id === "profit"), check: "shopify_check" in out.modules };
+    };
+    // Legacy viewers and analysts, and API keys, hold the breakdown but not the costs.
+    expect(sees([...LEGACY_GRANTS.viewer])).toEqual({ profit: false, capability: false, check: true });
+    expect(sees([...LEGACY_GRANTS.analyst])).toEqual({ profit: false, capability: false, check: true });
+    expect(sees(["inventory.view", "inventory.costs"])).toEqual({ profit: false, capability: false, check: false });
+    expect(sees(["analytics.sales", "finance.breakdown", "inventory.view", "inventory.costs"])).toEqual({ profit: true, capability: true, check: true });
+    expect(seesModule(member([], "owner"), "profit")).toBe(true);
+  });
+
+  it("lists Shopify's abandoned checkouts among the capabilities of a member who may see checkout abandonment", () => {
+    const withCheckouts = { ...report(), capabilities: [...report().capabilities, { id: "abandoned_checkouts" }] };
+    expect(redactOverview(withCheckouts, member(["analytics.abandonment"])).capabilities.map((c) => c.id)).toEqual(["contacts", "abandoned_checkouts"]);
+    expect(redactOverview(withCheckouts, member(["analytics.sales"])).capabilities.map((c) => c.id)).toEqual(["sales_overview"]);
   });
 
   it("keeps them once granted", () => {

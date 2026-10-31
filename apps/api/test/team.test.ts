@@ -397,7 +397,7 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     ok(await setAccess(b, memberId, "custom", ["marketing.ads", "marketing.campaigns"]));
     const table = await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export/table?${qs}`, guest.headers);
     expect(table.statusCode).toBe(200);
-    expect(table.json()).toMatchObject({ section: "ads_campaigns", label: "Ad campaigns", rows: [["Meta Ads", "act_1", "Spring", null, 12, 100, 4, 2, 0, 0, null, null, null, 0, null, null, null, "yes"]] });
+    expect(table.json()).toMatchObject({ section: "ads_campaigns", label: "Ad campaigns", rows: [["Meta Ads", "act_1", "Spring", null, null, null, null, null, null, 12, 100, 4, 2, 0, 0, null, null, null, 0, null, null, null, "yes"]] });
     // On screen isn't a download: nothing in the audit log, and the download itself still needs the export permission.
     expect(await systemDb.auditLog.count({ where: { workspaceId: b.ws, action: "report.exported" } })).toBe(0);
     expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export?${qs}`, guest.headers)).statusCode).toBe(403);
@@ -408,7 +408,7 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     // The same rows as on screen: a spend before of $0 (nothing ran in the week before), so no change from it.
     expect(csv.body.trim().split("\r\n")).toHaveLength(1 + table.json().rows.length);
     // (The campaign's status hasn't been read here: an empty cell.)
-    expect(csv.body).toContain('"Meta Ads","act_1","Spring",,12,100,4,2');
+    expect(csv.body).toContain('"Meta Ads","act_1","Spring",,,,,,,12,100,4,2');
     expect(await systemDb.auditLog.findFirst({ where: { workspaceId: b.ws, action: "report.exported" }, select: { metadata: true } })).toMatchObject({ metadata: { section: "ads_campaigns", platform: "meta" } });
   });
 
@@ -599,6 +599,23 @@ describe("staff and integrations permissions", () => {
     expect((await call("POST", `/workspaces/${b.ws}/stores/${b.store.id}/resync`, guest.headers)).statusCode).toBe(403);
     // A viewer can't hold management permissions.
     expect((await setAccess(b, memberId, "viewer", ["integrations.status", "integrations.manage"])).statusCode).toBe(400);
+  });
+});
+
+describe("the invitation panel's catalog", () => {
+  it("says which permissions show nothing yet, from the data the connected stores granted", async () => {
+    const owner = await signIn(ctx, "owner-catalog", "owner@catalog.test");
+    const ws = await createWorkspace(ctx, owner.headers, "Catalog");
+    const store = await createStore(ws, "catalog.myshopify.com", ["read_orders", "read_products"]);
+    const available = async () => {
+      const c = ok<{ modules: Array<{ permissions: Array<{ key: string; available: boolean }> }> }>(await call("GET", `/workspaces/${ws}/team/catalog`, owner.headers));
+      return Object.fromEntries(c.modules.flatMap((m) => m.permissions).map((p) => [p.key, p.available]));
+    };
+    // Shopify's abandoned checkouts need the orders alone; who left them needs the customers.
+    expect(await available()).toMatchObject({ "analytics.abandonment": true, "customers.contact": false, "analytics.conversion": false });
+    // Shopify's own sessions and visitors show conversion without the pixel's funnel.
+    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: ["read_orders", "read_products", "read_reports"] } });
+    expect(await available()).toMatchObject({ "analytics.conversion": true });
   });
 });
 

@@ -180,8 +180,26 @@ export function exportTable(section: ExportSection, modules: Obj, dates?: { rang
     case "ads_campaigns": {
       const a = isObj(modules.ads) ? modules.ads : {};
       const campaigns = list(a.campaigns);
-      // The status is the platform's own word (ENABLED, PAUSED, ACTIVE, ARCHIVED...), as of the account's last sync; empty: not read yet.
-      const header = ["Platform", "Account", "Campaign", "Status", ...AD_COLUMNS.slice(2).map(([label]) => label), "Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"];
+      // The status, Google's primary status, reasons and type, and the budget are the platform's own words (ENABLED, ACTIVE,
+      // LIMITED, BUDGET_CONSTRAINED, SEARCH, DAILY...) as of the account's last sync; empty: not read yet, or none
+      // (Meta has no primary status or type; a Meta campaign without a budget of its own has its ad sets').
+      const header = [
+        "Platform",
+        "Account",
+        "Campaign",
+        "Status",
+        "Primary status (Google)",
+        "Primary status reasons (Google)",
+        "Campaign type (Google)",
+        "Budget",
+        "Budget period",
+        ...AD_COLUMNS.slice(2).map(([label]) => label),
+        "Spend before",
+        "Spend change (%)",
+        "ROAS before",
+        "ROAS change (%)",
+        "Complete",
+      ];
       const rows = campaigns.map((c): Cell[] => {
         const change = isObj(c.change) ? c.change : null;
         const before = change && isObj(change.previous) ? change.previous : {};
@@ -191,6 +209,11 @@ export function exportTable(section: ExportSection, modules: Obj, dates?: { rang
           val(c, "accountId"),
           val(c, "name"),
           val(c, "status"),
+          val(c, "primaryStatus"),
+          Array.isArray(c.primaryStatusReasons) && c.primaryStatusReasons.length ? c.primaryStatusReasons.join(" ") : null,
+          val(c, "channelType"),
+          val(c, "budgetAmount"),
+          val(c, "budgetPeriod"),
           ...AD_COLUMNS.slice(2).map(([, k]) => val(c, k)),
           change ? val(before, "spend") : null,
           change ? pct(deltas.spend) : null,

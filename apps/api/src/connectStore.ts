@@ -1,5 +1,5 @@
 import { crossTenant, systemDb, type Store, type Tx } from "@app/db";
-import { audit, encryptTokenFields, endBillingForStore, logger, purgeStoreData, seedInitialSync, syncBillingFromShopify, type TokenResponse } from "@app/core";
+import { audit, customersFromChange, encryptTokenFields, endBillingForStore, logger, purgeStoreData, seedInitialSync, syncBillingFromShopify, type TokenResponse } from "@app/core";
 import { randomToken } from "@app/shared";
 import { HttpError, type Deps } from "./context.js";
 
@@ -139,9 +139,12 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
     if ((err as { code?: string }).code === "P2002") throw storeTaken();
     throw err;
   }
+  // From when orders carry their customer, should the token bring read_customers anew (its orders,
+  // a moved store's purged, are read with them by the import seeded below).
+  const before = existing && !moving ? existing.grantedScopes : [];
   await systemDb.store.update({
     where: { id: store.id },
-    data: { ...encryptTokenFields(store.id, token), pixelIngestKey: store.pixelIngestKey ?? randomToken(18) },
+    data: { ...encryptTokenFields(store.id, token), ...customersFromChange(before, token.scopes, new Date()), pixelIngestKey: store.pixelIngestKey ?? randomToken(18) },
   });
   // Shopify cancels an app's charges when it is uninstalled, so a store back after an uninstall
   // (a store only moves workspace after one) brings no plan with it: Free until approved again.

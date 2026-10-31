@@ -10,10 +10,12 @@
 import type { AdConnection } from "@app/db";
 import {
   DEMO_ACCOUNT_NAME,
+  DEMO_CAMPAIGNS,
   DEMO_DEFAULT_CURRENCY,
   DEMO_DEFAULT_SEED,
   DEMO_DEFAULT_TIMEZONE,
   demoCampaignRows,
+  demoCampaignStoredFacts,
   demoReport,
   localDay,
   type AdDayRow,
@@ -65,21 +67,28 @@ export class GoogleAdsDemoProvider implements GoogleAdsSource {
   constructor(private readonly conn: DemoConnection) {
     this.context = demoContextOf(conn);
   }
+  /** The account's own today: a campaign's primary status is rated as of it, as Google's is now. */
+  private today(): string {
+    try {
+      return localDay(new Date(), this.conn.timezone || DEMO_DEFAULT_TIMEZONE);
+    } catch {
+      return localDay(new Date(), "UTC");
+    }
+  }
   async campaignDays(since: string, until: string): Promise<AdDayRow[]> {
-    return demoCampaignRows(this.context, since, until);
+    // With each campaign's facts, as Google's campaign query carries them for a real account.
+    const today = this.today();
+    const facts = new Map(DEMO_CAMPAIGNS.map((c) => [c.id, demoCampaignStoredFacts(this.context, c, today)]));
+    return demoCampaignRows(this.context, since, until).map((r) => {
+      const f = facts.get(r.campaignId);
+      return f ? { ...r, campaignFacts: f } : r;
+    });
   }
   async accountHealth(): Promise<AdAccountHealth> {
     return { status: "active", detail: DEMO_ACCOUNT_STATUS_DETAIL, name: DEMO_ACCOUNT_NAME, currency: this.context.currency, timezone: this.conn.timezone ?? DEMO_DEFAULT_TIMEZONE };
   }
   async report(level: GoogleReportLevel, since: string, until: string, parent: GoogleReportParent = {}): Promise<GoogleReport> {
-    // A campaign's primary status is rated as of the account's today, as Google's is now.
-    let today: string;
-    try {
-      today = localDay(new Date(), this.conn.timezone || DEMO_DEFAULT_TIMEZONE);
-    } catch {
-      today = localDay(new Date(), "UTC");
-    }
-    return demoReport(this.context, level, since, until, parent, today);
+    return demoReport(this.context, level, since, until, parent, this.today());
   }
 }
 

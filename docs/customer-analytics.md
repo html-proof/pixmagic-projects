@@ -10,7 +10,9 @@ Nothing here is a forecast; "lifetime" means "so far".
   `apps/api/src/routes/customerAnalytics.ts`, `apps/web/src/components/dashboard/CustomerCohorts.tsx`.
 - Endpoint: `GET /workspaces/:ws/stores/:storeId/analytics/customers` with the dashboard's date
   query (`preset`, `from`, `to`) and `months` (1 to 24, default 12: first-order months listed).
-- Tests: `packages/shared/test/customers.test.ts`, `apps/api/test/customerAnalytics.test.ts`.
+- Tests: `packages/shared/test/customers.test.ts`, `apps/api/test/customerAnalytics.test.ts`; the
+  recorded grant (`stores.customers_from`) also `packages/core/test/scopes.test.ts`,
+  `apps/api/test/scopes.test.ts`, `apps/worker/test/worker.test.ts`.
 
 ## Who sees what
 
@@ -67,36 +69,60 @@ orders can differ by a few.
 
 ## Where it starts (`customersFrom`)
 
-Customers are counted from the first store-local day on which every order's customer is known
-(`customerHistoryStart` in @app/shared):
+Customers are counted from the first store-local day on which every order's customer is known, the
+later of:
 
 1. The first whole imported day: the day after the one the import window started on
    (`firstWholeDay` of `stores.orders_history_from`); with the full history, the first order's day.
-2. Orders say who placed them only once the store granted `read_customers`. Granting it later
-   re-reads Shopify's last 60 days, from a moment part way through a day; older orders stay without
-   a customer. So when orders since that whole day went without a customer, customers start on the
-   day orders began to carry one, or the day after when some of its orders have none. That day
-   (`customersKnownDay`, from `daily_store_metrics`) splits the orders since the whole day into two
-   stretches, each with its own share of orders that have a customer: it is the day with a known
-   customer that fits them best (binomial log-likelihood; that day's orders without one count as
-   before it), where the share before is at most a third of the share after. A start later than the
-   first day with a known customer must fit better by more than 1 (log): a store whose first weeks
-   had fewer customers by chance keeps its first day.
-   - Not simply the first day with a customer: a single old order linked out of turn (updated since
-     the grant, or dated by when it was processed elsewhere) would otherwise start the figures before
-     weeks of orders that say nobody.
-   - Not the day that best splits days with a customer from days without: on a store whose sales
-     are mostly guest checkouts or walk-ins with no customer, such days outnumber the others all
-     along, and the start would go to its last days.
-   - Guest checkouts look the same as orders read before the grant, so a store whose first days had
-     guest orders only starts a few days late. With orders linked out of turn on a store whose own
-     share of orders with a customer is small, the evidence can be too thin to skip them: then the
-     start is that early order's day, before orders without a customer.
+2. The first day orders all carry their customer. Orders say who placed them only once the store
+   granted `read_customers`. Granting it later re-reads Shopify's last 60 days (the whole history
+   with `read_all_orders`) from a moment part way through a day; older orders stay without a
+   customer. That day comes from the grant as recorded, or for a store that granted
+   `read_customers` before grants were recorded, from the orders.
 
-A store that gave `read_customers` back and granted it again more than 60 days later has orders
-without a customer in between: the cohorts of those months are smaller than they were, and their
-customers' later orders count as "back from before" (Shopify's position still says they bought
-before). Nothing marks those months yet.
+**The recorded grant** (`stores.customers_from`, `recordedCustomerStart` in @app/shared): from when
+every stored order carries its customer.
+
+- Set to the moment the store granted `read_customers` wherever its scopes are saved
+  (`customersFromChange` in core `scopes.ts`): the API's reconcile after a grant
+  (`apps/api/src/routes/scopes.ts`), `app/scopes_update`, a connect, a token that tells of a new
+  grant. Orders read from then on carry their customer.
+- Moved back to the start of the orders import queued since then, once it is in (the worker's
+  `finishBackfill`, apps/worker `handlers/sync.ts`): the re-read the grant queues
+  (`seedScopeFollowUp`), or any full import after it; the earliest is kept, the epoch for the whole
+  history. An import queued before the grant read orders without their customer, at least at
+  first, and moves nothing.
+- Its day is the one after the moment's store-local day (the moment fell part way through it).
+  Until the re-read is in, that is the day after the grant: the page has nothing to count yet and
+  says from when it will.
+- Cleared when `read_customers` is given up (orders updated from then on lose their customer) and
+  when the store's data is purged. A grant again starts over: the months between a give-back and a
+  later grant are left out instead of being read as small cohorts, and customers who bought before
+  it count as "back from before" (Shopify's position says they did).
+
+**Read from the orders** (`customerHistoryStart`), for a store that granted `read_customers` before
+grants were recorded (`customers_from` null; the column came on 2026-10-30): when orders since the
+whole day went without a customer, customers start on the day orders began to carry one, or the day
+after when some of its orders have none. That day (`customersKnownDay`, from `daily_store_metrics`)
+splits the orders since the whole day into two stretches, each with its own share of orders that
+have a customer: it is the day with a known customer that fits them best (binomial log-likelihood;
+that day's orders without one count as before it), where the share before is at most a third of
+the share after. A start later than the first day with a known customer must fit better by more
+than 1 (log): a store whose first weeks had fewer customers by chance keeps its first day.
+
+- Not simply the first day with a customer: a single old order linked out of turn (updated since
+  the grant, or dated by when it was processed elsewhere) would otherwise start the figures before
+  weeks of orders that say nobody.
+- Not the day that best splits days with a customer from days without: on a store whose sales are
+  mostly guest checkouts or walk-ins with no customer, such days outnumber the others all along,
+  and the start would go to its last days.
+- Guest checkouts look the same as orders read before the grant, so a store whose first days had
+  guest orders only starts a few days late. With orders linked out of turn on a store whose own
+  share of orders with a customer is small, the evidence can be too thin to skip them: then the
+  start is that early order's day, before orders without a customer.
+- A store that gave `read_customers` back and granted it again more than 60 days later has orders
+  without a customer in between: the cohorts of those months are smaller than they were, and
+  nothing marks them. Such a later grant is recorded, which ends this.
 
 Dates on screen that begin earlier are counted from `customersFrom` (`dates.clamped`); dates that
 end before it have no figures (`dates: null`), which the page says is not the same as no

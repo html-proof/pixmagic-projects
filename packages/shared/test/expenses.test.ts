@@ -80,6 +80,8 @@ describe("net profit", () => {
     expect(netProfit({ ...known, productCosts: null, adSpend: null, complete: false })).toEqual({ value: null, gaps: ["product_costs", "ad_spend", "costs_not_complete"] });
     expect(netProfit({ ...known, uncosted: 12 })).toEqual({ value: null, gaps: ["uncosted_sales"] });
     expect(netProfit({ ...known, adSpend: "hidden" })).toEqual({ value: null, gaps: ["ads_hidden"] });
+    // A member not shown Shopify's product costs: net profit would give them away.
+    expect(netProfit({ ...known, productCosts: "hidden" })).toEqual({ value: null, gaps: ["product_costs_hidden"] });
   });
 
   it("counts the costs list complete only for dates from the day the owner said so", () => {

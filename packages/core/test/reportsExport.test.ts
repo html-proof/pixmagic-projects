@@ -114,15 +114,32 @@ describe("the Advertising area's reports", () => {
         campaigns: [
           { provider: "meta", accountId: "act_1", campaignId: "1", name: "Spring", status: "ACTIVE", statusGroup: "active", ...totals, complete: true, change: { from: "2026-10-06", to: "2026-10-11", previous: { spend: 20, roas: 3 }, deltas: { spend: 1, roas: 0.5 } } },
           { provider: "google", accountId: "111", campaignId: "7", name: "Brand", ...totals, complete: false, change: null },
+          {
+            provider: "google",
+            accountId: "111",
+            campaignId: "8",
+            name: "Shoes",
+            status: "ENABLED",
+            primaryStatus: "LIMITED",
+            primaryStatusReasons: ["BUDGET_CONSTRAINED", "BIDDING_STRATEGY_LEARNING"],
+            channelType: "SEARCH",
+            budgetAmount: 40,
+            budgetPeriod: "DAILY",
+            ...totals,
+            complete: true,
+            change: null,
+          },
         ],
       },
     });
-    expect(t.header.slice(0, 4)).toEqual(["Platform", "Account", "Campaign", "Status"]);
+    expect(t.header.slice(0, 9)).toEqual(["Platform", "Account", "Campaign", "Status", "Primary status (Google)", "Primary status reasons (Google)", "Campaign type (Google)", "Budget", "Budget period"]);
     expect(t.header.slice(-5)).toEqual(["Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"]);
-    expect(t.rows[0]).toEqual(["Meta Ads", "act_1", "Spring", "ACTIVE", 40, 4000, 100, 80, 5, 200, 4, 180, 4.5, 20, 100, 3, 50, "yes"]);
+    expect(t.rows[0]).toEqual(["Meta Ads", "act_1", "Spring", "ACTIVE", null, null, null, null, null, 40, 4000, 100, 80, 5, 200, 4, 180, 4.5, 20, 100, 3, 50, "yes"]);
     expect(t.rows[1]!.slice(-5)).toEqual([null, null, null, null, "no"]);
     // A status not read yet is an empty cell.
     expect(t.rows[1]![3]).toBeNull();
+    // Google's primary status, its reasons, the campaign's type and its budget, as the last sync stored them.
+    expect(t.rows[2]!.slice(3, 9)).toEqual(["ENABLED", "LIMITED", "BUDGET_CONSTRAINED BIDDING_STRATEGY_LEARNING", "SEARCH", 40, "DAILY"]);
   });
 
   it("AdSense by day: earnings per day, a day without figures said so", () => {

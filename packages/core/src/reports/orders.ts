@@ -1,5 +1,20 @@
 import { Prisma, type Tx } from "@app/db";
-import { addDays, channelLabel, daysBetweenInclusive, orderGoesAhead, orderOutcome, TRAFFIC_LABEL, TRAFFIC_SOURCES, type DateRange, type OrderOutcomes, type TrafficSource } from "@app/shared";
+import {
+  addDays,
+  channelLabel,
+  daysBetweenInclusive,
+  orderGoesAhead,
+  orderOutcome,
+  TRAFFIC_LABEL,
+  TRAFFIC_SOURCES,
+  TRAFFIC_SPLIT_LABEL,
+  TRAFFIC_SPLITS,
+  trafficSplitOf,
+  type DateRange,
+  type OrderOutcomes,
+  type TrafficSource,
+  type TrafficSplit,
+} from "@app/shared";
 import { argMax, localMoment, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
@@ -76,6 +91,8 @@ export async function channels(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
  * packages/shared/src/traffic.ts), with the same money as sales by channel (net sales: after
  * discounts and returns, before tax and shipping). Other websites are listed by host. Orders stored
  * before sources were recorded are counted as `pending` (the dashboard's refresh re-reads them).
+ * `split` is the same sales, paid vs organic (TRAFFIC_SPLITS in @app/shared/traffic): by the last visit,
+ * as Shopify recorded it, never by what an ad platform credits to its ads.
  */
 export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   const rows = await tx.$queryRaw<Array<{ source: string | null; medium: string | null; host: string | null; campaign: string | null; orders: number; sales: string }>>`
@@ -86,6 +103,7 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   type Item = { key: string; source: string; label: string; orders: number; sales: number; paidOrders: number; paidSales: number };
   const items = new Map<string, Item>();
   const campaigns = new Map<string, { source: string; label: string; campaign: string; orders: number; sales: number }>();
+  const split = new Map<TrafficSplit, { orders: number; sales: number }>(TRAFFIC_SPLITS.map((id) => [id, { orders: 0, sales: 0 }]));
   let pending = 0;
   for (const x of rows) {
     const orders = num(x.orders);
@@ -94,6 +112,9 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
       pending += orders;
       continue;
     }
+    const part = split.get(trafficSplitOf(x.medium))!;
+    part.orders += orders;
+    part.sales = r2(part.sales + sales);
     const source = (TRAFFIC_SOURCES as readonly string[]).includes(x.source) ? (x.source as TrafficSource) : "other";
     const key = source === "other" && x.host ? `site:${x.host}` : source;
     const label = source === "other" && x.host ? x.host : TRAFFIC_LABEL[source];
@@ -120,6 +141,14 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
     items: list.map(({ key, ...x }) => ({ ...x, id: key, share: total > 0 ? x.sales / total : null })),
     paid: { ...paid, share: total > 0 ? paid.sales / total : null },
     campaigns: [...campaigns.values()].sort((a, b) => b.sales - a.sales || b.orders - a.orders).slice(0, 10),
+    /**
+     * Paid vs organic, every split in order (zero when none): the orders whose source is read, so it adds up
+     * to the items' sales; `pending` aren't in it. A share is of those sales (null when they add up to none).
+     */
+    split: TRAFFIC_SPLITS.map((id) => {
+      const p = split.get(id)!;
+      return { id, label: TRAFFIC_SPLIT_LABEL[id], orders: p.orders, sales: p.sales, share: total > 0 ? p.sales / total : null };
+    }),
     /** Orders in these dates whose source hasn't been read yet. */
     pending,
   };

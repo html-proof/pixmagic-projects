@@ -175,6 +175,16 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
             where: { id: store.id, OR: [{ ordersHistoryFrom: null }, { ordersHistoryFrom: { gt: from } }] },
             data: { ordersHistoryFrom: from },
           });
+          // And every order of the window carries its customer, for an import queued once the store
+          // held read_customers (stores.customers_from, the grant's moment until an import moves it
+          // back; null: no grant recorded, or given up since): customers are known from its start.
+          // One queued before the grant read orders without their customer, at least at first.
+          if (expandScopes(store.grantedScopes).has("read_customers")) {
+            await systemDb.store.updateMany({
+              where: { id: store.id, customersFrom: { lte: job.createdAt, gt: from } },
+              data: { customersFrom: from },
+            });
+          }
         }
         // Only a full backfill (or a refresh of a store that already had one) means "fully
         // synced". A 3-day reconcile finishing on a store whose backfill failed must not hide

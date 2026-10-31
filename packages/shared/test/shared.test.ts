@@ -28,6 +28,7 @@ import {
   resolveCapabilities,
   resolvePreset,
   WEEK_STARTS_ON,
+  safeEqual,
   saleValue,
   scopeList,
   scopesForModule,
@@ -77,6 +78,19 @@ describe("Shopify HMAC", () => {
     expect(verifyShopifyWebhookHmac(Buffer.from('{"id":1,"total":"99.00"}'), sig, SECRET)).toBe(false);
     expect(verifyShopifyWebhookHmac(body, undefined, SECRET)).toBe(false);
     expect(verifyShopifyWebhookHmac(body, sig, "other")).toBe(false);
+  });
+});
+
+describe("safeEqual", () => {
+  it("is true only for the same string, whatever the lengths", () => {
+    expect(safeEqual("abc123", "abc123")).toBe(true);
+    expect(safeEqual("", "")).toBe(true);
+    expect(safeEqual("Café ☕", "Café ☕")).toBe(true);
+    expect(safeEqual("abc123", "abc124")).toBe(false);
+    expect(safeEqual("abc123", "abc12")).toBe(false);
+    expect(safeEqual("abc", "abc123")).toBe(false);
+    expect(safeEqual("abc", "")).toBe(false);
+    expect(safeEqual("Café", "Café")).toBe(false);
   });
 });
 

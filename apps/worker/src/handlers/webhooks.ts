@@ -1,6 +1,6 @@
 /** The webhooks queue: each Shopify topic applied to the store's data (orders, products, refunds, app and GDPR topics). */
 import { systemDb, type Store } from "@app/db";
-import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, dropStoreInstance, disconnectStore, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
+import { applySubscriptionUpdate, audit, customerKey, customersFromChange, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, dropStoreInstance, disconnectStore, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
 import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
 import { zapierOrderPaid } from "@app/core/zapier";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
@@ -322,8 +322,11 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // backfill was lost for good. This way a retry can at worst queue it twice (idempotent).
         // Held back a minute, because the jobs read the saved scopes when they run (an orders
         // import that ran before the save would skip the customer hash read_customers allows).
+        // The grant's moment is taken first: the import it queues is moved back from it once in
+        // (stores.customers_from).
+        const at = new Date();
         await seedScopeFollowUp(deps, store, newlyGranted, { delaySeconds: SCOPE_FOLLOW_UP_DELAY_S });
-        await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: current } });
+        await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: current, ...customersFromChange(store.grantedScopes, current, at) } });
         await audit({ workspaceId: store.workspaceId, action: "store.scopes_updated", targetId: store.id, metadata: { current, granted: newlyGranted, revoked } });
         break;
       }

@@ -33,10 +33,10 @@ import {
 } from "@app/core";
 import { revokeZapierGrants } from "@app/core/zapier";
 import {
-  ACCESS_CAPABILITY,
   ACCESS_KEYS,
   ACCESS_MODULE_INFO,
   ACCESS_MODULES,
+  accessAvailable,
   grantedKeys,
   hasFullAccess,
   modulesOf,
@@ -196,10 +196,7 @@ export function teamRoutes(app: App, deps: Deps) {
       modules: ACCESS_MODULES.map((m) => ({
         id: m,
         ...ACCESS_MODULE_INFO[m],
-        permissions: permissionsOf(m).map((p) => {
-          const capability = ACCESS_CAPABILITY[p.key];
-          return { ...p, available: !capability || granted.has(capability) };
-        }),
+        permissions: permissionsOf(m).map((p) => ({ ...p, available: accessAvailable(p.key, granted) })),
       })),
       roles: [
         ...(a.role === "owner" || a.role === "admin" ? [{ id: "admin", ...ROLE_INFO.admin, template: [...ACCESS_KEYS], restricted: false, canManage: true }] : []),

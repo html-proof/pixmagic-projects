@@ -12,6 +12,7 @@ import {
   DEMO_DISCLAIMER,
   demoBreakdown,
   demoCampaignFacts,
+  demoPrimaryStatus,
   demoStoreDays,
   demoStoreTotals,
   topConverting,
@@ -22,6 +23,7 @@ import {
   type DemoBreakdownRow,
 } from "@app/shared";
 import { demoContextOf, isDemoConnection } from "../ads/googleAdsSource.js";
+import { storedCampaigns } from "../adConnections/campaigns.js";
 import { googleAdsConnectionStatus } from "../adConnections/demo.js";
 import { adToday } from "../adConnections/sync.js";
 
@@ -29,7 +31,9 @@ import { adToday } from "../adConnections/sync.js";
 // The Google Ads analytics page's answer for one connection and range (apps/api/src/routes/
 // adsGoogleDemo.ts): the connection's stored campaign-days worked into the overview, the series by day,
 // week and month, the campaign table, the conversion analytics and the recommendations
-// (@app/shared/adsAnalytics), the same for a demo account and a real one. What only a demo has is
+// (@app/shared/adsAnalytics), the same for a demo account and a real one. Each campaign's type, status,
+// primary status and budget are a demo's generator's, and a real account's as its last sync stored them
+// (ad_campaigns: Google's own word then, not for the dates). What only a demo has is
 // generated from its seed (@app/shared/adsDemo): the splits by device, country, age group and audience
 // segment, and the simulated store its spend is set against. A real connection's device and country
 // splits come from Google's live report, which the route reads; nothing here is ever generated for one.
@@ -77,12 +81,32 @@ export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: Date
   const today = adToday(conn, now);
   const coverage = accountCoverage(conn, today);
   const ctx = demo ? demoContextOf(conn) : null;
-  const settings: CampaignSettings[] = ctx
-    ? DEMO_CAMPAIGNS.map((c) => {
-        const f = demoCampaignFacts(ctx, c);
-        return { id: f.id, name: f.name, type: f.type, status: f.status, startDay: f.startDay, dailyBudget: f.dailyBudget };
-      })
-    : [];
+  let settingsAsOf: string | null = null;
+  let settings: CampaignSettings[];
+  if (ctx) {
+    settings = DEMO_CAMPAIGNS.map((c) => {
+      const f = demoCampaignFacts(ctx, c);
+      return { id: f.id, name: f.name, type: f.type, status: f.status, startDay: f.startDay, dailyBudget: f.dailyBudget, ...demoPrimaryStatus(ctx, c, today), budgetPeriod: "DAILY", totalBudget: null };
+    });
+  } else {
+    // Only the campaigns with figures in the range: one that spent nothing in it isn't listed at zero, as a demo's paused ones are.
+    const ids = [...new Set(inRange.map((r) => r.campaignId))];
+    const stored = withCampaigns && ids.length ? await storedCampaigns(tx, { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, campaignId: { in: ids } }) : [];
+    settings = stored.map((c) => ({
+      id: c.campaignId,
+      name: c.name,
+      type: c.channelType,
+      status: c.status,
+      startDay: null,
+      primaryStatus: c.primaryStatus,
+      primaryStatusReasons: c.primaryStatusReasons,
+      budgetPeriod: c.budgetPeriod,
+      dailyBudget: c.budgetPeriod === "DAILY" ? c.budgetAmount : null,
+      totalBudget: c.budgetPeriod === "CUSTOM_PERIOD" ? c.budgetAmount : null,
+    }));
+    const latest = stored.reduce<Date | null>((a, c) => (a === null || c.checkedAt > a ? c.checkedAt : a), null);
+    settingsAsOf = latest?.toISOString() ?? null;
+  }
   const campaigns = campaignAnalytics(inRange, range, settings);
   const current = adsMetrics(inRange);
   // Compared only with days the connection has stored in full: a comparison from before its history would read as growth from nothing.
@@ -119,6 +143,11 @@ export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: Date
     series: { day: adsSeries(inRange, range, "day"), week: adsSeries(inRange, range, "week"), month: adsSeries(inRange, range, "month") },
     /** Every campaign with figures in the range (the campaigns endpoint searches, sorts and pages them). */
     campaigns: withCampaigns ? campaigns : null,
+    /**
+     * Where the campaigns' types, statuses and budgets come from: a demo's generator, or a real account's
+     * last sync (Google's word then, not for the dates; `asOf` the latest it read, null while none is stored).
+     */
+    campaignSettings: { source: demo ? ("generated" as const) : ("synced" as const), asOf: settingsAsOf },
     conversions: { series: conversionSeries(inRange, range), top: withCampaigns ? topConverting(campaigns) : null },
     /** Devices: a demo's generated split; a real account's comes from Google's live report (the route adds it). */
     devices: split("device"),

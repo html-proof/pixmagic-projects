@@ -25,7 +25,9 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   managing integrations or staff, exports) are never in a template and "Select all" leaves them out:
   they are ticked one by one.
 - A permission never gets round Shopify: the dashboard's modules still need the store's scopes
-  (`capabilities.ts`). The invite panel marks permissions whose data no connected store has granted.
+  (`capabilities.ts`). The invite panel marks permissions whose data no connected store has granted
+  (`ACCESS_CAPABILITY`, any of a permission's data: conversion is the pixel's funnel or Shopify's
+  sessions; checkout abandonment is Shopify's abandoned checkouts, which need only orders).
 - A restricted role's `can(role, …)` (roles.ts) is always false, so a check that forgets the grants
   fails closed. Ask `allows(access, need)`.
 
@@ -46,7 +48,10 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   `redactOverview` removes fields that need their own permission (gross sales/discounts/tax/shipping
   and total sales, which holds tax and shipping, so such a member's headline is net sales; returns
   and refunds per day; the year report, stock value, order payment/fulfillment/cancellation, paid
-  attribution, ad campaigns, discount amounts, import counts).
+  attribution, ad campaigns, discount amounts, import counts). Shopify's gross profit and cost of
+  goods sold (the `profit` module, and those rows of `GET …/shopify-check`) need both the breakdown
+  (`finance.breakdown`) and `inventory.costs` (`OVERVIEW_MODULE_ALSO_NEEDS`), so a legacy viewer,
+  analyst or API key holding only the breakdown doesn't get them.
 - `GET …/contacts` asks Shopify only for the lists the member may see and blanks names, contact
   details and order history per permission (`redactContact`).
 - WhatsApp, ads, email, staff and settings routes each ask for the permission that covers them; the
