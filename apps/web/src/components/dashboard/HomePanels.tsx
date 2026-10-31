@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, Split, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
 import { trafficSourcePlatform, type AdSpendProvider } from "@app/shared/ads";
-import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
+import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
 import type { OrderOutcomes } from "@app/shared/orders";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -18,7 +18,7 @@ import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
 import { comparableAds, costsOf, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
 import type { Topic } from "./topics";
-import type { AdsModule, Overview, RecentOrder, TrafficModule } from "./types";
+import type { Overview, RecentOrder, TrafficModule } from "./types";
 
 // ---------------------------------------------------------------------------
 // The dashboard under its four headline numbers, in the owner's design (2026-10-24): sales against
