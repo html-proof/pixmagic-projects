@@ -2,8 +2,13 @@ name: CI
 
 # GitHub-hosted minutes are limited (GitHub Free: 2,000 a month for private repositories), so CI runs
 # only what a change can affect:
-# - A change of only Markdown files or docs/ starts no run at all: nothing to test, and on main
+# - A push to main of only Markdown files or docs/ starts no run at all: nothing to test, and
 #   nothing for Deploy to AWS to ship (it starts only when a CI run on main succeeds).
+# - A pull request of only those does start a run, because GitHub's merge block on main (branch
+#   protection: these three jobs must pass) waits for its checks to report. Its first job finds
+#   nothing to test and the other two skip, about a minute (tested job). The first job is required
+#   too: a draft's run skips every job, GitHub counts a skip as a pass, and it is the job that turns
+#   them pending again the moment the pull request is ready, before the others are even queued.
 # - Pull requests run the browser tests (e2e) only when they change what those tests drive, or
 #   carry the label "e2e" (tested job). Pushes to main always need them before Deploy.
 # - A run skips each job that already passed on the same code, Markdown and docs/ aside (tested job
@@ -16,15 +21,16 @@ name: CI
 #   making it one starts a run that cancels the queued or running one and skips every job, so the
 #   pull request shows grey checks instead of the red of a cancelled run. Marking it ready for
 #   review runs everything.
-# These paths-ignore lists are infra/runner/code-key.mjs's CI_IGNORES (its test holds them together).
+# This paths-ignore list is infra/runner/code-key.mjs's CI_IGNORES (its test holds them together).
 on:
   push:
     branches: [main]
     paths-ignore: ["**.md", "docs/**"]
   pull_request:
-    # GitHub's three by default, and the two that make a pull request a draft and ready again.
+    # GitHub's three by default, and the two that make a pull request a draft and ready again. No
+    # paths-ignore: a pull request that starts no run never reports the checks main's merge block
+    # waits for.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-    paths-ignore: ["**.md", "docs/**"]
 
 # One run at a time per pull request, and on main. A newer push waits for the run in progress rather
 # than cancelling it (GitHub drops older waiting runs in a group, so only the newest waits):
@@ -112,7 +118,8 @@ jobs:
           GIT_CONFIG_KEY_0: core.longpaths
           GIT_CONFIG_VALUE_0: "true"
       # Outputs: key, the code's key; checks and e2e, "true" when that job passed on this code
-      # already, or for e2e when a pull request doesn't need the browser tests. The browser tests
+      # already, for both when a pull request changes only Markdown and docs/ (CI_IGNORES: the code
+      # is main's), or for e2e when a pull request doesn't need the browser tests. The browser tests
       # drive the UI on the local server (apps/aws) with their own sign-in and mail stand-ins. A pull
       # request that changes none of that (or the UI's shared package, the dependencies or this
       # workflow) leaves them to the push to main, unless it has the label "e2e": add it, then push
@@ -125,24 +132,36 @@ jobs:
           retries: 3
           script: |
             const pr = context.payload.pull_request;
+            const { pathToFileURL } = require("url");
+            const { codeKey, ignoredByCi } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/infra/runner/code-key.mjs`).href);
+            // A pull request's changed paths (old names too), or null when GitHub can't list them all.
+            let changed = null;
+            if (pr) {
+              try {
+                const listed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+                // GitHub lists at most 3,000 files: a pull request that size runs everything.
+                if (listed.length < 3000) changed = listed.flatMap((f) => [f.filename, f.previous_filename]).filter(Boolean);
+                else core.info("3,000+ files changed: running everything.");
+              } catch (err) {
+                core.warning(`Couldn't list the changed files (${err.message}): running everything.`);
+              }
+            }
+            if (changed?.every(ignoredByCi)) {
+              core.info("Only Markdown and docs/ changed: nothing to test, so the checks and browser tests skip.");
+              core.setOutput("checks", "true");
+              core.setOutput("e2e", "true");
+              return;
+            }
             let e2e = true;
-            if (pr && !pr.labels.some((l) => l.name === "e2e")) {
+            if (changed && !pr.labels.some((l) => l.name === "e2e")) {
               const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
               const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
-              try {
-                const changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
-                const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
-                // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
-                e2e = hit !== undefined || changed.length >= 3000;
-                core.info(e2e ? `Browser tests needed (${hit ?? "3,000+ files"} changed).` : "Browser tests not needed: nothing they drive changed.");
-              } catch (err) {
-                core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
-              }
+              const hit = changed.find((p) => files.includes(p) || dirs.some((d) => p.startsWith(d)));
+              e2e = hit !== undefined;
+              core.info(e2e ? `Browser tests needed (${hit} changed).` : "Browser tests not needed: nothing they drive changed.");
             }
             if (!e2e) core.setOutput("e2e", "true");
 
-            const { pathToFileURL } = require("url");
-            const { codeKey } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/infra/runner/code-key.mjs`).href);
             const git = async (...args) => (await exec.getExecOutput("git", args, { silent: true })).stdout;
             const key = codeKey(await git("ls-tree", "-r", "-z", "HEAD"));
             const tree = (await git("rev-parse", "HEAD^{tree}")).trim();

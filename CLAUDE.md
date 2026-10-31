@@ -15,8 +15,9 @@ The owner wants every change made to this project live on AWS
 3. The change is live only when that Deploy run succeeded. Check it before saying so.
 
 - Work left on a local branch or uncommitted in a worktree never reaches AWS.
-- A change of only Markdown files or `docs/` starts no CI run and no Deploy: there is nothing to
-  ship, and its merge is done once it is on `main`.
+- A change of only Markdown files or `docs/` starts no Deploy: there is nothing to ship, and its
+  merge is done once it is on `main`. Its pull request still runs CI for about a minute (the first
+  job finds nothing to test and the other two skip), so its checks report.
 - GitHub-hosted minutes are scarce (Free plan). A pull request runs the browser tests only when it
   touches what they drive (`.github/workflows/ci.yml` says what); add the label `e2e` and push
   again to run them anyway. Merge a pull request whose last run is green on top of the current
