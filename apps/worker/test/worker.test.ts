@@ -361,6 +361,22 @@ describe("webhook processing", () => {
     expect(queues.sent.sync).toEqual([]);
   });
 
+  it("app/scopes_update records when read_customers was granted, no later than the re-read it queues, and clears it when it goes", async () => {
+    const store = await makeStore(["read_orders", "read_products"]);
+    const before = Date.now();
+    await webhook("app/scopes_update", { current: ["read_orders", "read_products", "read_customers"] });
+    const at = (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom!;
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+    // Queued before the scopes were saved, yet not before the grant's moment: the import moves it back once in.
+    const reread = await systemDb.syncJob.findFirstOrThrow({ where: { storeId: store.id, kind: "orders" } });
+    expect(reread.createdAt.getTime()).toBeGreaterThanOrEqual(at.getTime());
+    // Another scope leaves it as it was.
+    await webhook("app/scopes_update", { current: ["read_orders", "read_products", "read_customers", "write_pixels"] });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toEqual(at);
+    await webhook("app/scopes_update", { current: ["read_orders", "read_products", "write_pixels"] });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toBeNull();
+  });
+
   it("ignores an app/uninstalled delivery that predates the current installation", async () => {
     const store = await makeStore();
     // Shopify retries a failed delivery for up to 48h. The merchant uninstalled, then reinstalled
@@ -1561,6 +1577,66 @@ describe("orders pipeline", () => {
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(from) } });
     await purgeStoreData(store.id);
     expect(await historyFrom()).toBeNull();
+  });
+
+  /**
+   * stores.customers_from: the moment read_customers was granted, until the import that re-reads
+   * the orders with their customer is in; then that import's window, from which every order says
+   * who placed it (docs/customer-analytics.md "Where it starts").
+   */
+  it("moves the start of the known customers back to the re-read's window once it is in, for a re-read queued since the grant", async () => {
+    const store = await makeStore(["read_orders", "read_customers"]);
+    fetchImpl = async () => gqlJson(ordersPage([gOrder(1, { createdAt: new Date(Date.now() - 10 * 86400_000).toISOString() })]));
+    const customersFrom = async () => (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom;
+    const sync = async (job: { id: string }, data: Partial<SyncJobData> = {}) => {
+      const start = Date.now();
+      await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, pagedOnly: true, ...data }, deps);
+      return { start, end: Date.now() };
+    };
+
+    const tick = () => new Promise((r) => setTimeout(r, 10));
+
+    // An import queued before the grant read orders without their customer, at least at first: nothing moves.
+    const early = await makeJob(store, "orders");
+    await tick();
+    const granted = new Date();
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: granted } });
+    await sync(early);
+    expect(await customersFrom()).toEqual(granted);
+
+    // The re-read the grant queued: customers are known from its window's start, 60 days back from when it was in.
+    await tick();
+    const t = await sync(await makeJob(store, "orders"));
+    const moved = (await customersFrom())!.getTime();
+    expect(moved).toBeGreaterThanOrEqual(t.start - BACKFILL_DAYS * 86400_000);
+    expect(moved).toBeLessThanOrEqual(t.end - BACKFILL_DAYS * 86400_000);
+    // A later re-read of the window keeps the earliest, and a reconcile covers no window at all.
+    await sync(await makeJob(store, "orders"), { sinceDays: BACKFILL_DAYS });
+    await sync(await makeJob(store, "orders"), { sinceDays: RECONCILE_ORDER_DAYS });
+    expect((await customersFrom())!.getTime()).toBe(moved);
+
+    // Not recorded (granted before the column existed) or given up since: an import records nothing.
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: null } });
+    await sync(await makeJob(store, "orders"));
+    expect(await customersFrom()).toBeNull();
+    // Nor without read_customers, whatever was recorded.
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date(Date.now() - 1000), grantedScopes: ["read_orders"] } });
+    const kept = await customersFrom();
+    await sync(await makeJob(store, "orders"));
+    expect(await customersFrom()).toEqual(kept);
+    // Purging the orders forgets it with them.
+    await purgeStoreData(store.id);
+    expect(await customersFrom()).toBeNull();
+  });
+
+  it("records the whole history as read with customers when it was imported with read_customers held", async () => {
+    const store = await makeStore(["read_orders", "read_all_orders", "read_customers"]);
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date(Date.now() - 60_000) } });
+    // No orders at all: the whole (empty) history is in.
+    fetchImpl = async () => gqlJson({ orders: { nodes: [] } });
+    const job = await makeJob(store, "orders");
+    await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id }, deps);
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toEqual(new Date(0));
   });
 
   it("halves the page size and re-enqueues the same page when Shopify reports MAX_COST_EXCEEDED", async () => {
