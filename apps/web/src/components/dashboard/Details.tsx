@@ -1,6 +1,9 @@
 "use client";
 import { useState, type ReactNode } from "react";
+import { seesModule } from "@app/shared/access";
 import type { CompareMode } from "@app/shared/dates";
+import { useApp } from "@/components/AppContext";
+import { seesTopic } from "@/lib/access";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { TopProducts } from "./TopProducts";
@@ -14,6 +17,7 @@ import { Explained } from "./Explain";
 import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
+import { profitCardFigures } from "./profitFigures";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import { ProfitCard, ShopifyCheckCard } from "./ShopifyReports";
 import type { Topic } from "./topics";
@@ -45,6 +49,10 @@ const COMPARE_TITLE: Record<CompareMode, string> = {
 // ---------------------------------------------------------------------------
 
 function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
+  const { access, offers } = useApp();
+  // Advertising as the home page has it (app/(app)/dashboard/page.tsx), so Shopify's gross profit
+  // card gives the same net profit as Business profit overview.
+  const adsOn = offers("ads") && seesTopic(access, "ads", offers);
   const s = ov.modules.sales_overview!;
   const c = s.current;
   const p = s.previous;
@@ -155,7 +163,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       )}
 
       {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
-      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} />}
+      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn }, seesModule(access, "profit"))} />}
 
       <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">

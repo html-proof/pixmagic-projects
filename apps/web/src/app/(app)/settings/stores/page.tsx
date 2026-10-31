@@ -6,12 +6,8 @@ import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError } from "@/lib/api";
 import { fmtDateTime, fmtRelative } from "@/components/dashboard/format";
+import { revokeWords } from "@/components/settings/scopeRevoke";
 import { CAPABILITIES, SCOPE_LABELS, expandScopes, scopeLabel, scopeList } from "@app/shared/capabilities";
-
-/** The modules that stop working without `scope`, so a confirm can name them. */
-function modulesNeeding(scope: string): string[] {
-  return CAPABILITIES.filter((c) => c.requiredScopes.includes(scope)).map((c) => c.title);
-}
 
 /** Plain words for a status a merchant has no reason to know the internal name of. */
 function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { text: string; tone: string } {
@@ -104,18 +100,15 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
    * until they do, and the confirm says which ones rather than naming the scope alone.
    */
   async function revoke(id: string, domain: string, scope: string) {
-    const affected = modulesNeeding(scope);
-    const consequence = affected.length
-      ? `${affected.join(", ")} will stop working until you grant it again.`
-      : "Nothing on your dashboard uses it today.";
-    if (!confirm(`Stop letting bizinsights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
+    const words = revokeWords(scope, domain);
+    if (!confirm(`${words.question}\n\n${words.consequence}`)) return;
     setRevoking(`${id}:${scope}`);
     setError(null);
     try {
       await api(`/workspaces/${workspace.id}/stores/${id}/scopes/revoke`, { method: "POST", body: { scopes: [scope] } });
       await reloadStores();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : `We couldn't remove ${scopeLabel(scope).toLowerCase()}. Please try again.`);
+      setError(e instanceof ApiError ? e.message : revokeWords(scope, domain).failed);
     } finally {
       setRevoking(null);
     }
@@ -204,7 +197,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
                             type="button"
                             className="shrink-0 text-xs text-muted underline hover:text-danger disabled:opacity-50"
                             data-testid={`revoke-${scope}`}
-                            aria-label={`Remove ${scopeLabel(scope).toLowerCase()} permission for ${s.shopDomain}`}
+                            aria-label={revokeWords(scope, s.shopDomain).button}
                             disabled={busy}
                             onClick={() => revoke(s.id, s.shopDomain, scope)}
                           >

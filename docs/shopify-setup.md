@@ -344,7 +344,7 @@ Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-
 
 ### Shopify's reports (`read_reports`): sessions, visitors, gross profit, the check
 
-**Current state (2026-10-30): declared by the main and PixMagic apps, offered to no store yet.**
+**Current state (2026-10-30): declared and offered by the main and PixMagic apps; the App Store apps don't declare it.**
 The dashboard can show Shopify Analytics' own sessions, online store visitors and conversion rate,
 its gross profit, and a line-by-line check of our sales figures against its sales report
 (docs/kpis.md, "Shopify's own reports"). They come from ShopifyQL
@@ -358,13 +358,13 @@ Where each app stands:
 
 | App | `read_reports` in its toml | Offered (`SHOPIFY_APP_OPTIONAL_SCOPES`) | Level 2 |
 | --- | --- | --- | --- |
-| Main (`default`, 57e9ef75) | yes (`optional_scopes`, after the common list) | not yet | development stores: no review |
-| PixMagic (`pixmagic`, bb0ea9e4) | yes | not yet | custom distribution: "always available", but the fields must be selected (step 2) |
+| Main (`default`, 57e9ef75) | yes (`optional_scopes`, after the common list) | yes | development stores: no review |
+| PixMagic (`pixmagic`, bb0ea9e4) | yes | yes | custom distribution: "always available", but the fields must be selected (step 2) |
 | App Store (`appstore`, cf5c717d) | no | no | needs Shopify's review, which can't be asked for while the app is in App Store review |
 | First App Store app (`public`, 658431ae) | no | no | as `appstore`; never to be submitted |
 
-The setting is the switch, and it ships empty because Shopify grants an optional scope only once the
-app's **released** version declares it: offering **Enable** before `shopify app deploy` has released
+The setting is the switch, and it stays empty until both tomls are released, because Shopify grants
+an optional scope only once the app's **released** version declares it: offering **Enable** before `shopify app deploy` has released
 the toml sends the merchant to a Shopify error. Declaring a scope that nobody requests is harmless.
 The App Store reviewer's test store (`SHOPIFY_APP_STORE_PREVIEW_SHOPS`, on the main app) is never
 offered it, because the app under review doesn't declare it (`optionalScopesFor`).
@@ -376,19 +376,30 @@ the Shopify CLI):
    with what is live: Dev Dashboard → the app → **Versions** → the active version, against
    `shopify-app/shopify.app.toml` (or `.pixmagic.toml`) and `shopify-app/extensions/`. A deploy
    releases the whole config, so the current insights-pixel extension and webhooks go out too.
-   Then, in PowerShell:
+   The main folder (`C:\Users\Seban\Videos\saas-project2.0`) is often on another branch with older
+   tomls, so deploy from a fresh checkout of `main`. The CLI isn't installed globally: `npx` runs it,
+   and the pixel extension needs its packages first. In PowerShell:
 
    ```powershell
-   cd C:\Users\Seban\Videos\saas-project2.0\shopify-app
-   shopify app deploy --config shopify.app.toml
-   shopify app deploy --config pixmagic --version pixmagic-<n>
+   git -C C:\Users\Seban\Videos\saas-project2.0 fetch origin main
+   git -C C:\Users\Seban\Videos\saas-project2.0 worktree add --detach C:\bz-shopify origin/main
+   cd C:\bz-shopify\shopify-app\extensions\insights-pixel
+   npm ci
+   cd C:\bz-shopify\shopify-app
+   npx @shopify/cli@4.9.4 app deploy --config shopify.app.toml --version insights-<n> --message "Shopify's reports (read_reports)"
+   npx @shopify/cli@4.9.4 app deploy --config pixmagic --version pixmagic-<m> --message "Shopify's reports (read_reports)"
+   cd C:\
+   git -C C:\Users\Seban\Videos\saas-project2.0 worktree remove --force C:\bz-shopify
    ```
 
    The first is the main app (57e9ef75): always name its config, since a bare `shopify app deploy`
    releases whichever config the CLI last used, which can be the App Store app under review. `<n>`
-   is the next number after PixMagic's live version (Dev Dashboard → Versions; pixmagic-7 was live
-   on 2026-10-16). Never `--config appstore` or `--config public` for this. Check: each app's new
-   active version lists `read_reports` under optional scopes. Roll back in the Dev Dashboard (Versions → Release) if anything else changed.
+   and `<m>` are the next numbers after each app's live version (`npx @shopify/cli@4.9.4 app versions
+   list --config shopify.app.toml`, or `--config pixmagic`; insights-16 and pixmagic-9, released
+   2026-10-19, were still live on 2026-10-30). Never `--config appstore` or `--config public` for this. Check: the
+   same `app versions list` shows the new version active and dated today, and Dev Dashboard → the
+   app → Versions → that version lists `read_reports` under optional scopes. Roll back in the Dev
+   Dashboard (Versions → Release) if anything else changed.
 2. **Level 2 fields for PixMagic.** Partner Dashboard (organization 5229240) → **Apps** → the
    PixMagic app "bizinsights" (client id bb0ea9e4…) → **API access requests** → **Protected customer
    data access** → **Request access**: select *Protected customer data* with the reason "Store

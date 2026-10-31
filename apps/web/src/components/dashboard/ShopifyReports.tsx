@@ -2,6 +2,7 @@
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtRelative } from "./format";
 import { Badge, Delta, Empty, Panel, Stat, type Tone } from "./Primitives";
+import type { ProfitCardFigures } from "./profitFigures";
 import type { ProfitModule, ReportStatus, ShopifyCheckModule, ShopifySessionsModule } from "./types";
 
 /**
@@ -64,7 +65,12 @@ export function ShopifySessionsCard({ m, versus }: { m: ShopifySessionsModule; v
   );
 }
 
-export function ProfitCard({ m, currency, versus }: { m: ProfitModule; currency: string; versus?: string }) {
+/**
+ * Shopify's gross profit for the dates. `f` (`profitCardFigures`): whether any sale had a cost
+ * recorded, and the net profit Business profit overview gives for the same store and dates, or why
+ * there is none in its words, so the two never disagree.
+ */
+export function ProfitCard({ m, currency, versus, f }: { m: ProfitModule; currency: string; versus?: string; f: ProfitCardFigures }) {
   const c = m.current;
   const money = (n: number | null) => (n === null ? "—" : fmtMoney(n, currency));
   const note = statusNote(m.status);
@@ -82,9 +88,10 @@ export function ProfitCard({ m, currency, versus }: { m: ProfitModule; currency:
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="Gross profit" value={money(c.grossProfit)} note={<Delta value={m.deltas.grossProfit} label={versus} />} />
-            <Stat label="Cost of goods sold" value={money(c.costOfGoodsSold)} />
+            {/* Shopify's 0 for sales none of which had a cost per item isn't a cost. */}
+            <Stat label="Cost of goods sold" value={f.noCostRecorded ? "Not recorded in Shopify" : money(c.costOfGoodsSold)} />
             <Stat label="Margin where cost is known" value={fmtPct(c.marginOnCosted)} note={c.profitOnCosted !== null ? `${money(c.profitOnCosted)} on ${money(c.netSalesWithCost)} of sales` : undefined} />
-            <Stat label="Net profit" value="Not available" note="bizinsights doesn't know your other costs." />
+            <Stat label="Net profit" value={f.net === null ? "Not available" : money(f.net)} note={f.netNote} />
           </div>
           {uncosted > 0 && (
             <p className="alert alert-warn mt-4 text-sm" data-testid="profit-missing-cost">

@@ -275,7 +275,7 @@ export const handler = async (event: unknown, context: unknown) => {
     return crossTenant("maintenance", async () => {
       const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
       if (!store) return { error: "unknown_shop" };
-      return shopifyCheckReport(systemDb, store, deps);
+      return shopifyCheckReport((read) => read(systemDb), store, deps);
     });
   }
   if (action === "product-check") {

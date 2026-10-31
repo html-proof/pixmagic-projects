@@ -385,8 +385,13 @@ carries; nothing is estimated.
   (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
   **net profit** only when every input is known and the owner has marked the costs list complete for
   the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
-  no cost recorded in Shopify are named. Its share is called a **margin** only when the cost of goods
-  sold was taken off; with ad spend alone it is "of net sales", since sales less ad spend is no margin.
+  no cost recorded in Shopify are named. Shopify counts a sale with no cost per item at no cost, so
+  when no sale of the dates had one, its cost of goods sold of 0 isn't a cost: product costs read "Not
+  recorded in Shopify" and aren't taken off. Its share is called a **margin** only when the cost of
+  every sale was taken off; with ad spend alone, or sales with no cost recorded, it is "of net sales",
+  since sales less ad spend is no margin. Team & Access: the Product costs line, here and in Expenses
+  breakdown, is only for a member shown Shopify's cost of goods sold ("View costs and stock value"
+  with the breakdown, `costsOn`); without it there is no net profit.
 - **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
   the owner's costs by category). The mock's shipping, software and other expenses come only from
   the owner's costs: nothing else holds them.
@@ -774,7 +779,10 @@ Page access: "View sales and revenue" (`analytics.sales`); each row needs what i
 
 A period one of whose days isn't known (visits before the pixel, a day an ad account has no figures
 for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit: product
-costs, shipping, fees and the owner's other costs aren't recorded, and the page says so.
+costs, shipping, fees and the owner's other costs aren't taken off day by day (Shopify gives product
+costs only for the dates as a whole; Business profit overview takes off the costs bizinsights knows),
+and the page says so, naming only the costs the member is shown: Shopify's product costs with "View
+costs and stock value" and the breakdown, the owner's costs with the breakdown.
 
 **Days shown** (`?days=`): every day, weekdays, weekends or any weekdays picked (`0,2,4`, Monday = 0).
 **Business events** (`?events=`): every day, the days with an event, those without, those with an
@@ -818,7 +826,9 @@ text, is never copied into it).
 Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given only when:
 
 - Shopify's cost of goods sold is known for the dates (its profit report: `read_reports`) and every
-  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0);
+  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0). A member not shown
+  Shopify's cost of goods sold (without "View costs and stock value": `seesModule(access, "profit")`
+  is false) gets no net profit either, since it would give the cost away (`product_costs_hidden`);
 - the connected ad accounts' spend is known for every day, in the store's currency. With no ad
   account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
   ads gets no net profit, since it would give the spend away;
@@ -840,7 +850,7 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 | Sessions | `FROM sessions SHOW sessions`, human sessions only | Shopify ends a session after 30 minutes idle; bot sessions are left out (`human_or_bot_session = 'human'`, Shopify's own classification) |
 | Online store visitors | `online_store_visitors` | Shopify's own name and count of the different shoppers: unique over the whole range, asked for the range whole, never summed from days; people, not sessions, and not Meta's reach |
 | Conversion rate | `sessions_that_completed_checkout ÷ sessions` | Shopify's formula; the funnel steps (`sessions_with_cart_additions`, `sessions_that_reached_checkout`) and `pageviews` are shown too |
-| Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known. Not net profit: bizinsights knows none of the other costs |
+| Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known; with none recorded, cost of goods sold reads "Not recorded in Shopify". Not net profit: beside it the card gives Business profit overview's net profit for the same dates, or why there is none in its words |
 | The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |
 
 - **Windows**: the dashboard's range and its comparison, in the store's time zone. While the range
