@@ -128,3 +128,55 @@ export function StackedBar({ segments, format = (n) => new Intl.NumberFormat().f
     </figure>
   );
 }
+
+export interface DonutSlice {
+  key: string;
+  label: string;
+  value: number;
+  /** A categorical chart colour (var(--viz-cat-N)): fixed per entity, never per rank. */
+  color: string;
+}
+
+/**
+ * Part-to-whole ring (the dashboard's profit and costs panels): slices with a 2px gap of card
+ * between them, the figure that matters written in the middle, and every slice named in a legend
+ * beside it by the caller (never colour alone). Slices of 0 or less aren't drawn.
+ */
+export function Donut({ slices, label, size = 168, thickness = 22, children }: { slices: DonutSlice[]; label: string; size?: number; thickness?: number; children?: ReactNode }) {
+  const shown = slices.filter((s) => s.value > 0);
+  const total = shown.reduce((a, s) => a + s.value, 0);
+  const r = (size - thickness) / 2;
+  const c = 2 * Math.PI * r;
+  const starts = shown.map((_, i) => shown.slice(0, i).reduce((a, s) => a + (s.value / total) * c, 0));
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label} className="-rotate-90">
+        {total > 0 ? (
+          shown.map((s, i) => {
+            const len = (s.value / total) * c;
+            const gap = shown.length > 1 ? Math.min(2, len / 2) : 0;
+            return (
+              <circle
+                key={s.key}
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={thickness}
+                strokeDasharray={`${Math.max(0.5, len - gap)} ${c}`}
+                strokeDashoffset={-starts[i]!}
+                className="animate-fade"
+              >
+                <title>{s.label}</title>
+              </circle>
+            );
+          })
+        ) : (
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth={thickness} />
+        )}
+      </svg>
+      {children && <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">{children}</div>}
+    </div>
+  );
+}

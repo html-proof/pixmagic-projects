@@ -9,8 +9,11 @@ type Publics = Array<{ name: string; value: string }>;
 const script = (await import(new URL("../scripts/put-secrets.mjs", import.meta.url).href)) as {
   secretProblem: (name: string, value: string, publics?: Publics) => string | null;
   publicSettings: (text?: string) => Publics;
+  metaAppOf: (name: string, publics?: Publics) => { appId: string; version?: string } | null;
+  KEEPS_PREVIOUS: Record<string, string>;
+  UNSETTABLE: string[];
 };
-const { secretProblem, publicSettings } = script;
+const { secretProblem, publicSettings, metaAppOf, KEEPS_PREVIOUS, UNSETTABLE } = script;
 
 const META_SECRET = "0123456789abcdef0123456789abcdef";
 const ENTRA_SECRET = "Xyz8Q~abcdefghijklmnopqrstuvwxyz0123456_";
@@ -45,9 +48,34 @@ describe("the shapes put-secrets.mjs accepts", () => {
     expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")).toMatch(/0 characters/);
   });
 
+  it("rotates Zapier's client secret: the replaced one is kept as the previous, which --unset alone may remove", () => {
+    const secret = "a".repeat(43);
+    expect(secretProblem("ZAPIER_CLIENT_SECRET_PREVIOUS", secret)).toBeNull();
+    expect(secretProblem("ZAPIER_CLIENT_SECRET_PREVIOUS", "short")).toMatch(/Zapier client secret/);
+    expect(KEEPS_PREVIOUS).toEqual({ ZAPIER_CLIENT_SECRET: "ZAPIER_CLIENT_SECRET_PREVIOUS" });
+    expect(UNSETTABLE).toEqual(["ZAPIER_CLIENT_SECRET_PREVIOUS"]);
+  });
+
   it("never repeats the value it refuses", () => {
     const value = "a-pasted-value-that-must-not-be-printed";
     expect(secretProblem("META_APP_SECRET", value)).not.toContain(value);
+  });
+});
+
+describe("the Meta app a Meta secret is checked against", () => {
+  it("META_APP_SECRET is META_APP_ID's; WHATSAPP_APP_SECRET is WHATSAPP_APP_ID's, else META_APP_ID's", () => {
+    expect(metaAppOf("META_APP_SECRET")).toEqual({ appId: APP_SETTINGS.META_APP_ID, version: APP_SETTINGS.META_API_VERSION });
+    const own = [
+      { name: "META_APP_ID", value: "111" },
+      { name: "WHATSAPP_APP_ID", value: "222" },
+    ];
+    expect(metaAppOf("WHATSAPP_APP_SECRET", own)).toEqual({ appId: "222", version: undefined });
+    expect(metaAppOf("WHATSAPP_APP_SECRET", [own[0]!])).toEqual({ appId: "111", version: undefined });
+  });
+
+  it("nothing for another secret, or without the app id", () => {
+    expect(metaAppOf("GOOGLE_ADS_CLIENT_SECRET")).toBeNull();
+    expect(metaAppOf("META_APP_SECRET", [])).toBeNull();
   });
 });
 
@@ -57,7 +85,8 @@ describe("a public setting pasted as a secret", () => {
     expect(secretProblem("SHOPIFY_API_SECRET", APP_SETTINGS.SHOPIFY_API_KEY)).toMatch(/SHOPIFY_API_KEY .* public/);
     const pixmagic = (JSON.parse(APP_SETTINGS.SHOPIFY_EXTRA_APPS) as Array<{ key: string; clientId: string }>).find((a) => a.key === "pixmagic")!;
     expect(secretProblem("SHOPIFY_APP_SECRET_PIXMAGIC", pixmagic.clientId)).toMatch(/SHOPIFY_EXTRA_APPS \(pixmagic\)/);
-    expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", APP_SETTINGS.WHATSAPP_APP_ID)).toMatch(/WHATSAPP_APP_ID/);
+    // WhatsApp runs on the Meta Ads app (WHATSAPP_APP_ID is empty): its app id is META_APP_ID.
+    expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", APP_SETTINGS.META_APP_ID)).toMatch(/META_APP_ID/);
     expect(secretProblem("META_APP_SECRET", APP_SETTINGS.META_APP_ID)).toMatch(/META_APP_ID/);
   });
 

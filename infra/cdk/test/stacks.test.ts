@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,8 @@ writeFileSync(join(fnDir, "index.mjs"), "export const handler = async () => ({})
 writeFileSync(join(fnDir, "cognito-email.mjs"), "export const handler = async () => ({});\n");
 mkdirSync(join(fnDir, "public/_next/static/chunks"), { recursive: true });
 writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
+mkdirSync(join(fnDir, "fallback"));
+writeFileSync(join(fnDir, "fallback/unavailable.html"), "<!doctype html><title>unavailable</title>\n");
 writeFileSync(join(fnDir, "build.json"), `${JSON.stringify({ commit: "0123456789abcdef0123456789abcdef01234567", builtAt: "2026-10-17T09:00:00.000Z" })}\n`);
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
 
@@ -22,6 +25,7 @@ const { AuthStack } = await import("../lib/auth-stack.js");
 const { CiStack } = await import("../lib/ci-stack.js");
 const { AuditStack, ACCOUNT_REGIONS, ANALYZER_NAME } = await import("../lib/audit-stack.js");
 const { viewerRequestCode } = await import("../lib/viewer-request.js");
+const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 
 function synth(context: Record<string, string> = {}) {
   const app = new App({ context });
@@ -40,6 +44,14 @@ let t: ReturnType<typeof synth>;
 beforeAll(() => {
   t = synth();
 });
+
+type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+/** The app's distribution and the small one that serves its "temporarily unavailable" page. */
+function distributions(app: Template): { main: Json; fallback: Json } {
+  const all = Object.values(app.findResources("AWS::CloudFront::Distribution")).map((r) => r.Properties.DistributionConfig);
+  expect(all).toHaveLength(2);
+  return { main: all.find((d) => !/can't answer/.test(d.Comment)), fallback: all.find((d) => /can't answer/.test(d.Comment)) };
+}
 
 describe("the data stack", () => {
   it("keeps the database private, encrypted, backed up and protected, with a standby in the other AZ", () => {
@@ -217,7 +229,8 @@ describe("the app stack", () => {
   it("emails the owner the day's AWS cost every morning, letting only the cron function read Cost Explorer", () => {
     const costSchedules = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule", { Properties: { Target: { Input: '{"action":"cost-report"}' } } }));
     const ceGrants = (tpl: Template) =>
-      Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes("ce:"));
+      // The ce: service prefix itself, not "sms-voice:", which ends in "ce:" too.
+      Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes('"ce:'));
     // Once a day at 07:00 in Victoria, on even while the sweeps' schedules are off.
     const [report, ...others] = costSchedules(t.app);
     expect(others).toHaveLength(0);
@@ -232,11 +245,11 @@ describe("the app stack", () => {
     const grants = ceGrants(t.app);
     expect(grants).toHaveLength(1);
     const statements = grants[0]!.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>;
-    expect(statements.filter((st) => JSON.stringify(st.Action).includes("ce:"))).toEqual([{ Action: "ce:GetCostAndUsage", Effect: "Allow", Resource: "*" }]);
+    expect(statements.filter((st) => [st.Action].flat().some((a) => String(a).startsWith("ce:")))).toEqual([{ Action: "ce:GetCostAndUsage", Effect: "Allow", Resource: "*" }]);
     expect(grants[0]!.Properties.Roles).toEqual([{ Ref: expect.stringMatching(/^FncronServiceRole/) }]);
     // The budget's address, on the cron function only.
     const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
-    expect(vars("insights-production-cron").COST_REPORT_TO).toBe("aby@zodiix.com");
+    expect(vars("insights-production-cron").COST_REPORT_TO).toBe("bizinsightsaus@yahoo.com");
     expect(vars("insights-production-api").COST_REPORT_TO).toBeUndefined();
     expect(vars("insights-production-jobs").COST_REPORT_TO).toBeUndefined();
     // Off in staging (the account's bill is production's email) and with -c costReport=off: no schedule, no grant, no address.
@@ -249,13 +262,44 @@ describe("the app stack", () => {
 
   it("gives every job queue a dead-letter queue and covers the jobs timeout", () => {
     const queues = Object.values(t.app.findResources("AWS::SQS::Queue")).filter((q) => q.Properties.RedrivePolicy);
-    expect(queues).toHaveLength(4);
+    expect(queues).toHaveLength(6);
     for (const q of queues) {
       expect(q.Properties.RedrivePolicy.maxReceiveCount).toBe(10);
       expect(q.Properties.VisibilityTimeout).toBeGreaterThanOrEqual(900);
     }
-    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 4);
+    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 6);
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
+  });
+
+  it("routes SMS delivery events from the configuration set to the jobs function, publishable only by this account's SMS service", () => {
+    t.app.hasResourceProperties("AWS::SMSVOICE::ConfigurationSet", {
+      ConfigurationSetName: "insights-production-sms",
+      EventDestinations: [Match.objectLike({ Enabled: true, MatchingEventTypes: ["TEXT_ALL"], SnsDestination: { TopicArn: { Ref: Match.stringLikeRegexp("^SmsEvents") } } })],
+    });
+    t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
+      Topics: [{ Ref: Match.stringLikeRegexp("^SmsEvents") }],
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: "sns:Publish", Principal: { Service: "sms-voice.amazonaws.com" }, Condition: { StringEquals: { "aws:SourceAccount": Match.anyValue() } } })]) },
+    });
+    t.app.hasResourceProperties("AWS::SNS::Subscription", { Protocol: "sqs", RawMessageDelivery: true, Endpoint: { "Fn::GetAtt": [Match.stringLikeRegexp("^QueuesmsEvents"), "Arn"] } });
+    t.app.hasResourceProperties("AWS::Lambda::EventSourceMapping", { EventSourceArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^QueuesmsEvents"), "Arn"] }, FunctionResponseTypes: ["ReportBatchItemFailures"] });
+    const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
+    expect(vars("insights-production-jobs").SMS_CONFIGURATION_SET).toBe("insights-production-sms");
+  });
+
+  it("gives each function only the SMS calls it makes, and sending only on this account's own SMS resources", () => {
+    const policies = Object.values(t.app.findResources("AWS::IAM::Policy"));
+    const statementsOf = (role: RegExp) =>
+      policies.filter((p) => (p.Properties.Roles as Array<{ Ref: string }>).some((r) => role.test(r.Ref))).flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>);
+    const smsActions = (role: RegExp) => statementsOf(role).flatMap((st) => [st.Action].flat()).filter((a) => a.startsWith("sms-voice:"));
+    expect(smsActions(/^FnjobsServiceRole/)).toEqual(["sms-voice:SendTextMessage"]);
+    expect(smsActions(/^FncronServiceRole/)).toContain("sms-voice:DescribeOptedOutNumbers");
+    expect(smsActions(/^FncronServiceRole/)).not.toContain("sms-voice:SendTextMessage");
+    expect(smsActions(/^FnapiServiceRole/)).toEqual(expect.arrayContaining(["sms-voice:SendTextMessage", "sms-voice:CreateVerifiedDestinationNumber", "sms-voice:DescribeSenderIds", "sms-voice:ListTagsForResource"]));
+    for (const st of statementsOf(/ServiceRole/)) {
+      if ([st.Action].flat().includes("sms-voice:SendTextMessage")) {
+        for (const r of [st.Resource].flat()) expect(JSON.stringify(r)).toMatch(/arn:aws:sms-voice:\*:\d+:(configuration-set|phone-number|sender-id|pool|protect-configuration)\/\*/);
+      }
+    }
   });
 
   it("parks a scheduled run that never ran, instead of dropping it", () => {
@@ -270,6 +314,39 @@ describe("the app stack", () => {
       DestinationConfig: { OnFailure: { Destination: missed } },
     });
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-cron-missed-ticks" });
+    // Bursts of automated messages refused by SMS, email or WhatsApp providers (the Automations hub).
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-messaging-send-failures", Threshold: 25, EvaluationPeriods: 2 });
+    t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '?"sms send refused" ?"email send failed" ?"whatsapp send refused by the provider"' });
+    // The functions can't reach WhatsApp's service.
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-whatsapp-service-unreachable" });
+  });
+
+  it("counts sync jobs failing for good, ad connections turning to need their merchants, and stored ad figures that differ", () => {
+    const filters = Object.values(t.app.findResources("AWS::Logs::MetricFilter")).map((r) => r.Properties);
+    const byMetric = (name: string) => filters.filter((p) => p.MetricTransformations[0].MetricName === name);
+    // The worker's own line for a job's last failure (consume: "sync job failed", final), read as JSON,
+    // once its attempts ran out (core's MAX_ATTEMPTS, 6): a failure no retry helps (a paused shop,
+    // refused access) is final on its first attempt and comes back every day, so it isn't counted.
+    expect(byMetric("production-sync-jobs-failed-for-good").map((p) => p.FilterPattern)).toEqual(['{ ($.msg = "sync job failed") && ($.final IS TRUE) && ($.attempts >= 6) }']);
+    // Logged once per connection when it turns (core's recordAdFailure), from whichever function met it.
+    const needMerchants = byMetric("production-ad-connections-need-merchants");
+    expect(needMerchants.map((p) => p.FilterPattern)).toEqual(Array(3).fill('"ad connection needs the merchant"'));
+    expect(needMerchants.map((p) => JSON.stringify(p.LogGroupName))).toEqual([/"Logsapi/, /"Logsjobs/, /"Logscron/].map((re) => expect.stringMatching(re)));
+    expect(byMetric("production-ad-figures-differ").map((p) => p.FilterPattern)).toEqual(['"ad figures differ from the platform"']);
+    // Each over an hour; one merchant's own trouble doesn't reach the first two.
+    for (const [name, threshold] of [["sync-jobs-failed-for-good", 10], ["ad-connections-need-merchants", 10], ["ad-figures-differ", 1]] as const) {
+      t.app.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: `insights-production-${name}`,
+        Namespace: "Insights",
+        MetricName: `production-${name}`,
+        Period: 3600,
+        Statistic: "Sum",
+        Threshold: threshold,
+        EvaluationPeriods: 1,
+        TreatMissingData: "notBreaching",
+        AlarmActions: [{ Ref: Match.stringLikeRegexp("^Alarms") }],
+      });
+    }
   });
 
   it("tells the alarm topic about the database's events", () => {
@@ -290,9 +367,9 @@ describe("the app stack", () => {
     expect(budget!.Properties.Budget).toMatchObject({ BudgetType: "COST", TimeUnit: "MONTHLY", BudgetLimit: { Amount: 80, Unit: "USD" } });
     const alerts = budget!.Properties.NotificationsWithSubscribers as Array<{ Notification: Record<string, unknown>; Subscribers: unknown[] }>;
     expect(alerts.map((a) => [a.Notification.NotificationType, a.Notification.Threshold])).toEqual([["ACTUAL", 50], ["ACTUAL", 75], ["ACTUAL", 90], ["ACTUAL", 100], ["FORECASTED", 100]]);
-    for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "aby@zodiix.com" }]);
-    // The alarms stay off email unless alertEmail is given.
-    t.app.resourceCountIs("AWS::SNS::Subscription", 0);
+    for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "bizinsightsaus@yahoo.com" }]);
+    // The alarms stay off email unless alertEmail is given (the one subscription is SMS events → their queue).
+    expect(Object.values(t.app.findResources("AWS::SNS::Subscription")).filter((s) => s.Properties.Protocol === "email")).toHaveLength(0);
     // A change to the alerts replaces the budget, so it gets a name of its own.
     const name = budget!.Properties.Budget.BudgetName as string;
     expect(name).toMatch(/^insights-production-monthly-[0-9a-f]{8}$/);
@@ -333,6 +410,39 @@ describe("the app stack", () => {
     }
   });
 
+  it("leaves the app's settings to the package, so the 4 KB environment holds what only the deploy knows", () => {
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      // apps/aws/src/index.ts puts them in process.env at cold start (apps/aws/test/config.test.ts).
+      for (const name of Object.keys(appVars())) expect(vars[name]).toBeUndefined();
+    }
+  });
+
+  it("logs every function in as the system role (docs/system-database-role.md), and lets only the cron read the owner's login", () => {
+    t.data.hasResourceProperties("AWS::SecretsManager::Secret", {
+      Name: "insights/production/db-system",
+      GenerateSecretString: { SecretStringTemplate: JSON.stringify({ SYSTEM_DB_USER: "app_system" }), GenerateStringKey: "SYSTEM_DB_PASSWORD", ExcludePunctuation: true },
+    });
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    expect(fns).toHaveLength(3);
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      expect(vars.SYSTEM_DB_SECRET_ARN).toBe("insights/production/db-system");
+      // The owner's secret only where migrate, counts and evolution-db run.
+      expect(vars.DB_SECRET_ARN !== undefined).toBe(String(f.Properties.FunctionName).endsWith("-cron"));
+      expect(vars.SYSTEM_DB_PASSWORD).toBeUndefined();
+    }
+    // Who may read each secret: the roles whose policies name it.
+    const readers = (secret: RegExp) =>
+      Object.values(t.app.findResources("AWS::IAM::Policy"))
+        .filter((p) => (p.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>).some((st) => JSON.stringify(st.Action).includes("GetSecretValue") && secret.test(JSON.stringify(st.Resource))))
+        .flatMap((p) => (p.Properties.Roles as Array<{ Ref: string }>).map((r) => r.Ref.replace(/ServiceRole.*$/, "")))
+        .sort();
+    expect(readers(/RefSystemDbSecret/)).toEqual(["Fnapi", "Fncron", "Fnjobs"]);
+    expect(readers(/RefDbSecretAttachment/)).toEqual(["Fncron"]);
+  });
+
   it("puts CloudFront (WAF, HTTPS only) in front of the function URL, with the origin secret", () => {
     t.app.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
@@ -344,13 +454,14 @@ describe("the app stack", () => {
   });
 
   it("serves Next's build files from a private bucket, never through the function", () => {
-    const dist = Object.values(t.app.findResources("AWS::CloudFront::Distribution"))[0]!.Properties.DistributionConfig;
-    const byId = Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-    const assets = (dist.CacheBehaviors as Array<{ PathPattern: string; TargetOriginId: string }>).find((b) => b.PathPattern === "/_next/static/*")!;
+    const { main: dist } = distributions(t.app);
+    const byId = Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, Json>;
+    const behavior = (pattern: string) => (dist.CacheBehaviors as Array<{ PathPattern: string; TargetOriginId: string }>).find((b) => b.PathPattern === pattern)!;
+    const assets = behavior("/_next/static/*");
     expect(byId[assets.TargetOriginId].S3OriginConfig).toBeDefined();
     expect(byId[assets.TargetOriginId].OriginAccessControlId).toBeDefined();
     expect(byId[assets.TargetOriginId].OriginCustomHeaders).toBeUndefined();
-    expect(byId[dist.DefaultCacheBehavior.TargetOriginId].OriginCustomHeaders).toBeDefined();
+    expect(byId[behavior("/api/*").TargetOriginId].OriginCustomHeaders).toBeDefined();
 
     const site = Object.values(t.app.findResources("AWS::S3::Bucket"));
     expect(site).toHaveLength(1);
@@ -359,7 +470,9 @@ describe("the app stack", () => {
       PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Allow", Principal: { Service: "cloudfront.amazonaws.com" }, Action: ["s3:GetObject", "s3:ListBucket"] })]) },
     });
     // Old builds' chunks stay for pages still open; fonts get their type (the upload's CLI can't tell).
-    const uploads = Object.values(t.app.findResources("Custom::CDKBucketDeployment")).map((r) => r.Properties);
+    const resources = t.app.toJSON().Resources as Record<string, { Type: string; Properties: Json; DependsOn?: string[] }>;
+    const ids = Object.keys(resources).filter((id) => resources[id]!.Type === "Custom::CDKBucketDeployment" && resources[id]!.Properties.DestinationBucketKeyPrefix !== "_fallback/");
+    const uploads = ids.map((id) => resources[id]!.Properties);
     expect(uploads).toHaveLength(2);
     for (const u of uploads) {
       expect(u).toMatchObject({ Prune: false, DestinationBucketKeyPrefix: "_next/static/", SystemMetadata: { "cache-control": "public, max-age=31536000, immutable" } });
@@ -367,11 +480,62 @@ describe("the app stack", () => {
     expect(uploads.find((u) => u.Include)).toMatchObject({ Include: ["*.woff2"], SystemMetadata: { "content-type": "font/woff2" } });
     expect(uploads.find((u) => !u.Include)).toMatchObject({ Exclude: ["*.woff2"] });
     // CloudFront and the API's live alias wait for both uploads.
-    const resources = t.app.toJSON().Resources as Record<string, { Type: string; DependsOn?: string[] }>;
-    const ids = Object.keys(resources).filter((id) => resources[id]!.Type === "Custom::CDKBucketDeployment");
     const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && ids.every((id) => r.DependsOn?.includes(id))).length;
     expect(waiting("AWS::CloudFront::Distribution")).toBe(1);
     expect(waiting("AWS::Lambda::Alias")).toBe(1);
+  });
+});
+
+describe("a page the function can't answer", () => {
+  const origins = (dist: Json) => Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, Json>;
+  const members = (dist: Json) => (dist.OriginGroups.Items[0].Members.Items as Array<{ OriginId: string }>).map((m) => m.OriginId);
+
+  it("gets the site's own page from the fallback, for the pages only (GET and HEAD, which CloudFront fails over)", () => {
+    const { main } = distributions(t.app);
+    expect(main.OriginGroups.Quantity).toBe(1);
+    expect(main.DefaultCacheBehavior.TargetOriginId).toBe(main.OriginGroups.Items[0].Id);
+    expect(main.DefaultCacheBehavior.AllowedMethods).toEqual(["GET", "HEAD"]);
+    // 503 includes failing to connect, 504 timing out, 429 Lambda out of concurrency.
+    expect([...main.OriginGroups.Items[0].FailoverCriteria.StatusCodes.Items].sort()).toEqual([429, 500, 502, 503, 504]);
+    const [primary, secondary] = members(main).map((id) => origins(main)[id]);
+    expect(primary.OriginCustomHeaders).toEqual([expect.objectContaining({ HeaderName: "x-origin-verify" })]);
+    expect(secondary.DomainName).toEqual({ "Fn::GetAtt": [expect.stringMatching(/^FallbackCdn/), "DomainName"] });
+    // The origin secret stays with the function.
+    expect(secondary.OriginCustomHeaders).toBeUndefined();
+    expect(secondary.CustomOriginConfig).toMatchObject({ OriginProtocolPolicy: "https-only", OriginSSLProtocols: ["TLSv1.2"] });
+  });
+
+  it("never stands in for the API: its paths keep the function's own answers, every method, the same policies", () => {
+    const { main } = distributions(t.app);
+    const api = (main.CacheBehaviors as Json[]).filter((b) => b.PathPattern !== "/_next/static/*");
+    expect(api.map((b) => b.PathPattern)).toEqual([...API_PATH_PATTERNS]);
+    // The function URL as an origin of its own: CDK binds a group's primary separately.
+    const fn = origins(main)[members(main)[0]!];
+    for (const b of api) {
+      const target = origins(main)[b.TargetOriginId];
+      expect(target, b.PathPattern).toBeDefined();
+      expect([target.DomainName, target.OriginCustomHeaders, target.CustomOriginConfig], b.PathPattern).toEqual([fn.DomainName, fn.OriginCustomHeaders, fn.CustomOriginConfig]);
+      expect(b.AllowedMethods, b.PathPattern).toHaveLength(7);
+      for (const k of ["CachePolicyId", "OriginRequestPolicyId", "ResponseHeadersPolicyId", "FunctionAssociations", "ViewerProtocolPolicy"]) {
+        expect(b[k], `${b.PathPattern} ${k}`).toEqual(main.DefaultCacheBehavior[k]);
+      }
+    }
+    // No error page of the main distribution's own: it would replace the API's 502s and 503s too.
+    expect(main.CustomErrorResponses).toBeUndefined();
+  });
+
+  it("answers every address of the fallback with the unavailable page, as a 503 nobody keeps", () => {
+    const { fallback } = distributions(t.app);
+    expect(fallback.CustomErrorResponses).toEqual([403, 404].map((ErrorCode) => ({ ErrorCode, ResponseCode: 503, ResponsePagePath: "/unavailable.html", ErrorCachingMinTTL: 0 })));
+    expect(fallback.Origins).toHaveLength(1);
+    expect(fallback.Origins[0]).toMatchObject({ OriginPath: "/_fallback", OriginAccessControlId: expect.anything(), S3OriginConfig: expect.anything() });
+    expect(fallback.DefaultCacheBehavior).toMatchObject({ ViewerProtocolPolicy: "https-only", AllowedMethods: ["GET", "HEAD"] });
+    const resources = t.app.toJSON().Resources as Record<string, { Type: string; Properties: Json; DependsOn?: string[] }>;
+    const [id, upload] = Object.entries(resources).find(([, r]) => r.Type === "Custom::CDKBucketDeployment" && r.Properties.DestinationBucketKeyPrefix === "_fallback/")!;
+    expect(upload.Properties.SystemMetadata).toEqual({ "cache-control": "no-store" });
+    const dist = Object.values(resources).find((r) => r.Type === "AWS::CloudFront::Distribution" && r.Properties.DistributionConfig.Comment === fallback.Comment)!;
+    expect(dist.DependsOn).toContain(id);
+    t.app.hasOutput("FallbackDomain", { Value: { "Fn::GetAtt": [Match.stringLikeRegexp("^FallbackCdn"), "DomainName"] } });
   });
 });
 
@@ -401,7 +565,7 @@ describe("the app's domain", () => {
 
   it("leaves an environment without one on CloudFront's address", () => {
     const staging = synth({ env: "staging" });
-    const dist = Object.values(staging.app.findResources("AWS::CloudFront::Distribution"))[0]!.Properties.DistributionConfig;
+    const dist = distributions(staging.app).main;
     expect(dist.Aliases).toBeUndefined();
     expect(dist.ViewerCertificate).toBeUndefined();
     for (const f of Object.values(staging.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"))) {
@@ -436,6 +600,21 @@ describe("the viewer-request function", () => {
     }
     // Not an address: the edge's own is kept.
     expect(via("172.70.1.2", "1.2.3.4, 5.6.7.8")).toBe("172.70.1.2");
+  });
+
+  it("passes on where the client is: Cloudflare's location behind its proxy, CloudFront's otherwise, never the client's own", () => {
+    const geo = (viewerIp: string, headers: Record<string, string>) =>
+      run("bizinsights.io", {
+        method: "POST",
+        headers: { host: { value: "bizinsights.io" }, ...Object.fromEntries(Object.entries(headers).map(([k, value]) => [k, { value }])) },
+      }, viewerIp).headers["x-insights-viewer-geo"]?.value;
+    const both = { "cf-ipcountry": "IN", "cf-region": "Kerala", "cf-ipcity": "Kochi", "cloudfront-viewer-country": "US", "cloudfront-viewer-country-region-name": "Virginia", "cloudfront-viewer-city": "Ashburn" };
+    expect(geo("172.70.1.2", both)).toBe("IN|Kerala|Kochi");
+    expect(geo("203.0.113.9", both)).toBe("US|Virginia|Ashburn");
+    expect(geo("172.70.1.2", { "cf-ipcountry": "IN" })).toBe("IN||");
+    expect(geo("203.0.113.9", { "cloudfront-viewer-country": "SG", "cloudfront-viewer-city": "New York" })).toBe("SG||New%20York");
+    // Sent by the client itself (not from Cloudflare's addresses): ignored, and its own header dropped.
+    expect(geo("203.0.113.9", { "cf-ipcountry": "KP", "x-insights-viewer-geo": "KP||" })).toBeUndefined();
   });
 
   it("sends page requests on other names to the domain, path and query parameters as received", () => {
@@ -479,6 +658,25 @@ describe("the edge stack", () => {
     expect(rules["api-rate-per-ip"].Statement.RateBasedStatement.AggregateKeyType).toBe("IP");
     expect(rules["aws-ip-reputation"].OverrideAction).toEqual({ None: {} });
     expect(rules["aws-common-count-only"].OverrideAction).toEqual({ Count: {} });
+  });
+
+  it("matches the API and its exempt paths the way the app routes them, so /api/webhooks/../auth/login is limited", () => {
+    const acl = Object.values(t.edge.findResources("AWS::WAFv2::WebACL"))[0]!.Properties;
+    type ByteMatch = { FieldToMatch: Record<string, unknown>; SearchString: string; TextTransformations: unknown };
+    const byteMatches: ByteMatch[] = [];
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") {
+        for (const [k, x] of Object.entries(v)) {
+          if (k === "ByteMatchStatement") byteMatches.push(x as ByteMatch);
+          walk(x);
+        }
+      }
+    };
+    walk(acl.Rules);
+    const onPath = byteMatches.filter((m) => "UriPath" in m.FieldToMatch);
+    expect(onPath.map((m) => m.SearchString)).toEqual(expect.arrayContaining(["/api/", "/api/webhooks/", "/pixel/"]));
+    for (const m of onPath) expect(m.TextTransformations, m.SearchString).toEqual([{ Priority: 0, Type: "URL_DECODE" }, { Priority: 1, Type: "NORMALIZE_PATH" }]);
   });
 });
 
@@ -571,6 +769,10 @@ describe("Cognito's emails", () => {
       APP_URL: "https://bizinsights.io",
       API_URL: "https://bizinsights.io/api",
       EMAIL_FROM: "bizinsights <no-reply@bizinsights.io>",
+      // The codes come from the support sender, signed with the support address.
+      OTP_FROM_EMAIL: "support@bizinsights.io",
+      OTP_FROM_NAME: "BizInsights Support",
+      SUPPORT_EMAIL: "support@bizinsights.io",
       APP_SECRET_ARN: "insights/production/app",
       COGNITO_EMAIL_KEY_ARN: { "Fn::GetAtt": [keyId, "Arn"] },
     });
@@ -728,6 +930,28 @@ describe("IAM", () => {
     const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
     expect(workflow).toMatch(/^\s+environment: production\s*$/m);
     expect(workflow).toMatch(/^\s+id-token: write\s*$/m);
+  });
+
+  it("lets only the deploy job ask for the token, and keeps the app's dependencies out of that job", () => {
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
+    const [top, rest] = workflow.split(/^jobs:\s*$/m) as [string, string];
+    const [build, deploy] = rest.split(/^ {2}deploy:\s*$/m) as [string, string];
+    // Not for the whole workflow, not for the job that installs and builds everything.
+    expect(top).not.toMatch(/id-token/);
+    expect(build).not.toMatch(/id-token/);
+    expect(build).not.toMatch(/environment: production/);
+    expect(build).not.toMatch(/configure-aws-credentials/);
+    expect(build).toContain("pnpm --filter @app/aws build");
+    // The deploy job: the token, the CDK tools only and no install scripts, and the package built above.
+    expect(deploy).toMatch(/^\s+id-token: write\s*$/m);
+    expect(deploy).toMatch(/^\s+needs: build\s*$/m);
+    const installs = deploy.match(/pnpm install[^\r\n]*/g) ?? [];
+    expect(installs).toEqual(["pnpm install --frozen-lockfile --ignore-scripts --filter @infra/cdk"]);
+    expect(deploy).not.toMatch(/--filter @app\/aws (build|test)|pnpm (--filter \S+ )*test/);
+    expect(deploy).toContain("fail-on-cache-miss: true");
+    // Dependency install scripts, anywhere this repository is installed, only for these.
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { pnpm: { onlyBuiltDependencies: string[] } };
+    expect(pkg.pnpm.onlyBuiltDependencies).toEqual(["@prisma/engines", "esbuild", "prisma"]);
   });
 
   it("proves the deploy role's next trust on roles that grant nothing: one must admit the deploy workflow, two must refuse it", () => {
@@ -993,5 +1217,194 @@ describe("config", () => {
     expect(vars.NODE_ENV).toBeUndefined();
     expect(Object.keys(vars).some((k) => k.startsWith("COGNITO_"))).toBe(false);
     expect(JSON.parse(vars.SHOPIFY_EXTRA_APPS!)).toBeInstanceOf(Array);
+  });
+});
+
+describe("the WhatsApp stack (Evolution API)", () => {
+  let w: Template;
+  let a: Template;
+  beforeAll(async () => {
+    const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
+    const app = new App();
+    const cfg = envConfig((k) => app.node.tryGetContext(k));
+    const env = { account: cfg.account, region: cfg.region };
+    const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
+    const data = new DataStack(app, "D", cfg, { env });
+    const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
+    w = Template.fromStack(new WhatsappStack(app, "W", cfg, data, { env }));
+    a = Template.fromStack(appStack);
+  });
+
+  const container = () => {
+    const [def] = Object.values(w.findResources("AWS::ECS::TaskDefinition"));
+    return { def: def!.Properties, c: def!.Properties.ContainerDefinitions[0] };
+  };
+
+  it("runs one pinned image on Graviton, privately, never two tasks at once", () => {
+    const { def, c } = container();
+    expect(c.Image).toMatch(/^evoapicloud\/evolution-api:v2\.3\.7@sha256:[0-9a-f]{64}$/);
+    expect(def.RuntimePlatform).toEqual({ CpuArchitecture: "ARM64", OperatingSystemFamily: "LINUX" });
+    expect([def.Cpu, def.Memory]).toEqual(["512", "1024"]);
+    w.hasResourceProperties("AWS::ECS::Service", {
+      DesiredCount: 1,
+      LaunchType: "FARGATE",
+      DeploymentConfiguration: { MinimumHealthyPercent: 0, MaximumPercent: 100, DeploymentCircuitBreaker: { Enable: true, Rollback: true } },
+      NetworkConfiguration: { AwsvpcConfiguration: Match.objectLike({ AssignPublicIp: "DISABLED" }) },
+    });
+    w.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 0);
+    w.hasResourceProperties("AWS::ServiceDiscovery::PrivateDnsNamespace", { Name: "whatsapp.production.insights.internal" });
+  });
+
+  it("takes its keys from Secrets Manager only, keeps no customer data, shows no console and prints no QR codes", () => {
+    const { c } = container();
+    expect(c.Secrets.map((s: { Name: string }) => s.Name).sort()).toEqual(["AUTHENTICATION_API_KEY", "EVO_DB_PASSWORD", "EVO_DB_USER"]);
+    const env = Object.fromEntries((c.Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
+    for (const name of ["AUTHENTICATION_API_KEY", "DATABASE_CONNECTION_URI", "DATABASE_URL", "EVO_DB_PASSWORD"]) expect(env[name], name).toBeUndefined();
+    expect(env).toMatchObject({
+      TZ: "UTC",
+      SERVER_DISABLE_MANAGER: "true",
+      SERVER_DISABLE_DOCS: "true",
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false",
+      DATABASE_SAVE_DATA_INSTANCE: "true",
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false",
+      DATABASE_SAVE_DATA_CONTACTS: "false",
+      DATABASE_SAVE_DATA_CHATS: "false",
+      DATABASE_SAVE_DATA_HISTORIC: "false",
+      LOG_LEVEL: "ERROR,WARN",
+      TELEMETRY_ENABLED: "false",
+      WEBHOOK_GLOBAL_ENABLED: "false",
+      CACHE_REDIS_ENABLED: "false",
+      QRCODE_LIMIT: "6",
+      // A server's call has no Origin, which Evolution refuses unless CORS allows any (src/main.ts).
+      CORS_ORIGIN: "*",
+    });
+    // The database's address is put together inside the container, from the secret.
+    expect(c.Command[0]).toContain("DATABASE_CONNECTION_URI=");
+    expect(c.Command[0]).toContain("unset EVO_DB_PASSWORD");
+    // Only Evolution's own log lines reach CloudWatch: its stray console.log calls print customers' messages.
+    expect(c.Command[0]).toContain("exec node --require /tmp/quiet-console.cjs dist/main");
+  });
+
+  it("lets only Evolution's logger and pino through the console, on every method (libsignal prints private keys)", () => {
+    const { c } = container();
+    const filter = /cat > \/tmp\/quiet-console\.cjs <<'JS'\n([\s\S]*?)\nJS\n/.exec(c.Command[0])?.[1];
+    expect(filter).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "quiet-console-"));
+    writeFileSync(join(dir, "quiet-console.cjs"), `${filter}\n`);
+    // Every function on the console, called with a secret, then what libsignal 1c30d7d (Baileys' fork)
+    // prints in session_record.js, then Evolution's own lines and a pino line, which must stay.
+    const probe = join(dir, "probe.cjs");
+    writeFileSync(
+      probe,
+      `const fs = require("node:fs");
+const key = { privKey: Buffer.from("SECRET-buffer"), rootKey: Buffer.from("SECRET-buffer") };
+for (const m of Object.getOwnPropertyNames(console)) {
+  if (typeof console[m] !== "function" || m === "Console") continue;
+  try { console[m]("SECRET-" + m, key); } catch {}
+  try { console[m](false, "SECRET-" + m, key); } catch {}
+}
+console.time("SECRET-timer"); console.timeLog("SECRET-timer", key); console.timeEnd("SECRET-timer");
+console.table([{ secret: "SECRET-table" }]);
+console.info("Closing session:", { currentRatchet: { ephemeralKeyPair: key } });
+console.info("Opening session:", { currentRatchet: { ephemeralKeyPair: key } });
+console.info("Removing old closed session:", { currentRatchet: { ephemeralKeyPair: key } });
+console.warn("Session already closed", { currentRatchet: { ephemeralKeyPair: key } });
+console.error("Session error:SECRET-error", new Error("SECRET-stack").stack);
+console.log("[Evolution API]", "", "1", "-", "Mon Oct 26 2026 01:48:55  ", "ERROR ", "[ChannelStartupService]", "[string]", "KEPT-error");
+console.log("[Evolution API]", "", "1", "-", "Mon Oct 26 2026 01:48:55  ", "WARN ", "[ChannelStartupService]", "[object]", { kept: "KEPT-warn" });
+fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
+`,
+    );
+    const run = (...flags: string[]) => {
+      const r = spawnSync(process.execPath, [...flags, probe], { encoding: "utf8" });
+      expect(r.status).toBe(0);
+      return r.stdout + r.stderr;
+    };
+    // Without the filter, the probe does print its secrets on every method that prints...
+    const open = run();
+    for (const m of ["log", "info", "debug", "warn", "error", "trace", "dir", "dirxml", "table", "group", "groupCollapsed", "assert", "count", "timer"]) expect(open, m).toContain(`SECRET-${m}`);
+    expect(open).toMatch(/Closing session:[\s\S]*privKey: <Buffer/);
+    // ...and with it, nothing but Evolution's logger and pino.
+    const quiet = run("--require", join(dir, "quiet-console.cjs"));
+    expect(quiet).not.toContain("SECRET");
+    expect(quiet).not.toMatch(/session|Buffer|privKey/i);
+    for (const kept of ["KEPT-error", "KEPT-warn", "KEPT-pino"]) expect(quiet).toContain(kept);
+  });
+
+  it("lets only the functions in (8080), and itself into the database (5432)", () => {
+    const sgs = Object.entries(w.findResources("AWS::EC2::SecurityGroup"));
+    expect(sgs).toHaveLength(1);
+    const [sgId, sg] = sgs[0]!;
+    // Nothing in from an address range, here or as a rule of its own.
+    expect(sg.Properties.SecurityGroupIngress).toBeUndefined();
+    const rules = Object.values(w.findResources("AWS::EC2::SecurityGroupIngress")).map((x) => x.Properties);
+    expect(rules).toHaveLength(2);
+    for (const rule of rules) {
+      expect(rule.CidrIp).toBeUndefined();
+      expect(rule.CidrIpv6).toBeUndefined();
+      expect(rule.SourceSecurityGroupId).toBeDefined();
+    }
+    const into = (port: number) => rules.find((x) => x.FromPort === port && x.ToPort === port && x.IpProtocol === "tcp");
+    // Into the service: 8080 from the functions' group. Into the database: 5432 from the service's group.
+    expect(into(8080)!.GroupId).toEqual({ "Fn::GetAtt": [sgId, "GroupId"] });
+    expect(into(5432)!.SourceSecurityGroupId).toEqual({ "Fn::GetAtt": [sgId, "GroupId"] });
+  });
+
+  it("makes its database (the cron's evolution-db action) before the service starts, and fails the deploy if that fails", () => {
+    const [res] = Object.entries(w.findResources("AWS::CloudFormation::CustomResource"));
+    expect(res).toBeDefined();
+    const [svc] = Object.values(w.findResources("AWS::ECS::Service"));
+    expect(svc!.DependsOn).toEqual(expect.arrayContaining([res![0]]));
+    const [init] = Object.values(w.findResources("AWS::Lambda::Function", { Properties: { FunctionName: "insights-production-evolution-db-init" } }));
+    expect(init!.Properties.Code.ZipFile).toContain('action: "evolution-db"');
+    expect(init!.Properties.Code.ZipFile).toContain("if (r.FunctionError) throw");
+  });
+
+  it("uses only characters EC2 accepts in every security group's and rule's description, in every stack", () => {
+    // EC2 refuses anything else at deploy time (an apostrophe failed the first WhatsApp deploy).
+    const allowed = /^[a-zA-Z0-9. _\-:/()#,@[\]+=&;{}!$*]{0,255}$/;
+    const bad: string[] = [];
+    for (const tpl of [w, a, t.data, t.app, t.edge, t.auth, t.ci, t.audit]) {
+      for (const type of ["AWS::EC2::SecurityGroup", "AWS::EC2::SecurityGroupIngress", "AWS::EC2::SecurityGroupEgress"]) {
+        for (const [id, r] of Object.entries(tpl.findResources(type))) {
+          const p = r.Properties ?? {};
+          const texts = [p.GroupDescription, p.Description, ...[...(p.SecurityGroupIngress ?? []), ...(p.SecurityGroupEgress ?? [])].map((x: { Description?: unknown }) => x.Description)];
+          for (const text of texts) if (typeof text === "string" && !allowed.test(text)) bad.push(`${id}: ${text}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("leaves nothing behind when its first creation rolls back, so the next deploy can create it again", () => {
+    // A plain Retain survives a failed first create, and its fixed name then fails every later create
+    // (the log group did, on the second deploy). RetainExceptOnCreate keeps it only once the stack exists.
+    const resources = Object.entries(w.toJSON().Resources as Record<string, { Type: string; DeletionPolicy?: string }>);
+    expect(resources.filter(([, r]) => r.DeletionPolicy === "Retain").map(([id]) => id)).toEqual([]);
+    const [logs] = Object.values(w.findResources("AWS::Logs::LogGroup", { Properties: { LogGroupName: "/ecs/insights-production-evolution-a" } }));
+    expect(logs!.DeletionPolicy).toBe("RetainExceptOnCreate");
+  });
+
+  it("raises an alarm when no task runs or memory runs short", () => {
+    for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) w.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: name });
+  });
+
+  it("tells every function the service's private address and the key's secret, and only the cron its database's", () => {
+    const fns = Object.values(a.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    for (const f of fns) {
+      const vars = f.Properties.Environment.Variables as Record<string, unknown>;
+      expect(vars.EVOLUTION_API_URL).toBe("http://evolution-a.whatsapp.production.insights.internal:8080");
+      expect(vars.EVOLUTION_SECRET_ARN).toBeDefined();
+      expect(vars.EVOLUTION_API_KEY).toBeUndefined();
+      expect(vars.EVOLUTION_DB_SECRET_ARN !== undefined).toBe(String(f.Properties.FunctionName).endsWith("-cron"));
+    }
+  });
+
+  it("checks the database's certificate against the one RDS root that signs it", async () => {
+    const { rdsRootCa } = await import("../lib/whatsapp-stack.js");
+    const { X509Certificate } = await import("node:crypto");
+    const pem = rdsRootCa("ap-southeast-2", join(import.meta.dirname, "fixtures/rds-ap-southeast-2.pem"));
+    expect(new X509Certificate(pem!).subject).toContain("CN=Amazon RDS ap-southeast-2 Root CA RSA2048 G1");
+    expect(rdsRootCa("ap-southeast-2", join(import.meta.dirname, "fixtures/missing.pem"))).toBeNull();
   });
 });

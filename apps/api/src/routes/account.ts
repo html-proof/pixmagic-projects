@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { systemDb, type User } from "@app/db";
-import { detachUserAdGrants, logger, revokeReleasedAdGrants } from "@app/core";
-import { accountPasswordProblem, EMAIL_CODE_RE } from "@app/shared";
+import { accountDeletionEmail, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants } from "@app/core";
+import { revokeZapierGrants } from "@app/core/zapier";
+import { accountPasswordProblem, EMAIL_CODE_RE, safeEqual, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
-import { cognitoUsernameKey, notifyMethodAdded, notifyMethodRemoved, recordAuthEvent } from "../identity.js";
+import { cognitoUsernameKey, notifyEmailChanged, notifyMethodAdded, notifyMethodRemoved, notifyPasswordChanged, notifyTwoStepChanged, recordAuthEvent } from "../identity.js";
+import { endSessions, recordSession } from "../devices.js";
 import {
   clearSessionCookies,
   LINK_PROOF_TTL_S,
@@ -17,6 +19,23 @@ import {
   signedInRecently as recentSignIn,
 } from "../session.js";
 import type { App } from "../app.js";
+import {
+  challengeTiming,
+  CODE_TTL_S,
+  CODE_UNAVAILABLE,
+  codeExpired,
+  codeHash,
+  coordinatorDown,
+  countAttempt,
+  expiredCode,
+  incorrectCode,
+  limitCodeSends,
+  MAX_ATTEMPTS,
+  newCode,
+  RECORD_GRACE_S,
+  requireResendAllowed,
+  tooManyAttempts,
+} from "../emailCode.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cognitoFailure, enabledProviders, publicUser } from "./auth.js";
 
@@ -24,6 +43,8 @@ const codeSchema = z.string().trim().regex(EMAIL_CODE_RE, "Enter the 6-digit cod
 const totpSchema = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app.");
 const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code === "P2002";
 const isCognito = (err: unknown, ...codes: string[]) => err instanceof CognitoError && codes.includes(err.code);
+/** How far back GET /auth/account counts failed sign-ins (the Security page's "suspicious activity"). */
+const FAILED_SIGN_INS_WINDOW_MS = 7 * 86_400_000;
 
 /**
  * Cognito refusing this session's own access token means the session can't make this change: it
@@ -120,6 +141,10 @@ export function accountRoutes(app: App, deps: Deps) {
           },
         )
       : false;
+    const [passwordEvent, failedSignIns] = await Promise.all([
+      password ? systemDb.authEvent.findFirst({ where: { userId: user.id, type: { in: ["password_changed", "password_reset"] } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }) : null,
+      systemDb.authEvent.count({ where: { userId: user.id, type: SIGN_IN_FAILED_EVENT, createdAt: { gte: new Date(Date.now() - FAILED_SIGN_INS_WINDOW_MS) } } }),
+    ]);
     return c.json({
       user: publicUser(user),
       signedInWith: s.m,
@@ -136,9 +161,13 @@ export function accountRoutes(app: App, deps: Deps) {
       // A Google account's address comes from Google on every sign-in. An address nobody has proved
       // stays until it is (identity.ts: whatever others gave it is its owner's).
       canChangeEmail: s.m === "password" && user.emailVerified,
-      // What removing a method or deleting the account asks for (reauthenticate).
+      // What removing a method asks for (reauthenticate). Deleting the account asks for an emailed code.
       confirmWith: await confirmWith(c, user),
       mfaEnabled,
+      // When the password was last set (changed, reset, or added): null without one.
+      passwordChangedAt: password ? (passwordEvent?.createdAt ?? password.createdAt) : null,
+      // Sign-ins to this account stopped at the password or the code, in the last week.
+      failedSignIns,
     });
   });
 
@@ -167,22 +196,23 @@ export function accountRoutes(app: App, deps: Deps) {
     // then this browser signs in again too.
     await deps.auth.globalSignOut(accessToken).catch((err: unknown) => logger.warn({ err }, "Cognito sign-out after a password change failed"));
     await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } });
+    await endSessions({ userId: user.id });
     const fresh = await deps.auth.passwordSignIn(user.email, input.password).catch((err: unknown) => {
       throw cognitoFailure(err, "sign in after password change");
     });
     let signedIn = false;
     if ("tokens" in fresh) {
       const claims = await deps.auth.verifyIdToken(fresh.tokens.idToken);
-      setSessionCookies(
-        c,
-        newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: "password", authTime: claims.authTime, keep: s.keep, ownAddress: provesAddress(claims, user.email) }),
-        fresh.tokens.refreshToken,
-      );
+      const next = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: "password", authTime: claims.authTime, keep: s.keep, ownAddress: provesAddress(claims, user.email) });
+      setSessionCookies(c, next, fresh.tokens.refreshToken);
+      // The same device, under its new session: no new sign-in in the activity.
+      await recordSession(c, next, clientIp(c), { activity: false });
       signedIn = true;
     } else {
       clearSessionCookies(c);
     }
     await recordAuthEvent("password_changed", user.id, clientIp(c));
+    await notifyPasswordChanged(deps.mailer, user, "changed");
     return c.json({ ok: true, signedIn });
   });
 
@@ -294,6 +324,8 @@ export function accountRoutes(app: App, deps: Deps) {
         data: { type: "identity_removed", userId: user.id, ip: clientIp(c), metadata: { cognitoSub: target.subject, method: target.method, cognitoUsername: cognitoUsernameKey(target.username) } },
       }),
     ]);
+    // Its sessions end on their next request (above): off the device list now.
+    await endSessions({ userId: user.id, method: target.method });
     await notifyMethodRemoved(deps.mailer, user, {
       method: target.method as SignInMethod,
       email: target.email,
@@ -345,6 +377,7 @@ export function accountRoutes(app: App, deps: Deps) {
       throw accountFailure(err, "turn on two-step verification");
     });
     await recordAuthEvent("mfa_enabled", user.id, clientIp(c), { method: "totp" });
+    await notifyTwoStepChanged(deps.mailer, user, true);
     return c.json({ ok: true, mfaEnabled: true });
   });
 
@@ -379,6 +412,7 @@ export function accountRoutes(app: App, deps: Deps) {
         throw accountFailure(err, "turn off two-step verification");
       });
       await recordAuthEvent("mfa_disabled", user.id, clientIp(c), { method: "totp" });
+      await notifyTwoStepChanged(deps.mailer, user, false);
     }
     // Those tokens were only for this check.
     if (refreshToken) await deps.auth.revokeRefreshToken(refreshToken).catch((err: unknown) => logger.warn({ err }, "could not revoke a check's refresh token"));
@@ -441,12 +475,28 @@ export function accountRoutes(app: App, deps: Deps) {
     // What Cognito now says the address is.
     const claims = await cognitoAddress(c, "read changed email");
     if (!claims.email || !claims.emailVerified) throw new HttpError(400, "That code isn't right. Check the email and try again.", "invalid_code");
-    const updated = await systemDb.user.update({ where: { id: user.id }, data: { email: claims.email, emailVerified: true } }).catch((err: unknown) => {
+    // Every other device is signed out, as after a password change: whoever moved the address may
+    // be signed in on one of them. This browser carries on under a new session id issued at the
+    // cut-off (the same sign-in, ending when it would have). The other devices' Cognito refresh
+    // tokens aren't revoked, which would end this one's too with no password here to sign in
+    // again: they only ever work beside a session of ours, and those are all refused (context.ts).
+    const cutoff = new Date();
+    const updated = await systemDb.user.update({ where: { id: user.id }, data: { email: claims.email, emailVerified: true, sessionsValidAfter: cutoff } }).catch((err: unknown) => {
       if (isUniqueViolation(err)) throw new HttpError(409, "That email address belongs to another account.", "email_in_use");
       throw err;
     });
     await systemDb.authIdentity.updateMany({ where: { userId: user.id, subject: s.sub }, data: { email: claims.email } });
+    const next = {
+      ...newSession({ userId: user.id, sub: s.sub, username: s.un, method: s.m as SignInMethod, authTime: s.at, keep: s.keep, ownAddress: s.own }, cutoff.getTime()),
+      exp: s.exp,
+    };
+    setSessionCookies(c, next, readRefreshToken(c, s) ?? undefined);
+    await endSessions({ userId: user.id });
+    // The same device, under its new session: no new sign-in in the activity.
+    await recordSession(c, next, clientIp(c), { activity: false });
     await recordAuthEvent("email_changed", user.id, clientIp(c), { from: user.email, to: claims.email });
+    // The old address hears of it: from now on everything else goes to the new one.
+    await notifyEmailChanged(deps.mailer, user, claims.email);
     return c.json({ user: publicUser(updated) });
   });
 
@@ -486,32 +536,115 @@ export function accountRoutes(app: App, deps: Deps) {
     return c.json({ user: publicUser(updated) });
   });
 
+  // ---------------- Deleting the account: a code emailed to the account's address ----------------
+
+  /**
+   * What is kept of the code that confirms deleting the account, in the coordinator under
+   * deletionKey: its HMAC (emailCode.ts codeHash), never the code, and when it was issued. Every
+   * session confirms the deletion this way, whatever it signed in with: the code proves the
+   * account's own address, which a Google account linked under another address can't.
+   */
+  interface DeletionCode {
+    v: 1;
+    codeHash: string;
+    issuedAt: number;
+  }
+  const deletionKey = (userId: string) => `auth:code:delete:${userId}`;
+  const deletionScope = (userId: string, issuedAt: number) => `delete:${userId}:${issuedAt}`;
+
+  async function deletionCode(userId: string): Promise<DeletionCode | null> {
+    const raw = await deps.coord.peek(deletionKey(userId)).catch((err: unknown) => {
+      logger.error({ err }, "could not read an account-deletion code");
+      throw coordinatorDown();
+    });
+    if (!raw) return null;
+    const rec = JSON.parse(raw) as DeletionCode;
+    return rec?.v === 1 && typeof rec.issuedAt === "number" ? rec : null;
+  }
+
+  /** The workspaces `userId` is the only owner of: deleting the account waits until none is left. */
+  async function soleOwnedWorkspaces(userId: string): Promise<string[]> {
+    const owned = await systemDb.membership.findMany({ where: { userId, role: "owner" }, include: { workspace: { select: { id: true, name: true } } } });
+    const names: string[] = [];
+    for (const m of owned) {
+      const others = await systemDb.membership.count({ where: { workspaceId: m.workspaceId, role: "owner", userId: { not: userId } } });
+      if (!others) names.push(m.workspace.name);
+    }
+    return names;
+  }
+
+  const soleOwnerRefusal = (c: Ctx, names: string[]) =>
+    c.json(
+      {
+        error: "sole_owner",
+        message: `You're the only owner of ${names.join(", ")}. Delete ${names.length > 1 ? "those workspaces" : "that workspace"} or make someone else an owner first.`,
+        workspaces: names,
+      },
+      409,
+    );
+
+  /**
+   * "Email me a code" in the Delete account dialog: a 6-digit code to the account's address, with
+   * the sign-in code's rules (emailCode.ts: a minute's life, five guesses, one a minute, the
+   * address's hourly and daily caps). None while the deletion would be refused anyway (sole owner).
+   */
+  app.post("/auth/account/delete/code", async (c) => {
+    const user = await requireUser(c, deps);
+    const soleOwner = await soleOwnedWorkspaces(user.id);
+    if (soleOwner.length) return soleOwnerRefusal(c, soleOwner);
+    const standing = await deletionCode(user.id);
+    if (standing) requireResendAllowed(standing.issuedAt);
+    await limitCodeSends(deps.coord, user.email, clientIp(c));
+    const now = Date.now();
+    const code = newCode();
+    const mail = accountDeletionEmail({ code, name: user.displayName, email: user.email, appUrl: env().APP_URL, senders: env() });
+    // The email goes first: a code that couldn't be sent is never recorded as standing.
+    await deps.mailer.send(user.email, mail.subject, mail.text, mail.html, { purpose: mail.purpose }).catch((err: unknown) => {
+      logger.error({ err }, "could not email an account-deletion code");
+      throw new HttpError(503, CODE_UNAVAILABLE, "email_unavailable");
+    });
+    const rec: DeletionCode = { v: 1, codeHash: codeHash(deletionScope(user.id, now), code), issuedAt: now };
+    await deps.coord.put(deletionKey(user.id), JSON.stringify(rec), CODE_TTL_S + RECORD_GRACE_S).catch((err: unknown) => {
+      logger.error({ err }, "could not store an account-deletion code");
+      throw coordinatorDown();
+    });
+    return c.json({ ok: true, challenge: challengeTiming(now, now) });
+  });
+
   /**
    * Delete the account: its sign-in identities in Cognito, then the user (memberships go with it;
-   * employee records an organization keeps lose their link to it). Refused while the person is the
-   * only owner of a workspace, whose stores and data would otherwise be left with nobody.
+   * employee records an organization keeps lose their link to it). Confirmed with the code emailed
+   * to the account's address (above), whose minute and five guesses are checked before the code is
+   * looked at; the right one is spent with one atomic delete, so of two answers racing only one goes
+   * on. Refused while the person is the only owner of a workspace, whose stores and data would
+   * otherwise be left with nobody.
    */
   app.post("/auth/account/delete", async (c) => {
     const user = await requireUser(c, deps);
-    const input = z.object({ confirm: z.literal("DELETE", { errorMap: () => ({ message: "Type DELETE to confirm." }) }), password: z.string().max(256).optional() }).parse(await body(c));
+    const input = z.object({ confirm: z.literal("DELETE", { error: "Type DELETE to confirm." }), code: codeSchema }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
-    await reauthenticate(c, user, input.password);
-    const owned = await systemDb.membership.findMany({ where: { userId: user.id, role: "owner" }, include: { workspace: { select: { id: true, name: true } } } });
-    const soleOwner: string[] = [];
-    for (const m of owned) {
-      const others = await systemDb.membership.count({ where: { workspaceId: m.workspaceId, role: "owner", userId: { not: user.id } } });
-      if (!others) soleOwner.push(m.workspace.name);
+    await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    const pending = await deletionCode(user.id);
+    if (!pending) throw new HttpError(400, "Ask for a code first: we'll email it to your account's address.", "code_required");
+    if (codeExpired(pending.issuedAt)) throw expiredCode();
+    const scope = deletionScope(user.id, pending.issuedAt);
+    const attempt = await countAttempt(deps.coord, scope);
+    if (!safeEqual(pending.codeHash, codeHash(scope, input.code))) {
+      if (attempt >= MAX_ATTEMPTS) {
+        // The fifth wrong guess ends the code: a new one must be asked for.
+        await deps.coord.take(deletionKey(user.id)).catch((err: unknown) => logger.warn({ err }, "could not discard an account-deletion code"));
+        throw tooManyAttempts();
+      }
+      throw incorrectCode();
     }
-    if (soleOwner.length) {
-      return c.json(
-        {
-          error: "sole_owner",
-          message: `You're the only owner of ${soleOwner.join(", ")}. Delete ${soleOwner.length > 1 ? "those workspaces" : "that workspace"} or make someone else an owner first.`,
-          workspaces: soleOwner,
-        },
-        409,
-      );
-    }
+    // Before the code is spent (the code's own route refuses a sole owner too: this is a race).
+    const soleOwner = await soleOwnedWorkspaces(user.id);
+    if (soleOwner.length) return soleOwnerRefusal(c, soleOwner);
+    const spent = await deps.coord.take(deletionKey(user.id)).catch((err: unknown) => {
+      logger.error({ err }, "could not spend an account-deletion code");
+      throw coordinatorDown();
+    });
+    if (!spent) throw expiredCode();
     const identities = await systemDb.authIdentity.findMany({ where: { userId: user.id } });
     // Sign-in first, so nobody can sign in to a half-deleted account.
     for (const id of identities) {
@@ -527,6 +660,8 @@ export function accountRoutes(app: App, deps: Deps) {
         logger.error({ err, userId: user.id }, "account deletion: the person's ad connections weren't released; their tokens remain until a disconnect");
         return null;
       });
+      // Zapier connections they allowed stop working, and their Zaps' triggers go (docs/zapier.md).
+      await revokeZapierGrants({ userId: user.id }, "account_deleted").catch((err: unknown) => logger.error({ err, userId: user.id }, "account deletion: the person's Zapier connections weren't revoked"));
       await systemDb.user.delete({ where: { id: user.id } });
     } catch (err) {
       logger.error({ err, userId: user.id }, "account deletion: Cognito users deleted but the user row was not; finish by hand (docs/RUNBOOK.md)");
@@ -539,6 +674,8 @@ export function accountRoutes(app: App, deps: Deps) {
       const outcomes = await revokeReleasedAdGrants(released.grants, deps.fetchImpl);
       logger.info({ userId: user.id, released: released.released, outcomes }, "account deletion: ad connections released");
     }
+    // A login of theirs still waiting for its ad accounts: its row (the platform profile's name) and its grant go too.
+    await releaseAdLoginsWhere({ connectedByUserId: user.id }, deps.fetchImpl).catch((err: unknown) => logger.error({ err, userId: user.id }, "account deletion: waiting ad logins weren't released"));
     await recordAuthEvent("account_deleted", null, clientIp(c), { userId: user.id, identities: identities.length });
     clearSessionCookies(c);
     return c.json({ ok: true });

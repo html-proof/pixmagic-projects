@@ -3,7 +3,7 @@ import { resetEnvCache } from "@app/core";
 import { systemDb } from "@app/db";
 import { CognitoError } from "../src/cognito.js";
 import { newLinkSession, signSession } from "../src/session.js";
-import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
+import { clean, cookiesFrom, createWorkspace, deletionCode, ORIGIN, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
 
 /**
  * Settings → Security's sign-in methods: adding a password to a Google account, linking a Google
@@ -48,6 +48,8 @@ async function googleSignIn(person: { id: string; email: string }) {
   const back = ctx.auth.federatedSignIn(start.headers.location!, person);
   const res = await browser.post("/auth/oauth/callback", { code: back.code, state: back.state });
   expect(res.statusCode).toBe(200);
+  // Not held for an existing account's sign-in ({ next: "link" }): signed in.
+  expect(res.json().user).toBeDefined();
   return { browser, user: res.json().user as { id: string } };
 }
 
@@ -610,9 +612,18 @@ describe("removing a sign-in method", () => {
     expect(account).toMatchObject({ signedInWith: "google", confirmWith: "password", canAddPassword: false });
     const pw = account.methods.find((m: { method: string }) => m.method === "password");
     const remove = (payload: unknown) => del(`/auth/account/methods/${pw.id}`, { cookie: cookieOf(intruder.browser) }, payload);
+    /** The intruder asks for the deletion code (it goes to owner@shop.com) and guesses at it. */
+    const intruderDeletes = async () => {
+      // The minute between codes, skipped: the code before (if any) goes.
+      await ctx.deps.coord.take(`auth:code:delete:${user.id}`);
+      const code = await deletionCode(ctx, { cookie: cookieOf(intruder.browser) }, "owner@shop.com");
+      expect(ctx.mailer.sent.filter((m) => m.subject === "Confirm deleting your bizinsights account").map((m) => m.to)).not.toContain("intruder@gmail.com");
+      return post("/auth/account/delete", { confirm: "DELETE", code: String((Number(code) + 1) % 1_000_000).padStart(6, "0") }, { cookie: cookieOf(intruder.browser) });
+    };
     expect((await remove({})).json().error).toBe("password_required");
     expect((await remove({ password: "a-guess-at-it" })).json().error).toBe("wrong_password");
-    expect((await post("/auth/account/delete", { confirm: "DELETE" }, { cookie: cookieOf(intruder.browser) })).json().error).toBe("password_required");
+    // Deleting takes a code emailed to the account's own address, which the intruder doesn't read.
+    expect((await intruderDeletes()).json().error).toBe("invalid_code");
     expect((await post("/auth/login", { email: "owner@shop.com", password: ctx.auth.users.get("u1")!.password })).statusCode).toBe(200);
 
     // An account left with only that Google account (its password gone another way): nothing it has proves the address.
@@ -623,7 +634,8 @@ describe("removing a sign-in method", () => {
     expect(add.statusCode).toBe(401);
     expect(add.json()).toMatchObject({ error: "reauth_required", message: expect.stringContaining("owner@shop.com") });
     expect(ctx.auth.calls).not.toContain("adminCreateUser");
-    expect((await post("/auth/account/delete", { confirm: "DELETE" }, { cookie: cookieOf(intruder.browser) })).json().error).toBe("reauth_required");
+    expect((await intruderDeletes()).json().error).toBe("invalid_code");
+    expect(await systemDb.user.findUnique({ where: { id: user.id } })).not.toBeNull();
   });
 
   it("lets a recent Google sign-in with the account's own address confirm changes, as before", async () => {
@@ -644,6 +656,12 @@ describe("removing a sign-in method", () => {
     expect((await del(`/auth/account/methods/${theirs!.id}`, headers, { password })).statusCode).toBe(404);
     expect(ctx.auth.users.has("u2")).toBe(true);
 
+    // Google with the account's address: held at its first sign-in, linked by the password's in that browser.
+    const linking = testBrowser(ctx);
+    const start = await linking.get("/auth/oauth/google/start");
+    const back = ctx.auth.federatedSignIn(start.headers.location!, { id: "g-1", email: "owner@shop.com" });
+    expect((await linking.post("/auth/oauth/callback", { code: back.code, state: back.state })).json().next).toBe("link");
+    expect((await linking.post("/auth/login", { email: "owner@shop.com", password })).statusCode).toBe(200);
     // Signed in with Google: the password can go (a recent Google sign-in is the proof), Google can't.
     const { browser } = await googleSignIn({ id: "g-1", email: "owner@shop.com" });
     const methods = (await browser.get("/auth/account")).json().methods as Array<{ id: string; method: string }>;

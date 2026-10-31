@@ -21,10 +21,24 @@ export interface CanvasLoopOptions {
 }
 
 /**
- * Runs `draw` every animation frame while the canvas is on screen and the tab is visible, and
- * pauses otherwise. Handles device-pixel-ratio scaling and resizing (ResizeObserver). `draw`
- * may change between renders; the latest one is always used, so it can read MotionValues with
- * `.get()` without re-subscribing anything.
+ * Shortest time between two drawn frames. A 120–144 Hz screen offers a frame every 7–8 ms, and a
+ * full-screen scene redrawn that often kept integrated graphics (and the page's main thread) busy
+ * with nothing to show for it: drifting points look the same at half that rate. So those screens
+ * draw every other frame (60–72 a second), while 60–100 Hz screens still draw every frame.
+ */
+const MIN_FRAME_GAP_MS = 9.5;
+/**
+ * After a frame is drawn, the next one is only asked for this much later, past the next refresh
+ * on a 120–144 Hz screen: an animation frame that is asked for costs the page a full update even
+ * when nothing gets drawn in it.
+ */
+const ASK_AFTER_MS = 8.5;
+
+/**
+ * Runs `draw` on animation frames (at most one every MIN_FRAME_GAP_MS) while the canvas is on
+ * screen and the tab is visible, and pauses otherwise. Handles device-pixel-ratio scaling and
+ * resizing (ResizeObserver). `draw` may change between renders; the latest one is always used,
+ * so it can read MotionValues with `.get()` without re-subscribing anything.
  */
 export function useCanvasLoop(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -45,6 +59,7 @@ export function useCanvasLoop(
     let resized = true;
     let visible = false;
     let raf = 0;
+    let timer = 0;
     let start = 0;
     let last = 0;
 
@@ -64,17 +79,28 @@ export function useCanvasLoop(
       return true;
     };
 
+    const running = () => visible && !document.hidden;
     const frame = (now: number) => {
       raf = 0;
+      // A fast screen came round again before the gap was up: skip this one.
+      if (start && !resized && now - last < MIN_FRAME_GAP_MS) {
+        if (!still && running()) raf = requestAnimationFrame(frame);
+        return;
+      }
       if (!start) start = last = now;
       const dt = Math.min(64, now - last);
       last = now;
       drawRef.current(ctx, { width, height, time: now - start, dt, resized });
       resized = false;
-      if (!still && visible && !document.hidden) raf = requestAnimationFrame(frame);
+      if (!still && running()) {
+        timer = window.setTimeout(() => {
+          timer = 0;
+          if (!raf && running()) raf = requestAnimationFrame(frame);
+        }, ASK_AFTER_MS);
+      }
     };
     const kick = () => {
-      if (!raf && visible && !document.hidden) raf = requestAnimationFrame(frame);
+      if (!raf && !timer && running()) raf = requestAnimationFrame(frame);
     };
 
     const ro = new ResizeObserver(() => {
@@ -103,6 +129,7 @@ export function useCanvasLoop(
       io.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
       if (raf) cancelAnimationFrame(raf);
+      if (timer) window.clearTimeout(timer);
     };
   }, [canvasRef, still, maxDpr]);
 }

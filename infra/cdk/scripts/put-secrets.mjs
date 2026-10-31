@@ -2,7 +2,7 @@
 // (No #! line: infra/cdk/test imports this file, and Vitest can't load one that starts with #! in a
 // Windows checkout, whose line ends are CRLF. It always runs as `node ...` anyway.)
 //
-//   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]... [--dry-run]
+//   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]... [--unset NAME]... [--dry-run]
 //
 // --from <file>  a dotenv file (e.g. the main checkout's .env) to copy the values below from; the
 //                ones that must match the old deployment's secrets (TOKEN_ENCRYPTION_KEYS decrypts
@@ -12,7 +12,11 @@
 //                When the clipboard has no usable value (taking a screenshot replaces copied text),
 //                it asks for it instead: paste or type it, only a * per character is shown. A
 //                value without that secret's shape, or equal to one of the app's public settings
-//                (an App ID or client id copied instead of the secret), is refused.
+//                (an App ID or client id copied instead of the secret), is refused. So is a Meta
+//                secret (META_APP_SECRET, WHATSAPP_APP_SECRET) that Meta says isn't its app's.
+//                Replacing ZAPIER_CLIENT_SECRET keeps the old value as ZAPIER_CLIENT_SECRET_PREVIOUS,
+//                which bizinsights still accepts until Zapier has the new one (docs/RUNBOOK.md).
+// --unset NAME   remove a key that only lasts a rotation: ZAPIER_CLIENT_SECRET_PREVIOUS.
 // --dry-run      everything but the write: says what would change, and lists the keys the secret
 //                holds (`keys now:`), which is how to check that a provider's secret is there.
 //
@@ -25,6 +29,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { metaAcceptsSecret } from "./meta-secret.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name) => {
@@ -62,7 +67,17 @@ const SHAPES = {
   // The app's email provider (packages/core/src/mail; docs/aws-deployment.md "App email").
   RESEND_API_KEY: [/^re_[A-Za-z0-9_]{20,}$/, "a Resend API key (it starts with re_)"],
   RESEND_WEBHOOK_SECRET: [/^whsec_[A-Za-z0-9+/=]{20,}$/, "a Resend webhook signing secret (it starts with whsec_)"],
+  // The secret of bizinsights' own OAuth client for its Zapier app (docs/zapier.md): made by the owner
+  // (32 random bytes, base64url) and entered in the Zapier app's environment as CLIENT_SECRET too.
+  ZAPIER_CLIENT_SECRET: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _; docs/zapier.md says how to make one)"],
+  // The one before it, still accepted while a rotation is under way (docs/RUNBOOK.md, "Rotate the Zapier client secret").
+  ZAPIER_CLIENT_SECRET_PREVIOUS: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _)"],
 };
+
+/** A secret whose replaced value is kept under another name, still accepted until the rotation is finished. */
+export const KEEPS_PREVIOUS = { ZAPIER_CLIENT_SECRET: "ZAPIER_CLIENT_SECRET_PREVIOUS" };
+/** Keys --unset may remove: only those a rotation leaves behind. */
+export const UNSETTABLE = ["ZAPIER_CLIENT_SECRET_PREVIOUS"];
 
 /** Copied from --from files when present there. */
 const COPY = [
@@ -79,6 +94,8 @@ const COPY = [
   "EMAIL_MICROSOFT_CLIENT_SECRET",
   "EMAIL_CREDENTIAL_KEYS",
   "TURNSTILE_SECRET",
+  "ZAPIER_CLIENT_SECRET",
+  "ZAPIER_CLIENT_SECRET_PREVIOUS",
 ];
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
 /** Values anyone can read in this repository (packages/core/src/env.ts PUBLIC_SECRET_MARKERS). */
@@ -118,6 +135,17 @@ export function secretProblem(name, value, publics = publicSettings()) {
   if (same) return `it is ${same.name} from apps/aws/src/settings.ts, which is public, not ${what}`;
   if (!shape.test(value)) return `it isn't ${what} (${value.length} characters)`;
   return null;
+}
+
+/**
+ * The Meta app a Meta secret belongs to, from the public settings: META_APP_SECRET is META_APP_ID's,
+ * WHATSAPP_APP_SECRET is WHATSAPP_APP_ID's (META_APP_ID's when WhatsApp is on the same app). Null for
+ * any other secret, or without the id.
+ */
+export function metaAppOf(name, publics = publicSettings()) {
+  const get = (k) => publics.find((p) => p.name === k)?.value || "";
+  const appId = name === "META_APP_SECRET" ? get("META_APP_ID") : name === "WHATSAPP_APP_SECRET" ? get("WHATSAPP_APP_ID") || get("META_APP_ID") : "";
+  return appId ? { appId, version: get("META_API_VERSION") || undefined } : null;
 }
 
 const aws = (cliArgs) => execFileSync("aws", [...cliArgs, "--region", region, "--output", "json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -224,8 +252,30 @@ async function main() {
       console.error(`That can't be ${name}: ${problem}. Nothing was saved.`);
       process.exit(1);
     }
+    // A Meta secret of the right shape can still be another app's, an old one, or the Client token: Meta says.
+    const app = metaAppOf(name, publics);
+    if (app) {
+      const { accepted, detail } = await metaAcceptsSecret(app.appId, value, app.version);
+      if (accepted === false) {
+        console.error(`Meta says that isn't the secret of app ${app.appId} (${detail}). Nothing was saved. Copy App settings → Basic → App secret (Show) of that app, then run this again.`);
+        process.exit(1);
+      }
+      console.log(accepted ? `Meta accepts it as app ${app.appId}'s secret.` : `Meta didn't answer (${detail}), so it is stored unchecked: connect Meta Ads once afterwards to check it.`);
+    }
     if (next[name] !== value) report.push(`${name}: ${next[name] ? "replaced" : "set"} from ${source}`);
+    const keep = KEEPS_PREVIOUS[name];
+    if (keep && next[name] && next[name] !== value) {
+      next[keep] = next[name];
+      report.push(`${keep}: the replaced ${name}, still accepted until you --unset ${keep}`);
+    }
     next[name] = value;
+  }
+  for (const name of opt("--unset")) {
+    if (!UNSETTABLE.includes(name)) throw new Error(`Won't remove ${name}: only ${UNSETTABLE.join(", ")}`);
+    if (name in next) {
+      delete next[name];
+      report.push(`${name}: removed`);
+    }
   }
 
   const generate = { SESSION_SECRET: () => randomBytes(48).toString("base64url"), APP_RLS_PASSWORD: () => randomBytes(24).toString("hex") };

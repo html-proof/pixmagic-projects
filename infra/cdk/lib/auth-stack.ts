@@ -148,6 +148,10 @@ export class AuthStack extends Stack {
         APP_URL: appUrl,
         API_URL: `${appUrl}/api`,
         EMAIL_FROM: appVars().EMAIL_FROM!,
+        // Its codes come from the support sender and are signed with the support address (core/mail/senders.ts).
+        OTP_FROM_EMAIL: appVars().OTP_FROM_EMAIL!,
+        OTP_FROM_NAME: appVars().OTP_FROM_NAME!,
+        SUPPORT_EMAIL: appVars().SUPPORT_EMAIL!,
         // RESEND_API_KEY, and the app's other secrets env() checks, come from here at cold start.
         APP_SECRET_ARN: `insights/${cfg.name}/app`,
         COGNITO_EMAIL_KEY_ARN: key.keyArn,

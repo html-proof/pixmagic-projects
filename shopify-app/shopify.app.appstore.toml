@@ -23,6 +23,10 @@ scopes = "read_orders,read_products"
 # must mirror this list exactly. These three are protected customer data: see
 # docs/shopify-setup.md "Optional scopes" before submitting without Protected customer data
 # access approved.
+# No read_reports (Shopify's reports, ShopifyQL), unlike the main and PixMagic apps: it waits
+# for App Store review to finish and Shopify to approve Level 2 protected customer data for this
+# app. Then add it here and to this app's SHOPIFY_APP_OPTIONAL_SCOPES, and
+# `shopify app deploy --config appstore` (docs/shopify-setup.md, "Shopify's reports").
 # The Inventory module's stock levels, locations and stock changes (docs/inventory.md); none of
 # them is protected customer data.
 optional_scopes = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"]

@@ -1,7 +1,9 @@
 /**
- * The app's non-secret settings, the same in every environment: the CDK app puts them in the
- * functions' environment (infra/cdk/lib/app-stack.ts), and the local server (local.ts) starts from
- * them too, under whatever its env file sets. Left out on purpose: NODE_ENV, the addresses (APP_URL,
+ * The app's non-secret settings, the same in every environment. They ship in the functions' package:
+ * at cold start index.ts puts them in process.env under whatever the function's environment sets (not
+ * in that environment, which Lambda caps at 4 KB), and the local server (local.ts) starts from them
+ * too, under whatever its env file sets. A change here is live once its Deploy has succeeded
+ * (/api/version names the commit). Left out on purpose: NODE_ENV, the addresses (APP_URL,
  * API_URL) and the Cognito ids, which each environment gets from its own stacks (the runtime
  * parameter, secrets.ts). Secrets are in Secrets Manager (infra/cdk/scripts/put-secrets.mjs).
  *
@@ -16,6 +18,15 @@ export const APP_SETTINGS = {
   // removing it from the toml and redeploying does. Keep both in step: the build fails otherwise
   // (packages/core/test/appConfig.test.ts). See docs/shopify-setup.md section 3e.
   "SHOPIFY_OPTIONAL_SCOPES": "read_customers,write_pixels,read_customer_events,read_inventory,read_locations,write_inventory",
+  // Optional scopes only some apps declare, on top of the line above: "appKey:scope,scope;appKey:scope"
+  // (packages/core/src/scopes.ts appOptionalScopes), each in that app's toml too (appConfig.test.ts).
+  // read_reports (Shopify's reports: its sessions, online store visitors, gross profit, the "Checked
+  // against Shopify" check) is declared in shopify.app.toml and shopify.app.pixmagic.toml but offered
+  // to nobody yet: once `shopify app deploy` has released both and the PixMagic app has its Level 2
+  // protected customer data fields selected, this becomes "default:read_reports;pixmagic:read_reports"
+  // (docs/shopify-setup.md, "Shopify's reports"). "appstore" and "public" get it only after App Store
+  // review and Shopify's Level 2 approval for them.
+  "SHOPIFY_APP_OPTIONAL_SCOPES": "",
   "SHOPIFY_API_VERSION": "2026-10",
   // Stores the main app may be installed on. Empty means any store, which only holds once
   // Shopify has approved it for public distribution: until then it installs only on stores in
@@ -56,6 +67,19 @@ export const APP_SETTINGS = {
   // address on a domain verified there (bizinsights.io, records in Cloudflare DNS). The domain has
   // no mailbox, so replies go where a message names (an invitation: its sender).
   "EMAIL_FROM": "bizinsights <no-reply@bizinsights.io>",
+  // Who the codes, the shared links and Staff Management's emails come from (core/mail/senders.ts):
+  // sign-up, sign-in, verification and password-reset codes from support@, dashboard invitations
+  // from link@, employee portal invitations from staff@; everything else from EMAIL_FROM. All on
+  // bizinsights.io, so Resend sends them as it does EMAIL_FROM. The emails tell people to write to
+  // SUPPORT_EMAIL: bizinsights.io receives mail only once Cloudflare Email Routing forwards these
+  // addresses (docs/aws-deployment.md, "App email").
+  "OTP_FROM_EMAIL": "support@bizinsights.io",
+  "OTP_FROM_NAME": "BizInsights Support",
+  "LINK_FROM_EMAIL": "link@bizinsights.io",
+  "LINK_FROM_NAME": "BizInsights",
+  "STAFF_FROM_EMAIL": "staff@bizinsights.io",
+  "STAFF_FROM_NAME": "BizInsights",
+  "SUPPORT_EMAIL": "support@bizinsights.io",
   // Sign-in asks for a 6-digit code emailed by the app after the password (accounts with an
   // authenticator app keep that code instead). "" turns the step off; the password alone then
   // signs in. The codes last 60 seconds and one address gets at most these many an hour and a
@@ -63,6 +87,10 @@ export const APP_SETTINGS = {
   "AUTH_LOGIN_EMAIL_CODE": "1",
   "AUTH_CODE_LIMIT_HOURLY": "6",
   "AUTH_CODE_LIMIT_DAILY": "20",
+  // Addresses whose password alone signs in (comma-separated): the bizinsights account given to
+  // Meta's App Review reviewers, who can't read its inbox (docs/ads-review-packs.md). Empty it
+  // again once Meta has decided.
+  "AUTH_LOGIN_CODE_EXEMPT": "",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project
@@ -70,7 +98,7 @@ export const APP_SETTINGS = {
   // docs/ads-setup.md walks through all three.
   // Meta Ads: the Meta app "Insights" (971575545351940, Facebook account sebanceo@gmail.com, created 2026-10-11; use case
   // "Measure ad performance data with Marketing API"). Meta Ads stays "Coming soon" until META_APP_SECRET is set.
-  // WhatsApp runs on its own app (WHATSAPP_APP_ID below) and never borrows this app's secret.
+  // WhatsApp's Cloud API option runs on this app too (WHATSAPP_APP_ID below is empty), with this app's secret.
   "META_APP_ID": "971575545351940",
   // Marketing API v26.0 (2026-07-29). Every call and field the ads code uses was checked against its
   // changelog on 2026-10-19: none changed, except the multiple-id lookup (GET /?ids=), which v26.0
@@ -81,7 +109,7 @@ export const APP_SETTINGS = {
   "META_CONFIG_ID": "1521935306664882",
   // "1" once Meta grants the app Advanced Access to ads_read (App Review, after Business Verification).
   // Until then only people with a role on the app (admins, developers, testers: App roles → Roles) can
-  // connect; Facebook shows everyone else "Feature Unavailable", so Settings warns before sending them.
+  // connect; Facebook shows everyone else "Feature Unavailable" (Settings shows no note about it).
   "META_ADS_ADVANCED_ACCESS": "",
   "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
   "GOOGLE_ADS_API_VERSION": "v25",
@@ -96,25 +124,62 @@ export const APP_SETTINGS = {
   "GOOGLE_ADS_DAILY_OPERATIONS": "",
   // "1" once Google verifies the app's use of the adwords scope (Google Auth Platform → Verification
   // Center: branding first, then data access with the demo video). Until then Google shows "Google
-  // hasn't verified this app" before its consent screen, so Settings warns first. AdSense is unaffected.
+  // hasn't verified this app" before its consent screen (Settings shows no note about it). AdSense is unaffected.
   "GOOGLE_ADS_OAUTH_VERIFIED": "",
   // "1": the Google Ads card offers "Try demo", a simulated account whose figures bizinsights generates
   // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it
   // shows. Offered to members who may manage integrations; empty hides the button.
   "GOOGLE_ADS_DEMO_ENABLED": "1",
-  // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
-  // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
-  // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets
-  // WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Until then the
-  // dashboard says it isn't set up, and merchants can still connect with their own Meta app.
-  // WhatsApp's Meta app: "pixmagic" (1799660384680551, portfolio "Testbusiness", the imeseban@gmail.com Facebook account).
-  "WHATSAPP_APP_ID": "1799660384680551",
-  "WHATSAPP_CONFIG_ID": "",
-  "WHATSAPP_API_VERSION": "v25.0",
+  // WhatsApp Automation (docs/whatsapp.md) runs on bizinsights' own Evolution API service (its address
+  // and key come from the CDK app and Secrets Manager, not from here). Its Cloud API option connects
+  // through Meta's Embedded Signup: the Meta app id (empty: META_APP_ID is used), the Facebook Login
+  // for Business configuration id of its WhatsApp Embedded Signup v4 variation (WHATSAPP_CONFIG_ID),
+  // and the secrets WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Meta
+  // onboards a business only once it has approved bizinsights as a Tech Provider.
+  // Empty since 2026-10-25 (the owner's choice): WhatsApp runs on the Meta Ads app "Insights"
+  // (META_APP_ID, portfolio Zodiix Pty Ltd), so META_APP_SECRET serves and WHATSAPP_APP_SECRET stays
+  // unset. It ran on "pixmagic" (1799660384680551, portfolio "Testbusiness") before; nothing was ever
+  // connected through it. WHATSAPP_CONFIG_ID: the Insights app's Embedded Signup configuration
+  // "bizinsights WhatsApp Signup" (made 2026-10-25 from Meta's template: Cloud API, WhatsApp
+  // accounts, both whatsapp_* permissions, a 60-day system user token the health check refreshes;
+  // docs/whatsapp.md, "Setting it up", step 4).
+  "WHATSAPP_APP_ID": "",
+  "WHATSAPP_CONFIG_ID": "2228218088074576",
+  "WHATSAPP_API_VERSION": "v26.0",
+  // Workspaces (ids, comma-separated) that may also connect WhatsApp with a token of the Insights app
+  // made in Meta's dashboard, instead of Meta's window (docs/whatsapp.md, "Connecting with the app's own
+  // token"): bizinsights' own team, to record App Review with the app's test number before Meta
+  // approves bizinsights as a Tech Provider. Since 2026-10-29: the PixMagic workspace. Empty: no one.
+  "WHATSAPP_TOKEN_CONNECT_WORKSPACES": "cmvarpfwa000002jngkgh5ji2",
+  // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "live" since 2026-10-25:
+  // automations, campaigns and Send SMS hand texts to AWS, each after every check (sender verified
+  // and tagged for the store, sending on, consent, opt-outs, quiet hours, the monthly limit). AWS
+  // itself still decides who can receive: while the account is in its SMS sandbox (ACCOUNT_TIER
+  // SANDBOX, US$1 a month, checked 2026-10-25) only verified numbers get texts, and the dashboard
+  // says so ("Your SMS account is still being verified"). "sandbox" records automations' texts as
+  // dry runs instead; "off" stops everything (docs/sms.md, "Rollback"). Marketing texts need this
+  // switch and each store's own. The configuration set comes from the App stack.
+  "SMS_MODE": "live",
+  "SMS_MARKETING_ENABLED": "1",
+  "SMS_ACCOUNT_MONTHLY_LIMIT_USD": "20",
+  // A merchant asking for a sender name in Set up SMS emails this address: the platform owner
+  // requests it from AWS, registers it where the country requires that, and tags it for the
+  // workspace (docs/sms.md, "Sender names from Set up SMS").
+  "SMS_SENDER_REQUESTS_TO": "bizinsightsaus@yahoo.com",
   // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
   // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
   // Their secrets are in Secrets Manager. "common" accepts work, school and personal Microsoft accounts.
   "EMAIL_GOOGLE_CLIENT_ID": "",
   "EMAIL_MICROSOFT_CLIENT_ID": "",
   "EMAIL_MICROSOFT_AUTHORITY": "common",
+  // Zapier (docs/zapier.md, "Owner setup"): bizinsights is the OAuth provider of its app on Zapier's
+  // Developer Platform. ZAPIER_CLIENT_ID: the client id the owner chose and entered in the Zapier app's
+  // environment (CLIENT_ID); its secret is in Secrets Manager (put-secrets.mjs --set ZAPIER_CLIENT_SECRET).
+  // ZAPIER_REDIRECT_URI: the redirect URI the Zapier app shows under Authentication (exact match).
+  // ZAPIER_INVITE_URL: the app's invite link (Zapier → Manage team → Invite), what Connect opens.
+  // The app is "bizinsights", Zapier app 248720 (integrations/zapier/.zapierapprc), registered and
+  // pushed 2026-10-28, private. Without ZAPIER_CLIENT_SECRET every Zapier endpoint answers not_configured.
+  "ZAPIER_CLIENT_ID": "bizinsights-zapier",
+  "ZAPIER_REDIRECT_URI": "https://zapier.com/dashboard/auth/oauth/return/App248720CLIAPI/",
+  "ZAPIER_INVITE_URL": "https://zapier.com/developer/public-invite/248720/2c93102b9c4308838f92f4a1caf4e20f/",
 } as const satisfies Record<string, string>;

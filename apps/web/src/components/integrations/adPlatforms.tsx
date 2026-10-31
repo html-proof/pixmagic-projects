@@ -1,22 +1,51 @@
 import type { ReactNode } from "react";
-import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
+import {
+  Briefcase,
+  ChartColumn,
+  ChartNoAxesCombined,
+  CircleDollarSign,
+  Globe,
+  Image as ImageIcon,
+  Layers,
+  Megaphone,
+  MonitorSmartphone,
+  ShieldCheck,
+  Target,
+  TrendingUp,
+  UserRoundCheck,
+  Users,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
+import { AdsenseIcon, GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import type { AdProvider } from "@/lib/adConnections";
 
+/** The colours of the "what bizinsights reads" chips on Settings → Advertising (CSS variables of globals.css). */
+export type ChipTone = "info" | "violet" | "good" | "orange" | "rose";
+
 /**
- * What differs between the Google Ads, Meta Ads and Google AdSense cards on Settings → Connect your
- * business and Settings → Advertising; the rest is the same card (AdPlatformCard).
+ * What differs between the Google Ads, Meta Ads and Google AdSense cards on Settings → Advertising
+ * (AdPlatformPanel), and their names, icons and chips on Settings → Integrations (AdRow).
  */
 export interface AdPlatformInfo {
   name: string;
   /** What it brings, under the name. */
   sub: string;
-  /** The button that opens the platform's sign-in, before anything is connected. */
+  /** The button that opens the platform's sign-in, before anything is connected (both pages: the review packs quote it). */
   button: string;
   /** The same button while the browser leaves. */
   opening: string;
   Icon: (p: { size?: number }) => ReactNode;
-  /** What connecting turns on (Connect your business). */
+  /** What connecting turns on ("What you'll get" on Settings → Advertising). */
   features: string[];
+  /** What bizinsights reads from it, in the order the platform nests it (Settings → Advertising; the chips on Settings → Integrations). */
+  reads: Array<{ label: string; icon: LucideIcon; tone: ChipTone }>;
+  /** What someone needs before pressing the button (Settings → Advertising). */
+  needs: Array<{ label: string; icon: LucideIcon }>;
+  /** Beside "What you'll get" while nothing is connected (Settings → Advertising). */
+  promo: { title: string; text: string; button: string; icon: LucideIcon };
+  /** Its page in the Advertising area. */
+  page: string;
   /** What happens on the platform's screen, before anyone is sent there. */
   how: string;
   /** Where a login without an account can create one, or be given access to one. */
@@ -25,14 +54,36 @@ export interface AdPlatformInfo {
   retry: string;
 }
 
+/** Every platform's last requirement: connecting is for those who may manage integrations (Team & Access). */
+const MANAGE = { label: "The Manage integrations permission here", icon: ShieldCheck };
+
 export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
   google: {
     name: "Google Ads",
     sub: "Paid ads on Google Search, Shopping, YouTube and the Display network, including Performance Max campaigns",
     button: "Continue with Google Ads",
     opening: "Opening Google…",
-    Icon: GoogleIcon,
-    features: ["Daily spend, impressions and clicks", "Campaigns, ad groups, devices and countries", "Conversions and ROAS"],
+    Icon: GoogleAdsIcon,
+    features: ["Campaign performance and spend", "Ad groups, devices and countries", "Clicks, conversions and their value", "Ad spend next to your sales, with ROAS"],
+    reads: [
+      { label: "Campaigns", icon: Megaphone, tone: "info" },
+      { label: "Ad groups", icon: Layers, tone: "violet" },
+      { label: "Devices & countries", icon: Globe, tone: "good" },
+      { label: "Conversions", icon: Target, tone: "orange" },
+      { label: "Cost & spend", icon: CircleDollarSign, tone: "rose" },
+    ],
+    needs: [
+      { label: "A Google Ads account", icon: Briefcase },
+      { label: "A Google login that can open it, directly or through a manager account", icon: UserRoundCheck },
+      MANAGE,
+    ],
+    promo: {
+      title: "Put your Google Ads next to your sales",
+      text: "See what Search, Shopping, YouTube and Performance Max spend and bring, beside your Shopify orders.",
+      button: "Connect Google Ads",
+      icon: TrendingUp,
+    },
+    page: "/advertising/google",
     how: "Choose the Google account that manages your advertising, then select the ad accounts for this store. This includes paid YouTube and Display campaigns managed in those accounts. Only accounts you authorize are imported; your personal search and watch history are not accessed. bizinsights reads reports without changing campaigns or spending money.",
     home: [{ url: "https://ads.google.com/", label: "Open ads.google.com" }],
     retry: "Choose another Google account",
@@ -43,7 +94,26 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
     button: "Continue with Meta Ads",
     opening: "Opening Meta…",
     Icon: MetaIcon,
-    features: ["Daily spend, impressions and website link clicks", "Campaigns, ad sets, ads, placements and devices", "Reach, reported purchases and ROAS"],
+    features: ["Campaign performance and spend", "Ad set and ad level figures", "Placements, devices, countries, age and gender", "Reach, purchases and ROAS next to your sales"],
+    reads: [
+      { label: "Campaigns", icon: Megaphone, tone: "info" },
+      { label: "Ad sets", icon: Layers, tone: "violet" },
+      { label: "Ads", icon: ImageIcon, tone: "good" },
+      { label: "Audience", icon: Users, tone: "orange" },
+      { label: "Spend & ROAS", icon: CircleDollarSign, tone: "rose" },
+    ],
+    needs: [
+      { label: "A Meta ad account, in Ads Manager or a Business portfolio", icon: Briefcase },
+      { label: "A Facebook login that can see the account's performance", icon: UserRoundCheck },
+      MANAGE,
+    ],
+    promo: {
+      title: "Boost your marketing with Meta Ads",
+      text: "See what your Facebook and Instagram ads spend and bring, next to your sales.",
+      button: "Connect Meta Ads",
+      icon: Megaphone,
+    },
+    page: "/advertising/meta",
     how: "Sign in with Facebook and authorize bizinsights to read the ad accounts you choose, including their Facebook and Instagram campaigns. You need access to those ad accounts; connecting a Facebook profile alone does not grant access to every business account. No app download is needed. bizinsights reads reports without changing campaigns or spending money.",
     home: [
       { url: "https://adsmanager.facebook.com/", label: "Open Ads Manager" },
@@ -56,8 +126,26 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
     sub: "What your site earns from ads shown on it: earnings, page views, impressions and clicks",
     button: "Continue with Google AdSense",
     opening: "Opening Google…",
-    Icon: GoogleIcon,
-    features: ["Ad earnings next to your sales", "Earnings by site, country and device", "Page views, impressions and clicks"],
+    Icon: AdsenseIcon,
+    features: ["Estimated earnings, day by day", "Page views, impressions and clicks", "Earnings by site, country and device", "Ad earnings next to your sales"],
+    reads: [
+      { label: "Earnings", icon: Wallet, tone: "info" },
+      { label: "Performance", icon: ChartColumn, tone: "violet" },
+      { label: "Sites", icon: Globe, tone: "good" },
+      { label: "Countries & devices", icon: MonitorSmartphone, tone: "orange" },
+    ],
+    needs: [
+      { label: "A Google AdSense account", icon: Briefcase },
+      { label: "The Google account you sign in to AdSense with", icon: UserRoundCheck },
+      MANAGE,
+    ],
+    promo: {
+      title: "Track your AdSense earnings",
+      text: "See what your site earns from ads, day by day, next to your sales.",
+      button: "Connect AdSense",
+      icon: ChartNoAxesCombined,
+    },
+    page: "/advertising/adsense",
     how: "Choose the Google account with access to your AdSense and allow read-only reporting. This connection shows earnings from ads displayed on your website. To see money you spend advertising on Google or YouTube, connect Google Ads instead. bizinsights can't change your sites, ads or payments.",
     home: [{ url: "https://adsense.google.com/", label: "Open AdSense" }],
     retry: "Choose another Google account",

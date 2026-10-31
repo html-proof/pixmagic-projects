@@ -1,283 +1,426 @@
 /**
- * The merchant's own rules: trigger → conditions → action.
+ * Automations: trigger → conditions → template → recipient and timing (docs/whatsapp.md,
+ * "Automations"). Shopify's verified webhooks (events.ts) and customers' messages (inbound.ts)
+ * start them.
  *
- * Loops can't happen: actions never raise triggers (a rule's message going out is not an "order
- * created"), and each rule runs at most once per trigger and subject (order, checkout or customer),
- * enforced by a unique row in whatsapp_automation_runs that is written before the action. Two rules
- * that would send the same template to the same customer for the same subject send it once
- * (the message's dedupe key is per rule and subject, and the template guard below).
+ * An automation runs at most once per order, checkout, customer or message window (a unique run
+ * row), so Shopify's retries and duplicate deliveries message nobody twice. A run that doesn't
+ * send says why, and so does every message. Automations never trigger each other (a message
+ * bizinsights sends starts nothing), a reply to a customer's message waits out its cool-down, and
+ * an automation in test mode sends only to the store's own verified number: no loop, no surprise
+ * bulk send.
  */
-import { Prisma, systemDb, withTenant, type AbandonedCheckout, type OrderTracking, type Store, type WhatsappAutomationRule, type WhatsappContact } from "@app/db";
+import { systemDb, type Prisma, type Store, type WappAutomation, type WappConnection, type WappTemplate } from "@app/db";
 import {
-  automationActionSchema,
-  conditionSchema,
-  evaluateConditions,
+  evaluateWaConditions,
+  expandScopes,
   normalizePhone,
-  ruleConflicts,
-  templateShape,
-  TRIGGER_LABEL,
-  type AutomationAction,
-  type AutomationFacts,
-  type AutomationTrigger,
-  type Condition,
-  type RuleConflict,
-  type RuleLike,
-  type TemplateComponent,
-  type WhatsappConfig,
+  renderWaText,
+  variablesIn,
+  waAutomationSchema,
+  WaMissingValueError,
+  waSetupProgress,
+  WA_DEFAULT_REPLY_COOLDOWN,
+  waSampleValues,
+  WA_TRIGGER_INFO,
+  WA_TRIGGERS,
+  type NormalizedPhone,
+  type WaAutomationInput,
+  type WaCondition,
+  type WaFacts,
+  type WaRecipient,
+  type WaSkipReason,
+  type WaTemplateCategory,
+  type WaTrigger,
+  type WaValues,
 } from "@app/shared";
-import { z } from "zod";
-import { audit } from "../notify.js";
+import { appWebhookTopics } from "../apps.js";
 import { logger } from "../logger.js";
-import { WhatsappError } from "./errors.js";
-import { cancelScheduled, marketingAllowed, scheduleMessage, type WaDeps } from "./messages.js";
-import { contactFirstName, numberOptedOut, parseConfig } from "./store.js";
-import { orderValues, sampleValues, type Values } from "./values.js";
+import { audit } from "../notify.js";
+import { businessNameOf, connectionListens, liveConnection, settingsOf, verifiedTestPhone, WhatsappError, type WaDeps, type WaSettingsView } from "./common.js";
+import { applyShopifyConsent, upsertContact, type ContactDetails } from "./contacts.js";
+import { consentBlock, queueMessage } from "./messages.js";
+import { templateUsable } from "./templates.js";
 
-export interface AutomationSubject {
-  /** "order:<shopify id>" | "checkout:<token>" | "contact:<id>" */
-  key: string;
-  store: Pick<Store, "id" | "workspaceId">;
-  cfg: WhatsappConfig;
-  contact: WhatsappContact | null;
-  tracking?: OrderTracking | null;
-  checkout?: AbandonedCheckout | null;
-  facts: AutomationFacts;
-  values: Values;
-  /** The trigger fires this long after the event (review_request_due, checkout_abandoned). */
-  delayMinutes?: number;
+/** Events older than this start nothing (a replayed webhook, a backfill): customers aren't told old news. */
+export const STALE_EVENT_MS = 48 * 3600_000;
+/** A customer's message older than this gets no automatic reply (a webhook held back): it would answer old news. */
+export const STALE_REPLY_MS = 60 * 60_000;
+
+// ---------------------------------------------------------------------------
+// Which triggers this store can use
+// ---------------------------------------------------------------------------
+
+export interface TriggerAvailability {
+  available: boolean;
+  /** Why not, in the merchant's words. */
+  reason: string | null;
 }
-
-const conditionsSchema = z.array(conditionSchema).max(20);
-
-export function parseRule(rule: Pick<WhatsappAutomationRule, "conditions" | "action">): { conditions: Condition[]; action: AutomationAction } | null {
-  const c = conditionsSchema.safeParse(rule.conditions);
-  const a = automationActionSchema.safeParse(rule.action);
-  return c.success && a.success ? { conditions: c.data, action: a.data } : null;
-}
-
-/** A stored rule as the conflict checker sees it, or null when its settings aren't valid. */
-export function ruleLike(r: WhatsappAutomationRule): RuleLike | null {
-  const p = parseRule(r);
-  return p ? { id: r.id, name: r.name, enabled: r.enabled, trigger: r.trigger as AutomationTrigger, conditions: p.conditions, action: p.action } : null;
-}
-
-/** A store's rules as the conflict checker sees them (invalid ones left out). */
-export const rulesLike = (rules: WhatsappAutomationRule[]): RuleLike[] => rules.map(ruleLike).filter((r): r is RuleLike => !!r);
 
 /**
- * Check a new or changed rule before it is saved. A conflict that blocks it, or a template that
- * isn't in the account or can't be filled, throws; conflicts that only warn come back for the
- * merchant to see.
+ * What each trigger can do for this store: Shopify's events only where the store's app receives
+ * them (the App Store app gets no order or checkout events until Shopify approves protected
+ * customer data), new customers only with read_customers. Nothing is offered as working when it
+ * can't start a message.
  */
-export async function validateRule(workspaceId: string, storeId: string, candidate: RuleLike): Promise<RuleConflict[]> {
-  const others = rulesLike(await systemDb.whatsappAutomationRule.findMany({ where: { storeId, workspaceId } }));
-  const conflicts = ruleConflicts(candidate, others);
-  const blocking = conflicts.find((x) => x.severity === "block");
-  if (blocking) throw new WhatsappError(blocking.message, 409, "rule_conflict");
-  const a = candidate.action;
-  if (a.type === "send_template" || a.type === "schedule_reminder") {
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    const t = conn ? await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: a.templateName, language: a.language } } }) : null;
-    if (!t) throw new WhatsappError(`"${a.templateName}" (${a.language}) isn't in your WhatsApp account.`, 400, "template_missing");
-    const shape = templateShape(t.components as unknown as TemplateComponent[]);
-    if (a.mapping.body.length < shape.bodyVars) throw new WhatsappError(`The template has ${shape.bodyVars} variables; fill each one.`, 400, "mapping_incomplete");
-  }
-  return conflicts;
-}
-
-/** Status of the last message about this subject, for the "previous message status" condition. */
-async function previousStatus(subject: AutomationSubject): Promise<string> {
-  const where = subject.tracking ? { trackingId: subject.tracking.id } : subject.checkout ? { checkoutId: subject.checkout.id } : subject.contact ? { contactId: subject.contact.id } : null;
-  if (!where) return "none";
-  const last = await systemDb.whatsappMessage.findFirst({ where: { ...where, test: false }, orderBy: { createdAt: "desc" }, select: { status: true } });
-  return last?.status ?? "none";
-}
-
-export function describeAction(a: AutomationAction): string {
-  switch (a.type) {
-    case "send_template":
-      return `Send the approved template "${a.templateName}" (${a.language})`;
-    case "schedule_reminder":
-      return `Send the approved template "${a.templateName}" (${a.language}) after ${a.delayMinutes} minutes`;
-    case "cancel_pending":
-      return `Cancel pending messages: ${a.kinds.join(", ")}`;
-    case "internal_notification":
-      return `Show a notification to your team: "${a.message}"`;
-    case "record_event":
-      return `Record "${a.label}" in the audit log`;
-  }
-}
-
-async function perform(rule: WhatsappAutomationRule, action: AutomationAction, trigger: AutomationTrigger, subject: AutomationSubject, deps: Pick<WaDeps, "queues">): Promise<{ outcome: "done" | "skipped"; detail: string; messageId?: string }> {
-  switch (action.type) {
-    case "send_template":
-    case "schedule_reminder": {
-      if (!subject.contact) return { outcome: "skipped", detail: "No WhatsApp number for this customer" };
-      const delay = (subject.delayMinutes ?? 0) + (action.type === "schedule_reminder" ? action.delayMinutes : 0);
-      const { message, created } = await scheduleMessage(
-        {
-          store: subject.store,
-          kind: "automation",
-          dedupeKey: `rule:${rule.id}:${subject.key}`,
-          contact: subject.contact,
-          template: { name: action.templateName, language: action.language },
-          mapping: action.mapping,
-          values: subject.values,
-          scheduledFor: new Date(Date.now() + delay * 60_000),
-          trackingId: subject.tracking?.id ?? null,
-          orderName: subject.tracking?.orderName ?? null,
-          checkoutId: subject.checkout?.id ?? null,
-          ruleId: rule.id,
-          clickUrl: subject.values.checkout_url ?? null,
-        },
-        deps,
-      );
-      return { outcome: "done", detail: created ? describeAction(action) : "Already scheduled", messageId: message.id };
-    }
-    case "cancel_pending": {
-      const where = subject.tracking ? { trackingId: subject.tracking.id } : subject.checkout ? { checkoutId: subject.checkout.id } : null;
-      if (!where) return { outcome: "skipped", detail: "Nothing to cancel for this subject" };
-      const n = await cancelScheduled({ ...where, kinds: action.kinds }, `rule:${rule.name}`.slice(0, 120));
-      return { outcome: "done", detail: `Cancelled ${n} pending message${n === 1 ? "" : "s"}` };
-    }
-    case "internal_notification": {
-      const about = subject.tracking ? ` (order ${subject.tracking.orderName})` : subject.checkout ? " (abandoned checkout)" : "";
-      // An in-app notification, not an email: an "info" alert, listed under the top bar's bell for a
-      // week with this message as is (@app/shared/alerts).
-      await systemDb.alert.create({
-        data: { workspaceId: subject.store.workspaceId, storeId: subject.store.id, severity: "info", code: `wa_rule_${rule.id}`, message: `${action.message}${about}`.slice(0, 500) },
-      });
-      return { outcome: "done", detail: "Notification created" };
-    }
-    case "record_event":
-      await audit({
-        workspaceId: subject.store.workspaceId,
-        action: "whatsapp.automation_event",
-        targetType: "whatsapp_automation_rule",
-        targetId: rule.id,
-        metadata: { label: action.label, trigger, subject: subject.key },
-      });
-      return { outcome: "done", detail: `Recorded "${action.label}"` };
-  }
-}
-
-/** Run every enabled rule for this trigger against the subject. Returns how many ran. */
-export async function runAutomations(trigger: AutomationTrigger, subject: AutomationSubject, deps: Pick<WaDeps, "queues">): Promise<number> {
-  const rules = await systemDb.whatsappAutomationRule.findMany({ where: { storeId: subject.store.id, trigger, enabled: true }, orderBy: { createdAt: "asc" } });
-  if (!rules.length) return 0;
-  const facts: AutomationFacts = { ...subject.facts, previousMessageStatus: await previousStatus(subject) };
-  let ran = 0;
-  for (const rule of rules) {
-    let runId: string;
-    try {
-      const run = await systemDb.whatsappAutomationRun.create({
-        data: { workspaceId: subject.store.workspaceId, storeId: subject.store.id, ruleId: rule.id, trigger, subjectKey: subject.key, outcome: "pending" },
-      });
-      runId = run.id;
-    } catch (err) {
-      // Already ran for this subject (a webhook retry, a duplicate delivery): never twice.
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") continue;
-      throw err;
-    }
-    const parsed = parseRule(rule);
-    if (!parsed) {
-      await systemDb.whatsappAutomationRun.update({ where: { id: runId }, data: { outcome: "error", detail: "The rule's settings are no longer valid; edit and save it again." } });
-      continue;
-    }
-    const verdict = evaluateConditions(parsed.conditions, facts);
-    if (!verdict.pass) {
-      const failed = verdict.results.filter((r) => !r.pass).map((r) => r.condition.field).join(", ");
-      await systemDb.whatsappAutomationRun.update({ where: { id: runId }, data: { outcome: "skipped", detail: `Conditions not met: ${failed}` } });
-      continue;
-    }
-    try {
-      const r = await perform(rule, parsed.action, trigger, subject, deps);
-      await systemDb.whatsappAutomationRun.update({ where: { id: runId }, data: { outcome: r.outcome, detail: r.detail, messageId: r.messageId ?? null } });
-      ran++;
-    } catch (err) {
-      logger.error({ err, ruleId: rule.id, trigger }, "automation action failed");
-      await systemDb.whatsappAutomationRun.update({ where: { id: runId }, data: { outcome: "error", detail: (err as Error).message.slice(0, 300) } });
+export function triggerAvailability(store: Pick<Store, "shopifyAppKey" | "grantedScopes">): Record<WaTrigger, TriggerAvailability> {
+  const app = appWebhookTopics(store.shopifyAppKey);
+  const scopes = expandScopes(store.grantedScopes);
+  const out = {} as Record<WaTrigger, TriggerAvailability>;
+  for (const t of WA_TRIGGERS) {
+    const info = WA_TRIGGER_INFO[t];
+    if (t === "customer_created" && !scopes.has("read_customers")) {
+      out[t] = { available: false, reason: "bizinsights needs permission to read your customers in Shopify to hear about new ones. Update the bizinsights app's access in Shopify, then come back." };
+    } else if (t !== "customer_created" && info.topics.length && app && !info.topics.some((topic) => app.includes(topic))) {
+      out[t] = {
+        available: false,
+        reason: "Your store is connected through bizinsights' App Store app, which Shopify doesn't send order and checkout events to until it approves bizinsights' access to protected customer data.",
+      };
+    } else {
+      out[t] = { available: true, reason: null };
     }
   }
-  return ran;
+  return out;
 }
 
-/** "Test" in the dashboard: what the rule would do for a subject, without doing it. */
-export async function dryRunAutomation(rule: WhatsappAutomationRule, subject: AutomationSubject) {
-  const parsed = parseRule(rule);
-  if (!parsed) return { valid: false as const, error: "The rule's settings are not valid." };
-  const facts: AutomationFacts = { ...subject.facts, previousMessageStatus: await previousStatus(subject) };
-  const verdict = evaluateConditions(parsed.conditions, facts);
+// ---------------------------------------------------------------------------
+// Saving and switching on
+// ---------------------------------------------------------------------------
+
+export function automationInput(a: WappAutomation): WaAutomationInput {
   return {
-    valid: true as const,
-    trigger: TRIGGER_LABEL[rule.trigger as AutomationTrigger] ?? rule.trigger,
-    subject: subject.key,
-    facts,
-    conditions: verdict.results,
-    wouldRun: verdict.pass,
-    action: describeAction(parsed.action),
-    hasPhone: !!subject.contact,
+    name: a.name,
+    description: a.description,
+    trigger: a.trigger as WaTrigger,
+    conditions: a.conditions as unknown as WaCondition[],
+    templateId: a.templateId,
+    recipient: a.recipient as WaRecipient,
+    delayMinutes: a.delayMinutes,
+    sendWindow: a.sendWindowStart != null && a.sendWindowEnd != null ? { start: a.sendWindowStart, end: a.sendWindowEnd } : null,
+    testMode: a.testMode,
+    cooldownMinutes: a.cooldownMinutes,
   };
 }
 
 /**
- * "Test" in the dashboard: evaluate the rule against a recent order (or the one given) without
- * doing anything. With a phone number, a send action's template also goes to that number with
- * example values; `beforeSend` runs right before it is queued (the API's rate limit).
+ * Why an automation can't be switched on (empty: it can): the same list the builder shows, so the
+ * merchant sees every reason before pressing Activate.
  */
-export async function testAutomation(
-  store: Store,
-  rule: WhatsappAutomationRule,
-  input: { trackingId?: string; phone?: string },
-  deps: Pick<WaDeps, "queues"> & { beforeSend?: () => Promise<void> },
-) {
-  const { id: storeId, workspaceId } = store;
-  const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
-  const cfg = parseConfig(settings?.config);
-  const tracking = await withTenant(workspaceId, (tx) =>
-    tx.orderTracking.findFirst({ where: { storeId, workspaceId, ...(input.trackingId ? { id: input.trackingId } : {}) }, orderBy: { orderCreatedAt: "desc" } }),
-  );
-  const contact = tracking?.contactId ? await systemDb.whatsappContact.findUnique({ where: { id: tracking.contactId } }) : null;
-  const items = (tracking?.items as Array<{ productId: string; title: string }>) ?? [];
-  const subject: AutomationSubject = {
-    key: tracking ? `order:${tracking.shopifyOrderId}` : "example",
-    store,
-    cfg,
-    contact,
-    tracking,
-    facts: tracking
-      ? { orderValue: Number(tracking.totalPrice), productIds: items.map((i) => i.productId), productTitles: items.map((i) => i.title), orderStatus: tracking.status, country: tracking.country, marketingConsent: contact ? marketingAllowed(cfg, contact) : false }
-      : { orderValue: 0, marketingConsent: false },
-    values: tracking ? orderValues(store, cfg, tracking, contact ? contactFirstName(contact) : null) : sampleValues(store, cfg),
-  };
-  const result = await dryRunAutomation(rule, subject);
-  let testMessageId: string | null = null;
-  const parsed = parseRule(rule);
-  if (input.phone && parsed && (parsed.action.type === "send_template" || parsed.action.type === "schedule_reminder")) {
-    const phone = normalizePhone(input.phone, null);
-    if (!phone) throw new WhatsappError("Enter the number in international format, starting with + and the country code.", 400, "invalid_phone");
-    if (await numberOptedOut(storeId, phone.waId)) throw new WhatsappError("That number replied STOP to this store, so nothing (not even a test) can be sent to it.", 409, "opted_out");
-    await deps.beforeSend?.();
-    const { message } = await scheduleMessage(
-      {
-        store,
-        kind: "test",
-        dedupeKey: `test:rule:${rule.id}:${Date.now()}`,
-        contact: null,
-        template: { name: parsed.action.templateName, language: parsed.action.language },
-        mapping: parsed.action.mapping,
-        values: { ...sampleValues(store, cfg), ...subject.values, customer_name: "Test" },
-        scheduledFor: new Date(),
-        ruleId: rule.id,
-        test: { to: phone.waId },
-      },
-      deps,
-    );
-    testMessageId = message.id;
+export function automationProblems(
+  a: WaAutomationInput,
+  ctx: { template: WappTemplate | null; conn: WappConnection | null; settings: WaSettingsView; availability: Record<WaTrigger, TriggerAvailability> },
+): string[] {
+  const out: string[] = [];
+  const info = WA_TRIGGER_INFO[a.trigger];
+  if (!ctx.conn || ctx.conn.status !== "connected") out.push("WhatsApp isn't connected. Connect it on the Setup step first.");
+  const setup = waSetupProgress({
+    provider: (ctx.conn?.provider as "qr" | "cloud_api" | undefined) ?? null,
+    status: (ctx.conn?.status as "connected" | undefined) ?? null,
+    configuredAt: ctx.settings.configuredAt,
+    orderUpdates: ctx.settings.orderUpdates,
+    testVerifiedAt: ctx.settings.testVerifiedAt,
+    testPassedAt: ctx.settings.testPassedAt,
+  });
+  if (!setup.done.configure) out.push("Finish Step 3 (Configure): choose how customers agree to messages.");
+  if (!setup.done.test) out.push("Finish Step 4: verify your test number and send it a test message.");
+  if (!ctx.availability[a.trigger].available) out.push(ctx.availability[a.trigger].reason!);
+  if (!ctx.template) out.push("Pick a message template.");
+  else {
+    const usable = templateUsable(ctx.template, ctx.conn);
+    if (!usable.ok) out.push(`The template "${ctx.template.name}" can't be used: ${usable.reason}`);
+    if (info.category === "marketing" && ctx.template.category !== "marketing") out.push(`"${info.label}" sends marketing: pick a marketing template (it tells customers how to stop).`);
+    if (ctx.template.category === "marketing" && !ctx.settings.marketingEnabled) out.push("Marketing messages are switched off in Settings.");
+    const missing = variablesIn(ctx.template.body).filter((v) => !(info.variables as string[]).includes(v) && v !== "store_name");
+    if (missing.length) out.push(`The template uses ${missing.map((v) => `{{${v}}}`).join(", ")}, which "${info.label}" doesn't provide.`);
   }
-  // The rule's history shows the test; failing to record it mustn't fail the test itself.
-  await systemDb.whatsappAutomationRun
-    .create({ data: { workspaceId, storeId, ruleId: rule.id, trigger: rule.trigger, subjectKey: `test:${Date.now()}`, outcome: "test", detail: result.valid ? (result.wouldRun ? "Would run" : "Conditions not met") : result.error, messageId: testMessageId } })
-    .catch((err: unknown) => logger.warn({ err, ruleId: rule.id }, "could not record an automation test run"));
-  return { ...result, order: tracking ? { id: tracking.id, orderName: tracking.orderName } : null, testMessageId };
+  if (ctx.settings.orderUpdates === "unset" && (ctx.template?.category ?? info.category) === "transactional") out.push("Choose how customers agree to order updates in Settings.");
+  return out;
+}
+
+async function context(store: Store, templateId: string | null) {
+  const [conn, settings, template] = await Promise.all([
+    liveConnection(store.id),
+    settingsOf(store),
+    templateId ? systemDb.wappTemplate.findFirst({ where: { id: templateId, storeId: store.id } }) : Promise.resolve(null),
+  ]);
+  return { conn, settings, template, availability: triggerAvailability(store) };
+}
+
+export async function automationProblemsFor(store: Store, a: WappAutomation): Promise<string[]> {
+  return automationProblems(automationInput(a), await context(store, a.templateId));
+}
+
+/** Creates or edits an automation. Editing a switched-on one keeps it on only while it still has no problems. */
+export async function saveAutomation(input: { store: Store; userId: string; id?: string; data: unknown; ip?: string }): Promise<WappAutomation> {
+  const a = waAutomationSchema.parse(input.data);
+  const template = await systemDb.wappTemplate.findFirst({ where: { id: a.templateId, storeId: input.store.id } });
+  if (!template) throw new WhatsappError("Pick one of this store's templates.", 400, "template_not_found");
+  const data = {
+    name: a.name,
+    description: a.description ?? null,
+    trigger: a.trigger,
+    conditions: a.conditions as unknown as Prisma.InputJsonValue,
+    templateId: a.templateId,
+    recipient: a.recipient,
+    delayMinutes: a.delayMinutes,
+    sendWindowStart: a.sendWindow?.start ?? null,
+    sendWindowEnd: a.sendWindow?.end ?? null,
+    testMode: a.testMode,
+    cooldownMinutes: a.trigger === "message_received" ? (a.cooldownMinutes ?? WA_DEFAULT_REPLY_COOLDOWN) : null,
+    updatedByUserId: input.userId,
+  };
+  let row: WappAutomation;
+  if (input.id) {
+    const existing = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
+    if (!existing) throw new WhatsappError("Not found", 404, "not_found");
+    if (existing.trigger !== a.trigger) throw new WhatsappError("An automation's trigger can't change. Make a new automation instead.", 409, "trigger_fixed");
+    if (existing.status === "active") {
+      const problems = automationProblems(a, await context(input.store, a.templateId));
+      if (problems.length) throw new WhatsappError("This change would stop the automation from working. Pause it first, or fix what's listed.", 409, "automation_blocked", { problems });
+    }
+    row = await systemDb.wappAutomation.update({ where: { id: existing.id }, data: { ...data, version: { increment: 1 } } });
+  } else {
+    row = await systemDb.wappAutomation.create({ data: { ...data, workspaceId: input.store.workspaceId, storeId: input.store.id, status: "draft", createdByUserId: input.userId } });
+  }
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: input.id ? "whatsapp.automation_updated" : "whatsapp.automation_created", targetType: "whatsapp_automation", targetId: row.id, metadata: { trigger: a.trigger, testMode: a.testMode }, ip: input.ip });
+  return row;
+}
+
+/**
+ * Switches an automation on once nothing stops it. `subscribeCustomers` asks Shopify for its
+ * customers/create webhook ("A customer signs up" only): it returns why it can't, or null.
+ */
+export async function activateAutomation(input: { store: Store; id: string; userId: string; ip?: string; subscribeCustomers?: () => Promise<string | null> }): Promise<WappAutomation> {
+  const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!a) throw new WhatsappError("Not found", 404, "not_found");
+  const problems = await automationProblemsFor(input.store, a);
+  if (problems.length) throw new WhatsappError("This automation can't be switched on yet.", 409, "automation_blocked", { problems });
+  if (a.trigger === "customer_created" && input.subscribeCustomers) {
+    const why = await input.subscribeCustomers();
+    if (why) throw new WhatsappError(why, 409, "automation_blocked", { problems: [why] });
+  }
+  const row = await systemDb.wappAutomation.update({ where: { id: a.id }, data: { status: "active", activatedAt: new Date(), updatedByUserId: input.userId } });
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_activated", targetType: "whatsapp_automation", targetId: a.id, metadata: { trigger: a.trigger, testMode: a.testMode }, ip: input.ip });
+  return row;
+}
+
+/** Pauses an automation; its messages still waiting are cancelled. */
+export async function pauseAutomation(input: { store: Store; id: string; userId: string; ip?: string }): Promise<{ automation: WappAutomation; cancelled: number }> {
+  const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!a) throw new WhatsappError("Not found", 404, "not_found");
+  const row = await systemDb.wappAutomation.update({ where: { id: a.id }, data: { status: "paused", updatedByUserId: input.userId } });
+  const { count } = await systemDb.wappMessage.updateMany({ where: { automationId: a.id, status: "queued" }, data: { status: "cancelled", reason: "automation_off", finalAt: new Date(), payloadEnc: null } });
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_paused", targetType: "whatsapp_automation", targetId: a.id, metadata: { cancelled: count }, ip: input.ip });
+  return { automation: row, cancelled: count };
+}
+
+export async function deleteAutomation(input: { store: Store; id: string; userId: string; ip?: string }): Promise<void> {
+  const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!a) throw new WhatsappError("Not found", 404, "not_found");
+  await systemDb.wappMessage.updateMany({ where: { automationId: a.id, status: "queued" }, data: { status: "cancelled", reason: "automation_off", finalAt: new Date(), payloadEnc: null } });
+  await systemDb.$transaction([systemDb.wappAutomationRun.deleteMany({ where: { automationId: a.id } }), systemDb.wappAutomation.delete({ where: { id: a.id } })]);
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.automation_deleted", targetType: "whatsapp_automation", targetId: a.id, metadata: { name: a.name }, ip: input.ip });
+}
+
+// ---------------------------------------------------------------------------
+// Running
+// ---------------------------------------------------------------------------
+
+/** A Shopify event (or a customer's message) as the automations see it. */
+export interface AutomationSubject {
+  store: Store;
+  trigger: WaTrigger;
+  /** "order:<id>", "checkout:<token>", "customer:<id>", "inbound:<contact>"... */
+  key: string;
+  label: string;
+  phones: Partial<Record<WaRecipient, NormalizedPhone | null>>;
+  contact: ContactDetails;
+  /** Shopify's text-message marketing consent state on the event. */
+  shopifyConsent?: string | null;
+  values: WaValues;
+  facts: WaFacts;
+  occurredAt: Date;
+  /** A checkout's later update: a waiting reminder is timed again from the customer's latest change. */
+  retime?: boolean;
+  /** Only these automations (a customer's message runs each reply automation in its own cool-down window). */
+  automationIds?: string[];
+}
+
+export interface RunResult {
+  queued: number;
+  skipped: number;
+}
+
+async function recordRun(a: WappAutomation, s: { store: Store; key: string; label: string }, outcome: "queued" | "skipped", reason: WaSkipReason | null, extra: { detail?: string | null; contactId?: string | null; testMode?: boolean } = {}) {
+  try {
+    return await systemDb.wappAutomationRun.create({
+      data: {
+        workspaceId: s.store.workspaceId,
+        storeId: s.store.id,
+        automationId: a.id,
+        automationVersion: a.version,
+        trigger: a.trigger,
+        subjectKey: s.key,
+        subjectLabel: s.label.slice(0, 120),
+        outcome,
+        reason,
+        detail: extra.detail?.slice(0, 500) ?? null,
+        contactId: extra.contactId ?? null,
+        testMode: extra.testMode ?? false,
+      },
+    });
+  } catch (e) {
+    if ((e as { code?: string }).code === "P2002") return null;
+    throw e;
+  }
+}
+
+/** Runs every switched-on automation of the subject's trigger. Idempotent per automation and subject. */
+export async function runAutomations(deps: Pick<WaDeps, "queues">, s: AutomationSubject): Promise<RunResult> {
+  const result: RunResult = { queued: 0, skipped: 0 };
+  const conn = await liveConnection(s.store.id);
+  if (!connectionListens(conn)) return result;
+  const automations = await systemDb.wappAutomation.findMany({ where: { storeId: s.store.id, trigger: s.trigger, status: "active", ...(s.automationIds ? { id: { in: s.automationIds } } : {}) } });
+  if (!automations.length) return result;
+  const settings = await settingsOf(s.store);
+  const values: WaValues = { ...s.values, store_name: businessNameOf(s.store, settings) };
+
+  for (const a of automations) {
+    const key = s.key;
+    // A checkout's update re-times its waiting reminder instead of running again.
+    if (s.retime) {
+      const run = await systemDb.wappAutomationRun.findUnique({ where: { automationId_subjectKey: { automationId: a.id, subjectKey: key } } });
+      if (run) {
+        if (run.messageId) {
+          const due = new Date(s.occurredAt.getTime() + a.delayMinutes * 60_000);
+          await systemDb.wappMessage.updateMany({ where: { id: run.messageId, status: "queued" }, data: { sendAfter: due, enqueuedAt: null } });
+        }
+        continue;
+      }
+    }
+    const skip = async (reason: WaSkipReason, extra: { detail?: string | null; contactId?: string | null } = {}) => {
+      const run = await recordRun(a, { store: s.store, key, label: s.label }, "skipped", reason, extra);
+      if (run) result.skipped++;
+    };
+    if (settings.automationPausedAt) {
+      await skip("automation_paused");
+      continue;
+    }
+    if (Date.now() - s.occurredAt.getTime() > (s.trigger === "message_received" ? STALE_REPLY_MS : STALE_EVENT_MS)) {
+      await skip("stale_event");
+      continue;
+    }
+    const cond = evaluateWaConditions(a.conditions as unknown as WaCondition[], s.facts);
+    if (!cond.pass) {
+      await skip("conditions", { detail: cond.failed.join("; ") });
+      continue;
+    }
+    const template = await systemDb.wappTemplate.findFirst({ where: { id: a.templateId, storeId: s.store.id } });
+    if (!template || !templateUsable(template, conn).ok) {
+      await skip("template_unavailable");
+      continue;
+    }
+    const phone = s.phones[a.recipient as WaRecipient] ?? null;
+    if (!phone) {
+      await skip("no_phone");
+      continue;
+    }
+    let text: string;
+    try {
+      text = renderWaText(template.body, values);
+    } catch (e) {
+      if (e instanceof WaMissingValueError) {
+        await skip("missing_values", { detail: e.missing.map((v) => `{{${v}}}`).join(", ") });
+        continue;
+      }
+      throw e;
+    }
+    let contact = await upsertContact(s.store, phone, s.contact);
+    contact = await applyShopifyConsent(contact, s.shopifyConsent, settings.shopifySmsConsent, s.occurredAt);
+    const category = template.category as WaTemplateCategory;
+    const block = await consentBlock(contact, category, settings, { reply: s.trigger === "message_received" });
+    if (block) {
+      await skip(block, { contactId: contact.id });
+      continue;
+    }
+    // Test mode: the store's own verified number gets it instead of the customer.
+    let to: NormalizedPhone = phone;
+    if (a.testMode) {
+      const test = normalizePhone(await verifiedTestPhone(s.store.id), null);
+      if (!test) {
+        await skip("test_mode", { detail: "Test mode is on but the store has no verified test number.", contactId: contact.id });
+        continue;
+      }
+      to = test;
+    }
+    let run = await recordRun(a, { store: s.store, key, label: s.label }, "queued", a.testMode ? "test_mode" : null, { contactId: contact.id, testMode: a.testMode });
+    if (!run) {
+      // This automation already ran for this subject. A run whose message was never linked (an earlier
+      // try failed between the two) is finished now: its message has one idempotency key, so one message.
+      const earlier = await systemDb.wappAutomationRun.findUnique({ where: { automationId_subjectKey: { automationId: a.id, subjectKey: key } } });
+      if (!earlier || earlier.outcome !== "queued" || earlier.messageId) continue;
+      run = earlier;
+    }
+    const due = new Date(s.occurredAt.getTime() + a.delayMinutes * 60_000);
+    const { message } = await queueMessage(deps, {
+      store: s.store,
+      conn,
+      source: "automation",
+      category,
+      phone: to,
+      contactId: a.testMode ? null : contact.id,
+      payload: { text, meta: conn?.provider === "cloud_api" && template.metaName ? { name: template.metaName, language: template.metaLanguage ?? "en", params: variablesIn(template.body).map((v) => (values as Record<string, string>)[v] ?? "") } : null },
+      templateId: template.id,
+      idempotencyKey: `auto:${a.id}:${key}`,
+      automationId: a.id,
+      runId: run.id,
+      sendAfter: due < new Date() ? new Date() : due,
+    });
+    await systemDb.wappAutomationRun.update({ where: { id: run.id }, data: { messageId: message.id } });
+    await systemDb.wappAutomation.update({ where: { id: a.id }, data: { lastRunAt: new Date() } });
+    result.queued++;
+  }
+  if (result.queued || result.skipped) logger.info({ storeId: s.store.id, trigger: s.trigger, ...result }, "whatsapp automations ran");
+  return result;
+}
+
+/**
+ * Cancels what automations still wait to send about a subject: an order cancelled (except its own
+ * "order cancelled" message), a checkout finished.
+ */
+export async function cancelSubject(storeId: string, subjectKey: string, reason: "order_cancelled" | "checkout_completed", exceptTrigger?: WaTrigger): Promise<number> {
+  const runs = await systemDb.wappAutomationRun.findMany({ where: { storeId, subjectKey, messageId: { not: null }, ...(exceptTrigger ? { trigger: { not: exceptTrigger } } : {}) }, select: { messageId: true } });
+  const ids = runs.map((r) => r.messageId!).filter(Boolean);
+  if (!ids.length) return 0;
+  const { count } = await systemDb.wappMessage.updateMany({ where: { id: { in: ids }, status: "queued" }, data: { status: "cancelled", reason, finalAt: new Date(), payloadEnc: null } });
+  return count;
+}
+
+/** "Test": runs an automation once for a made-up event with sample values, to the store's verified test number. */
+export async function testAutomation(deps: Pick<WaDeps, "queues">, input: { store: Store; id: string; userId: string }): Promise<{ messageId: string }> {
+  const a = await systemDb.wappAutomation.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!a) throw new WhatsappError("Not found", 404, "not_found");
+  const conn = await liveConnection(input.store.id);
+  if (!conn || conn.status !== "connected") throw new WhatsappError("WhatsApp isn't connected. Connect it first.", 409, "not_connected");
+  const template = await systemDb.wappTemplate.findFirst({ where: { id: a.templateId, storeId: input.store.id } });
+  if (!template || !templateUsable(template, conn).ok) throw new WhatsappError("The automation's template can't be used. Check it on the Templates tab.", 409, "template_unavailable");
+  const testPhone = normalizePhone(await verifiedTestPhone(input.store.id), null);
+  if (!testPhone) throw new WhatsappError("Verify your test number first (Step 4).", 409, "no_test_number");
+  const settings = await settingsOf(input.store);
+  const values = waSampleValues(businessNameOf(input.store, settings));
+  const text = renderWaText(template.body, values, { lenient: true });
+  const nonce = `${Date.now()}`;
+  const { message } = await queueMessage(deps, {
+    store: input.store,
+    conn,
+    source: "test",
+    category: template.category as WaTemplateCategory,
+    phone: testPhone,
+    payload: { text, meta: conn.provider === "cloud_api" && template.metaName ? { name: template.metaName, language: template.metaLanguage ?? "en", params: variablesIn(template.body).map((v) => (values as Record<string, string>)[v] ?? "") } : null },
+    templateId: template.id,
+    idempotencyKey: `autotest:${a.id}:${nonce}`,
+    automationId: a.id,
+    createdByUserId: input.userId,
+  });
+  return { messageId: message.id };
 }

@@ -4,7 +4,10 @@ import type { AdsenseConfig, GoogleConfig, MetaConfig } from "../ads.js";
 import { env, switchedOn } from "../env.js";
 import type { FetchLike } from "../shopify.js";
 
-/** The platform's keys, or null while they aren't set (the Connect button says so). */
+/**
+ * The platform's keys, or null while they aren't set (the Connect button says so). Meta's secret signs
+ * every call (appsecret_proof), the code exchange, and Meta's deauthorize and data-deletion callbacks.
+ */
 export function metaConfig(fetchImpl?: FetchLike): MetaConfig | null {
   const e = env();
   if (!e.META_APP_ID || !e.META_APP_SECRET) return null;
@@ -38,6 +41,7 @@ export function adsenseConfig(fetchImpl?: FetchLike): AdsenseConfig | null {
   return { clientId: e.GOOGLE_ADS_CLIENT_ID, clientSecret: e.GOOGLE_ADS_CLIENT_SECRET, fetchImpl };
 }
 
+/** Platforms this server can connect: its own Meta app or Google client is set up (Google Ads also needs GOOGLE_ADS_ENABLED). */
 export const adsConfigured = (): Record<AdProvider, boolean> => ({ meta: metaConfig() !== null, google: googleConfig() !== null, adsense: adsenseConfig() !== null });
 
 /**

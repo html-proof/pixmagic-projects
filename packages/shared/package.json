@@ -11,21 +11,34 @@
     "./ads": "./src/ads.ts",
     "./adsAnalytics": "./src/adsAnalytics.ts",
     "./adsDemo": "./src/adsDemo.ts",
+    "./adsFromShopify": "./src/adsFromShopify.ts",
     "./alerts": "./src/alerts.ts",
     "./auth": "./src/auth.ts",
+    "./businessEvents": "./src/businessEvents.ts",
     "./capabilities": "./src/capabilities.ts",
+    "./customers": "./src/customers.ts",
     "./dates": "./src/dates.ts",
+    "./expenses": "./src/expenses.ts",
+    "./device": "./src/device.ts",
     "./health": "./src/health.ts",
+    "./integrations": "./src/integrations.ts",
     "./inventory": "./src/inventory.ts",
     "./journey": "./src/journey.ts",
+    "./funnel": "./src/funnel.ts",
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
+    "./sheet": "./src/sheet.ts",
     "./salesCalculation": "./src/salesCalculation.ts",
+    "./sms": "./src/sms.ts",
+    "./messaging": "./src/messaging.ts",
+    "./orders": "./src/orders.ts",
     "./whatsapp": "./src/whatsapp.ts",
     "./traffic": "./src/traffic.ts",
     "./staff": "./src/staff/index.ts",
     "./team": "./src/team.ts",
-    "./email": "./src/email/index.ts"
+    "./email": "./src/email/index.ts",
+    "./automations": "./src/automations.ts",
+    "./zapier": "./src/zapier.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -33,11 +46,11 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^3.25.0"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

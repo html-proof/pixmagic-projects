@@ -23,6 +23,7 @@ approval; until then the card says why it has no figure, never shows 0.
 | Additional fees | Sales report: additional fees | Records | Exact | Fee and additional-fee sales, and any sale Shopify gives no type, before tax |
 | Taxes | Sales report: taxes | Records | Exact | Gift cards and tips left out, as Shopify does |
 | Total sales | Sales report: total sales | Records | Exact | Net sales + additional fees + duties + shipping + taxes |
+| Total refunded | (bizinsights; Shopify's order page "Refunded", added up) | Records | n/a | What refunds, returns and cancellations took off total sales, tax and shipping in; shown under the Total sales tile, which is already after it |
 | Custom sales | none (the store's own calculation) | Records | Its own definition | The lines of total sales the store chose; always shown beside Shopify's figures, named, never instead of them (section "Total sales breakdown and Custom sales") |
 | Orders | Sales report: orders | Orders placed | Exact | On the day Shopify processed them (`processedAt`, see Conventions). Cancelled included; test, deleted and gift-card-only orders never. An order edited on a later day counts once, on its own day, in Shopify's report by day too |
 | Average order value | Sales report: AOV | Records | Exact | What the orders sold on the day they were placed (their items after discounts, before tax; gift cards and what an edit on a later day added left out: "excluding post-order adjustments") ÷ orders |
@@ -34,8 +35,10 @@ approval; until then the card says why it has no figure, never shows 0.
 | Sales channels, traffic sources | Sales by channel / by referrer | Orders + journey | Close | Shopify's last visit before the order; ads platforms attribute differently |
 | Sessions, visitors, conversion rate | Analytics: sessions, online store visitors, conversion rate | Reports (ShopifyQL) | Exact once granted | Bot sessions left out by Shopify. Without `read_reports` only the pixel's **tracked visits** exist, labelled as such and never called sessions |
 | Gross profit | Profit reports: gross profit | Reports (ShopifyQL) | Exact once granted | Uses the cost Shopify recorded at the time of sale, which the Admin API doesn't expose; never estimated from today's unit costs |
-| Net profit | none | | Not shown | No source holds the other costs (fees, postage, apps, staff, ads) |
-| Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits. Shopify's figures come with the sessions report |
+| Your costs | none (the owner's own figures) | Settings → Costs | Their own definition | Shopify plan, apps, staff, rent, shipping labels, fees...: each spread over the days it covers; never checked against anything |
+| Net profit | none | Profit report + ad platforms + your costs | Shown only when complete | Revenue − cost of goods − ad spend − your costs, and only for dates the owner marked the costs list complete for ("Costs and net profit") |
+| Checkout started, left at checkout, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits on the Shopping Funnel page (section "Shopping Funnel page"). Shopify's figures come with the sessions report |
+| Abandoned checkouts, recovered, their value | Orders → Abandoned checkouts | Shopify's checkout list (Admin API, `read_orders`) | Exact counts; value up to 2,000 a window | Last 60 days only; section "Abandoned checkouts (Shopify)" |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
 | Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own |
@@ -94,17 +97,45 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
 - **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
-- **Custom ranges** run from 2000-01-01 at the earliest, cover at most 366 days, and are reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today is refused (`400 invalid_range`).
+- **Weeks** run **Monday to Sunday** everywhere (`WEEK_STARTS_ON` in packages/shared/src/dates.ts,
+  ISO 8601), whichever platform the figures come from: the week presets, the charts grouped by week,
+  and the Google Ads analytics page. Meta and Google both offer Monday weeks in their own screens; pick
+  them there when comparing.
+- **Presets:** Today, Yesterday, **This week** (`wtd`: Monday to today) and **Last week** (`lastweek`:
+  the Monday-to-Sunday week before this one), Last 7 / 30 / 90 days, **Last 6 months** and **Last 12 months**
+  (`6m`, `12m`: from the day after the same date 6 or 12 months earlier, up to today: on 24 Oct 2026,
+  25 Apr – 24 Oct and 25 Oct 2025 – 24 Oct 2026), This month, Last month, This year, Last year, and
+  every **calendar year** of the store under "Calendar years" in the same menu (1 January to
+  31 December; this year up to today), from the year Shopify created the store. The custom dates also
+  move **a year earlier or later** with a click, so the same months of two years are compared quickly.
+- **At most 12 months at a time, however far back** (`latestRangeEnd`, `MAX_RANGE_MONTHS` in
+  packages/shared/src/dates.ts): a range starting on 15 Mar 2025 may end on 14 Mar 2026 at the latest,
+  one starting on 1 Jan 2024 on 31 Dec 2024 (366 days, a leap year), one starting on 29 Feb on the 28th
+  a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"), for
+  the dates picked and for comparison dates alike; the dates menu offers nothing longer, and the end
+  date's calendar stops there. Older periods are not limited: 1 Jan – 31 Dec 2023 is a question like
+  any other, and its comparison with the previous year is 2022. The downloads and Customer Messaging
+  read the same rule; the ad platforms' own report endpoints keep their 366-day limit.
+- **Custom ranges** run from 2000-01-01 at the earliest, or from the store's first day once Shopify's
+  creation date is known (`storeRangeLimits`: `Shop.createdAt`, `stores.shop_created_at`, read by the
+  shop sync job, and daily by the dashboard's refresh until it is; or an earlier order's day, since an
+  order imported from another platform can predate the store), and are reported only up to the
+  store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today, or before
+  the store's first day, is refused (`400 invalid_range`). Comparison dates may reach back before the
+  store's first day: they then hold no orders, and the change says "No earlier data".
 - **Comparison period:** what the % changes compare with, chosen beside the dates as in Shopify
   Analytics' second date chip (`compare` in the overview and export query; `resolvePreset` in
   packages/shared/src/dates.ts):
   - **Previous period** (the default, `compare=previous` or absent): the same number of days
-    immediately before the selected range (after that clamp); last month against the whole month
-    before it, whatever its length.
+    immediately before the selected range (after that clamp); this week so far against the same
+    weekdays of the week before (Monday to Wednesday against Monday to Wednesday, up to the same time
+    of day), never against the days just before it; last month against the whole month
+    before it, whatever its length; last year, or any calendar year picked (1 Jan – 31 Dec), against
+    the whole calendar year before it, leap or not.
   - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
     lack, becomes the 28th, so February 2028 is compared with 1–28 February 2027.
   - **Custom** (`compare=custom&cfrom=…&cto=…`): any dates, under the custom-range rules above (from
-    2000-01-01, at most 366 days, reported up to the store's today, not starting after it). They may
+    2000-01-01, at most 12 months, reported up to the store's today, not starting after it). They may
     have another length than the range, sit after it or overlap it. A pair that breaks a rule is
     refused with `400 invalid_range`, as a bad custom range is.
 
@@ -160,8 +191,14 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   import that covers a window of creation dates (the first import, "Refresh data", the 60-day
   re-read) records where its window began, in `stores.orders_history_from`, keeping the earliest.
   The day the window begins on was only partly covered, so `historyFrom` is the day after (unless it
-  began at midnight). With `read_all_orders` the whole history is in: the epoch is recorded and
-  `historyFrom` is `1970-01-01`, so nothing counts as not imported. A store holding an order from
+  began at midnight). With `read_all_orders` the whole history is imported **one calendar year at a
+  time, newest first** (`order_history_windows`, packages/core/src/orderHistory.ts, and "History
+  import" in docs/shopify-setup.md): as each year comes in with every newer one, `historyFrom` moves
+  back to its 1 January, and once the oldest year (the one holding the store's first order) is in, the
+  epoch is recorded and `historyFrom` is `1970-01-01`, so nothing counts as not imported. The
+  overview's `data.history` says how the store can have that history (`access`: `granted`,
+  `reconnect`, `requestable`, `awaiting_shopify`) and how far its import has got (`years`: each year's
+  status and orders), and the line under the dates says it in words. A store holding an order from
   before its window (imported before the window was recorded) starts at that order's day instead:
   `historyFrom` is the earlier of the window's first whole day and `oldestOrderDay`. A quiet store's
   first order can come days after its window starts; those days were imported too, with no orders, so
@@ -169,7 +206,13 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   forgets the window. Stores imported before the record existed were given 60 days before their last
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
-- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
+- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0, days before the imported history are "not imported" (null in the breakdown, drawn hatched).
+- **Every section follows the dates picked**, in the store's time zone: the tiles, both sales panels'
+  daily view, the sales, product, customer, channel, discount and fulfillment details, recent orders
+  (the latest 10 placed in the dates, and how many orders were cancelled in them, counted on the day of
+  the cancellation) and the downloads. The exceptions say so where they show: the monthly panel is the
+  calendar year to date against the two years before (whole months), stock is as of now, and the
+  ad platforms' own report pages have their own limits.
 - **An order counts on the day Shopify processed it** (`Order.processedAt`), the date its reports and
   its order list use. For an order placed in the store that is the moment it was created; an order
   imported from another platform, synced from POS offline or brought in by a marketplace app was
@@ -206,6 +249,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Additional fees | Σ (amount − tax) of fee, additional-fee and unknown sales | A sale Shopify gives no type is counted here, so the lines always add up to total sales |
 | Taxes | Σ tax of every sale (gift cards and tips aside) | On items, shipping, duties and fees alike, counted once |
 | **Total sales** | Net sales + Additional fees + Duties + Shipping + Taxes | Shopify's headline figure; the first tile |
+| Total refunded (`total_refunded`) | − Σ amount (tax in) of every sale of a return action (refunds, returns, cancellations), gift cards and tips aside, with the signs Shopify gave them | Under the Total sales tile as "Refunds −A$62.00": what refunds took off total sales in the dates, which is already after them. A refund's adjustment lines count, so it is the money given back: an item returned with nothing refunded (Shopify adds a refund discrepancy that evens it out, PixMagic #2821S on 2026-10-23) takes nothing off. Edits (action `update`) aren't refunds. Team & Access: needs both "View refunds" and the breakdown, as it holds the refunds' tax and shipping |
 | Custom sales | Σ of the lines of total sales the store's calculation counts | The store's own figure, never Shopify's (below) |
 | Orders | count of orders placed, on the day Shopify processed them (cancelled included; test orders never stored; gift-card-only orders left out) | |
 | Units (items sold) | Σ quantity sold − Σ quantity returned, gift cards included | Shopify's net items sold |
@@ -298,6 +342,91 @@ measure net sales only.
 
 **Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 
+## Dashboard home (the owner's design)
+
+Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
+`HomeCards.tsx`), from the owner's mock of 2026-10-24. Every figure is one the overview already
+carries; nothing is estimated.
+
+- **Headline tiles**: Total sales (Net sales without `finance.breakdown`), Orders, Average order
+  value, Total products sold, each with its change and a sparkline of the same figure day by day
+  (`series`; a day's `units` are its net items sold). Under Total sales: "Refunds −A$…", what
+  refunds took off it in the dates (`sales_overview.current.totalRefunded`, Total refunded above),
+  then the store's Custom sales when it shows them.
+- **Orders at a glance** (asked for by the owner on 2026-10-30, under the tiles; module
+  `order_outcomes`, `orderOutcomes` in core's reports/orders.ts): how the orders placed in the dates
+  went, the same orders as the Orders tile (by processed day, gift-card-only orders left out). Each
+  order is exactly one of these (`orderOutcome` in `@app/shared/orders`), so the three add up to the
+  Orders tile:
+  - **Completed**: not cancelled, paid (`paid`, `partially_refunded`, or no payment state read yet).
+  - **Awaiting payment**: `pending` (cash on delivery, bank transfer), `authorized` (to capture),
+    `partially_paid`.
+  - **Unsuccessful**: cancelled (whatever its payment says), payment failed (`voided`, `expired`),
+    or refunded in full (`refunded`).
+  - **Left at checkout**: shoppers who started a checkout in the dates and didn't buy, from the
+    storefront pixel's visits (one per shopper per day, as the funnel counts them; online store
+    only). Counted from the first day the pixel counted in full ("counted from …"); "Not tracked"
+    without the pixel or for dates before it. Not Shopify's abandoned checkouts list, which holds
+    only checkouts where the shopper left an email or phone.
+  - **Products sent**: of the completed and awaiting-payment orders, the items of those sent in full
+    (`fulfilled`), and how many were partly sent or are still to send (the fulfillment module's open
+    statuses). Shopify's per-line shipped quantities aren't stored, so a partly sent order's items
+    aren't split.
+
+  Team & Access: the panel shows with "View order list", "View fulfillment status" or "View checkout
+  abandonment"; completed / awaiting / unsuccessful need "View payment status" and "View
+  cancellations", products sent "View fulfillment status", left at checkout "View checkout
+  abandonment" (`redactOverview`).
+- **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
+  per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
+  in the store's currency and none is the Google Ads demo, as for MER.
+- **Business profit overview**: net sales less the costs bizinsights can see, Shopify's cost of
+  goods sold (its profit report, for the dates as a whole), the ad spend for the whole range
+  (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
+  **net profit** only when every input is known and the owner has marked the costs list complete for
+  the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
+  no cost recorded in Shopify are named. Its share is called a **margin** only when the cost of goods
+  sold was taken off; with ad spend alone it is "of net sales", since sales less ad spend is no margin.
+- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
+  the owner's costs by category). The mock's shipping, software and other expenses come only from
+  the owner's costs: nothing else holds them.
+- **Top products**: the top five of `top_products` by net revenue, each with its share of net sales;
+  withheld while the period's sales aren't all imported (`complete` false), as the full list is.
+- **Recent orders**: the five latest, with one status word (cancelled, fulfilled, then payment).
+  The mock's customer column is the sales channel: names are protected customer data.
+- **Key insights**: the first four checks of the business health check below, worst first.
+- **Advertising performance** and the integrations strip only where the workspace offers
+  advertising and the member is shown it (Team & Access); the strip only for those who can manage
+  integrations. TikTok Ads isn't offered.
+
+## Sales panels (dashboard overview)
+
+Reference implementation: `apps/web/src/components/dashboard/OverviewCharts.tsx`, in the owner's
+design (2026-10-24). Two panels under the home page's panels, each with its total in large type, a
+line on what is in it, a key, and the running total drawn as a violet line over the columns, read
+off its own scale on the right (its labels sit on the left scale's gridlines). The Sales section's
+cards above keep the running total in a strip of its own.
+
+- **Daily** (the dates picked): Total sales per day by default (Custom sales while the store shows
+  it), or Net sales, Orders or Returns ("Sales chart shows"). Sales days are coloured by the day
+  tiers above (best green, strong yellow, the rest cyan); today is light cyan (not over yet). Each
+  column carries its figure when every figure fits, otherwise only the best day's and today's;
+  weekend dates are in orange. Finished days with nothing are named in the line under the total.
+  "Sales chart groups" adds the days up **by week** (Monday to Sunday) once the dates hold more than a
+  week, and **by month** once they reach into a second month and run past a month (`periodBreakdown`
+  in packages/shared/src/sales.ts). A week or month that the dates picked cut short (a range starting
+  on a Wednesday) is named with the days it holds; one holding today, or with days not imported, is
+  lighter and "partial"; one with no day imported has no column, never $0. Day tiers are for days only.
+- **Monthly comparison** (this calendar year, January to the current month): each month beside the
+  same month of the two years before, **whole** (`pastYearBreakdown`: August last year is all of
+  August, while this August is so far), so a year's columns read as the month to beat. Total sales
+  by default, or Custom sales or Net sales ("Comparison shows"; Net sales only without
+  `finance.breakdown`). The percentage over this year's columns is the change on the month before,
+  as Month by month's (the current month on the same days of the month before). A year with nothing
+  imported isn't drawn; a month not imported has no column, a partly imported one is lighter.
+  Team & Access: the whole panel needs `finance.reports`, as Month by month does; the earlier
+  years' lines and refunds are redacted as this year's months are (`redactOverview`).
+
 ## Business overview (health check)
 
 Reference implementation: the grading rules in `packages/shared/src/health.ts` (unit-tested), applied by `businessHealth` in `apps/web/src/components/dashboard/Overview.tsx`. Each area gets one of four labels, always shown as words beside a colored dot:
@@ -336,6 +465,27 @@ a webhook's `landing_site` / `referring_site` live (`packages/shared/src/traffic
   the 60-day import window once (at most daily while any lack a source).
 - It's the store's view (the last visit before buying). An ad platform credits sales by its own rules
   (view-throughs, other devices), so its numbers differ, and the two are never added together.
+
+### Paid vs organic (dashboard "Paid vs organic sales", and on "Where your sales come from")
+
+The same net sales, grouped by how each order's last visit came (`TRAFFIC_SPLITS` and `trafficSplitOf` in
+`packages/shared/src/traffic.ts`; the traffic module's `split`):
+
+| Split | `traffic_medium` | What it is |
+| --- | --- | --- |
+| Paid ads | `paid` | a link tagged as an ad (above) |
+| Organic | `unpaid`, `referral` | a search engine, social network or other website, without an ad tag |
+| Email and messages | `email` | email, SMS and Shopify's message tactics |
+| Direct | `direct` | a typed or bookmarked address |
+| Not recorded | `unknown` | no visit recorded (point of sale, draft orders, apps) |
+
+- **Last click, from Shopify's journey**: never what Meta or Google credit to their ads, which count earlier clicks
+  and views too. Every place it shows says so.
+- An ad whose links carry no tags reads as organic (Facebook and Instagram add none by themselves): the note says to
+  add utm_medium=paid.
+- Each split's share is of the sales whose source is read; orders still being read (`pending`) are left out and
+  counted beside it. A split with no orders is listed at zero.
+- Team & Access: "View conversion attribution", like the tagged-ads figures (`redactOverview` drops `split`).
 
 ## Ads (Meta Ads, Google Ads)
 
@@ -400,8 +550,50 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   and a store day the account hasn't reached yet is missing, not 0.
 - **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
+- **Clicks, reach and visits are different counts, never added together.** Meta's reach is people Meta
+  showed an ad to; impressions, clicks and Meta's landing page views are each platform's own count; Shopify's
+  sessions and visitors are counted on the store, and tracked visits by the bizinsights pixel. A click
+  doesn't always become a session, and one person can be reached, click and visit more than once. The
+  Advertising overview says so under its figures.
+- **By week, by month:** the Advertising charts ("Ad charts group", and the Meta and Google pages' "Trend
+  groups") add the days up per Monday-to-Sunday week or calendar month (`groupSeries` in
+  packages/shared/src/ads.ts): each figure is the sum of its days, a rate is worked out from the sums
+  (never an average of daily rates), and a week or month missing any day's figures is left blank, as a
+  missing day is.
 - **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days. An account whose stored history falls short of those 90 days (its first sync failed and a later one worked, or it was connected before `history_from` was recorded) gets the whole 90 days in its daily re-check instead, until they are in (`recheckDays` in packages/core/src/adConnections/sync.ts).
 - **No earlier data:** comparisons go back only to where every counted account's figures start (see Conventions).
+
+### Live reports: figures read for the dates picked
+
+The Meta Ads and Google Ads pages' live reports (`GET .../ads/meta/report`, `.../ads/google/report`)
+ask the platform for exactly the dates picked, at the level picked, and carry figures not stored per day:
+
+| Figure | Formula | Notes |
+| --- | --- | --- |
+| Reach, frequency (Meta) | Meta's `reach`; impressions ÷ reach | People, counted once over the whole range: never added up over days |
+| Landing page views (Meta) | the first of `omni_landing_page_view`, `landing_page_view` in `actions` (never their sum) | Link clicks after which the page loaded, as Meta's pixel saw it: Meta's count, not the store's sessions |
+| Cost per landing page view (Meta) | spend ÷ landing page views | |
+| Conversion rate (Google) | `metrics.conversions` ÷ `metrics.clicks` | Google's "conv. rate", on every conversion action; not the store's conversion rate |
+
+The reports are cached briefly (10 minutes while they include today, an hour otherwise) under a
+versioned key (`ads-report:v2:`, `ads-greport:v2:`), moved whenever a report gains figures.
+
+### With no ad account connected: from the Shopify orders
+
+Reference implementation: `adsFromShopify` in `packages/shared/src/adsFromShopify.ts` and
+`adsFromShopifyModule` in `packages/core/src/reports/adsFromShopify.ts` (docs/advertising.md, "No ad
+account connected").
+
+| KPI | Formula | Notes |
+| --- | --- | --- |
+| Sales from Facebook and Instagram / Google and YouTube | net sales of the orders whose last visit's source is `facebook` or `instagram` (Meta) / `google` or `youtube` (Google Ads) | As "Where sales come from" counts them: the sales that happened in the range |
+| Orders | those orders placed in the range | Gift-card-only orders aside, as everywhere |
+| Share of your sales | the platform's sales ÷ the store's net sales over the range, every source together | Orders whose visit isn't read yet count in the whole, in no platform (`pending`) |
+| From links tagged as ads | the same for `traffic_medium = 'paid'` | An untagged Meta ad counts as a visit from Facebook or Instagram, not as an ad |
+| Change | (now − before) ÷ before, for the dates compared with | Only with their orders imported; a running day is cut at the same time of day (orders by processed time, sales by when they happened) |
+
+Each day of the range is given, a day before the store's imported orders as unknown (never 0). These are
+the store's last-click view and never added to, or shown as, a platform's own figures.
 
 ## Ad earnings (Google AdSense)
 
@@ -470,6 +662,173 @@ Visits are compared only from the first whole day after the pixel was put in pla
 
 `funnel_daily` is no longer written or read. It holds whatever the pre-visit pixel recorded and can be dropped once nothing needs that history.
 
+### Shopping Funnel page (/funnel)
+
+The page (`apps/web/src/app/(app)/funnel`, components in `apps/web/src/components/funnel/`) asks the
+dashboard's overview with `parts=funnel` (apps/api/src/routes/dashboard.ts): the funnel in full
+(`funnelDetail`, packages/core/src/reports/funnel.ts), the store's orders (sales overview), Shopify's
+own sessions when granted, and orders by traffic source. Its maths is in `packages/shared/src/funnel.ts`.
+`?view=shoppers` on the dashboard opens it.
+
+Every visit figure is a count of **tracked visits** and every rate divides tracked visits by tracked
+visits in the same dates and filter, so no rate mixes two sources:
+
+| Figure | Formula |
+| --- | --- |
+| Visits at a stage | Visits whose furthest step is that stage or a later one |
+| Share of visits | Visits at the stage ÷ all visits |
+| Progression rate | Visits at the stage ÷ visits at the stage before |
+| Drop-off rate | 1 − progression rate; visits lost = visits at the stage before − visits at the stage |
+| Conversion rate | Visits that completed checkout ÷ visits |
+| Checkout completion | Visits that completed checkout ÷ visits that started checkout |
+| View to cart rate (a product) | Visits that added the product to cart on its page ÷ visits that viewed its page |
+| Checkout completion (a product) | Visits that bought the product ÷ visits that started a checkout holding it (`checkoutCompletion`; every buying visit started that checkout) |
+| Change of a stage | (visits now − visits then) ÷ visits then, against the comparison (`stepDeltas`) |
+
+- **Largest drop-off**: the transition that lost the most visits (`largestDropOff`; a tie goes to the
+  earlier step). Rates are never called good or bad: there is no benchmark, only the store's own
+  earlier dates.
+- **A clear change**: a transition's progression differs from the comparison by more than chance, by
+  the pooled two-proportion z-test at 95% (`proportionZ`, |z| ≥ 1.96) with at least 30 visits on each
+  side and five expected successes and failures in each group; otherwise "within normal variation".
+- **Observations** (`funnelInsights`, at most six): where most visits are lost (30 visits or more);
+  visits up or down (Poisson test, at least 50 a side, only between dates of the same length); the
+  conversion rate or a transition changed (the z-test); mobile against desktop, or new against
+  returning visitors, buying or completing checkout at different rates (the z-test); a product page
+  added to cart less often than the store's other product pages (the z-test). Nothing else is said,
+  and reasons are offered as things to check, never as measured causes.
+- **Segments** (each a funnel of its own on the same visits): device, country, landing page (the
+  section the visit started on), new or returning (returning: the same hashed browser has a visit on
+  an earlier day since the pixel's history began), traffic source. The **filter** (`device`,
+  `visitor`, `landing`, `country`, `source`) narrows every visit figure on the page, the CSV included.
+  Orders, revenue and product sales are never narrowed: the orders carry no device or visit.
+- **Device and country** come from the pixel's own request: the browser's User-Agent read into
+  mobile, tablet, desktop or unknown (`funnelDevice`; an iPad asking for desktop sites counts as a
+  desktop), and the country the edge placed the request in (`locationOf`). Kept as one word each on
+  the visit (`funnel_visits.device`, `.country`), from the visit's first batch. Visits from before
+  2026-10-24 have neither: they show as "Not recorded", from `detailsFrom` on they have them.
+- **Traffic source** (`funnel_visits.source`, one of `TRAFFIC_SOURCES` in
+  packages/shared/src/traffic.ts): with the page view of a page reached from outside the store, the
+  pixel sends the referring site's host, the link's `utm_source` and `utm_medium` (cut to 100
+  characters) and the names of the ad click ids it carried (`gclid`, `gbraid`, `wbraid`, `fbclid`,
+  `ttclid`, `msclkid`; never their values). `arrivalSource` sorts that by the same rules as an
+  order's last visit (`classifyVisit`), so visits and orders by source use the same words; an arrival
+  with no referrer and no tags is Direct. Only the word is kept, and nothing of the referrer, tags or
+  address. Not an arrival: a page whose referrer is the store's own host (the pixel leaves those
+  out), checkout, thank-you and account pages (reached back from a payment provider or a sign-in),
+  and referrers on `myshopify.com` or `shopify.com`. A visit keeps its **first** arrival
+  (`COALESCE`, as the device): a shopper who comes back from elsewhere the same day keeps the first
+  source. Null shows as "Not recorded": visits from before the pixel sent arrivals (`sourcesFrom` is
+  the first day one has a source), and visits whose first tracked page wasn't the one they arrived on
+  (tracking accepted on a later page). Visits by source are the traffic sources permission's
+  (`analytics.traffic`, as orders by source): without it the segment isn't computed for the member,
+  `source` is dropped from their filter (`funnelViewOf`), and `redactOverview` removes both. The
+  Breakdown's Traffic source tab shows the store's orders by source under the visits, never divided
+  by them.
+- **Products** (`funnel_product_visits`, one row per visit and product; `productStepsOf`): bit 0
+  (1) the product page was viewed, bit 1 (2) added to cart on that page, bit 2 (4) added to cart
+  anywhere else (a quick add from a collection, search or cart drawer, or another product's page),
+  bit 3 (8) in a checkout the visit started, bit 4 (16) in a checkout the visit completed (16 sets 8
+  too). Bits 2-4 come from the products the pixel names with an add (the cart line's product) and a
+  checkout (its line items), by the handle in the product's storefront address; an older pixel names
+  none, so its add is put down to the product page it happened on and its quick adds to no product.
+  Quick adds, checkouts and purchases are null ("Not recorded", the column hidden) for dates before
+  `sourcesFrom`, which the same pixel release starts. Beside them, each product's orders, units (net
+  of returns) and net sales come from the store's orders in the dates (only for members with the top
+  products permission), never divided by views or tracked purchases: orders count every order,
+  tracked or not. `productSuggestion` names what to look at: a page added to cart less often than
+  the others (z-test, 20 viewing visits or more), added from its page by 10 visits or more with no
+  order holding it, a landing page that visits leave from more often than the store's other product
+  pages' (z-test), or ordered with no tracked view, quick add or checkout.
+- **Not measured**: paid or unpaid per visit (only the source word is kept), a visit's purchase
+  matched to its order, people across devices, and Shopify Analytics' own sessions without
+  `read_reports`. Traffic sources and checkouts per product need the updated pixel released to each
+  app (`shopify app deploy`, docs/shopify-setup.md); until then they show as "Not recorded".
+- **Checklist**: `FUNNEL_ACTIONS`, ticked per store by any member who sees the funnel
+  (`PUT …/funnel/actions/:id`, `funnel_action_checks`; audited as `funnel.action_done` /
+  `funnel.action_undone`). A shared, view-only dashboard and API keys can't tick.
+- **Download**: `GET …/export?section=funnel` with the dates and filter: the dates, the filter, the
+  funnel now and before, every transition, every day, every segment and the products (with quick
+  adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
+
+## Profit sheet (/sheet)
+
+Every figure bizinsights has for the store laid out like the owner's own spreadsheet: a row per
+figure, the days shown added up first, then a column per day, week (Monday to Sunday) or calendar
+month (`?by=`; without it days up to 45 days, weeks up to 190, then months). Its data is the
+dashboard's own answer narrowed to it (`GET …/overview?parts=sheet`: `sales_overview`, `funnel` with
+`visitsByDay`, `ads`, `ad_connections`); `@app/shared/sheet` adds the days up. Nothing is estimated.
+Page access: "View sales and revenue" (`analytics.sales`); each row needs what its figure needs.
+
+| Row | Day by day from | Notes |
+| --- | --- | --- |
+| Total sales, Total sales ex tax, Tax (as a share of total sales ex tax) | `series[].totalSales`, `.tax` | "View gross sales, discounts, tax, shipping and total sales" |
+| Net sales | `series[].netSales` | Every ratio below is worked out on it, as the dashboard's are |
+| Orders, Items sold | `series[].orders`, `.units` | |
+| New customer orders, New customer % | `series[].newCustomerOrders` = orders with a customer − returning customers' orders | "View returning vs new customers". An order with no customer record is neither |
+| Store visits | `funnel.visitsByDay` (the pixel's visits, as the funnel counts them) | Blank before the pixel counted them |
+| Conversion rate, Sales per visit | orders ÷ visits, net sales ÷ visits | |
+| Items per order, Average order value | units ÷ orders, `series[].orderValue` ÷ orders | Weeks and months divide the sums, never average the averages |
+| Meta / Google ad spend, Total ad spend | `ads.seriesByProvider` | In the ad accounts' currency |
+| Ads as share of sales (marketing expense ratio), its 3 days, Sales per unit of ad spend (MER), Ad spend per visit / per order, Net sales less ad spend | spend against net sales, visits, orders | Only when the ads report in the store's currency and none is the Google Ads demo (as "Ads as share of sales"). The 3-day share is for day columns: the day and the two before it, whatever the filter, blank on a day whose two before aren't in the dates |
+
+A period one of whose days isn't known (visits before the pixel, a day an ad account has no figures
+for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit: product
+costs, shipping, fees and the owner's other costs aren't recorded, and the page says so.
+
+**Days shown** (`?days=`): every day, weekdays, weekends or any weekdays picked (`0,2,4`, Monday = 0).
+**Business events** (`?events=`): every day, the days with an event, those without, those with an
+event of a kind (`kind:sale`), or the days of one event (`event:<id>`). The total and every column add
+up only the days shown; a week or month column says how many of its days that is.
+
+**Business events** (`business_events`, `@app/shared/businessEvents`): a name, a kind (sale or
+discount, ad campaign, product launch, email or SMS sent, holiday or season, stock problem, website
+change, other), a first and last store-local day (up to 366 days) and a note; 1,000 per store.
+Notes only: no figure is worked out from them. `GET/POST …/business-events`, `PUT/DELETE
+…/business-events/:id`: anyone with "View sales and revenue" may read, add, change and remove them,
+as the team's shared calendar; a shared (view-only) dashboard and API keys may only read. Audited as
+`business_event.created` / `.updated` / `.deleted` (kind and days, never the note). They show under
+their days in the sheet (the pencil on a column marks one there) and in "Business events in these
+dates": a day with an event against a day without one (net sales and orders a day, conversion, ads'
+share), then each event's own days, with "Only its days" to narrow the sheet to them.
+
+**Download CSV** ("Export approved reports" permission): the sheet as on screen, built in the browser (the
+same figures the page shows), plain numbers, the events as a row. **Print** prints the page.
+
+## Costs and net profit
+
+Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
+`netProfit`), `packages/core/src/expenses.ts` and Settings → Costs (`/settings/costs`).
+
+What Shopify, its profit report and the ad platforms can't tell bizinsights (the Shopify plan and
+apps, staff, rent, shipping labels, payment fees, ads on platforms that aren't connected) comes only
+from the store's owner, as **costs** kept per store in the store's currency (`store_expenses`). Owners
+and admins add, change and remove them; members with "View gross sales, discounts, tax, shipping and
+total sales" (`finance.breakdown`) see them, on the page and as the dashboard's `expenses` module. Each
+change is in the audit log (`expense.added`, `expense.changed`, `expense.removed`; the note, free
+text, is never copied into it).
+
+| Figure | Formula | Notes |
+| --- | --- | --- |
+| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year) | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost |
+| Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
+| Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
+| **Net profit** | revenue − Shopify's cost of goods sold − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
+
+Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given only when:
+
+- Shopify's cost of goods sold is known for the dates (its profit report: `read_reports`) and every
+  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0);
+- the connected ad accounts' spend is known for every day, in the store's currency. With no ad
+  account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
+  ads gets no net profit, since it would give the spend away;
+- the owner has said the costs list holds every cost from a day on (`store_expense_settings.complete_from`,
+  "This list holds every cost from"), and the dates start on or after that day.
+
+Otherwise the card shows what is left of net sales after the costs it does know, says "Not net
+profit" with each missing input, and links owners and admins to Settings → Costs. The figures are the
+owner's own: bizinsights checks none of them against anything.
+
 ## Shopify's own reports (sessions, gross profit, the check)
 
 Some figures only Shopify's reports can give exactly, so bizinsights asks them (ShopifyQL,
@@ -479,7 +838,7 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 | Figure | ShopifyQL | Notes |
 | --- | --- | --- |
 | Sessions | `FROM sessions SHOW sessions`, human sessions only | Shopify ends a session after 30 minutes idle; bot sessions are left out (`human_or_bot_session = 'human'`, Shopify's own classification) |
-| Visitors | `online_store_visitors` | Unique over the whole range: asked for the range whole, never summed from days |
+| Online store visitors | `online_store_visitors` | Shopify's own name and count of the different shoppers: unique over the whole range, asked for the range whole, never summed from days; people, not sessions, and not Meta's reach |
 | Conversion rate | `sessions_that_completed_checkout ÷ sessions` | Shopify's formula; the funnel steps (`sessions_with_cart_additions`, `sessions_that_reached_checkout`) and `pageviews` are shown too |
 | Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known. Not net profit: bizinsights knows none of the other costs |
 | The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |
@@ -499,6 +858,55 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 - **Reconciliation report**: the same check for today, yesterday, the last 7/30/90 days, this month
   and last month at once, with Shopify's sessions against the pixel's tracked visits
   (`definition_mismatch`) and its gross profit (`shopifyCheckReport`, docs/RUNBOOK.md).
+
+## Abandoned checkouts (Shopify)
+
+Shopify's own abandoned checkouts list, counted and added up for the dates: the card "Abandoned
+checkouts (Shopify)" on the Shopping Funnel page (`GET …/abandoned-checkouts`,
+`packages/core/src/shopifyCheckouts.ts`). Read from the Admin API (`abandonedCheckoutsCount`,
+`abandonedCheckouts`) with `read_orders`: no ShopifyQL, so no `read_reports`. Counts, money and
+dates only: no name, email, phone or address is asked for or kept.
+
+| Figure | Definition |
+| --- | --- |
+| Abandoned checkouts | Shopify's count of the checkouts in its abandoned checkouts list created in the dates, on the store's days: the shopper gave an email or phone number and didn't pay. Recovered and archived ones included, as Shopify's list keeps both. Shown with a "+" when Shopify gives the count only as a lower bound (`precision: AT_LEAST`); it then has no change and no rate |
+| Recovered so far | Of them, the ones Shopify marks recovered (`recovery_state:recovered`): completed later |
+| Recovered rate | Recovered ÷ abandoned, both by the day the checkout was created. Keeps rising for recent dates as late recoveries come in, hence "so far": a range that just ended compares unfavourably with an older one, so its change is shown uncoloured, never as better or worse |
+| Abandoned checkout value | Each checkout's total price added up (`totalPriceSet.shopMoney`: items after discounts, shipping and taxes) in the shop's currency, recovered ones included |
+| Recovered value | The total price of the ones completed later (`completedAt` set) |
+
+Not the same as two neighbouring figures, and never shown as them:
+
+- **Left at checkout**: the web pixel's tracked visits that started a checkout and didn't complete
+  it (consent-dependent, online store only), with no value and no recovery.
+- **Sessions that reached checkout**: Shopify Analytics' sessions (ShopifyQL), whether or not the
+  shopper ever gave contact details.
+
+Limits, each shown in words, never as 0:
+
+- **60 days.** Shopify puts `AbandonedCheckout` under `read_orders`, which covers what was created
+  in the last 60 days ("For older orders, add `read_all_orders`", shopify.dev access scopes).
+  Without `read_all_orders` (no bizinsights app asks for it yet) a window starting before the
+  store's today − 59 days is never asked for: the card says Shopify shares the last 60 days of
+  checkouts and from which day, and a comparison that old has no change. With `read_all_orders`
+  older windows are asked for; how long Shopify keeps abandoned checkouts isn't documented
+  (community posts say about three months), so an old comparison deserves care.
+- **Approval.** Abandoned checkouts are protected customer data (Shopify's "Orders" category);
+  without names or contact details that is Level 1, the same approval the orders import waits on.
+  An app Shopify hasn't approved yet (the App Store app on live stores) gets `ACCESS_DENIED`, kept
+  as `access_denied`: the card says bizinsights is waiting on Shopify's approval.
+- **Value up to 2,000 checkouts a window.** The counts are Shopify's own and complete. The value is
+  added up from the list, 250 a page (753 cost points) and 8 pages at most; with more checkouts
+  than that, prices in more than one currency, or a price Shopify withheld, the card says why
+  instead of a value, and the day-by-day chart is left out.
+- **Kept, not waited for.** Kept in `shopify_reports` (dataset `abandoned_checkouts`) like the
+  reports above: the same windows (5-minute marks while the range runs, the range and its
+  comparison cut at the same one), the same staleness and 14 days' keep. The worker asks only
+  stores that granted `read_orders` (`REPORT_SCOPE`).
+- **Search lag.** Shopify's search can lag a moment behind a checkout; the chart is added up from
+  the list, the totals are Shopify's counts.
+- **Who sees it.** View checkout abandonment (`analytics.abandonment`). Who the shoppers were is
+  "Customers to follow up" (`GET …/contacts`, its own permissions), read live and never stored.
 
 ## Checked against Shopify
 
@@ -569,6 +977,19 @@ briefly in either direction.
 - A refund today on an order older than Shopify's 60 days (without `read_all_orders`) is in Shopify's
   reports and can't be read here: neither the order nor the refund is visible to the app.
 
-- `read_orders` exposes 60 days of history. Longer ranges show data only from 60 days before the first import onward unless `read_all_orders` is approved.
+- `read_orders` exposes 60 days of history. Older dates show as not imported (hatched, "Not
+  imported", and a line under the dates saying from when the orders are in), never as zero sales,
+  until `read_all_orders` is granted and its year-by-year import has reached them. No figure is ever
+  estimated for them. A public app gets `read_all_orders` only once Shopify approves it for the scope
+  (docs/shopify-setup.md), so until then no store can reach further back than its import window.
 - An edit reaches the dashboard through the `orders/updated` delivery it causes (`orders/edited` isn't subscribed): its totals change, so the order's sales are read again.
 - Days before the switch to Shopify's sales records keep their old totals until their orders are read again (the dashboard's refresh re-reads the 60-day import window once); older days than that keep them for good.
+
+## Repeat customers and monthly cohorts
+
+The Customers page's repeat purchase rate, orders and net sales per customer, and monthly
+first-order cohorts with month-by-month retention: definitions, where they start
+(`customersFrom`: the first whole day every order's customer is known) and who sees which figure
+are in [customer-analytics.md](customer-analytics.md). All of them come from the orders held, never
+estimated; a cohort month that began before customers are known is marked partial, and a month
+that hasn't come has no figure.

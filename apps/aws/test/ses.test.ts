@@ -1,6 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@app/core/mailer", async (orig) => ({ ...(await orig<typeof import("@app/core/mailer")>()), env: () => ({ EMAIL_FROM: "bizinsights <no-reply@example.test>" }) }));
+vi.mock("@app/core/mailer", async (orig) => ({
+  ...(await orig<typeof import("@app/core/mailer")>()),
+  env: () => ({
+    EMAIL_FROM: "bizinsights <no-reply@example.test>",
+    OTP_FROM_EMAIL: "support@example.test",
+    OTP_FROM_NAME: "Example Support",
+    LINK_FROM_EMAIL: "link@example.test",
+    LINK_FROM_NAME: "Example",
+    STAFF_FROM_EMAIL: "staff@example.test",
+    STAFF_FROM_NAME: "Example",
+    SUPPORT_EMAIL: "support@example.test",
+  }),
+}));
 
 const { sesMailer } = await import("../src/sesMailer.js");
 const { chooseMailer } = await import("../src/mailers.js");
@@ -25,6 +37,21 @@ describe("the SES mailer", () => {
       Content: { Simple: { Subject: { Data: "Hi", Charset: "UTF-8" }, Body: { Text: { Data: "plain", Charset: "UTF-8" }, Html: { Data: "<p>rich</p>", Charset: "UTF-8" } } } },
       ConfigurationSetName: "cs",
     });
+  });
+
+  it("sends each email from the sender its purpose names: codes from support, invitations from link, the rest from EMAIL_FROM", async () => {
+    const from: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      from.push(JSON.parse(await new Request(input, init).text()).FromEmailAddress);
+      return new Response(JSON.stringify({ MessageId: "1" }));
+    }) as typeof fetch;
+    const mailer = sesMailer({ region: "ap-southeast-2", credentials: { accessKeyId: "a", secretAccessKey: "b" }, fetchImpl });
+    await mailer.send("a@example.test", "s", "t", undefined, { purpose: "login_code" });
+    await mailer.send("a@example.test", "s", "t", undefined, { purpose: "password_reset_code" });
+    await mailer.send("a@example.test", "s", "t", undefined, { purpose: "team_invitation" });
+    await mailer.send("a@example.test", "s", "t", undefined, { purpose: "notice" });
+    await mailer.send("a@example.test", "s", "t");
+    expect(from).toEqual(["Example Support <support@example.test>", "Example Support <support@example.test>", "Example <link@example.test>", "bizinsights <no-reply@example.test>", "bizinsights <no-reply@example.test>"]);
   });
 
   it("sends replies where the message says (an invitation: to whoever sent it)", async () => {

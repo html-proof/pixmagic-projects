@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { syncAdConnection, type AdsSyncData } from "@app/core";
+import { googleAdsOperationsToday, syncAdConnection, type AdsSyncData } from "@app/core";
 import { addDays, DEMO_ACCOUNT_ID, DEMO_CAMPAIGNS, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -200,6 +200,57 @@ describe("the demo's figures", () => {
     expect(names).not.toContain("Website Traffic");
     expect(names).toHaveLength(DEMO_CAMPAIGNS.length - 1);
     expect(res.json().report.rows[0]).toHaveProperty("dailyBudget");
+    // A real account's campaign fields: Google's primary status and its reasons, and the budget's period.
+    const search = res.json().report.rows.find((r: { id: string }) => r.id === "demo-c2");
+    expect(search).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null });
+    expect(fetched).toEqual([]);
+  });
+
+  it("open a campaign's ad groups, a Performance Max campaign's asset groups and an ad group's ads, all without Google", async () => {
+    await connectAndSync();
+    const row = await demoRow();
+    const today = localDay(new Date(), "Australia/Melbourne");
+    const report = (q: Record<string, string>) => get(`/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection: row.id, from: addDays(today, -7), to: today, ...q })}`);
+    const campaign = (await report({ level: "campaign" })).json().report.rows.find((r: { id: string }) => r.id === "demo-c2");
+    const groups = await report({ level: "ad_group", campaign: "demo-c2" });
+    expect(groups.statusCode).toBe(200);
+    expect(groups.json().report.rows.map((r: { id: string }) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
+    // Split from the campaign: its ad groups add up to it.
+    expect(groups.json().report.totals.spend).toBeCloseTo(campaign.spend, 2);
+    const ads = await report({ level: "ad", campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.rows.length).toBeGreaterThanOrEqual(2);
+    expect(ads.json().report.rows.every((r: { adGroupId: string; adType: string }) => r.adGroupId === "demo-c2-core" && r.adType === "RESPONSIVE_SEARCH_AD")).toBe(true);
+    const assets = await report({ level: "asset_group", campaign: "demo-c7" });
+    expect(assets.json().report.rows).toHaveLength(2);
+    // The demo's ids only: a Google-shaped id isn't one of the demo's.
+    expect((await report({ level: "ad_group", campaign: "12345" })).statusCode).toBe(400);
+    expect(fetched).toEqual([]);
+  });
+
+  it("keywords and search terms, generated: no Google call, no operation spent, and no daily cap", async () => {
+    await connectAndSync();
+    const row = await demoRow();
+    const today = localDay(new Date(), "Australia/Melbourne");
+    const report = (q: Record<string, string>) => get(`/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection: row.id, from: addDays(today, -30), to: today, ...q })}`);
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    const keywords = await report({ level: "keyword" });
+    expect(keywords.statusCode).toBe(200);
+    const rows = keywords.json().report.rows as Array<{ campaignId: string; matchType: string; qualityScore: number }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(new Set(rows.map((r) => r.campaignId))).toEqual(new Set(["demo-c2", "demo-c5"]));
+    expect(rows.every((r) => ["EXACT", "PHRASE", "BROAD"].includes(r.matchType) && r.qualityScore >= 1 && r.qualityScore <= 10)).toBe(true);
+    const inGroup = await report({ level: "keyword", campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(inGroup.json().report.rows.every((r: { adGroupId: string }) => r.adGroupId === "demo-c2-core")).toBe(true);
+    const terms = await report({ level: "search_term", campaign: "demo-c7" });
+    expect(terms.statusCode).toBe(200);
+    expect(terms.json().report.rows.length).toBeGreaterThan(0);
+    // The campaign's own figures on top: more than its listed terms.
+    const listed = terms.json().report.rows.reduce((a: number, r: { spend: number }) => a + r.spend, 0);
+    expect(terms.json().report.totals.spend).toBeGreaterThan(listed);
+    // Past the 25 a day a real account may read from Google: the demo costs nothing, so nothing holds it back.
+    for (let i = 1; i <= 24; i++) expect((await report({ level: i % 2 ? "search_term" : "keyword", from: addDays(today, -30 - i) })).statusCode).toBe(200);
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before);
     expect(fetched).toEqual([]);
   });
 
@@ -235,7 +286,54 @@ describe("the demo's figures", () => {
     expect(a.combined.note).toContain("Not your Shopify sales");
     // Compared with the 30 days before, which the demo has as well.
     expect(a.overview.previous).not.toBeNull();
+    // Its campaigns' types, statuses and budgets are the generator's; the sync stored the same facts, as it does a real account's.
+    expect(a.campaignSettings).toEqual({ source: "generated", asOf: null });
+    expect(a.campaigns.every((c: { primaryStatus: string | null; budgetPeriod: string | null }) => c.primaryStatus !== null && c.budgetPeriod === "DAILY")).toBe(true);
+    const stored = await systemDb.adCampaign.findFirstOrThrow({ where: { connectionId: (await demoRow()).id, campaignId: "demo-c2" } });
+    expect(stored).toMatchObject({ channelType: expect.any(String), primaryStatus: expect.any(String), budgetPeriod: "DAILY" });
+    expect(Number(stored.budgetAmount)).toBe(a.campaigns.find((c: { id: string }) => c.id === "demo-c2").dailyBudget);
     expect(fetched).toEqual([]);
+  });
+
+  it("a real account's analytics: each campaign's type, status and budget as its last sync stored them, never made up", async () => {
+    const real = await systemDb.adConnection.create({
+      data: { workspaceId: ws, storeId, provider: "google", accountId: "1234567890", accountName: "Real", currency: "AUD", timezone: "UTC", accessTokenEnc: "v1.real", tokenKeyVersion: 1, historyFrom: "2026-01-01", syncedThrough: localDay(new Date(), "UTC") },
+    });
+    const today = localDay(new Date(), "UTC");
+    const [from, to] = [addDays(today, -3), addDays(today, -1)];
+    const at = { workspaceId: ws, storeId, connectionId: real.id, provider: "google", accountId: "1234567890" };
+    for (const day of [from, addDays(from, 1), to]) {
+      for (const [campaignId, spend] of [["7", 8], ["8", 20], ["9", 1]] as const) {
+        await systemDb.adCampaignDaily.create({ data: { ...at, campaignId, campaignName: `Campaign ${campaignId}`, day, spend, impressions: 100, clicks: 4 } });
+      }
+    }
+    const read = new Date("2026-10-30T06:00:00Z");
+    await systemDb.adCampaign.createMany({
+      data: [
+        { ...at, campaignId: "7", name: "Search - brand", status: "ENABLED", channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 10, checkedAt: read },
+        { ...at, campaignId: "8", name: "PMax launch", status: "ENABLED", channelType: "PERFORMANCE_MAX", primaryStatus: "ELIGIBLE", budgetPeriod: "CUSTOM_PERIOD", budgetAmount: 500, checkedAt: new Date("2026-10-30T05:00:00Z") },
+        // Read before its facts were: its status only.
+        { ...at, campaignId: "9", name: "Old", status: "PAUSED", checkedAt: new Date("2026-10-29T05:00:00Z") },
+        // No figures in the dates: not listed at zero.
+        { ...at, campaignId: "10", name: "Idle", status: "ENABLED", channelType: "DISPLAY", budgetPeriod: "DAILY", budgetAmount: 3, checkedAt: read },
+      ],
+    });
+    const res = await get(`${base}/analytics?preset=custom&from=${from}&to=${to}&connection=${real.id}`);
+    expect(res.statusCode).toBe(200);
+    const a = res.json();
+    expect(a.account).toMatchObject({ demo: false, connectionType: "production" });
+    expect(a.campaignSettings).toEqual({ source: "synced", asOf: read.toISOString() });
+    const by = Object.fromEntries(a.campaigns.map((c: Record<string, unknown>) => [c.id, c]));
+    expect(Object.keys(by).sort()).toEqual(["7", "8", "9"]);
+    // A daily budget: today's, paced over the days the campaign ran in the dates (3 × $10 = $30, $24 of it spent).
+    expect(by["7"]).toMatchObject({ name: "Search - brand", type: "SEARCH", status: "ENABLED", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", dailyBudget: 10, totalBudget: null, activeDays: 3, budget: 30, budgetUse: 0.8 });
+    // A campaign total budget covers its own dates, not these: stated, never paced.
+    expect(by["8"]).toMatchObject({ type: "PERFORMANCE_MAX", primaryStatus: "ELIGIBLE", budgetPeriod: "CUSTOM_PERIOD", totalBudget: 500, dailyBudget: null, budget: null, budgetUse: null });
+    // Not read yet: nothing in their place.
+    expect(by["9"]).toMatchObject({ type: null, status: "PAUSED", primaryStatus: null, primaryStatusReasons: [], budgetPeriod: null, dailyBudget: null, budget: null });
+    // A paused campaign gets no recommendation; the table filters by the stored type.
+    const searchOnly = await get(`${base}/analytics/campaigns?preset=custom&from=${from}&to=${to}&connection=${real.id}&type=SEARCH`);
+    expect(searchOnly.json().rows.map((c: { id: string }) => c.id)).toEqual(["7"]);
   });
 
   it("the campaign table: search, filters, sorting, pages and dates", async () => {
@@ -275,7 +373,7 @@ describe("the demo's figures", () => {
 });
 
 describe("sync, reset and disconnect", () => {
-  it("Sync demo data queues one catch-up at a time, and two syncs of the same days never double a row", async () => {
+  it("Sync demo data queues one catch-up at a time; two syncs of the same days never double a row, and with the coordinator one waits for the other", async () => {
     await connectAndSync();
     const first = await post(`${base}/demo/sync`);
     expect(first.statusCode).toBe(200);
@@ -284,11 +382,17 @@ describe("sync, reset and disconnect", () => {
     expect(second.json().queued).toBe(false);
     const row = await demoRow();
     const job = (ctx.deps.queues.sent.sync as unknown as AdsSyncData[]).find((j) => j.kind === "ads")!;
-    // The same job run twice at once, as a redelivered message would be.
-    await Promise.all([
-      syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, coord: ctx.deps.coord }),
-      syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, coord: ctx.deps.coord }),
-    ]);
+    // The same job run twice at once, as a redelivered message would be. Without the coordinator (an ops
+    // script, or a coordinator that didn't answer) the two write side by side, and still never double a row.
+    const sync = (withCoord: boolean) =>
+      syncAdConnection(row.id, job.since, job.until, ctx.deps.fetchImpl, { trigger: "request", queues: ctx.deps.queues, ...(withCoord ? { coord: ctx.deps.coord } : {}) });
+    expect(await Promise.all([sync(false), sync(false)])).toMatchObject([{ skipped: false }, { skipped: false }]);
+    // With it, one reads the days; the other, finding it running, reads nothing ("busy"), and sent again
+    // by the worker once the first has ended, it syncs.
+    const both = await Promise.all([sync(true), sync(true)]);
+    expect(both.filter((r) => r.skipped && r.reason === "busy")).toHaveLength(1);
+    expect(both.filter((r) => !r.skipped)).toHaveLength(1);
+    expect(await sync(true)).toMatchObject({ skipped: false });
     const days = await systemDb.adCampaignDaily.findMany({ where: { connectionId: row.id }, select: { campaignId: true, day: true } });
     expect(new Set(days.map((d) => `${d.campaignId}|${d.day}`)).size).toBe(days.length);
     expect((await get(`${base}/status`)).json().demo.status).toBe("connected_demo");

@@ -361,6 +361,22 @@ describe("webhook processing", () => {
     expect(queues.sent.sync).toEqual([]);
   });
 
+  it("app/scopes_update records when read_customers was granted, no later than the re-read it queues, and clears it when it goes", async () => {
+    const store = await makeStore(["read_orders", "read_products"]);
+    const before = Date.now();
+    await webhook("app/scopes_update", { current: ["read_orders", "read_products", "read_customers"] });
+    const at = (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom!;
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+    // Queued before the scopes were saved, yet not before the grant's moment: the import moves it back once in.
+    const reread = await systemDb.syncJob.findFirstOrThrow({ where: { storeId: store.id, kind: "orders" } });
+    expect(reread.createdAt.getTime()).toBeGreaterThanOrEqual(at.getTime());
+    // Another scope leaves it as it was.
+    await webhook("app/scopes_update", { current: ["read_orders", "read_products", "read_customers", "write_pixels"] });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toEqual(at);
+    await webhook("app/scopes_update", { current: ["read_orders", "read_products", "write_pixels"] });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toBeNull();
+  });
+
   it("ignores an app/uninstalled delivery that predates the current installation", async () => {
     const store = await makeStore();
     // Shopify retries a failed delivery for up to 48h. The merchant uninstalled, then reinstalled
@@ -525,6 +541,30 @@ describe("webhook processing", () => {
     expect(await systemDb.order.count()).toBe(0);
     expect(await systemDb.orderLineItem.count()).toBe(0);
     expect(await systemDb.auditLog.count({ where: { action: { startsWith: "gdpr." } } })).toBe(2);
+  });
+
+  it("GDPR: customers/redact unlinks the orders it names without a customer id, every order of that customer, and counts their days again", async () => {
+    const store = await makeStore();
+    await claim(store.workspaceId);
+    await webhook("orders/create", order());
+    const line = (id: number) => [{ id, product_id: 50, title: "Tee", quantity: 1, price: "50.00", total_discount: "0" }];
+    await webhook("orders/create", order({ id: 1002, name: "#1002", created_at: "2026-03-02T15:00:00Z", updated_at: "2026-03-02T15:00:00Z", line_items: line(2) }));
+    await webhook("orders/create", order({ id: 1003, name: "#1003", customer: { id: 8 }, line_items: line(3) }));
+    await drainAggregates();
+    const day = (d: string) => systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: d } } });
+    expect(await day("2026-03-01")).toMatchObject({ orders: 2, ordersWithCustomer: 2 });
+    expect(await day("2026-03-02")).toMatchObject({ orders: 1, ordersWithCustomer: 1, returningCustomerOrders: 1 });
+
+    await webhook("customers/redact", { customer: { email: "pii@example.com" }, orders_to_redact: [1001] });
+    // #1002 wasn't named, but it is the same customer's: it goes too. Customer 8's order stays theirs.
+    expect((await systemDb.order.findMany({ orderBy: { shopifyId: "asc" } })).map((o) => [o.shopifyId, o.customerKey !== null])).toEqual([
+      ["1001", false],
+      ["1002", false],
+      ["1003", true],
+    ]);
+    await drainAggregates();
+    expect(await day("2026-03-01")).toMatchObject({ orders: 2, ordersWithCustomer: 1 });
+    expect(await day("2026-03-02")).toMatchObject({ orders: 1, ordersWithCustomer: 0, returningCustomerOrders: 0 });
   });
 
   it("GDPR: shop/redact erases the store itself, so a later install can't join the old account", async () => {
@@ -889,6 +929,7 @@ describe("aggregation parity", () => {
         duties: toNumber(r.duties),
         additionalFees: toNumber(r.additionalFees),
         totalSales: toNumber(r.totalSales),
+        totalRefunded: toNumber(r.totalRefunded),
         orderValue: toNumber(r.orderValue ?? 0),
       })),
     );
@@ -896,6 +937,9 @@ describe("aggregation parity", () => {
     // Duties and additional fees each on their own line (4.00 before tax per sale: 4.40 less 0.40 tax).
     expect(sqlSummary.duties).toBeGreaterThan(0);
     expect(sqlSummary.additionalFees).toBeGreaterThan(0);
+    // What the returns took off total sales, tax in: 7 items at 3.33, 5 adjustment sets of +2 −2 −2
+    // (2.00 each) and 3 shipping refunds at 4.40. The edits (−1.50) are no refund.
+    expect(sqlSummary.totalRefunded).toBe(46.51);
     expect(sql.map((r) => r.day).sort()).toEqual([...ref.keys()].sort());
     for (const r of sql) {
       const t = ref.get(r.day)!;
@@ -903,7 +947,7 @@ describe("aggregation parity", () => {
       expect(r.units).toBe(t.units);
       expect(r.refundedOrders).toBe(t.refundedOrders);
       expect(r.returningCustomerOrders).toBe(t.returningCustomerOrders);
-      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "duties", "additionalFees", "totalSales", "orderValue"] as const) expect(toNumber(r[k] ?? 0)).toBeCloseTo(t[k], 2);
+      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "duties", "additionalFees", "totalSales", "totalRefunded", "orderValue"] as const) expect(toNumber(r[k] ?? 0)).toBeCloseTo(t[k], 2);
       // Shopify's identity, day by day: the lines add up to total sales to the cent.
       const lines = toNumber(r.grossSales) - toNumber(r.discounts) - toNumber(r.refunds) + toNumber(r.shipping) + toNumber(r.taxes) + toNumber(r.duties) + toNumber(r.additionalFees);
       expect(Math.round(lines * 100)).toBe(Math.round(toNumber(r.totalSales) * 100));
@@ -1461,20 +1505,28 @@ describe("orders pipeline", () => {
     expect(ordersSearch({}, ["read_orders"], now)).toBe(`created_at:>='${new Date(now - BACKFILL_DAYS * 86400_000).toISOString()}'`);
     expect(ordersSearch({ sinceDays: 3 }, ["read_orders", "read_all_orders"], now)).toBe(`updated_at:>='${new Date(now - 3 * 86400_000).toISOString()}'`);
 
+    // With read_all_orders the whole history is read a calendar year at a time, newest first, from
+    // the year of the store's first order (apps/worker/test/orderHistory.test.ts follows it through).
     const store = await makeStore(["read_orders", "read_all_orders"]);
     const job = await makeJob(store, "orders");
     let vars: Record<string, unknown> = {};
     fetchImpl = async (_u, init) => {
-      vars = gqlBody(init).variables;
+      const body = gqlBody(init);
+      if (body.query.includes("query OldestOrder")) return gqlJson({ orders: { nodes: [{ createdAt: "2019-05-01T00:00:00Z" }] } });
+      vars = body.variables;
       return gqlJson(ordersPage([gOrder(1, { createdAt: "2019-05-01T00:00:00Z", updatedAt: "2019-05-01T00:00:00Z" })]));
     };
     await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, pagedOnly: true }, deps);
-    expect(vars).toMatchObject({ query: null });
+    const thisYear = Number(localDay(new Date(), "America/New_York").slice(0, 4));
+    const years = await systemDb.orderHistoryWindow.findMany({ where: { storeId: store.id }, orderBy: { year: "desc" } });
+    expect(years.map((y) => y.year)).toEqual(Array.from({ length: thisYear - 2018 }, (_, i) => thisYear - i));
+    // This year first: from midnight on 1 January in New York.
+    expect(vars).toMatchObject({ query: `created_at:>='${years[0]!.fromAt.toISOString()}'` });
+    expect(years[0]!.fromAt.toISOString()).toBe(`${thisYear}-01-01T05:00:00.000Z`);
     expect((await systemDb.order.findFirstOrThrow()).localDay).toBe("2019-04-30"); // New York
-    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
-    expect(after.status).toBe("active");
-    // The whole history is in: no comparison reaches back before it.
-    expect(after.ordersHistoryFrom).toEqual(new Date(0));
+    // The next year goes out on its own; the store isn't fully synced until the oldest is in.
+    expect(queues.sent.sync.at(-1)).toMatchObject({ kind: "orders", syncJobId: job.id, history: { windowId: years[1]!.id } });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).lastSyncedAt).toBeNull();
   });
 
   it("records where the imported order history starts: the window, the earliest one, never a reconcile's", async () => {
@@ -1525,6 +1577,66 @@ describe("orders pipeline", () => {
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(from) } });
     await purgeStoreData(store.id);
     expect(await historyFrom()).toBeNull();
+  });
+
+  /**
+   * stores.customers_from: the moment read_customers was granted, until the import that re-reads
+   * the orders with their customer is in; then that import's window, from which every order says
+   * who placed it (docs/customer-analytics.md "Where it starts").
+   */
+  it("moves the start of the known customers back to the re-read's window once it is in, for a re-read queued since the grant", async () => {
+    const store = await makeStore(["read_orders", "read_customers"]);
+    fetchImpl = async () => gqlJson(ordersPage([gOrder(1, { createdAt: new Date(Date.now() - 10 * 86400_000).toISOString() })]));
+    const customersFrom = async () => (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom;
+    const sync = async (job: { id: string }, data: Partial<SyncJobData> = {}) => {
+      const start = Date.now();
+      await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, pagedOnly: true, ...data }, deps);
+      return { start, end: Date.now() };
+    };
+
+    const tick = () => new Promise((r) => setTimeout(r, 10));
+
+    // An import queued before the grant read orders without their customer, at least at first: nothing moves.
+    const early = await makeJob(store, "orders");
+    await tick();
+    const granted = new Date();
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: granted } });
+    await sync(early);
+    expect(await customersFrom()).toEqual(granted);
+
+    // The re-read the grant queued: customers are known from its window's start, 60 days back from when it was in.
+    await tick();
+    const t = await sync(await makeJob(store, "orders"));
+    const moved = (await customersFrom())!.getTime();
+    expect(moved).toBeGreaterThanOrEqual(t.start - BACKFILL_DAYS * 86400_000);
+    expect(moved).toBeLessThanOrEqual(t.end - BACKFILL_DAYS * 86400_000);
+    // A later re-read of the window keeps the earliest, and a reconcile covers no window at all.
+    await sync(await makeJob(store, "orders"), { sinceDays: BACKFILL_DAYS });
+    await sync(await makeJob(store, "orders"), { sinceDays: RECONCILE_ORDER_DAYS });
+    expect((await customersFrom())!.getTime()).toBe(moved);
+
+    // Not recorded (granted before the column existed) or given up since: an import records nothing.
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: null } });
+    await sync(await makeJob(store, "orders"));
+    expect(await customersFrom()).toBeNull();
+    // Nor without read_customers, whatever was recorded.
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date(Date.now() - 1000), grantedScopes: ["read_orders"] } });
+    const kept = await customersFrom();
+    await sync(await makeJob(store, "orders"));
+    expect(await customersFrom()).toEqual(kept);
+    // Purging the orders forgets it with them.
+    await purgeStoreData(store.id);
+    expect(await customersFrom()).toBeNull();
+  });
+
+  it("records the whole history as read with customers when it was imported with read_customers held", async () => {
+    const store = await makeStore(["read_orders", "read_all_orders", "read_customers"]);
+    await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date(Date.now() - 60_000) } });
+    // No orders at all: the whole (empty) history is in.
+    fetchImpl = async () => gqlJson({ orders: { nodes: [] } });
+    const job = await makeJob(store, "orders");
+    await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id }, deps);
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toEqual(new Date(0));
   });
 
   it("halves the page size and re-enqueues the same page when Shopify reports MAX_COST_EXCEEDED", async () => {
@@ -1678,6 +1790,84 @@ describe("catalog and stock pipeline", () => {
     const p = await systemDb.product.findFirstOrThrow();
     expect(p).toMatchObject({ shopifyId: "8", status: "active", vendor: "Acme", productType: "Shirts" });
     expect(p.shopifyCreatedAt?.toISOString()).toBe("2025-06-01T00:00:00.000Z");
+  });
+
+  const collection = (id: number) => ({ id: `gid://shopify/Collection/${id}`, title: `C${id}` });
+  const pageNode = (over: Record<string, unknown> = {}) => ({
+    id: "gid://shopify/Product/8",
+    title: "Tee",
+    status: "ACTIVE",
+    vendor: "Acme",
+    productType: "Shirts",
+    updatedAt: "2026-03-01T00:00:00Z",
+    handle: "tee",
+    ...over,
+  });
+
+  it("reads every collection of a product in more than its page holds, and keeps them when Shopify withholds them", async () => {
+    const store = await makeStore();
+    const calls: GqlBody[] = [];
+    fetchImpl = async (_u, init) => {
+      const body = gqlBody(init);
+      calls.push(body);
+      if (body.query.includes("query ProductCollections")) {
+        // 12 in all: the page held the first 10, then two more pages of one.
+        return body.variables.cursor === "c10"
+          ? gqlJson({ product: { collections: { pageInfo: { hasNextPage: true, endCursor: "c11" }, nodes: [collection(11)] } } })
+          : gqlJson({ product: { collections: { pageInfo: { hasNextPage: false, endCursor: "c12" }, nodes: [collection(12)] } } });
+      }
+      return gqlJson({
+        products: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            pageNode({ collections: { pageInfo: { hasNextPage: true, endCursor: "c10" }, nodes: Array.from({ length: 10 }, (_, i) => collection(i + 1)) } }),
+            pageNode({ id: "gid://shopify/Product/9", title: "Mug", collections: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }),
+          ],
+        },
+      });
+    };
+    await runSync({ storeId: store.id, kind: "products", syncJobId: (await makeJob(store, "products")).id }, deps);
+    expect(calls.filter((c) => c.query.includes("query ProductCollections")).map((c) => c.variables)).toEqual([
+      { id: "gid://shopify/Product/8", cursor: "c10" },
+      { id: "gid://shopify/Product/8", cursor: "c11" },
+    ]);
+    const tee = await systemDb.product.findFirstOrThrow({ where: { shopifyId: "8" } });
+    expect(tee.collections).toEqual(Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1), title: `C${i + 1}` })));
+    // In no collection: an empty list, not "never read".
+    expect((await systemDb.product.findFirstOrThrow({ where: { shopifyId: "9" } })).collections).toEqual([]);
+
+    // A later catalog read where Shopify withheld the collections (null): the stored ones stay.
+    fetchImpl = async () => gqlJson({ products: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [pageNode({ title: "Tee 2", updatedAt: "2026-03-02T00:00:00Z", collections: null })] } });
+    await runSync({ storeId: store.id, kind: "products", syncJobId: (await makeJob(store, "products")).id }, deps);
+    const kept = await systemDb.product.findFirstOrThrow({ where: { shopifyId: "8" } });
+    expect(kept.title).toBe("Tee 2");
+    expect(kept.collections).toHaveLength(12);
+  });
+
+  it("reads a new product's collections on products/create, and leaves them to the catalog read when Shopify can't say", async () => {
+    await makeStore();
+    const asked: GqlBody[] = [];
+    fetchImpl = async (_u, init) => {
+      asked.push(gqlBody(init));
+      return gqlJson({ product: { collections: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [collection(5)] } } });
+    };
+    await webhook("products/create", restProduct());
+    expect(asked.map((b) => b.variables)).toEqual([{ id: "gid://shopify/Product/8", cursor: null }]);
+    expect((await systemDb.product.findFirstOrThrow()).collections).toEqual([{ id: "5", title: "C5" }]);
+    // products/update (sent for every order of the product too) doesn't ask.
+    await webhook("products/update", restProduct({ updated_at: "2026-03-03T00:00:00Z" }));
+    expect(asked).toHaveLength(1);
+    expect((await systemDb.product.findFirstOrThrow()).collections).toEqual([{ id: "5", title: "C5" }]);
+
+    // Shopify failing the read: the product is stored all the same, its collections unknown.
+    await systemDb.product.deleteMany();
+    fetchImpl = async () =>
+      new Response(JSON.stringify({ errors: [{ message: "Internal error", extensions: { code: "INTERNAL_SERVER_ERROR" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    const { ev } = await webhook("products/create", restProduct({ id: 9, variants: [] }));
+    expect((await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).toBe("succeeded");
+    const p = await systemDb.product.findFirstOrThrow({ where: { shopifyId: "9" } });
+    expect(p.title).toBe("Tee");
+    expect(p.collections).toBeNull();
   });
 
   it("syncs variants page by page with price, stock and unit cost", async () => {
@@ -2110,6 +2300,33 @@ describe("writeOrderBatch matches upsertOrder", () => {
       ],
     },
     ...over,
+  });
+
+  it.each(["single", "batch"] as const)("retains historical line identity after product deletion in the %s path", async (path) => {
+    const store = await makeStore(["read_orders"], "UTC", `history-${path}.myshopify.com`);
+    const write = async (orders: ReturnType<typeof normalizeGraphqlOrder>[]) => {
+      if (path === "batch") await writeOrderBatch(store, orders);
+      else for (const order of orders) await upsertOrder(store, order);
+    };
+    const first = normalizeGraphqlOrder(gqlOrder(1));
+    const second = normalizeGraphqlOrder(gqlOrder(2));
+    second.lineItems[0]!.variantShopifyId = "10";
+    second.lineItems[0]!.sku = "TEE-2";
+    await write([first, second]);
+    const deleted = [first, second].map(order => ({ ...order, updatedAt: new Date("2026-03-04T00:00:00Z"),
+      lineItems: order.lineItems.map(line => ({ ...line, productShopifyId: null, variantShopifyId: null, sku: null, title: "", price: 70 })) }));
+    await write(deleted);
+    await write(deleted); // A duplicate refresh must preserve identity without duplicating lines.
+    const lines = await systemDb.orderLineItem.findMany({ where: { storeId: store.id }, orderBy: { shopifyId: "asc" } });
+    expect(lines).toHaveLength(2);
+    expect(lines.map(line => [line.productShopifyId, line.variantShopifyId, line.sku, line.title, toNumber(line.price)])).toEqual([
+      ["50", "9", "TEE-1", first.lineItems[0]!.title, 70],
+      ["50", "10", "TEE-2", second.lineItems[0]!.title, 70],
+    ]);
+    const corrected = { ...first, updatedAt: new Date("2026-03-05T00:00:00Z"),
+      lineItems: first.lineItems.map(line => ({ ...line, productShopifyId: "60", variantShopifyId: "11", sku: "CORRECTED", title: "Corrected" })) };
+    await write([corrected]);
+    expect(await systemDb.orderLineItem.findFirst({ where: { storeId: store.id, shopifyId: first.lineItems[0]!.shopifyId } })).toMatchObject({ productShopifyId: "60", variantShopifyId: "11", sku: "CORRECTED", title: "Corrected" });
   });
 
   const readStore = async (storeId: string) => {

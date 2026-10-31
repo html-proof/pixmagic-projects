@@ -31,23 +31,24 @@ This pushes, as one versioned config:
 | App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified: authorizes a store we hold no working token for, otherwise opens it) |
 | Redirect URL | `https://APP_DOMAIN/api/shopify/callback` |
 | Scopes | `read_orders,read_products` (required) |
-| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; `read_inventory`, `read_locations`, `write_inventory` (Inventory, [inventory.md](inventory.md)) since 2026-10-19; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
+| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; `read_inventory`, `read_locations`, `write_inventory` (Inventory, [inventory.md](inventory.md)) since 2026-10-19; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install). Per app on top of those: `read_reports` in `shopify.app.toml` and `shopify.app.pixmagic.toml` only, offered once listed in `SHOPIFY_APP_OPTIONAL_SCOPES` (see [Shopify's reports](#shopifys-reports-read_reports-sessions-visitors-gross-profit-the-check)) |
 | Webhooks | see [webhooks.md](webhooks.md), delivered to `https://APP_DOMAIN/api/webhooks/shopify` |
 | Compliance webhooks | `customers/data_request`, `customers/redact`, `shop/redact` |
 | Web pixel extension | `extensions/insights-pixel` |
 
-`SHOPIFY_SCOPES` / `SHOPIFY_OPTIONAL_SCOPES` in the API env must match the toml.
+`SHOPIFY_SCOPES` / `SHOPIFY_OPTIONAL_SCOPES` in the API env must match the toml; `SHOPIFY_APP_OPTIONAL_SCOPES` may only name scopes that app's own toml adds.
 
 ### Scope → feature map (least privilege)
 
 | Scope | Unlocks | Why |
 | --- | --- | --- |
-| `read_orders` | Sales overview, refunds (required) | Orders, line items, refunds. Gives the **last 60 days** only; request `read_all_orders` (needs Shopify approval) for longer history |
+| `read_orders` | Sales overview, refunds, Abandoned checkouts (Shopify) (required) | Orders, line items, refunds, and the counts and prices of Shopify's abandoned checkouts (never who left them). Gives the **last 60 days** only; request `read_all_orders` (needs Shopify approval) for longer history |
 | `read_products` | Top products, inventory, catalog | Products (title, status, vendor, type) and variants (price, stock, unit cost) |
 | `read_customers` (optional) | New vs returning | Only the customer id is used, and only as a keyed hash |
 | `write_pixels`, `read_customer_events` (optional) | Shopping funnel | Install the web pixel and receive storefront events |
 | `read_inventory`, `read_locations` (optional, once declared) | Inventory: stock per location and quantity state | docs/inventory.md, "Turning on stock levels and stock changes" |
 | `write_inventory` (optional, once declared) | Inventory: changing stock from bizinsights | Only when a person with `inventory.adjust` asks; each change confirmed by Shopify |
+| `read_reports` (optional, main and PixMagic apps only) | Sessions and visitors (Shopify), Gross profit, Checked against Shopify | ShopifyQL report totals only; also needs Level 2 protected customer data selected for the app, though no customer data is read |
 
 The dashboard reads the scopes **actually granted** (from the token response and `app/scopes_update`) and hides any module whose scopes are missing.
 
@@ -63,7 +64,7 @@ There are two ways in, and both end in Shopify's own OAuth screen; merchants are
 
 It then starts the first import and opens `/claim` (requirement 2.3.3), or the dashboard for an account that already has the store. `/claim` says the store is connected and adds it to a bizinsights account: create one or sign in (both come back to `/claim`), then "Add store and open dashboard" (`POST /api/shopify/claim`) makes that person the workspace's owner and clears `awaiting_claim`. The right to claim is a single-use `shopify_claim` cookie (24 h, `GET /api/shopify/claim` says which store) given only to a browser that came back from Shopify's own approval: opening an unclaimed store from the admin goes through the authorize URL again (no prompt, the app is installed) rather than trusting the signed launch link. Only workspaces with `awaiting_claim` can be claimed. Claims and store moves lock the workspace row, so they can't interleave. A store installed by someone already signed in who manages exactly one workspace goes straight to that workspace instead, as it always has. A workspace nobody claims is erased with its store on `shop/redact`.
 
-**From inside the app** (Settings → Shopify, or the first-run page `/onboarding`). "Continue with Shopify" sends a signed-in user to Shopify's managed install link, where they pick the store and approve; Shopify then opens `/api/shopify/launch`, which finishes the connection for the workspace remembered in this browser (`shopify_pending` cookie). The store address field appears only when the API answers `shop_required`, i.e. the main app is limited to named stores (`SHOPIFY_DEFAULT_APP_SHOPS`). Connecting a store that sits unclaimed in a workspace of its own moves it into the connecting workspace (Shopify's approval proves as much as a claim) and drops the empty workspace; a store another account has claimed is refused (`store_taken`).
+**From inside the app** (Settings → Shopify, or the first-run page `/onboarding`). "Continue with Shopify" sends a signed-in user to Shopify's managed install link, where they pick the store and approve; Shopify then opens `/api/shopify/launch`, which finishes the connection for the workspace remembered in this browser (`shopify_pending` cookie). The store address field appears only when the API answers `shop_required`, i.e. the main app is limited to named stores (`SHOPIFY_DEFAULT_APP_SHOPS`). Connecting a store that sits unclaimed in a workspace of its own moves it into the connecting workspace (Shopify's approval proves as much as a claim) and drops the empty workspace; a store another account has claimed is never moved (`store_taken`). Instead of an error on the connect page, the merchant lands on a dashboard (`takenLanding` in `routes/shopify.ts`): the store's own when they are a member of its workspace (`/dashboard?ws=…&store=…`, nothing said), otherwise their workspace's, with a note that the store belongs to another account and the way to connect a different one (`?taken=<shop>`; the store switcher's "+ Connect another store" opens Settings → Stores). A connect started in Settings → Stores comes back there with the `store_taken` message.
 
 The public "Continue with Shopify" sign-up (`/auth/shopify/start`, per-user grant, claim) was retired from the UI on 2026-10-10 and removed from the API on 2026-10-11; see git history before then for how it worked.
 
@@ -148,7 +149,8 @@ What keeps a store complete, and its limits:
   per 5 minutes per store.
 - **History.** Shopify gives 60 days of orders without `read_all_orders`; that scope has to be
   requested in the Partner Dashboard (API access requests) and approved for each app before a
-  store can grant it. Ranges reaching further back show only what was imported.
+  store can grant it. Ranges reaching further back show those days as not imported, and the line
+  under the dashboard's dates says from when the orders are in and why (below, "History import").
 - **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only with the GitHub
   variable `AWS_SCHEDULES=on`; without it, missed webhooks are repaired only while a dashboard is
   open, by "Sync now", or by the re-read above.
@@ -174,8 +176,53 @@ Shopify screen set to compare with 14 Mar), in this order:
    (`scopeFollowUpKinds`), which reads every order with no date filter and records the history as
    complete, so "No earlier data" goes away for any comparison.
 
-Declaring it in `optional_scopes` instead grants nothing by itself: no dashboard button asks for
-`read_all_orders` (it unlocks no module), so it would need one first.
+Or, once approved, declare it in `optional_scopes` instead (every toml and
+`SHOPIFY_OPTIONAL_SCOPES`, as in 3e): installs keep working for merchants who never want it, and the
+line under the dashboard's dates then offers owners and admins **Import full history**, which sends
+them to Shopify to grant it (`POST .../scopes/request` with `scopes: ["read_all_orders"]`). The
+overview's `data.history.access` says which applies to a store: `granted`, `reconnect` (declared
+required, this store's grant predates it), `requestable` (declared optional) or `awaiting_shopify`
+(declared nowhere: the dashboard says Shopify has to approve bizinsights first, with no button).
+
+Apps created in the Dev Dashboard under a merchant's own organization (not a Partner organization) need
+no approval for `read_all_orders`, per Shopify's access-scope docs; every app in `shopify-app/` is in
+a Partner organization today, and `SHOPIFY_SCOPES` is shared by all of them, so a scope added for one
+is asked of every store.
+
+### History import (read_all_orders): a year at a time
+
+With `read_all_orders`, a full orders import (the first import, a newly granted scope, a store whose
+sync broke) reads the store's whole history **one store-local calendar year at a time, newest first**
+(packages/core/src/orderHistory.ts, table `order_history_windows`):
+
+1. The import's first message asks Shopify for the store's first order (`OLDEST_ORDER_QUERY`,
+   `orders(first: 1, sortKey: CREATED_AT)`) and plans one row per year from that order's year to this
+   one. Years go by creation date, as the order search filters, with each boundary the start of
+   1 January in the store's time zone, shared by the years either side, so no order falls between
+   two. The newest year runs on to now; the oldest has no lower bound.
+2. Each year is one bulk export (`created_at:>='…' AND created_at:<'…'`), polled and ingested as the
+   60-day import is; a year whose export fails or runs past the poll limit is walked page by page on
+   its own, and the next year tries bulk again. The export submitted for a year is recorded on its
+   row, so a finished export of the year before is never read as this year's.
+3. When a year is in, its row is done with its order count, its days are added up (the dashboard shows
+   it at once), and the store's history start (`orders_history_from`) moves back to its 1 January once
+   every newer year is done too. After the oldest year the store's returning customers are settled, the
+   epoch is recorded (the whole history is in) and the import ends as any full import does.
+4. A job that gives up (its last retry, or the stale-job sweep) marks the year it was reading failed.
+   The next full import (the dashboard retries an `error` store about every half hour) **resumes**:
+   years already done are kept and the import carries on from the year that failed. The newest year
+   is always read again (orders kept coming meanwhile), and a plan read without customers is started
+   over once `read_customers` is granted, since its orders lack the customer. A plan whose years are
+   all done is started over by the next full import. Disconnecting the store deletes the rows.
+
+Why years: one export of five years of orders with their sales records can run for hours, and an
+export still running after about an hour is walked page by page instead, at Shopify's query-cost
+pace of about 7 orders every 9 seconds (days, for a large store). A year is a fraction of that, a
+year that fails is all that is read again, and the most recent years, the ones looked at most,
+arrive first. The dashboard's line under the dates names the years in and the one being read
+("2026 and 2025 are in, 2024 now (3 of 6 years)"), or the year that failed, from `data.history.years`.
+
+Without `read_all_orders` nothing above applies: Shopify's 60 days are read as one window.
 
 ## 3c. A client's store with its own app (custom distribution) — not the product strategy
 
@@ -222,6 +269,7 @@ being stuck with whatever the install screen asked for:
 | --- | --- | --- |
 | `read_customers` | repeat-customer share | `customers` ("New vs returning") |
 | `write_pixels` + `read_customer_events` | storefront sessions and conversion | `funnel` ("Shopping funnel") |
+| `read_reports` (main and PixMagic apps only, declared 2026-10-30, offered once listed per app) | Shopify's own sessions, online store visitors, gross profit and the sales check | `shopify_sessions`, `profit` ([Shopify's reports](#shopifys-reports-read_reports-sessions-visitors-gross-profit-the-check)) |
 
 Everything else — sales, refunds, top products, channels, order timing, fulfillment, discount
 codes, recent orders, inventory, catalog — needs only `read_orders` / `read_products` and is
@@ -290,32 +338,98 @@ What a revoke does *not* do: it does not delete data the scope let us import, an
 
 `packages/core/test/appConfig.test.ts` fails the build if the tomls and `settings.ts` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
 
+**One app's own optional scopes.** `SHOPIFY_OPTIONAL_SCOPES` is what *every* app declares; a scope only some apps may declare (today `read_reports`) goes after it in those apps' tomls and in `SHOPIFY_APP_OPTIONAL_SCOPES` as `appKey:scope,scope;appKey:scope` (`appOptionalScopes`, packages/core/src/scopes.ts). A store is offered what the app it is connected through declares (`optionalScopesFor`: the dashboard's **Enable**, `scopes/request`, `scopes/revoke` and Settings → Stores' **Remove** all use it), except a store in `SHOPIFY_APP_STORE_PREVIEW_SHOPS` (the App Store reviewer's test store, on the main app), which is offered only what the App Store app declares. appConfig.test.ts checks that every toml starts with the common list, adds only allowed scopes, declares everything its app's entry offers (the setting may lag the toml, never lead it), and that the App Store apps add nothing. An entry the API can't read is logged and offered to no app.
+
 Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-scope-back) above.
 
 ### Shopify's reports (`read_reports`): sessions, visitors, gross profit, the check
 
-**Current state (2026-10-17): built, not offered yet.** The dashboard can show Shopify Analytics'
-own sessions, visitors and conversion rate, its gross profit, and a line-by-line check of our sales
-figures against its sales report (docs/kpis.md, "Shopify's own reports"). They come from ShopifyQL
-(`shopifyqlQuery`), which needs the `read_reports` scope **and Level 2 protected customer data
-access** (name, email, phone, address), even though none of that data is read. Until both are in
-place the cards "Sessions and visitors (Shopify)" and "Gross profit" say bizinsights is waiting on
-Shopify, and nothing calls ShopifyQL. To turn them on, per app (PixMagic first: it is the store
-compared with Shopify):
+**Current state (2026-10-30): declared by the main and PixMagic apps, offered to no store yet.**
+The dashboard can show Shopify Analytics' own sessions, online store visitors and conversion rate,
+its gross profit, and a line-by-line check of our sales figures against its sales report
+(docs/kpis.md, "Shopify's own reports"). They come from ShopifyQL
+([`shopifyqlQuery`](https://shopify.dev/docs/api/admin-graphql/latest/queries/shopifyqlQuery)),
+which needs the `read_reports` scope **and Level 2 protected customer data** (the name, email,
+phone and address fields), even though no customer's details are read: only report totals. Until a
+store has granted `read_reports` the cards "Sessions and visitors (Shopify)" and "Gross profit" stay
+locked, and nothing calls ShopifyQL for it (the worker skips the store).
 
-1. Dev Dashboard → the app → **API access → Protected customer data access**: request the
-   customer data fields name, email, phone and address (Level 2), with "Store analytics" as the
-   reason. A custom-distribution app is granted as soon as the form is filled in; the App Store app
-   (`appstore`) needs Shopify's review.
-2. Add `"read_reports"` to `optional_scopes` in every toml and to `SHOPIFY_OPTIONAL_SCOPES` in
-   `apps/aws/src/settings.ts` (appConfig.test.ts checks they agree), `shopify app deploy` each
-   app (`--config pixmagic`, `--config appstore`, `--config public`), and merge to `main`.
-3. In the dashboard, **Enable** on either card takes the merchant to Shopify to grant it. The next
-   poll asks Shopify; the figures fill in within a minute.
+Where each app stands:
 
-Check: `aws lambda invoke --function-name insights-production-cron:live --payload
-'{"action":"shopify-check","shop":"<shop>.myshopify.com"}'` (docs/RUNBOOK.md) lists every figure
-with its status; rows say "hasn't granted" until step 3, "didn't let bizinsights read" until step 1.
+| App | `read_reports` in its toml | Offered (`SHOPIFY_APP_OPTIONAL_SCOPES`) | Level 2 |
+| --- | --- | --- | --- |
+| Main (`default`, 57e9ef75) | yes (`optional_scopes`, after the common list) | not yet | development stores: no review |
+| PixMagic (`pixmagic`, bb0ea9e4) | yes | not yet | custom distribution: "always available", but the fields must be selected (step 2) |
+| App Store (`appstore`, cf5c717d) | no | no | needs Shopify's review, which can't be asked for while the app is in App Store review |
+| First App Store app (`public`, 658431ae) | no | no | as `appstore`; never to be submitted |
+
+The setting is the switch, and it ships empty because Shopify grants an optional scope only once the
+app's **released** version declares it: offering **Enable** before `shopify app deploy` has released
+the toml sends the merchant to a Shopify error. Declaring a scope that nobody requests is harmless.
+The App Store reviewer's test store (`SHOPIFY_APP_STORE_PREVIEW_SHOPS`, on the main app) is never
+offered it, because the app under review doesn't declare it (`optionalScopesFor`).
+
+**Owner steps, in this order** (the CLI and the dashboards need the owner's own sign-in; CI never runs
+the Shopify CLI):
+
+1. **Release the two tomls.** From an up-to-date `main`, first compare what a deploy would release
+   with what is live: Dev Dashboard → the app → **Versions** → the active version, against
+   `shopify-app/shopify.app.toml` (or `.pixmagic.toml`) and `shopify-app/extensions/`. A deploy
+   releases the whole config, so the current insights-pixel extension and webhooks go out too.
+   Then, in PowerShell:
+
+   ```powershell
+   cd C:\Users\Seban\Videos\saas-project2.0\shopify-app
+   shopify app deploy --config shopify.app.toml
+   shopify app deploy --config pixmagic --version pixmagic-<n>
+   ```
+
+   The first is the main app (57e9ef75): always name its config, since a bare `shopify app deploy`
+   releases whichever config the CLI last used, which can be the App Store app under review. `<n>`
+   is the next number after PixMagic's live version (Dev Dashboard → Versions; pixmagic-7 was live
+   on 2026-10-16). Never `--config appstore` or `--config public` for this. Check: each app's new
+   active version lists `read_reports` under optional scopes. Roll back in the Dev Dashboard (Versions → Release) if anything else changed.
+2. **Level 2 fields for PixMagic.** Partner Dashboard (organization 5229240) → **Apps** → the
+   PixMagic app "bizinsights" (client id bb0ea9e4…) → **API access requests** → **Protected customer
+   data access** → **Request access**: select *Protected customer data* with the reason "Store
+   analytics", then the fields **Name, Email, Phone and Address**, each with the reason "Shopify's
+   reports API (ShopifyQL) requires them; bizinsights reads only report totals, no customer's
+   details", answer the data protection questions and **Save**. A custom-distribution app needs no
+   review. The main app's stores are development stores, which need no review either; if its
+   dashboard offers the same page, select the same fields there.
+3. **Offer it: a one-line pull request.** In `apps/aws/src/settings.ts` set
+   `"SHOPIFY_APP_OPTIONAL_SCOPES": "default:read_reports;pixmagic:read_reports"` (or
+   `"default:read_reports"` alone while step 2 waits). Open the pull request, merge it once CI is
+   green, and confirm its **Deploy to AWS** run succeeded and `https://bizinsights.io/api/version`
+   names the merge commit. appConfig.test.ts refuses an app whose toml lacks the scope, and any
+   App Store app.
+4. **Try it on a development store of the main app** (not Insights Test, the reviewer's store,
+   which is never offered it): Dashboard → **More insights you can unlock** → "Gross profit" or
+   "Sessions and visitors (Shopify)" → **Enable**, and approve on Shopify's screen. Back on the
+   dashboard the cards fill in on a later poll, within about a minute. Then run the check against
+   Shopify's own reports for that store (docs/RUNBOOK.md, "Dashboard numbers look wrong", step 2):
+   `aws lambda invoke --region ap-southeast-2 --function-name insights-production-cron:live
+   --cli-binary-format raw-in-base64-out --payload '{"action":"shopify-check","shop":"<store>.myshopify.com"}' check.json`.
+   Its rows say the store "hasn't granted bizinsights its Shopify reports" before the grant, and
+   "Shopify didn't let bizinsights read this report" while Level 2 is missing.
+5. **PixMagic's owner clicks Enable** on either card and approves on Shopify. Nobody else can grant
+   it for that store.
+
+What the cards say instead of a figure: "Shopify didn't let bizinsights read its reports…" is
+`access_denied` (Level 2 not selected yet; asked again after 6 hours); "Shopify can't run this
+report for this store (some reports need a higher Shopify plan)" is `unsupported`, which gross
+profit can be on lower Shopify plans while sessions still work. Never a 0 or an estimate.
+
+To stop offering it, empty the setting again (a pull request, as in step 3): stores that granted it
+keep it, their cards keep working, and Settings → Stores still lists it as optional with **Remove**
+(what a store may give back comes from `APP_EXTRA_OPTIONAL_SCOPES` in `packages/core/src/apps.ts`,
+which mirrors the tomls, not from the setting).
+
+The App Store apps get it only after App Store review has finished and Shopify has approved Level 2
+for that app: then add `"read_reports"` to that toml's `optional_scopes` and to its entry in
+`APP_EXTRA_OPTIONAL_SCOPES`, run `shopify app deploy --config appstore`, and add
+`appstore:read_reports` to the setting, changing appConfig.test.ts's rule that App Store apps declare
+nothing extra in the same pull request.
 
 ## 3d. Troubleshooting installs
 
@@ -334,7 +448,7 @@ Check, in order:
 
    Request it anyway, and **before** submitting: "Applying for protected customer data isn't possible while the app is under review", so submitting first forces a withdraw-and-resubmit and loses queue position.
 3. **The released version matches the toml.** Editing a toml changes nothing until `cd shopify-app && shopify app deploy`. Dev Dashboard → **Versions** → the active version shows the scopes and URLs merchants are actually being asked for. Compare them with `shopify-app/shopify.app.toml`.
-4. **The right `client_id`.** The one in the failing URL must be the app that store is allowed to install. For a store with its own app ([3c](#3c-a-clients-store-with-its-own-app-custom-distribution--not-the-product-strategy)) this is the check that has actually failed in production, so verify it against the deployed app rather than the repo: signed in, open **Settings → Shopify → Enter store address instead**, enter the store and press Connect. The `client_id` in the Shopify address the browser opens (also in the response to `POST /api/workspaces/<ws>/shopify/install`, DevTools → Network) is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/aws/src/settings.ts`, and editing that file changes nothing until it is merged to `main` and its **Deploy to AWS** run has succeeded. Confirm with `aws lambda get-function-configuration --function-name insights-production-api --qualifier live --query Environment.Variables.SHOPIFY_EXTRA_APPS`, which shows what the live version actually has. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`, set with `put-secrets.mjs --set` and read by the functions only when an instance starts) does the same thing. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the configuration is deployed.
+4. **The right `client_id`.** The one in the failing URL must be the app that store is allowed to install. For a store with its own app ([3c](#3c-a-clients-store-with-its-own-app-custom-distribution--not-the-product-strategy)) this is the check that has actually failed in production, so verify it against the deployed app rather than the repo: signed in, open **Settings → Shopify → Enter store address instead**, enter the store and press Connect. The `client_id` in the Shopify address the browser opens (also in the response to `POST /api/workspaces/<ws>/shopify/install`, DevTools → Network) is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/aws/src/settings.ts`, and editing that file changes nothing until it is merged to `main` and its **Deploy to AWS** run has succeeded. The settings ship in the functions' package, not their environment, so confirm the live release has that commit: `https://bizinsights.io/api/version` names the commit it was built from, and `git merge-base --is-ancestor <your commit> <that commit>` succeeds once it contains yours. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`, set with `put-secrets.mjs --set` and read by the functions only when an instance starts) does the same thing. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the configuration is deployed.
 5. **A stale link.** `access_change_uuid` is single use and short lived, and it is bound to the install attempt that created it — so a grant URL copied out of one person's address bar and sent to someone else *always* lands on this page. Send merchants to `/signup` (then Settings → Shopify), never to an `admin.shopify.com/.../app/grant?...` URL.
 
 While the app is unapproved, set `SHOPIFY_DEFAULT_APP_SHOPS` to our development stores. Merchants we cannot serve then get `app_unavailable` ("This store can't install our app yet…") from us, instead of being handed to a Shopify page that cannot work. Clear it again the day the app is approved, or the store picker stays disabled — see "Which app a store is sent to" above.
@@ -400,7 +514,7 @@ choice is permanent. Our four apps, all named "bizinsights" and all served by th
 
 This is the only thing that makes a client's store installable, and it is entirely done in Shopify's Dev Dashboard — there is no code change that substitutes for it. Expect the review itself to take days to weeks, and plan client onboarding around that.
 
-1. **Protected customer data access.** Dev Dashboard → the app → **API access → Protected customer data access** → request it, selecting the data and giving the reasons. `read_orders` needs it. Request **Level 2 (name, email, phone)** as well: the dashboard's "Customers to follow up" card (`apps/api/src/routes/contacts.ts`) reads shoppers' names, emails and phone numbers live from Shopify so merchants can contact people who abandoned checkout or subscribed. It never stores them, so say so in the request ("displayed to the merchant on demand, not persisted"). Until Level 2 is approved, live stores get those fields withheld and the card says so; development stores show them straight away.
+1. **Protected customer data access.** Dev Dashboard → the app → **API access → Protected customer data access** → request it, selecting the data and giving the reasons. `read_orders` needs it. Among the reasons, name **abandoned checkouts**: "abandoned checkout counts and values for store analytics (no names or contact details stored)" — the Shopping Funnel page's "Abandoned checkouts (Shopify)" card reads them (Level 1), and until the approval Shopify answers `ACCESS_DENIED` and the card says it is waiting on Shopify (docs/kpis.md "Abandoned checkouts (Shopify)"). Request **Level 2 (name, email, phone)** as well: the dashboard's "Customers to follow up" card (`apps/api/src/routes/contacts.ts`) reads shoppers' names, emails and phone numbers live from Shopify so merchants can contact people who abandoned checkout or subscribed. It never stores them, so say so in the request ("displayed to the merchant on demand, not persisted"). Until Level 2 is approved, live stores get those fields withheld and the card says so; development stores show them straight away.
 2. **Check what the app actually asks for.** `cd shopify-app && shopify app deploy`, then Dev Dashboard → **Versions** → confirm the active version declares `read_orders,read_products`, no optional scopes, and our URLs. `packages/core/test/appConfig.test.ts` keeps the repo side honest; only a deploy changes Shopify's side.
 3. **Billing through Shopify.** A public app that charges merchants has to bill through the Billing API — section 4. Billing is switched off and the listing says Free; once paid plans launch, the reviewer must be able to approve, upgrade, downgrade and cancel a plan on their development store.
 4. **The listing.** App name, icon, description, pricing, a privacy policy URL, and support contact. Unlisted apps still need a complete listing: choose **Unlisted / limited visibility** at submission so it is reachable by link without appearing in search.

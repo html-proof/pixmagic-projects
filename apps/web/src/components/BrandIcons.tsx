@@ -26,3 +26,25 @@ export function GoogleIcon({ size = 20, className }: { size?: number; className?
     </svg>
   );
 }
+
+/** The Google Ads mark, simplified: a yellow and a blue stroke meeting at the top, a green dot at the foot of the yellow one. */
+export function GoogleAdsIcon({ size = 20, className }: { size?: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true" className={className}>
+      <path d="M24 10 11.5 33" stroke="#FBBC04" strokeWidth="10.5" strokeLinecap="round" />
+      <circle cx="11.5" cy="35.5" r="6.3" fill="#34A853" />
+      <path d="M24 10 36.5 33" stroke="#4285F4" strokeWidth="10.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** The Google AdSense mark, simplified: a green dot, then a yellow and a blue stroke leaning the same way. */
+export function AdsenseIcon({ size = 20, className }: { size?: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true" className={className}>
+      <circle cx="10" cy="40" r="5.6" fill="#34A853" />
+      <path d="M16 30 25.5 11" stroke="#FBBC04" strokeWidth="9.5" strokeLinecap="round" />
+      <path d="M27 36.5 36.5 17.5" stroke="#4285F4" strokeWidth="9.5" strokeLinecap="round" />
+    </svg>
+  );
+}

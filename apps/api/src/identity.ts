@@ -1,5 +1,7 @@
 import { systemDb, type AuthIdentity, type Tx, type User } from "@app/db";
 import { env, logger, type Mailer } from "@app/core";
+import { revokeZapierGrants } from "@app/core/zapier";
+import { maskEmail } from "@app/shared/email";
 import type { CognitoAuth, IdentityClaims, SignInMethod } from "./cognito.js";
 import { HttpError } from "./context.js";
 
@@ -32,6 +34,38 @@ const removedMethod = () =>
     "This Google account was removed from your bizinsights account's ways to sign in. Sign in another way, then link it again in Settings → Security if you want to use it.",
     "google_removed",
   );
+
+const otherGoogleLinked = () =>
+  new HttpError(
+    409,
+    "Your bizinsights account with this email address already signs in with a different Google account. Continue with that Google account, or sign in with your password.",
+    "google_other_linked",
+  );
+
+/**
+ * Continue with Google with a Google account new to bizinsights, whose address is an existing
+ * account's that has ways in of its own. Google's word for the address doesn't prove the account
+ * is this person's (a work address given to someone new, a Google account made with the address
+ * years ago), and joining them by it would skip the account's own checks (its two-step
+ * verification). auth.ts holds the Google account until this browser signs in to that account
+ * (holdForLink); nothing is linked or created before then.
+ */
+export class LinkRequired extends Error {
+  constructor(
+    readonly account: Pick<User, "id" | "email">,
+    readonly claims: IdentityClaims,
+  ) {
+    super("sign in to the existing account to link this Google account");
+  }
+}
+
+/**
+ * Whether a sign-in with `account`'s address must prove the account before joining it: the
+ * account has a way in already, and none is this same Google account. (Cognito makes a Google
+ * user again, with a new sub but the same user name, once its user was deleted.)
+ */
+const needsProof = (account: { identities: AuthIdentity[] }, claims: IdentityClaims) =>
+  account.identities.length > 0 && !account.identities.some((i) => cognitoUsernameKey(i.username) === cognitoUsernameKey(claims.username));
 
 /**
  * The name auth_events use for a Cognito user ("google_<id>" for a Google one): it stays the same
@@ -70,7 +104,71 @@ function noticeTime(user: NoticeUser, at: Date) {
 /** A security notice to the account's address. Plain text; best effort: a failure is logged and changes nothing. */
 async function sendNotice(mailer: Mailer, user: NoticeUser, subject: string, lines: string[]) {
   const text = ["Hello,", "", ...lines, "", "bizinsights Team"].join("\n");
-  await mailer.send(user.email, subject, text).catch((err: unknown) => logger.warn({ err, userId: user.id, subject }, "could not email a sign-in method's notice"));
+  await mailer.send(user.email, subject, text).catch((err: unknown) => logger.warn({ err, userId: user.id, subject }, "could not email a security notice"));
+}
+
+/**
+ * Tells the account's OLD address that the account moved to another one (Settings → Security).
+ * Whoever has the password and a session could otherwise take the account to their own inbox
+ * unnoticed, after which "Forgot password?" goes to them too. `user` is the account as it was.
+ */
+export async function notifyEmailChanged(mailer: Mailer, user: NoticeUser, newEmail: string, at = new Date()) {
+  const app = env().APP_URL;
+  await sendNotice(mailer, user, "The email address of your bizinsights account was changed", [
+    `The email address of your bizinsights account was changed from ${user.email} to ${maskEmail(newEmail)} on ${noticeTime(user, at)}. Signing in, password resets and our emails now use the new address, and every other device was signed out.`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    "If it wasn't you, someone else knows your password and was signed in to your account. A password reset now goes to the new address, so:",
+    `1. Contact us right away (${app}/support), from this address, and we'll help you get the account back.`,
+    "2. Change the password of this email account too, in case that is how they got in.",
+  ]);
+}
+
+/**
+ * Tells the account's address that its password was changed (Settings → Security) or reset (a
+ * code to the address). Either one signs every other device out, so it should never be news.
+ */
+export async function notifyPasswordChanged(mailer: Mailer, user: NoticeUser, how: "changed" | "reset", at = new Date()) {
+  const app = env().APP_URL;
+  const reset = how === "reset";
+  await sendNotice(mailer, user, reset ? "Your bizinsights password was reset" : "Your bizinsights password was changed", [
+    reset
+      ? `The password of your bizinsights account (${user.email}) was reset with a code sent to this address on ${noticeTime(user, at)}. Every device signed in to the account was signed out.`
+      : `The password of your bizinsights account (${user.email}) was changed on ${noticeTime(user, at)}. Every other device was signed out.`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    reset
+      ? "If it wasn't you, someone else can read this inbox:"
+      : "If it wasn't you, someone else knew your password and was signed in to your account:",
+    reset ? "1. Change the password of this email account first." : `1. Reset your password (${app}/forgot-password). That signs everyone out.`,
+    reset
+      ? `2. Then reset your bizinsights password again (${app}/forgot-password), and check the ways to sign in in Settings > Security (${app}/settings/security).`
+      : `2. Sign in and check the ways to sign in in Settings > Security (${app}/settings/security), removing any you don't recognise.`,
+  ]);
+}
+
+/**
+ * Tells the account's address that two-step verification was turned on or off. Turning it off
+ * leaves the password alone between someone and the account; turning it on with someone else's
+ * authenticator app would lock the owner out.
+ */
+export async function notifyTwoStepChanged(mailer: Mailer, user: NoticeUser, enabled: boolean, at = new Date()) {
+  const app = env().APP_URL;
+  await sendNotice(mailer, user, enabled ? "Two-step verification was turned on for your bizinsights account" : "Two-step verification was turned off for your bizinsights account", [
+    enabled
+      ? `Two-step verification was turned on for your bizinsights account (${user.email}) on ${noticeTime(user, at)}. Signing in now asks for a code from the authenticator app it was set up with.`
+      : `Two-step verification was turned off for your bizinsights account (${user.email}) on ${noticeTime(user, at)}. Signing in now asks for the password only.`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    "If it wasn't you, someone else knows your password and was signed in to your account:",
+    `1. Reset your password (${app}/forgot-password). That signs everyone out.`,
+    enabled
+      ? `2. If the next sign-in asks for a code you can't get, contact us (${app}/support).`
+      : `2. Sign in and turn two-step verification back on in Settings > Security (${app}/settings/security).`,
+  ]);
 }
 
 /**
@@ -176,7 +274,31 @@ async function relinquishSetUp(tx: Tx, userId: string) {
   const invitations = await tx.invitation.updateMany({ where: { invitedById: userId, acceptedAt: null, revokedAt: null }, data: { revokedAt: now } });
   const members = await tx.membership.updateMany({ where: { invitedById: userId, revokedAt: null }, data: { revokedAt: now, accessChangedAt: now } });
   if (left.length) await tx.membership.deleteMany({ where: { userId, invitedById: null } });
-  return { revokedApiKeys: keys.count, revokedInvitations: invitations.count, revokedMembers: members.count, leftWorkspaces: left.map((m) => m.workspaceId) };
+  // Zapier connections it allowed, like its API keys (docs/zapier.md).
+  const zapier = await revokeZapierGrants({ userId }, "account_taken_over", tx, now);
+  return { revokedApiKeys: keys.count, revokedInvitations: invitations.count, revokedMembers: members.count, revokedZapierConnections: zapier, leftWorkspaces: left.map((m) => m.workspaceId) };
+}
+
+type PictureClaims = Pick<IdentityClaims, "method" | "email" | "picture">;
+
+/**
+ * The picture a Google sign-in brings the account (users.avatar_url), or null for no change: a
+ * Google account under the account's own address keeps it current; any other only fills it while
+ * the account has none.
+ */
+function pictureFor(user: Pick<User, "avatarUrl">, claims: PictureClaims, ownAddress: boolean): string | null {
+  if (claims.method !== "google" || !claims.picture || claims.picture === user.avatarUrl) return null;
+  return ownAddress || !user.avatarUrl ? claims.picture : null;
+}
+
+/** `user` with the picture a Google account just linked to it brings (pictureFor). Best effort: never fails the sign-in. */
+export async function withPicture(user: User, claims: PictureClaims): Promise<User> {
+  const picture = pictureFor(user, claims, claims.email?.toLowerCase() === user.email);
+  if (!picture) return user;
+  return systemDb.user.update({ where: { id: user.id }, data: { avatarUrl: picture } }).catch((err: unknown) => {
+    logger.warn({ err, userId: user.id }, "could not keep the account's picture");
+    return user;
+  });
 }
 
 export interface ResolveOptions {
@@ -195,9 +317,13 @@ export interface ResolveOptions {
  *    someone else's address and walk into their workspaces; they are told it's taken instead.
  *    When that user's own address was never verified, the verified sign-in takes it over
  *    (takeOverUnverified). A Google account the user removed in Settings is refused
- *    (removedFromAccount) until they link it again there.
- * 3. Nobody: a new user. Not from a Google account whose address Google hasn't verified: such an
- *    account could never verify it here (Google's tokens can't ask Cognito for a code).
+ *    (removedFromAccount) until they link it again there. A Google account new to an account
+ *    with ways in of its own is never linked by its address alone: LinkRequired, and the person
+ *    signs in to the account once first (auth.ts). One Google account per account, as in
+ *    Settings: an account that has another is refused (google_other_linked).
+ * 3. Nobody: a new user, made from the verified identity (name, address, picture). Not from a
+ *    Google account whose address Google hasn't verified: such an account could never verify it
+ *    here (Google's tokens can't ask Cognito for a code).
  *
  * Idempotent: the (provider, subject) pair is unique, so a retried or concurrent first sign-in
  * finds the identity the other one created.
@@ -210,7 +336,7 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
   const linked = await systemDb.authIdentity.findUnique({ where, include: { user: true } });
   if (linked) {
     let user = linked.user;
-    const data: { email?: string; emailVerified?: boolean } = {};
+    const data: { email?: string; emailVerified?: boolean; avatarUrl?: string } = {};
     // Cognito is the authority on the address once it has verified it (an email change, say): when
     // this identity's address was the account's. One linked under another address (Google, from
     // Settings) never renames the account. Nor is an account whose address nobody proved ever moved
@@ -222,6 +348,8 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
     // unverified account (someone else's address) make it look proven, and keep it from the
     // address's owner (takeOverUnverified).
     if (claims.emailVerified && !user.emailVerified && (data.email ?? user.email) === email) data.emailVerified = true;
+    const picture = pictureFor(user, claims, (data.email ?? user.email) === email);
+    if (picture) data.avatarUrl = picture;
     if (Object.keys(data).length) {
       user = await systemDb.user.update({ where: { id: user.id }, data }).catch((err: unknown) => {
         // The new address already belongs to another user: keep this one's and say nothing.
@@ -257,7 +385,7 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
       throw err;
     }
     await recordAuthEvent(reason, user.id, opts.ip ?? null, { cognitoSub: claims.sub, method: claims.method, cognitoUsername: cognitoUsernameKey(claims.username) });
-    return user;
+    return withPicture(user, claims);
   };
 
   const sameEmail = await systemDb.user.findUnique({ where: { email }, include: { identities: true } });
@@ -266,8 +394,12 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
     // Removed in Settings: never linked back by its address alone. (A password comes back only
     // through a sign-up code to the address, which proves it again.)
     if (claims.method !== "password" && (await removedFromAccount(sameEmail.id, claims.username))) throw removedMethod();
-    const user: User = sameEmail.emailVerified ? sameEmail : await takeOverUnverified(sameEmail, claims, opts);
-    return link(user, "identity_linked");
+    if (!sameEmail.emailVerified) return link(await takeOverUnverified(sameEmail, claims, opts), "identity_linked");
+    if (claims.method !== "password" && needsProof(sameEmail, claims)) {
+      if (sameEmail.identities.some((i) => i.method === claims.method)) throw otherGoogleLinked();
+      throw new LinkRequired(sameEmail, claims);
+    }
+    return link(sameEmail, "identity_linked");
   }
 
   if (!claims.emailVerified && claims.method !== "password") throw providerEmailUnverified();
@@ -278,6 +410,7 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
         email,
         emailVerified: claims.emailVerified,
         displayName: claims.name?.slice(0, 80) ?? null,
+        avatarUrl: claims.picture ?? null,
         identities: {
           create: {
             provider: "cognito",

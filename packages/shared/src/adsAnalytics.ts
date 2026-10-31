@@ -9,7 +9,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/adsAnalytics), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, daysBetweenInclusive, eachDay } from "./dates";
+import { addDays, daysBetweenInclusive, eachDay, periodsOf, PERIOD_GRANULARITIES, type PeriodGranularity } from "./dates";
 import type { AdDayRow, GoogleReportMetrics } from "./ads";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -79,8 +79,8 @@ export function metricsOf(t: AdsSums): AdsMetrics {
 // Series: the figures per day, week (Monday to Sunday) or month, every period of the range present.
 // ---------------------------------------------------------------------------
 
-export const ADS_GRANULARITIES = ["day", "week", "month"] as const;
-export type AdsGranularity = (typeof ADS_GRANULARITIES)[number];
+export const ADS_GRANULARITIES = PERIOD_GRANULARITIES;
+export type AdsGranularity = PeriodGranularity;
 
 export interface AdsPeriod extends AdsMetrics {
   /** The period's first day (the day itself, the week's Monday, the month's first), clipped to the range. */
@@ -88,42 +88,6 @@ export interface AdsPeriod extends AdsMetrics {
   to: string;
   /** "2026-10-19" for a day, "2026-W42" for a week, "2026-10" for a month. */
   key: string;
-}
-
-/** The Monday of the week `day` is in. */
-export function weekStart(day: string): string {
-  const wd = new Date(`${day}T00:00:00Z`).getUTCDay();
-  return addDays(day, -((wd + 6) % 7));
-}
-
-/** ISO week label, "2026-W42". */
-export function weekKey(day: string): string {
-  const d = new Date(`${day}T00:00:00Z`);
-  // ISO weeks: the week with the year's first Thursday is week 1.
-  const target = new Date(d.getTime());
-  target.setUTCDate(target.getUTCDate() + 3 - ((target.getUTCDay() + 6) % 7));
-  const year = target.getUTCFullYear();
-  const firstThursday = new Date(Date.UTC(year, 0, 4));
-  const week = 1 + Math.round(((target.getTime() - firstThursday.getTime()) / 86_400_000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
-  return `${year}-W${String(week).padStart(2, "0")}`;
-}
-
-const monthStart = (day: string) => `${day.slice(0, 7)}-01`;
-
-/** The periods of [from, to] at `g`: each with its first and last day inside the range. */
-export function periodsOf(range: { from: string; to: string }, g: AdsGranularity): Array<{ key: string; from: string; to: string }> {
-  if (range.from > range.to) return [];
-  if (g === "day") return eachDay(range.from, range.to).map((d) => ({ key: d, from: d, to: d }));
-  const out: Array<{ key: string; from: string; to: string }> = [];
-  let start = range.from;
-  while (start <= range.to) {
-    const periodStart = g === "week" ? weekStart(start) : monthStart(start);
-    const next = g === "week" ? addDays(periodStart, 7) : addDays(monthStart(addDays(periodStart, 31)), 0);
-    const end = addDays(next, -1);
-    out.push({ key: g === "week" ? weekKey(periodStart) : periodStart.slice(0, 7), from: start, to: end < range.to ? end : range.to });
-    start = next;
-  }
-  return out;
 }
 
 export function adsSeries(rows: ReadonlyArray<AdDayRow>, range: { from: string; to: string }, g: AdsGranularity): AdsPeriod[] {
@@ -149,7 +113,15 @@ export interface CampaignSettings {
   /** ENABLED, PAUSED or REMOVED when known. */
   status: string | null;
   startDay: string | null;
+  /** A daily budget's amount; null for a total budget, and when none is known. */
   dailyBudget: number | null;
+  /** How Google rates its delivery now (campaign.primary_status: ELIGIBLE, LIMITED...) and why; none when not known. */
+  primaryStatus?: string | null;
+  primaryStatusReasons?: string[];
+  /** DAILY, or CUSTOM_PERIOD for one total over the campaign's own dates; null when no budget is known. */
+  budgetPeriod?: string | null;
+  /** A CUSTOM_PERIOD budget's whole amount; null otherwise. */
+  totalBudget?: number | null;
 }
 
 export interface CampaignAnalytics extends AdsMetrics {
@@ -159,9 +131,17 @@ export interface CampaignAnalytics extends AdsMetrics {
   status: string | null;
   startDay: string | null;
   dailyBudget: number | null;
+  primaryStatus: string | null;
+  primaryStatusReasons: string[];
+  budgetPeriod: string | null;
+  totalBudget: number | null;
   /** The days of the range the campaign ran on (had a stored row). */
   activeDays: number;
-  /** Its budget for those days (daily budget × active days) and the share of it spent; null without a budget. */
+  /**
+   * Its budget for those days (daily budget × active days) and the share of it spent; null without a daily
+   * budget (a total one covers the campaign's own dates, not these). A real account's daily budget is the
+   * one Google states now, as of the last sync: a budget changed within the dates isn't followed.
+   */
   budget: number | null;
   budgetUse: number | null;
   /** The range's first half against its second: how the campaign is moving. */
@@ -170,7 +150,7 @@ export interface CampaignAnalytics extends AdsMetrics {
 
 /**
  * Every campaign that has a row in the range, with its settings when `settings` has them (a demo's
- * from the generator, a real account's from the stored name alone). Biggest spend first.
+ * from the generator, a real account's as its last sync stored them: ad_campaigns). Biggest spend first.
  */
 export function campaignAnalytics(rows: ReadonlyArray<AdDayRow>, range: { from: string; to: string }, settings: ReadonlyArray<CampaignSettings> = []): CampaignAnalytics[] {
   const by = new Map<string, AdDayRow[]>();
@@ -195,6 +175,10 @@ export function campaignAnalytics(rows: ReadonlyArray<AdDayRow>, range: { from: 
         status: s?.status ?? null,
         startDay: s?.startDay ?? null,
         dailyBudget: s?.dailyBudget ?? null,
+        primaryStatus: s?.primaryStatus ?? null,
+        primaryStatusReasons: s?.primaryStatusReasons ?? [],
+        budgetPeriod: s?.budgetPeriod ?? (s?.dailyBudget !== null && s?.dailyBudget !== undefined ? "DAILY" : null),
+        totalBudget: s?.totalBudget ?? null,
         activeDays,
         budget,
         budgetUse: budget !== null && budget > 0 ? m.spend / budget : null,

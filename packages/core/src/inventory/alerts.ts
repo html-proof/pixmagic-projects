@@ -6,13 +6,13 @@
  * a webhook delivered twice, never repeats it; one that flaps is told again at most once a day.
  */
 import { Prisma, systemDb, type Store } from "@app/db";
-import { addDays, allows, dailyRate, isFastMovement, localDay, templateShape, type TemplateComponent } from "@app/shared";
+import { addDays, allows, dailyRate, isFastMovement, localDay } from "@app/shared";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import type { Mailer } from "../notify.js";
 import type { Queues } from "../queues.js";
 import { escapeHtml } from "@app/shared/email";
-import { scheduleMessage } from "../whatsapp/messages.js";
+import { queueTeamAlert } from "../whatsapp/teamAlerts.js";
 import { inventorySettings } from "./settings.js";
 import { salesDays, soldCte, STATUS, stockScope, variantStockCte } from "./stock.js";
 
@@ -160,8 +160,8 @@ export async function notifyStockAlerts(deps: NotifyDeps, store: Pick<Store, "id
   const storeName = store.name ?? store.shopDomain;
 
   if (settings.emailAlerts) await emailTeam(deps.mailer, store, storeName, counts, lines);
-  if (settings.whatsappAlerts && settings.whatsappTemplate && settings.whatsappTo.length) {
-    await whatsappTeam(deps, store, storeName, settings.whatsappTemplate, settings.whatsappTo, stockSummary(counts), now).catch((err: unknown) =>
+  if (settings.whatsappAlerts && settings.whatsappTo.length) {
+    await whatsappTeam(deps, store, settings.whatsappTo, stockSummary(counts), now).catch((err: unknown) =>
       logger.error({ err, storeId: store.id }, "stock alert WhatsApp message could not be scheduled"),
     );
   }
@@ -244,36 +244,11 @@ ${more > 0 ? `<p style="margin:0 0 16px;font-size:14px;color:#6b6b63">And ${more
 }
 
 /**
- * One WhatsApp message per number, through the store's own WhatsApp connection and an approved
- * template with two body variables ({{1}} the store's name, {{2}} the summary; the library's
- * "insights_stock_alert"). Sent as the merchant's own messages to their own team (WhatsApp's
- * test path: no customer, no consent record), deduplicated per number and day.
+ * One WhatsApp text per number, from the store's own connected WhatsApp (WhatsApp Automation).
+ * Sent as the merchant's own messages to their own team (no customer, no consent record), at most
+ * once per number and hour (whatsapp/teamAlerts.ts queueTeamAlert).
  */
-async function whatsappTeam(deps: NotifyDeps, store: Pick<Store, "id" | "workspaceId">, storeName: string, templateName: string, numbers: string[], summary: string, now: Date) {
-  const template = await systemDb.whatsappTemplate.findFirst({ where: { storeId: store.id, name: templateName, status: "APPROVED" } });
-  if (!template) {
-    logger.warn({ storeId: store.id, templateName }, "stock alert WhatsApp template isn't approved or is gone; not sent");
-    return;
-  }
-  const shape = templateShape(template.components as unknown as TemplateComponent[]);
-  if (shape.bodyVars !== 2 || shape.headerFormat !== "NONE" || shape.dynamicUrlButtons.length) {
-    logger.warn({ storeId: store.id, templateName }, "stock alert WhatsApp template doesn't have the shape the alert fills in; not sent");
-    return;
-  }
-  for (const to of numbers) {
-    await scheduleMessage(
-      {
-        store,
-        kind: "inventory_alert",
-        dedupeKey: `inventory_alert:${to}:${now.toISOString().slice(0, 13)}`,
-        contact: null,
-        template: { name: template.name, language: template.language },
-        mapping: { body: ["store_name", "custom_text"], buttons: [], fixed: { "body.2": summary.slice(0, 200) } },
-        values: { store_name: storeName },
-        scheduledFor: now,
-        test: { to },
-      },
-      { queues: deps.queues },
-    );
-  }
+async function whatsappTeam(deps: NotifyDeps, store: Pick<Store, "id">, numbers: string[], summary: string, now: Date) {
+  const queued = await queueTeamAlert(deps, { store, numbers, summary, at: now });
+  if (!queued) logger.info({ storeId: store.id }, "stock alert WhatsApp not queued (not connected, or already sent this hour)");
 }

@@ -2,7 +2,7 @@
  * Connecting and disconnecting: the sign-in's tokens wait while the person picks accounts, the chosen
  * accounts become connections, and access is taken back only when no other connection relies on it.
  */
-import { systemDb, type AdConnection } from "@app/db";
+import { crossTenant, systemDb, type AdConnection } from "@app/db";
 import { decrypt, type AdProvider } from "@app/shared";
 import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type AdAccountList, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
@@ -12,7 +12,7 @@ import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
 import { resolveAdAlerts } from "./alerts.js";
 import { metaConfig } from "./config.js";
-import { aad, accessTokenAndPerson, encryptAdTokens, learnAdPerson, sameSignIn } from "./credentials.js";
+import { aad, accessTokenAndPerson, encryptAdTokens, holdsOwnSignIn, learnAdPerson, sameSignIn } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
 
 export const ADS_PENDING_TTL_S = 900;
@@ -120,14 +120,33 @@ export async function takePendingAdConnect(coord: Coord, nonce: string): Promise
 
 /**
  * Use up, unanswered, every account choice one person (the platform's id for them) has waiting: their
- * access ended or they asked for their data to be deleted. Returns how many there were. Best effort.
+ * access ended or they asked for their data to be deleted. Returns the choices dropped. Best effort.
  */
-export async function dropPendingAdConnectsOf(coord: Coord, provider: AdProvider, externalUserId: string): Promise<number> {
+export async function dropPendingAdConnectsOf(coord: Coord, provider: AdProvider, externalUserId: string): Promise<PendingAdConnect[]> {
   const key = personPendingKey(provider, externalUserId);
-  let dropped = 0;
-  for (const p of await pendingOf(coord, key)) if (await coord.take(pendingKey(p.nonce)).catch(() => null)) dropped++;
+  const dropped: PendingAdConnect[] = [];
+  for (const p of await pendingOf(coord, key)) {
+    const raw = await coord.take(pendingKey(p.nonce)).catch(() => null);
+    if (!raw) continue;
+    try {
+      dropped.push(JSON.parse(raw) as PendingAdConnect);
+    } catch {
+      // Unreadable: dropped all the same.
+    }
+  }
   await coord.take(key).catch(() => null);
   return dropped;
+}
+
+/**
+ * Whether this person (the platform's id) has an account choice waiting other than `exceptPending`:
+ * its sign-in's grant is about to be used, so it must not be taken back. Best effort.
+ */
+async function personHasPending(coord: Coord, provider: string, externalUserId: string, exceptPending?: string): Promise<boolean> {
+  for (const p of await pendingOf(coord, personPendingKey(provider, externalUserId))) {
+    if (p.nonce !== exceptPending && p.expiresAt > Date.now() && (await peekPendingAdConnect(coord, p.nonce))) return true;
+  }
+  return false;
 }
 
 /** The sign-in's tokens back from a pending choice. */
@@ -162,11 +181,14 @@ export async function saveAdConnections(input: {
     // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
     externalUserId: input.externalUserId ?? null,
     grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
+    // bizinsights' own sign-in, whatever the row held before (holdsOwnSignIn).
+    source: "direct",
+    sourceLoginId: null,
   };
   const out: Array<AdConnection & { isNew: boolean }> = [];
   for (const a of input.accounts) {
     const where = { storeId_provider_accountId: { storeId: input.storeId, provider: input.provider, accountId: a.accountId } };
-    const before = await systemDb.adConnection.findUnique({ where, select: { id: true } });
+    const before = await systemDb.adConnection.findUnique({ where });
     // The account's health at the platform, when the listing said it.
     const health = a.status ? { accountStatus: a.status, accountStatusDetail: a.statusDetail ?? null } : {};
     const row = await systemDb.adConnection.upsert({
@@ -210,14 +232,17 @@ export async function saveAdConnections(input: {
 
 /**
  * A refresh token this person already gave bizinsights, for a sign-in where Google didn't send a new
- * one (it only does on first consent). Taken from another of their connections on the same platform.
+ * one (it only does on first consent). Taken from another of their connections on the same platform,
+ * in any workspace (the `ad_grants` reason).
  */
 export async function reusableRefreshToken(provider: AdProvider, externalUserId: string | null): Promise<string | null> {
   if (provider === "meta" || !externalUserId) return null;
-  const row = await systemDb.adConnection.findFirst({
-    where: { provider, externalUserId, refreshTokenEnc: { not: null }, status: { not: "reconnect" } },
-    orderBy: { updatedAt: "desc" },
-  });
+  const row = await crossTenant("ad_grants", () =>
+    systemDb.adConnection.findFirst({
+      where: { provider, externalUserId, source: "direct", refreshTokenEnc: { not: null }, status: { not: "reconnect" } },
+      orderBy: { updatedAt: "desc" },
+    }),
+  );
   if (!row?.refreshTokenEnc) return null;
   return decrypt(row.refreshTokenEnc, keyring(), aad(row.storeId, row.provider, "refresh"));
 }
@@ -231,11 +256,13 @@ const holdsGrant = { status: { not: "reconnect" }, accessTokenEnc: { not: "" } }
  * (GoogleConsentOptions.forceConsent false): a consent hands out a new refresh token every time, and
  * Google silently ends a login's oldest past 100 for one client. Google then sends none, and theirs is
  * reused (reusableRefreshToken); if they pick a login bizinsights holds none for, the callback asks
- * again with the consent screen.
+ * again with the consent screen. Their connections in any workspace (the `ad_grants` reason).
  */
 export async function holdsReusableRefreshToken(provider: AdProvider, userId: string): Promise<boolean> {
   if (provider === "meta") return false;
-  const n = await systemDb.adConnection.count({ where: { provider, connectedByUserId: userId, externalUserId: { not: null }, refreshTokenEnc: { not: null }, ...holdsGrant } });
+  const n = await crossTenant("ad_grants", () =>
+    systemDb.adConnection.count({ where: { provider, connectedByUserId: userId, source: "direct", externalUserId: { not: null }, refreshTokenEnc: { not: null }, ...holdsGrant } }),
+  );
   return n > 0;
 }
 
@@ -282,11 +309,18 @@ async function resolvePerson(conn: AdConnection, fetchImpl?: FetchLike): Promise
  * Whether anything else relies on this person's grant: a connection on the same grant (Google Ads and
  * AdSense share one), anywhere, by them, or by a person bizinsights doesn't know yet who turns out to
  * be them. Those are looked up now (a few at a time; the rest, and any that can't be looked up, keep
- * the grant, to be safe: revoking at Google ends every connection on it).
+ * the grant, to be safe: revoking at Google ends every connection on it). In every workspace, from
+ * whichever scope asks (the `ad_grants` reason, @app/db crossTenant.ts).
  */
-async function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
+function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
+  return crossTenant("ad_grants", () => grantUsedAnywhere(provider, externalUserId, exceptId, fetchImpl));
+}
+
+async function grantUsedAnywhere(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
   const family = { provider: { in: grantFamily(provider) }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
   if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
+  // A login of theirs still waiting for its ad accounts (logins.ts) reads through the same grant.
+  if ((await systemDb.adLogin.count({ where: { provider: { in: grantFamily(provider) }, externalUserId } })) > 0) return true;
   const unknown = await systemDb.adConnection.findMany({ where: { ...family, externalUserId: null }, orderBy: { updatedAt: "desc" }, take: 500 });
   const signIns = bySignIn(unknown);
   if (unknown.length >= 500 || signIns.length > PERSON_LOOKUPS) return true;
@@ -328,7 +362,8 @@ async function revokeGrant(provider: string, tokens: { accessToken: string; refr
  */
 export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   await resolveAdAlerts(conn).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
-  if (!conn.accessTokenEnc) return "unknown_person";
+  // A row that isn't bizinsights' own sign-in holds no token to revoke with (holdsOwnSignIn).
+  if (!conn.accessTokenEnc || !holdsOwnSignIn(conn)) return "unknown_person";
   // A connection that never learned who granted it asks the platform now, with its own token (what it
   // learns is kept on the rest of its sign-in; this row is gone). Access that ended has nothing to revoke.
   const person = conn.externalUserId ?? (await resolvePerson(conn, fetchImpl).catch(() => null));
@@ -371,11 +406,7 @@ export async function dropUnusedGrant(
   if (!externalUserId) return "unknown_person";
   if (opts.reusedRefreshToken || (provider !== "meta" && !tokens.refreshToken)) return "still_used";
   try {
-    if (opts.coord) {
-      for (const p of await pendingOf(opts.coord, personPendingKey(provider, externalUserId))) {
-        if (p.nonce !== opts.exceptPending && p.expiresAt > Date.now() && (await peekPendingAdConnect(opts.coord, p.nonce))) return "still_used";
-      }
-    }
+    if (opts.coord && (await personHasPending(opts.coord, provider, externalUserId, opts.exceptPending))) return "still_used";
     if (await grantStillUsed(provider, externalUserId, null, fetchImpl)) return "still_used";
     return await revokeGrant(provider, tokens, externalUserId, fetchImpl);
   } catch (err) {
@@ -414,10 +445,13 @@ export async function detachUserAdGrants(userId: string, workspaceId?: string): 
     const first = group[0];
     let tokens: ReleasedAdGrant["tokens"] = null;
     try {
-      tokens = {
-        accessToken: decrypt(first.accessTokenEnc, k, aad(first.storeId, first.provider, "access")),
-        refreshToken: first.refreshTokenEnc ? decrypt(first.refreshTokenEnc, k, aad(first.storeId, first.provider, "refresh")) : null,
-      };
+      // Only bizinsights' own sign-in holds tokens to revoke with (holdsOwnSignIn).
+      if (holdsOwnSignIn(first)) {
+        tokens = {
+          accessToken: decrypt(first.accessTokenEnc, k, aad(first.storeId, first.provider, "access")),
+          refreshToken: first.refreshTokenEnc ? decrypt(first.refreshTokenEnc, k, aad(first.storeId, first.provider, "refresh")) : null,
+        };
+      }
     } catch (err) {
       logger.warn({ err, connectionId: first.id }, "ad tokens of a leaving person couldn't be read; deleted without a revoke");
     }

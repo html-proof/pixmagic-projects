@@ -6,9 +6,12 @@ import {
   eachDay,
   NET_SALES_MONTHS,
   niceRound,
+  pastYearBreakdown,
+  periodBreakdown,
   SHOPIFY_STANDARD,
   splitTotal,
   tierOf,
+  TOTAL_SALES_MONTHS,
   weekdayOf,
   yearBreakdown,
   yearFigures,
@@ -35,6 +38,7 @@ const row = (d: string, grossSales: number, extra: Partial<DailyMetricsRow> = {}
   duties: 0,
   additionalFees: 0,
   totalSales: grossSales,
+  totalRefunded: 0,
   orders: grossSales > 0 ? 1 : 0,
   orderValue: grossSales,
   units: 0,
@@ -101,6 +105,31 @@ describe("daily breakdown", () => {
     expect(b.best).toEqual({ day: "2026-06-29", value: 100 });
     // Two finished days are too few to grade.
     expect(b.tiers).toBeNull();
+  });
+
+  it("groups the days into Monday-to-Sunday weeks and calendar months, keeping what isn't whole apart", () => {
+    // Wednesday 30 Sep to Thursday 15 Oct; today is the 15th; orders imported from 1 Oct.
+    const days = eachDay("2026-09-30", "2026-10-15").map((d) => day(d, 10));
+    const range = { from: "2026-09-30", to: "2026-10-15" };
+    const b = dailyBreakdown(days, "2026-10-15", "2026-10-01");
+    const weeks = periodBreakdown(b, range, "week");
+    expect(weeks.map((w) => [w.key, w.from, w.to, w.status, w.clipped, w.value, w.cumulative])).toEqual([
+      // Wed 30 Sep – Sun 4 Oct: cut short by the dates, and its first day wasn't imported.
+      ["2026-W40", "2026-09-30", "2026-10-04", "partial", true, 40, 40],
+      ["2026-W41", "2026-10-05", "2026-10-11", "complete", false, 70, 110],
+      // Mon 12 – Thu 15 Oct: holds today.
+      ["2026-W42", "2026-10-12", "2026-10-15", "partial", true, 40, 150],
+    ]);
+    expect(weeks[1]!.orders).toBe(7);
+    const months = periodBreakdown(b, range, "month");
+    expect(months.map((m) => [m.key, m.status, m.clipped, m.value, m.cumulative])).toEqual([
+      // 30 Sep alone, never imported: not a $0 month.
+      ["2026-09", "not_imported", true, 0, null],
+      ["2026-10", "partial", true, 150, 150],
+    ]);
+    // A whole finished month is complete and not clipped.
+    const sept = eachDay("2026-09-01", "2026-09-30").map((d) => day(d, 1));
+    expect(periodBreakdown(dailyBreakdown(sept, "2026-10-15", null), { from: "2026-09-01", to: "2026-09-30" }, "month")).toMatchObject([{ status: "complete", clipped: false, value: 30, orders: 30 }]);
   });
 
   it("names the months it covers whole, but not the one still running or one not fully imported", () => {
@@ -178,6 +207,42 @@ describe("year breakdown", () => {
     const march = yearBreakdown([row("2026-02-10", 100), row("2026-03-30", 50)], "2026-03-30", null).months.at(-1)!;
     expect(march.comparedWith).toEqual({ from: "2026-02-01", to: "2026-02-28" });
     expect(march.change).toBe(-0.5);
+  });
+});
+
+describe("the same months of the years before", () => {
+  const rows = [row("2024-02-29", 40), row("2024-03-05", 60), row("2025-02-10", 100), row("2025-02-28", 25), row("2025-03-31", 70), row("2025-04-01", 999), row("2026-02-10", 10)];
+
+  it("covers January to this month, each month whole, none of them running", () => {
+    const y = pastYearBreakdown(rows, "2026-02-18", 1, null);
+    expect(y.year).toBe(2025);
+    expect(y.months.map((m) => [m.month, m.from, m.to, m.current])).toEqual([
+      ["2025-01", "2025-01-01", "2025-01-31", false],
+      ["2025-02", "2025-02-01", "2025-02-28", false],
+    ]);
+    // All of February 2025, though February 2026 is only at the 18th.
+    expect(y.months[1]).toMatchObject({ netSales: 125, orders: 2 });
+    expect(y.total).toBe(125);
+    // A leap year's February runs to the 29th.
+    expect(pastYearBreakdown(rows, "2026-02-18", 2, null).months[1]).toMatchObject({ to: "2024-02-29", netSales: 40 });
+    // Nothing after this month's end comes in (April 2025 against a March 2026).
+    expect(pastYearBreakdown(rows, "2026-03-02", 1, null).total).toBe(195);
+  });
+
+  it("says which of those months weren't imported", () => {
+    const y = pastYearBreakdown(rows, "2026-03-02", 2, "2024-03-01");
+    expect(y.months.map((m) => m.coverage)).toEqual(["none", "none", "full"]);
+    expect(y.months[1]).toMatchObject({ netSales: 0, orders: 0 });
+    expect(y.total).toBe(60);
+  });
+});
+
+describe("total sales month by month", () => {
+  it("compares a month's total sales on those of the dates it is compared with", () => {
+    const y = yearBreakdown([row("2026-01-10", 100), row("2026-02-03", 150, { totalSales: 180 })], "2026-02-28", null);
+    expect(y.months.map(TOTAL_SALES_MONTHS.value)).toEqual([100, 180]);
+    expect(TOTAL_SALES_MONTHS.change(y.months[1]!)).toBe(0.8);
+    expect(yearFigures(y.months, TOTAL_SALES_MONTHS).total).toBe(280);
   });
 });
 

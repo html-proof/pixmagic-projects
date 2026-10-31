@@ -24,7 +24,7 @@ export const CONTACT: Readonly<{
   // verification matches this name and number against the website.
   legalName: "Zodiix Pty Ltd",
   companyNumber: "ACN 613 577 834",
-  supportEmail: "sales@ikorex.com.au",
+  supportEmail: "bizinsightsaus@yahoo.com",
   jurisdiction: "Victoria, Australia",
   postalAddress: "",
 };

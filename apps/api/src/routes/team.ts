@@ -15,6 +15,7 @@ import {
   previewTeamInvitation,
   queryTeam,
   recordLinkOpened,
+  releaseAdLoginsWhere,
   releaseUserAdGrants,
   removeMember,
   renewTeamAccess,
@@ -30,11 +31,12 @@ import {
   type InviteMail,
   type TeamActor,
 } from "@app/core";
+import { revokeZapierGrants } from "@app/core/zapier";
 import {
-  ACCESS_CAPABILITY,
   ACCESS_KEYS,
   ACCESS_MODULE_INFO,
   ACCESS_MODULES,
+  accessAvailable,
   grantedKeys,
   hasFullAccess,
   modulesOf,
@@ -97,6 +99,10 @@ export async function removeMemberReleasingAds(c: Ctx, deps: Deps, a: WorkspaceA
   const { userId } = await loadMember(a.workspaceId, memberId);
   const removed = await removeMember(teamActor(c, a), memberId, opts);
   await releaseUserAdGrants(userId, a.workspaceId, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's ad connections weren't released"));
+  // A login of theirs still waiting for its ad accounts goes too (the cron's check would let it go within the hour).
+  await releaseAdLoginsWhere({ workspaceId: a.workspaceId, connectedByUserId: userId }, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's waiting ad logins weren't released"));
+  // Zapier connections they allowed here stop working, and their Zaps' triggers go (docs/zapier.md).
+  await revokeZapierGrants({ workspaceId: a.workspaceId, userId }, "member_removed").catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's Zapier connections weren't revoked"));
   return removed;
 }
 
@@ -165,6 +171,7 @@ export function teamRoutes(app: App, deps: Deps) {
         q: z.string().max(100).optional(),
         status: z.enum(["active", "revoked", "pending", "expired", "cancelled", "members", "invitations"]).optional(),
         role: z.enum(ROLES).optional(),
+        module: z.enum(ACCESS_MODULES).optional(),
         sort: z.enum(TEAM_SORTS).optional(),
         dir: z.enum(["asc", "desc"]).optional(),
         page: z.coerce.number().int().min(1).max(10_000).optional(),
@@ -189,10 +196,7 @@ export function teamRoutes(app: App, deps: Deps) {
       modules: ACCESS_MODULES.map((m) => ({
         id: m,
         ...ACCESS_MODULE_INFO[m],
-        permissions: permissionsOf(m).map((p) => {
-          const capability = ACCESS_CAPABILITY[p.key];
-          return { ...p, available: !capability || granted.has(capability) };
-        }),
+        permissions: permissionsOf(m).map((p) => ({ ...p, available: accessAvailable(p.key, granted) })),
       })),
       roles: [
         ...(a.role === "owner" || a.role === "admin" ? [{ id: "admin", ...ROLE_INFO.admin, template: [...ACCESS_KEYS], restricted: false, canManage: true }] : []),
@@ -359,7 +363,9 @@ export function teamRoutes(app: App, deps: Deps) {
    * an account signed in on the same browser, and never borrows anything from it: a forwarded link
    * exposes no more than the invitation itself, and someone with a bizinsights account of their
    * own keeps it, signed in, in their other tabs. The first opening accepts the invitation; a user
-   * record is made for an address new to us (signing up later with that address links to it).
+   * record is made for an address new to us (signing up later with that address links to it). An
+   * address that already has an account someone signs in to isn't joined by the link: that account
+   * accepts signed in (409 sign_in_required, then POST /invitations/accept).
    *
    * The link keeps working (another device, a session that ended) until the invitation's end date,
    * while the member's access lasts. Opening it makes a session, so only from our own pages (login
@@ -378,18 +384,24 @@ export function teamRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:invite-open:${inv.id}`, LIMITS.inviteAcceptUser);
 
     const user = inv.reopenUserId ? await systemDb.user.findUniqueOrThrow({ where: { id: inv.reopenUserId } }) : await userForInvitee(inv.email);
-    // An account for this address that nobody has proved the address of, but that someone can sign in
-    // to (a password set by whoever made it): a link that may have been passed around doesn't prove the
-    // inbox either, so the invitation never lands there. It waits until the address is verified.
-    if (inv.status === "pending" && !user.emailVerified && (await systemDb.authIdentity.count({ where: { userId: user.id } })) > 0) {
-      logger.warn({ event: "invite_open_unverified_account", invitationId: inv.id, userId: user.id, ip: clientIp(c) }, "invitation link refused: the address's account isn't verified");
-      return c.json(
-        {
-          error: "account_unverified",
-          message: "This email address already has a bizinsights account that hasn't been confirmed. Sign in to it and confirm the email address first (or continue with Google using that address), then open this link again.",
-        },
-        409,
-      );
+    // An account someone can sign in to already has this address. Whoever holds the link isn't
+    // necessarily that person (the inviter can always copy it), so the link alone never joins it to
+    // a workspace: its owner accepts signed in as themselves (POST /invitations/accept, which checks
+    // the address and that it is verified). The link alone is for an address with no account yet.
+    if (inv.status === "pending" && (await systemDb.authIdentity.count({ where: { userId: user.id } })) > 0) {
+      // Nobody has proved this account's address either (a password set by whoever made it): it waits until the address is verified.
+      if (!user.emailVerified) {
+        logger.warn({ event: "invite_open_unverified_account", invitationId: inv.id, userId: user.id, ip: clientIp(c) }, "invitation link refused: the address's account isn't verified");
+        return c.json(
+          {
+            error: "account_unverified",
+            message: "This email address already has a bizinsights account that hasn't been confirmed. Sign in to it and confirm the email address first (or continue with Google using that address), then open this link again.",
+          },
+          409,
+        );
+      }
+      logger.info({ event: "invite_open_sign_in_required", invitationId: inv.id, ip: clientIp(c) }, "invitation link: the address has an account, which accepts signed in");
+      return c.json({ error: "sign_in_required", message: "This email address already has a bizinsights account. Sign in to it to accept this invitation." }, 409);
     }
     if (inv.status === "pending") await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
     const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: user.id } }, select: { accessExpiresAt: true } });

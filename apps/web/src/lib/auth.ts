@@ -1,5 +1,6 @@
 "use client";
 import { useEffect } from "react";
+import type { DeviceDescription } from "@app/shared/device";
 import { api, ApiError, isTransient, keepRetrying } from "./api";
 import { isSafeDestination, takeReturnTo } from "./returnTo";
 
@@ -14,6 +15,8 @@ export interface SignedInUser {
   email: string;
   emailVerified: boolean;
   displayName: string | null;
+  /** The profile picture from Google (https), when the account has one. */
+  avatarUrl?: string | null;
 }
 
 /** Which "Continue with ..." options this deployment offers, and which code steps it asks for. */
@@ -220,10 +223,21 @@ export function linkErrorMessage(code: string): string {
 
 /**
  * /auth/callback hands back what the provider (via Cognito) put in its address. A sign-in answers
- * with the user; a link from Settings with `linked` and where to go back to.
+ * with the user (a new Google account's is created there and then); a link from Settings with
+ * `linked` and where to go back to; a Google account whose address is an existing account's with
+ * `next: "link"`: the API holds it until this browser signs in to that account (pendingGoogleLink).
  */
 export const finishOAuth = (params: { state: string; code?: string; error?: string; error_description?: string }) =>
-  api<{ user: SignedInUser; redirect: string | null } | { linked: "google"; redirect: string }>("/auth/oauth/callback", { method: "POST", body: params });
+  api<{ user: SignedInUser; redirect: string | null } | { linked: "google"; redirect: string } | { next: "link"; provider: "google"; email: string }>("/auth/oauth/callback", {
+    method: "POST",
+    body: params,
+  });
+
+/** A Google account held in this browser for the existing account with its address, which signing in to that account links. */
+export const pendingGoogleLink = () => api<{ pending: false } | { pending: true; provider: "google"; email: string }>("/auth/pending-link");
+
+/** "Don't link Google": the held Google account is let go, and nothing is linked. */
+export const cancelGoogleLink = () => api<{ ok: true }>("/auth/pending-link", { method: "DELETE" });
 
 /**
  * Sign this browser out. After Google the user pool's own session in this browser is
@@ -273,7 +287,52 @@ export interface AccountInfo {
   confirmWith: "password" | "recent_sign_in" | "own_address_sign_in";
   /** Two-step verification (an authenticator app) on the password. null: couldn't be checked just now. */
   mfaEnabled: boolean | null;
+  /** When the password was last set (changed, reset or added); null without a password. */
+  passwordChangedAt: string | null;
+  /** Sign-ins to this account stopped at the password or the code in the last 7 days. */
+  failedSignIns: number;
 }
+
+/** Where a device was (last) seen from: approximate, from its address. */
+export interface SignInPlace {
+  /** ISO 3166 code ("IN"). */
+  country: string | null;
+  region: string | null;
+  city: string | null;
+}
+
+/** A device signed in to the account (GET /auth/account/sessions). */
+export interface SignedInDevice {
+  id: string;
+  /** The device asking. */
+  current: boolean;
+  method: SignInMethodName;
+  device: DeviceDescription;
+  ip: string | null;
+  location: SignInPlace | null;
+  signedInAt: string;
+  lastActiveAt: string;
+  expiresAt: string;
+}
+
+/** A sign-in to the account (GET /auth/account/activity): one that got in, or one stopped at the password or the code. */
+export interface SignInEvent {
+  id: string;
+  at: string;
+  status: "success" | "failed";
+  method: SignInMethodName | null;
+  step: "password" | "code" | null;
+  device: DeviceDescription;
+  ip: string | null;
+  location: SignInPlace | null;
+}
+
+/** Sign another device out (not this one: that is signOut). */
+export const removeDevice = (id: string) => api<{ ok: true }>(`/auth/account/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+/** A page of the account's sign-ins, newest first. */
+export const signInActivity = (cursor?: string | null, limit = 20) =>
+  api<{ events: SignInEvent[]; nextCursor: string | null }>(`/auth/account/activity?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
 
 /** `signedIn` false: the account asks for an app code at sign-in, so this browser signs in again too. */
 export const changePassword = (input: { currentPassword: string; password: string; confirmPassword: string }) =>
@@ -302,7 +361,11 @@ export const sendVerificationCode = () => api<{ ok: true; alreadyVerified?: bool
 
 export const verifyEmailCode = (code: string) => api<{ user: SignedInUser }>("/auth/account/verify-email", { method: "POST", body: { code } });
 
-export const deleteAccount = (password?: string) => api<{ ok: true }>("/auth/account/delete", { method: "POST", body: { confirm: "DELETE", password } });
+/** Deleting the account, step 1: a 6-digit code emailed to the account's address (its countdowns, the server's clock). */
+export const sendDeletionCode = () => api<{ ok: true; challenge: CodeChallenge }>("/auth/account/delete/code", { method: "POST" });
+
+/** Step 2: the code deletes the account. */
+export const deleteAccount = (code: string) => api<{ ok: true }>("/auth/account/delete", { method: "POST", body: { confirm: "DELETE", code } });
 
 /**
  * Where a finished sign-in or sign-up goes: back to the page that asked for it (a deep link opened

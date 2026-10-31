@@ -17,6 +17,7 @@ The JSON API the web app uses, served by the same Lambda function as the UI. Beh
 | --- | --- | --- |
 | Signed-in user | `__session` cookie (our signed session, httpOnly, SameSite=Lax; `__session_rt` holds the encrypted Cognito refresh token, sent to `/api` only) | Mutations must come from the app's Origin (CSRF). Sign-in endpoints check Origin even without a cookie. |
 | API key | `Authorization: Bearer sk_live_...` | Read-only (acts as `viewer`), one workspace. |
+| Zapier | `Authorization: Bearer zat_...` (OAuth access token, [../zapier.md](../zapier.md)) | `/zapier/*` only, one store; the member who connected it is re-checked on every request. |
 | Providers | Shopify HMAC, Meta `X-Hub-Signature-256`, OAuth state + PKCE | Verified before anything is read or written. |
 
 Workspace routes check membership first (non-members get **404**, so ids can't be probed), then
@@ -42,8 +43,8 @@ the permission in the table below (`@app/shared/roles`):
   Machine endpoints (webhooks, pixel) answer `{ "error": "<code>" }`.
 - **Every response** carries `x-request-id` (a random UUID). Quote it when
   reporting a problem: every log line written for that request carries the same id.
-- **Lists**: capped (100 by default). WhatsApp messages, orders, carts and reviews page with
-  `?limit=&cursor=` and answer `{ <items>, nextCursor }` (`apps/api/src/pagination.ts`).
+- **Lists**: capped (100 by default). WhatsApp messages and contacts page with `?limit=&cursor=`
+  and answer `{ <items>, nextCursor }`.
 - **Rate limits**: 300 requests a minute per IP overall (AWS WAF at CloudFront, and the app behind
   it; webhooks and the pixel exempt), tighter per-key limits on sign-in,
   codes, invitations, provider calls and public pages (`apps/api/src/rateLimit.ts`).
@@ -54,6 +55,88 @@ the permission in the table below (`@app/shared/roles`):
 | --- | --- |
 | `GET /healthz` | `{ "ok": true }` while the API runs (liveness). |
 | `GET /readyz` | `{ "ok", "checks": { "db", "coord", "tenantDb" } }`, 503 when any is false; each probe is bounded (3 s) and a failure is logged with its reason. |
+
+## Integration status
+
+`GET /workspaces/:ws/stores/:storeId/integrations` answers every connection of a store at once, its
+status worked out on the server (`routes/integrations.ts`, core's `integrations/status.ts`,
+`@app/shared/integrations`), so every page says the same thing and a new provider needs no logic of
+a page's own. It needs **View integration connection status** (`integrations.status`): a member
+without it gets 403, and another workspace's store, or a disconnected one, 404. It is read-only and
+calls no provider: it composes what each module already says about itself.
+
+```json
+{ "modules": [{
+  "id": "meta_ads", "title": "Meta Ads", "status": "reauthorization_required", "code": "auth_expired", "demo": false,
+  "accounts": [{ "id": "…", "name": "Shop ads", "status": "reauthorization_required", "lastSyncedAt": "…", "lastAttemptAt": "…", "code": "auth_expired", "demo": false }],
+  "lastSyncedAt": "2026-10-29T09:00:00.000Z",
+  "capabilities": ["spend", "impressions", "reach", "frequency", "clicks", "linkClicks", "…"],
+  "actions": ["connect", "reconnect", "refresh", "disconnect"],
+  "href": "/settings/ads"
+}] }
+```
+
+Modules, always all of them and in this order: `shopify`, `meta_ads`, `google_ads`, `adsense`,
+`whatsapp`, `sms`, `email`. The Zapier app (PR #275) adds its module once it merges. The answer
+doesn't leave out what an App Store workspace doesn't offer: the UI does (`lib/features.ts`).
+
+| Status | Means |
+| --- | --- |
+| `connected` | It works: the numbers come in, or messages can go. |
+| `pending` | Set up, and waiting for a step: the platform's approval or review, a first check, the store's first import, the rest of a channel's setup. |
+| `reauthorization_required` | Someone must sign in again: the access ended, a permission was taken back, or the person whose login powered it left. |
+| `syncing` | bizinsights is bringing it up to date, or checking it, now; it settles by itself. |
+| `error` | Connected, and not working: the last attempt failed, or the platform stopped the account. |
+| `disconnected` | Nothing connected (or disconnected, closed), or the provider isn't set up on this server (`code` `not_configured`). |
+
+Where each provider's own states land:
+
+- **Shopify** (`stores.status`): active → connected (without a token: reauthorization_required),
+  pending → pending, syncing → syncing. A store in error by the dashboard's reason (`syncProblem`,
+  the `code`): lost access (`access`) → reauthorization_required, Shopify's approval of protected
+  customer data (`not_approved`) → pending, the rest (a frozen, closed or locked shop) → error.
+- **Meta Ads, Google Ads, AdSense**: each account by the cards' own state (`connectionState`):
+  synchronizing → syncing; reconnect required, authorization required, permission missing →
+  reauthorization_required; verification pending → pending; sync failed → error; closed →
+  disconnected. The module is the worst of the accounts shown on the dashboard (`platformState`). A
+  sign-in still waiting for its ad accounts is connected, as its card says, with its reason as its
+  `code`. The Google Ads demo is an account with `demo: true`, and the module says `demo` when every
+  account it counts is the demo.
+- **WhatsApp** (the connection as its page shows it, `waConnectionView`): connected; pairing →
+  pending; reconnecting → syncing; logged out → reauthorization_required; failed → error;
+  disconnected → disconnected, with the connection's reason as its `code`. A store can connect once
+  bizinsights' Evolution API service is set up (a QR code; Meta's Cloud API needs its settings too);
+  without it the module says `not_configured`.
+- **SMS** (the Automations hub's card): connected; needing attention → error when the check at AWS
+  failed (`connection_failed`), pending while the store's setup is left (the first step as `code`);
+  not connected → disconnected.
+- **Email** (each mailbox's status): connected; pending (not tested yet) → pending; testing →
+  syncing; degraded, failed → error; reauthorization_required; disabled, revoked → disconnected. The
+  module: the hub's card when connected, else the worst of the mailboxes still in use and of the
+  workspace's own problems: no verified sender yet or sending paused → pending, suspended by
+  bizinsights → error (so a suspension is an error whatever the mailboxes say, `code` `suspended`).
+  A mailbox's `lastAttemptAt` is its last check that worked or its last failure, whichever is later.
+
+`actions` are what this caller may press, by their permissions and the module's state; each is done
+on the provider's own routes. A shared dashboard link and an API key get none.
+
+Every caller is told the same status for every module. What a channel's own page shows (the SMS
+sender, the mailboxes, why one needs attention) stays with whoever may open that page: SMS needs
+**View campaigns** (`marketing.campaigns`), as the Automations hub does, and a workspace API key
+sees neither SMS nor email beyond its status, since the hub and the email settings refuse keys
+(`emailAccess.ts`). For them the module comes with `accounts: []` and `code: null`.
+
+| Module | Who | Actions |
+| --- | --- | --- |
+| Shopify | owners and admins (`stores:manage`) | `refresh` (active or in error), `reconnect` (lost access), `disconnect` |
+| Ad platforms | Manage integrations | `connect` (set up on this server), `reconnect` (an account needs signing in again), `refresh` (a shown account with a working grant, the demo, or a waiting sign-in), `disconnect` |
+| WhatsApp | Manage integrations; `refresh` ("Check now") View campaigns | `connect` (set up on this server, nothing connected), `reconnect` (logged out or failed), `refresh`, `disconnect` |
+| SMS, email | the hub's own (`hubPermissions`: SMS owners and admins, email Manage integrations) | the hub card's, its test as `refresh` |
+
+`capabilities` are fixed per module: the store's data modules (`CAPABILITIES`), each ad platform's
+report figures, and the messaging channels' counts (WhatsApp sent, delivered, read, failed). Nothing
+secret is in the answer: no token, no password, no full phone number (a number is masked, and the
+SMS sender is never named by its AWS resource name).
 
 ## Endpoints
 
@@ -88,6 +171,7 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores/:storeId/overview` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
+| GET | `/workspaces/:ws/stores/:storeId/integrations` | integrations.status | integrations.ts |
 | POST | `/pixel/:key` | per-store ingest key, rate-limited | pixel.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/request` | stores:manage | scopes.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/refresh` | stores:manage | scopes.ts |
@@ -97,52 +181,48 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/shopify/callback` | public (signed/origin-checked) | shopify.ts |
 | GET | `/shopify/launch` | public (signed/origin-checked) | shopify.ts |
 | POST | `/webhooks/shopify` | public (signed/origin-checked) | webhooks.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/embedded` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/manual/discover` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/manual` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/register` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/pin` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/refresh` | stores:manage | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/settings` | dashboard:read | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp` | marketing.campaigns or integrations.status | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/start` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/finish` | integrations.manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/connect/numbers` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/number` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/pin` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/connect/check` | integrations.manage | whatsapp.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp` | integrations.manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/pin` | owners and admins | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/settings` | marketing.campaigns | whatsapp.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/whatsapp/settings` | stores:manage | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/templates` | dashboard:read | whatsapp.ts |
+| POST|DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/settings/event-key` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/templates` | marketing.campaigns | whatsapp.ts |
 | POST | `/workspaces/:ws/stores/:storeId/whatsapp/templates` | stores:manage | whatsapp.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/test` | stores:manage | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/analytics` | dashboard:read | whatsapp.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/messages` | customers:contact | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id/retry` | stores:manage | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id/cancel` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/orders` | customers:contact | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/orders/:id` | customers:contact | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/orders/:id/steps` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/carts` | customers:contact | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/carts/:id/remind` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/reviews` | customers:contact | whatsappOps.ts |
-| PATCH | `/workspaces/:ws/stores/:storeId/whatsapp/reviews/:id` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | dashboard:read | whatsappOps.ts |
-| PATCH | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappOps.ts |
-| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id/schedule` | stores:manage | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id/pause|resume|cancel` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/automations` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/automations` | stores:manage | whatsappOps.ts |
-| PATCH | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id` | stores:manage | whatsappOps.ts |
-| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id/runs` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/automations/:id/test` | stores:manage | whatsappOps.ts |
-| GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/summary` | dashboard:read | whatsappOps.ts |
-| POST | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/opt-out` | customers:contact | whatsappOps.ts |
-| GET | `/webhooks/whatsapp` | Meta verify token | whatsappPublic.ts |
-| POST | `/webhooks/whatsapp` | `X-Hub-Signature-256` (rate-limited when not bizinsights' own app) | whatsappPublic.ts |
-| GET | `/public/track/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/public/review/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| POST | `/public/review/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/public/stores/:storeId/reviews` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/r/:code` | public (unguessable token / rate-limited) | whatsappPublic.ts |
-| GET | `/whatsapp/platform` | public (unguessable token / rate-limited) | whatsappPublic.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/templates/sync` | stores:manage | whatsapp.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/templates/:id` | stores:manage | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/templates/:id/test` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/messages` | marketing.campaigns (text: customers.contact) | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id` | marketing.campaigns (text: customers.contact) | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages` | stores:manage + customers.contact | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/messages/:id/retry` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts` | marketing.campaigns + customers.contact | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/:id` | marketing.campaigns + customers.contact | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/:id/consent` | stores:manage + customers.contact | whatsapp.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/events` | stores:manage | whatsapp.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/workflows` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/check` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/workflows` | stores:manage | whatsappAutomation.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id` | marketing.campaigns | whatsappAutomation.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id` | stores:manage | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id/activate|pause|test` | stores:manage | whatsappAutomation.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/workflows/:id` | stores:manage | whatsappAutomation.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate` | marketing.campaigns | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns` | stores:manage | whatsappAutomation.ts |
+| GET | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | marketing.campaigns | whatsappAutomation.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappAutomation.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id` | stores:manage | whatsappAutomation.ts |
+| POST | `/workspaces/:ws/stores/:storeId/whatsapp/campaigns/:id/test|schedule|cancel` | stores:manage | whatsappAutomation.ts |
+| GET | `/webhooks/whatsapp` | Meta verify token | whatsappWebhook.ts |
+| POST | `/webhooks/whatsapp` | `X-Hub-Signature-256` (refusals rate-limited per IP) | whatsappWebhook.ts |
+| POST | `/whatsapp/events` | the store's event key (`Authorization: Bearer whev_...`) | whatsappWebhook.ts |
 | POST | `/workspaces` | signed in | workspaces.ts |
 | PATCH | `/workspaces/:ws` | members:manage | workspaces.ts |
 | GET | `/workspaces/:ws/members` | dashboard:read | workspaces.ts |
@@ -161,3 +241,14 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | POST | `/workspaces/:ws/billing/subscribe` | billing:manage | workspaces.ts |
 | GET | `/workspaces/:ws/audit-logs` | audit:read | workspaces.ts |
 | GET | `/workspaces/:ws/alerts` | dashboard:read | workspaces.ts |
+| GET | `/oauth/zapier/authorize` | signed in (own sign-in, not a shared link) | zapierOAuth.ts |
+| POST | `/workspaces/:ws/stores/:storeId/zapier/authorize` | integrations.manage | zapierOAuth.ts |
+| POST | `/oauth/token` | public (Zapier's client secret) | zapierOAuth.ts |
+| GET | `/zapier/me` | Zapier bearer token (`zat_`) only | zapier.ts |
+| POST | `/zapier/hooks` | Zapier bearer token only | zapier.ts |
+| DELETE | `/zapier/hooks/:id` | Zapier bearer token only | zapier.ts |
+| GET | `/zapier/samples/:event` | Zapier bearer token only | zapier.ts |
+| GET | `/zapier/search/ad-performance` | Zapier bearer token only, marketing.ads | zapier.ts |
+| GET | `/zapier/search/adsense-earnings` | Zapier bearer token only, marketing.ads | zapier.ts |
+| GET | `/workspaces/:ws/stores/:storeId/zapier` | integrations.status | zapier.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/zapier/connections/:grantId` | integrations.manage | zapier.ts |

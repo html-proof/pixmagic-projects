@@ -66,6 +66,11 @@ Pay fields are left out of responses for people without `pay:view`. Unknown or f
    starts unverified and must enter the code /verify-email sends before the portal answers
    (`email_unverified`). If the address already has an account, the page asks them to sign in and
    joins that account instead (`/staff/invitations/accept-existing`).
+   **Whoever signs up with the address sees the record's pay**, so two rules keep someone without
+   `pay:view` (an HR manager) from claiming a record to read it: changing the email of an employee
+   who has a pay rate or a payroll item needs `pay:view` (`pay_restricted`), and nobody without
+   `pay:view` joins through an invitation they sent themselves (`own_invitation`: someone else sends
+   theirs). Owners, admins and anyone else who may see pay can claim their own record either way.
 5. Later sign-ins use the normal login (password, Google, email code); forgot password is the
    existing `/forgot-password`. Logout ends this browser's session; **Sign out of all devices** (portal →
    Account) revokes every session of the account (`POST /auth/sessions/revoke`).

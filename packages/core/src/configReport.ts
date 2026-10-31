@@ -11,9 +11,9 @@ import type { OAuthProvider } from "@app/shared/email";
 import { adsConfigured, adsRestricted } from "./adConnections/config.js";
 import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
-import { env } from "./env.js";
+import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
-import { waPlatformConfig } from "./whatsapp/graph.js";
+import { zapierConfig } from "./zapier/config.js";
 
 /** A provider's public id (one of the app's settings) and its secret (Secrets Manager). */
 export interface ProviderCredentials {
@@ -30,16 +30,30 @@ export interface ProviderCredentials {
 
 export interface ConfigReport {
   /** Each ad platform: set up (Connect works), and restricted (its sign-in lets only some people through yet). */
+  /** `configured`: the platform's own app is set up here, so its Connect button signs in. */
   ads: { configured: Record<AdProvider, boolean>; restricted: Record<AdProvider, boolean> };
   /**
-   * "Connect WhatsApp Business" (Embedded Signup; manual connections need none of this), the settings
-   * it still lacks (names, empty once it is on), and the webhook verify token.
+   * WhatsApp Automation: linking a phone through bizinsights' Evolution API service (on once its
+   * URL and key are set), connecting through Meta's Cloud API (Embedded Signup; the settings it still
+   * lacks, empty once it can be offered), and the verify token of Meta's webhook.
    */
-  whatsapp: { embeddedSignup: boolean; embeddedSignupNeeds: string[]; webhookVerifyToken: boolean };
+  whatsapp: {
+    evolution: boolean;
+    evolutionNeeds: string[];
+    embeddedSignup: boolean;
+    embeddedSignupNeeds: string[];
+    webhookVerifyToken: boolean;
+    /** Whether the functions reach the service (the cron's "config" action asks it; absent elsewhere). */
+    service?: { reachable: boolean; version: string | null };
+  };
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
-  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean };
+  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
+  /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
+  sms: { mode: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean };
+  /** Zapier (docs/zapier.md): its OAuth client fully set up (id, secret, redirect URI), and whether Connect has an invite link to open. */
+  zapier: { configured: boolean; inviteUrl: boolean };
   credentials: ProviderCredentials[];
   /** The providers in `credentials` whose public id is set and whose secret is missing. */
   halfConfigured: string[];
@@ -65,7 +79,7 @@ function extraShopifyApps(raw: string | undefined): Array<{ key: string; clientI
 /**
  * Whether WhatsApp's app secret is there: its own, or the Meta Ads app's when WhatsApp runs on that app (no
  * WHATSAPP_APP_ID, or the same id). On an app of its own, only its own secret signs what it sends.
- * The same rule as whatsapp/graph.ts.
+ * The same rule as whatsapp/common.ts.
  */
 const waSecretSet = (vars: Vars) =>
   !!vars.WHATSAPP_APP_SECRET || ((!vars.WHATSAPP_APP_ID || vars.WHATSAPP_APP_ID === vars.META_APP_ID) && !!vars.META_APP_SECRET);
@@ -84,16 +98,17 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
     secretSet: !!vars[secretSetting],
     effect,
   });
-  // WhatsApp's secret is used only by Embedded Signup ("Connect WhatsApp Business") and the webhooks
-  // of the numbers it connects; manual connections bring their own app's secret. So its id here is
-  // WHATSAPP_CONFIG_ID, the setting that turns Embedded Signup on: an app id picked (WHATSAPP_APP_ID)
-  // before its configuration exists is no reason to warn on every deploy.
+  // WhatsApp's Meta secret is used by the Cloud API way to connect (Embedded Signup) and the webhooks of
+  // the numbers it connects. So its id here is WHATSAPP_CONFIG_ID, the setting that turns it on: an app
+  // id picked (WHATSAPP_APP_ID) before its configuration exists is no reason to warn on every deploy.
+  // On the Meta Ads app the secret to set is META_APP_SECRET (WHATSAPP_APP_SECRET would win over it).
+  const onMetaApp = !vars.WHATSAPP_APP_ID || vars.WHATSAPP_APP_ID === vars.META_APP_ID;
   const whatsapp: ProviderCredentials = {
     ...pair(
       "WhatsApp (Embedded Signup)",
       "WHATSAPP_CONFIG_ID",
-      "WHATSAPP_APP_SECRET",
-      "Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work",
+      onMetaApp ? "META_APP_SECRET" : "WHATSAPP_APP_SECRET",
+      "connecting WhatsApp through Meta's Cloud API (Embedded Signup) can't be offered, and Meta's webhooks for Cloud API numbers can't be checked",
     ),
     secretSet: waSecretSet(vars),
   };
@@ -117,19 +132,29 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
     whatsapp,
     pair("Gmail (email sending)", "EMAIL_GOOGLE_CLIENT_ID", "EMAIL_GOOGLE_CLIENT_SECRET", "Connect Gmail says it isn't set up"),
     pair("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", "Connect Outlook says it isn't set up"),
+    // bizinsights' own OAuth client for its Zapier app (docs/zapier.md): the id is public, the secret is the one entered in Zapier too.
+    pair("Zapier", "ZAPIER_CLIENT_ID", "ZAPIER_CLIENT_SECRET", "Zapier can't connect to bizinsights (its endpoints answer not_configured) and Settings says Zapier isn't set up yet"),
   ];
 }
 
+/** What bizinsights' Evolution API service still lacks here (empty: phones can be linked). */
+export function evolutionNeeds(vars: Vars = process.env): string[] {
+  return [!vars.EVOLUTION_API_URL ? "EVOLUTION_API_URL" : null, !vars.EVOLUTION_API_KEY ? "EVOLUTION_API_KEY" : null].filter((n): n is string => n !== null);
+}
+
 /**
- * What "Connect WhatsApp Business" still lacks, by setting name: Meta's app (its own, or the Meta Ads
- * app's), the Embedded Signup configuration, and that app's secret. Empty when Embedded Signup is on
- * (whatsapp/graph.ts waPlatformConfig asks for the same three).
+ * What connecting through Meta's Cloud API still lacks, by setting name: the Evolution API service it
+ * sends through, Meta's app (its own, or the Meta Ads app's), the Embedded Signup configuration,
+ * that app's secret and the webhook verify token. Empty when it can be offered (whatsapp/overview.ts
+ * cloudApiMissing asks for the same).
  */
 export function embeddedSignupNeeds(vars: Vars = process.env): string[] {
   return [
+    ...evolutionNeeds(vars),
     !vars.WHATSAPP_APP_ID && !vars.META_APP_ID ? "WHATSAPP_APP_ID" : null,
     !vars.WHATSAPP_CONFIG_ID ? "WHATSAPP_CONFIG_ID" : null,
     !waSecretSet(vars) ? "WHATSAPP_APP_SECRET" : null,
+    !vars.WHATSAPP_WEBHOOK_VERIFY_TOKEN ? "WHATSAPP_WEBHOOK_VERIFY_TOKEN" : null,
   ].filter((n): n is string => n !== null);
 }
 
@@ -145,7 +170,9 @@ export function configReport(): ConfigReport {
   return {
     ads: { configured: adsConfigured(), restricted: adsRestricted() },
     whatsapp: {
-      embeddedSignup: waPlatformConfig() !== null,
+      evolution: evolutionNeeds().length === 0,
+      evolutionNeeds: evolutionNeeds(),
+      embeddedSignup: embeddedSignupNeeds().length === 0,
       embeddedSignupNeeds: embeddedSignupNeeds(),
       webhookVerifyToken: !!e.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     },
@@ -156,7 +183,11 @@ export function configReport(): ConfigReport {
       google: !!e.COGNITO_DOMAIN && e.COGNITO_IDENTITY_PROVIDERS.split(",").some((p) => p.trim() === "Google"),
       emailOtp: e.COGNITO_EMAIL_OTP === "1",
       loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
+      // How many addresses skip that code (never which).
+      loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
     },
+    sms: { mode: e.SMS_MODE, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim() },
+    zapier: { configured: zapierConfig().configured, inviteUrl: zapierConfig().settings.ZAPIER_INVITE_URL },
     credentials,
     halfConfigured: credentials.filter(isHalf).map((c) => c.provider),
   };

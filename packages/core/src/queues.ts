@@ -9,6 +9,10 @@ export const QUEUE = {
   webhooks: "webhooks",
   aggregate: "aggregate",
   email: "email",
+  /** AWS End User Messaging's SMS delivery events (configuration set → SNS → this queue; core/sms/delivery.ts). */
+  smsEvents: "smsEvents",
+  /** WhatsApp Automation (core/whatsapp): sends, Evolution API's webhook events, campaign batches. */
+  whatsapp: "whatsapp",
 } as const;
 export type QueueName = keyof typeof QUEUE;
 
@@ -63,6 +67,12 @@ export interface SyncJobData {
    */
   pagedOnly?: boolean;
   /**
+   * On a full orders import with read_all_orders: the year of the history plan this message reads
+   * (order_history_windows, packages/core/src/orderHistory.ts). Absent on the import's first message,
+   * which plans the years, and on every other orders job.
+   */
+  history?: { windowId: string };
+  /**
    * On a "shop" job: the jobs seeded with it that wait for the store's time zone, which it
    * starts once it has learned it. Absent on messages sent before the ids were carried.
    */
@@ -114,6 +124,15 @@ export interface AggregateJobData {
  */
 export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string } | { kind: "team_invitation"; deliveryId: string };
 
+/** One SMS delivery event as AWS publishes it (raw SNS delivery), checked by core/sms smsEventSchema. */
+export type SmsEventMessage = Record<string, unknown>;
+
+/**
+ * WhatsApp Automation (core/whatsapp): send one message, apply one stored webhook event from
+ * Evolution API, or make the next batch of a campaign's messages. The rows carry the state.
+ */
+export type WhatsappJob = { kind: "wapp_send"; messageId: string } | { kind: "wapp_event"; eventId: string } | { kind: "wapp_campaign"; campaignId: string };
+
 export interface Producer<T> {
   send(body: T, opts?: { delaySeconds?: number }): Promise<void>;
 }
@@ -123,6 +142,8 @@ export interface Queues {
   webhooks: Producer<WebhookJobData>;
   aggregate: Producer<AggregateJobData>;
   email: Producer<EmailJob>;
+  smsEvents: Producer<SmsEventMessage>;
+  whatsapp: Producer<WhatsappJob>;
 }
 
 /** Large payload storage (R2 in production). */
@@ -150,12 +171,14 @@ export type MemoryQueues = Queues & {
 };
 
 export function memoryQueues(): MemoryQueues {
-  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[] };
+  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[], smsEvents: [] as SmsEventMessage[], whatsapp: [] as WhatsappJob[] };
   const sentOpts = {
     sync: [] as Array<SendOptions | undefined>,
     webhooks: [] as Array<SendOptions | undefined>,
     aggregate: [] as Array<SendOptions | undefined>,
     email: [] as Array<SendOptions | undefined>,
+    smsEvents: [] as Array<SendOptions | undefined>,
+    whatsapp: [] as Array<SendOptions | undefined>,
   };
   const producer = <T>(list: T[], opts: Array<SendOptions | undefined>): Producer<T> => ({
     async send(body, o) {
@@ -170,8 +193,10 @@ export function memoryQueues(): MemoryQueues {
     webhooks: producer(sent.webhooks, sentOpts.webhooks),
     aggregate: producer(sent.aggregate, sentOpts.aggregate),
     email: producer(sent.email, sentOpts.email),
+    smsEvents: producer(sent.smsEvents, sentOpts.smsEvents),
+    whatsapp: producer(sent.whatsapp, sentOpts.whatsapp),
     clear() {
-      for (const k of ["sync", "webhooks", "aggregate", "email"] as const) {
+      for (const k of ["sync", "webhooks", "aggregate", "email", "smsEvents", "whatsapp"] as const) {
         sent[k].length = 0;
         sentOpts[k].length = 0;
       }

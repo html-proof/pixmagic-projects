@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { customerKey, phoneHash, recordDataRequest, waEncrypt } from "@app/core";
+import { customerKey, recordDataRequest, waEncrypt, waPhoneHash } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 import { LEGACY_GRANTS } from "@app/shared";
 
@@ -25,17 +25,24 @@ async function scenario() {
   // The customer's order (linked by the keyed hash), and someone else's.
   await systemDb.order.create({ data: { ...base, shopifyId: "1001", name: "#1001", customerKey: customerKey(store, "7") } });
   await systemDb.order.create({ data: { ...base, shopifyId: "1002", name: "#1002", customerKey: customerKey(store, "8") } });
-  await systemDb.whatsappContact.create({
+  // WhatsApp Automation's contact for the customer, with a consent record.
+  const contact = await systemDb.wappContact.create({
     data: {
       workspaceId: ws,
       storeId: store.id,
-      phoneHash: phoneHash(store.id, "61412345678"),
-      phoneEnc: waEncrypt(store.id, "phone", "61412345678"),
-      phoneMasked: "+61 4•• ••• 678",
+      phoneHash: waPhoneHash(store.id, "61412345678"),
+      phoneEnc: waEncrypt(store.id, "phone", "+61412345678"),
+      phoneMasked: "+61 •••••• 678",
       firstNameEnc: waEncrypt(store.id, "name", "Pat"),
-      customerKey: customerKey(store, "7"),
-      marketingStatus: "opted_in",
+      shopifyCustomerId: "7",
+      optedIn: true,
+      marketing: "opted_in",
     },
+  });
+  await systemDb.wappConsentEvent.create({ data: { workspaceId: ws, storeId: store.id, contactId: contact.id, scope: "marketing", status: "opted_in", source: "whatsapp_start", occurredAt: new Date("2026-10-02T00:00:00Z") } });
+  // And what the earlier WhatsApp feature still holds about them (found by the same hash).
+  await systemDb.whatsappContact.create({
+    data: { workspaceId: ws, storeId: store.id, phoneHash: waPhoneHash(store.id, "61412345678"), phoneEnc: "legacy", phoneMasked: "+61 •••••• 678", customerKey: customerKey(store, "7") },
   });
   const { request } = await recordDataRequest(store, { requestId: "9999", customerId: "7", phone: "+61 412 345 678", email: "pat@example.com", ordersRequested: [] });
   await systemDb.alert.create({ data: { workspaceId: ws, storeId: store.id, severity: "warning", code: "privacy_request", message: "m" } });
@@ -61,7 +68,9 @@ describe("privacy requests", () => {
     const body = res.json();
     expect(body.orders.map((o: { name: string }) => o.name)).toEqual(["#1001"]);
     expect(body.orders[0]).toMatchObject({ total: "49", currency: "USD" });
-    expect(body.whatsapp.contacts).toEqual([expect.objectContaining({ phone: "61412345678", firstName: "Pat", marketing: "opted_in" })]);
+    expect(body.whatsapp.contacts).toEqual([expect.objectContaining({ phone: "+61412345678", firstName: "Pat", marketing: "opted_in" })]);
+    expect(body.whatsapp.consent).toEqual([expect.objectContaining({ scope: "marketing", status: "opted_in", source: "whatsapp_start" })]);
+    expect(body.whatsapp.olderRecords).toBe(1);
     expect(body.request).toMatchObject({ shopifyRequestId: "9999", customerId: "7" });
 
     const after = await systemDb.dataRequest.findUniqueOrThrow({ where: { id: request.id } });

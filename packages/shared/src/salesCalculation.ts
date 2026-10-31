@@ -12,7 +12,7 @@
  * and doesn't depend on the order of a floating-point sum.
  */
 // Extensionless imports: the web app imports this file directly (@app/shared/salesCalculation).
-import { z } from "zod";
+import { z } from "./zod";
 
 /** The lines of Shopify's total sales, in the order its breakdown lists them. */
 export const SALES_COMPONENTS = ["netSales", "additionalFees", "duties", "shipping", "taxes"] as const;

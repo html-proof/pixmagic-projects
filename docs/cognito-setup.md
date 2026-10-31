@@ -30,8 +30,27 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 - **Accounts**: `users.id` never changes. Each Cognito user (password, Google) is linked to
   it in `auth_identities` (provider, Cognito `sub`, user name, method). Several identities can point
   at one user (`apps/api/src/identity.ts`):
+  - **Continue with Google is sign-up and sign-in in one** (the same button on `/login` and
+    `/signup`): a Google account new to bizinsights, at an address no account has, becomes a new
+    account on the spot, with the name, verified address and picture Google gives (`users.avatar_url`,
+    the pool's `picture` mapping) and its Google identity (`auth_identities`: the Cognito user
+    `google_<Google sub>`, method `google`); no form, no role anywhere until it makes or joins a
+    workspace. Two first sign-ins at once make one account (the unique `(provider, subject)` and
+    `users.email`). A returning Google account is found by its Cognito user.
   - A sign-in links to the existing account with the same address only when Cognito vouches for
     the address (a confirmed sign-up code; Google's `email_verified`). Never on an unverified one.
+  - **A new Google account never joins an account that has its own ways in by its address alone**
+    (Google's word for an address isn't proof the account is this person's, and it would skip the
+    account's two-step verification). The callback answers `{ next: "link", email }` instead, with
+    no session (the Google sign-in's refresh token is handed back) and nothing created: who the
+    Google account is waits in the coordinator for 15 minutes under an id in an httpOnly cookie
+    (`__link`, path `/api/auth`; `identity_link_pending`). The sign-in page says the address
+    already has an account and asks the person to sign in to it the usual way (the password, its
+    emailed code or the authenticator app's). That sign-in, in that browser, links the Google
+    account (`identity_linked` with `via: "sign_in"`) and the account's address is emailed; a
+    sign-in to another account links nothing and ends the hold; "Don't link Google" lets it go
+    (`DELETE /api/auth/pending-link`). An account that already has a different Google account is
+    refused (`google_other_linked`: one per account, as in Settings).
   - When that existing account's own address was never verified (an employee account made from a
     copied invitation link, whose password whoever opened the link chose), the verified sign-in
     takes it over: the account's other Cognito users are deleted, their identities removed, every
@@ -71,8 +90,10 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
     Cognito user is deleted and its sessions end at once). Each addition and removal is emailed
     to the account's address. A Google session counts as the person again only when it proved the
     account's own address (the session's `own` claim, and that identity's address): one linked
-    under another address needs the account's password to remove a method or delete the account,
-    and can't add a password (`GET /api/auth/account` says which: `confirmWith`). A removed Google
+    under another address needs the account's password to remove a method, and can't add a
+    password (`GET /api/auth/account` says which: `confirmWith`). Deleting the account asks every
+    session for a 6-digit code emailed to the account's own address instead (no password field in
+    that dialog: beside one, browsers filled the address into the "Type DELETE" box). A removed Google
     account stays out even when its address is the account's: Cognito makes its federated user
     again on its next sign-in, but the removal (`identity_removed` with its Cognito user name, in
     `auth_events`) stops it linking back by address (`google_removed`) until it is linked again
@@ -106,11 +127,13 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 | `POST /api/auth/otp/start`, `/otp/verify` | passwordless code (only with `COGNITO_EMAIL_OTP=1`) |
 | `GET /api/auth/oauth/google/start` | to Google to sign in, with state, PKCE and a nonce. `?keep=0`: "Keep me signed in" unticked. (`?link=1` no longer links: back to `returnTo` with `?link_error=start_again`) |
 | `POST /api/auth/oauth/google/link` `{ returnTo }` | link Google to the signed-in account, from our own pages: `{ redirect }` to Google's account chooser (a sign-in in the last 15 minutes, or `POST /api/auth/account/methods/google/prepare` with the password first); back to `<returnTo>?linked=google` or `?link_error=<code>`; refusals are errors whose code the page puts there |
-| `POST /api/auth/oauth/callback` | what the provider sent back (from the `/auth/callback` page) |
+| `POST /api/auth/oauth/callback` | what the provider sent back (from the `/auth/callback` page): `{ user, redirect }`, `{ linked, redirect }` (Settings), or `{ next: "link", provider, email }` (the address is an existing account's: sign in to it to link) |
+| `GET`, `DELETE /api/auth/pending-link` | the Google account held in this browser for an existing account (`{ pending, provider, email }`); let it go |
 | `POST /api/auth/logout`, `/logout-all` | this browser; every device |
 | `GET /api/auth/session`, `/api/auth/whoami`, `/api/me` | the session |
-| `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `canAddPassword`, `confirmWith` (`password`, `recent_sign_in` or `own_address_sign_in`: what removing a method or deleting the account asks for), `mfaEnabled` (null: Cognito couldn't be asked) |
-| `POST /api/auth/account/{password,password/add,email,email/confirm,verify-email/send,verify-email,delete}` | change or add a password, change or verify the email, delete the account |
+| `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `canAddPassword`, `confirmWith` (`password`, `recent_sign_in` or `own_address_sign_in`: what removing a method asks for), `mfaEnabled` (null: Cognito couldn't be asked) |
+| `POST /api/auth/account/{password,password/add,email,email/confirm,verify-email/send,verify-email}` | change or add a password, change or verify the email |
+| `POST /api/auth/account/delete/code`, `/delete` `{ confirm: "DELETE", code }` | delete the account: a code emailed to the account's address (`challenge`: its countdowns; 409 `sole_owner` before any email), then the code within its minute (section 8's rules: five guesses, one code a minute, the address's caps) |
 | `DELETE /api/auth/account/methods/:id` | remove a sign-in method |
 | `POST /api/auth/account/methods/google/prepare` | the password again, so this session may start one link to Google in the next 5 minutes |
 | `POST /api/auth/account/mfa/{setup,verify,disable}` | two-step verification (section 6) |
@@ -142,8 +165,8 @@ aws cloudformation describe-stacks --stack-name InsightsAuth-production --region
 Emails: left to itself Cognito sends codes from `no-reply@verificationemail.com`, limited to 50 a
 day. Production doesn't: the Auth stack gives the pool a Custom Email Sender trigger (template
 parameters `CustomEmailSenderState`, `CustomEmailSenderArn`, `CustomEmailKmsKeyArn`), a function
-that sends every code through the app's mail provider (Resend) from `no-reply@bizinsights.io`
-([aws-deployment.md](aws-deployment.md), "Sign-in emails"). For the passwordless code (`EMAIL_OTP`)
+that sends every code through the app's mail provider (Resend) from `support@bizinsights.io`
+([aws-deployment.md](aws-deployment.md), "Sign-in emails" and "Who each email comes from"). For the passwordless code (`EMAIL_OTP`)
 Cognito's documentation asks for SES: verify a domain in SES in the same region, get production access, and pass
 `SesFromEmail` and `SesIdentityArn` to the template (`parameters` in `infra/cdk/lib/auth-stack.ts`).
 
@@ -196,6 +219,12 @@ account passing hides that), and a logo plus brand verification are what make Go
    `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/authorize?…identity_provider=Google…`;
    then Continue with Google on `/login` in a private window ends on the dashboard (or onboarding,
    for a new account).
+
+The identity provider (`GoogleProvider` in `infra/aws/cognito.yaml`) asks Google for `openid email
+profile` and maps `email`, `email_verified` (without it no Google address counts as verified, and
+nothing links), `name`, `given_name`, `family_name` and `picture` (the account's profile picture)
+to the pool's attributes. Changing the mapping is an in-place update of the provider, made by the
+Deploy run like any other change; a user's attributes follow at their next Google sign-in.
 
 To switch it off again, delete the GitHub variable and run Deploy to AWS.
 
@@ -372,6 +401,11 @@ code emailed after the password) follows the same rules, enforced by the API on 
   Google sign-ins have Google's own verification and get neither.
 - **Off switch**: `AUTH_LOGIN_EMAIL_CODE` empty (`apps/aws/src/settings.ts`, then a deploy) and the
   password alone signs in, as before; `GET /api/auth/config` says `loginCode`.
+- **Exempt addresses**: `AUTH_LOGIN_CODE_EXEMPT` (same file, comma-separated) lists accounts whose
+  password alone signs in while everyone else gets the code: the account given to Meta's App Review
+  reviewers, who can't read its inbox ([ads-review-packs.md](ads-review-packs.md)). An authenticator
+  app still applies to them. Each such sign-in logs `login_code_exempt`; the config report counts
+  the addresses (`auth.loginCodeExempt`). Empty it once the review is over.
 - The pages: six boxes (`OtpInput` in `apps/web/src/components/auth/CodeStep.tsx`: typing moves on,
   Backspace back, a pasted or autofilled code fills them all and the sixth digit sends), "Code
   expires in 00:59", "Resend code in 00:59" then "Resend verification code", "Use a different email

@@ -171,7 +171,7 @@ export type RestProduct = z.output<typeof restProductSchema>;
 // ---------------------------------------------------------------- REST webhooks, as the automations read them
 
 /*
- * The WhatsApp and email automations (whatsapp/events.ts, email/events.ts) read more of an order
+ * WhatsApp Automation and the email automations (whatsapp/events.ts, email/events.ts) read more of an order
  * or checkout than analytics does: who the customer is and how to reach them. They have schemas of
  * their own, so a field only they read can't cost analytics an order, nor the other way round.
  * Each module parses a payload only once it is about to act on it, so a store that doesn't use it
@@ -196,6 +196,9 @@ const decimal = z.union([z.number().finite(), z.string().regex(/^-?\d+(\.\d+)?$/
 
 const automationLineItem = obj({ product_id: restId.nullish(), title: str, variant_title: str, quantity: z.number().nullish(), price: amount.nullish() });
 
+/** A customer's SMS marketing consent on REST payloads (customers, and the customer on orders and checkouts). */
+const smsMarketingConsent = obj({ state: str, opt_in_level: str, consent_updated_at: str, consent_collected_from: str }).nullish().catch(null);
+
 /** Who is buying, how to reach them and what they agreed to: the same fields on orders and checkouts. */
 const buyer = {
   email: str,
@@ -210,8 +213,11 @@ const buyer = {
     email: str,
     phone: str,
     accepts_marketing: z.boolean().nullish(),
+    /** The customer's order count and lifetime spend as Shopify keeps them (WhatsApp campaign audiences). */
+    orders_count: z.number().nullish(),
+    total_spent: decimal.nullish(),
     email_marketing_consent: obj({ state: str }).nullish(),
-    sms_marketing_consent: obj({ state: str }).nullish(),
+    sms_marketing_consent: smsMarketingConsent,
     default_address: address,
   }).nullish(),
   shipping_address: address,
@@ -259,6 +265,8 @@ export const automationOrderSchema = obj({
   /** Cart attributes, set by the merchant's theme and apps: values arrive as strings, but needn't. */
   note_attributes: z.array(obj({ name: str, value: z.union([z.string(), z.number(), z.boolean()]).nullish() })).nullish(),
   discount_codes: z.array(obj({ code: str })).nullish(),
+  /** How it was paid ("shopify_payments", "Cash on Delivery (COD)"...): a workflow condition. */
+  payment_gateway_names: z.array(z.string()).nullish(),
   order_status_url: str,
   /** Each parcel is checked on its own (fulfillmentSchema): one that doesn't fit costs only itself. */
   fulfillments: z.array(z.unknown()).nullish(),
@@ -271,6 +279,21 @@ export const automationCheckoutSchema = obj({
   completed_at: timestamp.nullish(),
   abandoned_checkout_url: str,
 });
+
+/**
+ * customers/create, customers/update and customers_marketing_consent/update, as Customer
+ * Messaging reads them: the customer's number and SMS marketing consent (read_customers).
+ */
+export const customerConsentSchema = obj({
+  id: restId,
+  first_name: str,
+  phone: str,
+  sms_marketing_consent: smsMarketingConsent,
+  default_address: address,
+  created_at: timestamp.nullish(),
+  updated_at: timestamp.nullish(),
+});
+export type CustomerConsentPayload = z.output<typeof customerConsentSchema>;
 
 /** refunds/create, for what was paid back. */
 export const automationRefundSchema = obj({
@@ -414,7 +437,7 @@ export const graphqlOrderSchema = obj({
    * journeySummarySchema): a journey that doesn't fit costs the visit, not the whole order.
    * Absent when the query didn't ask for it, which is told apart from null.
    */
-  customerJourneySummary: z.unknown(),
+  customerJourneySummary: z.unknown().optional(),
   subtotalPriceSet: moneyBag,
   totalDiscountsSet: moneyBag,
   totalTaxSet: moneyBag,
@@ -426,6 +449,12 @@ export const graphqlOrderSchema = obj({
   /** Absent when the query didn't ask for it (then the stored sales are kept), which is told apart from an empty list. */
   agreements: obj({ pageInfo, nodes: z.array(graphqlAgreementSchema).nullish() }).nullish(),
 });
+
+/** A Collection node (PRODUCTS_QUERY, PRODUCT_COLLECTIONS_QUERY). */
+export const graphqlCollectionSchema = obj({ id: gid, title: str });
+
+/** A product's collections connection; `pageInfo` says whether there are more than the page held. */
+const productCollections = obj({ pageInfo, nodes: z.array(graphqlCollectionSchema) });
 
 export const graphqlProductSchema = obj({
   id: gid,
@@ -442,8 +471,12 @@ export const graphqlProductSchema = obj({
   description: str,
   category: obj({ fullName: str }).nullish().catch(null),
   featuredMedia: obj({ preview: obj({ image: obj({ url: str }).nullish() }).nullish() }).nullish().catch(null),
-  collections: obj({ nodes: z.array(obj({ id: gid, title: str })) }).nullish().catch(null),
+  // Withheld or not understood (null): the stored collections are kept (normalizeGraphqlProduct).
+  collections: productCollections.nullish().catch(null),
 });
+
+/** PRODUCT_COLLECTIONS_QUERY's answer; `product` is null when the product is gone. */
+export const graphqlProductCollectionsSchema = obj({ product: obj({ collections: productCollections }).nullish() });
 
 export const graphqlVariantSchema = obj({
   id: gid,
@@ -471,24 +504,11 @@ export const graphqlVariantSchema = obj({
   selectedOptions: z.array(obj({ name: z.string(), value: z.string() })).nullish().catch(null),
 });
 
-/** Order.fulfillments as the WhatsApp shipment poll asks for them (SHIPMENTS_QUERY in whatsapp/events.ts). */
-export const graphqlShipmentSchema = obj({
-  id: gid,
-  status: str,
-  displayStatus: str,
-  updatedAt: timestamp.nullish(),
-  inTransitAt: timestamp.nullish(),
-  deliveredAt: timestamp.nullish(),
-  estimatedDeliveryAt: timestamp.nullish(),
-  trackingInfo: z.array(obj({ company: str, number: str, url: str })).nullish(),
-});
-
-/** An order of the shipment poll. Each parcel is checked on its own (graphqlShipmentSchema). */
-export const graphqlShipmentOrderSchema = obj({ id: gid, fulfillments: z.array(z.unknown()).nullish() });
 
 export type GraphqlMoney = z.output<typeof moneyBag>;
 export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;
 export type GraphqlProduct = z.output<typeof graphqlProductSchema>;
+export type GraphqlCollection = z.output<typeof graphqlCollectionSchema>;
 export type GraphqlVariant = z.output<typeof graphqlVariantSchema>;
 
 // ---------------------------------------------------------------- Inventory (core/inventory)

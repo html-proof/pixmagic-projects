@@ -15,8 +15,9 @@ surroundings differs.
 browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTTP server
               /api/*, /webhooks/*, /pixel/*, /shopify/*  ──► Hono app (apps/api)
               everything else                            ──► static UI (apps/web, Next.js static export)
+                                                             (if the function can't answer: apps/web's /unavailable page, from S3)
 
-jobs   SQS (sync, webhooks, aggregate, email) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
+jobs   SQS (sync, webhooks, aggregate, email, smsEvents, whatsapp) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
 cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
 
 apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsApp, email, staff, persistence)
@@ -41,13 +42,13 @@ Each package may import only the ones above it in this table, never one below.
 
 | Package | Holds | Must not |
 | --- | --- | --- |
-| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), the email rule and template engine (`@app/shared/email`), the Google Ads demo's generator and the Google Ads analytics figures (`adsDemo.ts`, `adsAnalytics.ts`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
+| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), the email rule and template engine (`@app/shared/email`), Customer Messaging's SMS rules (`@app/shared/sms`: parts and encoding, variables, consent, delivery statuses), the Automations hub's trigger catalog and status scale (`@app/shared/automations`), the Google Ads demo's generator and the Google Ads analytics figures (`adsDemo.ts`, `adsAnalytics.ts`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
 | `packages/db` | Prisma schema, migrations (with RLS policies), `systemDb` / `tenantDb` / `withTenant` / `withDb`. | Contain business rules. |
-| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md), the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
+| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md), the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md), Customer Messaging (`sms/`, imported as `@app/core/sms`: SMS through AWS End User Messaging behind an `SmsProvider`; docs/sms.md), the Automations hub (`automations/`, imported as `@app/core/automations`: one adapter per channel over the SMS and email engines, the merged history; docs/automations.md), Zapier (`zapier/`, imported as `@app/core/zapier`: bizinsights as the OAuth provider of its Zapier app, the event outbox and its deliveries; [zapier.md](zapier.md)), the store's own costs (`expenses.ts`: Settings → Costs and the dashboard's `expenses` module; the rules, net profit included, in `@app/shared/expenses`; [kpis.md](kpis.md) "Costs and net profit"). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
 | `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
-| `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
+| `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth, WhatsApp and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
 Where a new piece of code goes:
@@ -72,8 +73,12 @@ Where a new piece of code goes:
   `allowed(need)` (`useApp()`) for the same thing to decide what to show; `can(role, …)` is for owner
   and admin rights only and is false for every other role.
 - **Reads** go through `withTenant(workspaceId, tx => ...)` (Postgres RLS as a second guard);
-  `systemDb` bypasses RLS and is for auth bootstrap, webhooks, jobs and writes that already scoped
-  by workspace and store.
+  `systemDb` is for auth bootstrap, webhooks, jobs and writes that already scoped by workspace and
+  store. RLS binds it too, in the row scope its entry point names (`forTenant` for every
+  `/workspaces/:ws` route and each job; `crossTenant(reason)` only for a reason on the list in
+  `packages/db/src/crossTenant.ts`): [system-database-role.md](system-database-role.md). A new path
+  outside `/workspaces/:ws` goes in `apps/api/src/rowScope.ts`; a new job kind, in
+  `apps/worker/src/rowScope.ts`.
 - **Input**: `z.object(...).parse(await body(c))` for JSON, the same for `c.req.query()`. A Zod
   failure becomes a 400 `validation` response automatically.
 - **Errors**: throw `HttpError(status, message, code)` for anything the client should be told; the
@@ -95,15 +100,33 @@ Where a new piece of code goes:
   a new code needs its wording there. The Slack post carries the code and the alert's id, which
   finds the "alert raised" log line with the message.
 
+## Integration status
+
+Where every connection of a store stands is worked out once, on the server:
+`GET /workspaces/:ws/stores/:storeId/integrations` (`routes/integrations.ts`) answers each module
+(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, email) on one scale of six statuses:
+connected, pending, reauthorization_required, syncing, error, disconnected. The scale, each
+provider's states mapped onto it, and the ad cards' own states (`connectionState`, `platformState`,
+which `apps/web/src/lib/adConnections.ts` re-exports) are pure functions in
+`@app/shared/integrations`; core's `integrations/status.ts` composes what each module already says
+about itself (the store's status and `syncProblem`, the ad rows and waiting sign-ins,
+`waConnectionView`, the Automations hub's SMS and email cards) and decides nothing again. A new
+provider adds its mapping in shared and its module in core, and no page needs logic of its own; the
+Zapier app (PR #275) adds its module once it merges. Every caller is told the same statuses; a
+channel's accounts and reasons stay with whoever may open its own page (the SMS sender with View
+campaigns, and neither SMS's nor email's with an API key). The answer's shape, the mappings and who
+is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
+
 ## Worker conventions (`apps/worker`)
 
 - A queue message is processed by `consume()`; a job that throws is retried with backoff up to
   `MAX_ATTEMPTS` (the SQS queues' `maxReceiveCount` in infra/cdk stays above it), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and SQS both deliver at least once.
-- What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, Meta's WhatsApp
-  webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
-  (`parseShopify`, `parseShopifyList` for a page) and `core/whatsapp/metaPayloads.ts` (`parseMeta`).
+- What Shopify, Meta and Evolution API send (webhook payloads, GraphQL pages, bulk JSONL, the
+  WhatsApp webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
+  (`parseShopify`, `parseShopifyList` for a page), `core/whatsapp/webhook.ts` (Evolution API's
+  deliveries) and `core/whatsapp/cloud.ts` (Meta's, for Cloud API numbers).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
   meet the same payload again. The WhatsApp and email automations read an order or checkout only
   once they are about to act on it, so a store that doesn't use them logs nothing about it. The
@@ -118,7 +141,7 @@ Where a new piece of code goes:
 src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + AppShell (top bar, sidebar).
                     portal/ (employee self-service) and join/ (employee invitations) sit outside it:
                     employees aren't workspace members. Staff Management: docs/staff.md.
-src/components/     UI. dashboard/, whatsapp/, email/, staff/, team/, landing/ per area; app-wide pieces at
+src/components/     UI. dashboard/, funnel/, whatsapp/, email/, staff/, team/, landing/ per area; app-wide pieces at
                     the top (AppUi.tsx: page header, skeleton, toasts, useAction, confirm dialog; ui.tsx:
                     Alert, EmptyState, AuthShell). A page with several tabs or sections keeps only
                     their routing and state; the tabs and sections are components in
@@ -136,14 +159,14 @@ of truth and almost every screen is "load, show, edit, save".
 | --- | --- |
 | Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
-| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. |
+| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; the Profit sheet (/sheet, [kpis.md](kpis.md) "Profit sheet") `?by=&days=&events=`. |
 | Per-device preferences | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
 | Form drafts | Component state. |
 
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
 "load more", a request fired by a button), and then guard against late answers: keep the answer
 with the request it belongs to, or ignore any response that isn't the latest (see
-`components/dashboard/Contacts.tsx` and `app/(app)/whatsapp/messages/page.tsx`).
+`components/dashboard/Contacts.tsx` and the audience count in `components/whatsapp/Campaigns.tsx`).
 
 The API response reader (`lib/apiResponse.ts`) owns `ApiError`, body parsing and error-envelope
 normalization. It has no React dependency, so response failures can be tested independently.
@@ -161,40 +184,58 @@ those routes makes the current page preload Geist and its stylesheet, and Chrome
 were "preloaded but not used", and warns again a few seconds after every later request while they
 stay unused. So a link from any other page to one of them is `<Link prefetch={false}>`. Geist Mono is
 the landing page's alone: each font has its own CSS chunk (`cssChunking` in next.config.ts), so the
-sign-in and legal pages' links to `/` are `prefetch={false}` too. The build fails if a page preloads a
-font its markup doesn't use (scripts/check-font-preloads.mjs), and e2e/console.spec.ts fails on any
-unused preload or CSP report on the signed-in, sign-in and legal pages.
+sign-in and legal pages' links to `/` (header and footer) are `prefetch={false}` too. The build fails
+if a page preloads a font its markup doesn't use (scripts/check-font-preloads.mjs), and
+e2e/console.spec.ts fails on any unused preload, CSP report or console error on the signed-in,
+sign-in and legal pages.
+
+**A clean console.** Chrome logs every response of 400 or more as a console error, so a state the
+page expects is not an error response. Who is signed in comes from `getMe()` (lib/apiClient.ts):
+GET /auth/whoami answers a visitor with `user: null` and a 200, where /me would answer 401 on every
+app page a signed-out visitor opens. A refusal (a wrong code, a cancelled sign-in, an expired link)
+stays a 4xx.
 
 **Business logic.** Pages and components format and arrange what the API returns; rules and
 calculations belong in `@app/shared` (shared with the API) or the API itself. The dashboard's
 health grading lives in `@app/shared/health` and its drop-off and landing-page maths in
-`@app/shared/journey`; the repeated sentence pieces are in `components/dashboard/Narrative.tsx`.
-When a page needs to know what the API will allow (which campaign buttons to show, which message
-kinds a page covers), it asks the same function the API uses (`campaignCan`, `kindsOf` in
-`@app/shared/whatsapp`) rather than writing the rule out again.
+`@app/shared/journey` (the Shopping Funnel page's transitions, segments, tests and observations in
+`@app/shared/funnel`); the repeated sentence pieces are in `components/dashboard/Narrative.tsx`.
+When a page needs to know what the API will allow (what a template draft breaks), it asks the same
+function the API uses (`waTemplateIssues` in `@app/shared/whatsapp`) rather than writing the rule
+out again.
 Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code that only a click
 needs out of the page's first load.
 
 **Landing page motion.** On integrated graphics the page drops frames on GPU work, not JavaScript,
-so every effect has to be cheap for the GPU process:
+so every effect has to be cheap for the GPU process. Many laptops also refresh at 120–144 Hz, which
+leaves 7–8 ms per frame:
 
+- Nothing may make the browser scroll on the main thread: no `background-attachment: fixed` (the
+  app-wide washes sit on a fixed `body::before` layer instead) and no non-passive wheel or touch
+  listeners. A fixed background made every scroll frame repaint the whole window.
 - Anything whose transform or opacity follows the scroll gets its own layer (`lp-layer`), so the
   GPU moves it instead of the browser repainting the area around it. Avoid animating `filter`,
   `backdrop-filter`, `mask-image`, `border-radius`, `clip-path` or colours on large elements:
-  each frame of those is a repaint.
+  each frame of those is a repaint. No `backdrop-filter` on the fixed nav: what scrolls under it
+  changes on every frame, so it was re-blurred on every frame.
 - Particles go through `components/landing/shared/particles.ts`: one batched WebGL draw per frame
   (2D fallback included), set up in idle time after the intro. Don't stamp hundreds of shapes with
-  the 2D canvas API.
-- Ambient loops are composited CSS animations (`lp-loop`, paused off screen by `usePauseWhenHidden`);
-  no SVG `stroke-dashoffset`/SMIL loops and no motion `repeat: Infinity` on unpromoted elements.
-- Wheel scrolling is eased by `hooks/useSmoothScroll.ts` (Lenis), so scroll-driven scenes follow the
-  scroll directly: don't add `useSpring` on top of scroll progress.
+  the 2D canvas API. `hooks/useCanvasLoop.ts` draws at most every 9.5 ms (every other frame on a
+  120–144 Hz screen); hide a canvas layer while it has nothing on it.
+- Ambient loops are composited CSS animations (`lp-loop`, paused off screen by `usePauseWhenHidden`),
+  one animation per moving element: while the page draws frames for anything else, Chrome updates
+  the style of every running animation on each of them. No SVG `stroke-dashoffset`/SMIL loops, no
+  `offset-path` (it runs on the main thread: sample the path into transform keyframes, as
+  `HeroFlows` does) and no motion `repeat: Infinity` (it runs in JavaScript on every frame).
+- Wheel scrolling is eased by `hooks/useSmoothScroll.ts` (Lenis) on 60 Hz-class screens only; faster
+  screens keep the browser's own smooth scrolling, which doesn't wait for the main thread. Either
+  way scroll-driven scenes follow the scroll directly: don't add `useSpring` on top of scroll progress.
 
 ## Configuration
 
 | Setting | Lives in | Read by |
 | --- | --- | --- |
-| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (the CDK puts them in the functions' environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
+| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the functions' package, put in `process.env` at cold start by `apps/aws/src/index.ts`; not in the 4 KB environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
 | Secrets (session, encryption keys, client secrets) | Secrets Manager `insights/production/*`, set with `infra/cdk/scripts/put-secrets.mjs` ([aws-deployment.md](aws-deployment.md)); locally `apps/aws/.env` (from `.env.example`) | `apps/aws/src/secrets.ts` at cold start, into `process.env`, then `env()` |
 | Services (queues, coordinator, payload store, mail) | infra/cdk (queue URLs, table, bucket, SES region in the functions' environment) | `apps/aws/src/index.ts` (AWS) or `local.ts` (local), passed as `Deps` |
 | Sign-in (Amazon Cognito: pool, client, domain; the client secret) | the Auth stack (`infra/aws/cognito.yaml` via infra/cdk), into the runtime parameter and a secret ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
@@ -221,7 +262,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 ## Naming
 
 - **Files**: React component files are PascalCase (`StoreHeader.tsx`, `LoadError.tsx`, and modules of
-  several components such as `WhatsappUi.tsx`, `Primitives.tsx`); modules of helpers, hooks,
+  several components such as `WaUi.tsx`, `Primitives.tsx`); modules of helpers, hooks,
   constants or types are camelCase (`format.ts`, `storage.ts`, `heroLayout.ts`). `ui.tsx` (app-wide
   and in `components/staff`, `components/landing/shared`) is the one fixed name. Rename a file as a
   commit of pure `git mv` renames, imports in the next commit: git carries other branches' edits
@@ -230,7 +271,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
   use default exports.
 - **Errors**: `XxxError extends Error` (or `AppError`, for a rule the person broke) and sets
   `this.name`, so logs say which.
-- **API**: route files by area (`routes/whatsappOps.ts`), registration functions `<area>Routes`.
+- **API**: route files by area (`routes/smsAutomations.ts`), registration functions `<area>Routes`.
 - **Relative imports inside packages** use the `.js` extension (`./dates.js`), except in the
   `packages/shared` modules the UI imports by subpath (`ads.ts`, `sales.ts`): Next's bundler does
   not map `./dates.js` to `dates.ts` in a workspace package, so those stay extensionless.
@@ -239,7 +280,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 
 | Kind | Where | Runs with |
 | --- | --- | --- |
-| Unit (pure logic, config files, AWS adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test` | `pnpm test` |
+| Unit (pure logic, config files, AWS adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test`, `apps/web/test` (`node --test`) | `pnpm test` |
 | Infrastructure (synthesized stacks) | `infra/cdk/test` | `pnpm --filter @infra/cdk test` |
 | Integration (real Postgres, faked Cognito/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
 | End to end (Playwright against the local server) | `apps/web/e2e` | `pnpm e2e` |
@@ -260,7 +301,14 @@ and suppression of late shared-session sign-outs. Public customer links omit cre
 never change merchant permissions or session state.
 
 `ErrorState`, `ErrorNotice` and `PublicLinkError` provide recovery views; the last keeps customers
-on the store's public link. Retry-After hints disable manual retries and delay automatic retries.
+on the store's public link. Every error card (the 404 page, crashes, failed loads, customer links) is
+`ErrorPanel` in `components/ErrorState.tsx`: the status code in the logo's green, or an illustration
+for a failure without one, and a `fullPage` one sits in the site's frame (`ErrorPage`), so a new error
+screen uses it rather than a design of its own. The access screens (access revoked or ended, a shared
+dashboard closed: `components/team/AccessStates.tsx`) use it too, with a word in place of a code.
+`app/unavailable` is the page CloudFront shows at any page's address while the server can't answer;
+the AWS build moves it to the site bucket, so it must work without the API (no API calls; support is
+a mail link). Retry-After hints disable manual retries and delay automatic retries.
 Use `pnpm --filter @app/web test` for transport and recovery tests and
 `pnpm --filter @app/web test:errors-ui` for browser checks independent of Postgres and Cognito.
 
@@ -292,10 +340,6 @@ components; then `worker/handlers.ts` (one module per job in `worker/src/handler
 
 What is left is not a move:
 
-- `appsecret_proof` on WhatsApp's Meta Graph calls. The ads calls send it (every
-  call made with a person's token, `metaGraph.ts` with the ads app's secret), so "Require App
-  Secret" can be turned on for the ads app "Insights" once that is deployed. WhatsApp still sends none: a merchant's own
-  WhatsApp app has a secret we don't hold.
 - `noUncheckedIndexedAccess` in `apps/web` (437 findings, nearly all in landing animations): a pass
   with visual checks.
 - No formatter (Prettier) or import sorting: one repository-wide reformat, at a moment when no

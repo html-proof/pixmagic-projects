@@ -36,29 +36,44 @@ describe("the shipped settings", () => {
       "Shopify app appstore: SHOPIFY_APP_SECRET_APPSTORE",
       "Meta Ads: META_APP_SECRET",
       "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
+      // WhatsApp runs on the Meta Ads app, so that app's secret is WhatsApp's too.
+      "WhatsApp (Embedded Signup): META_APP_SECRET",
+      // bizinsights' own OAuth client for its Zapier app (docs/zapier.md).
+      "Zapier: ZAPIER_CLIENT_SECRET",
     ]);
   });
 
-  it("leave WhatsApp alone until its Embedded Signup configuration is set", () => {
-    // WHATSAPP_APP_ID is shipped, WHATSAPP_CONFIG_ID is empty: Embedded Signup is off on purpose, so
-    // its secret missing is no warning. Once the configuration id is set, it is.
-    expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toBe("");
-    const withSignup = { ...APP_SETTINGS, WHATSAPP_CONFIG_ID: "1234567890" };
-    expect(halfConfigured(withSignup).map((c) => c.provider)).toContain("WhatsApp (Embedded Signup)");
+  it("turn WhatsApp's Embedded Signup on, on the Meta Ads app, with that app's secret", () => {
+    // WHATSAPP_APP_ID empty: WhatsApp runs on the Meta Ads app, whose secret signs its calls and
+    // webhooks. WHATSAPP_CONFIG_ID set: Embedded Signup is on, so its secret missing is a warning.
+    expect(APP_SETTINGS.WHATSAPP_APP_ID).toBe("");
+    expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toMatch(/^\d+$/);
+    expect(halfConfigured({ ...APP_SETTINGS, ...SECRETS }).map((c) => c.provider)).not.toContain("WhatsApp (Embedded Signup)");
   });
 });
 
 describe('the cron action {"action":"config"}', () => {
   it("answers what is set up, by setting name, without a value", async () => {
-    Object.assign(process.env, APP_SETTINGS, SECRETS);
+    // The secrets only: the shipped settings come from the package (index.ts), as on AWS, where the
+    // functions' environment doesn't carry them.
+    for (const k of Object.keys(APP_SETTINGS)) delete process.env[k];
+    Object.assign(process.env, SECRETS);
     resetEnvCache();
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
     const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
 
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
-    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense"]);
-    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false });
+    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Zapier"]);
+    // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed. Evolution API's address
+    // and key come from the CDK app and Secrets Manager (not set in this test).
+    expect(report.whatsapp).toEqual({
+      evolution: false,
+      evolutionNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"],
+      embeddedSignup: false,
+      embeddedSignupNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"],
+      webhookVerifyToken: false,
+    });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
     // The cold start already said it in the logs, once per provider.

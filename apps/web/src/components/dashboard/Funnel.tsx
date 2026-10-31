@@ -1,42 +1,15 @@
 "use client";
-import type { FunnelStep, FunnelStepSummary, JourneyPageRow, SectionSummary, SiteSection } from "@app/shared/journey";
+import { FUNNEL_STEP_LABEL, SITE_SECTION_LABEL } from "@app/shared/funnel";
+import type { JourneyPageRow, SectionSummary } from "@app/shared/journey";
 import { fmtNum, fmtPct } from "@/lib/api";
 import { BarRow } from "./Charts";
-import { noEarlierData } from "./DateRange";
 import { plural } from "./format";
-import { AnimatedNumber } from "./Motion";
-import { Badge, Delta, Empty, Panel, Stat } from "./Primitives";
+import { Badge, Panel } from "./Primitives";
 import type { FunnelModule } from "./types";
 
-export const STEP_LABEL: Record<FunnelStep, string> = {
-  visited: "Visited your store",
-  viewed_product: "Viewed a product",
-  added_to_cart: "Added to cart",
-  started_checkout: "Started checkout",
-  purchased: "Completed a purchase",
-};
+export const STEP_LABEL = FUNNEL_STEP_LABEL;
 
-/** What getting past each step means, for the line under it. */
-const WENT_ON: Record<FunnelStep, string> = {
-  visited: "went on to view a product",
-  viewed_product: "went on to add to cart",
-  added_to_cart: "went on to start checkout",
-  started_checkout: "went on to complete their purchase",
-  purchased: "",
-};
-
-export const SECTION_LABEL: Record<SiteSection, string> = {
-  home: "Home page",
-  collection: "Collection pages",
-  product: "Product pages",
-  search: "Search",
-  cart: "Cart",
-  checkout: "Checkout",
-  content: "Pages & blog",
-  account: "Customer account",
-  other: "Other pages",
-};
-const sectionName = (s: SiteSection | null) => (s ? SECTION_LABEL[s] : "Page not recorded");
+export const SECTION_LABEL = SITE_SECTION_LABEL;
 
 /** Paths the ingest collapses to one fixed page get a plain name; the rest are shown as the address. */
 const FIXED_PAGES: Record<string, string> = {
@@ -53,96 +26,6 @@ const sectionPrefix = (p: JourneyPageRow) => (FIXED_PAGES[p.path] ? "" : `${SECT
 function PageName({ path }: { path: string }) {
   const name = FIXED_PAGES[path];
   return name ? <span>{name}</span> : <span className="font-mono text-xs">{path}</span>;
-}
-
-/** How many sections to name under a step before folding the rest into "+N more". */
-const LEFT_FROM_SHOWN = 4;
-
-function StepRow({ s, index, visits, last }: { s: FunnelStepSummary; index: number; visits: number; last: boolean }) {
-  const width = visits > 0 ? (s.reached / visits) * 100 : 0;
-  // Inside this step's bar: the part that went on (solid) and the part that left here (tinted).
-  const wentOn = last ? 100 : s.reached > 0 ? ((s.continued ?? 0) / s.reached) * 100 : 0;
-  const shown = s.leftFrom.slice(0, LEFT_FROM_SHOWN);
-  const hidden = s.leftFrom.slice(LEFT_FROM_SHOWN).reduce((a, x) => a + x.visits, 0);
-  return (
-    <li className="animate-rise relative pl-9" style={{ ["--i" as string]: index + 2 }} data-testid={`funnel-step-${s.step}`}>
-      {!last && <span aria-hidden className="absolute bottom-0 left-[11px] top-7 w-px bg-border" />}
-      <span aria-hidden className={`absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${last ? "bg-accent text-accent-ink" : "border border-border bg-bg"}`}>
-        {index + 1}
-      </span>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <span className="font-medium">{STEP_LABEL[s.step]}</span>
-        <span className="text-sm">
-          <strong className="tabular-nums"><AnimatedNumber value={s.reached} format={fmtNum} /></strong>
-          <span className="text-muted"> · {fmtPct(s.shareOfVisits)} of visits</span>
-        </span>
-      </div>
-      <div className="mt-2 h-3 rounded-full bg-bg">
-        <div className="animate-grow-x flex h-3 gap-[2px] overflow-hidden rounded-full transition-[width] duration-700" style={{ width: `${width}%`, minWidth: s.reached > 0 ? 6 : 0, ["--i" as string]: index }}>
-          {wentOn > 0 && <div className="bg-gradient-to-r from-accent to-accent/80" style={{ width: `${wentOn}%` }} />}
-          {!last && s.left > 0 && <div className="flex-1 bg-danger/30" />}
-        </div>
-      </div>
-      {!last && (
-        <div className="space-y-1 pb-5 pt-2 text-sm">
-          <p>
-            <span className="font-medium text-danger">{fmtNum(s.left)} left at this step</span>
-            <span className="text-muted"> ({fmtPct(s.leftRate)})</span>
-            <span aria-hidden="true" className="text-muted"> · </span>
-            <span className="text-muted">
-              {fmtNum(s.continued)} {WENT_ON[s.step]}
-            </span>
-          </p>
-          {shown.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-muted">Last page they were on:</span>
-              {shown.map((x) => (
-                <span key={x.section ?? "unknown"} className="rounded-full border border-border px-2 py-0.5">
-                  {sectionName(x.section)} <strong className="tabular-nums">{fmtNum(x.visits)}</strong>
-                </span>
-              ))}
-              {hidden > 0 && <span className="text-muted">+{fmtNum(hidden)} elsewhere</span>}
-            </div>
-          )}
-        </div>
-      )}
-    </li>
-  );
-}
-
-/** The shopping funnel: every visit, how far it got, and how many dropped out where. */
-export function FunnelCard({ m, versus }: { m: FunnelModule; versus?: string }) {
-  // Null when the pixel counted visits on the dates compared with: nothing is compared before it.
-  const missing = m.previous.imported === false ? noEarlierData(m.historyFrom, "visits") : null;
-  return (
-    <Panel
-      id="funnel"
-      title="Shopping funnel"
-      help={`Every visit the bizinsights pixel tracked in these dates: how far shoppers got, and the page they were on when they left. A tracked visit is one shopper on one day, and shoppers who decline tracking aren't counted, so these are trends, not Shopify's sessions or conversion rate (Shopify Analytics counts every session, ending one after 30 minutes idle).${missing ? ` ${missing}` : ""}`}
-    >
-      {m.visits === 0 ? (
-        <Empty>No storefront visits recorded in these dates yet. They show up here within a minute of someone browsing your store.</Empty>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Tracked visits" value={<AnimatedNumber value={m.visits} format={fmtNum} />} note={<Delta value={m.deltas.visits} label={versus} />} />
-            <Stat label="Tracked visits that bought" value={<AnimatedNumber value={m.conversionRate} format={fmtPct} />} note={<Delta value={m.deltas.conversionRate} label={versus} />} />
-            <Stat label="Completed a purchase" value={<AnimatedNumber value={m.purchases} format={fmtNum} />} tone="good" note="Visits that ended in a finished checkout." />
-            <Stat label="Left without buying" value={<AnimatedNumber value={m.exits} format={fmtNum} />} note={`${fmtPct(m.visits ? m.exits / m.visits : null)} of visits.`} />
-          </div>
-          <ol className="mt-6" aria-label="Funnel steps">
-            {m.steps.map((s, i) => (
-              <StepRow key={s.step} s={s} index={i} visits={m.visits} last={i === m.steps.length - 1} />
-            ))}
-          </ol>
-          <p className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted" aria-hidden="true">
-            <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-accent" />Went on to the next step</span>
-            <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-danger/30" />Left at this step</span>
-          </p>
-        </>
-      )}
-    </Panel>
-  );
 }
 
 function PageList({ items, empty, sub }: { items: JourneyPageRow[]; empty: string; sub: (p: JourneyPageRow) => string }) {

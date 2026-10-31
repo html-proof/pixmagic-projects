@@ -1,19 +1,15 @@
 "use client";
 import type { ReactNode } from "react";
-import { ArrowRight, HeartPulse } from "lucide-react";
 import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
-import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
 import { throughLabel } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
 import { comparisonHelp, noEarlierData } from "./DateRange";
-import { STEP_LABEL } from "./Funnel";
-import { AreaPreview } from "./Previews";
 import { Icon } from "./Icons";
 import { B, Change, changeWords, comparedOn } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
-import { topicInfo, topicSummary, type Topic } from "./topics";
+import { topicInfo, type Topic } from "./topics";
 import { appliedCustom, breakdownOf } from "./redacted";
 import type { AdFigures, Overview } from "./types";
 
@@ -151,187 +147,9 @@ function HealthBadge({ health }: { health: Health }) {
   );
 }
 
-/** The round icon beside a card's title, tinted by how that area is doing. */
-const TILE: Record<Health, string> = {
-  attention: "bg-danger/10 text-danger",
-  watch: "bg-warn/12 text-warn",
-  good: "bg-accent/10 text-accent",
-  info: "bg-accent/10 text-accent",
-};
-
 function countsOf(checks: Check[]) {
   const n = (h: Health) => checks.filter((c) => c.health === h).length;
   return { attention: n("attention"), watch: n("watch"), good: n("good"), graded: checks.filter((c) => c.health !== "info").length };
-}
-
-const worst = (hs: Health[]): Health => hs.reduce<Health>((a, h) => (HEALTH[h].order < HEALTH[a].order ? h : a), "info");
-
-interface AreaRow {
-  topic: Topic;
-  health: Health;
-  text: string;
-}
-
-/**
- * One row per part of the store for the main page, worst first: the same health check as the
- * overview, folded to one status and one sentence per area so nothing is said twice.
- */
-export function areaRows(ov: Overview, currency: string, topics: Topic[]): AreaRow[] {
-  const checks = businessHealth(ov, currency);
-  const byTopic = (t: Topic) => checks.filter((c) => c.topic === t);
-  const m = ov.modules;
-  const rows = topics.map((t): AreaRow => {
-    const own = byTopic(t);
-    const health = worst(own.map((c) => c.health));
-    let text = own.find((c) => c.health === health)?.text ?? own[0]?.text ?? topicSummary(t, ov, currency);
-    if (t === "sales") text = own.find((c) => c.id === "net")?.text ?? text;
-    if (t === "shoppers" && m.funnel && m.funnel.visits > 0) {
-      const f = m.funnel;
-      const leak = biggestDropOff(f.steps);
-      text = `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} bought.${leak && leak.left > 0 ? ` Most who left stopped at “${STEP_LABEL[leak.step].toLowerCase()}” (${fmtNum(leak.left)}).` : ""}`;
-    }
-    return { topic: t, health, text };
-  });
-  // Stable: areas with the same status keep the page's usual order.
-  return rows.map((r, i) => ({ r, i })).sort((a, b) => HEALTH[a.r.health].order - HEALTH[b.r.health].order || a.i - b.i).map((x) => x.r);
-}
-
-/** The answer first, in one or two sentences, above the numbers. */
-export function StoreSummary({ ov, currency }: { ov: Overview; currency: string }) {
-  const s = ov.modules.sales_overview;
-  if (!s) return null;
-  const attention = businessHealth(ov, currency).filter((c) => c.health === "attention").length;
-  const when =
-    ov.range.from !== ov.range.to
-      ? `From ${fmtDay(ov.range.from, { year: false })} to ${fmtDay(ov.range.to, { year: false })}`
-      : ov.range.to === ov.today
-        ? "So far today"
-        : `On ${fmtDay(ov.range.to, { year: false })}`;
-  return (
-    <p className="text-sm leading-relaxed">
-      {when} you had <B>{fmtMoney(s.current.netSales, currency)}</B> in net sales from{" "}
-      <B>{plural(s.current.orders, "order")}</B>
-      {salesChange(ov, s.deltas.netSales)}.{" "}
-      {attention > 0 ? (
-        <>
-          <B>{plural(attention, "thing needs", "things need")} your attention</B>; they&apos;re at the top of the list below.
-        </>
-      ) : (
-        <>Nothing needs your attention right now.</>
-      )}
-    </p>
-  );
-}
-
-/**
- * One card. The whole card opens the details (the title's button is stretched over it), so the
- * picture inside can be real markup rather than something squeezed into a <button>.
- */
-function AreaCard({ topic, health, text, preview, onOpen }: { topic: Topic; health: Health; text: string; preview: ReactNode; onOpen: () => void }) {
-  const info = topicInfo(topic);
-  return (
-    <li className="card lift group animate-rise relative flex flex-col gap-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent">
-      <div className="flex items-start gap-4">
-        <span aria-hidden className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${TILE[health]}`}>
-          <Icon name={info.icon} className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <h3 className="font-semibold">
-              <button onClick={onOpen} className="text-left outline-none after:absolute after:inset-0 after:rounded-xl after:content-['']" data-testid={`area-${topic}`}>
-                {info.title}
-                <span className="sr-only"> – open details</span>
-              </button>
-            </h3>
-            {health !== "info" && <HealthBadge health={health} />}
-          </div>
-          <p className="mt-1 text-sm text-muted">{text}</p>
-        </div>
-      </div>
-      {preview && <div aria-hidden>{preview}</div>}
-      <p aria-hidden className="mt-auto flex items-center gap-1 pt-1 text-sm font-semibold text-accent">
-        View details
-        <Icon name="chevronRight" className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-      </p>
-    </li>
-  );
-}
-
-/** Every part of the store, each with a small picture of it, worst first. */
-export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; currency: string; topics: Topic[]; onOpen: (t: Topic) => void }) {
-  const rows = areaRows(ov, currency, topics);
-  if (!rows.length) return null;
-  return (
-    <section aria-labelledby="areas-h">
-      <h2 id="areas-h" className="sr-only">Your store, area by area (what needs attention first)</h2>
-      <ul className="grid gap-4 md:grid-cols-2">
-        {rows.map((r) => (
-          <AreaCard key={r.topic} topic={r.topic} health={r.health} text={r.text} preview={<AreaPreview topic={r.topic} ov={ov} currency={currency} />} onOpen={() => onOpen(r.topic)} />
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-/**
- * Every graded check at once: one bar split by status, and the count of each. Opens the full
- * report (the overview panel), which lists every check worst first.
- */
-/** `report`: whether the detailed report (the overview panel) is shared with this member ("View reports"). */
-export function HealthOverview({ ov, currency, onOpen, report = true }: { ov: Overview; currency: string; onOpen: (t: Topic) => void; report?: boolean }) {
-  const c = countsOf(businessHealth(ov, currency));
-  const parts = [
-    { label: HEALTH.attention.label, n: c.attention, fill: "bg-fill-danger" },
-    { label: HEALTH.watch.label, n: c.watch, fill: "bg-fill-warn" },
-    { label: HEALTH.good.label, n: c.good, fill: "bg-fill-good" },
-  ];
-  return (
-    <section className="card animate-rise flex min-w-0 flex-col" aria-labelledby="health-h" data-testid="health-overview">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3.5">
-          <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-            <HeartPulse className="h-5 w-5" strokeWidth={1.8} />
-          </span>
-          <div className="min-w-0">
-            <h2 id="health-h" className="font-semibold">Business health overview</h2>
-            <p className="mt-0.5 text-sm text-muted">All key metrics at a glance.</p>
-          </div>
-        </div>
-        {report && (
-          <button type="button" onClick={() => onOpen("overview")} className="btn-secondary h-9 shrink-0 px-3 text-xs shadow-[var(--shadow)]" data-testid="area-overview">
-            View detailed report
-            <ArrowRight aria-hidden className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {c.graded > 0 ? (
-        <>
-          <div
-            className="animate-grow-x mt-6 flex h-3 gap-1"
-            role="img"
-            aria-label={`${parts.map((p) => `${p.label}: ${fmtNum(p.n)}`).join(", ")}, of ${plural(c.graded, "graded check")}.`}
-          >
-            {parts
-              .filter((p) => p.n > 0)
-              .map((p) => (
-                <span key={p.label} className={`h-full rounded-full ${p.fill}`} style={{ flexGrow: p.n, flexBasis: 0 }} />
-              ))}
-          </div>
-          <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm" aria-hidden>
-            {parts.map((p) => (
-              <li key={p.label} className="inline-flex items-center gap-2">
-                <span className={`h-2.5 w-2.5 rounded-[3px] ${p.fill}`} />
-                <span className="text-text/80">{p.label}</span>
-                <strong className="font-semibold tabular-nums">{fmtNum(p.n)}</strong>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <p className="mt-5 text-sm text-muted">Nothing to grade yet. Each area gets a status here once orders come in.</p>
-      )}
-    </section>
-  );
 }
 
 function Row({ label, now, before, change }: { label: string; now: string; before?: string | null; change?: ReactNode }) {
@@ -456,7 +274,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
         <Panel
           id="d-key-figures"
           title="Every key figure"
-          help={`${range}, against ${comparisonHelp(ov.previous)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.historyFrom)}` : ""}${
+          help={`${range}, against ${comparisonHelp(ov.previous, ov.range)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.historyFrom)}` : ""}${
             ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so while these dates include today their figures compare whole days only, up to yesterday." : ""
           }${notCompared.map((x) => ` ${x}`).join("")}`}
         >
@@ -501,7 +319,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
                 {m.shopify_sessions?.current && (
-                  <Row label="Sessions (Shopify)" now={fmtNum(m.shopify_sessions.current.sessions ?? 0)} before={m.shopify_sessions.previous ? fmtNum(m.shopify_sessions.previous.sessions ?? 0) : null} change={<Change value={m.shopify_sessions.deltas.sessions} />} />
+                  <Row label="Sessions (Shopify)" now={m.shopify_sessions.current.sessions !== null ? fmtNum(m.shopify_sessions.current.sessions) : "—"} before={m.shopify_sessions.previous?.sessions != null ? fmtNum(m.shopify_sessions.previous.sessions) : null} change={<Change value={m.shopify_sessions.deltas.sessions} />} />
                 )}
                 {m.shopify_sessions?.current && (
                   <Row label="Conversion rate (Shopify)" now={fmtPct(m.shopify_sessions.current.conversionRate)} before={m.shopify_sessions.previous ? fmtPct(m.shopify_sessions.previous.conversionRate) : null} change={<Change value={m.shopify_sessions.deltas.conversionRate} />} />

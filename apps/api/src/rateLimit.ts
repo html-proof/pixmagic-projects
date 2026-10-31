@@ -43,6 +43,8 @@ export const LIMITS = {
   mfaVerifyAccount: { max: 10, windowSec: 900 },
   /** Password, email and account changes, per user. */
   accountChange: { max: 10, windowSec: 3600 },
+  /** Signing other devices out (Settings → Security), one at a time. */
+  sessionRemove: { max: 30, windowSec: 600 },
 
   // ---- Signed-in actions ----
   /** Customer contact details, fetched live from Shopify (per workspace and user). */
@@ -100,22 +102,56 @@ export const LIMITS = {
   adsDemo: { max: 10, windowSec: 600 },
   /** Meta, Google Ads and AdSense reports, per store and user: each one is a few platform calls (a cached answer doesn't count). */
   adsReport: { max: 30, windowSec: 600 },
+  /**
+   * Google Ads keyword and search-term reports asked of Google, per ad account a day (a cached answer
+   * doesn't count; the demo's never do): two operations each, four with a comparison, so one account
+   * spends at most about 100 of the 2,880 every merchant shares.
+   */
+  adsGoogleDetail: { max: 25, windowSec: 86_400 },
   /** The status page of a Meta data deletion request, per IP (a code is 80 random bits; this only slows guessing). */
   metaDeletionStatusIp: { max: 60, windowSec: 600 },
   /** Meta's callbacks refused (a signed_request that doesn't verify), per IP: past it they're answered 429 and no longer logged. Meta's own aren't counted. */
   metaCallbackRefusedIp: { max: 20, windowSec: 600 },
-  /** WhatsApp: connecting a number (Meta calls each), per store. */
+  /** WhatsApp: starting a pairing, a Cloud API sign-up, reconnecting or disconnecting (each calls Evolution API), per store. */
   waConnect: { max: 10, windowSec: 600 },
-  /** WhatsApp: "Refresh" (number and templates from Meta), per store. */
-  waRefresh: { max: 6, windowSec: 600 },
-  /** WhatsApp: templates submitted for Meta's review, per store. */
-  waTemplateCreate: { max: 30, windowSec: 3600 },
-  /** WhatsApp: test messages to the merchant's own phone, per store. */
+  /** WhatsApp: the page polling the pairing code while the phone scans (each asks Evolution API), per store. */
+  waPairing: { max: 240, windowSec: 600 },
+  /** WhatsApp: "Check again" (asks Evolution API for the state), per store. */
+  waRefresh: { max: 12, windowSec: 600 },
+  /** WhatsApp: templates saved, submitted for Meta's review or deleted, per store. */
+  waTemplateCreate: { max: 60, windowSec: 3600 },
+  /** WhatsApp: test messages and verification codes to the merchant's own phone, per store. */
   waTest: { max: 10, windowSec: 600 },
   /** WhatsApp: campaign audience estimates (the builder asks as filters change), per store. */
   waEstimate: { max: 120, windowSec: 600 },
-  /** WhatsApp: "Send reminder" on an abandoned cart, per store. */
-  waRemind: { max: 30, windowSec: 600 },
+  /** WhatsApp: messages a person sends from the dashboard, per store. */
+  waSend: { max: 60, windowSec: 600 },
+
+  // ---- Customer Messaging (SMS) ----
+  /** "Check with AWS" on the sender (a few AWS calls each), per store. */
+  smsVerify: { max: 10, windowSec: 600 },
+  /** Automations hub: changes to automations and channel connections, per workspace. */
+  automations: { max: 120, windowSec: 600 },
+  /** Verification codes AWS texts to a test number, per store (each costs a text). */
+  smsVerificationCode: { max: 5, windowSec: 3600 },
+  /** Codes typed in for one test number (AWS's codes are short: this stops guessing). */
+  smsVerificationCheck: { max: 10, windowSec: 3600 },
+  /** Test texts to the team's own numbers, per store. */
+  smsTest: { max: 10, windowSec: 600 },
+  /** Set up SMS: "Request sender name" (each one emails the platform owner), per store. */
+  smsSenderRequest: { max: 5, windowSec: 3600 },
+  /** Set up SMS: Connect, and the setup's other changes (drafts, messages, automatic texts), per store. */
+  smsSetup: { max: 120, windowSec: 600 },
+  /** One-off texts to a customer from the Send SMS page, per store. */
+  smsManual: { max: 30, windowSec: 600 },
+  /** Sends to chosen customers (up to 200 each) from the Send SMS page, per store: with the monthly limit's hard stop, this keeps a stolen session from texting a store's whole list over and over. */
+  smsSend: { max: 10, windowSec: 600 },
+  /** The template editor's live preview (as the merchant types), per store. */
+  smsPreview: { max: 300, windowSec: 600 },
+  /** Segment and campaign estimates and rule dry runs, per store. */
+  smsEstimate: { max: 120, windowSec: 600 },
+  /** The /stop page's look-ups and confirmations, per IP (a code is ~59 random bits; this only slows guessing). */
+  smsOptOutIp: { max: 30, windowSec: 600 },
 
   // ---- Staff Management ----
   /** Employee invitation page loads, per IP (a token is 256 bits; this only slows scanning). */
@@ -160,24 +196,38 @@ export const LIMITS = {
   /** Unsubscribe page loads and clicks, per IP. */
   emailUnsubscribeIp: { max: 60, windowSec: 600 },
 
+  // ---- Zapier (docs/zapier.md) ----
+  /** Allowing Zapier on the consent page, per user: each one issues an authorization code. */
+  zapierAuthorize: { max: 20, windowSec: 600 },
+  /**
+   * POST /oauth/token, per IP. Zapier's servers make every merchant's requests from a few addresses
+   * (each connection refreshes about once an hour), so this only caps a flood; secrets and codes are
+   * 256 bits, which no rate makes guessable.
+   */
+  zapierTokenIp: { max: 600, windowSec: 60 },
+  /** Zapier's API calls (subscribing triggers, samples, searches), per connection. */
+  zapierApi: { max: 300, windowSec: 60 },
+  /** Requests with a zat_ token bizinsights never issued (not merely expired), per IP: past it they're answered 429. */
+  zapierBadTokenIp: { max: 120, windowSec: 600 },
+  /** Disconnecting Zapier from Settings, per workspace. */
+  zapierManage: { max: 30, windowSec: 600 },
+
   // ---- Public ingest ----
   /** Web pixel, per IP (a storefront sends a batch per page or so). */
   pixelIp: { max: 600, windowSec: 60 },
-  /** Customers' order tracking pages, per IP. */
-  trackIp: { max: 120, windowSec: 60 },
-  /** Review form loads and submissions, per IP, and submissions per order. */
-  reviewIp: { max: 60, windowSec: 600 },
-  reviewSubmitPerOrder: { max: 10, windowSec: 3600 },
-  /** Tracked links in WhatsApp messages, per IP. */
-  clickIp: { max: 300, windowSec: 60 },
   /** Meta's webhook verification handshake (GET), per IP. */
   waVerifyIp: { max: 30, windowSec: 60 },
   /**
-   * WhatsApp webhook deliveries not signed by bizinsights' own app, per IP: each one costs a database
-   * read to find the connection whose secret might sign it. Same ceiling as the global API limit,
-   * which webhooks are exempt from.
+   * WhatsApp webhook deliveries whose signature doesn't verify, per IP: past it they're answered 429
+   * and no longer logged. Meta's own (signed) deliveries aren't counted.
    */
   waUnsignedIp: { max: 300, windowSec: 60 },
+  /**
+   * Password resets tried with one address's code, per address, whichever IPs they come from
+   * (auth.ts, POST /auth/password/reset): codeVerifyIp alone lets guesses spread over many IPs,
+   * leaving Cognito's own lockout as the only guard. As many as claimVerifyEmail allows.
+   */
+  resetVerifyEmail: { max: 5, windowSec: 3600 },
 } as const satisfies Record<string, Limit>;
 
 /** Fixed-window limiter. Throws 429 once more than `max` hits occur within `windowSec`. */

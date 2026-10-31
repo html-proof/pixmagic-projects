@@ -1,6 +1,21 @@
 import { Prisma, type Tx } from "@app/db";
-import { channelLabel, daysBetweenInclusive, TRAFFIC_LABEL, TRAFFIC_SOURCES, type DateRange, type TrafficSource } from "@app/shared";
-import { argMax, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
+import {
+  addDays,
+  channelLabel,
+  daysBetweenInclusive,
+  orderGoesAhead,
+  orderOutcome,
+  TRAFFIC_LABEL,
+  TRAFFIC_SOURCES,
+  TRAFFIC_SPLIT_LABEL,
+  TRAFFIC_SPLITS,
+  trafficSplitOf,
+  type DateRange,
+  type OrderOutcomes,
+  type TrafficSource,
+  type TrafficSplit,
+} from "@app/shared";
+import { argMax, localMoment, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -76,6 +91,8 @@ export async function channels(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
  * packages/shared/src/traffic.ts), with the same money as sales by channel (net sales: after
  * discounts and returns, before tax and shipping). Other websites are listed by host. Orders stored
  * before sources were recorded are counted as `pending` (the dashboard's refresh re-reads them).
+ * `split` is the same sales, paid vs organic (TRAFFIC_SPLITS in @app/shared/traffic): by the last visit,
+ * as Shopify recorded it, never by what an ad platform credits to its ads.
  */
 export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   const rows = await tx.$queryRaw<Array<{ source: string | null; medium: string | null; host: string | null; campaign: string | null; orders: number; sales: string }>>`
@@ -86,6 +103,7 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   type Item = { key: string; source: string; label: string; orders: number; sales: number; paidOrders: number; paidSales: number };
   const items = new Map<string, Item>();
   const campaigns = new Map<string, { source: string; label: string; campaign: string; orders: number; sales: number }>();
+  const split = new Map<TrafficSplit, { orders: number; sales: number }>(TRAFFIC_SPLITS.map((id) => [id, { orders: 0, sales: 0 }]));
   let pending = 0;
   for (const x of rows) {
     const orders = num(x.orders);
@@ -94,6 +112,9 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
       pending += orders;
       continue;
     }
+    const part = split.get(trafficSplitOf(x.medium))!;
+    part.orders += orders;
+    part.sales = r2(part.sales + sales);
     const source = (TRAFFIC_SOURCES as readonly string[]).includes(x.source) ? (x.source as TrafficSource) : "other";
     const key = source === "other" && x.host ? `site:${x.host}` : source;
     const label = source === "other" && x.host ? x.host : TRAFFIC_LABEL[source];
@@ -120,6 +141,14 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
     items: list.map(({ key, ...x }) => ({ ...x, id: key, share: total > 0 ? x.sales / total : null })),
     paid: { ...paid, share: total > 0 ? paid.sales / total : null },
     campaigns: [...campaigns.values()].sort((a, b) => b.sales - a.sales || b.orders - a.orders).slice(0, 10),
+    /**
+     * Paid vs organic, every split in order (zero when none): the orders whose source is read, so it adds up
+     * to the items' sales; `pending` aren't in it. A share is of those sales (null when they add up to none).
+     */
+    split: TRAFFIC_SPLITS.map((id) => {
+      const p = split.get(id)!;
+      return { id, label: TRAFFIC_SPLIT_LABEL[id], orders: p.orders, sales: p.sales, share: total > 0 ? p.sales / total : null };
+    }),
     /** Orders in these dates whose source hasn't been read yet. */
     pending,
   };
@@ -190,6 +219,51 @@ export async function fulfillment(tx: Tx, { ws, storeId }: Scope, r: DateRange, 
 }
 
 /**
+ * How the orders placed in the range went (`OrderOutcomes` in @app/shared, the dashboard's "Orders at
+ * a glance"): completed, awaiting payment or unsuccessful (`orderOutcome`), and of the orders still on,
+ * how many were sent. The same orders as the Orders tile: on the day Shopify processed them, gift-card-only
+ * orders left out. `checkouts` comes from the storefront pixel (`checkoutsLeft`), null without it.
+ */
+export async function orderOutcomes(tx: Tx, { ws, storeId }: Scope, r: DateRange, checkouts: OrderOutcomes["checkouts"]): Promise<OrderOutcomes> {
+  const rows = await tx.$queryRaw<Array<{ cancelled: boolean; financial_status: string | null; fulfillment_status: string | null; orders: number; items: number }>>`
+    SELECT (o.cancelled_at IS NOT NULL) AS cancelled, o.financial_status, o.fulfillment_status,
+           COUNT(*)::int AS orders, COALESCE(SUM(u.items), 0)::int AS items
+    FROM orders o
+    LEFT JOIN LATERAL (
+      SELECT SUM(li.quantity) AS items FROM order_line_items li
+      WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.order_id = o.id
+    ) u ON TRUE
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.local_day BETWEEN ${r.from} AND ${r.to} AND NOT o.gift_card_only
+    GROUP BY 1, 2, 3`;
+  const outcome = { completed: 0, awaitingPayment: 0, unsuccessful: 0, cancelled: 0, paymentFailed: 0, refunded: 0 };
+  const shipping = { orders: 0, sent: 0, partlySent: 0, notSent: 0, items: 0, itemsSent: 0 };
+  let orders = 0;
+  for (const x of rows) {
+    const n = num(x.orders);
+    const items = num(x.items);
+    orders += n;
+    const o = orderOutcome({ cancelled: Boolean(x.cancelled), financialStatus: x.financial_status });
+    if (o === "completed") outcome.completed += n;
+    else if (o === "awaiting_payment") outcome.awaitingPayment += n;
+    else {
+      outcome.unsuccessful += n;
+      if (o === "cancelled") outcome.cancelled += n;
+      else if (o === "payment_failed") outcome.paymentFailed += n;
+      else outcome.refunded += n;
+    }
+    if (!orderGoesAhead(o)) continue;
+    shipping.orders += n;
+    shipping.items += items;
+    if (x.fulfillment_status === "fulfilled") {
+      shipping.sent += n;
+      shipping.itemsSent += items;
+    } else if (x.fulfillment_status === "partially_fulfilled") shipping.partlySent += n;
+    else if (x.fulfillment_status && OPEN_FULFILLMENT_STATUSES.includes(x.fulfillment_status)) shipping.notSent += n;
+  }
+  return { orders, outcome, shipping, checkouts };
+}
+
+/**
  * Most used discount codes. Codes are case-insensitive in Shopify, so usage is
  * grouped case-insensitively and shown with its most common spelling. An order
  * that used several codes counts toward each of them.
@@ -225,8 +299,13 @@ export async function discountCodes(tx: Tx, { ws, storeId }: Scope, r: DateRange
   return { items: rows.map((x) => ({ code: x.code, orders: num(x.orders), discount: num(x.discount), sales: num(x.sales) })) };
 }
 
-/** Latest 10 orders regardless of range; cancelled ones are included and flagged. */
-export async function recentOrders(tx: Tx, { ws, storeId }: Scope) {
+/**
+ * The 10 latest orders placed in the range (on the day Shopify processed them, as every order
+ * figure counts them), cancelled ones included and flagged; and how many orders were cancelled in
+ * the range, on the day each was cancelled (transaction date, whenever the order was placed), so a
+ * cancellation counts in the dates it happened, once.
+ */
+export async function recentOrders(tx: Tx, { ws, storeId }: Scope, r: DateRange, timeZone: string) {
   const rows = await tx.$queryRaw<
     Array<{
       id: string;
@@ -242,7 +321,7 @@ export async function recentOrders(tx: Tx, { ws, storeId }: Scope) {
     }>
   >`
     SELECT o.id, o.shopify_id, o.name,
-           to_char(o.shopify_created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
+           to_char(COALESCE(o.shopify_processed_at, o.shopify_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
            o.total_price::text AS total, o.financial_status, o.fulfillment_status, o.source_name,
            (o.cancelled_at IS NOT NULL) AS cancelled,
            COALESCE((
@@ -250,10 +329,15 @@ export async function recentOrders(tx: Tx, { ws, storeId }: Scope) {
              WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.order_id = o.id
            ), 0)::int AS units
     FROM orders o
-    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
-    ORDER BY o.shopify_created_at DESC, o.id DESC
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.local_day BETWEEN ${r.from} AND ${r.to}
+    ORDER BY COALESCE(o.shopify_processed_at, o.shopify_created_at) DESC, o.id DESC
     LIMIT 10`;
+  const [cancelled] = await tx.$queryRaw<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM orders o
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
+      AND o.cancelled_at >= ${localMoment(r.from, "00:00:00", timeZone)} AND o.cancelled_at < ${localMoment(addDays(r.to, 1), "00:00:00", timeZone)}`;
   return {
+    cancelledInRange: num(cancelled?.n),
     items: rows.map((x) => ({
       id: x.id,
       shopifyId: x.shopify_id,

@@ -3,7 +3,7 @@
  * items and sales records beyond the first page, and the reader the daily check uses (verify.ts).
  */
 import type { Store } from "@app/db";
-import { env, withAccessToken, graphqlOrderOverflow, logger, normalizeGraphqlSales, ORDER_LINE_ITEMS_QUERY, parseShopify, replaceOrderSales, storedSalesState, graphqlAgreementListSchema, graphqlOrderSchema, shopifyGraphqlWithCost, ShopifyGraphqlError, ShopifyHttpError, StoreDisconnectedError, orderSalesQuery, orderCustomerHistorySchema, orderIndex, type CustomerHistory, type GraphqlOrder, type SyncJobData } from "@app/core";
+import { env, withAccessToken, gidToId, graphqlOrderOverflow, graphqlProductCollectionsSchema, logger, normalizeGraphqlCollection, normalizeGraphqlSales, ORDER_LINE_ITEMS_QUERY, parseShopify, PRODUCT_COLLECTIONS_QUERY, replaceOrderSales, storedSalesState, graphqlAgreementListSchema, graphqlOrderSchema, shopifyGraphqlWithCost, ShopifyGraphqlError, ShopifyHttpError, StoreDisconnectedError, orderSalesQuery, orderCustomerHistorySchema, orderIndex, type CustomerHistory, type GraphqlOrder, type ProductCollection, type SyncJobData } from "@app/core";
 import { expandScopes } from "@app/shared";
 import { AccessRevokedError, enqueueAggregate, NotApprovedError, sleep, UnrecoverableError, type WorkerDeps } from "./common.js";
 
@@ -136,6 +136,38 @@ async function fetchOrderLineItems(deps: WorkerDeps, store: Store, pace: Pace, o
     if (!hasNextPage || !endCursor) return nodes;
     cursor = endCursor;
   }
+}
+
+/** Pages of PRODUCT_COLLECTIONS_QUERY read for one product: 1,000 collections past its products page's 10. */
+export const PRODUCT_COLLECTION_PAGES = 4;
+
+/**
+ * One product's collections from `cursor` on (PRODUCT_COLLECTIONS_QUERY, 250 a page), after
+ * `first` (those its products page held), so its sales count in every collection it is in (core
+ * reports/collections.ts). Undefined when the product is gone or the answer doesn't fit the schema
+ * (logged): the stored collections are kept. Past PRODUCT_COLLECTION_PAGES the rest are left out,
+ * and that is logged.
+ */
+export async function readProductCollections(
+  deps: WorkerDeps,
+  store: Store,
+  pace: Pace,
+  productGid: string,
+  cursor: string | null,
+  first: ProductCollection[] = [],
+): Promise<ProductCollection[] | undefined> {
+  const out = [...first];
+  for (let page = 0; page < PRODUCT_COLLECTION_PAGES; page++) {
+    const raw = await gql<unknown>(deps, store, pace, PRODUCT_COLLECTIONS_QUERY, { id: productGid, cursor });
+    const d = parseShopify(graphqlProductCollectionsSchema, raw, "GraphQL product collections", { storeId: store.id, product: gidToId(productGid) });
+    if (!d?.product) return undefined;
+    out.push(...d.product.collections.nodes.map(normalizeGraphqlCollection));
+    const info = d.product.collections.pageInfo;
+    if (!info?.hasNextPage || !info.endCursor) return out;
+    cursor = info.endCursor;
+  }
+  logger.warn({ storeId: store.id, product: gidToId(productGid), collections: out.length }, "product is in more collections than are read; the rest are left out");
+  return out;
 }
 
 /**

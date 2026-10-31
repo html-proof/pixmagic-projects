@@ -82,6 +82,14 @@ export async function mailSubjects(email: string): Promise<string[]> {
   return (await mailTo(email)).map((m) => m.Subject);
 }
 
+/** Who sent the newest email to `email` with this subject: its From address and name (Mailpit's shape, or its stand-in's). */
+export async function latestMailSender(email: string, subject = /verification code/i): Promise<{ address: string; name: string } | null> {
+  const newest = (await mailTo(email)).find((m) => subject.test(m.Subject));
+  if (!newest) return null;
+  const full = (await (await fetch(`${E2E_MAILPIT_URL}/api/v1/message/${newest.ID}`)).json()) as { From?: { Address?: string; Email?: string; Name?: string } };
+  return { address: full.From?.Address ?? full.From?.Email ?? "", name: full.From?.Name ?? "" };
+}
+
 /** The id of the newest email to `email` with this subject, or null: taken before an action, so the one it sends can be told apart. */
 export async function newestMailId(email: string, subject = /verification code/i): Promise<string | null> {
   return (await mailTo(email)).find((m) => subject.test(m.Subject))?.ID ?? null;

@@ -35,7 +35,7 @@ vi.mock("../src/adConnections/config.js", () => ({
 
 const { adsenseReportForConnection, googleReportForConnection, metaReportForConnection } = await import("../src/adConnections/reports.js");
 const { AdsAuthError, AdsPermissionError, AdsRateLimitedError, AdsReportPendingError, AdsRetryableError } = await import("../src/ads.js");
-const { googleAdsOperationsToday, googleAdsPaused, pauseGoogleAds } = await import("../src/adConnections/budget.js");
+const { googleAdsOperationsToday, googleAdsPaused, metaAdsPaused, pauseGoogleAds } = await import("../src/adConnections/budget.js");
 const { memoryCoord } = await import("../src/coord.js");
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -79,6 +79,28 @@ describe("live reports per connection", () => {
     recorded.length = 0;
     expect((await metaReportForConnection(conn(), "campaign", "2026-09-01", "2026-09-07", meta)).rows).toEqual([]);
     expect(recorded).toEqual([]);
+  });
+
+  it("Meta: its limit on bizinsights' app pauses Meta Ads, syncs too; while paused no call is made and the answer is Meta's throttling", async () => {
+    const coord = memoryCoord();
+    let calls = 0;
+    const appLimit: FetchLike = async () => (calls++, json({ error: { message: "(#4) Application request limit reached", code: 4 } }, 400));
+    await expect(metaReportForConnection(conn(), "campaign", "2026-10-01", "2026-10-07", appLimit, { coord })).rejects.toMatchObject({ code: 4, errorCode: "rate_limited" });
+    expect(await metaAdsPaused(coord)).toBe(true);
+    // Another account's report, while paused: Meta isn't asked, and the route words it as Meta's throttling ("busy").
+    calls = 0;
+    recorded.length = 0;
+    const held = await metaReportForConnection(conn({ id: "conn2", accountId: "act_2" }), "campaign", "2026-10-01", "2026-10-07", appLimit, { coord }).catch((e: unknown) => e);
+    expect(held).toBeInstanceOf(AdsRateLimitedError);
+    expect(held).toMatchObject({ errorCode: "rate_limited" });
+    expect((held as InstanceType<typeof AdsRateLimitedError>).retryAfterS).toBeGreaterThan(890);
+    expect(calls).toBe(0);
+    expect(recorded).toEqual([]);
+    // One account's own throttling (17) leaves the others alone.
+    const fresh = memoryCoord();
+    const userLimit: FetchLike = async () => json({ error: { message: "User request limit reached", code: 17 } }, 400);
+    await expect(metaReportForConnection(conn(), "campaign", "2026-10-01", "2026-10-07", userLimit, { coord: fresh })).rejects.toMatchObject({ code: 17 });
+    expect(await metaAdsPaused(fresh)).toBe(false);
   });
 
   it("Google: the failure is classified and recorded as a report's; recording failing never hides the report's own error", async () => {
@@ -132,6 +154,53 @@ describe("live reports per connection", () => {
     await expect(googleReportForConnection(account, "campaign", "2026-10-01", "2026-10-07", exhausted, { coord: fresh })).rejects.toMatchObject({ errorCode: "quota_exhausted" });
     expect(await googleAdsPaused(fresh)).toBe(true);
     expect(recorded.every((r) => (r.failure as { status: string }).status === "error")).toBe(true);
+  });
+
+  it("Google: a drill-down (one campaign's ad groups, one ad group's ads) is one counted operation, not two", async () => {
+    const coord = memoryCoord();
+    const queries: string[] = [];
+    const google: FetchLike = async (_input, init) => {
+      queries.push((JSON.parse(String(init?.body)) as { query: string }).query);
+      return json([{ results: [{ campaign: { id: "11", name: "Brand" }, adGroup: { id: "55", name: "Shoes" }, metrics: { costMicros: "1000000", impressions: "10", clicks: "1" } }] }]);
+    };
+    const account = conn({ provider: "google", accountId: "111" });
+    const r = await googleReportForConnection(account, "ad_group", "2026-10-01", "2026-10-07", google, { coord, parent: { campaign: "11" } });
+    expect(r.rows).toEqual([expect.objectContaining({ id: "55", campaignId: "11" })]);
+    expect(queries).toHaveLength(1);
+    expect(await googleAdsOperationsToday(coord)).toBe(1);
+    // The whole account's ad groups: the account's totals too, two.
+    await googleReportForConnection(account, "ad_group", "2026-10-01", "2026-10-07", google, { coord });
+    expect(await googleAdsOperationsToday(coord)).toBe(3);
+    // The demo's drill-down: generated, nothing fetched or counted.
+    const demo = conn({ provider: "google", isDemo: true, accountId: "DEMO-ADS-001", demoSeed: 7, timezone: "UTC", createdAt: new Date("2026-10-20T00:00:00Z") });
+    const ads = await googleReportForConnection(demo, "ad", "2026-10-01", "2026-10-07", google, { coord, parent: { campaign: "demo-c2", adGroup: "demo-c2-core" } });
+    expect(ads.rows.length).toBeGreaterThan(0);
+    expect(queries).toHaveLength(3);
+    expect(await googleAdsOperationsToday(coord)).toBe(3);
+  });
+
+  it("Google: keywords and search terms are two counted operations wherever they're read; none while the allowance is used up; the demo's none at all", async () => {
+    const coord = memoryCoord();
+    const queries: string[] = [];
+    const google: FetchLike = async (_input, init) => {
+      queries.push((JSON.parse(String(init?.body)) as { query: string }).query);
+      return json([{ results: [{ campaign: { id: "11", name: "Brand" }, campaignSearchTermView: { searchTerm: "shoes" }, metrics: { costMicros: "1000000", impressions: "10", clicks: "1" } }] }]);
+    };
+    const account = conn({ provider: "google", accountId: "111" });
+    await googleReportForConnection(account, "keyword", "2026-10-01", "2026-10-07", google, { coord });
+    expect(await googleAdsOperationsToday(coord)).toBe(2);
+    // Under a campaign too: its own row and its terms.
+    const terms = await googleReportForConnection(account, "search_term", "2026-10-01", "2026-10-07", google, { coord, parent: { campaign: "11" } });
+    expect(terms.rows).toEqual([expect.objectContaining({ id: "11~shoes", name: "shoes" })]);
+    expect(queries.slice(2).map((q) => q.match(/FROM (\w+)/)![1])).toEqual(["campaign", "campaign_search_term_view"]);
+    expect(await googleAdsOperationsToday(coord)).toBe(4);
+    await pauseGoogleAds(coord, null);
+    await expect(googleReportForConnection(account, "keyword", "2026-10-01", "2026-10-07", google, { coord })).rejects.toMatchObject({ errorCode: "quota_exhausted" });
+    expect(queries).toHaveLength(4);
+    const demo = conn({ provider: "google", isDemo: true, accountId: "DEMO-ADS-001", demoSeed: 7, timezone: "UTC", createdAt: new Date("2026-10-20T00:00:00Z") });
+    expect((await googleReportForConnection(demo, "search_term", "2026-10-01", "2026-10-07", google, { coord })).rows.length).toBeGreaterThan(0);
+    expect(queries).toHaveLength(4);
+    expect(await googleAdsOperationsToday(coord)).toBe(4);
   });
 
   it("Google and AdSense: a report ends by its deadline, as 'busy' (try again), and the operations it started are still counted", async () => {

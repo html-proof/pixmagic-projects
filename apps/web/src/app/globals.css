@@ -14,6 +14,10 @@
   --warn: #a15c07;
   --good: #1f7a46;
   --info: #2f62a3;
+  /* A third hue for things that are neither good nor bad (Settings → Security's password card). */
+  --violet: #6e56cf;
+  /* A fourth decorative hue, for icon tiles that only tell items apart (Settings → Advertising's chips). */
+  --rose: #c2417a;
   --chart: #18794e;
   /* Status as a filled shape (health bars, stock bars, status dots): brighter than the text
      colours above, which have to stay readable as text. Always next to a label. */
@@ -31,8 +35,24 @@
   --viz-cat-1: #2a78d6;
   --viz-cat-2: #eb6834;
   --viz-cat-3: #1baf7a;
+  /* The overview's sales panels (the owner's design, OverviewCharts.tsx): cyan days, yellow strong
+     and green best days, a light cyan day still running, a violet running total. The years compared
+     with are a recessive grey (two back) and a navy (last year), apart from this year's cyan. */
+  --viz-day: #00a6d9;
+  --viz-day-strong: #f2b705;
+  --viz-day-best: #18a957;
+  --viz-day-partial: #9bddf2;
+  --viz-running: #7c3aed;
+  --viz-year-2: #a3b5bd;
+  --viz-year-1: #33597a;
+  /* Weekend dates under the columns: an orange that reads as text. */
+  --viz-weekend: #c2410c;
   --shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 8px 24px -14px rgb(20 28 22 / 0.14);
   --shadow-lift: 0 2px 4px rgb(20 28 22 / 0.06), 0 22px 44px -18px rgb(20 28 22 / 0.26);
+  /* The signed-in sidebar (the owner's design): deep navy in both schemes, the page you're on in a
+     green that keeps white text at 4.5:1. */
+  --nav-bg: #0f1c2e;
+  --nav-active: #198754;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -52,6 +72,8 @@
     --warn: #f0b048;
     --good: #6fcf97;
     --info: #7aa7e6;
+    --violet: #a594f9;
+    --rose: #f27aa6;
     --chart: #6fbf94;
     --fill-danger: #f2555a;
     --fill-warn: #f0b429;
@@ -63,8 +85,28 @@
     --viz-cat-1: #3987e5;
     --viz-cat-2: #d95926;
     --viz-cat-3: #199e70;
+    --viz-day: #45cdf3;
+    --viz-day-strong: #f5c431;
+    --viz-day-best: #34c26f;
+    --viz-day-partial: #1d6a80;
+    --viz-running: #a78bfa;
+    --viz-year-2: #848f94;
+    --viz-year-1: #2f6799;
+    --viz-weekend: #ff8a5c;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -16px rgb(0 0 0 / 0.7);
+    --nav-bg: #0c1522;
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
+  }
+}
+/* The list a select opens, in both schemes. Chrome and Edge on Windows draw it on white when the
+   select's own background is see-through (the dashboard's Dates and Compare pills, the store
+   switcher, Top products' menus) yet keep the page's text colour, so in dark mode the choices
+   were near-white on white. */
+@layer base {
+  option,
+  optgroup {
+    background-color: var(--surface);
+    color: var(--text);
   }
 }
 
@@ -81,20 +123,35 @@
   --color-warn: var(--warn);
   --color-good: var(--good);
   --color-info: var(--info);
+  --color-violet: var(--violet);
+  --color-rose: var(--rose);
   --color-fill-danger: var(--fill-danger);
   --color-fill-warn: var(--fill-warn);
   --color-fill-good: var(--fill-good);
+  --color-nav: var(--nav-bg);
+  --color-nav-active: var(--nav-active);
 }
 
 body {
-  /* Two soft washes of the brand colours behind everything, so pages don't read as flat grey. */
-  background:
-    radial-gradient(1100px 520px at 0% -10%, color-mix(in oklab, var(--accent) 11%, transparent), transparent 62%),
-    radial-gradient(900px 480px at 100% -5%, color-mix(in oklab, var(--accent-2) 9%, transparent), transparent 58%),
-    var(--bg);
-  background-attachment: fixed;
+  background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+/*
+ * Two soft washes of the brand colours behind everything, so pages don't read as flat grey. They
+ * stay put while the page scrolls, on a fixed layer of their own: as `background-attachment: fixed`
+ * on the body they made Chrome scroll every page on the main thread and repaint the whole window on
+ * each frame of a scroll, which on the landing page was most of what a frame cost.
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 520px at 0% -10%, color-mix(in oklab, var(--accent) 11%, transparent), transparent 62%),
+    radial-gradient(900px 480px at 100% -5%, color-mix(in oklab, var(--accent-2) 9%, transparent), transparent 58%);
 }
 
 @utility btn {
@@ -146,6 +203,50 @@ body {
 @utility alert-warn {
   --tone: var(--warn);
 }
+/* ---- Settings → Security: cards, icon discs, pills and buttons tinted with their own `--tone` ----- */
+@utility tone-card {
+  border-color: color-mix(in oklab, var(--tone) 30%, var(--border));
+  background: linear-gradient(135deg, color-mix(in oklab, var(--tone) 9%, var(--surface)) 0%, var(--surface) 75%);
+}
+@utility tone-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--tone) 15%, transparent);
+  color: var(--tone);
+}
+@utility tone-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  background: color-mix(in oklab, var(--tone) 15%, transparent);
+  color: color-mix(in oklab, var(--tone) 85%, var(--text));
+}
+@utility tone-button {
+  @apply btn;
+  border: 1px solid color-mix(in oklab, var(--tone) 55%, var(--border));
+  background: color-mix(in oklab, var(--tone) 12%, var(--surface));
+  color: color-mix(in oklab, var(--tone) 70%, var(--text));
+  &:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--tone) 20%, var(--surface));
+  }
+}
+@utility tone-solid {
+  @apply btn;
+  background: var(--tone);
+  color: var(--surface);
+  &:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+}
+
 @keyframes alert-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
@@ -546,6 +647,9 @@ body {
     background: #fff;
     overflow: visible !important;
   }
+  body::before {
+    display: none;
+  }
   body:has([data-print-root]) * {
     visibility: hidden;
   }
@@ -844,24 +948,81 @@ html {
 @utility lp-scroll-cue {
   animation: lp-scroll-cue 2.8s infinite;
 }
-/*
- * A short bright dash running along a hero flow line. It is its own small layer riding an
- * `offset-path`, so moving it never repaints the diagram (an animated SVG stroke-dashoffset
- * repainted the whole hero visual every frame).
- */
-@keyframes lp-flow-dash {
-  0% {
-    offset-distance: 0%;
+/* Ask Insight while it works: the "comparing" dot breathing out, and the light sweeping an active row's bar. */
+@keyframes lp-ask-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.6);
     opacity: 0;
   }
-  6% {
-    opacity: 1;
+}
+@utility lp-ask-pulse {
+  animation: lp-ask-pulse 1.6s ease-in-out infinite;
+}
+@keyframes lp-ask-sweep {
+  from {
+    transform: translateX(-120%);
   }
-  94% {
-    opacity: 1;
+  to {
+    transform: translateX(330%);
   }
+}
+@utility lp-ask-sweep {
+  animation: lp-ask-sweep 1.1s linear infinite;
+}
+/*
+ * A webhook notification on the Shopify connection line (ShopifyConnection): 2.6 s from the store to
+ * bizinsights (54% of the 4.8 s cycle), fading in and out at the ends, then 2.2 s out of sight. Its
+ * label shows mid-line only. CSS rather than a JS loop, so the compositor runs it on its own.
+ */
+@keyframes lp-packet-x {
+  0% {
+    transform: translateX(0);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.25, 1);
+  }
+  54.17%,
   100% {
-    offset-distance: 100%;
+    transform: translateX(100%);
+  }
+}
+@keyframes lp-packet-y {
+  0% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.25, 1);
+  }
+  54.17%,
+  100% {
+    transform: translateY(100%);
+  }
+}
+@keyframes lp-packet-fade {
+  0% {
+    opacity: 0;
+  }
+  8.67%,
+  44.42% {
+    opacity: 1;
+  }
+  54.17%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes lp-packet-label {
+  0%,
+  9.75% {
+    opacity: 0;
+  }
+  16.25%,
+  35.75% {
+    opacity: 1;
+  }
+  42.25%,
+  100% {
     opacity: 0;
   }
 }

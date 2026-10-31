@@ -12,7 +12,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/sales), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, daysBetweenInclusive } from "./dates";
+import { addDays, daysBetweenInclusive, eachDay, periodsOf } from "./dates";
 import { delta, type DailyMetricsRow } from "./kpi";
 import { customSales, type ComponentSelection, type SalesLines } from "./salesCalculation";
 
@@ -172,6 +172,58 @@ export function dailyBreakdown<D extends SalesDay>(
   };
 }
 
+/**
+ * A week or month of the dates picked, as the dashboard's sales chart draws it when grouped
+ * (`periodBreakdown`). `partial` is a period not all there yet: it holds today, or some of its days
+ * weren't imported; `not_imported` is one with none imported. `clipped` says the dates picked cut
+ * the week or month short (a range starting on a Wednesday has a first "week" of five days), so it
+ * isn't set against whole ones as if it were.
+ */
+export interface BreakdownPeriod<D extends SalesDay = SalesDay> {
+  /** "2026-W43" for a week, "2026-10" for a month (`periodsOf`). */
+  key: string;
+  /** Its first and last day inside the dates picked. */
+  from: string;
+  to: string;
+  days: Array<BreakdownDay<D>>;
+  status: "complete" | "partial" | "not_imported";
+  clipped: boolean;
+  /** The measure over its imported days. */
+  value: number;
+  orders: number;
+  /** The running total at its last imported day; null when none of its days was imported. */
+  cumulative: number | null;
+}
+
+/**
+ * The days of a breakdown in weeks (Monday to Sunday) or calendar months (`periodsOf` in ./dates):
+ * every period of the range present, in order, each adding up its imported days. A day not
+ * imported adds nothing and makes its period `partial`, never a lower figure passed off as whole.
+ */
+export function periodBreakdown<D extends SalesDay>(b: DailyBreakdown<D>, range: { from: string; to: string }, g: "week" | "month"): Array<BreakdownPeriod<D>> {
+  const byDay = new Map(b.days.map((d) => [d.day, d]));
+  return periodsOf(range, g).map((p) => {
+    const days = eachDay(p.from, p.to)
+      .map((day) => byDay.get(day))
+      .filter((d): d is BreakdownDay<D> => d !== undefined);
+    const imported = days.filter((d) => d.status !== "not_imported");
+    const whole = daysBetweenInclusive(p.from, p.to);
+    const full = g === "week" ? 7 : daysBetweenInclusive(`${p.from.slice(0, 7)}-01`, monthEnd(p.from.slice(0, 7)));
+    const status = imported.length === 0 ? "not_imported" : imported.length < whole || imported.some((d) => d.status === "today") ? "partial" : "complete";
+    return {
+      key: p.key,
+      from: p.from,
+      to: p.to,
+      days,
+      status,
+      clipped: whole < full,
+      value: r2(imported.reduce((a, d) => a + d.value, 0)),
+      orders: imported.reduce((a, d) => a + d.orders, 0),
+      cumulative: imported.at(-1)?.cumulative ?? null,
+    };
+  });
+}
+
 export type MonthCoverage = "full" | "partial" | "none";
 
 export interface SalesMonth {
@@ -286,6 +338,17 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
   };
 }
 
+/**
+ * The same months of an earlier year (`yearsBack` before `today`'s), each whole: January to the
+ * month `today` is in. What this year's months are set against month by month, so its last month
+ * is a finished one (`current` false), unlike this year's.
+ */
+export function pastYearBreakdown(rows: DailyMetricsRow[], today: string, yearsBack: number, historyFrom: string | null): YearBreakdown {
+  const end = monthEnd(`${Number(today.slice(0, 4)) - yearsBack}-${today.slice(5, 7)}`);
+  const y = yearBreakdown(rows, end, historyFrom);
+  return { ...y, months: y.months.map((m) => ({ ...m, current: false })) };
+}
+
 /** What a month card measures: net sales, or the store's Custom sales from the month's lines. */
 export interface MonthMeasure<M> {
   value: (m: M) => number;
@@ -295,6 +358,12 @@ export interface MonthMeasure<M> {
 
 /** Shopify's net sales, as the months carry it. */
 export const NET_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "netSales" | "change">> = { value: (m) => m.netSales, change: (m) => m.change };
+
+/** Shopify's total sales, compared on the total sales of the dates the month is compared with. */
+export const TOTAL_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "totalSales" | "comparedLines">> = {
+  value: (m) => m.totalSales,
+  change: (m) => (m.comparedLines ? delta(m.totalSales, m.comparedLines.totalSales) : null),
+};
 
 /**
  * The store's Custom sales month by month: the lines its calculation counts, added up in cents

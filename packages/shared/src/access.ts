@@ -10,6 +10,7 @@
 //
 // Imported by the UI through `@app/shared/access`: no I/O, relative imports stay extensionless.
 
+import { adsFromShopifyWithoutAttribution, type AdsFromShopify } from "./adsFromShopify";
 import { can as roleCan, type Permission, type Role } from "./roles";
 import { MONTH_LINES } from "./sales";
 
@@ -121,7 +122,15 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   // ---- Inventory
   { key: "inventory.view", module: "inventory", kind: "view", label: "View inventory", reveals: "Stock levels at every location, items running low or sold out, locations and the stock reports, in units." },
   { key: "inventory.products", module: "inventory", kind: "view", requires: ["inventory.view"], label: "View product information", reveals: "Product details: descriptions, images, variants, SKUs, barcodes, options, selling prices and shipping details." },
-  { key: "inventory.costs", module: "inventory", kind: "view", sensitive: true, requires: ["inventory.view"], label: "View costs and stock value", reveals: "Cost per item, what the stock is worth at cost and at selling price, potential margin and inventory turnover." },
+  {
+    key: "inventory.costs",
+    module: "inventory",
+    kind: "view",
+    sensitive: true,
+    requires: ["inventory.view"],
+    label: "View costs and stock value",
+    reveals: "Cost per item, what the stock is worth at cost and at selling price, potential margin and inventory turnover; with the sales breakdown, Shopify's gross profit, cost of goods sold and margin.",
+  },
   { key: "inventory.history", module: "inventory", kind: "view", requires: ["inventory.view"], label: "View stock history", reveals: "Every stock change bizinsights has seen, and the changes made in bizinsights with who made them." },
   { key: "inventory.export", module: "inventory", kind: "export", sensitive: true, requires: ["inventory.view"], label: "Export inventory", reveals: "Download the stock list as a CSV file, with costs only for someone who may also see them." },
   { key: "inventory.adjust", module: "inventory", kind: "manage", sensitive: true, requires: ["inventory.view"], label: "Adjust stock", reveals: "Change stock in Shopify: stock received, corrections, stock counts and damaged stock." },
@@ -134,17 +143,17 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "orders.cancellations", module: "orders", kind: "view", requires: ["orders.list"], label: "View cancellations", reveals: "Which of the latest orders were cancelled." },
   // ---- Marketing
   { key: "marketing.ads", module: "marketing", kind: "view", label: "View advertising analytics", reveals: "Meta and Google Ads spend, clicks, conversions and return on ad spend, and AdSense earnings." },
-  { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and WhatsApp campaigns, automations and their results." },
+  { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and Customer Messaging: WhatsApp and text message (SMS) campaigns, automations, templates and settings, their results and what texts cost. Customers' numbers and messages need \"View contact information\" too." },
   { key: "marketing.attribution", module: "marketing", kind: "view", requires: ["analytics.traffic"], label: "View conversion attribution", reveals: "Orders and sales that came from paid traffic and from each UTM campaign." },
   // ---- Discounts
   { key: "discounts.codes", module: "discounts", kind: "view", label: "View discount codes and usage", reveals: "Which discount codes were used, and on how many orders." },
   { key: "discounts.performance", module: "discounts", kind: "view", requires: ["discounts.codes"], label: "View discount performance", reveals: "How much each code took off, and the sales it came with." },
   // ---- Finance
-  { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax, shipping and total sales", reveals: "How total sales add up: gross sales, discounts and returns to net sales, plus shipping, duties, fees and tax, and the store's Custom sales calculation. Without it, the headline shows net sales." },
+  { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax, shipping and total sales", reveals: "How total sales add up: gross sales, discounts and returns to net sales, plus shipping, duties, fees and tax, the store's Custom sales calculation, the check against Shopify's sales report, and the store's own costs (Settings → Costs). Without it, the headline shows net sales. Shopify's gross profit and cost of goods sold need \"View costs and stock value\" too." },
   { key: "finance.refunds", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View refunds", reveals: "Returns (money refunded, cancelled or edited out), the return rate and how many orders had one." },
   { key: "finance.reports", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View financial reports", reveals: "This year's sales month by month, compared with last year." },
   // ---- Integrations
-  { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work. Never passwords, tokens or keys." },
+  { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work, and the email setup: sending accounts, domains, templates, automations and sending totals. Never passwords, tokens or keys." },
   {
     key: "integrations.manage",
     module: "integrations",
@@ -152,7 +161,8 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
     sensitive: true,
     requires: ["integrations.status"],
     label: "Manage integrations",
-    reveals: "Connect, refresh and disconnect ad accounts, the WhatsApp number and email sending accounts. The Shopify store itself stays with owners and admins.",
+    reveals:
+      "Connect, refresh and disconnect ad accounts, the WhatsApp number and email sending accounts, and connect the store to Zapier (its Zaps then get what this person may see). The Shopify store itself stays with owners and admins.",
   },
   // ---- Staff
   { key: "staff.team", module: "staff", kind: "view", label: "View team information", reveals: "Employees' names, positions, departments and status." },
@@ -167,14 +177,16 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
 const BY_KEY = new Map(ACCESS_PERMISSIONS.map((p) => [p.key, p]));
 
 /**
- * The store data (capabilities.ts) each permission shows. A permission whose data no connected
- * store has granted bizinsights can still be given (the store may grant it later), and the team
- * page says it shows nothing yet: a permission never gets round a Shopify scope.
+ * The store data (capabilities.ts) each permission shows (any of several). A permission whose data
+ * no connected store has granted bizinsights can still be given (the store may grant it later), and
+ * the team page says it shows nothing yet: a permission never gets round a Shopify scope.
  */
-export const ACCESS_CAPABILITY: Partial<Record<AccessKey, string>> = {
+export const ACCESS_CAPABILITY: Partial<Record<AccessKey, string | readonly string[]>> = {
   "analytics.sales": "sales_overview",
-  "analytics.conversion": "funnel",
-  "analytics.abandonment": "contacts",
+  // The pixel's funnel, or Shopify's own sessions and visitors on the same page (read_reports).
+  "analytics.conversion": ["funnel", "shopify_sessions"],
+  // Shopify's abandoned checkouts, counted (read_orders); the list with who left them is the customers'.
+  "analytics.abandonment": "abandoned_checkouts",
   "analytics.behavior": "order_timing",
   "analytics.traffic": "channels",
   "customers.list": "contacts",
@@ -205,6 +217,13 @@ export const ACCESS_CAPABILITY: Partial<Record<AccessKey, string>> = {
   "finance.refunds": "refunds",
   "finance.reports": "sales_overview",
 };
+
+/** Whether a permission shows anything, given the store data (capability ids) a connected store has granted. */
+export function accessAvailable(key: AccessKey, granted: ReadonlySet<string>): boolean {
+  const data = ACCESS_CAPABILITY[key];
+  if (data === undefined) return true;
+  return (typeof data === "string" ? [data] : data).some((c) => granted.has(c));
+}
 
 export const isAccessKey = (s: string): s is AccessKey => BY_KEY.has(s as AccessKey);
 export const accessPermission = (key: AccessKey): AccessPermissionDef => BY_KEY.get(key)!;
@@ -509,10 +528,16 @@ export const OVERVIEW_MODULE_ACCESS = {
   funnel: ["analytics.conversion"],
   channels: ["analytics.traffic"],
   traffic: ["analytics.traffic"],
+  // Meta's and Google's sales from the store's own orders (adsFromShopify.ts): orders by where their
+  // visit came from, on the Advertising pages; their tagged-ad figures need attribution (redactFields).
+  ads_from_shopify: ["analytics.traffic"],
   order_timing: ["analytics.behavior"],
   fulfillment: ["orders.fulfillment"],
   discount_codes: ["discounts.codes"],
   recent_orders: ["orders.list"],
+  // Orders at a glance (OrderOutcomes in ./orders.ts): its payment, shipping and checkout parts each
+  // need their own permission (redactFields), so it is shown with any of them.
+  order_outcomes: ["orders.list", "orders.fulfillment", "analytics.abandonment"],
   inventory: ["products.inventory"],
   // The Inventory module's own Shopify access (capabilities.ts): its pages, not the dashboard's.
   stock_levels: ["inventory.view"],
@@ -523,20 +548,35 @@ export const OVERVIEW_MODULE_ACCESS = {
   ad_connections: ["marketing.ads"],
   ad_configured: ["marketing.ads"],
   // Shopify's own figures (packages/core/src/reports/shopify.ts): its sessions with the funnel, its
-  // gross profit and the check of the sales figures against its sales report with the breakdown.
+  // gross profit and the check of the sales figures against its sales report with the breakdown
+  // (gross profit with the costs permission too, OVERVIEW_MODULE_ALSO_NEEDS).
   shopify_sessions: ["analytics.conversion"],
   profit: ["finance.breakdown"],
   shopify_check: ["finance.breakdown"],
-  // Not a module of the overview: the live customer lists (GET .../contacts), named here so the
+  // The owner's own costs (Settings → Costs): money figures as sensitive as the cost of goods beside them.
+  expenses: ["finance.breakdown"],
+  // Not modules of the overview: the live customer lists (GET .../contacts) and Shopify's abandoned
+  // checkouts counted (GET .../abandoned-checkouts, the Shopping Funnel's card), named here so the
   // dashboard's capability list can say whether this member gets them at all.
   contacts: ["customers.list", "analytics.abandonment"],
+  abandoned_checkouts: ["analytics.abandonment"],
 } as const satisfies Record<string, readonly AccessKey[]>;
+
+/**
+ * Modules that need these as well (every one), on top of one of OVERVIEW_MODULE_ACCESS's. Shopify's
+ * gross profit is its cost of goods sold against net sales: costs, which are shown to no one without
+ * "View costs and stock value", as on the Inventory pages.
+ */
+const OVERVIEW_MODULE_ALSO_NEEDS: Partial<Record<keyof typeof OVERVIEW_MODULE_ACCESS, readonly AccessKey[]>> = {
+  profit: ["inventory.costs"],
+};
 
 export function seesModule(access: MemberAccess, module: string): boolean {
   const need = (OVERVIEW_MODULE_ACCESS as Record<string, readonly AccessKey[]>)[module];
   // A module this list doesn't know is never shown to a restricted member: new data starts closed.
   if (!need) return hasFullAccess(access.role);
-  return allows(access, need);
+  const also = (OVERVIEW_MODULE_ALSO_NEEDS as Record<string, readonly AccessKey[]>)[module] ?? [];
+  return allows(access, need) && also.every((k) => allows(access, k));
 }
 
 type Obj = Record<string, unknown>;
@@ -548,6 +588,16 @@ function omit(o: unknown, keys: readonly string[]): unknown {
   const out: Obj = { ...o };
   for (const k of keys) delete out[k];
   return out;
+}
+
+/**
+ * `year` (this year month by month) without `keys` in any month: its own months and those of the
+ * years before it it is compared with (`past`). Anything else comes back as it is.
+ */
+function omitFromMonths(year: unknown, keys: readonly string[]): unknown {
+  const cut = (y: unknown) => (isObj(y) && Array.isArray(y.months) ? { ...y, months: y.months.map((m: unknown) => omit(m, keys)) } : y);
+  const out = cut(year);
+  return isObj(out) && Array.isArray(out.past) ? { ...out, past: out.past.map(cut) } : out;
 }
 
 /**
@@ -565,22 +615,25 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       const lines = ["tax", "shipping", "duties", "additionalFees", "totalSales"];
       s = {
         ...s,
-        current: omit(s.current, ["grossSales", "discounts", ...lines]),
+        // What refunds took off total sales holds their tax and shipping too.
+        current: omit(s.current, ["grossSales", "discounts", "totalRefunded", ...lines]),
         previous: omit(s.previous, ["grossSales", ...lines]),
         deltas: omit(s.deltas, ["grossSales", "totalSales"]),
       };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, lines));
       // This year month by month ("View financial reports") keeps its net sales, without the lines.
-      if (isObj(s.year) && Array.isArray(s.year.months)) s.year = { ...s.year, months: s.year.months.map((m: unknown) => omit(m, MONTH_LINES)) };
+      if (s.year !== undefined) s.year = omitFromMonths(s.year, MONTH_LINES);
       delete s.calculation;
     }
     if (!g.has("finance.reports")) delete s.year;
     // Returns are refunds (and cancellations and edits), for the range, each day and each month.
     if (!g.has("finance.refunds")) {
-      s = { ...s, current: omit(s.current, ["returns"]) };
+      s = { ...s, current: omit(s.current, ["returns", "totalRefunded"]) };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
-      if (isObj(s.year) && Array.isArray(s.year.months)) s.year = { ...s.year, months: s.year.months.map((m: unknown) => omit(m, ["refunds"])) };
+      if (s.year !== undefined) s.year = omitFromMonths(s.year, ["refunds"]);
     }
+    // Which orders were a customer's first: the customers module's figure (new and returning customers), day by day too.
+    if (!g.has("customers.analytics") && Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["newCustomerOrders"]));
     out.sales_overview = s;
   }
   const inv = out.inventory;
@@ -592,12 +645,34 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       ...(g.has("orders.fulfillment") ? [] : ["fulfillmentStatus"]),
       ...(g.has("orders.cancellations") ? [] : ["cancelled"]),
     ];
-    if (drop.length) out.recent_orders = { ...recent, items: recent.items.map((i: unknown) => omit(i, drop)) };
+    // How many orders were cancelled in the dates is cancellation detail too.
+    if (drop.length) out.recent_orders = { ...((g.has("orders.cancellations") ? recent : omit(recent, ["cancelledInRange"])) as Obj), items: recent.items.map((i: unknown) => omit(i, drop)) };
+  }
+  // How the dates' orders went: paid or not is payment status, cancelled ones cancellations, and the
+  // count of orders goes with seeing orders or their shipping at all.
+  const outcomes = out.order_outcomes;
+  if (isObj(outcomes)) {
+    const drop = [
+      ...(g.has("orders.payments") && g.has("orders.cancellations") ? [] : ["outcome"]),
+      ...(g.has("orders.fulfillment") ? [] : ["shipping"]),
+      ...(g.has("analytics.abandonment") ? [] : ["checkouts"]),
+      ...(g.has("orders.list") || g.has("analytics.sales") || g.has("orders.fulfillment") ? [] : ["orders"]),
+    ];
+    if (drop.length) out.order_outcomes = omit(outcomes, drop);
+  }
+  // The Shopping Funnel's visits by where they came from: the traffic sources permission's, like orders by source.
+  const funnel = out.funnel;
+  if (isObj(funnel) && !g.has("analytics.traffic")) {
+    out.funnel = {
+      ...funnel,
+      ...(isObj(funnel.segments) ? { segments: omit(funnel.segments, ["source"]) } : {}),
+      ...(isObj(funnel.filter) ? { filter: omit(funnel.filter, ["source"]) } : {}),
+    };
   }
   const traffic = out.traffic;
   if (isObj(traffic) && !g.has("marketing.attribution")) {
     out.traffic = {
-      ...(omit(traffic, ["paid", "campaigns"]) as Obj),
+      ...(omit(traffic, ["paid", "campaigns", "split"]) as Obj),
       items: Array.isArray(traffic.items) ? traffic.items.map((i: unknown) => omit(i, ["paidOrders", "paidSales"])) : traffic.items,
     };
   }
@@ -605,6 +680,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   if (isObj(ads) && !g.has("marketing.campaigns")) out.ads = omit(ads, ["campaigns"]);
   // Orders Shopify's visit record credits to each platform's ads: attribution, like the traffic module's paid figures.
   if (isObj(out.ads) && !g.has("marketing.attribution")) out.ads = omit(out.ads, ["sourced"]);
+  // The same from the store's orders alone, for a platform not connected: its tagged-ad figures and campaigns.
+  if (isObj(out.ads_from_shopify) && !g.has("marketing.attribution")) out.ads_from_shopify = adsFromShopifyWithoutAttribution(out.ads_from_shopify as unknown as AdsFromShopify);
   const codes = out.discount_codes;
   if (isObj(codes) && Array.isArray(codes.items) && !g.has("discounts.performance")) {
     out.discount_codes = { ...codes, items: codes.items.map((i: unknown) => omit(i, ["discount", "sales"])) };
@@ -629,7 +706,7 @@ export function redactOverview<T extends { modules: Obj; capabilities: Array<{ i
   if (isObj(report.data)) {
     const seesOrders = g.has("analytics.sales") || g.has("orders.list");
     const seesProducts = g.has("products.view") || g.has("products.performance") || g.has("products.inventory");
-    out.data = omit(report.data, [...(seesOrders ? [] : ["orders", "oldestOrderDay", "newestOrderDay", "historyFrom"]), ...(seesProducts ? [] : ["products", "variants"])]);
+    out.data = omit(report.data, [...(seesOrders ? [] : ["orders", "oldestOrderDay", "newestOrderDay", "historyFrom", "history"]), ...(seesProducts ? [] : ["products", "variants"])]);
   }
   return out;
 }

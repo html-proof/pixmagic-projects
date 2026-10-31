@@ -1,15 +1,18 @@
 import type { Store, Tx } from "@app/db";
-import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { comparisonImported, delta, localDay, pastYearBreakdown, resolveCapabilities, storeStartDay, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
+import { expensesModule } from "../expenses.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
-import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
+import { declaredScopes, optionalScopesFor } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
+import { adsFromShopifyModule } from "./adsFromShopify.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
-import { funnel } from "./funnel.js";
-import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
-import { comparisonRows, customerCounts, dailyRows, dailySeries, topProducts } from "./sales.js";
+import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
+import { channels, discountCodes, fulfillment, orderOutcomes, orderTiming, recentOrders, traffic } from "./orders.js";
+import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
+import { productPerformance } from "./products.js";
 import { shopifyModules } from "./shopify.js";
 
 /**
@@ -32,6 +35,23 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
 }
 
 /**
+ * What the Advertising pages ask of the ad modules beyond the dashboard's question: one platform's or
+ * one account's figures, and every campaign. Figures for some of the accounts are never set against
+ * the store's whole sales (MER, share of sales, cost per order): only the accounts' own figures, and,
+ * for a whole platform, the orders Shopify credits to that platform's ads.
+ */
+export interface AdsView {
+  /** Only this platform's accounts. */
+  platform?: AdProvider;
+  /** Only this account (an ad connection's id). */
+  account?: string;
+  /** Every campaign, each with its change, rather than the 10 that spent most. */
+  allCampaigns?: boolean;
+  /** Meta's and Google's figures from the store's own orders as well (`ads_from_shopify`), for a platform with no ad account connected. */
+  fromShopify?: boolean;
+}
+
+/**
  * Everything the dashboard shows for one store and one date range, in one transaction (`tx` from
  * `withTenant`, so RLS applies). Modules are included ONLY when the store's granted scopes enable
  * them; disabled modules come back in `capabilities` with the missing scopes so the UI can
@@ -41,9 +61,23 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
  * @app/shared/access): the others are not even computed. The route still passes the answer through
  * `redactOverview`, which also takes out the fields inside a module that need their own permission.
  *
+ * `adsView` narrows the ad modules for the Advertising pages (AdsView). `funnelView`: the Shopping
+ * Funnel page's question (its filter), which makes the funnel module the page's full report
+ * (`funnelDetail`) instead of the dashboard's summary. `sheet.visitsByDay`: the Profit sheet's
+ * question, which adds the visits day by day to the funnel module.
+ *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
-export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRange; previous: Comparison }, now = new Date(), sees: (module: string) => boolean = () => true) {
+export async function storeOverview(
+  tx: Tx,
+  store: Store,
+  dates: { range: DateRange; previous: Comparison },
+  now = new Date(),
+  sees: (module: string) => boolean = () => true,
+  adsView: AdsView = {},
+  funnelView?: FunnelView,
+  sheet: { visitsByDay?: boolean } = {},
+) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
   const storeId = store.id;
@@ -55,7 +89,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   // must never offer an action that cannot work — see apps/api/src/routes/scopes.ts.
   const capabilities = resolveCapabilities(store.grantedScopes, {
     pixelInstalled: store.pixelInstalled,
-    optionalScopes: declaredOptionalScopes(),
+    optionalScopes: optionalScopesFor(store),
     declaredScopes: declaredScopes(),
   });
   const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));
@@ -73,6 +107,9 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     // While the range is still running, the comparison stops at the same time of day (Shopify's like-for-like).
     const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), previousImported ? comparisonRows(tx, ws, storeId, previous, store.timezone) : []]);
     rangeRows = cur;
+    // This calendar year and the two before it, month by month, whatever the dates picked: one read
+    // from the January two years back (this year's January compares with the December before).
+    const yearRows = enabled.has("sales_overview") ? await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 2}-01-01`, to: today }) : [];
     const c = summarize(cur);
     const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
@@ -80,6 +117,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
       // Shopify's "Total sales breakdown", line for line: gross − discounts − returns = net sales,
       // + additional fees + duties + shipping + taxes = total sales. The lines come for the dates
       // compared with too, so the store's own calculation from them (Custom sales) compares as well.
+      // totalRefunded: what refunds took off that total sales, tax and shipping in (under the tile).
       modules.sales_overview = {
         current: {
           grossSales: c.grossSales,
@@ -87,6 +125,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
           returns: c.refunds,
           netSales: c.netSales,
           totalSales: c.totalSales,
+          totalRefunded: c.totalRefunded,
           orders: c.orders,
           units: c.units,
           averageOrderValue: c.averageOrderValue,
@@ -118,9 +157,9 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
           units: change(c.units, p.units),
         },
         series: dailySeries(cur, range),
-        // This calendar year month by month, whatever the dates picked. Reaches back to the
-        // December before so January has something to compare with.
-        year: yearBreakdown(await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }), today, data.historyFrom),
+        // This calendar year month by month, and the same months of the two years before, whole
+        // (the dashboard's monthly comparison): each month not imported is said to be so.
+        year: { ...yearBreakdown(yearRows, today, data.historyFrom), past: [1, 2].map((back) => pastYearBreakdown(yearRows, today, back, data.historyFrom)) },
         // The store's own calculation from those lines: which it counts and whether the dashboard
         // shows it. Restored for everyone who opens the dashboard; Shopify's figures above never change.
         calculation: await storeSalesCalculation(tx, scope),
@@ -145,9 +184,19 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     }
   }
 
-  if (enabled.has("top_products")) modules.top_products = await topProducts(tx, scope, range);
+  // The owner's own costs (Settings → Costs), set against the sales above: only beside them.
+  if (modules.sales_overview && sees("expenses")) {
+    const expenses = await expensesModule(tx, scope, store.currency, range, previous);
+    if (expenses) modules.expenses = expenses;
+  }
 
-  if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store);
+  if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range, {}, now);
+
+  if (enabled.has("funnel")) {
+    const f = funnelView ? await funnelDetail(tx, scope, range, previous, store, funnelView) : await funnel(tx, scope, range, previous, store);
+    // The Profit sheet's visits day by day, counted as the funnel counts them.
+    modules.funnel = sheet.visitsByDay ? { ...f, visitsByDay: await visitsByDay(tx, scope, range, f.historyFrom) } : f;
+  }
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   type SalesFigures = { netSales?: number; orders?: number };
@@ -157,36 +206,56 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   // second look-up. Its orders and the dates compared with go with the net sales (the ads module sets
   // them against the spend); which orders Shopify credits to each platform's ads is read when the
   // store's traffic sources are read at all (the channels capability, and the member sees them).
+  // Some of the spend (one platform, one account) is never set against the whole store's sales; one
+  // AdSense account's earnings neither.
+  const { platform, account } = adsView;
+  const someSpend = !!(platform || account);
   const adsOpts = {
     timeZone: store.timezone,
     now,
-    orders: salesModule?.current?.orders ?? null,
-    before: salesModule?.previous ? { netSales: salesModule.previous.netSales ?? null, orders: salesModule.previous.orders ?? null } : null,
-    attribution: enabled.has("channels"),
+    orders: someSpend ? null : (salesModule?.current?.orders ?? null),
+    before: !someSpend && salesModule?.previous ? { netSales: salesModule.previous.netSales ?? null, orders: salesModule.previous.orders ?? null } : null,
+    attribution: !account && enabled.has("channels"),
+    connections: account ? [account] : undefined,
+    allCampaigns: adsView.allCampaigns,
   };
-  if (sees("ads")) {
-    const ads = await adsModule(tx, scope, range, previous, store.currency, netSales, adsOpts);
+  if (sees("ads") && platform !== "adsense") {
+    const ads = await adsModule(tx, scope, range, previous, store.currency, someSpend ? null : netSales, { ...adsOpts, provider: platform });
     if (ads) modules.ads = ads;
   }
-  if (sees("adsense")) {
-    const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales, adsOpts);
+  if (sees("adsense") && (!platform || platform === "adsense")) {
+    const adsense = await adsenseModule(tx, scope, range, previous, store.currency, account ? null : netSales, adsOpts);
     if (adsense) modules.adsense = adsense;
   }
   if (sees("ad_connections")) {
     // Which platforms are connected at all, hidden accounts included: the Advertising section
     // offers the ones that aren't, and says so when every account is hidden. Counts only, and
-    // only for a store with ad accounts (absent means none).
+    // only for a store with ad accounts (absent means none). `waiting`: the platforms whose sign-in
+    // is connected with no ad account yet (adConnections/logins.ts), which the section says instead.
     const adCounts = await tx.adConnection.groupBy({ by: ["provider", "enabled"], where: { workspaceId: ws, storeId: store.id }, _count: { _all: true } });
-    const connected = { meta: 0, google: 0, adsense: 0, hidden: 0 };
+    const waiting = (await tx.adLogin.findMany({ where: { workspaceId: ws, storeId: store.id }, select: { provider: true } })).map((l) => l.provider);
+    const connected = { meta: 0, google: 0, adsense: 0, hidden: 0, ...(waiting.length ? { waiting } : {}) };
     for (const g of adCounts) {
       if (g.provider === "meta" || g.provider === "google" || g.provider === "adsense") connected[g.provider] += g._count._all;
       if (!g.enabled) connected.hidden += g._count._all;
     }
-    if (adCounts.length) modules.ad_connections = connected;
+    if (adCounts.length || waiting.length) modules.ad_connections = connected;
   }
   // Which platforms this server can connect at all: the dashboard only offers those.
   const configured = adsConfigured();
   if (sees("ad_configured") && (configured.meta || configured.google || configured.adsense)) modules.ad_configured = configured;
+  // Meta and Google as the store's orders record them (packages/shared/src/adsFromShopify.ts): what the
+  // Advertising pages show of a platform with no ad account connected, from the orders' own visits
+  // (the traffic sources, read with the channels capability). Never for one account, or AdSense alone.
+  if (adsView.fromShopify && !account && platform !== "adsense" && enabled.has("channels") && sees("ads_from_shopify")) {
+    modules.ads_from_shopify = await adsFromShopifyModule(tx, scope, dates, {
+      currency: store.currency,
+      timeZone: store.timezone,
+      compare: previousImported,
+      historyFrom: data.historyFrom,
+      provider: platform,
+    });
+  }
 
   if (enabled.has("channels")) {
     modules.channels = await channels(tx, scope, range);
@@ -195,7 +264,13 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);
   if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);
   if (enabled.has("discount_codes")) modules.discount_codes = await discountCodes(tx, scope, range);
-  if (enabled.has("recent_orders")) modules.recent_orders = await recentOrders(tx, scope);
+  if (enabled.has("recent_orders")) modules.recent_orders = await recentOrders(tx, scope, range, store.timezone);
+  // Not a capability of its own: the store's orders (read_orders), and checkouts left once the
+  // storefront pixel is on (the funnel's capability, whether or not this member sees the funnel).
+  const on = (id: string) => capabilities.some((c) => c.id === id && c.enabled);
+  if (on("recent_orders") && sees("order_outcomes")) {
+    modules.order_outcomes = await orderOutcomes(tx, scope, range, on("funnel") ? await checkoutsLeft(tx, scope, range, store) : null);
+  }
   if (enabled.has("inventory")) modules.inventory = await inventory(tx, store, today);
   if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 
@@ -301,10 +376,11 @@ export async function workspaceStores(tx: Tx, ws: string) {
   // "connected and holding nothing", which look identical from scopes and lastSyncedAt alone.
   // Two grouped queries for the whole workspace, not one pair per store.
   const stores = await tx.store.findMany({ where: { workspaceId: ws, status: { not: "uninstalled" } }, orderBy: { createdAt: "asc" } });
-  const orders = await tx.order.groupBy({ by: ["storeId"], where: { workspaceId: ws }, _count: { _all: true } });
+  const orders = await tx.order.groupBy({ by: ["storeId"], where: { workspaceId: ws }, _count: { _all: true }, _min: { localDay: true } });
   const products = await tx.product.groupBy({ by: ["storeId"], where: { workspaceId: ws }, _count: { _all: true } });
   const countBy = (rows: Array<{ storeId: string; _count: { _all: number } }>) => new Map(rows.map((r) => [r.storeId, r._count._all]));
   const orderCount = countBy(orders);
+  const oldestOrderDay = new Map(orders.map((r) => [r.storeId, r._min.localDay]));
   const productCount = countBy(products);
   // Why a store that stopped syncing stopped, as the dashboard says it: the card's status line must
   // not send someone to reconnect a store that reconnecting doesn't fix. Only stores in error, which are few.
@@ -317,6 +393,8 @@ export async function workspaceStores(tx: Tx, ws: string) {
     store,
     imported: { orders: orderCount.get(store.id) ?? 0, products: productCount.get(store.id) ?? 0 },
     syncProblem: problems.get(store.id) ?? null,
+    // Where the store's dates begin (storeStartDay), so the date pickers know before the first numbers load.
+    startDay: storeStartDay(store.shopCreatedAt, store.timezone, oldestOrderDay.get(store.id) ?? null),
   }));
 }
 

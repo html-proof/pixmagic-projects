@@ -1,12 +1,13 @@
 import { createHmac, randomInt } from "node:crypto";
 import { env, logger, type Coord } from "@app/core";
-import { sha256Hex } from "@app/shared";
+import { EMAIL_CODE_TTL_S, sha256Hex } from "@app/shared";
 import { HttpError } from "./context.js";
 import { limit, LIMITS, type Limit } from "./rateLimit.js";
 
 /**
- * The 6-digit codes emailed at sign-up (to confirm the address) and at sign-in (after the
- * password), and the rules every one of them follows, enforced here on the server's clock:
+ * The 6-digit codes emailed at sign-up (to confirm the address), at sign-in (after the password)
+ * and to delete the account (routes/account.ts), and the rules every one of them follows, enforced
+ * here on the server's clock:
  *
  * - A code lives CODE_TTL_S seconds from the moment it is issued. The page shows a countdown, but
  *   the countdown is only a picture of this: a code offered later is refused before anything looks
@@ -16,7 +17,7 @@ import { limit, LIMITS, type Limit } from "./rateLimit.js";
  * - A code takes MAX_ATTEMPTS wrong guesses, then it is thrown away and a new one must be asked for.
  *   The guesses are counted in the coordinator (DynamoDB on AWS), so they add up across instances.
  * - One address gets at most AUTH_CODE_LIMIT_HOURLY codes an hour and AUTH_CODE_LIMIT_DAILY a day
- *   (sign-up and sign-in together), and one IP address at most LIMITS.codeIp.
+ *   (every kind together), and one IP address at most LIMITS.codeIp.
  *
  * The sign-up code itself is Cognito's (SignUp / ConfirmSignUp mark the address verified there), and
  * Cognito would keep it for 24 hours. It never reaches Cognito except through the API (the app client
@@ -25,14 +26,14 @@ import { limit, LIMITS, type Limit } from "./rateLimit.js";
  * with one atomic delete, so two answers can't both succeed.
  */
 
-/** A code's life, in seconds, from the moment it is issued. */
-export const CODE_TTL_S = 60;
+/** A code's life, in seconds, from the moment it is issued (the email says so too: @app/shared/auth). */
+export const CODE_TTL_S = EMAIL_CODE_TTL_S;
 /** Seconds after a code was issued before another one may be asked for. */
 export const RESEND_AFTER_S = 60;
 /** Wrong guesses one code takes; the one that reaches this ends the code. */
 export const MAX_ATTEMPTS = 5;
 /** How long the record of a code outlives the code, so "expired" can be told from "none was sent". */
-const RECORD_GRACE_S = 15 * 60;
+export const RECORD_GRACE_S = 15 * 60;
 
 /** What the page needs for its countdowns: the server's clock, so the browser's never matters. */
 export interface CodeChallenge {

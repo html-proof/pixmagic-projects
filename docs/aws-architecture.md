@@ -29,12 +29,13 @@ Principles:
 | Coarse API flood protection (1,500 requests/min/IP) | **AWS WAF** rate-based rule on CloudFront, plus AWS managed rule groups | Blocks floods before they cost a Lambda invocation. |
 | Per-key rate limits, one-time OAuth state, locks, signed-out sessions, export grants (the coordinator) | **DynamoDB** table (on-demand, TTL) | `apps/aws/src/dynamoCoord.ts`; the local server keeps it in memory. |
 | Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
-| Background jobs (sync, webhooks, aggregate, email), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
+| Background jobs (sync, webhooks, aggregate, email, whatsapp), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
 | `*/15 * * * *`: token refresh, stale jobs, ads sync, WhatsApp, open shifts, email sweeps; `15 3 * * *`: nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron, UTC. |
-| Connection pooling to Postgres (two logins: the owner role and the RLS role) | Capped Lambda concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
+| Connection pooling to Postgres (two logins: the system role and the tenant role, both bound by RLS) | Capped Lambda concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
 | All data | **RDS for PostgreSQL 17** (encrypted, automated backups, point-in-time restore) | No single machine to keep running (the old deployment's database on the owner's PC went down when Docker Desktop stopped). |
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
 | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
+| WhatsApp Automation's gateway (Evolution API, a container) | **ECS Fargate** (one task, private subnets, no public address, no load balancer), found by the functions through **Cloud Map**; its own database on the same RDS instance | WhatsApp sessions are long-lived connections a Lambda can't hold ([whatsapp.md](whatsapp.md)). |
 | Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
 | Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication, of which nothing is left in the app ([cognito-setup.md](cognito-setup.md), section 4). |
 | Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; rotation for database passwords. |
@@ -43,7 +44,7 @@ Principles:
 | Live dashboards (push updates; on an unmerged branch) | **AppSync Events** (managed WebSocket pub/sub), or keep polling | Decide when that branch lands; polling works meanwhile. |
 
 Third parties (Shopify, Meta Graph/WhatsApp Cloud API, Google Ads/AdSense, Gmail/Microsoft Graph,
-Slack) call back on the app's address (section 7).
+Slack) and the WhatsApp service (Evolution API's webhooks) call back on the app's address (section 7).
 
 ## 2. Target architecture
 
@@ -62,6 +63,7 @@ Slack) call back on the app's address (section 7).
    │  Lambda api ───────┐        Lambda consumers (sync, webhooks, aggregate, email)      │
    │  Lambda scheduled ─┼──────► (RDS Proxy) ─► RDS PostgreSQL 17  (isolated subnets)     │
    │  Lambda migrate ───┘                                                                 │
+   │  ECS Fargate "evolution" (WhatsApp, Cloud Map) ◄─ Lambdas :8080; ─► RDS :5432        │
    │        │  gateway endpoints: S3, DynamoDB (free)                                     │
    │        └─► NAT gateway (public subnet) ─► Cognito, Shopify, Meta, Google, Microsoft, │
    │                                            SMTP servers, Slack, Secrets Manager, SQS │
@@ -123,8 +125,9 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 - **NAT**: the functions call the internet (Cognito, Shopify, Meta, Google, SMTP). Built as a NAT
   instance per AZ (t4g.nano, `infra/cdk/lib/nat-instances.ts`) since 2026-10-17: high availability
   for a third of one NAT gateway's price (docs/aws-deployment.md, Fault tolerance).
-- **Security groups**: Lambda → RDS (or RDS Proxy) 5432 only; RDS Proxy → RDS 5432 only; nothing inbound
-  from the internet to the VPC.
+- **Security groups**: Lambda → RDS (or RDS Proxy) 5432 only; RDS Proxy → RDS 5432 only; Lambda →
+  the WhatsApp service (Evolution API) 8080 only, and that service → RDS 5432; nothing inbound from
+  the internet to the VPC.
 - **IAM**: one role per function, least privilege (its queue, its table, its secrets). Humans sign
   in through IAM Identity Center with MFA; GitHub Actions deploys with an OIDC role. No long-lived
   access keys anywhere (Cognito admin calls use the function role, as built in Phase 1).
@@ -193,11 +196,12 @@ The app's address is `https://bizinsights.io` since 2026-10-16 (pages asked for 
 | --- | --- | --- |
 | Shopify (the main app and each other app: pixmagic, public, appstore) | `application_url`, `redirect_urls`, webhook `uri` → `https://bizinsights.io/api/...` (in every toml) | `shopify-app/shopify.app*.toml`, then `shopify app deploy` |
 | Shopify web pixel extension | Posts to the `API_URL` it was given when it was made (the `after-move` action re-points older pixels) | `shopify-app/extensions/insights-pixel` |
-| Meta (Ads login, WhatsApp) | Redirect URI `https://bizinsights.io/api/ads/meta/callback`; WhatsApp webhook callback `https://bizinsights.io/api/webhooks/whatsapp` and its verify token | Meta app dashboards |
-| Google (Ads, AdSense) | Redirect URIs `https://bizinsights.io/api/ads/google/callback` and `.../adsense/callback`; domain verification for the consent screen (fixes "unverified app"): a Search Console **Domain** property for bizinsights.io, whose TXT record goes in Cloudflare DNS | Google Cloud console, Search Console |
+| Meta (Ads login, WhatsApp) | Redirect URI `https://bizinsights.io/api/ads/meta/callback` ([ads-setup.md](ads-setup.md#how-connecting-works); Nango's old `…/api/ads/nango/oauth-callback`, which bizinsights no longer answers, stays registered until [Leaving Nango](ads-setup.md#leaving-nango)'s step (d)); WhatsApp webhook callback `https://bizinsights.io/api/webhooks/whatsapp` and its verify token | Meta app dashboards |
+| Google (Ads, AdSense) | Redirect URIs `https://bizinsights.io/api/ads/google/callback` and `…/api/ads/adsense/callback` (Nango's old callback likewise); domain verification for the consent screen (fixes "unverified app"): a Search Console **Domain** property for bizinsights.io, whose TXT record goes in Cloudflare DNS | Google Cloud console, Search Console |
 | Google sign-in (Cognito) | Redirect URI `<the user pool's domain>/oauth2/idpresponse` | Google Cloud OAuth client ([cognito-setup.md](cognito-setup.md)) |
 | Microsoft and Gmail (email integrations) | Redirect URIs `https://bizinsights.io/api/email/oauth/microsoft/callback` and `.../google/callback` | Microsoft Entra app registration, Google Cloud OAuth client |
 | Cognito app client | Callback `https://bizinsights.io/auth/callback`, logout `…/login?signedOut=1` | `infra/aws/cognito.yaml` (`AppUrl`) |
+| Evolution API (WhatsApp, bizinsights' own service) | Webhook `https://bizinsights.io/api/webhooks/whatsapp/evolution/<instance>`, set by bizinsights on each instance it makes ([whatsapp.md](whatsapp.md)) | nothing to register |
 | Slack alerts | none | — |
 
 ## 8. Environments, code and delivery
@@ -215,6 +219,7 @@ The app's address is `https://bizinsights.io` since 2026-10-16 (pages asked for 
 | `Messaging` | SQS queues and DLQs, EventBridge schedules, SNS alarm topic |
 | `App` | The Lambda functions, aliases, CodeDeploy, CloudFront, WAF, Route 53 records |
 | `Observability` | Dashboards, alarms, canary, budgets |
+| `Whatsapp` | WhatsApp's Evolution API service: ECS Fargate, Cloud Map, its alarms (built as `InsightsWhatsapp-<env>`, [whatsapp.md](whatsapp.md)) |
 
 - **Code in `apps/aws`** (alongside what Phase 1 built): handlers `api` (no static files any more),
   `consumer` (SQS → `consume()`), `scheduled` (EventBridge → `runScheduled()`), `migrate`; adapters
@@ -248,7 +253,8 @@ retiring the old deployment and Firebase Auth. The steps, their order and the ro
 | CloudFront + WAF | ~10-15 | ~10-15 |
 | Secrets Manager, KMS, Route 53, CloudWatch, GuardDuty, canary | ~25-35 | ~25-35 |
 | SES | $0.10 per 1,000 emails | same |
-| **Total** | **~120-145** | **~225-260** |
+| WhatsApp's Evolution API service (Fargate task on demand, Cloud Map, two secrets, alarms; [whatsapp.md](whatsapp.md), "Cost") | ~19 | ~19 |
+| **Total** | **~139-164** | **~244-279** |
 
 Staging (approved separately) stays ~US$20-25. The domain itself is ~US$15/year. Biggest levers:
 RDS Proxy only when needed (lean starts without it, as the Phase 1 staging does), and one NAT

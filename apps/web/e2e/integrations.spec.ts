@@ -1,18 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, insertAdConnection, insertStore, PASSWORD, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Settings → Connect your business and Settings → Advertising, through the real app. Google, Meta
- * and AdSense can't run here and e2e/server.env sets none of them up, so the Meta and AdSense cards
- * say Coming soon until an account is connected, while Google Ads offers its demo instead (server.env
- * sets GOOGLE_ADS_DEMO_ENABLED; e2e/adsDemo.spec.ts drives it): Not connected, with Try demo as its
- * only button. Connected accounts are written straight into ad_connections, one per state, and both
- * pages must word each the same (lib/adConnections.ts).
+ * Settings → Integrations (a card each for Google Ads, Shopify, WhatsApp, Meta Ads, Google AdSense and Zapier)
+ * and Settings → Advertising (every ad account), through the real app. Google, Meta and AdSense can't run here and
+ * e2e/server.env sets none of them up, so Meta and AdSense say Coming soon until an account is
+ * connected, while Google Ads offers its demo instead (server.env sets GOOGLE_ADS_DEMO_ENABLED;
+ * e2e/adsDemo.spec.ts drives it): Not connected, with Try demo as its only button. Connected accounts
+ * are written straight into ad_connections, one per state, and are worded as lib/adConnections.ts says.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** A verified owner with a workspace and a connected store. */
@@ -24,7 +24,7 @@ async function ownerWithStore(page: Page, prefix: string) {
   return { email, ws, storeId };
 }
 
-/** The WhatsApp card loads Meta's SDK: answer it with nothing, so no page reaches facebook.net. */
+/** Meta's SDK (the Cloud API's sign-in for WhatsApp) is answered with nothing, so no page reaches facebook.net. */
 const quietMeta = (page: Page) => page.route("https://connect.facebook.net/**", (route) => route.fulfill({ status: 200, contentType: "text/javascript", body: "" }));
 
 const platform = (page: Page, testid: string) => page.getByTestId(testid).getByTestId("platform-state");
@@ -41,56 +41,109 @@ async function apiSendsReasons(page: Page, ws: string, storeId: string): Promise
   }, [ws, storeId] as const);
 }
 
-test("Connect your business lists every card, Google Account first, and ad platforms not set up say Coming soon or offer their demo", async ({ page }) => {
+test("Integrations shows Google Ads, Shopify, WhatsApp, Meta Ads, Google AdSense and Zapier; one not set up says Coming soon or offers its demo", async ({ page }) => {
   await ownerWithStore(page, "hub");
   await quietMeta(page);
   await page.goto("/settings/integrations");
 
+  await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
   const cards = page.locator('section[data-testid^="int-"]');
   await expect(cards).toHaveCount(6);
-  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual([
-    "int-google-account",
-    "int-shopify",
-    "int-whatsapp",
-    "int-google-ads",
-    "int-meta-ads",
-    "int-adsense-ads",
-  ]);
-  await expect(platform(page, "int-google-account")).toHaveText("Not linked");
-  await expect(page.getByTestId("int-google-account").getByRole("button", { name: "Continue with Google" })).toBeVisible();
+  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-google", "int-shopify", "int-whatsapp", "int-meta", "int-adsense", "int-zapier"]);
+  // Zapier: server.env has no ZAPIER_CLIENT_SECRET, so it isn't set up here, and there is nothing to open.
+  const zapier = page.getByTestId("int-zapier");
+  await expect(zapier).toContainText("Not set up yet");
+  await expect(zapier).toContainText("Zapier isn't set up for bizinsights yet");
+  await expect(zapier.getByTestId("int-zapier-connect")).toHaveCount(0);
+  // Signing in with Google is Settings → Security's, not one of the cards.
+  await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
+  // One Click Setup: Learn more says how, and folds away again.
+  const setup = page.getByTestId("one-click-setup");
+  await setup.getByRole("button", { name: "Learn more" }).click();
+  await expect(setup.getByRole("button", { name: "Learn more" })).toHaveAttribute("aria-expanded", "true");
+  await expect(setup.getByRole("listitem")).toHaveCount(3);
+  await expect(setup).toContainText("There are no keys or codes to copy");
+  await setup.getByRole("button", { name: "Learn more" }).click();
+  await expect(setup.getByRole("listitem")).toHaveCount(0);
   await expect(platform(page, "int-shopify")).toHaveText("Connected");
+  await expect(page.getByTestId("int-shopify").getByRole("link", { name: "Manage Shopify" })).toHaveAttribute("href", "/settings/stores");
   await expect(platform(page, "int-whatsapp")).toHaveText("Not connected");
 
-  // Not set up on this server and no demo to offer: "Coming soon", never "Not connected", and no button to press.
-  for (const [testid, name, button] of [
-    ["int-meta-ads", "Meta Ads", "Continue with Meta Ads"],
-    ["int-adsense-ads", "Google AdSense", "Continue with Google AdSense"],
+  // Meta and AdSense aren't set up on this server and have no demo: "Coming soon", never "Not connected", and nothing to press.
+  for (const [id, name] of [
+    ["int-meta", "Meta Ads"],
+    ["int-adsense", "Google AdSense"],
   ] as const) {
-    const card = page.getByTestId(testid);
+    const card = page.getByTestId(id);
     await expect(card.getByRole("heading", { name })).toBeVisible();
-    await expect(platform(page, testid)).toHaveText("Coming soon");
-    await expect(card).toContainText(`shows a “${button}” button`);
+    await expect(platform(page, id)).toHaveText("Coming soon");
+    await expect(card).toContainText(`${name} sign-in is being switched on`);
     await expect(card.getByRole("button")).toHaveCount(0);
   }
-  // Google Ads isn't set up either, but offers its demo: "Not connected" (never "Coming soon" with a
-  // button under it), the settings the real sign-in still lacks, and Try demo as the only button.
-  const googleAds = page.getByTestId("int-google-ads");
-  await expect(googleAds.getByRole("heading", { name: "Google Ads" })).toBeVisible();
-  await expect(platform(page, "int-google-ads")).toHaveText("Not connected");
-  await expect(googleAds.getByTestId("int-google-ads-not-configured")).toContainText("it still needs GOOGLE_ADS_");
-  await expect(googleAds.getByTestId("int-google-ads-not-configured")).toContainText("Try demo connects a simulated account");
-  await expect(googleAds.getByRole("button", { name: "Continue with Google Ads" })).toHaveCount(0);
-  await expect(googleAds.getByRole("button")).toHaveCount(1);
-  await expect(googleAds.getByTestId("int-google-try-demo")).toHaveText("Try demo");
+  await expect(page.getByTestId("int-meta").getByRole("list", { name: "What Meta Ads brings" })).toContainText("Spend & ROAS");
+  // Google Ads isn't set up either, but its demo is offered: "Not connected" (never "Coming soon" with
+  // a button under it), and Try demo as the only button.
+  const google = page.getByTestId("int-google");
+  await expect(google.getByRole("heading", { name: "Google Ads" })).toBeVisible();
+  await expect(platform(page, "int-google")).toHaveText("Not connected");
+  await expect(google.getByRole("button", { name: "Connect Google Ads" })).toHaveCount(0);
+  await expect(google.getByRole("button")).toHaveCount(1);
+  await expect(google.getByTestId("int-google-try-demo")).toHaveText("Try demo");
 
-  // Settings → Advertising has the same three cards, in the same words.
+  // Settings → Advertising keeps a card per platform, and says what the real sign-in still lacks.
   await page.goto("/settings/ads");
   await expect(platform(page, "ads-provider-google")).toHaveText("Not connected");
+  await expect(page.getByTestId("ads-provider-google-not-configured")).toContainText("it still needs GOOGLE_ADS_");
   await expect(page.getByTestId("ads-provider-google").getByTestId("try-demo-google")).toHaveText("Try demo");
   for (const p of ["meta", "adsense"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Coming soon");
 });
 
-test("each connected account shows its state, the same way on both pages", async ({ page }) => {
+test("Connect goes straight to the platform's sign-in, with no note, even while Google and Meta still review bizinsights", async ({ page }) => {
+  const { ws, storeId } = await ownerWithStore(page, "choose");
+  await quietMeta(page);
+  // This server as if every platform's sign-in were set up, with Google Ads and Meta still under their platform's review.
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads`, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.json()) as Record<string, Record<string, boolean>>;
+    await route.fulfill({
+      response: res,
+      json: { ...body, configured: { google: true, meta: true, adsense: true }, restricted: { google: true, meta: true, adsense: false } },
+    });
+  });
+  const started: string[] = [];
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/*/connect`, (route) => {
+    const p = new URL(route.request().url()).pathname.split("/").at(-2)!;
+    started.push(p);
+    // Back to this page instead of the platform's sign-in, marked so the test can wait until the browser is there.
+    return route.fulfill({ json: { url: `/settings/integrations?back=${p}` } });
+  });
+  await page.goto("/settings/integrations");
+
+  const google = page.getByTestId("int-google");
+  await expect(platform(page, "int-google")).toHaveText("Not connected");
+  await expect(platform(page, "int-meta")).toHaveText("Not connected");
+  // The real sign-in is set up, so the demo is a line under it, not the button.
+  await expect(google.getByTestId("int-google-try-demo")).toBeVisible();
+  // Each Connect leaves for its platform's sign-in at once: no window in between. The page leaves by
+  // itself: wait for it to arrive, or a click of ours would land on the page being left.
+  await google.getByRole("button", { name: "Connect Google Ads" }).click();
+  await page.waitForURL(/\/settings\/integrations\?back=google$/);
+  expect(started).toEqual(["google"]);
+  await page.getByTestId("int-adsense").getByRole("button", { name: "Connect Google AdSense" }).click();
+  await page.waitForURL(/\/settings\/integrations\?back=adsense$/);
+  expect(started).toEqual(["google", "adsense"]);
+  await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta Ads" }).click();
+  await page.waitForURL(/\/settings\/integrations\?back=meta$/);
+  expect(started).toEqual(["google", "adsense", "meta"]);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Settings → Advertising: both cards read "Not connected", with no note about the platform's review.
+  await page.goto("/settings/ads");
+  for (const p of ["google", "meta"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Not connected");
+  await expect(page.getByText(/added as testers|Feature Unavailable|still verifying bizinsights/)).toHaveCount(0);
+});
+
+test("each connected account shows its state, and Integrations the most pressing one per platform", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "states");
   const at = { workspaceId: ws, storeId };
   await insertAdConnection(db, {
@@ -133,44 +186,52 @@ test("each connected account shows its state, the same way on both pages", async
     ["pub-555", "verification_pending", "Verification pending"],
   ];
 
-  await page.route("https://connect.facebook.net/**", (route) => route.fulfill({ status: 200, contentType: "text/javascript", body: "" }));
-  for (const [path, prefix] of [
-    ["/settings/integrations", "int-"],
-    ["/settings/ads", "ads-provider-"],
-  ] as const) {
-    await page.goto(path);
-    const card = (p: string) => (prefix === "int-" ? `int-${p}-ads` : `ads-provider-${p}`);
-    // A card shows its most pressing account: hidden accounts don't count (Lapsed Promo would outrank them all).
-    await expect(platform(page, card("google"))).toHaveText("Synchronizing");
-    await expect(page.getByTestId(card("google")).getByTestId("platform-hidden")).toHaveCount(0);
-    await expect(platform(page, card("meta"))).toHaveText("Reconnect required");
-    await expect(platform(page, card("adsense"))).toHaveText("Verification pending");
-    for (const [id, state, label] of expected) {
-      await expect(account(page, id)).toHaveAttribute("data-state", state);
-      await expect(account(page, id).getByTestId("account-state")).toHaveText(label);
-    }
+  await quietMeta(page);
+  // Integrations: each platform shows its most pressing account, and sends there to fix it. Google Ads is
+  // Synchronizing: hidden accounts don't count, or Lapsed Promo would outrank them all.
+  await page.goto("/settings/integrations");
+  await expect(platform(page, "int-google")).toHaveText("Synchronizing");
+  await expect(page.getByTestId("int-google-accounts")).toContainText("+3 more");
+  await expect(page.getByTestId("int-google").getByRole("link", { name: "Manage Google Ads" })).toHaveAttribute("href", "/settings/ads");
+  await expect(platform(page, "int-adsense")).toHaveText("Verification pending");
+  await expect(page.getByTestId("int-adsense-accounts")).toContainText("Account: My Site");
+  await expect(page.getByTestId("int-adsense").getByRole("link", { name: "Fix Google AdSense" })).toHaveAttribute("href", "/settings/ads");
+  await expect(platform(page, "int-meta")).toHaveText("Reconnect required");
+  await expect(page.getByTestId("int-meta-accounts")).toContainText("+2 more");
+  await expect(page.getByTestId("int-meta").getByRole("link", { name: "Fix Meta Ads" })).toHaveAttribute("href", "/settings/ads");
+  await expect(page.getByTestId("ad-account")).toHaveCount(0);
 
-    // What failed is said in plain words; the platform's own text only behind Details.
-    const failed = account(page, "act_333");
-    await expect(failed.getByTestId("account-message")).toContainText("Meta refused the last update");
-    await expect(failed.getByTestId("account-message")).not.toContainText("#100");
-    await failed.getByText("Details").click();
-    await expect(failed).toContainText("(#100) Unsupported get request");
-    await expect(account(page, "act_444").getByTestId("account-message")).toContainText("can no longer see this ad account");
-    await expect(account(page, "act_888").getByTestId("account-message")).toContainText("Press Reconnect");
-
-    const connected = account(page, "111-111-1111");
-    await expect(connected).toContainText("1 hour ago");
-    await expect(connected).toContainText("Read Google Ads reports");
-    await expect(connected).toContainText("Google has no read-only permission for Google Ads; bizinsights only reads.");
-    await expect(connected).toContainText("Data through");
-    await expect(account(page, "222-222-2222").getByTestId("timezone-note")).toContainText("America/Los_Angeles");
-    await expect(account(page, "777-777-7777")).toContainText("Hidden from the dashboard");
-    // Every row's controls are named for their account.
-    await expect(page.getByRole("checkbox", { name: "Show on dashboard: Brand Search" })).toBeChecked();
-    await expect(page.getByRole("checkbox", { name: "Show on dashboard: Old Promo" })).not.toBeChecked();
-    await expect(page.getByRole("button", { name: "Disconnect Agency Ads" })).toBeVisible();
+  // Settings → Advertising: every account, each worded as lib/adConnections.ts says.
+  await page.goto("/settings/ads");
+  await expect(platform(page, "ads-provider-google")).toHaveText("Synchronizing");
+  await expect(page.getByTestId("ads-provider-google").getByTestId("platform-hidden")).toHaveCount(0);
+  await expect(platform(page, "ads-provider-meta")).toHaveText("Reconnect required");
+  await expect(platform(page, "ads-provider-adsense")).toHaveText("Verification pending");
+  for (const [id, state, label] of expected) {
+    await expect(account(page, id)).toHaveAttribute("data-state", state);
+    await expect(account(page, id).getByTestId("account-state")).toHaveText(label);
   }
+
+  // What failed is said in plain words; the platform's own text only behind Details.
+  const failed = account(page, "act_333");
+  await expect(failed.getByTestId("account-message")).toContainText("Meta refused the last update");
+  await expect(failed.getByTestId("account-message")).not.toContainText("#100");
+  await failed.locator("summary", { hasText: /^Details/ }).click();
+  await expect(failed).toContainText("(#100) Unsupported get request");
+  await expect(account(page, "act_444").getByTestId("account-message")).toContainText("can no longer see this ad account");
+  await expect(account(page, "act_888").getByTestId("account-message")).toContainText("Press Reconnect");
+
+  const connected = account(page, "111-111-1111");
+  await expect(connected).toContainText("1 hour ago");
+  await expect(connected).toContainText("Read Google Ads reports");
+  await expect(connected).toContainText("Google has no read-only permission for Google Ads; bizinsights only reads.");
+  await expect(connected).toContainText("Data through");
+  await expect(account(page, "222-222-2222").getByTestId("timezone-note")).toContainText("America/Los_Angeles");
+  await expect(account(page, "777-777-7777")).toContainText("Hidden from the dashboard");
+  // Every row's controls are named for their account.
+  await expect(page.getByRole("checkbox", { name: "Show on dashboard: Brand Search" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Show on dashboard: Old Promo" })).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "Disconnect Agency Ads" })).toBeVisible();
 });
 
 test("reasons only the newer API sends: authorization, permission taken back, closed, under review, a requested sync, AdSense sites", async ({ page }) => {
@@ -235,18 +296,18 @@ test("an account hidden before its first sync isn't Synchronizing and nothing lo
   // The page's own clock, so its 5-second look-again can be run through without waiting.
   await page.clock.install();
 
-  for (const [path, card] of [
-    ["/settings/integrations", (p: string) => `int-${p}-ads`],
-    ["/settings/ads", (p: string) => `ads-provider-${p}`],
-  ] as const) {
+  for (const path of ["/settings/integrations", "/settings/ads"]) {
     await page.goto(path);
-    await expect(platform(page, card("google"))).toHaveText("Connected");
-    await expect(page.getByTestId(card("google")).getByTestId("platform-hidden")).toBeVisible();
-    const hidden = account(page, "456-000-0001");
-    await expect(hidden).toHaveAttribute("data-state", "connected");
-    await expect(hidden.getByTestId("account-message")).toHaveText("Nothing fetched yet: bizinsights fetches this account's figures once it's shown on the dashboard.");
-    await expect(platform(page, card("meta"))).toHaveText("Sync failed");
-    await expect(account(page, "act_4561").getByTestId("account-message")).toContainText("The first update hasn't come through yet");
+    const hub = path === "/settings/integrations";
+    await expect(platform(page, hub ? "int-google" : "ads-provider-google")).toHaveText("Connected");
+    await expect(platform(page, hub ? "int-meta" : "ads-provider-meta")).toHaveText("Sync failed");
+    if (!hub) {
+      await expect(page.getByTestId("ads-provider-google").getByTestId("platform-hidden")).toBeVisible();
+      const hidden = account(page, "456-000-0001");
+      await expect(hidden).toHaveAttribute("data-state", "connected");
+      await expect(hidden.getByTestId("account-message")).toHaveText("Nothing fetched yet: bizinsights fetches this account's figures once it's shown on the dashboard.");
+      await expect(account(page, "act_4561").getByTestId("account-message")).toContainText("The first update hasn't come through yet");
+    }
 
     const before = looks;
     await page.clock.runFor(16_000);
@@ -310,25 +371,25 @@ test("a member who may only view integrations gets no buttons; Manage integratio
   await quietMeta(page);
 
   await grant(["integrations.status"]);
-  for (const path of ["/settings/integrations", "/settings/ads"]) {
-    await page.goto(path);
-    await expect(account(page, "123-000-0001").getByTestId("account-state")).toHaveText("Connected");
-    await expect(page.getByText("needs the Manage integrations permission")).toBeVisible();
-    await expect(page.getByRole("checkbox", { name: "Show on dashboard: Shop Search" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Disconnect Shop Search" })).toHaveCount(0);
-  }
   await page.goto("/settings/integrations");
+  await expect(platform(page, "int-google")).toHaveText("Connected");
+  await expect(page.getByTestId("int-google-accounts")).toContainText("Account: Shop Search");
+  await expect(page.getByText("needs the Manage integrations permission")).toBeVisible();
   await expect(platform(page, "int-whatsapp")).toHaveText("Not connected");
-  await expect(page.getByTestId("wa-connect")).toHaveCount(0);
+  await expect(page.getByTestId("int-whatsapp-connect")).toHaveCount(0);
+  await page.goto("/settings/ads");
+  await expect(account(page, "123-000-0001").getByTestId("account-state")).toHaveText("Connected");
+  await expect(page.getByText("needs the Manage integrations permission")).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Show on dashboard: Shop Search" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Disconnect Shop Search" })).toHaveCount(0);
 
   // "Manage integrations" without being an owner or admin: the WhatsApp and ad buttons (the API allows them too).
   await grant(["integrations.status", "integrations.manage"]);
   await page.goto("/settings/integrations");
-  await expect(page.getByTestId("wa-connect")).toBeVisible();
+  await expect(page.getByTestId("int-whatsapp-connect")).toBeVisible();
   await expect(page.getByText("needs the Manage integrations permission")).toHaveCount(0);
-  await expect(page.getByRole("checkbox", { name: "Show on dashboard: Shop Search" })).toBeChecked();
-  await expect(page.getByRole("button", { name: "Disconnect Shop Search" })).toBeVisible();
   await page.goto("/settings/ads");
+  await expect(page.getByRole("checkbox", { name: "Show on dashboard: Shop Search" })).toBeChecked();
   await expect(page.getByRole("button", { name: "Disconnect Shop Search" })).toBeVisible();
 });
 
@@ -336,8 +397,7 @@ test("disconnecting asks first, then says bizinsights couldn't hand the access b
   const { ws, storeId } = await ownerWithStore(page, "disconnect");
   const otherStore = await insertStore(db, ws, `disconnect-other-${Date.now()}.myshopify.com`);
   await insertAdConnection(db, { workspaceId: ws, storeId, provider: "google", accountId: "321-000-0001", accountName: "Only Account", lastSyncedAt: hoursAgo(1) });
-  await quietMeta(page);
-  await page.goto("/settings/integrations");
+  await page.goto("/settings/ads");
   await page.getByTestId("store-switcher").selectOption(storeId);
   await page.getByRole("button", { name: "Disconnect Only Account" }).click();
   const dialog = page.getByRole("dialog", { name: "Disconnect Only Account?" });
@@ -358,14 +418,14 @@ test("disconnecting asks first, then says bizinsights couldn't hand the access b
   await expect(page.getByTestId("action-note")).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(removeAccess).toBeFocused();
-  await expect(platform(page, "int-google-ads")).toHaveText("Disconnected");
+  await expect(platform(page, "ads-provider-google")).toHaveText("Disconnected");
   const { rows } = await db.query("SELECT count(*)::int AS n FROM ad_connections WHERE store_id = $1", [storeId]);
   expect(rows[0].n).toBe(0);
 
   // Another store chosen at the top (the page stays): the note and "Disconnected" were about the first
   // one. Nothing is connected for this store, so the card is back to offering the demo.
   await page.getByTestId("store-switcher").selectOption(otherStore);
-  await expect(platform(page, "int-google-ads")).toHaveText("Not connected");
+  await expect(platform(page, "ads-provider-google")).toHaveText("Not connected");
   await expect(page.getByTestId("action-note")).toHaveCount(0);
 });
 
@@ -457,68 +517,6 @@ test("a sign-in that came back with a problem is explained, whatever the code", 
   // Anything else typed into the address: the general sentence, never "undefined" or code.
   await page.goto(`/settings/ads?error=constructor&provider=google&store=${storeId}`);
   await expect(page.locator(".alert[role=alert]")).toHaveText("Connecting didn't work. Please try again.");
-});
-
-test("Google Account: Continue with Google links it from Connect your business, and the page says so on return", async ({ page }) => {
-  const email = uniqueEmail("hublink");
-  await signUp(page, email);
-  await createWorkspace(page, "Link Co");
-  await quietMeta(page);
-  await page.goto("/settings/integrations");
-  const card = page.getByTestId("int-google-account");
-  await expect(platform(page, "int-google-account")).toHaveText("Not linked");
-  await card.getByRole("button", { name: "Continue with Google" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in with Google (test)" })).toBeVisible();
-  const google = uniqueEmail("hublink-google");
-  await page.getByLabel("Email").fill(google);
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(page).toHaveURL(/\/settings\/integrations$/, { timeout: 20_000 });
-  await expect(page.getByRole("status").filter({ hasText: "Google is linked" })).toBeVisible();
-  await expect(platform(page, "int-google-account")).toHaveText("Linked");
-  await expect(card).toContainText(google);
-  await expect(card.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
-  await expect(card.getByRole("link", { name: "Manage sign-in methods" })).toHaveAttribute("href", "/settings/security");
-
-  // A link that came back refused is worded, then cleared from the address.
-  await page.goto("/settings/integrations?link_error=google_in_use");
-  await expect(page.getByRole("alert").filter({ hasText: "already signs in to another bizinsights account" })).toBeVisible();
-  await expect(page).toHaveURL(/\/settings\/integrations$/);
-});
-
-test("Google Account: a sign-in older than 15 minutes asks for the password in a dialog the keyboard can use, then links", async ({ page }) => {
-  const email = uniqueEmail("hubpass");
-  await signUp(page, email);
-  await createWorkspace(page, "Pass Co");
-  await quietMeta(page);
-  // This session as if it began 20 minutes ago (the server still knows it's fresh; the password is checked for real).
-  await page.route("**/api/auth/account", async (route) => {
-    const res = await route.fetch();
-    const json = (await res.json()) as { signedInAt: number };
-    await route.fulfill({ response: res, json: { ...json, signedInAt: Date.now() - 20 * 60_000 } });
-  });
-  await page.goto("/settings/integrations");
-  await expect(platform(page, "int-google-account")).toHaveText("Not linked");
-  await page.getByTestId("int-google-account").getByRole("button", { name: "Continue with Google" }).click();
-
-  const dialog = page.getByRole("dialog", { name: "Confirm it's you" });
-  const field = dialog.getByLabel("Your password", { exact: true });
-  // It opens on the password, and nothing in it is disabled or claims to be working.
-  await expect(field).toBeFocused();
-  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeEnabled();
-  await expect(dialog.getByRole("button", { name: "Continue to Google" })).toBeEnabled();
-  // Enter with nothing typed says what's missing.
-  await page.keyboard.press("Enter");
-  await expect(dialog).toContainText("Enter your bizinsights password to continue.");
-  await expect(field).toBeFocused();
-  // Typed, Enter continues to Google.
-  await field.fill(PASSWORD);
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("heading", { name: "Sign in with Google (test)" })).toBeVisible();
-  await page.getByLabel("Email").fill(uniqueEmail("hubpass-google"));
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page).toHaveURL(/\/settings\/integrations$/, { timeout: 20_000 });
-  await expect(page.getByRole("status").filter({ hasText: "Google is linked" })).toBeVisible();
 });
 
 test("the data deletion page shows a Meta deletion request's status, and the privacy policy explains removing bizinsights in Facebook", async ({ page }) => {

@@ -20,12 +20,12 @@ import {
   resetGoogleAdsDemo,
   type GoogleReport,
 } from "@app/core";
-import { googleAdsAnalytics, type GoogleAdsAnalytics } from "@app/core/reports";
+import { GOOGLE_ANALYTICS_PART_IDS, GOOGLE_ANALYTICS_PARTS, googleAdsAnalytics, googleAnalyticsTable, type GoogleAdsAnalytics, type GoogleAnalyticsPart } from "@app/core/reports";
 import { allows, CAMPAIGN_SORTS, DEMO_BADGE, DEMO_DISCLAIMER, pageCampaigns, type DemoBreakdownRow, type GoogleReportRow } from "@app/shared";
-import { body, clientIp, HttpError, requireWorkspace, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { publicConnections, storeInWorkspace } from "./ads.js";
+import { publicConnections, sendCsv, storeInWorkspace } from "./ads.js";
 import { datesQuery, resolveQueryDates } from "./dashboard.js";
 
 /**
@@ -61,11 +61,15 @@ const campaignsQuery = analyticsQuery.extend({
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).optional(),
 });
+const exportQuery = analyticsQuery.extend({ part: z.enum(GOOGLE_ANALYTICS_PART_IDS as [GoogleAnalyticsPart, ...GoogleAnalyticsPart[]]) });
 
 /** A live report's rows as the analytics page's split rows (share of the report's spend). */
 function splitRows(report: GoogleReport): DemoBreakdownRow[] {
   const total = report.totals.spend;
-  return report.rows.map(({ campaignName: _c, status: _s, channel: _ch, dailyBudget: _b, ...row }: GoogleReportRow) => ({ ...row, share: total > 0 ? row.spend / total : null }));
+  return report.rows.map(({ campaignId: _ci, campaignName: _c, adGroupId: _gi, adGroupName: _g, adType: _t, status: _s, channel: _ch, primaryStatus: _ps, primaryStatusReasons: _pr, budgetPeriod: _bp, dailyBudget: _b, totalBudget: _tb, matchType: _m, qualityScore: _q, ...row }: GoogleReportRow) => ({
+    ...row,
+    share: total > 0 ? row.spend / total : null,
+  }));
 }
 
 export function adsGoogleDemoRoutes(app: App, deps: Deps) {
@@ -208,6 +212,11 @@ export function adsGoogleDemoRoutes(app: App, deps: Deps) {
     const { ws, storeId } = params(c);
     const access = await requireWorkspace(c, deps, ws, need);
     await storeInWorkspace(ws, storeId);
+    return analyticsOf(ws, storeId, access, query);
+  }
+
+  /** The analytics of a store the member's workspace was checked to have (asked, the download). */
+  async function analyticsOf(ws: string, storeId: string, access: WorkspaceAccess, query: z.infer<typeof analyticsQuery>): Promise<Asked> {
     const where = query.connection ? { workspaceId: ws, storeId, provider: "google", id: query.connection } : { workspaceId: ws, storeId, provider: "google", isDemo: true };
     const conn: AdConnection | null = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where, orderBy: { createdAt: "asc" } }));
     if (!conn) throw new HttpError(404, query.connection ? "Not found" : "No Google Ads demo is connected to this store.", query.connection ? "not_found" : "no_demo");
@@ -307,4 +316,33 @@ export function adsGoogleDemoRoutes(app: App, deps: Deps) {
       return c.json({ account: x.account, range: x.range, disclaimer: x.disclaimer, combined: x.combined });
     });
   }
+
+  /**
+   * One section of the analytics page as CSV (`part`, GOOGLE_ANALYTICS_PARTS in core's reports/adsExport.ts),
+   * from the same answer the page shows: needs "Export approved reports" and "View advertising analytics"
+   * (and "View campaigns" for the campaigns and recommendations), checked before the store or the query;
+   * held to the downloads' allowance and in the audit log (sendCsv). A real account's devices and audience
+   * read Google's splits as the page does; the demo's file says on its first row that it is simulated.
+   */
+  app.get(`${base}/analytics/export`, async (c) => {
+    const { ws, storeId } = params(c);
+    const access = await requireWorkspace(c, deps, ws, "reports.export");
+    if (!allows(access.access, "marketing.ads")) throw new HttpError(403, "You don't have permission to see advertising analytics, so you can't download them.", "forbidden");
+    await storeInWorkspace(ws, storeId);
+    const q = exportQuery.parse(c.req.query());
+    if (GOOGLE_ANALYTICS_PARTS[q.part].campaigns && !allows(access.access, "marketing.campaigns")) {
+      throw new HttpError(403, "You don't have permission to see campaigns, so you can't download them.", "forbidden");
+    }
+    return sendCsv(c, deps, access, storeId, async () => {
+      const a = await analyticsOf(ws, storeId, access, q);
+      if (q.part === "devices" || q.part === "audience") await liveSplits(c, a);
+      const x = a.analytics;
+      const demo = x.account.demo;
+      return {
+        name: ["bizinsights", "google-ads", ...(demo ? ["demo-simulated"] : []), x.account.accountId, q.part, x.range.from, "to", x.range.to].join("-"),
+        table: googleAnalyticsTable(q.part, x),
+        metadata: { section: "google_ads_analytics", part: q.part, platform: "google", account: a.conn.id, from: x.range.from, to: x.range.to, ...(demo ? { demo: true } : {}) },
+      };
+    });
+  });
 }

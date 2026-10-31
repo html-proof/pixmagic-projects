@@ -141,10 +141,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
       else if (!authenticated) err.message = publicErrorMessage(res.status, err.code);
       err.correlationId = safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray"));
       err.retryAt = (res.status === 429 || res.status === 503) ? parseRetryAfter(res.headers.get("retry-after")) : undefined;
-      if (authenticated && res.status === 401 && err.code === "unauthenticated") {
-        if (signedOutHere(asShared)) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
-        else err.sessionLeft = true;
-      }
+      if (authenticated && res.status === 401 && err.code === "unauthenticated") signedOut(err, asShared);
       if (authenticated && isRefused(err)) signalAccess({ refused: err.code as "forbidden" | "access_revoked" | "access_expired" });
       throw err;
     }
@@ -153,6 +150,26 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     if (error instanceof ApiError && !(controller.signal.aborted && error.status === 0)) throw error;
     throw new ApiError(controller.signal.aborted ? 408 : 0, controller.signal.aborted ? "timeout" : "network", UNREACHABLE);
   } finally { clearTimeout(timer); }
+}
+
+/** A call made as `asShared` found no session: the signed-in shells hear of it, unless it was a session this tab has left. */
+function signedOut(err: ApiError, asShared: boolean) {
+  if (signedOutHere(asShared)) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+  else err.sessionLeft = true;
+}
+
+/**
+ * GET /me without the 401 that every browser logs as a console error when someone signed out
+ * opens an app page: /auth/whoami answers the same for a session and `user: null` for nobody.
+ * Nobody is turned into the error (and the signed-out event) /me's 401 would have given.
+ */
+export async function getMe<T extends { user: object }>(): Promise<T> {
+  const asShared = isSharedTab();
+  const me = await api<T | { user: null }>("/auth/whoami");
+  if (me.user) return me as T;
+  const err = new ApiError(401, "unauthenticated", "Sign in required");
+  signedOut(err, asShared);
+  throw err;
 }
 
 /** Messages are selected locally; provider responses can contain private diagnostics. */
@@ -166,7 +183,7 @@ function publicErrorMessage(status: number, code: string): string {
     email_in_use: "That email address belongs to another account. Sign in with an email code to prove it's yours.",
     invalid_shop: "Enter your store's myshopify.com address.",
     shop_required: "Enter your store's myshopify.com address.",
-    store_taken: "This store is already connected to another workspace.",
+    store_taken: "This store is already connected to another bizinsights account. Ask its owner to invite you, or connect a different store.",
     invalid_range: "Choose a valid date range and try again.",
     reconnect: "Integration disconnected. Reconnect it in Settings to resume updates.",
     pending_expired: "That account selection has expired. Connect again to choose your accounts.",

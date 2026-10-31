@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withDb } from "@app/db";
-import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
+import { adAccessToken, metaAdsPaused, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
 import { addDays, adErrorMessage, LEGACY_GRANTS, localDay, META_OBJECT_FIELDS } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
- * "Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense": connecting
- * ad accounts to a store, and what the dashboard shows from them.
+ * "Continue with Meta Ads" / "Continue with Google Ads" / "Continue with Google AdSense": bizinsights'
+ * own sign-in with each platform (core's adConnections/signIn.ts), connecting ad accounts to a store,
+ * and what the dashboard shows from them.
  */
 
 let ctx: TestCtx;
@@ -21,6 +22,8 @@ const KEYS = {
   GOOGLE_ADS_ENABLED: "1",
   // Meta hasn't granted Advanced Access to ads_read: only the app's testers can connect (reset for every test).
   META_ADS_ADVANCED_ACCESS: "",
+  // Classic Facebook Login (scope=ads_read) unless a test sets a Login for Business configuration.
+  META_CONFIG_ID: "",
 };
 const NO_KEYS = Object.fromEntries(Object.keys(KEYS).map((k) => [k, ""]));
 
@@ -124,6 +127,8 @@ describe("connecting ad accounts", () => {
       configured: { meta: false, google: false, adsense: false },
       restricted: { meta: false, google: false, adsense: false },
       connections: [],
+      // Sign-ins connected with no ad account yet: none here.
+      logins: [],
       // The Google Ads demo (docs/ads-demo.md) is offered only when switched on; the real sign-in says what it lacks.
       demo: { google: false },
       missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },
@@ -135,7 +140,7 @@ describe("connecting ad accounts", () => {
 
   it("says Meta only lets the app's testers in until Meta grants Advanced Access to ads_read, and still offers the button", async () => {
     const restricted = async () => (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers })).json().restricted;
-    // Facebook shows everyone else "Feature Unavailable" and never comes back, so the page has to say so first.
+    // Facebook shows everyone else "Feature Unavailable" and never comes back.
     // Google Ads shows "Google hasn't verified this app" until Google verifies the adwords scope; AdSense never.
     expect(await restricted()).toEqual({ meta: true, google: true, adsense: false });
     expect((await connect("meta")).statusCode).toBe(200);
@@ -174,6 +179,13 @@ describe("connecting ad accounts", () => {
       ["meta", "act_2", "EU ads", "EUR", true, "active"],
     ]);
     expect(JSON.stringify(rows)).not.toContain("META_LONG_SECRET");
+    // bizinsights' own sign-in: the token itself, sealed, one for both accounts of the sign-in.
+    expect(rows.map((r) => [r.source, r.sourceLoginId, r.refreshTokenEnc])).toEqual([
+      ["direct", null, null],
+      ["direct", null, null],
+    ]);
+    expect(rows[0]!.accessTokenEnc).toBe(rows[1]!.accessTokenEnc);
+    expect(rows[0]!.grantedScopes).toEqual(["ads_read"]);
     expect(await adAccessToken(rows[0]!)).toBe("META_LONG_SECRET");
     expect(rows[0]!.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 86_400_000);
 
@@ -188,6 +200,8 @@ describe("connecting ad accounts", () => {
     expect(list.body).not.toContain("Enc");
     expect(list.json().connections[0]).toMatchObject({ provider: "meta", accountId: "act_1", enabled: true, status: "active" });
     expect(list.json().connections[0].accessExpiresAt).toBeTruthy();
+    // Every account is read with bizinsights' own sign-in: the answer no longer says how.
+    expect(list.json().connections[0]).not.toHaveProperty("source");
   });
 
   it("Continue with Google: offline access, a manager's client reached through it", async () => {
@@ -202,7 +216,7 @@ describe("connecting ad accounts", () => {
     const { start, cb } = await connectFlow("google");
     const url = new URL(start.json().url);
     expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords openid");
     // One account: nothing to choose, straight to the numbers.
     expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=google&accounts=1&store=${storeId}`);
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
@@ -221,7 +235,7 @@ describe("connecting ad accounts", () => {
     ctx.setFetch(adsensePlatform());
     const { start, cb } = await connectFlow("adsense");
     const url = new URL(start.json().url);
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly openid");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/adsense/callback");
     expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=adsense&accounts=1&store=${storeId}`);
@@ -245,6 +259,23 @@ describe("connecting ad accounts", () => {
     expect(cb.headers.location).toContain("error=no_accounts");
     expect(cb.headers.location).toContain("provider=adsense");
     expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("an AdSense answer with no account, or only closed ones, is told apart, and nothing is kept", async () => {
+    const adsenseAnswering = (accounts: unknown): FetchLike => async (input) => {
+      const u = new URL(String(input));
+      if (u.host === "oauth2.googleapis.com" && u.pathname === "/token") return json({ access_token: "AT", refresh_token: "RT", expires_in: 3599 });
+      if (u.pathname === "/v2/accounts") return json(accounts);
+      return json({ error: { message: `unexpected ${u.pathname}` } }, 400);
+    };
+    ctx.setFetch(adsenseAnswering({}));
+    const none = new URL((await connectFlow("adsense")).cb.headers.location as string);
+    expect(Object.fromEntries(none.searchParams)).toEqual({ error: "no_accounts", provider: "adsense", store: storeId });
+    ctx.setFetch(adsenseAnswering({ accounts: [{ name: "accounts/pub-9", displayName: "Old site", state: "CLOSED" }] }));
+    const closed = new URL((await connectFlow("adsense")).cb.headers.location as string);
+    expect(closed.searchParams.get("error")).toBe("account_not_ready");
+    expect(await systemDb.adConnection.count()).toBe(0);
+    expect(await systemDb.adLogin.count()).toBe(0);
   });
 
   it("choosing accounts: only the ticked ones are connected, a choice is this person's and works once", async () => {
@@ -640,6 +671,8 @@ describe("the Meta Ads report", () => {
         calls.push(`insights:${u.searchParams.get("level")}`);
         if (opts.revoked) return json({ error: { message: "Error validating access token: The user has not authorized application", code: 190 } }, 400);
         expect(u.searchParams.get("use_unified_attribution_setting")).toBe("true");
+        // Meta's count under each fixed window too, beside each ad set's own setting.
+        expect(JSON.parse(u.searchParams.get("action_attribution_windows")!)).toEqual(["1d_click", "7d_click", "1d_view"]);
         expect(JSON.parse(u.searchParams.get("time_range")!)).toEqual({ since: "2026-09-01", until: "2026-09-30" });
         expect(u.searchParams.get("time_increment")).toBeNull();
         const level = u.searchParams.get("level");
@@ -654,10 +687,10 @@ describe("the Meta Ads report", () => {
                 clicks: "300",
                 inline_link_clicks: "200",
                 actions: [
-                  { action_type: "omni_purchase", value: "6" },
+                  { action_type: "omni_purchase", value: "6", "1d_click": "4", "7d_click": "6" },
                   { action_type: "purchase", value: "6" },
                 ],
-                action_values: [{ action_type: "omni_purchase", value: "482" }],
+                action_values: [{ action_type: "omni_purchase", value: "482", "1d_click": "300", "7d_click": "482" }],
               },
             ],
           });
@@ -709,6 +742,12 @@ describe("the Meta Ads report", () => {
     // Reach for the account is Meta's own, de-duplicated figure: not 3500 + 900.
     expect(body.report.totals).toMatchObject({ spend: 120.5, impressions: 10000, reach: 4000, frequency: 2.5, linkClicks: 200, purchases: 6, purchaseValue: 482, cpm: 12.05, costPerLinkClick: 0.6 });
     expect(body.report.totals.roas).toBeCloseTo(4, 1);
+    // Each window's own count, from the same purchase action; one Meta left out counted none.
+    expect(body.report.totals.byWindow).toMatchObject({
+      "1d_click": { purchases: 4, purchaseValue: 300 },
+      "7d_click": { purchases: 6, purchaseValue: 482 },
+      "1d_view": { purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 },
+    });
     expect(body.report.rows.map((r: { id: string; name: string; status: string; spend: number }) => [r.id, r.name, r.status, r.spend])).toEqual([
       ["11", "Spring sale", "ACTIVE", 100],
       ["12", "Retarget", "CAMPAIGN_PAUSED", 20.5],
@@ -757,6 +796,29 @@ describe("the Meta Ads report", () => {
     expect(calls).toEqual([]);
   });
 
+  it("Meta's limit on bizinsights' app: the report is Meta being busy, and while Meta Ads is paused for it Meta isn't asked", async () => {
+    const conn = await connectedMeta();
+    const calls: string[] = [];
+    ctx.setFetch(async (input) => {
+      if (new URL(String(input)).pathname.endsWith("/act_1/insights")) {
+        calls.push("insights");
+        return json({ error: { message: "(#4) Application request limit reached", code: 4 } }, 400);
+      }
+      return metaPlatform(input);
+    });
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("meta_busy");
+    expect(await metaAdsPaused(ctx.deps.coord)).toBe(true);
+    // Other dates, while paused: the same answer, without a call to Meta; the account stays as it was.
+    const asked = calls.length;
+    const held = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { from: "2026-08-01", to: "2026-08-30" }), headers });
+    expect(held.statusCode).toBe(503);
+    expect(held.json().error).toBe("meta_busy");
+    expect(calls).toHaveLength(asked);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+
   it("refuses dates that aren't a real range of up to a year, and levels it doesn't know", async () => {
     const conn = await connectedMeta();
     ctx.setFetch(reportPlatform([]));
@@ -765,6 +827,92 @@ describe("the Meta Ads report", () => {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
     }
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad" }), headers })).statusCode).toBe(200);
+  });
+
+  it("opens one campaign's ad sets and one ad set's ads: the parent's own totals, each cached apart, Meta's own ids only", async () => {
+    const conn = await connectedMeta();
+    const asked: string[] = [];
+    ctx.setFetch(async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/act_1/insights")) {
+        const filtering = JSON.parse(u.searchParams.get("filtering") ?? "[]") as Array<{ field: string; value: string[] }>;
+        const campaign = filtering.find((f) => f.field === "campaign.id")?.value[0];
+        const adset = filtering.find((f) => f.field === "adset.id")?.value[0];
+        const level = u.searchParams.get("level");
+        asked.push(`${level}:${campaign ?? "-"}:${adset ?? "-"}`);
+        if (campaign !== "11") return json({ data: [] });
+        if (level === "campaign") return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", spend: "100", impressions: "8000", reach: "3500" }] });
+        if (level === "adset" && adset) return json({ data: [{ campaign_id: "11", adset_id: "21", adset_name: "Women", spend: "60", reach: "2000" }] });
+        if (level === "adset") {
+          return json({
+            data: [
+              { campaign_id: "11", campaign_name: "Spring sale", adset_id: "21", adset_name: "Women", spend: "60", reach: "2000" },
+              { campaign_id: "11", campaign_name: "Spring sale", adset_id: "22", adset_name: "Men", spend: "40", reach: "1800" },
+            ],
+          });
+        }
+        return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", adset_id: "21", adset_name: "Women", ad_id: "31", ad_name: "Carousel", spend: "60" }] });
+      }
+      // The statuses: from the campaign's or the ad set's own list, never the account's.
+      if (u.pathname.endsWith("/11/adsets")) {
+        asked.push("list:11/adsets");
+        return json({ data: [{ id: "21", effective_status: "ACTIVE" }, { id: "22", effective_status: "PAUSED" }] });
+      }
+      if (u.pathname.endsWith("/21/ads")) {
+        asked.push("list:21/ads");
+        return json({ data: [{ id: "31", effective_status: "ADSET_PAUSED" }] });
+      }
+      return metaPlatform(input);
+    });
+    const url = (q: Record<string, string>) => reportUrl(conn.id, q);
+    const res = await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "11" }), headers });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.cached).toBe(false);
+    // The campaign's own reach (each person once), not its ad sets' added up.
+    expect(body.report.totals).toMatchObject({ spend: 100, reach: 3500 });
+    expect(body.report.rows.map((r: { id: string; campaignId: string; campaignName: string; status: string }) => [r.id, r.campaignId, r.campaignName, r.status])).toEqual([
+      ["21", "11", "Spring sale", "ACTIVE"],
+      ["22", "11", "Spring sale", "PAUSED"],
+    ]);
+    expect(body.report.campaigns).toBeNull();
+    expect([...asked].sort()).toEqual(["adset:11:-", "campaign:11:-", "list:11/adsets"]);
+    // Asked again: from the cache.
+    expect((await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "11" }), headers })).json().cached).toBe(true);
+    expect(asked).toHaveLength(3);
+    // Another campaign is another report, never the first one's cache: nothing ran there, so nothing is listed.
+    const other = await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "12" }), headers });
+    expect(other.json()).toMatchObject({ cached: false, report: { rows: [], totals: { spend: 0 } } });
+    expect(asked).toHaveLength(5);
+    // One ad set's ads: the ad set's own totals, its ads' statuses from its own list.
+    const ads = await ctx.app.inject({ method: "GET", url: url({ level: "ad", campaign: "11", adset: "21" }), headers });
+    expect(ads.statusCode).toBe(200);
+    expect(ads.json().report.totals).toMatchObject({ spend: 60, reach: 2000 });
+    expect(ads.json().report.rows).toEqual([expect.objectContaining({ id: "31", name: "Carousel", campaignId: "11", adsetId: "21", adsetName: "Women", status: "ADSET_PAUSED" })]);
+    expect(asked.slice(5).sort()).toEqual(["ad:11:21", "adset:11:21", "list:21/ads"]);
+
+    // Ids that aren't Meta's, and levels that can't be under what's given: refused, Meta not asked.
+    const bad: Array<Record<string, string>> = [
+      { level: "adset", campaign: "11 OR 1=1" },
+      { level: "ad", adset: "act_21" },
+      { level: "adset", campaign: "demo-c1" },
+      { level: "campaign", campaign: "11" },
+      { level: "adset", adset: "21" },
+      { level: "placement", campaign: "11" },
+    ];
+    for (const q of bad) expect((await ctx.app.inject({ method: "GET", url: url(q), headers })).statusCode).toBe(400);
+    expect(asked).toHaveLength(8);
+
+    // Someone outside the workspace: not told it exists, whatever they ask.
+    const outsider = await signIn(ctx, "ads-drill-other", "drill-other@y.com");
+    for (const q of [{ level: "adset", campaign: "11" }, { level: "adset", campaign: "not-an-id" }]) {
+      expect((await ctx.app.inject({ method: "GET", url: url(q), headers: outsider.headers })).statusCode).toBe(404);
+    }
+    // A member who may not view campaigns: refused.
+    const viewer = await signIn(ctx, "ads-drill-viewer", "drill-viewer@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: LEGACY_GRANTS.viewer.filter((p) => p !== "marketing.campaigns") } });
+    expect((await ctx.app.inject({ method: "GET", url: url({ level: "adset", campaign: "11" }), headers: viewer.headers })).statusCode).toBe(403);
+    expect(asked).toHaveLength(8);
   });
 });
 
@@ -952,6 +1100,91 @@ describe("starting a sign-in", () => {
     expect(over.json().error).toBe("rate_limited");
     expect(over.headers["retry-after"]).toBe("600");
   });
+
+  it("needs integrations.manage and a verified email, and sets the state cookie only for this browser", async () => {
+    const other = await signIn(ctx, "ads-unverified", "unverified@x.com", false);
+    const theirWs = await createWorkspace(ctx, other.headers);
+    const theirStore = (await createStore(theirWs, "theirs.myshopify.com", ["read_orders"])).id;
+    const unverified = await ctx.app.inject({ method: "POST", url: `/workspaces/${theirWs}/stores/${theirStore}/ads/meta/connect`, headers: other.headers });
+    expect(unverified.statusCode).toBe(403);
+    expect(unverified.json().error).toBe("email_unverified");
+    expect(unverified.headers["set-cookie"] ?? "").not.toContain("ads_oauth_state");
+    // Another workspace's store, through this workspace's address: not found.
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${theirStore}/ads/meta/connect`, headers })).statusCode).toBe(404);
+
+    const ok = await connect("meta");
+    const state = new URL(ok.json().url).searchParams.get("state")!;
+    expect(state).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    // HttpOnly and Lax: script can't read it, and it comes back on the platform's top-level redirect.
+    expect(ok.headers["set-cookie"]).toMatch(new RegExp(`ads_oauth_state=${state};.*HttpOnly`, "i"));
+    expect(ok.headers["set-cookie"]).toMatch(/SameSite=Lax/i);
+    // The answer carries the consent screen's address only: no token, nothing of the state's contents.
+    expect(Object.keys(ok.json())).toEqual(["url"]);
+  });
+});
+
+describe("a choice is only for the store and person it was made for", () => {
+  it("another store of the workspace, or someone else's workspace, can't see, use or cancel it", async () => {
+    ctx.setFetch(metaPlatform);
+    const { cb } = await connectFlow("meta");
+    const pick = pickOf(cb.headers.location as string)!;
+    const expired = async (base: string, h: Record<string, string>) => {
+      for (const res of [
+        await ctx.app.inject({ method: "GET", url: `${base}/ads/pending/${pick}`, headers: h }),
+        await ctx.app.inject({ method: "POST", url: `${base}/ads/pending/${pick}`, headers: h, payload: { accountIds: ["act_1"] } }),
+        await ctx.app.inject({ method: "DELETE", url: `${base}/ads/pending/${pick}`, headers: h }),
+      ]) {
+        expect(res.statusCode).toBe(404);
+        expect(res.json().error).toBe("pending_expired");
+      }
+    };
+    // Another store of this workspace, with this choice's nonce.
+    const second = (await createStore(ws, "ads-second.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+    await expired(`/workspaces/${ws}/stores/${second}`, headers);
+    // Someone else, through their own workspace and store.
+    const other = await signIn(ctx, "ads-other-owner", "other-owner@y.com");
+    const theirWs = await createWorkspace(ctx, other.headers, "Theirs");
+    const theirStore = (await createStore(theirWs, "theirs-too.myshopify.com", ["read_orders"])).id;
+    await expired(`/workspaces/${theirWs}/stores/${theirStore}`, other.headers);
+    // Through this workspace's address they aren't a member at all.
+    expect((await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers: other.headers })).statusCode).toBe(404);
+    expect(await systemDb.adConnection.count()).toBe(0);
+    // None of that used it up: its person still finishes it, on its own store only.
+    const done = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1"] } });
+    expect(done.json()).toEqual({ provider: "meta", connected: 1 });
+    expect((await systemDb.adConnection.findMany()).map((r) => [r.storeId, r.accountId])).toEqual([[storeId, "act_1"]]);
+  });
+
+  it("another workspace can't disconnect an account", async () => {
+    ctx.setFetch(metaPlatform);
+    await connectAll("meta");
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
+    const other = await signIn(ctx, "ads-other-owner", "other-owner@y.com");
+    const theirWs = await createWorkspace(ctx, other.headers, "Theirs");
+    const theirStore = (await createStore(theirWs, "theirs-too.myshopify.com", ["read_orders"])).id;
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${theirWs}/stores/${theirStore}/ads/connections/${row.id}`, headers: other.headers })).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${row.id}`, headers: other.headers })).statusCode).toBe(404);
+    expect(await systemDb.adConnection.count()).toBe(2);
+  });
+});
+
+describe("Nango, which brokered the sign-ins from 2026-10-22 to 2026-10-28, is gone", () => {
+  it("its old callback address is no route any more: Not found, with or without a code", async () => {
+    for (const query of ["", "?code=AQ-code&state=nango-state"]) {
+      const back = await ctx.app.inject({ method: "GET", url: `/ads/nango/oauth-callback${query}`, headers: { cookie } });
+      expect(back.statusCode).toBe(404);
+      expect(back.json()).toEqual({ error: "not_found", message: "Not found" });
+    }
+    // "nango" was never a platform of the callback.
+    expect((await ctx.app.inject({ method: "GET", url: "/ads/nango/callback?code=C&state=S", headers: { cookie } })).headers.location).toBe("http://localhost:3001/settings/ads?error=unknown_provider");
+  });
+
+  it("its webhooks and its session, finish and cancel routes are gone", async () => {
+    expect((await ctx.app.inject({ method: "POST", url: "/webhooks/nango", headers: { "content-type": "application/json" }, payload: JSON.stringify({ type: "auth", operation: "creation", connectionId: "c" }) })).statusCode).toBe(404);
+    for (const step of ["session", "finish", "cancel"]) {
+      expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/nango/${step}`, headers, payload: {} })).statusCode).toBe(404);
+    }
+  });
 });
 
 describe("Refresh", () => {
@@ -1004,6 +1237,19 @@ describe("the sign-in coming back with a platform problem", () => {
     // Nothing connected, nothing else relies on that person's grant: given back each time.
     expect(revoked).toEqual(["G_REFRESH", "G_REFRESH"]);
     expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("Meta refusing bizinsights' appsecret_proof is ours to fix, not the merchant's", async () => {
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      // The code exchange is signed with the app secret itself; every call with the person's token carries the proof Meta refuses.
+      if (u.pathname.endsWith("/oauth/access_token")) return metaPlatform(input, init);
+      return json({ error: { message: "Invalid appsecret_proof provided in the API argument", type: "GraphMethodException", code: 100 } }, 400);
+    });
+    const { cb } = await connectFlow("meta");
+    expect(errorOf(cb)).toBe("not_configured");
+    expect(await systemDb.adConnection.count()).toBe(0);
+    expect(await systemDb.adLogin.count()).toBe(0);
   });
 
   it("a platform taken off this server mid sign-in is ours to say; new Google Ads connections switched off still lets one already started finish", async () => {
@@ -1081,8 +1327,9 @@ describe("the AdSense report", () => {
     // Other sites chosen: another report, asked of AdSense again.
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { sites: ["shop.example.com", "blog.example.com"] } });
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers })).json()).toMatchObject({ cached: false, report: { sites: ["shop.example.com", "blog.example.com"] } });
-    // Country and device type are levels too; anything else isn't.
-    for (const level of ["country", "platform"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    // Country, device type and ad unit are levels too; anything else isn't.
+    for (const level of ["country", "platform", "ad_unit"]) expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    expect(seen.at(-1)!.searchParams.getAll("dimensions")).toEqual(["AD_UNIT_ID", "AD_UNIT_NAME"]);
     expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword" }), headers })).statusCode).toBe(400);
   });
 
@@ -1119,7 +1366,19 @@ describe("the Meta Ads report compared with other dates", () => {
       const range = JSON.parse(u.searchParams.get("time_range")!) as { since: string; until: string };
       asked.push(`${u.searchParams.get("level")}:${range.since}`);
       if (u.searchParams.get("level") === "account") return json({ data: [{ spend: spend[range.since], impressions: "1000", reach: "400" }] });
-      return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", spend: spend[range.since], impressions: "1000", reach: "400", inline_link_clicks: "10" }] });
+      return json({
+        data: [
+          {
+            campaign_id: "11",
+            campaign_name: "Spring sale",
+            spend: spend[range.since],
+            impressions: "1000",
+            reach: "400",
+            inline_link_clicks: "10",
+            actions: [{ action_type: "omni_purchase", value: "3", "1d_click": range.since === "2026-09-01" ? "2" : "1" }],
+          },
+        ],
+      });
     }
     if (u.pathname.endsWith("/act_1/campaigns")) {
       asked.push("statuses");
@@ -1141,6 +1400,11 @@ describe("the Meta Ads report compared with other dates", () => {
     expect(body.cached).toBe(false);
     expect(body.report).toMatchObject({ since: "2026-09-01", until: "2026-09-30", totals: { spend: 100 }, rows: [{ id: "11", name: "Spring sale", status: "ACTIVE", spend: 100 }] });
     expect(body.report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-30", totals: { spend: 80, reach: 400 }, rows: [{ id: "11", spend: 80, linkClicks: 10 }] });
+    // Each window's purchases are among the figures compared, so the window picked compares like with like.
+    expect(body.report.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 2 });
+    expect(body.report.comparison.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 1 });
+    // The account's row had no purchase: none under the window, as under each ad set's own setting.
+    expect(body.report.comparison.totals.byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
     // Only figures beside each id: no names or statuses again.
     expect(body.report.comparison.rows[0].name).toBeUndefined();
     // Delivery statuses are read for the report's own rows only (they're list calls on Meta's rate limit).

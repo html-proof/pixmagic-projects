@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import { actionError } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -13,7 +14,10 @@ import { actionError } from "@/lib/api";
  * A section with a menu of its own (Staff Management, WhatsApp): the menu down the left from tablet
  * width, a row of links that scrolls sideways above the page on phones.
  */
-export function SectionLayout({ title, icon, items, children }: { title: string; icon: ReactNode; items: ReadonlyArray<{ href: string; label: string; active: boolean }>; children: ReactNode }) {
+/** A section's menu entry, or a heading over the entries after it (shown from tablet width up). */
+export type SectionItem = { href: string; label: string; active: boolean } | { heading: string };
+
+export function SectionLayout({ title, icon, items, children }: { title: string; icon: ReactNode; items: ReadonlyArray<SectionItem>; children: ReactNode }) {
   return (
     <div className="grid gap-6 md:grid-cols-[13rem_1fr]">
       <nav aria-label={title} className="flex gap-1 overflow-x-auto pb-1 md:flex-col md:pb-0">
@@ -21,16 +25,22 @@ export function SectionLayout({ title, icon, items, children }: { title: string;
           {icon}
           {title}
         </p>
-        {items.map(({ href, label, active }) => (
-          <Link
-            key={href}
-            href={href}
-            aria-current={active ? "page" : undefined}
-            className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${active ? "bg-surface font-semibold shadow-sm" : "text-muted hover:text-text"}`}
-          >
-            {label}
-          </Link>
-        ))}
+        {items.map((item) =>
+          "heading" in item ? (
+            <p key={`h:${item.heading}`} className="mt-4 hidden px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted md:block">
+              {item.heading}
+            </p>
+          ) : (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={item.active ? "page" : undefined}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${item.active ? "bg-surface font-semibold shadow-sm" : "text-muted hover:text-text"}`}
+            >
+              {item.label}
+            </Link>
+          ),
+        )}
       </nav>
       <div className="min-w-0 space-y-4">{children}</div>
     </div>
@@ -207,5 +217,58 @@ export function ConfirmDialog({
         </form>
       </div>
     </div>
+  );
+}
+
+/**
+ * A dialog with content of its own (a form, or a form in steps), closed by its X, Escape or a click
+ * outside. Focus goes to its first field (or its first button) and back where it was when it
+ * closes. ConfirmDialog is the yes-or-no one.
+ */
+export function Dialog({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
+  const id = useId();
+  const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.activeElement as HTMLElement | null;
+    (body.current?.querySelector<HTMLElement>("input:not([type=hidden]), textarea, select") ?? body.current?.querySelector<HTMLElement>("button, a[href]") ?? ref.current)?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      // A confirm dialog opened on top handles its own Escape.
+      if (e.key === "Escape" && !e.defaultPrevented && ref.current?.contains(document.activeElement)) close.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      prev?.focus();
+    };
+  }, [open]);
+  if (!open) return null;
+  return overlay(
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={onClose}>
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={id}
+        tabIndex={-1}
+        className="card animate-sheet max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto outline-none"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h2 id={id} className="text-lg font-semibold">
+            {title}
+          </h2>
+          <button type="button" onClick={onClose} aria-label="Close" className="-m-1.5 grid size-9 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-bg hover:text-text">
+            <X size={18} aria-hidden />
+          </button>
+        </div>
+        <div ref={body} className="mt-3">
+          {children}
+        </div>
+      </div>
+    </div>,
   );
 }

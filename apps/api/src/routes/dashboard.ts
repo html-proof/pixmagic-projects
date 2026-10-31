@@ -1,18 +1,19 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule } from "@app/shared";
+import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
 import {
   audit,
   latestReconciliation,
   logger,
   requestShopifyReports,
+  revocableOptionalScopesFor,
   revocableScopes,
   saveSalesCalculation,
   startReconciliation,
   storeSalesCalculation,
   type ReportRequest,
 } from "@app/core";
-import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
+import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeLimits, storeOverview, workspaceStores, type AdsView, type FunnelView } from "@app/core/reports";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -31,13 +32,71 @@ export const datesQuery = {
   cfrom: z.string().optional(),
   cto: z.string().optional(),
 };
-const querySchema = z.object(datesQuery);
-type DatesQuery = z.infer<typeof querySchema>;
+type DatesQuery = z.infer<z.ZodObject<typeof datesQuery>>;
 
-/** The dates in the store's zone; custom dates or comparison dates that can't be reported on are a 400 `invalid_range`. */
-export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string) {
+/**
+ * What the Advertising pages narrow the ad figures to: `platform=meta|google|adsense`, `account=<an ad
+ * connection's id>` (AdsView in core: figures for some of the spend are never set against the store's
+ * whole sales).
+ */
+export const adsViewQuery = {
+  platform: z.enum(AD_PROVIDERS).optional(),
+  account: z.string().min(1).max(64).optional(),
+};
+
+/**
+ * What the Shopping Funnel page narrows the visit figures to (FunnelFilter in @app/shared):
+ * `device=mobile|tablet|desktop|unknown`, `visitor=new|returning`, `landing=<site section>`,
+ * `country=<ISO 3166 code>`, `source=<traffic source>`.
+ */
+export const funnelQuery = {
+  device: z.enum(FUNNEL_DEVICES).optional(),
+  visitor: z.enum(VISITOR_KINDS).optional(),
+  landing: z.enum(SITE_SECTIONS).optional(),
+  country: z.string().regex(COUNTRY_CODE).optional(),
+  source: z.enum(TRAFFIC_SOURCES).optional(),
+};
+type FunnelQuery = z.infer<z.ZodObject<typeof funnelQuery>>;
+
+/**
+ * The Shopping Funnel page's question, for the member asking: product sales only with the top
+ * products permission, and visits by traffic source only with the traffic sources one (without it
+ * a `source` asked for is left out, and the answer's `filter` says what was applied).
+ */
+export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
+  const sources = seesModule(access, "traffic");
+  const filter: FunnelFilter = {};
+  if (q.device) filter.device = q.device;
+  if (q.visitor) filter.visitor = q.visitor;
+  if (q.landing) filter.landing = q.landing;
+  if (q.country) filter.country = q.country;
+  if (q.source && sources) filter.source = q.source;
+  return { filter, productSales: seesModule(access, "top_products"), sources };
+}
+
+/**
+ * `parts=advertising`: only what the Advertising pages show (the ad modules, Meta's and Google's
+ * figures from the store's own orders, and the store's sales and traffic they're set against), with
+ * every campaign; the rest of the dashboard isn't computed.
+ * `parts=funnel`: only what the Shopping Funnel page shows (the funnel in full, narrowed by
+ * `funnelQuery`, and the orders, Shopify sessions and traffic sources beside it).
+ * `parts=sheet`: only what the Profit sheet shows (/sheet): the sales day by day, the visits day by
+ * day beside the funnel's summary, and the ad spend day by day.
+ */
+const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "ads_from_shopify", "sales_overview", "channels", "traffic"]);
+const FUNNEL_MODULES: ReadonlySet<string> = new Set(["funnel", "shopify_sessions", "sales_overview", "channels", "traffic"]);
+const SHEET_MODULES: ReadonlySet<string> = new Set(["sales_overview", "funnel", "ads", "ad_connections"]);
+const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery, parts: z.enum(["advertising", "funnel", "sheet"]).optional() });
+
+/**
+ * The dates in the store's zone, at most 12 months at a time, within the store's `limits`
+ * (`storeLimits` in core: custom dates no earlier than its first day once Shopify's creation date is
+ * known; without them, from 2000). Custom dates or comparison dates that can't be reported on are a
+ * 400 `invalid_range`.
+ */
+export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string, limits: RangeLimits = {}) {
   try {
-    return resolvePreset(q.preset, now, timeZone, q.from && q.to ? { from: q.from, to: q.to } : undefined, { mode: q.compare, from: q.cfrom, to: q.cto });
+    return resolvePreset(q.preset, now, timeZone, q.from && q.to ? { from: q.from, to: q.to } : undefined, { mode: q.compare, from: q.cfrom, to: q.cto }, limits);
   } catch (e) {
     throw new HttpError(400, (e as Error).message, "invalid_range");
   }
@@ -51,6 +110,7 @@ export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string) {
 export function publicStore(s: {
   id: string;
   shopDomain: string;
+  shopifyAppKey: string;
   name: string | null;
   timezone: string;
   currency: string;
@@ -59,6 +119,7 @@ export function publicStore(s: {
   pixelInstalled: boolean;
   lastSyncedAt: Date | null;
   installedAt: Date | null;
+  shopCreatedAt: Date | null;
 }) {
   return {
     id: s.id,
@@ -68,19 +129,46 @@ export function publicStore(s: {
     currency: s.currency,
     status: s.status,
     grantedScopes: s.grantedScopes,
-    revocableScopes: revocableScopes(s.grantedScopes, s.grantedScopes),
+    revocableScopes: revocableScopes(s.grantedScopes, s.grantedScopes, revocableOptionalScopesFor(s)),
     pixelInstalled: s.pixelInstalled,
     lastSyncedAt: s.lastSyncedAt,
     installedAt: s.installedAt,
+    // When Shopify created the store (null until its details are read): where its dates begin.
+    shopCreatedAt: s.shopCreatedAt,
   };
 }
 
 export function dashboardRoutes(app: App, deps: Deps) {
+  app.get("/workspaces/:ws/stores/:storeId/analytics/products/top-selling", async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireWorkspace(c, deps, ws, "products.performance");
+    const q = z.object({
+      ...datesQuery,
+      dateFrom: z.string().optional(), dateTo: z.string().optional(),
+      sortBy: z.enum(PRODUCT_SORTS).default("units"), direction: z.enum(["asc", "desc"]).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(100), page: z.coerce.number().int().min(1).max(100).default(1),
+      search: z.string().max(200).optional(), productId: z.string().max(100).optional(), collectionId: z.string().max(100).optional(),
+    }).parse(c.req.query());
+    return c.json(await withTenant(ws, async tx => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      if (!["orders", "products"].every(resource => store.grantedScopes.some(s => s === `read_${resource}` || s === `write_${resource}`))) throw new HttpError(403, "Order and product access are required. Reconnect the store with the required access.", "missing_scope");
+      if (!!q.dateFrom !== !!q.dateTo) throw new HttpError(400, "Both dateFrom and dateTo are required", "invalid_range");
+      const now = new Date();
+      const limits = await storeLimits(tx, { ws, storeId }, store);
+      const dates = resolveQueryDates(q.dateFrom && q.dateTo ? { ...q, preset: "custom", from: q.dateFrom, to: q.dateTo } : q, now, store.timezone, limits);
+      return productPerformance(tx, { ws, storeId }, store, dates.range, q, now);
+    }));
+  });
   app.get("/workspaces/:ws/stores", async (c) => {
     const { ws } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    const { access } = await requireWorkspace(c, deps, ws, "dashboard:read");
     const stores = await withTenant(ws, (tx) => workspaceStores(tx, ws));
-    return c.json({ stores: stores.map(({ store, imported, syncProblem }) => ({ ...publicStore(store), imported, syncProblem })) });
+    // Every member gets the store picker; how many orders and products each store holds is for
+    // those who see the stores' connection (Settings → Stores), as the dashboard's answer keeps a
+    // store's size from members who see neither its orders nor its products (redactOverview).
+    const counts = allows(access, "integrations.status");
+    return c.json({ stores: stores.map(({ store, imported, syncProblem, startDay }) => ({ ...publicStore(store), ...(counts ? { imported } : {}), syncProblem, startDay })) });
   });
 
   // The import's progress and its failures: the Shopify connection's status page.
@@ -103,7 +191,12 @@ export function dashboardRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/overview", async (c) => {
     const { ws, storeId } = c.req.param();
     const { access } = await requireWorkspace(c, deps, ws, "dashboard:read");
-    const q = querySchema.parse(c.req.query());
+    const q = overviewQuery.parse(c.req.query());
+    const advertising = q.parts === "advertising";
+    const adsView: AdsView = advertising ? { platform: q.platform, account: q.account, allCampaigns: true, fromShopify: true } : {};
+    const only = advertising ? ADVERTISING_MODULES : q.parts === "funnel" ? FUNNEL_MODULES : q.parts === "sheet" ? SHEET_MODULES : null;
+    const sees = (m: string) => (!only || only.has(m)) && seesModule(access, m);
+    const funnelView = q.parts === "funnel" ? funnelViewOf(q, access) : undefined;
 
     let polled: Parameters<typeof autoRefresh>[1] | null = null;
     let reports: ReportRequest[] = [];
@@ -112,8 +205,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (!store) throw new HttpError(404, "Not found", "not_found");
       polled = store;
       const now = new Date();
-      const dates = resolveQueryDates(q, now, store.timezone);
-      const report = redactOverview(await storeOverview(tx, store, dates, now, (m) => seesModule(access, m)), access);
+      const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
+      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView, { visitsByDay: q.parts === "sheet" }), access);
       reports = report.shopifyRefresh;
       return {
         store: publicStore(store),
@@ -139,6 +232,38 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (reports.length) await requestShopifyReports(deps, polled, reports).catch((err) => logger.warn({ err, storeId }, "shopify reports request failed"));
     }
     return c.json(body);
+  });
+
+  /**
+   * The Shopping Funnel's checklist: mark a recommended action done for the store, or not done
+   * (FUNNEL_ACTIONS in @app/shared). Anyone who sees the funnel may tick it, as the team's shared
+   * list; a shared (view-only) dashboard and API keys can't.
+   */
+  app.put("/workspaces/:ws/stores/:storeId/funnel/actions/:actionId", async (c) => {
+    const { ws, storeId, actionId } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "analytics.conversion");
+    if (a.link || !a.user) throw new HttpError(403, "The shared dashboard is view-only.", "forbidden");
+    if (!isFunnelAction(actionId)) throw new HttpError(404, "Not found", "not_found");
+    const { done } = z.object({ done: z.boolean() }).parse(await body(c));
+    const userId = a.user.id;
+    const result = await withTenant(ws, async (tx) => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      if (!done) {
+        await tx.funnelActionCheck.deleteMany({ where: { workspaceId: ws, storeId, actionId } });
+        return { id: actionId, done: false, doneAt: null };
+      }
+      const row = await tx.funnelActionCheck.upsert({
+        where: { storeId_actionId: { storeId, actionId } },
+        create: { workspaceId: ws, storeId, actionId, doneBy: userId },
+        update: {},
+      });
+      return { id: actionId, done: true, doneAt: row.doneAt.toISOString() };
+    });
+    await audit({ workspaceId: ws, actorUserId: userId, action: done ? "funnel.action_done" : "funnel.action_undone", targetType: "store", targetId: storeId, metadata: { action: actionId }, ip: clientIp(c) }).catch(
+      (err: unknown) => logger.warn({ err }, "audit failed"),
+    );
+    return c.json(result);
   });
 
   /**

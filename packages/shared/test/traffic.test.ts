@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyVisit, restVisit } from "../src/traffic";
+import { classifyVisit, restVisit, TRAFFIC_SPLITS, trafficSplitOf } from "../src/traffic";
 
 describe("where a sale came from", () => {
   it("reads a Meta ad's tags: Instagram placement, paid, with the campaign", () => {
@@ -59,5 +59,25 @@ describe("where a sale came from", () => {
     expect(classifyVisit({ referrerUrl: "https://notfacebook.com/" })).toMatchObject({ source: "other" });
     expect(classifyVisit({ referrerUrl: "https://google.evil.example/" })).toMatchObject({ source: "other" });
     expect(classifyVisit({ landingPage: "/?utm_source=fbshop" })).toMatchObject({ source: "direct" });
+  });
+});
+
+describe("paid vs organic", () => {
+  it("groups each medium: tagged ads paid; posts, searches and other websites organic; then email, direct and not recorded", () => {
+    expect(trafficSplitOf("paid")).toBe("paid");
+    expect(trafficSplitOf("unpaid")).toBe("organic");
+    expect(trafficSplitOf("referral")).toBe("organic");
+    expect(trafficSplitOf("email")).toBe("email");
+    expect(trafficSplitOf("direct")).toBe("direct");
+    expect(trafficSplitOf("unknown")).toBe("unknown");
+    // Nothing recorded, or a medium this code doesn't know: never counted as paid or organic.
+    expect(trafficSplitOf(null)).toBe("unknown");
+    expect(trafficSplitOf("something-new")).toBe("unknown");
+    expect(TRAFFIC_SPLITS).toEqual(["paid", "organic", "email", "direct", "unknown"]);
+  });
+
+  it("an ad whose link carries no tag reads as organic, as Shopify recorded it: the label says so", () => {
+    expect(trafficSplitOf(classifyVisit({ landingPage: "/?fbclid=IwAR1", referrerUrl: "https://m.facebook.com/" }).medium)).toBe("organic");
+    expect(trafficSplitOf(classifyVisit({ landingPage: "/?gclid=abc" }).medium)).toBe("paid");
   });
 });

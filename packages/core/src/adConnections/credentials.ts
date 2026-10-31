@@ -21,6 +21,15 @@ export function encryptAdTokens(storeId: string, provider: AdProvider, t: TokenS
   };
 }
 
+/**
+ * Whether the row holds bizinsights' own sign-in with the platform (`source` "direct"), as every row
+ * has since 2026-10-28, when the last connections signed in through a broker were moved onto
+ * bizinsights' own tokens. One that didn't would hold no token of bizinsights': it is never read, and
+ * waits for a reconnect, which makes it one (saveAdConnections). The column goes with a later
+ * migration (docs/database/schema.md).
+ */
+export const holdsOwnSignIn = (conn: Pick<AdConnection, "source">): boolean => conn.source === "direct";
+
 /** The Google OAuth client a Google Ads or AdSense connection refreshes through. */
 const googleOAuthFor = (provider: string, fetchImpl?: FetchLike) => (provider === "adsense" ? adsenseConfig(fetchImpl) : googleClient(fetchImpl));
 
@@ -51,6 +60,8 @@ export async function accessTokenAndPerson(conn: AdConnection, fetchImpl?: Fetch
   const k = keyring();
   const soon = Date.now() + 5 * 60_000;
   const access = () => decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access"));
+  // Not a sign-in of bizinsights' own (holdsOwnSignIn): never read, Reconnect.
+  if (!holdsOwnSignIn(conn)) throw new AdsAuthError("This connection holds no sign-in of bizinsights' own");
   if (conn.provider === "meta") {
     if (conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("Meta access has expired");
     return { token: access() };
@@ -94,18 +105,23 @@ async function rememberPerson(conn: Pick<AdConnection, "storeId" | "provider" | 
  */
 export async function learnAdPerson(conn: AdConnection, accessToken: string, fetchImpl?: FetchLike): Promise<string | null> {
   if (conn.externalUserId) return conn.externalUserId;
-  let person: string | null = null;
-  if (conn.provider === "meta") {
-    const cfg = metaConfig(fetchImpl);
-    if (!cfg) return null;
-    person = await metaUserId(cfg, accessToken);
-  } else {
-    const cfg = googleOAuthFor(conn.provider, fetchImpl);
-    if (!cfg) return null;
-    person = await googleUserId(cfg, accessToken);
-  }
+  const person = await platformPerson(conn.provider, accessToken, fetchImpl);
   if (person) await rememberPerson(conn, person);
   return person;
+}
+
+/**
+ * Who an access token of bizinsights' own app belongs to: Meta's app-scoped user id, Google's `sub`
+ * (Google also checks the token was issued to bizinsights' client: AdsAuthError when it wasn't). Null
+ * when the platform doesn't say, or isn't set up here.
+ */
+export async function platformPerson(provider: string, accessToken: string, fetchImpl?: FetchLike): Promise<string | null> {
+  if (provider === "meta") {
+    const cfg = metaConfig(fetchImpl);
+    return cfg ? metaUserId(cfg, accessToken) : null;
+  }
+  const cfg = googleOAuthFor(provider, fetchImpl);
+  return cfg ? googleUserId(cfg, accessToken) : null;
 }
 
 /**

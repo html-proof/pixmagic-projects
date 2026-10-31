@@ -30,12 +30,30 @@ describe("the demo source", () => {
     const rows = await src.campaignDays("2026-09-01", "2026-09-07");
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.accountId === DEMO_ACCOUNT_ID && r.day >= "2026-09-01" && r.day <= "2026-09-07")).toBe(true);
+    // Each row carries its campaign's facts, as Google's campaign query does a real account's: the sync stores them.
+    expect(rows.every((r) => r.campaignFacts?.budgetPeriod === "DAILY" && r.campaignFacts.budgetAmount! > 0 && r.campaignFacts.channelType !== null && r.campaignFacts.primaryStatus !== null)).toBe(true);
     const health = await src.accountHealth();
     expect(health).toMatchObject({ status: "active", currency: "AUD", timezone: "Australia/Melbourne" });
     expect(health.detail).toContain("not verified by Google");
     const report = await src.report("campaign", "2026-09-01", "2026-09-30");
     expect(report.rows.length).toBeGreaterThan(0);
     expect(report.truncated).toBe(false);
+    // The fields a real account's campaigns carry: Google's primary status and its reasons, and the budget's period.
+    expect(report.rows.every((r) => r.primaryStatus !== null && Array.isArray(r.primaryStatusReasons) && r.budgetPeriod === "DAILY" && r.totalBudget === null)).toBe(true);
+    expect(report.rows.find((r) => r.id === "demo-c2")).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] });
+    // Down from a campaign to its ad groups and an ad group's ads: generated too.
+    const groups = await src.report("ad_group", "2026-09-01", "2026-09-30", { campaign: "demo-c2" });
+    expect(groups.rows.map((r) => r.id).sort()).toEqual(["demo-c2-broad", "demo-c2-core"]);
+    const ads = await src.report("ad", "2026-09-01", "2026-09-30", { campaign: "demo-c2", adGroup: "demo-c2-core" });
+    expect(ads.rows.length).toBeGreaterThan(0);
+    expect(ads.rows.every((r) => r.adGroupId === "demo-c2-core")).toBe(true);
+    // Keywords and search terms: generated as well, never asked of Google.
+    const keywords = await src.report("keyword", "2026-09-01", "2026-09-30");
+    expect(keywords.rows.length).toBeGreaterThan(0);
+    expect(keywords.rows.every((r) => r.matchType !== null && r.qualityScore !== null)).toBe(true);
+    const terms = await src.report("search_term", "2026-09-01", "2026-09-30", { campaign: "demo-c7" });
+    expect(terms.rows.length).toBeGreaterThan(0);
+    expect(terms.rows.every((r) => r.campaignId === "demo-c7" && r.channel === "PERFORMANCE_MAX")).toBe(true);
   });
 
   it("takes its epoch from the day the demo was connected, in the account's own zone", () => {
@@ -79,5 +97,10 @@ describe("the production source", () => {
     const src = googleAdsSource({ ...demoConn, isDemo: false, accountId: "1234567890" }, { cfg: { clientId: "id", clientSecret: "secret", version: "v25", fetchImpl }, accessToken: "token" });
     expect(await src.campaignDays("2026-09-01", "2026-09-07")).toEqual([]);
     expect(asked).toBe(1);
+    // A drill-down is one query, and only for Google's own ids.
+    expect((await src.report("ad", "2026-09-01", "2026-09-07", { adGroup: "55" })).rows).toEqual([]);
+    expect(asked).toBe(2);
+    await expect(src.report("ad", "2026-09-01", "2026-09-07", { adGroup: "demo-c2-core" })).rejects.toMatchObject({ status: 400 });
+    expect(asked).toBe(2);
   });
 });

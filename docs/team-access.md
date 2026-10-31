@@ -25,19 +25,33 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   managing integrations or staff, exports) are never in a template and "Select all" leaves them out:
   they are ticked one by one.
 - A permission never gets round Shopify: the dashboard's modules still need the store's scopes
-  (`capabilities.ts`). The invite panel marks permissions whose data no connected store has granted.
+  (`capabilities.ts`). The invite panel marks permissions whose data no connected store has granted
+  (`ACCESS_CAPABILITY`, any of a permission's data: conversion is the pixel's funnel or Shopify's
+  sessions; checkout abandonment is Shopify's abandoned checkouts, which need only orders).
 - A restricted role's `can(role, …)` (roles.ts) is always false, so a check that forgets the grants
   fails closed. Ask `allows(access, need)`.
 
 ## What the API enforces
 
+- **Deny by default, route by route** (`apps/api/test/routeAccess.test.ts`): every route the API
+  serves is called as nobody signed in (401), as a member given nothing (403/404, except their own
+  access, notification settings, the store picker and a dashboard answer with no modules), as
+  another business's owner (404), as this workspace's owner naming another business's store (never
+  its data, never a call to Shopify for it), and as a shared link and an API key (every change
+  refused). A route that isn't public, an account's own or a workspace's fails the test until it is
+  placed in one of its lists, so a new route can't become reachable by accident.
+- Every route asks who is calling before it reads the request: a stranger gets 401 or 404, never a
+  validation error that shows what the route expects.
 - `requireWorkspace` reads the membership from the database on every request: a change or a
   revocation applies to the member's next request. A revoked member gets `403 access_revoked`.
 - `GET …/overview` computes only the modules the member may see (`storeOverview(…, sees)`), then
   `redactOverview` removes fields that need their own permission (gross sales/discounts/tax/shipping
   and total sales, which holds tax and shipping, so such a member's headline is net sales; returns
   and refunds per day; the year report, stock value, order payment/fulfillment/cancellation, paid
-  attribution, ad campaigns, discount amounts, import counts).
+  attribution, ad campaigns, discount amounts, import counts). Shopify's gross profit and cost of
+  goods sold (the `profit` module, and those rows of `GET …/shopify-check`) need both the breakdown
+  (`finance.breakdown`) and `inventory.costs` (`OVERVIEW_MODULE_ALSO_NEEDS`), so a legacy viewer,
+  analyst or API key holding only the breakdown doesn't get them.
 - `GET …/contacts` asks Shopify only for the lists the member may see and blanks names, contact
   details and order history per permission (`redactContact`).
 - WhatsApp, ads, email, staff and settings routes each ask for the permission that covers them; the
@@ -46,6 +60,10 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - `GET …/export?section=` (CSV) needs "Export approved reports" plus the section's own permission,
   and holds only what the member sees. Customer lists are never exported.
 - Workspace API keys see what viewers saw before Team & Access (`LEGACY_GRANTS.viewer`), read-only.
+- Connecting the store to Zapier ([zapier.md](zapier.md)) needs "Manage integrations" and the
+  member's own sign-in. The connection acts as that member: every Zapier request and every event
+  sent re-checks their membership, and each trigger also needs its data permission ("View advertising
+  analytics", "View campaigns", the bell's rule for alerts). Removing the member revokes it.
 - The Inventory pages (`apps/web/src/app/(app)/inventory`, API `routes/inventory.ts`) have a module
   of their own: view, product information, costs and stock value, stock history, export, adjust
   stock, stock alerts, inventory settings (docs/inventory.md). Costs are left out of every answer
@@ -99,9 +117,21 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   - No Cognito identity behind it. The membership is checked on every request, as for anyone.
   - Someone new gets a user record with no sign-in of its own. Signing up later with that address
     (verified) links to it (`identity.ts`).
+  - **An address that already has an account someone signs in to is never joined by the link
+    alone** (409 `sign_in_required`; `account_unverified` while nobody has proved its address):
+    whoever holds a link may not be its person (an owner or admin can always copy it), and opening
+    it would otherwise make that account a member of their workspace without them. The invite page
+    accepts at once if this browser is signed in to that account (`POST /invitations/accept`: the
+    invited, verified address), and otherwise offers "Sign in to accept" and comes back to the
+    invitation (the token waits in the tab's sessionStorage, never in the address bar or
+    localStorage). After that, the link reopens their view-only shared dashboard like anyone's.
+  - Onboarding connects a store into the workspace named by `?ws=`, otherwise only into one the
+    person owns (the selected one, else their first), and makes them one of their own when they
+    own none: never into another business's workspace just because an invitation put them in it.
 - After the first opening the link keeps opening the dashboard (another device, a session that
   ended) until its end date, while the member's access lasts: revoking or removing them ends it at
-  once. Signed in already to an account (theirs or anyone's), the account stays signed in and
+  once. Removing them also cancels it for good (`revoked_at`), so inviting them back later never
+  revives an old link. Signed in already to an account (theirs or anyone's), the account stays signed in and
   untouched in its own tabs. Only from our own pages (login CSRF). Opening on arrival is safe with
   email scanners because the link isn't used up (a scanner that runs scripts counts as an opening).
 - The web app (`Me.shared`) hides the account's own pages (profile, sign-in and security), shows
@@ -109,6 +139,13 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - The optional message is plain text, at most 500 characters, without links (every invitation is an
   email from our domain).
 - If the email can't be sent, the invitation is kept and the inviter gets the link to pass on.
+- **An owner or admin who is removed, revoked, or no longer an owner or admin takes no working link
+  along** (`retireLinksOf`, in the same transaction as the change): the invitations they sent that
+  nobody accepted are cancelled, and every other invitation whose link they had (sent, copied,
+  resent or replaced, from the audit log) gets a new link, so the old one stops working (dashboards
+  already open carry on while the access lasts; an owner copies the new link from the team list).
+  Their own invitation keeps its link while they stay a member. The counts go into the change's
+  audit entry (`invitationsCancelled`, `linksReplaced`, and `ownLinksEnded` on removal).
 
 ## Email delivery
 
@@ -122,6 +159,20 @@ SES's sandbox). Delivered/bounced/complained come only from the provider's signe
 tracked. No address or message content is kept in the delivery records or the logs. Which provider
 sends is configuration (docs/aws-deployment.md "App email"); in production it is Resend since
 2026-10-16, so invitations reach any address.
+
+## What the web app does
+
+The pages are static files with no data in them: everything a page shows comes from the API above,
+which decides. `canOpenPage` (`apps/web/src/lib/access.ts`) says which pages a member may open, by
+path; the route guard (`useAccessGuard`, `components/AppShell.tsx`) sends anyone on a page they may
+not open (typed in, bookmarked, or just taken away) to where they can go, saying "You don't have
+access to that page.", before the page mounts, so it never asks for its data. The sidebar, the
+command palette and the section menus (Settings) list only pages `canOpenPage` allows; WhatsApp
+Automation is one page whose tabs follow what its API answer allows (Customers only with "View contact
+information"). An
+address with no page at all (`/dashboard/setting`) is the not-found page, outside the app.
+`apps/web/e2e/team.spec.ts` types the owners' and admins' pages into a shared dashboard and calls
+their APIs from it.
 
 ## Live updates
 

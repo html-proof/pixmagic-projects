@@ -3,9 +3,8 @@ import type { AdProvider } from "./adConnections";
 
 /**
  * Leaving for an ad platform's sign-in, and noticing when the browser comes back without finishing
- * it: the Back button, or the page restored from the back/forward cache. Facebook's own error pages
- * ("Feature Unavailable") never send anyone back to bizinsights, so this is the one moment to explain
- * them; and a restored page would otherwise keep its button stuck on "Opening…".
+ * it: the Back button, or the page restored from the back/forward cache, which would otherwise keep
+ * its button stuck on "Opening…".
  */
 
 const KEY = "ads-sign-in";

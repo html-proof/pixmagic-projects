@@ -1,7 +1,7 @@
 "use client";
 import { useId, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { fmtDay, fmtLongDay } from "./format";
-import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
+import { columnPath, columnWidth, niceTicksAround, useWidth } from "./chartUtils";
 
 // ---------------------------------------------------------------------------
 // A small multi-series line chart: one shared y-axis (never two), one line per series, a crosshair
@@ -51,6 +51,7 @@ export function LineChart({
   grid = false,
   floor = 0,
   bars = false,
+  periods,
 }: {
   days: string[];
   series: LineSeries[];
@@ -72,6 +73,8 @@ export function LineChart({
   floor?: number;
   /** A column per day instead of a line (`area` is ignored). Today's column is lighter: the day isn't over. */
   bars?: boolean;
+  /** When each point is a week or month, not a day: its words under the axis and in the tooltip (`fmtPeriod`). */
+  periods?: Array<{ tick: string; long: string }>;
 }) {
   const [ref, width] = useWidth();
   const [hover, setAt] = useState<number | null>(null);
@@ -81,18 +84,22 @@ export function LineChart({
   const n = days.length;
   // The dates can change under a held hover (a shorter range): never read past the new end.
   const at = hover !== null && hover < n ? hover : null;
-  const max = Math.max(0, ...series.flatMap((s) => s.values.filter((v): v is number => v !== null)));
+  const known = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
+  const max = Math.max(0, ...known);
+  // A day can be below zero (more refunds than sales): the axis reaches down to it, never past the chart.
+  const min = Math.min(0, ...known);
   const show = (v: number | null | undefined) => (v === null || v === undefined ? NO_DATA : format(v));
-  const ticks = niceTicks(Math.max(max, floor, integer ? 4 : 0), 4);
-  const step = ticks[1] ?? 1;
-  const top = ticks[ticks.length - 1] || 1;
+  const ticks = niceTicksAround(min, Math.max(max, floor, integer ? 4 : 0), 4);
+  const step = ticks.length > 1 ? ticks[1]! - ticks[0]! : 1;
+  const bottom = ticks[0]!;
+  const top = ticks.length > 1 ? ticks[ticks.length - 1]! : bottom + 1;
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right - END_LABEL_W);
   const plotH = height - MARGIN.top - MARGIN.bottom;
   // Bars sit in the middle of equal slots; line points run edge to edge.
   const slot = n ? plotW / n : 0;
   const barW = columnWidth(slot);
   const x = (i: number) => MARGIN.left + (bars ? slot * (i + 0.5) : n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-  const y = (v: number) => MARGIN.top + plotH - (v / top) * plotH;
+  const y = (v: number) => MARGIN.top + plotH - ((v - bottom) / (top - bottom)) * plotH;
 
   // About one date label per 70px, always including the first and last day.
   const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 70))));
@@ -116,7 +123,9 @@ export function LineChart({
     } else if (e.key === "Escape") setAt(null);
   };
 
-  const describe = (i: number) => `${fmtLongDay(days[i]!)}${days[i] === today ? " (today so far)" : ""}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
+  // A grouped chart names its weeks or months; today is a day, so it is only marked on a daily one.
+  const longName = (i: number) => periods?.[i]?.long ?? `${fmtLongDay(days[i]!)}${days[i] === today ? " · today so far" : ""}`;
+  const describe = (i: number) => `${longName(i)}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
 
   return (
     <div className="min-w-0">
@@ -157,7 +166,8 @@ export function LineChart({
               ))}
             {ticks.map((t, i) => (
               <g key={i}>
-                <line x1={MARGIN.left} x2={MARGIN.left + plotW} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
+                {/* With days below zero, the zero line is the one the columns stand on: a shade darker. */}
+                <line x1={MARGIN.left} x2={MARGIN.left + plotW} y1={y(t)} y2={y(t)} stroke={t === 0 && bottom < 0 ? "var(--muted)" : "var(--border)"} strokeOpacity={t === 0 && bottom < 0 ? 0.6 : 1} strokeWidth={1} />
                 <text x={MARGIN.left - 6} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill="var(--muted)">
                   {fmtAxis(t, step)}
                 </text>
@@ -165,7 +175,7 @@ export function LineChart({
             ))}
             {xTicks.map(({ d, i }) => (
               <text key={d} x={tickX(i)} y={height - 6} textAnchor={n <= 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={11} fill="var(--muted)">
-                {d === today ? "Today" : fmtDay(d, { year: false })}
+                {periods?.[i]?.tick ?? (d === today ? "Today" : fmtDay(d, { year: false }))}
               </text>
             ))}
             {bars &&
@@ -244,7 +254,7 @@ export function LineChart({
             className="pointer-events-none absolute z-10 min-w-[10rem] rounded-lg border border-border bg-surface px-3 py-2 text-xs shadow-lg"
             style={{ top: MARGIN.top, left: Math.min(Math.max(0, x(at) + 12), Math.max(0, width - 176)) }}
           >
-            <div className="text-muted">{fmtLongDay(days[at]!)}{days[at] === today ? " · today so far" : ""}</div>
+            <div className="text-muted">{longName(at)}</div>
             {series.map((s) => (
               <div key={s.key} className="mt-1 flex items-center gap-2">
                 <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
@@ -264,7 +274,7 @@ export function LineChart({
           <caption>{label}</caption>
           <thead>
             <tr>
-              <th scope="col">Day</th>
+              <th scope="col">{periods ? "Period" : "Day"}</th>
               {series.map((s) => (
                 <th key={s.key} scope="col">{s.label}</th>
               ))}
@@ -273,7 +283,7 @@ export function LineChart({
           <tbody>
             {days.map((d, i) => (
               <tr key={d}>
-                <th scope="row">{fmtLongDay(d)}</th>
+                <th scope="row">{periods?.[i]?.long ?? fmtLongDay(d)}</th>
                 {series.map((s) => (
                   <td key={s.key}>{show(s.values[i])}</td>
                 ))}

@@ -266,6 +266,54 @@ describe("purchases among Google's conversions", () => {
   });
 });
 
+describe("each campaign's facts, read with its days", () => {
+  const withFacts = (id: string, day: string) => ({
+    campaign: { id, name: `C${id}`, status: "ENABLED", advertisingChannelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] },
+    campaignBudget: { period: "DAILY", amountMicros: "40000000" },
+    segments: { date: day },
+    metrics: { costMicros: "1000000", impressions: "10", clicks: "1", conversions: 0, conversionsValue: 0 },
+  });
+
+  it("are selected in the days' own query, so they cost no operation of their own", async () => {
+    const queries: string[] = [];
+    const f = fake((_u, init) => {
+      queries.push(queryOf(init));
+      return json([{ results: [withFacts("1", "2026-10-01"), withFacts("1", "2026-10-02")] }]);
+    });
+    const rows = await googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-02");
+    // One operation: no conversions, so no purchase query either.
+    expect(queries).toEqual([
+      "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.primary_status, campaign.primary_status_reasons, campaign_budget.period, campaign_budget.amount_micros, campaign_budget.total_amount_micros, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '2026-10-01' AND '2026-10-02'",
+    ]);
+    expect(rows.map((r) => r.campaignFacts)).toEqual([
+      { channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+      { channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+    ]);
+    expect(rows[0]).toMatchObject({ campaignStatus: "ENABLED", spend: 1 });
+  });
+
+  it("Google refusing their fields reads the days without them (one more operation, only then); lost access still fails the sync", async () => {
+    const queries: string[] = [];
+    const refused = fake((_u, init) => {
+      const q = queryOf(init);
+      queries.push(q);
+      return q.includes("primary_status")
+        ? json([adsFailure(400, "INVALID_ARGUMENT", [{ errorCode: { queryError: "UNRECOGNIZED_FIELD" }, message: "Unrecognized field" }])], 400)
+        : json([{ results: [{ campaign: { id: "1", name: "C1", status: "PAUSED" }, segments: { date: "2026-10-01" }, metrics: { costMicros: "2000000", impressions: "5", clicks: "0", conversions: 0 } }] }]);
+    });
+    const rows = await googleCampaignDays(google(refused.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-01");
+    expect(queries).toHaveLength(2);
+    expect(queries[1]).not.toContain("primary_status");
+    // The days count; the facts aren't read, so what is stored stays.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ spend: 2, campaignStatus: "PAUSED" });
+    expect(rows[0]!.campaignFacts).toBeUndefined();
+    const lost = fake(() => json([adsFailure(403, "PERMISSION_DENIED", [{ errorCode: { authorizationError: "USER_PERMISSION_DENIED" }, message: "no" }])], 403));
+    await expect(googleCampaignDays(google(lost.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-01")).rejects.toBeInstanceOf(AdsPermissionError);
+    expect(lost.calls).toHaveLength(1);
+  });
+});
+
 describe("the accounts a Google login reaches", () => {
   it("looks them up 8 at a time, in Google's order, with each account's status; managers are never listed", async () => {
     const ids = Array.from({ length: 30 }, (_, i) => String(1000 + i));
@@ -417,5 +465,24 @@ describe("Google sign-in", () => {
     await expect(googleUserId(google(other.fetchImpl), "AT")).rejects.toBeInstanceOf(AdsAuthError);
     const bad = fake(() => json({ aud: "cid", sub: "not-digits" }));
     expect(await googleUserId(google(bad.fetchImpl), "AT")).toBeNull();
+  });
+
+  it("who signed in, when tokeninfo leaves it out: Google's userinfo, only for a token that carries openid", async () => {
+    const withOpenid = fake((u) =>
+      u.pathname === "/tokeninfo" ? json({ aud: "cid", scope: "https://www.googleapis.com/auth/adsense.readonly openid" }) : json({ sub: "112233445566" }),
+    );
+    expect(await googleUserId(google(withOpenid.fetchImpl), "AT")).toBe("112233445566");
+    const userinfo = withOpenid.calls.find((c) => c.url.host === "openidconnect.googleapis.com")!;
+    expect(userinfo.url.pathname).toBe("/v1/userinfo");
+    // The token goes in the header, never the address.
+    expect(new Headers(userinfo.init?.headers).get("authorization")).toBe("Bearer AT");
+    expect(userinfo.url.search).toBe("");
+    // A token without openid (connected before it was asked for): no further call, the person stays unknown.
+    const without = fake(() => json({ aud: "cid", scope: "https://www.googleapis.com/auth/adsense.readonly" }));
+    expect(await googleUserId(google(without.fetchImpl), "AT")).toBeNull();
+    expect(without.calls).toHaveLength(1);
+    // userinfo refusing (or down) leaves it unknown rather than failing the connect.
+    const refused = fake((u) => (u.pathname === "/tokeninfo" ? json({ aud: "cid", scope: "openid" }) : json({ error: "invalid_token" }, 401)));
+    expect(await googleUserId(google(refused.fetchImpl), "AT")).toBeNull();
   });
 });

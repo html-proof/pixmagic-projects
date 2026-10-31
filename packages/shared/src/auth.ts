@@ -26,3 +26,21 @@ export function accountPasswordProblem(password: string): string | null {
 
 /** Codes Cognito emails (sign-up confirmation, password reset, email change): six digits. */
 export const EMAIL_CODE_RE = /^\d{6}$/;
+
+/**
+ * Seconds a sign-up or sign-in code lives from the moment it is issued: the API enforces it
+ * (apps/api/src/emailCode.ts) and the email states it (core/mail/authEmails.ts).
+ */
+export const EMAIL_CODE_TTL_S = 60;
+
+/**
+ * The 6-digit code in what someone copied: the code, a line of the email or all of it, or the code
+ * split in two ("482 913", "482-913"). Longer numbers (a phone number, an order id) are not codes.
+ * Null when there is none.
+ */
+export function codeInText(text: string): string | null {
+  const whole = /(?<!\d)\d{6}(?!\d)/.exec(text);
+  if (whole) return whole[0];
+  const split = /(?<![\d-])(\d{3})[ \u00a0-](\d{3})(?![\d-])/.exec(text);
+  return split ? split[1]! + split[2]! : null;
+}

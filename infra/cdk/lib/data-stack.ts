@@ -40,9 +40,17 @@ export class DataStack extends Stack {
   /** The NAT instances (cfg.natGateways of them): every function's way out to the internet. */
   readonly natInstances: ec2.Instance[];
   readonly appSg: ec2.SecurityGroup;
+  /** The database's: other stacks add who else may reach PostgreSQL (the WhatsApp service, whatsapp-stack.ts). */
+  readonly dbSg: ec2.SecurityGroup;
   readonly db: rds.DatabaseInstance;
   readonly dbSecret: secretsmanager.ISecret;
+  /** The system role's login (SYSTEM_DB_USER, SYSTEM_DB_PASSWORD): the cron's migrate action makes the role from it. */
+  readonly systemDbSecret: secretsmanager.Secret;
   readonly appSecret: secretsmanager.Secret;
+  /** WhatsApp's Evolution API service: its global key (EVOLUTION_API_KEY), shared by the functions and its container. */
+  readonly evolutionSecret: secretsmanager.Secret;
+  /** Its database role (EVOLUTION_DB_USER, EVOLUTION_DB_PASSWORD): its container and the cron, which makes the role. */
+  readonly evolutionDbSecret: secretsmanager.Secret;
   readonly coordTable: dynamodb.Table;
   readonly payloads: s3.Bucket;
   readonly artifacts: s3.Bucket;
@@ -112,7 +120,7 @@ export class DataStack extends Stack {
     // Functions: outbound only.
     this.appSg = new ec2.SecurityGroup(this, "AppSg", { vpc: this.vpc, securityGroupName: `${prefix}-app`, description: "Insights Lambda functions (outbound only)", allowAllOutbound: true });
     const adminSg = new ec2.SecurityGroup(this, "AdminSg", { vpc: this.vpc, securityGroupName: `${prefix}-admin`, description: "Insights admin host (SSM only, outbound only)", allowAllOutbound: true });
-    const dbSg = new ec2.SecurityGroup(this, "DbSg", { vpc: this.vpc, securityGroupName: `${prefix}-db`, description: "Insights PostgreSQL", allowAllOutbound: false });
+    const dbSg = (this.dbSg = new ec2.SecurityGroup(this, "DbSg", { vpc: this.vpc, securityGroupName: `${prefix}-db`, description: "Insights PostgreSQL", allowAllOutbound: false }));
     dbSg.addIngressRule(this.appSg, ec2.Port.tcp(5432), "Lambda functions");
     dbSg.addIngressRule(adminSg, ec2.Port.tcp(5432), "Admin host (restores, psql via SSM)");
 
@@ -158,9 +166,21 @@ export class DataStack extends Stack {
       // (CloudWatch Logs, RDSOSMetrics). Turning it on or off doesn't restart the database.
       monitoringInterval: Duration.seconds(60),
       cloudwatchLogsExports: ["postgresql"],
+      // whatsapp-stack.ts checks the database's certificate against this root alone (DB_CA there).
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
     this.dbSecret = this.db.secret!;
+    // The system paths' own database login, app_system (docs/system-database-role.md): not the
+    // tables' owner, so row-level security applies to it. Generated here once and never seen by
+    // anyone; the migrate action sets the role's password from it. Letters and digits only: it goes
+    // into a URL as it is. Never edit generateSecretString (CloudFormation would generate a new value).
+    this.systemDbSecret = new secretsmanager.Secret(this, "SystemDbSecret", {
+      // The functions read it by this name (app-stack.ts SYSTEM_DB_SECRET_ARN): keep them the same.
+      secretName: `insights/${cfg.name}/db-system`,
+      description: "Insights database: the system paths' login role app_system (SYSTEM_DB_USER, SYSTEM_DB_PASSWORD)",
+      generateSecretString: { secretStringTemplate: JSON.stringify({ SYSTEM_DB_USER: "app_system" }), generateStringKey: "SYSTEM_DB_PASSWORD", passwordLength: 40, excludePunctuation: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
 
     // The app's own secrets. Created with ORIGIN_VERIFY only (CloudFront needs it at deploy time);
     // infra/cdk/scripts/put-secrets.mjs fills in the rest without printing any value. Never edit
@@ -169,6 +189,24 @@ export class DataStack extends Stack {
       secretName: `insights/${cfg.name}/app`,
       description: "Insights app secrets: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD, ORIGIN_VERIFY, provider secrets",
       generateSecretString: { secretStringTemplate: "{}", generateStringKey: "ORIGIN_VERIFY", passwordLength: 48, excludePunctuation: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // WhatsApp Automation's Evolution API service (whatsapp-stack.ts, docs/whatsapp.md): its global API
+    // key and its own database role's password, both generated here once and never seen by anyone.
+    // Letters and digits only: they go into a URL and a header as they are. Never edit
+    // generateSecretString (CloudFormation would generate new values; the instances' keys are their own).
+    this.evolutionSecret = new secretsmanager.Secret(this, "EvolutionSecret", {
+      // The functions read it by this name (app-stack.ts EVOLUTION_SECRET_ARN): keep them the same.
+      secretName: `insights/${cfg.name}/evolution-api`,
+      description: "Insights WhatsApp: the Evolution API service's global API key (EVOLUTION_API_KEY)",
+      generateSecretString: { secretStringTemplate: "{}", generateStringKey: "EVOLUTION_API_KEY", passwordLength: 48, excludePunctuation: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.evolutionDbSecret = new secretsmanager.Secret(this, "EvolutionDbSecret", {
+      secretName: `insights/${cfg.name}/evolution-db`,
+      description: "Insights WhatsApp: the Evolution API service's own database role (EVOLUTION_DB_USER, EVOLUTION_DB_PASSWORD)",
+      generateSecretString: { secretStringTemplate: JSON.stringify({ EVOLUTION_DB_USER: "evolution" }), generateStringKey: "EVOLUTION_DB_PASSWORD", passwordLength: 40, excludePunctuation: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
@@ -226,6 +264,7 @@ export class DataStack extends Stack {
     });
     this.artifacts.grantRead(adminRole);
     this.dbSecret.grantRead(adminRole);
+    this.systemDbSecret.grantRead(adminRole);
     this.appSecret.grantRead(adminRole);
     this.adminHost = new ec2.Instance(this, "AdminHost", {
       instanceName: `${prefix}-admin`,

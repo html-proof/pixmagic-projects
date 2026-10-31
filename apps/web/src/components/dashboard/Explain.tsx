@@ -33,6 +33,7 @@ const TERMS: Record<Topic, Terms> = {
   sales: [
     ["Same as Shopify", "Every sales figure here is worked out from Shopify's own sales records, the way Shopify's reports do, so the same dates show the same numbers in both. Test orders aren't counted."],
     ["Total sales", "What customers paid: net sales plus additional fees, duties, shipping charges and taxes. Shopify's home page shows this figure."],
+    ["Refunds (under total sales)", "How much refunds, returns and cancellations took off total sales in these dates, tax and shipping included: the money given back. Total sales is already after them, on the day each refund was made, so a refund today lowers today even for an order placed earlier. An item returned with no money given back takes nothing off."],
     ["Custom sales", "Your own calculation from the lines of total sales: for example without taxes, or product revenue only. It is always shown next to Shopify's total sales and named after the calculation, and never changes Shopify's figures. Owners and admins choose it in the Total sales breakdown."],
     ["Net sales", "What your products sold for: gross sales, minus discounts, minus returns. Tax and shipping aren't included. It is sales, not profit: what the products cost you isn't taken off."],
     ["Gross sales", "Every item sold at its listed price, before any discount and before tax."],
@@ -66,13 +67,13 @@ const TERMS: Record<Topic, Terms> = {
     ["Updated", "Every hour, and the last 30 days are fetched again daily because the platforms keep counting purchases for a while after the click."],
   ],
   adsense: [
-    ["Estimated earnings", "What Google AdSense estimates the ads shown on your site earned, in the AdSense account's currency. AdSense finalizes each month after it ends, so recent days can still change: it isn't money paid out yet."],
+    ["Estimated earnings", "What Google AdSense estimates the ads shown on your site earned, in the AdSense account's currency. AdSense finalizes each month in the first days of the next, so recent days can still change."],
     ["Page views", "Pages on your site that showed AdSense ads, as AdSense counts them."],
     ["Page RPM", "Estimated earnings divided by thousands of page views: what a thousand page views are worth in ad money."],
     ["Impressions", "AdSense counts one for each ad request where at least one ad was delivered to the page, not one for every ad shown."],
     ["Click-through rate (CTR)", "Clicks divided by impressions."],
     ["Earnings per click", "Estimated earnings divided by clicks."],
-    ["Next to your sales", "Estimated earnings divided by your store's own net sales for the same dates. Estimated earnings are what AdSense expects to pay you, not money paid out yet: they're never mixed with what you spend on ads."],
+    ["Next to your sales", "Estimated earnings divided by your store's own net sales for the same dates. Earnings are never mixed with what you spend on ads."],
     ["By site", "Each of the store's sites the ads were shown on. Other sites on the same AdSense account aren't counted when sites are chosen for the store in Settings, and the page lists them."],
     [
       "Unavailable",

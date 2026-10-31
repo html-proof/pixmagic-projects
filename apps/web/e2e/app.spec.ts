@@ -1,12 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { fillCode, fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 /** Onboarding creates the workspace when the user clicks connect; tests that skip Shopify create it directly. */
@@ -215,7 +215,15 @@ test("forgot password: a code by email, a new password, then signing in with it"
 });
 
 test.describe("Continue with Google (through the user pool's managed login)", () => {
-  test("Continue with Google signs a new person in, and the session survives a refresh", async ({ page }) => {
+  const methodsOf = async (email: string) =>
+    (await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1 ORDER BY i.created_at", [email.toLowerCase()])).rows.map((r) => r.method as string);
+  const userCount = async (email: string) => Number((await db.query("SELECT count(*) FROM users WHERE email = $1", [email.toLowerCase()])).rows[0].count);
+
+  test("Continue with Google signs a new person up and in with no form, the session survives a refresh, and the same button signs them back in", async ({ page }) => {
+    // The stand-in sends a picture for "pic-" addresses; Google's image host, answered here.
+    await page.route("https://lh3.googleusercontent.com/**", (route) =>
+      route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64") }),
+    );
     await page.goto("/login");
     await page.getByRole("button", { name: "Continue with Google" }).click();
     // The provider's own screen (here: the stand-in), reached with PKCE and a nonce.
@@ -223,7 +231,7 @@ test.describe("Continue with Google (through the user pool's managed login)", ()
     const authorize = new URL(page.url());
     expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
     expect(authorize.searchParams.get("nonce")).toBeTruthy();
-    const email = uniqueEmail("google");
+    const email = uniqueEmail("pic-google");
     await page.getByLabel("Email").fill(email);
     await page.getByRole("button", { name: "Continue" }).click();
     // Back on /auth/callback, which finishes the sign-in: a brand-new account goes to connect a store.
@@ -231,11 +239,37 @@ test.describe("Continue with Google (through the user pool's managed login)", ()
     await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
     await page.reload();
     await expect(page).toHaveURL(/\/onboarding/);
-    const rows = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
-    expect(rows.rows).toEqual([{ method: "google" }]);
+    expect(await methodsOf(email)).toEqual(["google"]);
+    const made = (await db.query("SELECT display_name, email_verified, avatar_url FROM users WHERE email = $1", [email.toLowerCase()])).rows[0];
+    expect(made).toEqual({ display_name: "Social Person", email_verified: true, avatar_url: expect.stringMatching(/^https:\/\/lh3\.googleusercontent\.com\//) });
+
+    // With a workspace, the account menu shows the Google picture; signed out, the same button on
+    // the create-account page signs in to the same account, straight to its dashboard.
+    await createWorkspace(page, "Google Co");
+    await page.goto("/dashboard");
+    await expect(page.getByRole("button", { name: "Account menu" }).locator("img")).toHaveAttribute("src", made.avatar_url);
+    await signOutFromMenu(page);
+    await expect(page).toHaveURL(/\/login/);
+    await page.goto("/signup");
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await page.getByLabel("Email").fill(email);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    expect(await userCount(email)).toBe(1);
+    expect(await workspaceCount(email)).toBe(1);
   });
 
-  test("links Google to an existing password account with the same address, and handles a cancelled sign-in", async ({ page }) => {
+  test("a cancelled Google sign-in goes back to the sign-in page and creates nothing", async ({ page }) => {
+    await page.goto("/login");
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await expect(page.getByRole("heading", { name: "Sign in with Google (test)" })).toBeVisible();
+    await page.getByRole("link", { name: "Cancel" }).click();
+    await expect(page).toHaveURL(/\/login\?googleCancelled=1/, { timeout: 20_000 });
+    await expect(page.getByText("Google sign-in was cancelled. Nothing was changed and no account was created.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue with Google" })).toBeEnabled();
+  });
+
+  test("Google with an existing password account's address: sign in to that account once to link it, then Google signs straight in", async ({ page }) => {
     const email = uniqueEmail("linked");
     await signUp(page, email);
     await createWorkspace(page, "Linked Co");
@@ -243,18 +277,31 @@ test.describe("Continue with Google (through the user pool's managed login)", ()
 
     await page.goto("/login");
     await page.getByRole("button", { name: "Continue with Google" }).click();
-    await page.getByRole("link", { name: "Cancel" }).click();
-    await expect(page.getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
-    await expect(alert(page)).toContainText("cancelled");
+    await page.getByLabel("Email").fill(email);
+    await page.getByRole("button", { name: "Continue" }).click();
+    // Not a second account, and not linked by the address alone: the account's own sign-in first.
+    await expect(page).toHaveURL(/\/login\?link=google/, { timeout: 20_000 });
+    await expect(page.getByRole("heading", { name: "Link your Google account" })).toBeVisible();
+    await expect(page.getByText("You already have a bizinsights account with")).toContainText(email.toLowerCase());
+    await expect(page.getByLabel("Email Address")).toHaveValue(email.toLowerCase());
+    await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
+    expect(await methodsOf(email)).toEqual(["password"]);
+    expect(await userCount(email)).toBe(1);
 
+    // The password and its emailed code, as at any sign-in: then Google is one of the account's ways in.
+    await logIn(page, email);
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    expect(await workspaceCount(email)).toBe(1);
+    expect(await methodsOf(email)).toEqual(["password", "google"]);
+
+    // From now on the same button signs straight in to it.
+    await page.context().clearCookies();
+    await page.goto("/login");
     await page.getByRole("button", { name: "Continue with Google" }).click();
     await page.getByLabel("Email").fill(email);
     await page.getByRole("button", { name: "Continue" }).click();
-    // The existing account (with its workspace), not a new one.
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
-    expect(await workspaceCount(email)).toBe(1);
-    const methods = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1 ORDER BY i.created_at", [email]);
-    expect(methods.rows.map((r) => r.method)).toEqual(["password", "google"]);
+    expect(await userCount(email)).toBe(1);
   });
 });
 
@@ -271,11 +318,28 @@ test("Account Security: change the password, see how the account signs in, sign 
   await page.goto("/settings/security");
   await expect(page.getByRole("heading", { name: "Security", exact: true })).toBeVisible();
   await expect(page.getByText("Email and password", { exact: true })).toBeVisible();
-  const passwordSection = page.locator("section", { has: page.getByRole("heading", { name: "Password", exact: true }) });
-  await passwordSection.getByLabel("Current password", { exact: true }).fill(PASSWORD);
-  await passwordSection.getByLabel("New password", { exact: true }).fill("changed-password-9");
-  await passwordSection.getByLabel("Confirm new password", { exact: true }).fill("changed-password-9");
-  await passwordSection.getByRole("button", { name: "Change password" }).click();
+  // Both devices are listed, this one first; the other can be signed out from here.
+  const devices = page.locator("section", { has: page.getByRole("heading", { name: "Your sign-in devices", exact: true }) });
+  await expect(devices.getByText("Current device").filter({ visible: true })).toHaveCount(1);
+  await devices.getByRole("button", { name: /^Remove / }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(devices.getByText(/is signed out\.$/)).toBeVisible();
+  await expect(devices.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  await other.goto("/dashboard");
+  await expect(other).toHaveURL(/\/login/);
+  await logIn(other, email);
+  await expect(other).toHaveURL(/\/dashboard/);
+  // Its sign-ins are in the activity.
+  await page.reload();
+  const activity = page.locator("section", { has: page.getByRole("heading", { name: "Recent sign-in activity", exact: true }) });
+  await expect(activity.getByText("Success").filter({ visible: true })).toHaveCount(3);
+
+  await page.locator("section", { has: page.getByRole("heading", { name: "Password", exact: true }) }).getByRole("button", { name: "Change", exact: true }).click();
+  const passwordDialog = page.getByRole("dialog", { name: "Change password" });
+  await passwordDialog.getByLabel("Current password", { exact: true }).fill(PASSWORD);
+  await passwordDialog.getByLabel("New password", { exact: true }).fill("changed-password-9");
+  await passwordDialog.getByLabel("Confirm new password", { exact: true }).fill("changed-password-9");
+  await passwordDialog.getByRole("button", { name: "Change password" }).click();
   await expect(page.getByText("Password changed.")).toBeVisible();
   // This device stays signed in; the other one is out.
   await page.reload();
@@ -283,7 +347,7 @@ test("Account Security: change the password, see how the account signs in, sign 
   await other.goto("/dashboard");
   await expect(other).toHaveURL(/\/login/);
 
-  await page.getByRole("button", { name: "Sign out of all devices" }).click();
+  await page.getByRole("button", { name: "Sign out of all devices" }).first().click();
   await page.getByRole("button", { name: "Sign out everywhere" }).click();
   await expect(page).toHaveURL(/\/login/);
   await page.goto("/dashboard");
@@ -400,6 +464,51 @@ test("sign up with a password, verify email, connect from onboarding", async ({ 
   expect(await workspaceCount(email)).toBe(1);
 });
 
+test("connecting a store another account has opens the dashboard instead, which offers another store", async ({ page }) => {
+  await stubShopify(page);
+  const email = uniqueEmail("taken");
+  await signUp(page, email);
+  // The store lives in a workspace someone else's account has claimed.
+  const shop = `e2e-taken-${Date.now()}.myshopify.com`;
+  const theirs = (await db.query("INSERT INTO workspaces (id, name) VALUES (gen_random_uuid()::text, 'Theirs') RETURNING id")).rows[0].id as string;
+  const takenId = await insertStore(db, theirs, shop);
+
+  // One click: Shopify comes back with that store (the launch it opens after the install).
+  const install = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
+  await page.getByRole("button", { name: "Continue with Shopify" }).click();
+  await install;
+  await page.goto(signedLaunchUrl(shop));
+  await expect(page).toHaveURL(/\/dashboard$/);
+  const note = page.getByRole("status").filter({ hasText: "already connected to another bizinsights account" });
+  await expect(note).toContainText(shop);
+  await expect(page.getByRole("heading", { name: "Connect your first store" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue with Shopify" })).toBeVisible();
+
+  // With a store of its own, the store switcher offers the next one.
+  const mine = (await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1", [email])).rows[0].workspace_id as string;
+  await insertStore(db, mine, `e2e-mine-${Date.now()}.myshopify.com`);
+  await page.goto("/dashboard");
+  await page.getByTestId("store-switcher").selectOption({ label: "+ Connect another store" });
+  await expect(page).toHaveURL(/\/settings\/stores$/);
+  await expect(page.getByTestId("shopify-connect")).toBeVisible();
+
+  // A member of the store's workspace connecting it from another one: no message, its dashboard opens.
+  const userId = (await db.query("SELECT id FROM users WHERE email = $1", [email])).rows[0].id as string;
+  await db.query("INSERT INTO memberships (id, workspace_id, user_id, role) VALUES (gen_random_uuid()::text, $1, $2, 'owner')", [theirs, userId]);
+  const fresh = await page.evaluate(async () => {
+    const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Fresh" }) });
+    const ws = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    await fetch(`/api/workspaces/${ws}/shopify/start`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    return ws;
+  });
+  expect(fresh).toBeTruthy();
+  await page.goto(signedLaunchUrl(shop));
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByTestId("store-switcher")).toHaveValue(takenId);
+  await expect(page.getByLabel("Workspace")).toHaveValue(theirs);
+  await expect(page.getByText("already connected to another bizinsights account")).toHaveCount(0);
+});
+
 test("dashboard shows webhook-driven metrics and only granted modules", async ({ page }) => {
   const email = uniqueEmail("dash");
   await signUp(page, email);
@@ -441,6 +550,10 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
     await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00", { timeout: 5000 });
   }).toPass({ timeout: 30_000 });
   await expect(page.getByTestId("metric-Orders")).toContainText("1");
+  // How it went (Orders at a glance): through, none unsuccessful; checkouts left need the storefront pixel.
+  await expect(page.getByTestId("glance-completed")).toContainText("1");
+  await expect(page.getByTestId("glance-unsuccessful")).toContainText("None cancelled, failed or refunded");
+  await expect(page.getByTestId("glance-checkouts")).toContainText("Not tracked");
   await expect(page.getByTestId("metric-Average order value")).toContainText("$100.00");
   await expect(page.getByRole("heading", { name: "Top products" })).toHaveCount(0);
 
@@ -502,20 +615,20 @@ test("a workspace installed from the App Store shows only what the listing descr
   const nav = page.getByRole("navigation", { name: "App" });
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
-  for (const name of ["WhatsApp", "Staff", "Marketing"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging", "Automations"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(page.getByTestId("about-data")).toBeVisible();
   await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
 
   // Settings: Shopify, without the advertising, email and WhatsApp connections.
   await page.goto("/settings/integrations");
   await expect(page.getByTestId("int-shopify")).toBeVisible();
-  for (const id of ["int-whatsapp", "int-google-ads", "int-meta-ads"]) await expect(page.getByTestId(id)).toHaveCount(0);
+  for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense", "int-zapier"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
   await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
   for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
 
   // Their pages are closed as well, typed in or bookmarked.
-  for (const path of ["/whatsapp", "/staff", "/settings/ads", "/settings/email"]) {
+  for (const path of ["/whatsapp", "/messaging", "/automations", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
     await page.goto(path);
     await expect(page.getByTestId("access-notice")).toContainText("You don't have access to that page.");
     await expect(page).toHaveURL(/\/dashboard/);

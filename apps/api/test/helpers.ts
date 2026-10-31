@@ -42,6 +42,8 @@ async function inject(app: App, opts: InjectOptions): Promise<InjectResponse> {
 
 export interface TestCtx {
   app: { inject(opts: InjectOptions): Promise<InjectResponse> };
+  /** Every route the app serves (method and path pattern), middleware left out. */
+  routes: Array<{ method: string; path: string }>;
   deps: Deps & { coord: ReturnType<typeof memoryCoord>; queues: ReturnType<typeof memoryQueues> };
   mailer: ReturnType<typeof memoryMailer>;
   auth: ReturnType<typeof fakeCognito>;
@@ -70,7 +72,8 @@ export async function setup(): Promise<TestCtx> {
     resetEnvCache();
     resetShopifyAppsCache();
   };
-  return { app: { inject: (o) => inject(hono, o) }, deps, mailer, auth, setFetch: (f) => (fetchImpl = f), setEnv };
+  const routes = [...new Map(hono.routes.filter((r) => r.method !== "ALL").map((r) => [`${r.method} ${r.path}`, { method: r.method, path: r.path }])).values()];
+  return { app: { inject: (o) => inject(hono, o) }, routes, deps, mailer, auth, setFetch: (f) => (fetchImpl = f), setEnv };
 }
 
 export async function teardown(_ctx: TestCtx) {
@@ -112,6 +115,20 @@ export async function signIn(ctx: TestCtx, uid: string, email: string, verified 
 export async function userOf(sub: string) {
   const id = await systemDb.authIdentity.findUniqueOrThrow({ where: { provider_subject: { provider: "cognito", subject: sub } }, include: { user: true } });
   return id.user;
+}
+
+/** The newest account-deletion code emailed to `to` (POST /auth/account/delete/code). */
+export function emailedDeletionCode(ctx: TestCtx, to: string): string {
+  const mail = [...ctx.mailer.sent].reverse().find((m) => m.to === to && m.subject === "Confirm deleting your bizinsights account");
+  if (!mail) throw new Error(`no account-deletion code emailed to ${to}`);
+  return /^ {4}(\d{6})$/m.exec(mail.text)![1]!;
+}
+
+/** Deleting the account, step 1, as the Security page does it: the code emailed to the account's address `to`. */
+export async function deletionCode(ctx: TestCtx, headers: Record<string, string>, to: string): Promise<string> {
+  const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete/code", headers: { ...ORIGIN, ...headers } });
+  if (res.statusCode !== 200) throw new Error(`account-deletion code refused: ${res.body}`);
+  return emailedDeletionCode(ctx, to);
 }
 
 export async function createWorkspace(ctx: TestCtx, headers: Record<string, string>, name = "Acme") {

@@ -1,4 +1,6 @@
 /**
+ * bizinsights' own allowances at the ad platforms, shared by every merchant.
+ *
  * Google Ads API operations: bizinsights' Cloud project may make a fixed number a day across every
  * merchant (Explorer access: 2,880 on real accounts), counted by Google over a sliding 24 hours
  * (https://developers.google.com/google-ads/api/docs/api-policy/access-levels). Each Search or
@@ -7,8 +9,20 @@
  *
  * The syncs count what they spend here, in the coordinator, so the background ones can stop short of
  * the allowance and leave the rest to people connecting accounts and opening reports. When Google
- * says the allowance is used up anyway, Google Ads syncs pause for a while.
+ * says the allowance is used up anyway, Google Ads syncs pause for a while. Who stops first: history
+ * walks (60%), keyword and search-term reports (70%), scheduled syncs (80%); connects, Refresh and the
+ * other reports may use it all.
+ *
+ * Meta's application request limit: bizinsights' app may make so many Graph API calls over a rolling
+ * hour, counted by Meta across every merchant's account
+ * (https://developers.facebook.com/docs/graph-api/overview/rate-limiting/). Over it, Meta answers
+ * error code 4 to every call, whichever account it is for, until enough of the hour's calls have aged
+ * out. So the first Meta Ads call told so pauses Meta Ads syncs and live reports for a while, rather
+ * than every account's job calling Meta to be told the same and waiting on its own. Meta's other
+ * throttles (17, 32, 613, the business use case codes 80000-80099) are one account's or one person's,
+ * and stay with that account's job.
  */
+import { AdsRateLimitedError } from "../ads.js";
 import type { Coord } from "../coord.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
@@ -20,6 +34,11 @@ export const GOOGLE_ADS_DAILY_OPERATIONS = 2880;
 export const GOOGLE_ADS_SCHEDULED_SHARE = 0.8;
 /** Fetching older history waits for a quieter day: it stops at this share. */
 export const GOOGLE_ADS_HISTORY_SHARE = 0.6;
+/**
+ * The keyword and search-term reports (read only when someone opens them) stop at this share: before
+ * the scheduled syncs do, so they never hold back the figures the dashboard shows.
+ */
+export const GOOGLE_ADS_DETAIL_SHARE = 0.7;
 /** How long Google Ads syncs pause when Google says the allowance is used up and doesn't say for how long. */
 export const GOOGLE_ADS_PAUSE_S = 3600;
 
@@ -84,10 +103,63 @@ export async function googleAdsBudget(coord: Coord): Promise<GoogleAdsBudget> {
   return { paused, used, limit: googleAdsDailyOperations() };
 }
 
-/** Whether a background Google Ads sync may run now: scheduled ones up to 80% of the allowance, history up to 60%. */
-export function googleAdsBudgetAllows(b: GoogleAdsBudget, trigger: "schedule" | "history"): boolean {
+/**
+ * Whether a background Google Ads sync may run now, scheduled ones up to 80% of the allowance and history
+ * up to 60%; or (`detail`) a keyword or search-term report may be asked of Google, up to 70%.
+ */
+export function googleAdsBudgetAllows(b: GoogleAdsBudget, trigger: "schedule" | "history" | "detail"): boolean {
   if (b.paused) return false;
-  return b.used < b.limit * (trigger === "history" ? GOOGLE_ADS_HISTORY_SHARE : GOOGLE_ADS_SCHEDULED_SHARE);
+  const share = trigger === "history" ? GOOGLE_ADS_HISTORY_SHARE : trigger === "detail" ? GOOGLE_ADS_DETAIL_SHARE : GOOGLE_ADS_SCHEDULED_SHARE;
+  return b.used < b.limit * share;
+}
+
+/**
+ * How long Meta Ads pauses when Meta says bizinsights' app is over its limit. Meta gives no wait for this
+ * limit (calls fail until the hour's count falls back under it). A quarter of the rolling hour lets the
+ * oldest calls age out without holding every account back for the whole hour; if Meta still says no,
+ * the first call after the pause starts another.
+ */
+export const META_ADS_PAUSE_S = 900;
+/** Meta counts the app's calls over a rolling hour: after an hour without any, none are left in the count. */
+const META_ADS_PAUSE_MAX_S = 3600;
+const META_PAUSE_KEY = "meta-ads-paused";
+
+/** Meta's application request limit (Graph error code 4): bizinsights' app, not the account, is over its calls for the hour. */
+export const isMetaAppLimit = (err: unknown): err is AdsRateLimitedError => err instanceof AdsRateLimitedError && err.code === 4;
+
+/**
+ * Meta said bizinsights' app is over its limit: hold Meta Ads syncs and live reports back for
+ * META_ADS_PAUSE_S, or for `seconds` when that is longer, at most an hour. `seconds` is the wait in the
+ * failed call's usage headers, which are its account's (metaRetryAfterS), not the app's: a longer one is
+ * kept, a shorter one says nothing about the app. A pause is never shortened: another call told the same
+ * a moment later, its own account naming a shorter wait, leaves the longer pause standing. Returns how
+ * long the pause still runs, or null when the coordinator couldn't keep it. Never throws: the call's own
+ * failure is handled the same either way.
+ */
+export async function pauseMetaAds(coord: Coord, seconds: number | null): Promise<number | null> {
+  const s = Math.min(META_ADS_PAUSE_MAX_S, Math.max(META_ADS_PAUSE_S, Math.round(seconds ?? 0)));
+  const until = Date.now() + s * 1000;
+  try {
+    const current = await metaAdsPausedUntil(coord);
+    if (current && current.getTime() >= until) return Math.ceil((current.getTime() - Date.now()) / 1000);
+    await coord.put(META_PAUSE_KEY, new Date(until).toISOString(), s);
+  } catch (err) {
+    logger.warn({ err }, "meta ads: pause not kept");
+    return null;
+  }
+  logger.warn({ pauseSeconds: s }, "meta ads: application request limit reached; meta ads syncs and reports paused");
+  return s;
+}
+
+/** Until when Meta Ads calls are held back (pauseMetaAds); null when they aren't. */
+export async function metaAdsPausedUntil(coord: Coord): Promise<Date | null> {
+  const v = await coord.peek(META_PAUSE_KEY).catch(() => null);
+  const until = v ? new Date(v) : null;
+  return until && until.getTime() > Date.now() ? until : null;
+}
+
+export async function metaAdsPaused(coord: Coord): Promise<boolean> {
+  return (await metaAdsPausedUntil(coord)) !== null;
 }
 
 /** A fetch that counts the requests that reach the Google Ads API (each is an operation, refused or not). */

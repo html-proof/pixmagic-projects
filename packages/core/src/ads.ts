@@ -1,8 +1,8 @@
 /**
  * Meta Marketing API, Google Ads API and AdSense Management API clients: the OAuth handshake
- * ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"), the
- * accounts a person can see, and daily numbers per campaign (ads) or per site (AdSense). One
- * module per platform in ads/; this file is the one place the rest of core imports them from.
+ * ("Continue with Meta Ads" / "Continue with Google Ads" / "Continue with Google AdSense"), the
+ * accounts a person can see, and daily numbers per campaign (ads) or per site (AdSense). One module
+ * per platform in ads/; this file is the one place the rest of core imports them from.
  *
  * Read-only by design: the only permissions asked for are `ads_read` (Meta), the Google Ads scope
  * used for reporting and `adsense.readonly`. Nothing here creates, edits or pauses an ad.

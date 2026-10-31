@@ -88,13 +88,15 @@ async function trackedVisits(tx: Tx, store: Pick<Store, "id" | "workspaceId" | "
 
 /**
  * Every figure of every period, ours against Shopify's. Shopify is asked for each period's exact
- * window (to the second while it runs), one call after another.
+ * window (to the second while it runs), one call after another. `profit: false` leaves out
+ * Shopify's gross profit and cost of goods sold, and doesn't ask for them: for a member who isn't
+ * shown costs (Team & Access, `seesModule(access, "profit")`).
  */
 export async function shopifyCheckReport(
   tx: Tx,
   store: Store,
   deps: ReportFetchDeps,
-  opts: { periods?: readonly DatePreset[]; now?: Date } = {},
+  opts: { periods?: readonly DatePreset[]; now?: Date; profit?: boolean } = {},
 ): Promise<{ shop: string; timezone: string; currency: string; apiVersion: string; generatedAt: string; historyFrom: string | null; periods: CheckReportPeriod[] }> {
   const now = opts.now ?? new Date();
   const periods = (opts.periods ?? CHECK_PERIODS).filter((p) => p !== "custom" && (DATE_PRESETS as readonly string[]).includes(p));
@@ -113,7 +115,7 @@ export async function shopifyCheckReport(
     const ourRows = until ? await comparisonRows(tx, store.workspaceId, store.id, { ...range, until }, store.timezone) : await dailyRows(tx, store.workspaceId, store.id, range);
     const ours = summarize(ourRows);
     const covered = historyFrom !== null && range.from >= historyFrom;
-    const [sales, sessions, profit] = [await ask("sales", window), await ask("sessions", window), await ask("profit", window)];
+    const [sales, sessions, profit] = [await ask("sales", window), await ask("sessions", window), opts.profit === false ? null : await ask("profit", window)];
     const rows: CheckReportRow[] = [];
 
     // Sales: the same records added up the same way, so they must agree.
@@ -164,12 +166,14 @@ export async function shopifyCheckReport(
     });
 
     // Profit: Shopify's alone; bizinsights doesn't compute one of its own.
-    const pv = "values" in profit ? profit.values : null;
-    const refusedProfit = "error" in profit ? (REFUSED[profit.error] ?? null) : null;
-    const cogs = val(pv, "costOfGoodsSold");
-    const without = val(pv, "netSalesWithoutCost");
-    rows.push({ metric: LABEL.grossProfit!, shopify: val(pv, "grossProfit"), bizinsights: null, difference: null, percent: null, status: "not_verifiable", note: refusedProfit ?? (without ? `Includes ${without} of net sales with no cost recorded in Shopify.` : "Shopify's figure, shown as is.") });
-    rows.push({ metric: LABEL.costOfGoodsSold!, shopify: cogs === null ? null : Math.abs(cogs), bizinsights: null, difference: null, percent: null, status: "not_verifiable", note: refusedProfit });
+    if (profit) {
+      const pv = "values" in profit ? profit.values : null;
+      const refusedProfit = "error" in profit ? (REFUSED[profit.error] ?? null) : null;
+      const cogs = val(pv, "costOfGoodsSold");
+      const without = val(pv, "netSalesWithoutCost");
+      rows.push({ metric: LABEL.grossProfit!, shopify: val(pv, "grossProfit"), bizinsights: null, difference: null, percent: null, status: "not_verifiable", note: refusedProfit ?? (without ? `Includes ${without} of net sales with no cost recorded in Shopify.` : "Shopify's figure, shown as is.") });
+      rows.push({ metric: LABEL.costOfGoodsSold!, shopify: cogs === null ? null : Math.abs(cogs), bizinsights: null, difference: null, percent: null, status: "not_verifiable", note: refusedProfit });
+    }
 
     out.push({ preset, from: range.from, to: range.to, until, rows });
   }

@@ -3,27 +3,33 @@ import { systemDb } from "@app/db";
 import {
   logger,
   ADS_RECENT_DAYS,
+  AdSyncBusyError,
+  checkAdLogins,
   classifyAdError,
   enqueueAdHistory,
   enqueueAdSync,
   googleAdsBudget,
   googleAdsBudgetAllows,
+  metaAdsPaused,
   nextHistoryWindow,
   recheckDays,
   sweepAdAlerts,
   syncAdConnection,
+  type AdSyncResult,
   type AdsSyncData,
-  dispatchStore,
-  sendWhatsappMessage,
+  dispatchCampaign,
+  processWebhookEvent,
+  sendQueuedMessage,
   type WhatsappJob,
   processBusinessEvent,
   retryInvitationEmail,
   sendEmailMessage,
   type EmailJob,
 } from "@app/core";
+import { applySmsEvent, noSmsProvider, sendSmsJob, type SmsJob } from "@app/core/sms";
+import { zapierAfterAdSync } from "@app/core/zapier";
 import { UnrecoverableError, type WorkerDeps } from "./common.js";
 
-/** One WhatsApp message, or a store's due messages in a batch (campaigns, catch-up). */
 /** Email integrations: send one message, or run the automations for one business event. */
 export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
   if (job.kind === "email_send") return { outcome: await sendEmailMessage(job.messageId, deps) };
@@ -32,20 +38,39 @@ export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
   return processBusinessEvent(job.eventId, deps);
 }
 
+/**
+ * WhatsApp Automation (the whatsapp queue): send one message, make a campaign's next batch, or apply
+ * one of Evolution API's stored webhook events. The rows carry the state: a send never throws for the
+ * provider's answer; an event that fails throws, so the queue brings it back (and it is set aside
+ * after enough tries, here or by the sweep).
+ */
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
-  if (job.kind === "whatsapp") return { outcome: await sendWhatsappMessage(job.messageId, deps) };
-  return dispatchStore(job.storeId, deps);
+  if (job.kind === "wapp_send") return { outcome: await sendQueuedMessage(deps, job.messageId) };
+  if (job.kind === "wapp_campaign") return { outcome: await dispatchCampaign(deps, job.campaignId) };
+  return { outcome: await processWebhookEvent(deps, job.eventId) };
+}
+
+/** One text (Customer Messaging). The row carries its state; the send path never throws for an SMS failure. */
+export async function runSmsJob(job: SmsJob, deps: WorkerDeps) {
+  return { outcome: await sendSmsJob(job.jobId, { ...deps, sms: deps.sms ?? noSmsProvider }) };
+}
+
+/** One AWS delivery event. One that came before its send was recorded throws (SmsEventNotYetKnown), so the queue brings it back. */
+export async function runSmsEvent(body: unknown, deps: WorkerDeps) {
+  return { outcome: await applySmsEvent(body, deps) };
 }
 
 /**
  * Fetch one ad account's days. Access that has ended or was lost, an account the platform closed,
  * or a request it refuses won't get better by retrying: the connection is marked already (Settings and
  * the alerts word it), and the job stops. Outages throw on, so the queue retries with backoff; a
- * platform that asked to wait (AdsRateLimitedError) is waited for without spending a retry (consume).
+ * platform that asked to wait (AdsRateLimitedError), or another sync of the account still running
+ * (AdSyncBusyError), is waited for without spending a retry (consume).
  */
 export async function runAdsSync(data: AdsSyncData, deps: WorkerDeps) {
+  let res: AdSyncResult;
   try {
-    const res = await syncAdConnection(data.connectionId, data.since, data.until, deps.fetchImpl, {
+    res = await syncAdConnection(data.connectionId, data.since, data.until, deps.fetchImpl, {
       // Messages queued before triggers were kept were all asked for by someone or by the schedule; as requests they're never held back.
       trigger: data.trigger ?? "request",
       health: data.health,
@@ -53,12 +78,15 @@ export async function runAdsSync(data: AdsSyncData, deps: WorkerDeps) {
       queues: deps.queues,
       coord: deps.coord,
     });
-    if (res.skipped) logger.info({ connectionId: data.connectionId, reason: res.reason, trigger: data.trigger ?? "request" }, "ad account sync skipped");
-    else logger.info({ connectionId: data.connectionId, since: res.since, until: res.until, rows: res.stored, trigger: data.trigger ?? "request", continued: res.continued }, "ad account synced");
   } catch (err) {
     if (!classifyAdError(err).retryable) throw new UnrecoverableError("ad sync stopped: the connection is marked", { cause: err });
     throw err;
   }
+  if (res.skipped && res.reason === "busy") throw new AdSyncBusyError(data.connectionId);
+  if (res.skipped) logger.info({ connectionId: data.connectionId, reason: res.reason, trigger: data.trigger ?? "request" }, "ad account sync skipped");
+  else logger.info({ connectionId: data.connectionId, since: res.since, until: res.until, rows: res.stored, trigger: data.trigger ?? "request", continued: res.continued }, "ad account synced");
+  // Zapier's thresholds and daily summary for the store, on the figures just stored (docs/zapier.md). Never throws.
+  if (!res.skipped) await zapierAfterAdSync(data.connectionId, deps);
 }
 
 const MINUTE = 60_000;
@@ -99,7 +127,9 @@ function recentLeaseMs(c: { provider: string; consecutiveFailures: number }): nu
  * reconnect are left alone. History short of 25 months is walked back a window at a time.
  *
  * Google Ads syncs stop at 80% of the day's allowance (60% for history), so connecting accounts and
- * reports keep the rest, and pause altogether when Google says it is used up.
+ * reports keep the rest, and pause altogether when Google says it is used up. Meta Ads syncs aren't
+ * queued while Meta says bizinsights' app is over its hourly limit (the Meta pause in core's budget.ts):
+ * their leases stay free, so the first tick after the pause queues them.
  */
 export async function scheduleAdsSync(deps: WorkerDeps) {
   const now = Date.now();
@@ -119,12 +149,15 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
   // Google's daily allowance concerns real accounts only: a demo's figures are generated, not fetched.
   const google = conns.some((c) => c.provider === "google" && !c.isDemo) ? await googleAdsBudget(deps.coord) : null;
   if (google) logger.info({ googleAdsOperations: google.used, allowance: google.limit, paused: google.paused }, "google ads operations in the last 24 hours");
+  const metaPaused = conns.some((c) => c.provider === "meta") && (await metaAdsPaused(deps.coord));
+  if (metaPaused) logger.info({ metaAdsPaused: true }, "meta ads paused (bizinsights' app is over Meta's limit): no meta sync queued this tick");
   const spread = () => ({ delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
   let sent = 0;
   let historyStarts = 0;
   for (const c of conns) {
     if (!c.lastSyncedAt && c.createdAt.getTime() > now - ADS_NEW_GRACE_MS) continue;
     if (c.provider === "google" && !c.isDemo && google && !googleAdsBudgetAllows(google, "schedule")) continue;
+    if (c.provider === "meta" && metaPaused) continue;
     const wide = `ads-recheck:${c.id}`;
     // Nothing new to read: once a day, ask the platform whether the account is back.
     if (c.status === "permission" || c.status === "unavailable" || c.accountStatus === "closed") {
@@ -169,4 +202,12 @@ async function sendOrRelease(deps: WorkerDeps, lease: string, send: () => Promis
 /** Ad connections' alerts (core's sweepAdAlerts): raised from what the connections say, closed once nothing calls for them. */
 export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | "fetchImpl">) {
   return sweepAdAlerts({ mailer: deps.mailer, fetchImpl: deps.fetchImpl });
+}
+
+/**
+ * Sign-ins connected with no ad account yet (core's logins.ts): asked again once an hour, and their ad
+ * accounts connected as soon as the platform lists some.
+ */
+export async function checkWaitingAdLogins(deps: Pick<WorkerDeps, "coord" | "queues" | "fetchImpl">) {
+  return checkAdLogins(deps);
 }

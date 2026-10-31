@@ -1,7 +1,7 @@
 import { Prisma, toNumber, type Tx } from "@app/db";
 import { addDays, eachDay, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { dayTotals } from "../persist.js";
-import { localMoment, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
+import { localMoment, r2, type Scope } from "./common.js";
 
 export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r: DateRange): Promise<DailyMetricsRow[]> {
   const rows = await tx.dailyStoreMetrics.findMany({
@@ -18,6 +18,7 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
     duties: toNumber(x.duties),
     additionalFees: toNumber(x.additionalFees),
     totalSales: toNumber(x.totalSales),
+    totalRefunded: toNumber(x.totalRefunded),
     orders: x.orders,
     // A row from before order_value was kept: gross − discounts, as average order value was then.
     orderValue: x.orderValue === null ? r2(toNumber(x.grossSales) - toNumber(x.discounts)) : toNumber(x.orderValue),
@@ -46,6 +47,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
     | "duties"
     | "additional_fees"
     | "total_sales"
+    | "total_refunded"
     | "orders"
     | "order_value"
     | "units"
@@ -54,7 +56,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
     | "refunded_orders";
   const part = await tx.$queryRaw<Array<Record<Column | "day", string>>>`
     ${dayTotals({ id: storeId, workspaceId }, [c.to], localMoment(c.to, c.until, timeZone))}
-    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, duties::text, additional_fees::text, total_sales::text,
+    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, duties::text, additional_fees::text, total_sales::text, total_refunded::text,
            orders::text, order_value::text, units::text, orders_with_customer::text, returning_customer_orders::text, refunded_orders::text
     FROM t`;
   return [
@@ -69,6 +71,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
       duties: Number(x.duties),
       additionalFees: Number(x.additional_fees),
       totalSales: Number(x.total_sales),
+      totalRefunded: Number(x.total_refunded),
       orders: Number(x.orders),
       orderValue: Number(x.order_value),
       units: Number(x.units),
@@ -116,7 +119,7 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
   const byDay = new Map(rows.map((x) => [x.day, x]));
   return eachDay(r.from, r.to).map((day) => {
     const x = byDay.get(day);
-    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, units: 0, refunds: 0, averageOrderValue: null, orderValue: 0, newCustomerOrders: 0 };
     const beforeRefunds = r2(x.grossSales - x.discounts);
     return {
       day,
@@ -127,32 +130,14 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
       duties: r2(x.duties),
       additionalFees: r2(x.additionalFees),
       orders: x.orders,
+      units: x.units,
       refunds: r2(x.refunds),
       averageOrderValue: x.orders > 0 ? r2(x.orderValue / x.orders) : null,
+      // What average order value divides: the day's orders' items after discounts, before tax (the
+      // Profit sheet adds it up over weeks and months, where averaging the averages would be wrong).
+      orderValue: r2(x.orderValue),
+      // Orders of customers buying for the first time: of the orders with a customer, the ones not returning.
+      newCustomerOrders: x.ordersWithCustomer - x.returningCustomerOrders,
     };
   });
-}
-
-/**
- * Best sellers in the range: each product's net sales (before tax, after discounts and returns)
- * and items sold less items returned, from the product sales that happened in the range, as
- * Shopify's sales by product counts them. The products together make the range's net sales.
- */
-export async function topProducts(tx: Tx, { ws, storeId }: Scope, range: DateRange) {
-  const top = await tx.$queryRaw<Array<{ product_shopify_id: string | null; title: string; revenue: string; units: bigint }>>`
-    SELECT li.product_shopify_id, COALESCE(MAX(p.title), MAX(li.title)) AS title,
-           SUM(${SALE_VALUE})::text AS revenue,
-           SUM(${SALE_UNITS}) AS units
-    FROM order_sales s
-    JOIN order_line_items li ON li.store_id = s.store_id AND li.shopify_id = s.line_item_shopify_id
-    LEFT JOIN products p ON p.workspace_id = ${ws} AND p.store_id = li.store_id AND p.shopify_id = li.product_shopify_id
-    WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND li.workspace_id = ${ws}
-      AND s.line_type = 'product' AND s.local_day BETWEEN ${range.from} AND ${range.to}
-    GROUP BY li.product_shopify_id
-    HAVING SUM(${SALE_VALUE}) > 0
-    ORDER BY SUM(${SALE_VALUE}) DESC, SUM(${SALE_UNITS}) DESC, 2 ASC, 1 ASC
-    LIMIT 5`;
-  return {
-    items: top.map((t) => ({ productId: t.product_shopify_id, title: t.title, revenue: Number(t.revenue), units: Number(t.units) })),
-  };
 }

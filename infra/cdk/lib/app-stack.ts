@@ -19,11 +19,13 @@ import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
+import * as smsvoice from "aws-cdk-lib/aws-smsvoice";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
-import { appVars, FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
+import { API_PATH_PATTERNS } from "../../../apps/aws/src/paths.js";
+import { FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
 
 /** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
 const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
@@ -33,9 +35,10 @@ const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
 };
 import type { DataStack } from "./data-stack.js";
 import { loggedBucket } from "./s3-access-logs.js";
+import { evolutionUrl } from "./whatsapp-stack.js";
 import { viewerRequestCode } from "./viewer-request.js";
 
-type QueueName = "sync" | "webhooks" | "aggregate" | "email";
+type QueueName = "sync" | "webhooks" | "aggregate" | "email" | "smsEvents" | "whatsapp";
 
 /**
  * The application: queues, the three functions (one package), CloudFront, schedules, alarms,
@@ -44,6 +47,8 @@ type QueueName = "sync" | "webhooks" | "aggregate" | "email";
  * Traffic: viewer → CloudFront (+ WAF) → the `api` function URL, which serves the pages and the API
  * on one origin (first-party session cookie, the same routing as the local server). Next's hashed build
  * files, `/_next/static/*`, come from an S3 bucket instead and are cached at the edge for a year.
+ * A page the function can't answer is the site's "temporarily unavailable" page, from that bucket
+ * through a second distribution; the API's paths always get the function's own answer.
  * CloudFront adds a secret header the function checks, so the function URL can't be used to go
  * around WAF, and a viewer-request function passes on the viewer's real address and host. With a
  * domain of its own (config.ts `domain`), CloudFront answers on it with the ACM certificate and the
@@ -82,7 +87,7 @@ export class AppStack extends Stack {
       })();
     const shortCommit = commit.replace(/^([0-9a-f]{7})[0-9a-f]+/, "$1");
 
-    // --- Queues (sync, webhooks, aggregate, email + a dead-letter queue).
+    // --- Queues (sync, webhooks, aggregate, email, smsEvents, whatsapp + a dead-letter queue).
     // Visibility timeout covers the jobs function's 15 minutes. consume() settles every message
     // within MAX_ATTEMPTS (6); maxReceiveCount 10 only catches what it never settles (crashes).
     const dlq = new sqs.Queue(this, "Dlq", { queueName: `${prefix}-dlq`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
@@ -95,12 +100,37 @@ export class AppStack extends Stack {
         enforceSSL: true,
         deadLetterQueue: { queue: dlq, maxReceiveCount: 10 },
       });
-    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email") };
+    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email"), smsEvents: queue("smsEvents"), whatsapp: queue("whatsapp") };
+
+    // --- Customer Messaging: AWS End User Messaging SMS (docs/sms.md). The configuration set sends
+    // every SMS event (accepted, delivered, failed, opted out...) to a topic only this account's SMS
+    // service may publish to, which hands each one, raw, to the smsEvents queue the jobs function
+    // reads (core/sms/delivery.ts). Texts are sent with this configuration set, so each one's
+    // outcome and price come back; origination identities (sender IDs, numbers) are registered by
+    // the owner in the console and tagged for the workspace that may use them (docs/sms.md).
+    const smsConfigurationSet = `${prefix}-sms`;
+    const smsTopic = new sns.Topic(this, "SmsEvents", { topicName: `${prefix}-sms-events`, displayName: `Insights ${cfg.name} SMS delivery events` });
+    smsTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        principals: [new iam.ServicePrincipal("sms-voice.amazonaws.com")],
+        actions: ["sns:Publish"],
+        resources: [smsTopic.topicArn],
+        conditions: { StringEquals: { "aws:SourceAccount": cfg.account } },
+      }),
+    );
+    smsTopic.addSubscription(new subs.SqsSubscription(queues.smsEvents, { rawMessageDelivery: true }));
+    const smsConfig = new smsvoice.CfnConfigurationSet(this, "SmsConfigurationSet", {
+      configurationSetName: smsConfigurationSet,
+      eventDestinations: [{ eventDestinationName: "to-jobs", enabled: true, matchingEventTypes: ["TEXT_ALL"], snsDestination: { topicArn: smsTopic.topicArn } }],
+    });
+    // AWS checks it may publish to the topic when the destination is created: the policy first.
+    smsConfig.node.addDependency(smsTopic);
 
     // --- Functions.
     const code = lambda.Code.fromAsset(FUNCTION_DIR);
+    // What only this deployment knows. The app's settings (apps/aws/src/settings.ts) are not here:
+    // they ship in the package (index.ts), since together they would fill most of the 4 KB.
     const environment: Record<string, string> = {
-      ...appVars(),
       NODE_ENV: "production",
       LOG_LEVEL: "info",
       APP_COMMIT: commit,
@@ -110,7 +140,9 @@ export class AppStack extends Stack {
       NODE_EXTRA_CA_CERTS: "/var/task/rds-ca.pem",
       APP_SECRET_ARN: data.appSecret.secretArn,
       RUNTIME_PARAM: this.runtimeParam,
-      DB_SECRET_ARN: data.dbSecret.secretArn,
+      // The database login of every function: the system role (docs/system-database-role.md), by name
+      // like the Evolution secrets below. Only the cron is given the owner's (DB_SECRET_ARN, below).
+      SYSTEM_DB_SECRET_ARN: `insights/${cfg.name}/db-system`,
       DB_HOST: data.db.dbInstanceEndpointAddress,
       DB_PORT: data.db.dbInstanceEndpointPort,
       DB_NAME: "app",
@@ -118,6 +150,12 @@ export class AppStack extends Stack {
       PAYLOADS_BUCKET: data.payloads.bucketName,
       QUEUE_URLS: Stack.of(this).toJsonString(Object.fromEntries(Object.entries(queues).map(([k, q]) => [k, q.queueUrl]))),
       SES_REGION: cfg.region,
+      SMS_CONFIGURATION_SET: smsConfigurationSet,
+      // WhatsApp Automation's Evolution API service (whatsapp-stack.ts): its private address, and its
+      // global key's secret (read at cold start like the others), by name: an ARN would cost the
+      // 4 KB environment ~90 bytes more (Secrets Manager reads a secret by either).
+      EVOLUTION_API_URL: evolutionUrl(cfg),
+      EVOLUTION_SECRET_ARN: `insights/${cfg.name}/evolution-api`,
       // A domain is known before the deploy, so the functions get it with the release (no window in
       // which a fresh instance reads the previous address from the runtime parameter). Without one,
       // the address is CloudFront's, which the runtime parameter carries.
@@ -145,6 +183,10 @@ export class AppStack extends Stack {
           ...environment,
           ...(name === "api" ? { COGNITO_WORKER_SECRET_ARN: cognitoSecret } : {}),
           ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
+          // Only the cron makes the WhatsApp service's database role (its "evolution-db" action) and prunes its data.
+          ...(name === "cron" ? { EVOLUTION_DB_SECRET_ARN: `insights/${cfg.name}/evolution-db` } : {}),
+          // The owner's login: the cron's maintenance actions (migrate, counts, evolution-db) change tables.
+          ...(name === "cron" ? { DB_SECRET_ARN: data.dbSecret.secretArn } : {}),
         },
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
@@ -156,7 +198,10 @@ export class AppStack extends Stack {
         currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
       });
       data.appSecret.grantRead(f);
-      data.dbSecret.grantRead(f);
+      data.systemDbSecret.grantRead(f);
+      if (name === "cron") data.dbSecret.grantRead(f);
+      data.evolutionSecret.grantRead(f);
+      if (name === "cron") data.evolutionDbSecret.grantRead(f);
       data.coordTable.grantReadWriteData(f);
       data.payloads.grantReadWrite(f);
       for (const q of Object.values(queues)) q.grantSendMessages(f);
@@ -173,6 +218,29 @@ export class AppStack extends Stack {
     const jobs = fn("jobs", 1024, Duration.seconds(900), "Insights background jobs (SQS)");
     const cron = fn("cron", 1024, Duration.seconds(900), "Insights scheduled sweeps + maintenance actions");
     this.apiRole = api.fn.role!;
+    // Customer Messaging's calls to AWS End User Messaging SMS, each function only what it does.
+    // Sending is scoped to this account's configuration sets and origination identities, in any
+    // region (Indian local routes are in ap-south-1); the Describe calls have no resource-level
+    // permissions. The API sends test texts and verifies test numbers and senders; the jobs send;
+    // the cron reads the opt-out lists and re-checks senders daily.
+    const smsArns = (...types: string[]) => types.map((t) => `arn:aws:sms-voice:*:${cfg.account}:${t}/*`);
+    const smsSend = new iam.PolicyStatement({ actions: ["sms-voice:SendTextMessage"], resources: smsArns("configuration-set", "phone-number", "sender-id", "pool", "protect-configuration") });
+    const smsDescribe = new iam.PolicyStatement({
+      actions: ["sms-voice:DescribeAccountAttributes", "sms-voice:DescribeSpendLimits", "sms-voice:DescribePhoneNumbers", "sms-voice:DescribeSenderIds", "sms-voice:DescribePools", "sms-voice:DescribeRegistrations", "sms-voice:ListTagsForResource"],
+      resources: ["*"],
+    });
+    jobs.fn.addToRolePolicy(smsSend);
+    api.fn.addToRolePolicy(smsSend);
+    api.fn.addToRolePolicy(smsDescribe);
+    api.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["sms-voice:CreateVerifiedDestinationNumber", "sms-voice:SendDestinationNumberVerificationCode", "sms-voice:VerifyDestinationNumber", "sms-voice:DeleteVerifiedDestinationNumber", "sms-voice:TagResource"],
+        resources: ["*"],
+      }),
+    );
+    cron.fn.addToRolePolicy(smsDescribe);
+    cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["sms-voice:DescribeOptedOutNumbers"], resources: smsArns("opt-out-list") }));
+
     // The cost email's one Cost Explorer call a day (it has no resource-level permissions).
     if (costReportTo) cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["ce:GetCostAndUsage"], resources: ["*"] }));
 
@@ -184,6 +252,9 @@ export class AppStack extends Stack {
       ["webhooks", 10, 2, 2],
       ["aggregate", 5, 1, 2],
       ["email", 10, 2, 2],
+      ["smsEvents", 10, 2, 2],
+      // WhatsApp sends, Evolution API's events and campaign batches: quick jobs, each store paced by its own lock.
+      ["whatsapp", 10, 1, 3],
     ];
     for (const [name, batchSize, windowS, maxConcurrency] of sources) {
       jobs.alias.addEventSource(
@@ -261,17 +332,61 @@ export class AppStack extends Stack {
       },
       removeHeaders: ["x-powered-by"],
     });
+
+    // --- While the function can't answer a page (down, timing out, out of Lambda capacity), the
+    // site's own "temporarily unavailable" page as a 503, at the address asked for, not CloudFront's
+    // bare error page or Lambda's JSON. Pages only: the API's paths (paths.ts) keep their own
+    // answers, the app's 502s and 503s ("Google is still approving bizinsights…") included. A custom
+    // error page can't be scoped like that (it is the whole distribution's), so pages go to an origin
+    // group whose fallback is a second, tiny distribution: every address there is missing from the
+    // bucket's _fallback/, and its error page is the page (apps/web's /unavailable, which the build
+    // moves out of the function's files). Its styles and scripts are /_next/static/*, the bucket.
+    const fallbackFiles = join(FUNCTION_DIR, "fallback");
+    if (!existsSync(join(fallbackFiles, "unavailable.html"))) throw new Error(`No unavailable page at ${fallbackFiles}: build the package without --skip-web`);
+    const fallbackPage = new s3deploy.BucketDeployment(this, "FallbackPage", {
+      sources: [s3deploy.Source.asset(fallbackFiles)],
+      destinationBucket: site,
+      destinationKeyPrefix: "_fallback/",
+      // A browser asks again next time instead of keeping the outage as that address's page.
+      cacheControl: [s3deploy.CacheControl.fromString("no-store")],
+      memoryLimit: 512,
+    });
+    const fallback = new cloudfront.Distribution(this, "FallbackCdn", {
+      comment: `Insights ${cfg.name}: the page shown while the app can't answer`,
+      defaultBehavior: {
+        // Read only, no list: a missing file is S3's 403.
+        origin: origins.S3BucketOrigin.withOriginAccessControl(site, { originPath: "/_fallback", originAccessLevels: [cloudfront.AccessLevel.READ] }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      },
+      errorResponses: [403, 404].map((httpStatus) => ({ httpStatus, responseHttpStatus: 503, responsePagePath: "/unavailable.html", ttl: Duration.seconds(0) })),
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_ALL,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+    });
+    fallback.node.addDependency(fallbackPage);
+    const pages = new origins.OriginGroup({
+      primaryOrigin: origin,
+      fallbackOrigin: new origins.HttpOrigin(fallback.distributionDomainName, { protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY, originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2] }),
+      // 503 also covers CloudFront failing to connect, 504 the function taking too long, 429 Lambda's
+      // concurrency running out. The static UI never answers any of them itself.
+      fallbackStatusCodes: [429, 500, 502, 503, 504],
+    });
+
+    const toFunction: cloudfront.BehaviorOptions = {
+      origin,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      responseHeadersPolicy: securityHeaders,
+      functionAssociations: [{ function: viewer, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
+    };
     this.distribution = new cloudfront.Distribution(this, "Cdn", {
       comment: `Insights ${cfg.name}`,
-      defaultBehavior: {
-        origin,
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-        responseHeadersPolicy: securityHeaders,
-        functionAssociations: [{ function: viewer, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
-      },
+      // The pages (everything but the API's paths), GET and HEAD as the static UI answers: CloudFront
+      // fails over for those methods only.
+      defaultBehavior: { ...toFunction, origin: pages, allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD },
       additionalBehaviors: {
         "/_next/static/*": {
           origin: siteOrigin,
@@ -281,6 +396,7 @@ export class AppStack extends Stack {
           responseHeadersPolicy: securityHeaders,
           compress: true,
         },
+        ...Object.fromEntries(API_PATH_PATTERNS.map((pattern) => [pattern, toFunction])),
       },
       ...(cfg.domain
         ? {
@@ -413,6 +529,98 @@ export class AppStack extends Stack {
       });
       alarm(`${name}-error-lines`, filter.metric({ period: five, statistic: "Sum" }), name === "api" ? 20 : 50, `Many error log lines from ${name}`, 2);
     }
+    // Customer Messaging on hold: AWS failing repeatedly (circuit open), the account's SMS spending
+    // limit reached, or bizinsights' own monthly ceiling (SMS_ACCOUNT_MONTHLY_LIMIT_USD) reached.
+    for (const [name, f] of [["jobs", jobs.fn], ["api", api.fn]] as const) {
+      const smsHold = new logs.MetricFilter(this, `SmsHold-${name}`, {
+        logGroup: f.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("sms circuit opened", "sms held", "sms platform monthly limit reached"),
+        metricNamespace: "Insights",
+        metricName: `${cfg.name}-${name}-sms-hold`,
+        metricValue: "1",
+        defaultValue: 0,
+      });
+      alarm(`sms-hold-${name}`, smsHold.metric({ period: five, statistic: "Sum" }), 1, `Texts are on hold (${name}): AWS failing, the SMS spending limit, or the platform's monthly SMS ceiling; see docs/sms.md`);
+    }
+    // Automated messages the providers refuse (each SMS refusal, retried or not, and each failed
+    // email send): a burst means a provider, an account or a sender has a problem the Automations
+    // hub's history shows message by message (docs/automations.md, "Alarms").
+    const sendFailures = new logs.MetricFilter(this, "MessagingSendFailures", {
+      logGroup: jobs.fn.logGroup,
+      filterPattern: logs.FilterPattern.anyTerm("sms send refused", "email send failed", "whatsapp send refused by the provider"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-messaging-send-failures`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("messaging-send-failures", sendFailures.metric({ period: five, statistic: "Sum" }), 25, "Many automated SMS, emails or WhatsApp messages refused by their providers: see the message histories, docs/automations.md and docs/whatsapp.md", 2);
+    // WhatsApp's Evolution API service not answering the cron's check (every 15 minutes): no store can
+    // connect or send until it is back (whatsapp-stack.ts has the service's own alarms).
+    const evolutionDown = new logs.MetricFilter(this, "EvolutionUnreachable", {
+      logGroup: cron.fn.logGroup,
+      filterPattern: logs.FilterPattern.anyTerm("evolution unreachable"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-evolution-unreachable`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("whatsapp-service-unreachable", evolutionDown.metric({ period: Duration.minutes(15), statistic: "Sum" }), 1, "WhatsApp's Evolution API service didn't answer the sweep: no store can connect or send (docs/whatsapp.md, Runbook)", 2);
+    const hour = Duration.hours(1);
+    // Sync-queue jobs that failed for good with every attempt spent (consume's "sync job failed" with
+    // final: true, from the sixth delivery: core's MAX_ATTEMPTS): a store's orders, catalog or stock, an
+    // ad account's sync, a check against Shopify, failing with something a retry should have got past
+    // (a platform's 5xx or 429, a network error, our own code). A failure no retry helps (final on its
+    // first attempt: UnrecoverableError) is left out: a shop that is paused, frozen or closed (Shopify
+    // 402/404/423), access Shopify refuses, protected customer data not approved, an ad connection
+    // marked for its merchant. Each of those is told to its merchant (an alert, the ad account's card;
+    // ad connections have their own alarm below) and comes back with every daily reconcile, which
+    // starts all stores in the same tick: three such stores would make ten lines in that hour every
+    // day. One store's jobs that run out of attempts are a handful at most (orders, products, variants,
+    // its check, its ad accounts); ten in an hour is more than one store makes, and points at a cause
+    // every store meets: ours, or a platform's outage that outlasted the retries.
+    const syncFailures = new logs.MetricFilter(this, "SyncJobsFailedForGood", {
+      logGroup: jobs.fn.logGroup,
+      filterPattern: logs.FilterPattern.all(
+        logs.FilterPattern.stringValue("$.msg", "=", "sync job failed"),
+        logs.FilterPattern.booleanValue("$.final", true),
+        logs.FilterPattern.numberValue("$.attempts", ">=", 6),
+      ),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-sync-jobs-failed-for-good`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("sync-jobs-failed-for-good", syncFailures.metric({ period: hour, statistic: "Sum" }), 10, "Ten or more sync jobs ran out of attempts in an hour, more than one store makes: see docs/RUNBOOK.md");
+    // Ad connections turning to "reconnect" or "permission" (core's recordAdFailure logs each once, when
+    // it turns), from a sync (jobs), a live report (api) or the cron's own reads. One merchant's sign-in
+    // ending turns the accounts connected with it, one to a few for a store, and each sign-in ends at a
+    // time of its own (Meta's last about 60 days); ten in an hour, across stores, is a break at the
+    // platform or in bizinsights' app (access cut for the app, its secret changed, a code misread).
+    const needMerchants = `${cfg.name}-ad-connections-need-merchants`;
+    for (const [name, f] of [["api", api.fn], ["jobs", jobs.fn], ["cron", cron.fn]] as const) {
+      new logs.MetricFilter(this, `AdsNeedMerchant-${name}`, {
+        logGroup: f.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("ad connection needs the merchant"),
+        metricNamespace: "Insights",
+        metricName: needMerchants,
+        metricValue: "1",
+        defaultValue: 0,
+      });
+    }
+    alarm("ad-connections-need-merchants", new cloudwatch.Metric({ namespace: "Insights", metricName: needMerchants, period: hour, statistic: "Sum" }), 10, "Ten or more ad connections turned to Reconnect or permission in an hour: a platform-wide break, not one merchant's sign-in (docs/RUNBOOK.md)");
+    // The cron's daily check of each Meta and AdSense account's settled week against the platform (core's
+    // adConnections/verify.ts) found a figure outside its tolerance. Once a day per account and on finished
+    // days, so any one is a fault to look at; the alarm clears the hour after and fires again on the
+    // next day's check while the difference stays.
+    const figuresDiffer = new logs.MetricFilter(this, "AdFiguresDiffer", {
+      logGroup: cron.fn.logGroup,
+      filterPattern: logs.FilterPattern.anyTerm("ad figures differ from the platform"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-ad-figures-differ`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("ad-figures-differ", figuresDiffer.metric({ period: hour, statistic: "Sum" }), 1, "Stored ad figures differ from what the platform reports for the same week: see docs/RUNBOOK.md");
 
     new cloudwatch.Dashboard(this, "Dashboard", {
       dashboardName: prefix,
@@ -450,6 +658,7 @@ export class AppStack extends Stack {
 
     new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });
     new CfnOutput(this, "CloudFrontDomain", { value: this.distribution.distributionDomainName, description: "CloudFront's own name: the DNS target of the app's domain" });
+    new CfnOutput(this, "FallbackDomain", { value: fallback.distributionDomainName, description: "Where CloudFront gets the page it shows while the app can't answer (any path; a 503)" });
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
     new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });

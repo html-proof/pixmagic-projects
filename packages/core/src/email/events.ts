@@ -167,7 +167,7 @@ const checkoutKey = (storeId: string, token: string) => `checkout:${storeId}:${t
  * full schema checks (and logs) the payload once an automation acts on it.
  */
 const checkoutRefSchema = z
-  .object({ token: z.string().optional().catch(undefined), checkout_token: z.string().optional().catch(undefined), completed_at: z.unknown() })
+  .object({ token: z.string().optional().catch(undefined), checkout_token: z.string().optional().catch(undefined), completed_at: z.unknown().optional() })
   .catch({});
 
 /** A checkout that turned into an order (or completed) is no longer a candidate for abandonment. */

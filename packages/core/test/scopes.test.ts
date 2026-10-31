@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appOptionalScopes,
+  customersFromChange,
   declaredOptionalScopes,
   fetchGrantedScopes,
+  logger,
   optionalScopeGrantUrl,
+  optionalScopesFor,
   requestableScopes,
   resetEnvCache,
+  revocableOptionalScopesFor,
   revocableScopes,
   revokeAccessScopes,
   ScopeRevokeError,
@@ -23,7 +28,11 @@ const saved = { ...process.env };
 
 /** SHOPIFY_OPTIONAL_SCOPES is read through the cached env, so set it before the first read. */
 function withOptionalScopes<T>(value: string, fn: () => T): T {
-  Object.assign(process.env, BASE_ENV, { SHOPIFY_OPTIONAL_SCOPES: value });
+  return withEnv({ SHOPIFY_OPTIONAL_SCOPES: value }, fn);
+}
+
+function withEnv<T>(vars: Record<string, string>, fn: () => T): T {
+  Object.assign(process.env, BASE_ENV, vars);
   resetEnvCache();
   return fn();
 }
@@ -31,6 +40,79 @@ function withOptionalScopes<T>(value: string, fn: () => T): T {
 afterEach(() => {
   process.env = { ...saved };
   resetEnvCache();
+  vi.restoreAllMocks();
+});
+
+/** What production declares for every app (apps/aws/src/settings.ts), and read_reports for two of them. */
+const COMMON = "read_customers,write_pixels,read_customer_events";
+const PER_APP = { SHOPIFY_OPTIONAL_SCOPES: COMMON, SHOPIFY_APP_OPTIONAL_SCOPES: "default:read_reports;pixmagic:read_reports" };
+
+describe("optional scopes per app", () => {
+  it("adds an app's own extras to the common list", () => {
+    withEnv(PER_APP, () => {
+      expect(declaredOptionalScopes("pixmagic")).toEqual(["read_customers", "write_pixels", "read_customer_events", "read_reports"]);
+      expect(declaredOptionalScopes("default")).toContain("read_reports");
+      // No app named, or one without extras (an App Store app): the common list only.
+      expect(declaredOptionalScopes()).toEqual(COMMON.split(","));
+      expect(declaredOptionalScopes("appstore")).toEqual(COMMON.split(","));
+      expect(declaredOptionalScopes("nope")).toEqual(COMMON.split(","));
+    });
+  });
+
+  it("offers nothing extra in the shipped configuration (the setting empty)", () => {
+    withEnv({ SHOPIFY_OPTIONAL_SCOPES: COMMON, SHOPIFY_APP_OPTIONAL_SCOPES: "" }, () => {
+      expect(appOptionalScopes()).toEqual({});
+      expect(declaredOptionalScopes("default")).toEqual(COMMON.split(","));
+    });
+  });
+
+  it("leaves out an entry it can't read, and keeps the rest", () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => {});
+    withEnv({ SHOPIFY_OPTIONAL_SCOPES: COMMON, SHOPIFY_APP_OPTIONAL_SCOPES: "default=read_reports; pixmagic:read_reports, read_reports ;PixMagic:read_x;public:" }, () => {
+      // Fails closed: a typo offers the scope to no app, never to every app.
+      expect(appOptionalScopes()).toEqual({ pixmagic: ["read_reports"] });
+      expect(declaredOptionalScopes("default")).toEqual(COMMON.split(","));
+      // Read once per value: every request asks, the log says it once.
+      appOptionalScopes();
+      expect(error).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("offers the App Store reviewer's test store only what the App Store app declares", () => {
+    withEnv({ ...PER_APP, SHOPIFY_APP_STORE_PREVIEW_SHOPS: "Review-Store.myshopify.com" }, () => {
+      // On the main app, which declares read_reports, but shown as the App Store app, which doesn't.
+      expect(optionalScopesFor({ shopifyAppKey: "default", shopDomain: "review-store.myshopify.com" })).not.toContain("read_reports");
+      expect(optionalScopesFor({ shopifyAppKey: "default", shopDomain: "dev-store.myshopify.com" })).toContain("read_reports");
+      expect(optionalScopesFor({ shopifyAppKey: "pixmagic", shopDomain: "pixmagic.myshopify.com" })).toContain("read_reports");
+      expect(optionalScopesFor({ shopifyAppKey: "appstore", shopDomain: "merchant.myshopify.com" })).toEqual(COMMON.split(","));
+    });
+  });
+
+  it("asks for and gives back only what the store's own app declares", () => {
+    withEnv(PER_APP, () => {
+      const appstore = optionalScopesFor({ shopifyAppKey: "appstore", shopDomain: "merchant.myshopify.com" });
+      const pixmagic = optionalScopesFor({ shopifyAppKey: "pixmagic", shopDomain: "pixmagic.myshopify.com" });
+      expect(requestableScopes(["read_reports"], ["read_orders"], appstore)).toEqual([]);
+      expect(requestableScopes(["read_reports"], ["read_orders"], pixmagic)).toEqual(["read_reports"]);
+      expect(requestableScopes(["read_reports"], ["read_orders", "read_reports"], pixmagic)).toEqual([]);
+      // The default stays the common list, which has no read_reports.
+      expect(requestableScopes(["read_reports"], ["read_orders"])).toEqual([]);
+      expect(revocableScopes(["read_reports"], ["read_orders", "read_reports"], revocableOptionalScopesFor({ shopifyAppKey: "pixmagic" }))).toEqual(["read_reports"]);
+      expect(revocableScopes(["read_reports"], ["read_orders", "read_reports"], revocableOptionalScopesFor({ shopifyAppKey: "appstore" }))).toEqual([]);
+    });
+  });
+
+  it("lets a store give back what its app's toml declares, though the setting no longer offers it", () => {
+    // The off switch in docs/shopify-setup.md: the setting emptied, the grant kept.
+    withEnv({ SHOPIFY_OPTIONAL_SCOPES: COMMON, SHOPIFY_APP_OPTIONAL_SCOPES: "", SHOPIFY_APP_STORE_PREVIEW_SHOPS: "review-store.myshopify.com" }, () => {
+      expect(optionalScopesFor({ shopifyAppKey: "default", shopDomain: "dev-store.myshopify.com" })).not.toContain("read_reports");
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "default" })).toEqual([...COMMON.split(","), "read_reports"]);
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "pixmagic" })).toContain("read_reports");
+      // An App Store app's toml declares nothing extra, and neither does an app we don't know.
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "appstore" })).toEqual(COMMON.split(","));
+      expect(revocableOptionalScopesFor({ shopifyAppKey: "nope" })).toEqual(COMMON.split(","));
+    });
+  });
 });
 
 describe("optional scope grant URL", () => {
@@ -115,6 +197,28 @@ describe("scopeFollowUpKinds", () => {
   it("queues nothing for a scope with no backfill behind it", () => {
     expect(scopeFollowUpKinds([])).toEqual([]);
     expect(scopeFollowUpKinds(["read_orders"])).toEqual([]);
+  });
+});
+
+describe("customersFromChange", () => {
+  const at = new Date("2026-10-30T03:00:00Z");
+
+  it("records the moment read_customers arrives: orders read from then on carry their customer", () => {
+    expect(customersFromChange(["read_orders"], ["read_orders", "read_customers"], at)).toEqual({ customersFrom: at });
+    // write_customers holds read_customers.
+    expect(customersFromChange(["read_orders"], ["read_orders", "write_customers"], at)).toEqual({ customersFrom: at });
+  });
+
+  it("clears it when read_customers goes: a grant again starts over", () => {
+    expect(customersFromChange(["read_orders", "read_customers"], ["read_orders"], at)).toEqual({ customersFrom: null });
+    expect(customersFromChange(["read_customers"], [], at)).toEqual({ customersFrom: null });
+  });
+
+  it("leaves it alone while read_customers stays, or stays away", () => {
+    // Held all along (granted before it was recorded, maybe): the start isn't moved to now.
+    expect(customersFromChange(["read_orders", "read_customers"], ["read_orders", "read_customers", "write_pixels"], at)).toEqual({});
+    expect(customersFromChange(["read_customers"], ["write_customers"], at)).toEqual({});
+    expect(customersFromChange(["read_orders"], ["read_orders", "read_products"], at)).toEqual({});
   });
 });
 

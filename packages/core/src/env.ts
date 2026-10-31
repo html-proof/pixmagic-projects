@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** A display name that is safe unquoted in a From header: no line breaks, angle brackets, quotes or address punctuation. */
+const HEADER_NAME_RE = /^[^\r\n<>"@,;:\\]*$/;
+
 /**
  * Plain-string configuration from `process.env`: on AWS the functions' environment plus the
  * secrets and runtime parameter loaded at cold start (apps/aws/src/secrets.ts), locally the
@@ -51,6 +54,12 @@ const schema = z.object({
    */
   AUTH_LOGIN_EMAIL_CODE: z.string().optional().default(""),
   /**
+   * Addresses (comma-separated) whose password alone signs in even with AUTH_LOGIN_EMAIL_CODE on:
+   * the account given to an app store's reviewers (Meta App Review), who can't read its inbox.
+   * Empty: none.
+   */
+  AUTH_LOGIN_CODE_EXEMPT: z.string().optional().default(""),
+  /**
    * How many sign-up and sign-in codes one address may be emailed an hour and a day (each code also
    * waits 60 seconds for the next). Empty: 6 and 20.
    */
@@ -72,6 +81,13 @@ const schema = z.object({
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
   SHOPIFY_OPTIONAL_SCOPES: z.string().default(""),
+  /**
+   * Optional scopes only some of our apps declare, on top of SHOPIFY_OPTIONAL_SCOPES (which every
+   * app declares): `appKey:scope,scope;appKey:scope`, each mirroring that app's toml (scopes.ts
+   * `appOptionalScopes`). Not JSON, so packages/core/test/appConfig.test.ts can read it from
+   * apps/aws/src/settings.ts. Empty: no app declares more than the common list.
+   */
+  SHOPIFY_APP_OPTIONAL_SCOPES: z.string().optional().default(""),
   SHOPIFY_API_VERSION: z.string().default("2026-10"),
   /** Extra Shopify apps as JSON (see apps.ts); each one's secret is in SHOPIFY_APP_SECRET_<KEY>. */
   SHOPIFY_EXTRA_APPS: z.string().optional().default(""),
@@ -117,7 +133,7 @@ const schema = z.object({
    * "1" once Meta has granted the app Advanced Access to ads_read (App Review, which needs Business
    * Verification). Until then Facebook lets only people with a role on the app (administrators,
    * developers, testers) grant it; anyone else gets Facebook's own "Feature Unavailable" page, which
-   * never comes back to bizinsights. Off, Settings says so before sending people to Facebook.
+   * never comes back to bizinsights. Off, the API reports Meta as `restricted` (Settings shows no note).
    */
   META_ADS_ADVANCED_ACCESS: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
@@ -132,7 +148,7 @@ const schema = z.object({
   /**
    * "1" once Google has verified the OAuth app's use of the sensitive adwords scope (Google Auth
    * Platform → Verification Center). Until then Google shows "Google hasn't verified this app" before
-   * its consent screen and caps new users at 100, so Settings says so before sending people there.
+   * its consent screen and caps new users at 100; the API reports Google Ads as `restricted` (Settings shows no note).
    */
   GOOGLE_ADS_OAUTH_VERIFIED: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),
@@ -151,18 +167,80 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
-   * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the
-   * Facebook Login for Business configuration id of its WhatsApp Embedded Signup variation. The
-   * verify token is what the Meta app's webhook settings were given. Manual connections (the
-   * merchant's own app and system-user token) work without any of these.
+   * WhatsApp Automation on Evolution API (docs/whatsapp.md): bizinsights' own Evolution API service.
+   * Its internal base URL (in AWS the ECS service's private DNS name, reachable only from the
+   * functions; locally the docker-compose service), its global API key (a secret, used only to
+   * create instances and list them), and the name of that server (shard) new connections go to.
+   * Without the URL or the key, connecting WhatsApp is off and the page says so.
+   */
+  EVOLUTION_API_URL: z.string().optional().default(""),
+  EVOLUTION_API_KEY: z.string().optional().default(""),
+  EVOLUTION_SHARD: z.string().default("a"),
+  /** Where Evolution API posts its webhooks: bizinsights' public API (empty: API_URL). Locally, an address the container can reach. */
+  EVOLUTION_WEBHOOK_URL: z.string().optional().default(""),
+  /** Each call to Evolution API gives up after this long (ms). */
+  EVOLUTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
+  /**
+   * The Cloud API way to connect (Meta's Embedded Signup, then Evolution API's WHATSAPP-BUSINESS
+   * integration sends through it): the Meta app's id and secret (the ad accounts' Meta app when
+   * these are empty), the Facebook Login for Business configuration id of its WhatsApp Embedded
+   * Signup variation, and the verify token of Meta's webhook. Without them the page offers only the
+   * linked phone, and says why.
    */
   WHATSAPP_APP_ID: z.string().optional().default(""),
   WHATSAPP_APP_SECRET: z.string().optional().default(""),
   WHATSAPP_CONFIG_ID: z.string().optional().default(""),
-  WHATSAPP_API_VERSION: z.string().default("v25.0"),
+  WHATSAPP_API_VERSION: z.string().default("v26.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
+  /**
+   * Workspace ids (comma-separated) that may also connect WhatsApp with a token of bizinsights' own
+   * Meta app instead of Meta's window: bizinsights' own team, e.g. to record Meta's App Review with
+   * the app's test number. Empty: no one.
+   */
+  WHATSAPP_TOKEN_CONNECT_WORKSPACES: z.string().optional().default(""),
+  /**
+   * Customer Messaging: SMS through AWS End User Messaging (docs/sms.md).
+   *  - off: nothing is sent to AWS. The pages work; rules and campaigns record dry runs.
+   *  - sandbox: test texts only, to numbers a merchant verified with AWS (AWS's own sandbox
+   *    allows no others); rules and campaigns still record dry runs.
+   *  - live: rules and campaigns text customers, after every consent, budget and sender check.
+   */
+  SMS_MODE: z.enum(["off", "sandbox", "live"]).default("off"),
+  /** Marketing texts (campaigns, abandoned checkouts, win-back, VIP): a switch of their own, off until the platform owner turns it on. */
+  SMS_MARKETING_ENABLED: z.string().optional().default(""),
+  /** The AWS region SMS calls go to unless a store's sender names another (Indian local routes: ap-south-1). Empty: AWS_REGION. */
+  SMS_DEFAULT_REGION: z.string().optional().default(""),
+  /** The configuration set whose event destination reports delivery (infra/cdk): one name, or JSON per region. */
+  SMS_CONFIGURATION_SET: z.string().optional().default(""),
+  /** A platform-owned origination identity stores may share (its AWS tags must say bizinsights:shared=true). Empty: none. */
+  SMS_SHARED_SENDER: z.string().optional().default(""),
+  /** Where merchants' sender-name requests go (the platform owner, who sets them up and registers them with AWS). Empty: they are recorded and logged only. */
+  SMS_SENDER_REQUESTS_TO: z.string().optional().default(""),
+  /** bizinsights' own ceiling on what all stores together may spend on texts in a month (US$), below AWS's account spending limit. */
+  SMS_ACCOUNT_MONTHLY_LIMIT_USD: z.coerce.number().min(0).default(20),
+  /** The most AWS may charge for one part of a text (MaxPrice is this times the parts); a dearer route refuses the text. */
+  SMS_MAX_PRICE_PER_PART_USD: z.coerce.number().min(0.001).max(5).default(0.25),
+  /** Price per part by country (US$), copied from AWS's price list, for estimates before AWS has billed any text there: {"AU":0.05}. */
+  SMS_PRICE_TABLE: z.string().optional().default("{}"),
+  /** Parts per second one sender may send (the origination identity's MPS at AWS). */
+  SMS_PARTS_PER_SECOND: z.coerce.number().int().min(1).max(1000).default(1),
+  /** Most recipients one campaign may have. */
+  SMS_CAMPAIGN_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(1_000_000).default(2000),
   EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
+  /**
+   * The senders of the codes (OTP_*: sign-up, sign-in, verification and password-reset codes), of
+   * shared links (LINK_*: dashboard invitations) and of Staff Management (STAFF_*: employee portal
+   * invitations), core/mail/senders.ts. An empty address sends from EMAIL_FROM. Names go into the
+   * From header as they are, so they may not hold the characters that would need quoting there.
+   */
+  OTP_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
+  OTP_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
+  LINK_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
+  LINK_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
+  STAFF_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
+  STAFF_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
+  /** Where the app's emails send people with questions ("contact support@..."). Empty: no such line. */
+  SUPPORT_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
   /**
    * Email integrations (docs/email.md). "Connect Gmail / Google Workspace" needs a Google OAuth
    * client whose consent screen lists gmail.send; "Connect Outlook / Microsoft 365" an Entra app
@@ -203,6 +281,22 @@ const schema = z.object({
   /** Signing secret (whsec_...) of the Resend webhook endpoint POST /api/webhooks/email/resend. */
   RESEND_WEBHOOK_SECRET: z.string().optional().default(""),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
+  /**
+   * Zapier (docs/zapier.md): bizinsights is the OAuth provider of its app on Zapier's Developer
+   * Platform. The client id and secret are values the owner makes up and enters on both sides (the
+   * secret in Secrets Manager, put-secrets.mjs --set ZAPIER_CLIENT_SECRET, and in the Zapier app's
+   * environment as CLIENT_SECRET); the redirect URI is the one Zapier's app shows (Authentication →
+   * OAuth v2), matched exactly. Until all three are set, every Zapier endpoint answers 503
+   * `not_configured` and Settings → Integrations says Zapier isn't set up yet. The invite URL (the
+   * Zapier app's invite link, or its public page once Zapier lists it) is what Connect opens.
+   * ZAPIER_CLIENT_SECRET_PREVIOUS: the secret before a rotation, accepted too until every version of
+   * the Zapier app has the new one (docs/RUNBOOK.md); empty otherwise.
+   */
+  ZAPIER_CLIENT_ID: z.string().optional().default(""),
+  ZAPIER_CLIENT_SECRET: z.string().optional().default(""),
+  ZAPIER_CLIENT_SECRET_PREVIOUS: z.string().optional().default(""),
+  ZAPIER_REDIRECT_URI: z.union([z.literal(""), z.string().url()]).default(""),
+  ZAPIER_INVITE_URL: z.union([z.literal(""), z.string().url()]).default(""),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -227,7 +321,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {

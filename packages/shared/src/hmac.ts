@@ -1,9 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
+/** Compares in constant time, length included: both sides are hashed to 32 bytes first, so a wrong-length guess isn't answered sooner. */
 export function safeEqual(a: string, b: string): boolean {
-  const ha = createHash("sha256").update(a).digest();
-  const hb = createHash("sha256").update(b).digest();
-  return timingSafeEqual(ha, hb) && a.length === b.length;
+  return timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 }
 
 /**

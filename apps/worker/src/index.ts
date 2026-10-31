@@ -1,10 +1,13 @@
-import { dbReachable, systemDb, type StoreStatus } from "@app/db";
+import { crossTenant, dbReachable, systemDb, type StoreStatus } from "@app/db";
+import { SIGN_IN_ACTIVITY_DAYS, SIGN_IN_EVENT, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import {
   AdsRateLimitedError,
+  AdSyncBusyError,
   backoffSeconds,
   flagStaleSessions,
   logger,
   MAX_ATTEMPTS,
+  pruneAdSyncRuns,
   pruneShopifyReports,
   pruneTeamRecords,
   raiseAlert,
@@ -13,6 +16,7 @@ import {
   type AggregateJobData,
   type Producer,
   type QueueName,
+  setWebhookEventAside,
   sweepWhatsapp,
   sweepEmail,
   type EmailJob,
@@ -22,8 +26,10 @@ import {
   type WebhookJobData,
   pruneReconciliations,
   failInventoryPass,
+  failHistoryWindows,
   type WhatsappJob,
 } from "@app/core";
+import { noSmsProvider, sweepSms, type SmsJob } from "@app/core/sms";
 import {
   AccessRevokedError,
   NotApprovedError,
@@ -36,20 +42,28 @@ import {
   runAdsSync,
   runAggregate,
   runEmailJob,
+  runSmsEvent,
+  runSmsJob,
   runWhatsappJob,
   runSync,
   scheduleAdsSync,
   scheduleReconcile,
   seedSalesRereads,
   sweepAdConnectionAlerts,
+  checkWaitingAdLogins,
+  runZapierJob,
+  sweepZapierDeliveries,
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
+import type { ZapierJob } from "@app/core/zapier";
 import { runShopifyReports } from "./shopifyReports.js";
 
+import { inJobScope } from "./rowScope.js";
 import { failVerify, runVerify } from "./verify.js";
 
 export * from "./handlers.js";
+export { inJobScope, jobWorkspace } from "./rowScope.js";
 export { runVerify, startChecks } from "./verify.js";
 export { runShopifyReports } from "./shopifyReports.js";
 
@@ -103,37 +117,60 @@ const RATE_DEFER_MAX_DELAY_S = 3600;
 const RATE_DEFER_MAX_MS = 6 * 3600_000;
 
 /**
+ * Shortest and longest wait between re-sends while another sync of the same ad account runs (see
+ * deferWhileBusy): a window takes seconds to a few minutes, a Meta report job longer.
+ */
+const BUSY_DEFER_MIN_DELAY_S = 15;
+const BUSY_DEFER_MAX_DELAY_S = 300;
+/**
+ * A sync holds its account for 16 minutes at most (ADS_SYNC_LOCK_MS): one still finding it taken after
+ * this long is a fault to see, so it is let through to the ordinary retries.
+ */
+const BUSY_DEFER_MAX_MS = 2 * 3600_000;
+
+/**
  * Process one message. Success acks; failure retries with exponential backoff
  * until MAX_ATTEMPTS (or immediately fails on UnrecoverableError), then records
  * the failure and raises an alert. A failure while the database is unreachable
  * is not the job's fault and spends none of that budget (see deferForDb). Never
- * throws, so one bad message does not redeliver the rest of its batch.
+ * throws, so one bad message does not redeliver the rest of its batch. `systemDb` sees only the
+ * job's own workspace (rowScope.ts).
  */
 export async function consume(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
+  return inJobScope(queue, msg.body, () => consumeInScope(queue, msg, deps));
+}
+
+async function consumeInScope(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
   // The deferral is consume's bookkeeping, not part of the job. Handlers re-enqueue
   // `{ ...data, ... }` (the next page, a halved page, the next bulk phase), so passing it through
   // would start every follow-up message part-way through an outage it never saw.
-  const { dbDeferral, rateDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral; rateDeferral?: RateDeferral };
+  const { dbDeferral, rateDeferral, busyDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral; rateDeferral?: RateDeferral; busyDeferral?: RateDeferral };
   // Ad platforms rate-limit per app: jitter keeps many accounts' retries from landing together.
   const jitter = queue === "sync" && (job as { kind?: string }).kind === "ads" ? Math.floor(Math.random() * 30) : 0;
   try {
     // Ad account syncs ride the sync queue too (see adsQueue), told apart by their kind.
     const kind = (job as { kind?: string }).kind;
     if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
-    // WhatsApp messages ride the sync queue too; the message rows carry their own state.
-    else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) await runWhatsappJob(job as WhatsappJob, deps);
+    // Texts (Customer Messaging) ride the sync queue too; the job rows carry their own state.
+    else if (queue === "sync" && kind === "sms") await runSmsJob(job as SmsJob, deps);
     // The check against Shopify rides the sync queue too; its run's row is its record.
     else if (queue === "sync" && kind === "verify") await runVerify(job as VerifyJob, deps);
     // Shopify's report figures for the dashboard ride the sync queue too; the kept rows carry their state.
     else if (queue === "sync" && kind === "shopify_reports") await runShopifyReports(job as ShopifyReportsJob, deps);
+    // Zapier deliveries (docs/zapier.md) ride the sync queue too; the delivery rows carry their own retries.
+    else if (queue === "sync" && kind === "zapier") await runZapierJob(job as ZapierJob, deps);
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else if (queue === "email") await runEmailJob(job as EmailJob, deps);
+    else if (queue === "smsEvents") await runSmsEvent(job, deps);
+    // WhatsApp Automation: sends, Evolution API's events, campaign batches; the rows carry their own state.
+    else if (queue === "whatsapp") await runWhatsappJob(job as WhatsappJob, deps);
     else await runAggregate(job as AggregateJobData);
     msg.ack();
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
     if (queue === "sync" && (job as { kind?: string }).kind === "ads" && err instanceof AdsRateLimitedError && (await deferForRateLimit(msg, job, rateDeferral, err, deps))) return;
+    if (queue === "sync" && (job as { kind?: string }).kind === "ads" && err instanceof AdSyncBusyError && (await deferWhileBusy(msg, job, busyDeferral, rateDeferral, deps))) return;
     if (!(err instanceof UnrecoverableError) && !(await (deps.dbHealthy ?? dbReachable)())) {
       await deferForDb(queue, msg, job, dbDeferral, err, deps);
       return;
@@ -211,6 +248,29 @@ async function deferForRateLimit(msg: QueueMessage, job: object, prev: RateDefer
   return true;
 }
 
+/**
+ * Another sync of the same ad account is running (AdSyncBusyError): this one read nothing, and comes
+ * again shortly, as a new message carrying its deferral like deferForRateLimit's, spending none of the
+ * job's retries. A wait for the platform the job had begun goes on with it, so waiting for another sync
+ * doesn't start that count again. False: it has waited long enough already; the ordinary retries take over.
+ */
+async function deferWhileBusy(msg: QueueMessage, job: object, prev: RateDeferral | undefined, rate: RateDeferral | undefined, deps: WorkerDeps): Promise<boolean> {
+  const now = Date.now();
+  const since = prev?.since ?? now;
+  const count = prev?.count ?? 0;
+  if (now - since >= BUSY_DEFER_MAX_MS) return false;
+  const delaySeconds = Math.min(BUSY_DEFER_MAX_DELAY_S, BUSY_DEFER_MIN_DELAY_S * 2 ** count) + Math.floor(Math.random() * 15);
+  logger.info({ connectionId: (job as AdsSyncData).connectionId, messageId: msg.id, deferrals: count, delaySeconds }, "ad sync waiting: another sync of this account is running");
+  try {
+    await (deps.queues.sync as Producer<unknown>).send({ ...job, ...(rate ? { rateDeferral: rate } : {}), busyDeferral: { count: count + 1, since } }, { delaySeconds });
+  } catch (sendErr) {
+    logger.error({ err: sendErr, messageId: msg.id }, "re-sending an ad sync that waits for another failed");
+    return false;
+  }
+  msg.ack();
+  return true;
+}
+
 async function onFailure(queue: QueueName, body: unknown, err: Error, final: boolean, deps: WorkerDeps) {
   const error = err.message.slice(0, 500);
   const kind = (body as { kind?: string })?.kind;
@@ -219,10 +279,15 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // reasons is put back by sendEmailMessage itself, and the sweep re-queues anything left waiting.
     return;
   }
-  if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) {
-    // The message row is the record (scheduled / failed with its reason), and the sweeper picks up
-    // anything still due. A dispatch chain that gave up lets the next tick start a new one.
-    if (final && kind === "whatsapp_dispatch") await deps.coord.release(`wa-dispatch:${(body as { storeId: string }).storeId}`).catch(() => {});
+  if ((queue === "sync" && kind === "sms") || queue === "smsEvents") {
+    // The job row is the record (an SMS send never throws for a provider failure); a delivery event
+    // that keeps failing is left to the queue's dead-letter queue, with its alarm.
+    return;
+  }
+  if (queue === "whatsapp") {
+    // The rows are the record: a message stays queued or failed with its reason, a campaign's batch
+    // chain is picked up again by the sweep, and an event that kept failing is set aside here or by the sweep.
+    if (final && kind === "wapp_event") await setWebhookEventAside((body as { eventId: string }).eventId, error);
     return;
   }
   if (queue === "sync" && kind === "verify") {
@@ -231,6 +296,10 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
   }
   if (queue === "sync" && kind === "shopify_reports") {
     // Nothing to mark: the dashboard asks again for whatever is still missing or stale.
+    return;
+  }
+  if (queue === "sync" && kind === "zapier") {
+    // The delivery row is the record: one cut short is tried again by the cron sweep (stuck "delivering").
     return;
   }
   if (queue === "sync" && (body as { kind?: string })?.kind === "ads") {
@@ -250,6 +319,8 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: final ? { status: "failed", error } : { error } }).catch(() => {});
     if (!final) return;
     if (data.kind === "inventory") await failInventoryPass(data.inventory?.runId, error).catch(() => {});
+    // A full history's year that was being read failed with it; the import resumes there next time.
+    if (data.kind === "orders") await failHistoryWindows(data.syncJobId, error).catch(() => {});
     // The jobs seeded to wait for this one's time zone (orders, a stock pass) will never be sent:
     // left queued, they read as an import or a stock check about to start until the stale-job
     // sweep gave up on them hours later.
@@ -288,6 +359,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
       },
       deps.mailer,
       deps.fetchImpl,
+      deps.queues,
     );
   } else if (queue === "webhooks") {
     const data = body as WebhookJobData;
@@ -299,6 +371,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
         { workspaceId: ev.workspaceId, storeId: ev.storeId, severity: "warning", code: "webhook_failed", message: `Processing ${ev.topic} failed: ${err.message}` },
         deps.mailer,
         deps.fetchImpl,
+        deps.queues,
       );
     }
     if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
@@ -329,6 +402,25 @@ export async function prunePixelDedupe(batch = 20_000): Promise<number> {
 }
 
 /**
+ * Settings → Security's records: a device row a month after its session ended (signed out, removed,
+ * or expired), and the sign-in activity (auth_events signed_in / sign_in_failed) after
+ * SIGN_IN_ACTIVITY_DAYS, a bounded batch per tick. The account's other auth_events stay: they are
+ * its security trail (and some of them are checked at sign-in).
+ */
+const ENDED_SESSION_KEEP_MS = 30 * 86_400_000;
+export async function pruneSignIns(batch = 5_000) {
+  const now = Date.now();
+  const ended = new Date(now - ENDED_SESSION_KEEP_MS);
+  const activity = new Date(now - SIGN_IN_ACTIVITY_DAYS * 86_400_000);
+  const sessions = await systemDb.$executeRaw`
+    DELETE FROM user_sessions WHERE id IN (SELECT id FROM user_sessions WHERE ended_at < ${ended} OR expires_at < ${ended} LIMIT ${batch})`;
+  const events = await systemDb.$executeRaw`
+    DELETE FROM auth_events WHERE id IN (
+      SELECT id FROM auth_events WHERE type IN (${SIGN_IN_EVENT}, ${SIGN_IN_FAILED_EVENT}) AND created_at < ${activity} LIMIT ${batch})`;
+  return { sessions, events };
+}
+
+/**
  * Team & Access retention (core's pruneTeamRecords) once a day, on whichever tick first gets the
  * day's lease: it scans the audit log, which no tick needs to do more often. A failed run gives the
  * lease back, so the next tick tries again.
@@ -344,7 +436,23 @@ export async function pruneTeamDaily(deps: Pick<WorkerDeps, "coord">) {
   }
 }
 
+/** Ad sync records past their keeping (core's pruneAdSyncRuns) once a day, like the team retention above. */
+export async function pruneAdSyncRunsDaily(deps: Pick<WorkerDeps, "coord">) {
+  if (!(await deps.coord.acquire("sweep:ad-sync-runs", TEAM_RETENTION_LEASE_MS))) return null;
+  try {
+    return await pruneAdSyncRuns();
+  } catch (err) {
+    await deps.coord.release("sweep:ad-sync-runs").catch(() => {});
+    throw err;
+  }
+}
+
+/** One cron tick. Its sweeps work across every store, so `systemDb` sees every workspace (the `sweep` reason). */
 export async function runScheduled(cron: string, deps: WorkerDeps) {
+  return crossTenant("sweep", () => runSweeps(cron, deps));
+}
+
+async function runSweeps(cron: string, deps: WorkerDeps) {
   if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
   // job only needs noticing within the window it has already been stuck for.
@@ -383,7 +491,12 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad alert sweep failed; the next tick tries again");
       return null;
     });
-    // WhatsApp: campaigns, due messages, parcel status, retention. Last, on its own leases.
+    // Sign-ins connected with no ad account yet: asked again, and their accounts connected once listed.
+    const adLogins = await checkWaitingAdLogins(deps).catch((err: unknown) => {
+      logger.error({ err }, "waiting ad login check failed; the next tick tries again");
+      return null;
+    });
+    // WhatsApp Automation: due messages, webhook retries, campaigns, health checks, retention. On its own leases.
     const whatsapp = await sweepWhatsapp(deps).catch((err: unknown) => {
       logger.error({ err }, "whatsapp sweep failed; the next tick tries again");
       return null;
@@ -398,8 +511,17 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "email sweep failed; the next tick tries again");
       return null;
     });
+    // Customer Messaging: due texts, cut-off sends, delivery timeouts, campaigns, opt-out lists, the daily checks.
+    const sms = await sweepSms({ ...deps, sms: deps.sms ?? noSmsProvider }).catch((err: unknown) => {
+      logger.error({ err }, "sms sweep failed; the next tick tries again");
+      return null;
+    });
     const pixelDedupePruned = await prunePixelDedupe().catch((err: unknown) => {
       logger.error({ err }, "pixel dedupe prune failed; the next tick tries again");
+      return null;
+    });
+    const signInsPruned = await pruneSignIns().catch((err: unknown) => {
+      logger.error({ err }, "sign-in records prune failed; the next tick tries again");
       return null;
     });
     const teamPruned = await pruneTeamDaily(deps).catch((err: unknown) => {
@@ -423,7 +545,16 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "inventory prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned };
+    const adSyncRunsPruned = await pruneAdSyncRunsDaily(deps).catch((err: unknown) => {
+      logger.error({ err }, "ad sync records prune failed; the next tick tries again");
+      return null;
+    });
+    // Zapier last: the alerts the sweeps above raised (with no queue at hand) go out in this same tick.
+    const zapier = await sweepZapierDeliveries(deps).catch((err: unknown) => {
+      logger.error({ err }, "zapier sweep failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

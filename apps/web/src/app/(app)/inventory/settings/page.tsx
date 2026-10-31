@@ -18,7 +18,6 @@ import { INVENTORY_DEFAULTS } from "@app/shared/inventory";
 export default function StockSettingsPage() {
   const { base, status } = useInventory();
   const { data, error, loading, reload, setData } = useApi<{ settings: InventorySettingsView }>(`${base}/settings`);
-  const templates = useApi<{ templates: Array<{ name: string; language: string }> }>(status?.can.alerts ? `${base}/whatsapp-templates` : null);
   const { busy, run } = useAction();
   const s = data?.settings;
   const [alerts, setAlerts] = useState({ lowStockThreshold: "", emailAlerts: true, dashboardAlerts: true, whatsappAlerts: false, whatsappTemplate: "", numbers: "" });
@@ -116,16 +115,13 @@ export default function StockSettingsPage() {
               </div>
               {alerts.whatsappAlerts && (
                 <>
-                  <Field label="WhatsApp template" htmlFor="wa-template" hint="An approved template with two variables: the store's name, then the alert. Submit the library's “Stock alert (to your team)” from WhatsApp → Message templates.">
-                    <select id="wa-template" className="input" value={alerts.whatsappTemplate} onChange={(e) => setAlerts({ ...alerts, whatsappTemplate: e.target.value })}>
-                      <option value="">Choose a template</option>
-                      {templates.data?.templates.map((t) => (
-                        <option key={`${t.name}:${t.language}`} value={t.name}>
-                          {t.name} ({t.language})
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
+                  <p className="text-xs text-muted sm:col-span-2">
+                    A short text from the store&apos;s connected WhatsApp (
+                    <Link href="/dashboard/whatsapp-automation" className="underline">
+                      WhatsApp Automation
+                    </Link>
+                    ), within its sending hours and daily limit, at most one an hour to each number. Nothing is sent while WhatsApp isn&apos;t connected. On Meta&apos;s Cloud API, it reaches only people who wrote to that number in the last 24 hours.
+                  </p>
                   <Field label="Send to" htmlFor="wa-to" hint={s.whatsappTo.length ? `Now: ${s.whatsappTo.join(", ")}. Enter numbers to replace them.` : "Up to 5 numbers in international format, e.g. +61400000000."}>
                     <input id="wa-to" className="input" value={alerts.numbers} onChange={(e) => setAlerts({ ...alerts, numbers: e.target.value })} placeholder="+61400000000, +61400000001" />
                   </Field>

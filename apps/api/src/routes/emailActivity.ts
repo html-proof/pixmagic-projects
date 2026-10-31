@@ -6,11 +6,11 @@ import {
   emailAnalytics,
   emailAudit,
   emailOverview,
-  enqueueEmailSend,
   getEmailSettings,
   getMessage,
   listIngestKeys,
   listMessages,
+  retryEmailMessage,
   revokeIngestKey,
   updateEmailSettings,
 } from "@app/core";
@@ -82,19 +82,7 @@ export function emailActivityRoutes(app: App, deps: Deps) {
     const { ws, id } = c.req.param();
     const { user } = await requireEmail(c, deps, ws, "email:automate");
     await limit(deps.coord, `rl:email:retry:${ws}`, LIMITS.emailRetry);
-    const m = await withTenant(ws, (tx) => tx.emailMessage.findFirst({ where: { id, workspaceId: ws } }));
-    if (!m) throw new HttpError(404, "Not found", "not_found");
-    if (m.kind !== "automation") throw new HttpError(409, "Test emails can't be retried; send a new test instead.", "not_retryable");
-    if (m.status !== "failed" && m.status !== "unknown") throw new HttpError(409, "Only failed messages, or ones whose outcome is unknown, can be retried.", "not_retryable");
-    const now = new Date();
-    const { count } = await systemDb.emailMessage.updateMany({
-      where: { id: m.id, workspaceId: ws, status: { in: ["failed", "unknown"] } },
-      data: { status: "queued", attempts: 0, scheduledAt: now, enqueuedAt: null, failedAt: null, lastErrorCode: null, lastErrorMessage: null },
-    });
-    if (!count) throw new HttpError(409, "The message changed in the meantime; reload and try again.", "conflict");
-    await systemDb.emailMessageEvent.create({ data: { workspaceId: ws, messageId: m.id, eventType: "queued", metadata: { retriedBy: user.id, previousStatus: m.status } } });
-    await enqueueEmailSend({ id: m.id, scheduledAt: now }, deps);
-    await emailAudit({ workspaceId: ws, actorUserId: user.id, action: "email.message.retried", targetType: "email_message", targetId: m.id, metadata: { previousStatus: m.status } });
+    await retryEmailMessage(ws, id, user.id, deps);
     return c.json({ message: await getMessage(ws, id) });
   });
 

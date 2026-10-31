@@ -269,11 +269,8 @@ export function AskInsight() {
                   className="col-start-1 row-start-1 flex items-center gap-2.5 self-center text-[15px] text-lp-muted md:text-[16px]"
                 >
                   <span className="relative grid size-6 shrink-0 place-items-center">
-                    <motion.span
-                      animate={summary === "working" ? { scale: [1, 1.6, 1], opacity: [0.5, 0, 0.5] } : { scale: 1, opacity: 0 }}
-                      transition={summary === "working" ? { duration: 1.6, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
-                      className="absolute size-2 rounded-full bg-lp-violet-bright"
-                    />
+                    {/* CSS loops here and in the rows: the compositor runs them, not a script on every frame. */}
+                    <span className={`absolute size-2 rounded-full bg-lp-violet-bright ${summary === "working" ? "lp-loop lp-ask-pulse" : "opacity-0"}`} />
                     <span className="relative size-1.5 rounded-full bg-lp-violet-bright/80" />
                   </span>
                   Comparing this week with the week before…
@@ -391,11 +388,7 @@ function AnalysisRow({ topic, state, instant }: { topic: string; state: RowState
       <span className="relative grid size-5 shrink-0 place-items-center">
         {state === "waiting" && <span className="size-4 rounded-full border border-lp-line-strong" />}
         {state === "active" && (
-          <motion.span
-            animate={{ rotate: 360 }}
-            transition={{ duration: 0.9, repeat: Infinity, ease: "linear" }}
-            className="size-4 rounded-full border-2 border-lp-violet/25 border-t-lp-violet-bright"
-          />
+          <span className="lp-loop size-4 animate-spin rounded-full border-2 border-lp-violet/25 border-t-lp-violet-bright [animation-duration:0.9s]" />
         )}
         {state === "done" && (
           <motion.span
@@ -421,12 +414,7 @@ function AnalysisRow({ topic, state, instant }: { topic: string; state: RowState
             className="absolute inset-0 origin-left rounded-full [background:var(--lp-gradient)]"
           />
           {state === "active" && (
-            <motion.span
-              initial={{ x: "-120%" }}
-              animate={{ x: "330%" }}
-              transition={{ duration: 1.1, repeat: Infinity, ease: "linear" }}
-              className="absolute inset-y-0 left-0 w-1/3 [background:linear-gradient(90deg,transparent,rgb(255_255_255/0.6),transparent)]"
-            />
+            <span className="lp-loop lp-ask-sweep absolute inset-y-0 left-0 w-1/3 [background:linear-gradient(90deg,transparent,rgb(255_255_255/0.6),transparent)]" />
           )}
         </span>
       </span>

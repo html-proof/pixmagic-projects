@@ -4,10 +4,18 @@ import { escapeHtml } from "@app/shared/email";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
+import { fromHeader, type EmailPurpose } from "./mail/senders.js";
 import type { MailReceipt } from "./mail/types.js";
+import type { Queues } from "./queues.js";
+import { zapierAlertRaised, zapierAuditEvent } from "./zapier/events.js";
 
 export interface MailOptions {
-  /** Where replies go instead of EMAIL_FROM (whose mailbox doesn't exist): an invitation's replies reach the person who sent it. */
+  /**
+   * What the email is for, which decides who it comes from (core/mail/senders.ts): a code from the
+   * support sender, a shared link from the link sender. Absent: EMAIL_FROM. Never a raw address.
+   */
+  purpose?: EmailPurpose;
+  /** Where replies go instead of the sender (whose mailbox may not exist): an invitation's replies reach the person who sent it. */
   replyTo?: string;
   /**
    * The same key for every attempt at one message: a provider that supports it (Resend) sends it
@@ -40,7 +48,7 @@ export function parseFrom(from: string): string | { email: string; name: string 
 export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Mailer {
   return {
     async send(to, subject, text, html, opts) {
-      const from = parseFrom(env().EMAIL_FROM);
+      const from = parseFrom(fromHeader(opts?.purpose));
       const res = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/v1/send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -65,10 +73,10 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
  * recipient), one per entry, until it is empty again.
  */
 export function memoryMailer(): Mailer & {
-  sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }>;
+  sent: Array<{ to: string; from: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }>;
   fail: Error[];
 } {
-  const sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }> = [];
+  const sent: Array<{ to: string; from: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }> = [];
   const fail: Error[] = [];
   return {
     sent,
@@ -77,7 +85,7 @@ export function memoryMailer(): Mailer & {
       const err = fail.shift();
       if (err) throw err;
       const messageId = `mem-${sent.length + 1}`;
-      sent.push({ to, subject, text, messageId, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}), ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}) });
+      sent.push({ to, from: fromHeader(opts?.purpose), subject, text, messageId, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}), ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}) });
       return { provider: "memory", messageId };
     },
   };
@@ -128,6 +136,8 @@ export async function raiseAlert(
   input: { workspaceId: string; storeId?: string | null; severity: "info" | "warning" | "critical"; code: string; message: string },
   mailer: Mailer,
   fetchImpl: FetchLike = fetch,
+  /** Queues Zapier's "New alert" deliveries at once; without it the cron sweep sends them (within 15 minutes). */
+  queues?: Pick<Queues, "sync">,
 ) {
   const open = await systemDb.alert.findFirst({
     where: { workspaceId: input.workspaceId, storeId: input.storeId ?? null, code: input.code, resolvedAt: null },
@@ -136,6 +146,8 @@ export async function raiseAlert(
   const alert = await systemDb.alert.create({ data: { ...input, storeId: input.storeId ?? null } });
   // The logger drops any `code` key (it can be an OAuth code), so the alert's goes in as alertCode.
   logger.warn({ alertId: alert.id, alertCode: alert.code, alert }, "alert raised");
+  // Zapier's "New alert" trigger (docs/zapier.md): worded as the bell words it. Never throws.
+  await zapierAlertRaised(alert, queues);
 
   // Names for the email and Slack. Best effort: without them both still go out.
   const [workspace, store] = await Promise.all([
@@ -205,6 +217,9 @@ export async function resolveAlerts(storeId: string, codes: string[]): Promise<n
  * it after the change it records has been committed, so failing here would turn that success into
  * an error (a 500 the client retries, repeating the change; a queue job retried for work already
  * done). A failure is logged, with what was being recorded, instead.
+ *
+ * A row that is an integration connected or disconnected (an ad platform, WhatsApp, Zapier) is also
+ * Zapier's "Integration connected / disconnected" event for the store (zapier/events.ts).
  */
 export async function audit(input: {
   workspaceId: string;
@@ -216,7 +231,7 @@ export async function audit(input: {
   ip?: string;
 }) {
   try {
-    await systemDb.auditLog.create({
+    const row = await systemDb.auditLog.create({
       data: {
         workspaceId: input.workspaceId,
         actorUserId: input.actorUserId ?? null,
@@ -227,6 +242,8 @@ export async function audit(input: {
         ip: input.ip,
       },
     });
+    // Never throws (recordZapierEvent logs its own failures); without a queue here, the cron sweep sends it.
+    await zapierAuditEvent(row);
   } catch (err) {
     logger.error({ err, workspaceId: input.workspaceId, action: input.action, targetType: input.targetType, targetId: input.targetId }, "audit log write failed");
   }

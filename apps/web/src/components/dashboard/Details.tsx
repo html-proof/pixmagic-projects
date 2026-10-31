@@ -1,25 +1,21 @@
 "use client";
-import Link from "next/link";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { CompareMode } from "@app/shared/dates";
-import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
-import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
+import { TopProducts } from "./TopProducts";
+import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
 import { ContactsCard } from "./Contacts";
+import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
 import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
-import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
-import { shownFigures, upToWords } from "./adFigures";
-import { AdsDetail } from "./AdsPanel";
-import { AdsenseDetail } from "./AdsensePanel";
 import { Explained } from "./Explain";
 import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
-import { ProfitCard, ShopifyCheckCard, ShopifySessionsCard } from "./ShopifyReports";
+import { ProfitCard, ShopifyCheckCard } from "./ShopifyReports";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 import { appliedCustom, breakdownOf, salesLinesOf } from "./redacted";
@@ -90,7 +86,9 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
           {total !== null ? (
             <>
               Your total sales were <B>{money(total)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}. Before shipping and taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
+              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
+              {c.totalRefunded !== undefined && c.totalRefunded > 0 ? <> That&apos;s after refunds took <B>{money(c.totalRefunded)}</B> off it.</> : null} Before shipping and
+              taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
             </>
           ) : (
             <>
@@ -112,7 +110,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
 
-      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous)}.`}>
+      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous, ov.range)}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} label={versus} />} />}
           {custom && <Stat label={`Custom sales · ${custom.name}`} value={money(custom.current)} note={<Delta value={custom.delta} label={versus} />} />}
@@ -212,7 +210,14 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
-  const topRevenue = Math.max(0, ...items.map((i) => i.revenue));
+  // Top products narrowed to a collection, picked in Sales by collection or Top products' own list.
+  const [collection, setCollection] = useState<CollectionChoice | null>(null);
+  const collections = useCollectionSales(ov, !!ov.modules.top_products);
+  const choices = (collections.report?.items ?? []).map((c) => ({ id: c.collectionId, title: collectionName(c) }));
+  const pick = (c: CollectionChoice) => {
+    setCollection(c);
+    document.getElementById("d-top-products")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   return (
     <>
       <InShort>
@@ -229,87 +234,12 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
             )}
           </>
         ) : (
-          <p>No product sales in these dates yet.</p>
+          <p>{ov.modules.top_products?.complete === false ? "Product rankings are waiting for complete sales data for these dates." : "No product sales in these dates yet."}</p>
         )}
       </InShort>
-      {ov.modules.top_products && (
-        <Panel id="d-top-products" title="Top products" help="Ranked by net sales in these dates (after discounts and returns, before tax), as Shopify's sales by product counts them.">
-          {items.length === 0 ? (
-            <p className="text-sm text-muted">No product sales in these dates yet.</p>
-          ) : (
-            <ul className="space-y-4">
-              {items.map((p, rank) => (
-                <BarRow
-                  key={p.productId ?? p.title}
-                  label={
-                    <>
-                      <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${rank === 0 ? "bg-accent-2 text-white" : "bg-border text-muted"}`}>{rank + 1}</span>
-                      {p.title}
-                    </>
-                  }
-                  value={money(p.revenue)}
-                  fraction={topRevenue > 0 ? p.revenue / topRevenue : 0}
-                  sub={[
-                    plural(p.units, "unit"),
-                    p.units ? `${money(r2(p.revenue / p.units))} each on average` : null,
-                    share(p.revenue) !== null ? `${fmtPct(share(p.revenue))} of sales` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                />
-              ))}
-            </ul>
-          )}
-        </Panel>
-      )}
+      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} collection={collection} collections={choices} onCollection={setCollection} />}
+      {ov.modules.top_products && <CollectionSales ov={ov} currency={currency} live={collections} onPick={pick} />}
       {ov.modules.catalog && <CatalogCard m={ov.modules.catalog} currency={currency} />}
-    </>
-  );
-}
-
-/** Shopify's own sessions and visitors first, when granted; then what the pixel tracked. */
-function ShoppersDetail({ ov }: { ov: Overview }) {
-  const s = ov.modules.shopify_sessions;
-  const f = ov.modules.funnel;
-  return (
-    <>
-      {s && <ShopifySessionsCard m={s} versus={versusWords(ov)} />}
-      {f && <FunnelDetail ov={ov} f={f} />}
-    </>
-  );
-}
-
-function FunnelDetail({ ov, f }: { ov: Overview; f: NonNullable<Overview["modules"]["funnel"]> }) {
-  const leak = biggestDropOff(f.steps);
-  const where = dropOffSection(leak);
-  const bestEntry = bestEntryPage(f.entryPages);
-  const visitsChange = f.previous.imported === false ? "no earlier data to compare" : upDown(f.deltas.visits);
-  return (
-    <>
-      <InShort>
-        {f.visits === 0 ? (
-          <p>No storefront visits recorded in these dates yet.</p>
-        ) : (
-          <>
-            <p>
-              Your store had <B>{plural(f.visits, "tracked visit")}</B>{visitsChange ? <> ({visitsChange})</> : null}, and <B>{fmtPct(f.conversionRate)}</B> of them ended in a purchase ({plural(f.purchases, "purchase")}).
-            </p>
-            {leak && leak.left > 0 && (
-              <p>
-                The biggest drop-off: <B>{fmtNum(leak.left)}</B> shoppers stopped at &ldquo;{STEP_LABEL[leak.step].toLowerCase()}&rdquo;
-                {where ? <>, most of them on <B>{SECTION_LABEL[where].toLowerCase()}</B></> : null}.
-              </p>
-            )}
-            {bestEntry && bestEntry.purchases > 0 && (
-              <p>
-                Visits that started on <B>{bestEntry.path === "/" ? "the home page" : bestEntry.path}</B> bought most often ({fmtPct(bestEntry.purchases / bestEntry.visits)}).
-              </p>
-            )}
-          </>
-        )}
-      </InShort>
-      <FunnelCard m={f} versus={versusWords(ov)} />
-      {f.visits > 0 && <JourneyCard m={f} />}
     </>
   );
 }
@@ -485,10 +415,13 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean }) {
+function CustomersDetail({ ov, currency, contactsOn }: { ov: Overview; currency: string; contactsOn: boolean }) {
   const cu = ov.modules.customers;
   const rate = cu?.current.returningCustomerRate ?? null;
   const before = cu?.previous.returningCustomerRate ?? null;
+  // Repeat customers and cohorts: their own report, asked for only with the customers module.
+  const [months, setMonths] = useState(12);
+  const lifetime = useCustomerAnalytics(ov, !!cu, months);
   return (
     <>
       {cu && (
@@ -528,6 +461,8 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
               </div>
             )}
           </Panel>
+          <RepeatCustomers currency={currency} live={lifetime} />
+          <MonthlyCohorts currency={currency} live={lifetime} months={months} onMonths={setMonths} />
         </>
       )}
       {contactsOn && <ContactsCard key={ov.store.id} storeId={ov.store.id} storeName={ov.store.name ?? ov.store.shopDomain} shopDomain={ov.store.shopDomain} />}
@@ -536,18 +471,24 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
 }
 
 function OrdersDetail({ ov, currency }: { ov: Overview; currency: string }) {
-  const items = ov.modules.recent_orders!.items;
+  const { items, cancelledInRange } = ov.modules.recent_orders!;
   const cancelled = items.filter((o) => o.cancelled).length;
   return (
     <>
       <InShort>
         {items.length ? (
           <p>
-            Your latest order is <B>{items[0]!.name}</B> for <B>{fmtMoney(items[0]!.total, currency)}</B>. Open any order to see it in Shopify.
+            The latest order placed in these dates is <B>{items[0]!.name}</B> for <B>{fmtMoney(items[0]!.total, currency)}</B>. Open any order to see it in Shopify.
             {cancelled ? <> {plural(cancelled, "order")} here {cancelled === 1 ? "was" : "were"} cancelled.</> : null}
           </p>
         ) : (
-          <p>No orders imported yet.</p>
+          <p>No orders were placed in these dates.</p>
+        )}
+        {/* Counted on the day each was cancelled, whenever it was placed: a transaction date, not the order's. */}
+        {cancelledInRange !== undefined && cancelledInRange > 0 && (
+          <p data-testid="cancelled-in-range">
+            <B>{plural(cancelledInRange, "order")}</B> {cancelledInRange === 1 ? "was" : "were"} cancelled in these dates, counted on the day of the cancellation.
+          </p>
         )}
       </InShort>
       <RecentOrdersCard items={items} currency={currency} timezone={ov.store.timezone} shopDomain={ov.store.shopDomain} />
@@ -575,76 +516,21 @@ export function TopicContents({
   const body: ReactNode =
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
     : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
-    : topic === "ads" && m.ads ? (
-      <>
-        <AdsDetail ov={ov} />
-        {m.adsense && <AdsenseLink ov={ov} onOpen={onOpen} />}
-      </>
-    )
-    : topic === "adsense" && m.adsense ? <AdsenseDetail ov={ov} />
-    // Marketing with only AdSense connected (or the ad accounts hidden): its earnings, not "nothing connected".
-    : topic === "ads" && m.adsense ? <AdsenseDetail ov={ov} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
-    : topic === "shoppers" && (m.funnel || m.shopify_sessions) ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />
     : topic === "channels" && m.channels ? <ChannelsDetail ov={ov} currency={currency} />
     : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />
     : topic === "stock" && m.inventory ? <StockDetail ov={ov} currency={currency} />
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
-    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} contactsOn={contactsOn} />
+    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} currency={currency} contactsOn={contactsOn} />
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
-    // The sidebar's Marketing opens this before any ad account is connected, or with all of them hidden: say so, and where that's done.
-    : topic === "ads" ? <NoAdAccounts ov={ov} />
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
     <>
       {body}
-      {/* Then, under every topic: what to do about it, and what each number means (AdSense's when that's what Marketing shows). */}
-      <Explained topic={topic === "ads" && !m.ads && m.adsense ? "adsense" : topic} ov={ov} currency={currency} />
+      {/* Then, under every topic: what to do about it, and what each number means. Ads and AdSense have their own pages (/advertising). */}
+      <Explained topic={topic} ov={ov} currency={currency} />
     </>
   );
 }
 
-/** Under the ads details, when AdSense is connected too: its estimated earnings, one tap away. */
-function AdsenseLink({ ov, onOpen }: { ov: Overview; onOpen: (t: Topic) => void }) {
-  const s = ov.modules.adsense!;
-  const { totals, through } = shownFigures(s);
-  return (
-    <div className="card flex flex-wrap items-center justify-between gap-2 text-sm" data-testid="ads-adsense-link">
-      <span>
-        <span className="font-medium">Google AdSense</span>
-        <span className="text-muted">
-          {" · "}
-          {totals ? `${fmtMoney(totals.earnings, s.currency)} estimated earnings from ads on your site${through ? ` ${upToWords(through)}` : ""}` : "estimated earnings from ads on your site"}
-        </span>
-      </span>
-      <button type="button" className="text-xs text-accent underline-offset-2 hover:underline" onClick={() => onOpen("adsense")}>
-        See details
-      </button>
-    </div>
-  );
-}
-
-function NoAdAccounts({ ov }: { ov: Overview }) {
-  const { allowed } = useApp();
-  const n = ov.modules.ad_connections;
-  const settings = (
-    <Link href="/settings/ads" className="font-medium text-accent underline">
-      Settings → Advertising
-    </Link>
-  );
-  if (n && n.hidden > 0 && n.meta + n.google + n.adsense > 0) {
-    return (
-      <p className="text-sm text-muted">
-        This store&apos;s ad accounts are hidden from the dashboard.{" "}
-        {allowed("integrations.manage") ? <>Turn on the ones that belong to this store in {settings} to see their results here.</> : "Ask a workspace owner or admin to turn them on."}
-      </p>
-    );
-  }
-  return (
-    <p className="text-sm text-muted">
-      No ad accounts are connected to this store yet. Connect Meta Ads or Google Ads to see what you spend, or Google AdSense to see what your site earns from ads,
-      in {settings}, and their results show up here.
-    </p>
-  );
-}

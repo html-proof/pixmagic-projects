@@ -5,7 +5,6 @@ import {
   adjustmentView,
   adjustStock,
   audit,
-  declaredOptionalScopes,
   declaredScopes,
   evaluateStockAlerts,
   inventoryOverview,
@@ -17,6 +16,7 @@ import {
   logger,
   maskNumber,
   movementList,
+  optionalScopesFor,
   PRODUCT_MEDIA_QUERY,
   productDetail,
   productGid,
@@ -30,7 +30,7 @@ import {
   storeGraphql,
   toCsv,
 } from "@app/core";
-import { adjustmentSchema, allows, inventorySettingsSchema, localDay, resolveCapabilities, stockQuerySchema, templateShape, thresholdSchema, type TemplateComponent } from "@app/shared";
+import { adjustmentSchema, allows, inventorySettingsSchema, localDay, resolveCapabilities, stockQuerySchema, thresholdSchema } from "@app/shared";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -83,7 +83,7 @@ export function inventoryRoutes(app: App, deps: Deps) {
       await withTenant(ws, async (tx) => {
         const store = await loadStore(tx, ws, storeId);
         const [scope, settings] = await Promise.all([stockScope(store), inventorySettings(store.id)]);
-        const caps = resolveCapabilities(store.grantedScopes, { optionalScopes: declaredOptionalScopes(), declaredScopes: declaredScopes() }).filter((x) => x.area === "inventory");
+        const caps = resolveCapabilities(store.grantedScopes, { optionalScopes: optionalScopesFor(store), declaredScopes: declaredScopes() }).filter((x) => x.area === "inventory");
         return {
           store: { id: store.id, name: store.name ?? store.shopDomain, currency: store.currency, timezone: store.timezone, status: store.status, shopDomain: store.shopDomain },
           status: await inventoryStatus(tx, store, scope, settings),
@@ -176,8 +176,8 @@ export function inventoryRoutes(app: App, deps: Deps) {
   /** One product: its information, variants, stock per location, sales and (with inventory.history) its stock history. */
   app.get(`${base}/products/:productId`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const productId = productParam.parse(c.req.param("productId"));
     const a = await requireWorkspace(c, deps, ws, "inventory.view");
+    const productId = productParam.parse(c.req.param("productId"));
     const detail = await withTenant(ws, async (tx) => {
       const store = await loadStore(tx, ws, storeId);
       const today = localDay(new Date(), store.timezone);
@@ -195,8 +195,8 @@ export function inventoryRoutes(app: App, deps: Deps) {
   /** A product's images and options, read live from Shopify (bizinsights keeps only the featured image). */
   app.get(`${base}/products/:productId/media`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const productId = productParam.parse(c.req.param("productId"));
     const a = await requireWorkspace(c, deps, ws, "inventory.products");
+    const productId = productParam.parse(c.req.param("productId"));
     await limit(deps.coord, `rl:inventory-media:${a.user?.id ?? ws}`, LIMITS.inventoryMedia);
     const store = await withTenant(ws, (tx) => loadStore(tx, ws, storeId));
     if (store.status === "uninstalled") throw new HttpError(409, "The store isn't connected.", "store_disconnected");
@@ -325,12 +325,6 @@ export function inventoryRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "inventory.alerts");
     const input = alertSettingsSchema.parse(await body(c));
     const store = await withTenant(ws, (tx) => loadStore(tx, ws, storeId));
-    if (input.whatsappAlerts && input.whatsappTemplate) {
-      const t = await withTenant(ws, (tx) => tx.whatsappTemplate.findFirst({ where: { workspaceId: ws, storeId, name: input.whatsappTemplate!, status: "APPROVED" } }));
-      if (!t || templateShape(t.components as unknown as TemplateComponent[]).bodyVars !== 2) {
-        throw new HttpError(400, "Pick an approved WhatsApp template with two variables: the store's name, then the alert.", "invalid_template");
-      }
-    }
     const current = await inventorySettings(store.id);
     const { whatsappTo: _t, storeId: _s, updatedAt: _u, ...keep } = current;
     const saved = await saveInventorySettings(store, { ...keep, ...input });
@@ -368,6 +362,7 @@ export function inventoryRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "inventory.view");
     return c.json(
       await withTenant(ws, async (tx) => {
+        await loadStore(tx, ws, storeId);
         const rows = await tx.$queryRaw<Array<{ id: string; kind: string; variant_id: string; available: number; threshold: number | null; opened_at: Date; product_id: string | null; product_title: string | null; variant_title: string | null; sku: string | null }>>`
           SELECT a.id, a.kind, a.variant_shopify_id AS variant_id, a.available, a.threshold, a.opened_at,
                  v.product_shopify_id AS product_id, p.title AS product_title, v.title AS variant_title, v.sku
@@ -381,20 +376,5 @@ export function inventoryRoutes(app: App, deps: Deps) {
         };
       }),
     );
-  });
-
-  /** Approved WhatsApp templates the stock alert can be sent with (two body variables). */
-  app.get(`${base}/whatsapp-templates`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "inventory.alerts");
-    const rows = await withTenant(ws, (tx) => tx.whatsappTemplate.findMany({ where: { workspaceId: ws, storeId, status: "APPROVED" }, orderBy: { name: "asc" } }));
-    return c.json({
-      templates: rows
-        .filter((t) => {
-          const s = templateShape(t.components as unknown as TemplateComponent[]);
-          return s.bodyVars === 2 && s.headerFormat === "NONE" && !s.dynamicUrlButtons.length;
-        })
-        .map((t) => ({ name: t.name, language: t.language, category: t.category })),
-    });
   });
 }

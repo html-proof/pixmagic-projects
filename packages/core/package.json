@@ -8,7 +8,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./reports": "./src/reports/index.ts",
-    "./mailer": "./src/mailer.ts"
+    "./mailer": "./src/mailer.ts",
+    "./sms": "./src/sms/index.ts",
+    "./automations": "./src/automations/index.ts",
+    "./integrations": "./src/integrations/index.ts",
+    "./zapier": "./src/zapier/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -18,11 +22,11 @@
   "dependencies": {
     "@app/db": "workspace:*",
     "@app/shared": "workspace:*",
-    "zod": "^3.25.0"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

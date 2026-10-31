@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ACCESS_CAPABILITY,
   ACCESS_KEYS,
   ACCESS_PERMISSIONS,
+  accessAvailable,
   addPermission,
   allows,
   linkSessionAccess,
@@ -19,6 +21,7 @@ import {
   seesModule,
   type MemberAccess,
 } from "../src/access";
+import { CAPABILITIES, resolveCapabilities } from "../src/capabilities";
 import { can } from "../src/roles";
 import { MONTH_LINES } from "../src/sales";
 import { staffAccess } from "../src/staff/access";
@@ -61,6 +64,33 @@ describe("the permission catalog", () => {
       expect(arrayFor("invitations", role)).toEqual([...LEGACY_GRANTS[role]]);
       expect(checkGrants(role, LEGACY_GRANTS[role]).ok).toBe(true);
     }
+  });
+});
+
+describe("what each permission shows (the invite panel's \"shows nothing for now\")", () => {
+  // The capability ids a store with these scopes has, as GET .../team/catalog reads them.
+  const enabled = (scopes: string[], pixelInstalled = false) => new Set(resolveCapabilities(scopes, { pixelInstalled }).filter((c) => c.enabled).map((c) => c.id));
+
+  it("names only store data the capability registry knows", () => {
+    const ids = new Set<string>(CAPABILITIES.map((c) => c.id));
+    for (const [key, data] of Object.entries(ACCESS_CAPABILITY)) for (const id of typeof data === "string" ? [data] : data) expect(ids.has(id), `${key}: ${id}`).toBe(true);
+  });
+
+  it("checkout abandonment shows Shopify's abandoned checkouts with orders alone, without customers", () => {
+    expect(accessAvailable("analytics.abandonment", enabled(["read_orders", "read_products"]))).toBe(true);
+    // The customer lists (who left a checkout) still need customers.
+    expect(accessAvailable("customers.contact", enabled(["read_orders", "read_products"]))).toBe(false);
+    expect(accessAvailable("analytics.abandonment", enabled(["read_products"]))).toBe(false);
+  });
+
+  it("conversion shows the pixel's funnel or Shopify's own sessions, either one", () => {
+    expect(accessAvailable("analytics.conversion", enabled(["read_orders"]))).toBe(false);
+    expect(accessAvailable("analytics.conversion", enabled(["read_orders", "read_reports"]))).toBe(true);
+    expect(accessAvailable("analytics.conversion", enabled(["read_orders", "write_pixels", "read_customer_events"], true))).toBe(true);
+  });
+
+  it("a permission with no store data of its own always shows something", () => {
+    expect(accessAvailable("staff.team", new Set())).toBe(true);
   });
 });
 
@@ -126,13 +156,23 @@ describe("allows", () => {
 const report = () => ({
   store: { id: "s" },
   capabilities: [{ id: "sales_overview" }, { id: "top_products" }, { id: "contacts" }, { id: "inventory" }, { id: "funnel" }],
-  data: { orders: 10, products: 4, variants: 6, oldestOrderDay: "2026-01-01", newestOrderDay: "2026-10-01", historyFrom: "2025-12-28" },
+  data: {
+    orders: 10,
+    products: 4,
+    variants: 6,
+    oldestOrderDay: "2026-01-01",
+    newestOrderDay: "2026-10-01",
+    historyFrom: "2025-12-28",
+    createdDay: "2025-12-01",
+    startDay: "2025-12-01",
+    history: { access: "granted", years: [{ year: 2026, status: "done", orders: 10, finishedAt: null }] },
+  },
   modules: {
     sales_overview: {
-      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
+      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, totalRefunded: 12, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
       previous: { grossSales: 90, netSales: 80, totalSales: 90, tax: 4, shipping: 6, duties: 0, additionalFees: 0, orders: 2, units: 2, averageOrderValue: 40 },
       deltas: { netSales: 0.25, totalSales: 0.24, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
-      series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33 }],
+      series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33, newCustomerOrders: 2 }],
       year: {
         year: 2026,
         months: [
@@ -163,8 +203,14 @@ const report = () => ({
     },
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
     inventory: { current: { trackedVariants: 1, unitsInStock: 2, stockValueAtCost: 80, variantsWithCost: 1, retailValue: 200, outOfStock: 0, lowStock: 1 }, lowStockItems: [] },
-    recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }] },
-    traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
+    recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }], cancelledInRange: 2 },
+    order_outcomes: {
+      orders: 5,
+      outcome: { completed: 3, awaitingPayment: 1, unsuccessful: 1, cancelled: 1, paymentFailed: 0, refunded: 0 },
+      shipping: { orders: 4, sent: 2, partlySent: 0, notSent: 2, items: 9, itemsSent: 4 },
+      checkouts: { started: 6, completed: 3, left: 3, from: null },
+    },
+    traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], split: [{ id: "paid", label: "Paid ads", orders: 1, sales: 10, share: 1 }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
     ads: { currency: "USD", campaigns: [{ name: "c" }], current: { spend: 1 }, sales: { netSales: 10, orders: 1 }, sourced: [{ provider: "meta", orders: 1, sales: 10, salesPerSpend: 10 }] },
@@ -183,7 +229,8 @@ describe("redactOverview", () => {
     const out = redactOverview(report(), member(["products.performance"]));
     expect(Object.keys(out.modules)).toEqual(["top_products"]);
     expect(out.capabilities.map((c) => c.id)).toEqual(["top_products"]);
-    expect(out.data).toEqual({ products: 4, variants: 6 });
+    // The orders' history (how many each imported year holds) goes with the orders; where the dates begin stays.
+    expect(out.data).toEqual({ products: 4, variants: 6, createdDay: "2025-12-01", startDay: "2025-12-01" });
     expect(seesModule(member(["products.performance"]), "mystery_new_module")).toBe(false);
     expect(seesModule(member([], "admin"), "mystery_new_module")).toBe(true);
   });
@@ -199,12 +246,16 @@ describe("redactOverview", () => {
     expect(s).not.toHaveProperty("year");
     // The store's own calculation is drawn from those lines, so it goes with them.
     expect(s).not.toHaveProperty("calculation");
+    // Which orders were a customer's first is customer analytics.
     expect(s.series[0]).toEqual({ day: "2026-10-01", netSales: 100, orders: 3, averageOrderValue: 33 });
     expect(out.modules.inventory.current).not.toHaveProperty("stockValueAtCost");
     expect(out.modules.inventory.current).not.toHaveProperty("retailValue");
     expect(out.modules.recent_orders.items[0]).toEqual({ id: "o", name: "#1", total: 100, units: 1, channel: "web" });
+    // How many orders were cancelled in the dates is cancellation detail too.
+    expect(out.modules.recent_orders).not.toHaveProperty("cancelledInRange");
     expect(out.modules.traffic).not.toHaveProperty("campaigns");
     expect(out.modules.traffic).not.toHaveProperty("paid");
+    expect(out.modules.traffic).not.toHaveProperty("split");
     expect(out.modules.traffic.items[0]).not.toHaveProperty("paidSales");
     expect(out.modules.discount_codes.items[0]).toEqual({ code: "SAVE", orders: 2 });
     expect(out.modules.ads).not.toHaveProperty("campaigns");
@@ -213,7 +264,7 @@ describe("redactOverview", () => {
     expect(out.modules.ads).toHaveProperty("sales");
     expect(out.modules).toHaveProperty("ad_connections");
     // Sales figures come with the dates they were imported from (a member without them gets neither, above).
-    expect(out.data).toMatchObject({ orders: 10, oldestOrderDay: "2026-01-01", historyFrom: "2025-12-28" });
+    expect(out.data).toMatchObject({ orders: 10, oldestOrderDay: "2026-01-01", historyFrom: "2025-12-28", history: { access: "granted" } });
     // The original is untouched.
     expect(report().modules.sales_overview.current.grossSales).toBe(120);
   });
@@ -231,6 +282,33 @@ describe("redactOverview", () => {
     expect(both.modules.sales_overview.year.months[0]).toEqual(report().modules.sales_overview.year.months[0]);
     // The original is untouched.
     expect(report().modules.sales_overview.year.months[0]!.taxes).toBe(5);
+  });
+
+  it("redacts the years this year is compared with as it does this year's months", () => {
+    const withPast = () => {
+      const r = report();
+      const y = r.modules.sales_overview.year;
+      const past = { ...y, year: 2025, months: y.months.map((m) => ({ ...m, month: "2025-10", current: false })) };
+      return { ...r, modules: { ...r.modules, sales_overview: { ...r.modules.sales_overview, year: { ...y, past: [past] } } } };
+    };
+    type WithPast = ReturnType<typeof withPast>;
+    const reports = redactOverview(withPast(), member(["analytics.sales", "finance.reports"])) as WithPast;
+    const past = reports.modules.sales_overview.year.past[0]!;
+    expect(past).toMatchObject({ year: 2025, total: 100 });
+    expect(past.months[0]).toMatchObject({ month: "2025-10", netSales: 100, orders: 3 });
+    for (const k of [...MONTH_LINES, "refunds"]) expect(past.months[0]).not.toHaveProperty(k);
+
+    const all = redactOverview(withPast(), member(["analytics.sales", "finance.reports", "finance.breakdown", "finance.refunds"])) as WithPast;
+    expect(all.modules.sales_overview.year.past[0]!.months[0]).toEqual(withPast().modules.sales_overview.year.past[0]!.months[0]);
+    expect(redactOverview(withPast(), member(["analytics.sales"])).modules.sales_overview).not.toHaveProperty("year");
+  });
+
+  it("keeps what refunds took off total sales only with both View refunds and the breakdown", () => {
+    // It holds the refunds' tax and shipping, so it needs the lines as well as the refunds.
+    const current = (keys: string[]) => (redactOverview(report(), member(["analytics.sales", ...keys])) as ReturnType<typeof report>).modules.sales_overview.current;
+    expect(current(["finance.refunds"])).not.toHaveProperty("totalRefunded");
+    expect(current(["finance.breakdown"])).not.toHaveProperty("totalRefunded");
+    expect(current(["finance.breakdown", "finance.refunds"])).toMatchObject({ totalSales: 115, totalRefunded: 12 });
   });
 
   it("keeps each month's refunds only with View refunds", () => {
@@ -251,16 +329,50 @@ describe("redactOverview", () => {
     expect(report().modules.sales_overview.year.months[0]!.refunds).toBe(10);
   });
 
+  it("shows how the dates' orders went part by part: payments with cancellations, shipping, checkouts left", () => {
+    const parts = (keys: string[]) => Object.keys(redactOverview(report(), member(keys)).modules.order_outcomes ?? {}).sort();
+    expect(parts(["orders.list"])).toEqual(["orders"]);
+    // Unsuccessful orders are mostly cancelled ones: payment status alone doesn't show them.
+    expect(parts(["orders.list", "orders.payments"])).toEqual(["orders"]);
+    expect(parts(["orders.list", "orders.payments", "orders.cancellations"])).toEqual(["orders", "outcome"]);
+    expect(parts(["orders.fulfillment"])).toEqual(["orders", "shipping"]);
+    // Checkouts left alone don't tell how many orders the store took.
+    expect(parts(["analytics.abandonment"])).toEqual(["checkouts"]);
+    expect(parts(["products.performance"])).toEqual([]);
+    expect(redactOverview(report(), member([...LEGACY_GRANTS.viewer, "orders.payments", "orders.cancellations", "orders.fulfillment", "analytics.abandonment"])).modules.order_outcomes).toEqual(report().modules.order_outcomes);
+  });
+
+  it("gives Shopify's gross profit only with both the breakdown and the costs permission", () => {
+    const withProfit = () => ({ ...report(), capabilities: [...report().capabilities, { id: "profit" }], modules: { ...report().modules, profit: { status: "ready", current: { grossProfit: 900, costOfGoodsSold: 650 } }, shopify_check: { rows: [] } } });
+    const sees = (keys: string[]) => {
+      const out = redactOverview(withProfit(), member(keys));
+      return { profit: "profit" in out.modules, capability: out.capabilities.some((c) => c.id === "profit"), check: "shopify_check" in out.modules };
+    };
+    // Legacy viewers and analysts, and API keys, hold the breakdown but not the costs.
+    expect(sees([...LEGACY_GRANTS.viewer])).toEqual({ profit: false, capability: false, check: true });
+    expect(sees([...LEGACY_GRANTS.analyst])).toEqual({ profit: false, capability: false, check: true });
+    expect(sees(["inventory.view", "inventory.costs"])).toEqual({ profit: false, capability: false, check: false });
+    expect(sees(["analytics.sales", "finance.breakdown", "inventory.view", "inventory.costs"])).toEqual({ profit: true, capability: true, check: true });
+    expect(seesModule(member([], "owner"), "profit")).toBe(true);
+  });
+
+  it("lists Shopify's abandoned checkouts among the capabilities of a member who may see checkout abandonment", () => {
+    const withCheckouts = { ...report(), capabilities: [...report().capabilities, { id: "abandoned_checkouts" }] };
+    expect(redactOverview(withCheckouts, member(["analytics.abandonment"])).capabilities.map((c) => c.id)).toEqual(["contacts", "abandoned_checkouts"]);
+    expect(redactOverview(withCheckouts, member(["analytics.sales"])).capabilities.map((c) => c.id)).toEqual(["sales_overview"]);
+  });
+
   it("keeps them once granted", () => {
     const out = redactOverview(report(), member([...LEGACY_GRANTS.viewer, "reports.export"])) as ReturnType<typeof report>;
     expect(out.modules.sales_overview.current.grossSales).toBe(120);
-    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 115, returns: 10, duties: 2, additionalFees: 1 });
+    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 115, totalRefunded: 12, returns: 10, duties: 2, additionalFees: 1 });
     expect(out.modules.sales_overview.previous).toMatchObject({ tax: 4, shipping: 6 });
-    expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2 });
+    expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2, newCustomerOrders: 2 });
     expect(out.modules.sales_overview.calculation.applyToDashboard).toBe(true);
     expect(out.modules.sales_overview.year.months[0]).toMatchObject({ taxes: 5, totalSales: 115, comparedLines: { shipping: 6 } });
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
+    expect(out.modules.recent_orders.cancelledInRange).toBe(2);
   });
 });
 

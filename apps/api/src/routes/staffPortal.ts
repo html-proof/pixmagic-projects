@@ -27,6 +27,7 @@ import { body, clientIp, HttpError, requireAppOrigin, requireUser, type Ctx, typ
 import { CognitoError, CognitoUnavailableError } from "../cognito.js";
 import { resolveUser } from "../identity.js";
 import { newSession, provesAddress, setSessionCookies } from "../session.js";
+import { recordSession } from "../devices.js";
 import { cognitoFailure } from "./auth.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -103,11 +104,9 @@ export function staffPortalRoutes(app: App, deps: Deps) {
       if (!("tokens" in signedIn)) throw new CognitoError("UnexpectedChallenge", signedIn.challenge);
       const claims = await deps.auth.verifyIdToken(signedIn.tokens.idToken);
       user = await resolveUser(claims, { ip: clientIp(c), auth: deps.auth });
-      setSessionCookies(
-        c,
-        newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, ownAddress: provesAddress(claims, user.email) }),
-        signedIn.tokens.refreshToken,
-      );
+      const session = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, ownAddress: provesAddress(claims, user.email) });
+      setSessionCookies(c, session, signedIn.tokens.refreshToken);
+      await recordSession(c, session, clientIp(c));
     } catch (err) {
       await release();
       if (err instanceof CognitoError && err.code === "UsernameExistsException") {

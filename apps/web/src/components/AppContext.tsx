@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { allows, type AccessNeed, type MemberAccess } from "@app/shared/access";
 import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
-import { ApiError, api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
+import { ApiError, api, contextHeaders, getMe, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
 import { ACCESS_CHANGED_EVENT, onAccessSignal } from "@/lib/access";
 import { offersModule, type AppModule } from "@/lib/features";
 import { LoadError, Unreachable } from "@/components/LoadError";
@@ -36,7 +36,7 @@ export interface MeWorkspace {
 }
 
 export interface Me {
-  user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string };
+  user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string; avatarUrl?: string | null };
   workspaces: MeWorkspace[];
   /** Organizations this account works for as an employee (the employee portal at /portal). */
   employments?: Array<{ workspaceId: string; organization: string; employeeId: string; fullName: string; jobTitle: string; status: string }>;
@@ -58,6 +58,10 @@ export interface StoreSummary {
   revocableScopes: string[];
   pixelInstalled: boolean;
   lastSyncedAt: string | null;
+  /** When Shopify created the store; null until its details are read. */
+  shopCreatedAt?: string | null;
+  /** The store's first day (its creation day, or an earlier order's): where the date pickers begin. */
+  startDay?: string | null;
   /** How much of the store actually landed, so the UI can tell an empty store from a broken one. */
   imported?: { orders: number; products: number };
   /** While the store is in error: why its sync stopped (syncProblem in the API). */
@@ -104,6 +108,12 @@ const AppCtx = createContext<Ctx | null>(null);
 const isActive = (w: MeWorkspace) => !w.status || w.status === "active";
 
 /**
+ * The workspace (`?ws=`) or store (`?store=`) the address names: the API's redirects after a
+ * connect open the one they are about. Only picks among the person's own, and only on arrival.
+ */
+const linked = (name: "ws" | "store") => new URLSearchParams(window.location.search).get(name);
+
+/**
  * How often the open workspace's permissions are checked while the tab is visible. The check is
  * one tiny request answered 304 while nothing changed; any other response that shows a different
  * fingerprint, or a refusal, checks at once. Enforcement never waits for it: the API checks every
@@ -148,7 +158,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadMe = useCallback(async () => {
     let m: Me;
     try {
-      m = await api<Me>("/me");
+      m = await getMe<Me>();
     } catch (e) {
       if (!isSignedOut(e)) {
         setMeError(e);
@@ -170,8 +180,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMe(m);
       const active = m.workspaces.filter(isActive);
       if (!currentWs.current || !m.workspaces.some((w) => w.id === currentWs.current)) {
+        const asked = active.find((w) => w.id === linked("ws"));
+        if (asked) writeLocal(WORKSPACE_KEY, asked.id);
         const saved = readLocal(WORKSPACE_KEY);
-        const pick = active.find((w) => w.id === saved) ?? active[0] ?? m.workspaces[0]!;
+        const pick = asked ?? active.find((w) => w.id === saved) ?? active[0] ?? m.workspaces[0]!;
         currentWs.current = pick.id;
       }
       setWsId(currentWs.current);
@@ -190,7 +202,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (currentWs.current !== wsId) return;
     setStores(stores);
     setStoresStatus("ready");
-    const saved = readLocal(storeKey(wsId));
+    const asked = stores.find((s) => s.id === linked("store"))?.id;
+    if (asked) writeLocal(storeKey(wsId), asked);
+    const saved = asked ?? readLocal(storeKey(wsId));
     setStoreIdState((cur) => (stores.some((s) => s.id === cur) ? cur : stores.some((s) => s.id === saved) ? saved : (stores[0]?.id ?? null)));
   }, [wsId]);
 

@@ -1,15 +1,23 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
-import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals } from "@app/shared/ads";
+import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
+import type { AdsFromShopify } from "@app/shared/adsFromShopify";
+import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
+import type { ExpenseTotals } from "@app/shared/expenses";
+import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
+import type { OrderOutcomes } from "@app/shared/orders";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
+import type { TrafficSplit } from "@app/shared/traffic";
 
 /**
  * A month of `SalesOverview.year`: its lines of total sales (`MONTH_LINES`) and its refunds only for
  * a member who may see them (Team & Access: "View gross sales, discounts, tax and shipping", "View refunds").
  */
 export type YearMonth = Omit<SalesMonth, MonthLine | "refunds"> & Partial<Pick<SalesMonth, MonthLine | "refunds">>;
+/** A calendar year month by month, as `SalesOverview.year` carries it. */
+export type YearOf = Omit<YearBreakdown, "months"> & { months: YearMonth[] };
 
 export interface Capability {
   id: string;
@@ -36,6 +44,8 @@ export interface OverviewStore {
   pixelInstalled: boolean;
   lastSyncedAt: string | null;
   installedAt?: string | null;
+  /** When Shopify created the store; null until its details are read. */
+  shopCreatedAt?: string | null;
 }
 
 /**
@@ -54,6 +64,11 @@ export interface SalesOverview {
     netSales: number;
     /** Net sales + additional fees + duties + shipping + taxes: Shopify's headline "Total sales". */
     totalSales?: number;
+    /**
+     * What refunds, returns and cancellations took off that total sales, tax and shipping in.
+     * Team & Access: both "View refunds" and the breakdown; absent from answers of older releases.
+     */
+    totalRefunded?: number;
     orders: number;
     units: number;
     averageOrderValue: number | null;
@@ -91,16 +106,35 @@ export interface SalesOverview {
   };
   /**
    * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
-   * its `totalSales`: "View gross sales, discounts, tax and shipping".
+   * its `totalSales`: "View gross sales, discounts, tax and shipping"; its `newCustomerOrders` (orders
+   * that were a customer's first): "View returning vs new customers". `units`: net items sold that day;
+   * `orderValue`: what its orders sold for, which average order value divides (both absent from
+   * older answers).
    */
   series: Array<
-    Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number }
+    Omit<SalesDay, "refunds" | "totalSales"> & {
+      refunds?: number;
+      totalSales?: number;
+      shipping?: number;
+      tax?: number;
+      duties?: number;
+      additionalFees?: number;
+      units?: number;
+      orderValue?: number;
+      newCustomerOrders?: number;
+    }
   >;
   /**
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
    * month's lines of total sales as `totalSales`.
    */
-  year?: Omit<YearBreakdown, "months"> & { months: YearMonth[] };
+  year?: YearOf & {
+    /**
+     * The same months of the two years before (last year first), each whole (`pastYearBreakdown`):
+     * the overview's monthly comparison. Redacted as this year's months; absent from older answers.
+     */
+    past?: YearOf[];
+  };
   /**
    * The store's own calculation from the lines of total sales (Custom sales): which it counts and
    * whether the dashboard shows it. Team & Access: as grossSales (its figures are drawn from them).
@@ -124,7 +158,12 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   errorCode?: string | null;
   /** The account's own health at the platform (AD_ACCOUNT_STATUSES); null until read. */
   accountStatus?: string | null;
+  /** The last sync that worked: what its figures are as of. */
   lastSyncedAt: string | null;
+  /** A sync someone asked for (Refresh, Sync all now, turning it back on) that hasn't finished yet (syncRunning in lib/adConnections). Absent from older answers. */
+  syncRequestedAt?: string | null;
+  /** When the last sync started, whatever came of it. Absent from older answers. */
+  lastSyncAttemptAt?: string | null;
   /** Added up: in the currency the module is in. */
   counted: boolean;
   /** The Google Ads demo: simulated figures, shown as such and never set against the store's sales. Absent from older answers. */
@@ -142,6 +181,8 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   sites?: string[];
   /** AdSense, sites chosen: the last day read whose earnings AdSense didn't split by site (the store's share of them isn't known). */
   unsplitThrough?: string | null;
+  /** AdSense: its figures are final, not AdSense's estimate, up to this day; null: none is yet. Absent from older answers. */
+  finalThrough?: string | null;
 }
 
 /** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
@@ -221,8 +262,32 @@ export interface AdsModule extends AdFigures<AdTotals> {
   byProvider: AdsProviderFigures[];
   /** Each platform's own days (missing where its accounts have none). */
   seriesByProvider: Array<{ provider: AdSpendProvider; series: AdSeriesDay[] }>;
-  /** Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop before the range ends. */
-  campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean }>;
+  /**
+   * Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop
+   * before the range ends. The dashboard gets the 10 that spent most; the Advertising pages
+   * (?parts=advertising) every one, each with its `change`.
+   */
+  campaigns?: Array<
+    AdTotals & {
+      provider: AdSpendProvider;
+      accountId: string;
+      campaignId: string;
+      name: string;
+      complete?: boolean;
+      change?: CampaignChange | null;
+      /** The platform's own word for the campaign's delivery now (Google's campaign.status, Meta's effective_status); null: not read yet. Absent from older answers. */
+      status?: string | null;
+      statusGroup?: CampaignStatusGroup | null;
+      /** Google's channel type (SEARCH, PERFORMANCE_MAX...) as of the last sync; null for Meta and while unread. Absent from older answers. */
+      channelType?: string | null;
+      /** Google's primary status (ELIGIBLE, LIMITED...) and its reasons as of the last sync; null and none for Meta and while unread. */
+      primaryStatus?: string | null;
+      primaryStatusReasons?: string[];
+      /** The budget as of the last sync, in the account's currency: DAILY, CUSTOM_PERIOD (Google: a total) or LIFETIME (Meta); null when none is known. */
+      budgetPeriod?: string | null;
+      budgetAmount?: number | null;
+    }
+  >;
   /** Ad spend divided by the store's net sales (same currency, every day known); null with a demo among the accounts. */
   shareOfSales: number | null;
   /** A demo account (simulated figures) is among the counted accounts: the store's own sales are left out of this module. */
@@ -241,6 +306,18 @@ export interface AdsModule extends AdFigures<AdTotals> {
    * "View conversion attribution"; null when the sources weren't read. Absent from older answers.
    */
   sourced?: Array<{ provider: AdSpendProvider; orders: number; sales: number; salesPerSpend: number | null }> | null;
+}
+
+/**
+ * A campaign's change on the same whole days as the totals' (`compared`); null when the totals have
+ * none. A campaign that ran on no day of the dates compared with has a spend of 0 then, and no change.
+ */
+export interface CampaignChange {
+  /** The dates compared with. */
+  from: string;
+  to: string;
+  previous: { spend: number | null; linkClicks: number | null; purchases: number | null; purchaseValue: number | null; roas: number | null };
+  deltas: { spend: number | null; linkClicks: number | null; purchases: number | null; purchaseValue: number | null; roas: number | null };
 }
 
 /** adsVsSales (@app/shared/ads) with the dates compared with and the changes (salesVsSpend in the API). */
@@ -262,16 +339,31 @@ export interface AdsenseModule extends AdFigures<AdsenseTotals> {
   sitesLeftOut?: Array<AdsenseTotals & { site: string }>;
   /** Estimated earnings divided by the store's net sales (same currency, every day known). */
   vsSales: number | null;
+  /** The day every counted account's figures are final up to (null: one has none final yet). Absent from older answers. */
+  finalThrough?: string | null;
+  /** AdSense has finalized every day of the figures given (`current`, else `partial`): "Final", else "Estimated". Absent from older answers. */
+  final?: boolean;
 }
 
 /** GET .../ads/adsense/report: one AdSense account split by country or device type, asked of AdSense for exactly these dates. */
 export interface AdsenseReportAnswer {
+  account: { id: string; accountId: string; name: string | null };
+  today: string;
+  cached: boolean;
+  report: AdsenseReport;
+}
+
+/** A live report's figures: the stored days' measures, and ad requests, coverage and viewability (absent from answers before 2026-10-29). */
+export type AdsenseReportFigures = AdsenseTotals & Partial<Pick<AdsenseReportTotals, "adRequests" | "coverage" | "viewability">>;
+
+/** The report itself (AdsenseLiveReport in @app/core). */
+export interface AdsenseReport {
   level: AdsenseReportLevel;
   since: string;
   until: string;
   currency: string | null;
-  rows: AdsenseReportRow[];
-  totals: AdsenseTotals;
+  rows: Array<AdsenseReportFigures & { id: string; name: string }>;
+  totals: AdsenseReportFigures;
   truncated: boolean;
   /** The sites the answer is limited to (the connection's chosen sites; empty: every site). Absent: taken as the connection's. */
   sites?: string[];
@@ -287,6 +379,11 @@ export interface TrafficModule {
   items: Array<{ id: string; source: string; label: string; orders: number; sales: number; paidOrders?: number; paidSales?: number; share: number | null }>;
   paid?: { orders: number; sales: number; share: number | null };
   campaigns?: Array<{ source: string; label: string; campaign: string; orders: number; sales: number }>;
+  /**
+   * Paid vs organic: the same sales by how each order's last visit came, as Shopify recorded it (last click).
+   * Every split, in order; Team & Access "View conversion attribution"; absent from older answers.
+   */
+  split?: Array<{ id: TrafficSplit; label: string; orders: number; sales: number; share: number | null }>;
   /** Orders whose source hasn't been read from Shopify yet. */
   pending: number;
 }
@@ -352,9 +449,63 @@ export interface FunnelModule extends JourneySummary {
   exitPages: JourneyPageRow[];
   /** The first day every visit was counted from: the day after the pixel was put in place. */
   historyFrom?: string | null;
-  /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
-  previous: { visits: number | null; conversionRate: number | null; imported?: boolean };
+  /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". `reached`: visits per step then. */
+  previous: { visits: number | null; conversionRate: number | null; imported?: boolean; reached?: number[] | null };
   deltas: { visits: number | null; conversionRate: number | null };
+  /** The Profit sheet's answer (?parts=sheet) only: visits day by day, null on a day before they were counted. */
+  visitsByDay?: Array<{ day: string; visits: number | null }>;
+}
+
+/** One product page on the Shopping Funnel page (funnelDetail in packages/core/src/reports/funnel.ts). */
+export interface FunnelProduct {
+  handle: string;
+  productId: string | null;
+  title: string | null;
+  imageUrl: string | null;
+  url: string | null;
+  /** Visits that viewed its page; null when product pages weren't recorded in these dates. */
+  viewed: number | null;
+  /** Visits that added it to cart from its page. */
+  added: number | null;
+  addRate: number | null;
+  /**
+   * Visits that added it to cart from anywhere else (a quick add), started a checkout holding it, and
+   * bought it; and bought ÷ started checkout on those visits. Null when they weren't recorded in these
+   * dates (`sourcesFrom`).
+   */
+  quickAdded: number | null;
+  checkouts: number | null;
+  purchased: number | null;
+  checkoutCompletion: number | null;
+  /** Visits that started on its page; of those, visits that left the store from it without buying; and all visits that left from it without buying. */
+  landed: number;
+  landedLeft: number;
+  exits: number;
+  /** The store's orders of it in these dates (only with the top products permission). */
+  orders?: number;
+  units?: number;
+  netSales?: number;
+}
+
+/** The Shopping Funnel page's funnel (GET …/overview?parts=funnel): the dashboard's, and everything funnelDetail adds. */
+export interface FunnelPageModule extends FunnelModule {
+  filter: FunnelFilter;
+  stepDeltas: Array<number | null>;
+  browsers: number;
+  transitions: FunnelTransition[];
+  /** Day by day, visits reached per step; null on a day before visits were counted. */
+  daily: Array<{ day: string; reached: number[] | null }>;
+  /** `source`: only for members who see traffic sources. */
+  segments: { device: SegmentFunnel[]; country: SegmentFunnel[]; landing: SegmentFunnel[]; visitor: SegmentFunnel[]; source?: SegmentFunnel[] };
+  products: FunnelProduct[];
+  productSales: boolean;
+  /** The first day device, country and product pages were recorded. */
+  detailsFrom: string | null;
+  /** The first day traffic sources, and quick adds, checkouts and purchases per product, were recorded. */
+  sourcesFrom: string | null;
+  lastEventAt: string | null;
+  insights: FunnelInsight[];
+  actions: Array<{ id: string; doneAt: string; doneBy: string | null; doneByName: string | null }>;
 }
 
 /** GET .../contacts: read live from Shopify, never stored (see apps/api/src/routes/contacts.ts). Names, contact details and order history can each be withheld (Team & Access). */
@@ -412,6 +563,21 @@ export interface ImportedData {
    * the first order, which a quiet store has days later.
    */
   historyFrom?: string | null;
+  /** The store-local day Shopify created the store; null until its details are read. */
+  createdDay?: string | null;
+  /** The store's first day (that, or an earlier order's): how early custom dates may start, the first year offered. */
+  startDay?: string | null;
+  /**
+   * The orders older than Shopify's 60 days: how the store can have them (`HistoryAccess` in
+   * @app/shared) and, once it has, how their import is going, a year at a time, newest first.
+   * Left out for a member who may not see orders.
+   */
+  history?: OrderHistory;
+}
+
+export interface OrderHistory {
+  access: HistoryAccess;
+  years: Array<{ year: number; status: "queued" | "running" | "done" | "failed"; orders: number; finishedAt: string | null }>;
 }
 
 export interface Freshness {
@@ -419,6 +585,17 @@ export interface Freshness {
   waiting: number;
   waitingSince: string | null;
   failed: number;
+}
+
+export interface ProductPerformance {
+  items: Array<{
+    key: string; rank: number; productId: string | null; title: string; imageUrl: string | null; sku: string | null;
+    units: number; grossUnits: number; returnedUnits: number; revenue: number; grossSales: number; discounts: number; returns: number;
+    orders: number; growth: number | null; trend: string; trendScore: number | null; lastSold: string | null;
+    variants: Array<{ variantId: string | null; sku: string | null; units: number; revenue: number }>;
+  }>;
+  total: number; complete: boolean; baseline: boolean; lastSyncedAt: string | null; unknownIdentitySales?: number;
+  historyFrom: string | null; previous: { from: string; to: string };
 }
 
 export interface Overview {
@@ -451,27 +628,55 @@ export interface Overview {
     refunds?: { current: { refunds: number; refundRate: number | null; refundedOrders: number }; deltas: { refunds: number | null } };
     /** Customers counted once each, as Shopify's reports count them; rate = returning ÷ customers. */
     customers?: { current: CustomerCounts; previous: { [K in keyof CustomerCounts]: CustomerCounts[K] | null } };
-    top_products?: { items: Array<{ productId: string | null; title: string; revenue: number; units: number }> };
+    top_products?: ProductPerformance;
     funnel?: FunnelModule;
     channels?: ChannelsModule;
     traffic?: TrafficModule;
     order_timing?: OrderTimingModule;
     fulfillment?: FulfillmentModule;
     discount_codes?: DiscountCodesModule;
-    recent_orders?: { items: RecentOrder[] };
+    /** The latest orders placed in the dates; `cancelledInRange`: orders cancelled in them (needs "View cancellations"). */
+    recent_orders?: { items: RecentOrder[]; cancelledInRange?: number };
+    /** How the dates' orders went: completed, awaiting payment, unsuccessful, sent, and checkouts left (Orders at a glance). */
+    order_outcomes?: OrderOutcomes;
     inventory?: InventoryModule;
     catalog?: CatalogModule;
     ads?: AdsModule;
     adsense?: AdsenseModule;
-    /** How many accounts of each platform are connected to the store, hidden ones included. */
-    ad_connections?: { meta: number; google: number; adsense: number; hidden: number };
+    /**
+     * How many accounts of each platform are connected to the store, hidden ones included. `waiting`:
+     * the platforms whose sign-in is connected with no ad account yet (absent from an older API).
+     */
+    ad_connections?: { meta: number; google: number; adsense: number; hidden: number; waiting?: string[] };
     /** Which platforms this server can connect (absent: none is set up). */
     ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
+    /**
+     * Meta's and Google's sales from the store's own orders (the Advertising pages only, `parts=advertising`):
+     * what they show of a platform with no ad account connected. Needs "View traffic sources"; its tagged-ad
+     * figures and campaigns, "View conversion attribution".
+     */
+    ads_from_shopify?: AdsFromShopify;
     /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
     shopify_sessions?: ShopifySessionsModule;
     profit?: ProfitModule;
     shopify_check?: ShopifyCheckModule;
+    /** The owner's own costs (Settings → Costs) for the dates; needs finance.breakdown. */
+    expenses?: ExpensesModule;
   };
+}
+
+/** The store's own costs for the dates (core expensesModule), in the store's currency. */
+export interface ExpensesModule {
+  currency: string;
+  /** Every cost the store keeps, whether or not it falls in the dates. */
+  count: number;
+  current: ExpenseTotals;
+  previous: { total: number } | null;
+  delta: number | null;
+  /** From which day the owner says the list holds every cost; null: not said. */
+  completeFrom: string | null;
+  /** The list holds every cost for all of the dates. */
+  complete: boolean;
 }
 
 /** Customers who ordered in a range (the customers module): each once, however many orders. */

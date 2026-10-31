@@ -41,12 +41,19 @@ export class EdgeStack extends Stack {
   constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
     super(scope, id, props);
 
+    // The path as the app will route it (it parses the URL, which decodes %2e and resolves dot
+    // segments): matched raw, /api/webhooks/../auth/login would count as a webhook and skip the
+    // per-IP limit while the app serves it as /api/auth/login.
+    const routedPath = [
+      { priority: 0, type: "URL_DECODE" },
+      { priority: 1, type: "NORMALIZE_PATH" },
+    ];
     const exempt = ["/api/webhooks/", "/api/pixel/", "/webhooks/", "/pixel/"].map((path) => ({
       byteMatchStatement: {
         fieldToMatch: { uriPath: {} },
         positionalConstraint: "STARTS_WITH",
         searchString: path,
-        textTransformations: [{ priority: 0, type: "NONE" }],
+        textTransformations: routedPath,
       },
     }));
     const isApi = {
@@ -54,7 +61,7 @@ export class EdgeStack extends Stack {
         fieldToMatch: { uriPath: {} },
         positionalConstraint: "STARTS_WITH",
         searchString: "/api/",
-        textTransformations: [{ priority: 0, type: "NONE" }],
+        textTransformations: routedPath,
       },
     };
     const cloudflare = (version: "IPV4" | "IPV6", addresses: string[]) =>

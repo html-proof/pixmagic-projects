@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import type { AdSeriesDay, AdTotals } from "@app/shared/ads";
+import { groupSeries, type AdSeriesDay, type AdTotals } from "@app/shared/ads";
+import { periodsOf, type PeriodGranularity } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -24,7 +25,7 @@ import { shownFigures, upToWords } from "./adFigures";
 import { noEarlierData } from "./DateRange";
 import { DemoChip } from "./Advertising";
 import { Alert } from "@/components/ui";
-import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
+import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtPeriod, fmtRange, fmtSpan, fmtTimes, periodChoices, plural } from "./format";
 import { Icon } from "./Icons";
 import { GoogleReportPanel } from "./GoogleReport";
 import { LineChart, type LineSeries } from "./LineChart";
@@ -35,7 +36,8 @@ import { ColumnsWithTotal } from "./ColumnsWithTotal";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// The Ads panel: what connected Meta and Google ad accounts spent, and what they say it brought.
+// The Ads details (the Advertising area's Meta Ads and Google Ads pages): what connected Meta and
+// Google ad accounts spent, and what they say it brought.
 // Figures exist only for days every counted account has stored; a gap is "Unavailable" with its
 // reason, never 0. Purchases are purchases only: Google's other conversions are named as such.
 // ---------------------------------------------------------------------------
@@ -106,8 +108,8 @@ function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview
       <Stat label="Cost per click" value={t.linkClicks === null ? BEING_READ : t.cpc !== null ? money(t.cpc) : "—"} note="Spend ÷ link clicks" />
       <Stat label="Click-through rate" value={t.linkClicks === null ? BEING_READ : fmtPct(t.ctr)} note={`${fmtNum(t.impressions)} impressions`} />
       <Stat label="Cost per 1,000 impressions" value={t.cpm !== null ? money(t.cpm) : "—"} />
-      {/* Every day of the range only: the store's sales include the days still to come in. */}
-      {a.current && <Stat label="Ads as share of sales" value={fmtPct(a.shareOfSales)} note="Ad spend ÷ your net sales" />}
+      {/* Every day of the range only: the store's sales include the days still to come in. Not for one platform or account (the Advertising pages). */}
+      {a.current && a.shareOfSales !== null && <Stat label="Ads as share of sales" value={fmtPct(a.shareOfSales)} note="Ad spend ÷ your net sales" />}
       {t.leads > 0 && <Stat label="Leads" value={fmtNum(t.leads)} />}
     </div>
   );
@@ -122,7 +124,7 @@ const PLATFORM_COLOR: Record<"meta" | "google", string> = { meta: "var(--viz-cat
 // what Shopify's record of the visit behind each order says.
 // ---------------------------------------------------------------------------
 
-function SalesVsSpend({ a, ov }: { a: AdsModule; ov: Overview }) {
+export function SalesVsSpend({ a, ov }: { a: AdsModule; ov: Overview }) {
   const s = a.sales;
   if (!s) return null;
   const money = (n: number) => fmtMoney(n, a.currency);
@@ -267,29 +269,42 @@ export function trendValue(d: AdSeriesDay, m: TrendMetric): number | null {
 
 function PerformanceTrend({ a, ov }: { a: AdsModule; ov: Overview }) {
   const [metric, setMetric] = useState<TrendMetric>("spend");
+  const [pickedBy, setBy] = useState<PeriodGranularity>("day");
   if (a.series.length < 2) return null;
+  const choices = periodChoices(ov.range);
+  const by = choices.some(([g]) => g === pickedBy) ? pickedBy : "day";
+  // A week's or month's rate is worked out from its sums (`trendValue` on the added-up period), never averaged.
+  const group = (s: AdSeriesDay[]) => (by === "day" ? s : groupSeries(s, ov.range, by));
   const money = (v: number) => fmtMoney(v, a.currency);
   const axisMoney = (v: number, step: number) => (step < 1 ? fmtMoney(v, a.currency) : fmtMoneyCompact(v, a.currency));
   const compact = (v: number) => new Intl.NumberFormat(undefined, { notation: "compact" }).format(v);
   const kind = metric === "spend" || metric === "purchaseValue" || metric === "cpc" || metric === "cpm" ? "money" : metric === "ctr" ? "rate" : metric === "roas" ? "times" : "count";
   const format = kind === "money" ? money : kind === "rate" ? (v: number) => fmtPct(v) : kind === "times" ? (v: number) => fmtTimes(v) : fmtNum;
   const fmtAxis = kind === "money" ? axisMoney : kind === "rate" ? (v: number) => fmtPct(v) : kind === "times" ? (v: number) => fmtTimes(v) : (v: number) => compact(v);
-  const series: LineSeries[] = a.seriesByProvider.map((s) => ({ key: s.provider, label: PLATFORM[s.provider].name, color: PLATFORM_COLOR[s.provider], values: s.series.map((d) => trendValue(d, metric)) }));
-  const days = a.series.map((d) => d.day);
+  const series: LineSeries[] = a.seriesByProvider.map((s) => ({ key: s.provider, label: PLATFORM[s.provider].name, color: PLATFORM_COLOR[s.provider], values: group(s.series).map((d) => trendValue(d, metric)) }));
+  const points = by === "day" ? a.series : groupSeries(a.series, ov.range, by);
+  const days = points.map((d) => d.day);
+  const periods = by === "day" ? undefined : periodsOf(ov.range, by).map((p) => ({ tick: fmtPeriod(p, by, "tick"), long: fmtPeriod(p, by, "long") }));
+  const per = by;
   const title = TREND_METRICS.find(([m]) => m === metric)![1];
   const empty = series.every((s) => s.values.every((v) => v === null));
   return (
     <Panel
       id="d-ads-trend"
       title="Over the days"
-      help={`${fmtSpan(ov.range.from, ov.range.to)}, by platform. Days a platform has no figures for are left blank, not drawn as 0${kind === "money" || kind === "count" ? "" : "; so is a rate on a day its ads didn't run"}.`}
-      aside={<ChartChoice label="Figure" value={metric} options={TREND_METRICS} onChange={setMetric} />}
+      help={`${fmtSpan(ov.range.from, ov.range.to)}, by platform${by === "week" ? ", in weeks from Monday to Sunday" : by === "month" ? ", in calendar months" : ""}. ${by === "day" ? "Days" : `A ${per} with any day`} a platform has no figures for ${by === "day" ? "are" : "is"} left blank, not drawn as 0${kind === "money" || kind === "count" ? "" : `; so is a rate on a ${per} its ads didn't run`}.`}
+      aside={
+        <div className="flex flex-wrap gap-2">
+          {choices.length > 1 && <ChartChoice<PeriodGranularity> label="Trend groups" value={by} onChange={setBy} options={choices} />}
+          <ChartChoice label="Figure" value={metric} options={TREND_METRICS} onChange={setMetric} />
+        </div>
+      }
     >
       <div data-testid="ads-trend" data-metric={metric}>
         {empty ? (
           <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted">No figures for this in these dates yet.</p>
         ) : (
-          <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={`${title} per day by platform, ${fmtSpan(ov.range.from, ov.range.to)}`} today={ov.today} integer={kind === "count"} />
+          <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={`${title} per ${per} by platform, ${fmtSpan(ov.range.from, ov.range.to)}`} today={by === "day" ? ov.today : undefined} integer={kind === "count"} periods={periods} />
         )}
       </div>
       {(metric === "purchases" || metric === "purchaseValue" || metric === "roas") && (
@@ -341,7 +356,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
             <span>
               The Google Ads demo&apos;s simulated figures are among these accounts. They are generated by bizinsights, not read from Google, and aren&apos;t set against your store&apos;s own
               sales here.{" "}
-              <Link className="font-medium underline" href="/ads/google">
+              <Link className="font-medium underline" href="/advertising/google/analytics">
                 Open the Google Ads analytics page
               </Link>{" "}
               to see the demo next to a simulated store.
@@ -523,7 +538,18 @@ export function AdsDetail({ ov }: { ov: Overview }) {
       </Panel>
 
       {a.campaigns && (
-        <Panel id="d-ads-campaigns" title="Campaigns" help="The campaigns that spent most in these dates.">
+        <Panel
+          id="d-ads-campaigns"
+          title="Campaigns"
+          help="The campaigns that spent most in these dates."
+          aside={
+            a.campaigns.length > 0 && (
+              <Link className="text-xs text-accent underline" href="/advertising/campaigns">
+                Compare every campaign
+              </Link>
+            )
+          }
+        >
           {a.campaigns.length === 0 ? (
             <p className="text-sm text-muted">{c ? "No campaign spent anything in these dates." : "No campaign figures for these dates yet."}</p>
           ) : (
@@ -540,7 +566,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {a.campaigns.map((cmp) => {
+                  {a.campaigns.slice(0, 10).map((cmp) => {
                     const P = PLATFORM[cmp.provider];
                     return (
                       <tr key={`${cmp.provider}:${cmp.accountId}:${cmp.campaignId}`} className="border-t border-border">
@@ -577,7 +603,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         aside={
           <span className="flex flex-wrap items-center gap-3">
             {a.accounts.some((acc) => acc.provider === "google") && (
-              <Link className="text-xs text-accent underline" href="/ads/google" data-testid="open-google-ads-analytics">
+              <Link className="text-xs text-accent underline" href="/advertising/google/analytics" data-testid="open-google-ads-analytics">
                 Google Ads analytics
               </Link>
             )}

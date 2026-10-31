@@ -56,6 +56,57 @@ services:
       HOST=0.0.0.0 PORT=9229 exec npx -y cognito-local@5.3.0"
     volumes: ["./infra/cognito-local/seed:/seed:ro", "cognito-data:/data"]
     ports: ["127.0.0.1:9229:9229", "[::1]:9229:9229"]
+  # WhatsApp Automation's Evolution API (docs/whatsapp.md, "Running it locally"), only with
+  # `docker compose --profile whatsapp up -d evolution`. The same release production runs
+  # (infra/cdk/lib/whatsapp-stack.ts), with a database of its own: never the postgres service above.
+  # Point the app at it with EVOLUTION_API_URL=http://127.0.0.1:8081, EVOLUTION_API_KEY (below) and
+  # EVOLUTION_WEBHOOK_URL=http://host.docker.internal:<API port>/api.
+  evolution:
+    profiles: ["whatsapp"]
+    image: evoapicloud/evolution-api:v2.3.7@sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339
+    depends_on: [evolution-postgres]
+    environment:
+      TZ: UTC
+      SERVER_TYPE: http
+      SERVER_PORT: "8080"
+      SERVER_URL: http://127.0.0.1:8081
+      SERVER_DISABLE_DOCS: "true"
+      SERVER_DISABLE_MANAGER: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: insights_a
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_SAVE_IS_ON_WHATSAPP: "false"
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-local-evolution-key-change-me}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+      LOG_LEVEL: ERROR,WARN
+      LOG_COLOR: "false"
+      LOG_BAILEYS: error
+      DEL_INSTANCE: "false"
+      CONFIG_SESSION_PHONE_CLIENT: bizinsights
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      QRCODE_LIMIT: "6"
+      TELEMETRY_ENABLED: "false"
+      WA_BUSINESS_VERSION: v26.0
+    ports: ["127.0.0.1:8081:8080", "[::1]:8081:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  evolution-postgres:
+    profiles: ["whatsapp"]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution
+      POSTGRES_DB: evolution
+    volumes: ["evolution-pgdata:/var/lib/postgresql/data"]
 volumes:
   pgdata: {}
   cognito-data: {}
+  evolution-pgdata: {}

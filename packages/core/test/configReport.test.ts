@@ -26,6 +26,8 @@ const KEYS = [
   "WHATSAPP_APP_SECRET",
   "WHATSAPP_CONFIG_ID",
   "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+  "EVOLUTION_API_URL",
+  "EVOLUTION_API_KEY",
   "EMAIL_GOOGLE_CLIENT_ID",
   "EMAIL_GOOGLE_CLIENT_SECRET",
   "EMAIL_MICROSOFT_CLIENT_ID",
@@ -37,6 +39,10 @@ const KEYS = [
   "COGNITO_DOMAIN",
   "COGNITO_IDENTITY_PROVIDERS",
   "COGNITO_EMAIL_OTP",
+  "ZAPIER_CLIENT_ID",
+  "ZAPIER_CLIENT_SECRET",
+  "ZAPIER_REDIRECT_URI",
+  "ZAPIER_INVITE_URL",
 ];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 
@@ -81,6 +87,8 @@ const EVERYTHING = {
   WHATSAPP_APP_SECRET: "secret-whatsapp-8888",
   WHATSAPP_CONFIG_ID: "public-wa-config-9999",
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: "secret-verify-token-0000",
+  EVOLUTION_API_URL: "http://evolution-a.internal-test:8080",
+  EVOLUTION_API_KEY: "secret-evolution-4545454545",
   EMAIL_GOOGLE_CLIENT_ID: "public-gmail-1212.apps.googleusercontent.com",
   EMAIL_GOOGLE_CLIENT_SECRET: "GOCSPX-secret-gmail-3434",
   EMAIL_MICROSOFT_CLIENT_ID: "0f0f0f0f-1111-2222-3333-444444444444",
@@ -91,6 +99,9 @@ const EVERYTHING = {
   COGNITO_CLIENT_SECRET: "secret-cognito-2424",
   COGNITO_DOMAIN: "https://auth.example.test",
   COGNITO_IDENTITY_PROVIDERS: "Google",
+  ZAPIER_CLIENT_ID: "public-zapier-client-6767",
+  ZAPIER_CLIENT_SECRET: "secret-zapier-client-8989",
+  ZAPIER_REDIRECT_URI: "https://zapier.com/dashboard/auth/oauth/return/App4242CLIAPI/",
 };
 
 const half = (vars: Record<string, string>) => halfConfigured(vars).map((c) => c.provider);
@@ -125,9 +136,11 @@ describe("which provider has its public id but not its secret", () => {
       "SHOPIFY_EXTRA_APPS/SHOPIFY_APP_SECRET_APPSTORE",
       "META_APP_ID/META_APP_SECRET",
       "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET",
-      "WHATSAPP_CONFIG_ID/WHATSAPP_APP_SECRET",
+      // No WHATSAPP_APP_ID: WhatsApp runs on the Meta Ads app, with its secret.
+      "WHATSAPP_CONFIG_ID/META_APP_SECRET",
       "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
       "EMAIL_MICROSOFT_CLIENT_ID/EMAIL_MICROSOFT_CLIENT_SECRET",
+      "ZAPIER_CLIENT_ID/ZAPIER_CLIENT_SECRET",
     ]);
   });
 
@@ -158,8 +171,11 @@ describe("which provider has its public id but not its secret", () => {
     // Manual connections bring their own app's secret, so nothing is missing for them.
     expect(half({ WHATSAPP_APP_ID: "1799660384680551" })).toEqual([]);
     expect(half({ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "public-wa-config-9999" })).toEqual(["WhatsApp (Embedded Signup)"]);
-    const wa = providerCredentials({ WHATSAPP_CONFIG_ID: "c" }).find((c) => c.secretSetting === "WHATSAPP_APP_SECRET")!;
-    expect(wa.effect).toBe("Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work");
+    const wa = providerCredentials({ WHATSAPP_CONFIG_ID: "c" }).find((c) => c.provider === "WhatsApp (Embedded Signup)")!;
+    // On the Meta Ads app (no id of its own) the secret to set is that app's.
+    expect(wa.secretSetting).toBe("META_APP_SECRET");
+    expect(providerCredentials({ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c" }).find((c) => c.provider === "WhatsApp (Embedded Signup)")!.secretSetting).toBe("WHATSAPP_APP_SECRET");
+    expect(wa.effect).toBe("connecting WhatsApp through Meta's Cloud API (Embedded Signup) can't be offered, and Meta's webhooks for Cloud API numbers can't be checked");
   });
 
   it('says what each missing secret stops, in words that follow "so"', () => {
@@ -178,9 +194,10 @@ describe("the configuration report", () => {
     setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", COGNITO_EMAIL_OTP: "" });
     const r = configReport();
     expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
-    expect(r.whatsapp).toEqual({ embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
+    expect(r.whatsapp).toEqual({ evolution: true, evolutionNeeds: [], embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
-    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false });
+    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
+    expect(r.zapier).toEqual({ configured: true, inviteUrl: false });
     expect(r.halfConfigured).toEqual([]);
   });
 
@@ -202,15 +219,30 @@ describe("the configuration report", () => {
     expect(r.ads.restricted).toEqual({ meta: false, google: false, adsense: false });
   });
 
-  it("names what Embedded Signup still lacks, exactly when it is off", () => {
+  it("names what linking a phone still lacks: Evolution API's address and key", () => {
+    for (const [vars, needs] of [
+      [{}, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"]],
+      [{ EVOLUTION_API_URL: "u" }, ["EVOLUTION_API_KEY"]],
+      [{ EVOLUTION_API_URL: "u", EVOLUTION_API_KEY: "k" }, []],
+    ] as Array<[Record<string, string>, string[]]>) {
+      setEnv(vars);
+      const r = configReport();
+      expect(r.whatsapp.evolutionNeeds, JSON.stringify(vars)).toEqual(needs);
+      expect(r.whatsapp.evolution).toBe(needs.length === 0);
+    }
+  });
+
+  it("names what the Cloud API way still lacks, exactly when it is off", () => {
+    const ready = { WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v", EVOLUTION_API_URL: "u", EVOLUTION_API_KEY: "k" };
     const cases: Array<[Record<string, string>, string[]]> = [
-      [{}, ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
+      [{}, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"]],
       // Production today: the app is picked, its configuration and secret aren't there.
-      [{ WHATSAPP_APP_ID: "1799660384680551" }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w" }, ["WHATSAPP_CONFIG_ID"]],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m" }, ["WHATSAPP_APP_SECRET"]],
-      [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c" }, []],
-      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c" }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", ...ready }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", ...ready }, ["WHATSAPP_CONFIG_ID"]],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m", ...ready }, ["WHATSAPP_APP_SECRET"]],
+      [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", ...ready }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "v" }, ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"]],
     ];
     for (const [vars, needs] of cases) {
       setEnv(vars);
@@ -226,7 +258,7 @@ describe("the configuration report", () => {
     setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: " Google ,Facebook" });
     expect(configReport().auth.google).toBe(true);
     setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
-    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false, loginCode: false });
+    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
   });
 });
 

@@ -8,16 +8,20 @@
  * What bizinsights can hold about one customer, and how each is found:
  *  - analytics: orders linked by the keyed customer hash, plus the orders the request names;
  *    no name, email or address is stored with them;
- *  - WhatsApp (when the store uses it): the contact (number, first name, consent), the messages
- *    sent to it, its parcel tracking and reviews, its abandoned checkouts;
+ *  - WhatsApp Automation (when the store uses it): the contact (number, first name, consent and its
+ *    history), the messages to and from it; and how many records the earlier WhatsApp feature's
+ *    tables still hold about them, until those are dropped;
  *  - email automations: messages sent to the address and the store events recorded for it.
  */
 import { systemDb, type DataRequest, type Store, type Tx } from "@app/db";
 import { normalizePhone } from "@app/shared";
 import { normalizeEmail } from "@app/shared/email";
 import { customerKey } from "./persist.js";
-import { contactFirstName, contactWaId, phoneHash, waDecrypt } from "./whatsapp/store.js";
+import { waPhoneHash } from "./whatsapp/common.js";
+import { legacyRecordCount } from "./whatsapp/legacy.js";
+import { whatsappExportFor } from "./whatsapp/privacy.js";
 import { isUniqueViolation, recipientHash } from "./email/common.js";
+import { smsExportFor } from "./sms/privacy.js";
 
 export interface DataRequestInput {
   /** Shopify's id for the request (data_request.id). */
@@ -46,7 +50,7 @@ export async function recordDataRequest(store: Pick<Store, "id" | "workspaceId">
         shopifyRequestId: input.requestId,
         customerId: input.customerId ?? null,
         customerKey: input.customerId ? customerKey(store, input.customerId) : null,
-        phoneHash: phone ? phoneHash(store.id, phone.waId) : null,
+        phoneHash: phone ? waPhoneHash(store.id, phone.waId) : null,
         emailHash: email ? recipientHash(store.workspaceId, email) : null,
         ordersRequested: input.ordersRequested ?? [],
       },
@@ -59,14 +63,6 @@ export async function recordDataRequest(store: Pick<Store, "id" | "workspaceId">
 }
 
 const money = (d: { toString(): string } | null | undefined) => (d == null ? null : d.toString());
-/** A secret field that can no longer be read (a retired key) is reported as such, not dropped. */
-function reveal(read: () => string | null): string | null {
-  try {
-    return read();
-  } catch {
-    return "[could not be decrypted]";
-  }
-}
 
 /**
  * Everything bizinsights holds about the customer `request` names, for the store owner to pass
@@ -88,30 +84,9 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       })
     : [];
 
-  const contactMatch = [
-    ...(request.customerKey ? [{ customerKey: request.customerKey }] : []),
-    ...(request.phoneHash ? [{ phoneHash: request.phoneHash }] : []),
-  ];
-  const contacts = contactMatch.length ? await tx.whatsappContact.findMany({ where: { workspaceId, storeId, OR: contactMatch } }) : [];
-  const contactIds = contacts.map((c) => c.id);
-  const orderIds = [...new Set([...orders.map((o) => o.shopifyId), ...request.ordersRequested])];
-  const trackings =
-    contactIds.length || orderIds.length
-      ? await tx.orderTracking.findMany({
-          where: { workspaceId, storeId, OR: [{ contactId: { in: contactIds } }, { shopifyOrderId: { in: orderIds } }] },
-          select: { id: true },
-        })
-      : [];
-  const trackingIds = trackings.map((t) => t.id);
-  const [messages, checkouts, reviews] = await Promise.all([
-    contactIds.length || trackingIds.length
-      ? tx.whatsappMessage.findMany({
-          where: { workspaceId, storeId, OR: [{ contactId: { in: contactIds } }, { trackingId: { in: trackingIds } }] },
-          orderBy: { createdAt: "asc" },
-        })
-      : [],
-    contactIds.length ? tx.abandonedCheckout.findMany({ where: { workspaceId, storeId, contactId: { in: contactIds } }, orderBy: { checkoutCreatedAt: "asc" } }) : [],
-    trackingIds.length ? tx.customerReview.findMany({ where: { workspaceId, storeId, trackingId: { in: trackingIds } }, orderBy: { submittedAt: "asc" } }) : [],
+  const [whatsapp, olderWhatsappRecords] = await Promise.all([
+    whatsappExportFor(tx, workspaceId, storeId, { phoneHash: request.phoneHash, customerId: request.customerId }),
+    legacyRecordCount(storeId, { phoneHash: request.phoneHash, customerKey: request.customerKey }),
   ]);
 
   const [emailMessages, emailEvents] = request.emailHash
@@ -154,52 +129,7 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       referrerHost: o.referrerHost,
       lineItems: o.lineItems.map((l) => ({ title: l.title, sku: l.sku, quantity: l.quantity, price: money(l.price), discount: money(l.discount) })),
     })),
-    whatsapp: {
-      contacts: contacts.map((c) => ({
-        phone: reveal(() => contactWaId(c)),
-        firstName: reveal(() => contactFirstName(c)),
-        country: c.country,
-        marketing: c.marketingStatus,
-        marketingSource: c.marketingSource,
-        marketingUpdatedAt: c.marketingUpdatedAt?.toISOString() ?? null,
-        optedOut: c.optedOut,
-        optedOutAt: c.optedOutAt?.toISOString() ?? null,
-        lastMessageFromCustomerAt: c.lastInboundAt?.toISOString() ?? null,
-        firstSeenAt: c.createdAt.toISOString(),
-      })),
-      messages: messages.map((m) => ({
-        kind: m.kind,
-        template: m.templateName,
-        order: m.orderName,
-        status: m.status,
-        to: m.phoneMasked,
-        scheduledFor: m.scheduledFor.toISOString(),
-        sentAt: m.sentAt?.toISOString() ?? null,
-        deliveredAt: m.deliveredAt?.toISOString() ?? null,
-        readAt: m.readAt?.toISOString() ?? null,
-      })),
-      abandonedCheckouts: checkouts.map((a) => ({
-        startedAt: a.checkoutCreatedAt.toISOString(),
-        lastActivityAt: a.lastActivityAt.toISOString(),
-        customerName: a.customerNameEnc ? reveal(() => waDecrypt(a.storeId, "name", a.customerNameEnc!)) : null,
-        phone: a.phoneMasked,
-        items: a.items,
-        currency: a.currency,
-        total: money(a.totalPrice),
-        marketingConsent: a.marketingConsent,
-        status: a.status,
-        recoveredOrder: a.recoveredOrderName,
-      })),
-      reviews: reviews.map((r) => ({
-        order: r.orderName,
-        product: r.productTitle,
-        rating: r.rating,
-        text: r.body,
-        reviewerName: r.reviewerName,
-        status: r.status,
-        submittedAt: r.submittedAt.toISOString(),
-      })),
-    },
+    whatsapp: { ...whatsapp, olderRecords: olderWhatsappRecords },
     email: {
       messages: emailMessages.map((m) => ({
         kind: m.kind,
@@ -211,5 +141,6 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       })),
       events: emailEvents.map((e) => ({ type: e.eventType, source: e.source, occurredAt: e.occurredAt.toISOString(), status: e.status })),
     },
+    sms: await smsExportFor(tx, workspaceId, storeId, { customerKey: request.customerKey, customerId: request.customerId, ordersRequested: request.ordersRequested }),
   };
 }

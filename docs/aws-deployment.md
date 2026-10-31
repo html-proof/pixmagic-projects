@@ -15,7 +15,8 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Address | **https://bizinsights.io** (DNS at Cloudflare, below); CloudFront's own name `d2mr8m2p1qkh58.cloudfront.net` and `www` redirect pages there | `infra/cdk/lib/config.ts` `domain` |
 | UI + API | Lambda `insights-production-api` (function URL, alias `live`) behind CloudFront + WAF | `apps/aws/src/index.ts` |
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
-| Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
+| Page while the server is down | A page request the function can't answer (connection failure, timeout, 429/5xx) fails over to the site's own "Service temporarily unavailable" page as a 503: a second distribution (stack output `FallbackDomain`) serves `_fallback/unavailable.html` from the same bucket for any path. The API's paths never fail over, so its own 502/503 messages reach the app. The smoke test fetches the page from the fallback. | `infra/cdk/lib/app-stack.ts`, `apps/web/src/app/unavailable`, `apps/aws/src/paths.ts` |
+| Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: GitHub variable `AWS_SCHEDULES=on`) | `runScheduled()` in `apps/worker` |
 | Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
@@ -24,13 +25,16 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 | Audit (whole account) | CloudTrail `insights-account` (every Region) → S3 `insights-account-trail-605411278365` (1 year); IAM Access Analyzer `insights-account` in all 18 enabled Regions (StackSet `insights-account-access-analyzer`); GuardDuty (turned on by hand) | `infra/cdk/lib/audit-stack.ts` |
 
-Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
-file uploads (exports are generated on request), so S3 holds only webhook bodies and dumps.
+Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination (the WhatsApp
+service keeps its sessions in its own memory and database). The only file uploads are WhatsApp
+attachments, kept in the payloads bucket until they are sent (exports are generated on request), so
+S3 holds only webhook bodies, those attachments and dumps.
 
 ## Deploy (from a PC)
 
@@ -76,13 +80,17 @@ secret among them:
 | --- | --- | --- |
 | `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
-| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (else `META_APP_ID`) | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app) | Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work |
+| `WHATSAPP_CONFIG_ID` (set 2026-10-25), on the app `WHATSAPP_APP_ID` (empty, so `META_APP_ID`: WhatsApp's Cloud API option runs on the Meta Ads app "Insights") | `META_APP_SECRET` while WhatsApp is on the Meta Ads app, as now (the check names it so); `WHATSAPP_APP_SECRET` only on an app of its own; `WHATSAPP_WEBHOOK_VERIFY_TOKEN` too | WhatsApp's Cloud API option (Embedded Signup) can't be offered; linking a phone with a QR code still works (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
-Embedded Signup is off until `WHATSAPP_CONFIG_ID` is set, so until then nothing warns about
-WhatsApp's secret: the check's line on the Deploy run names what it still needs instead
-("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET)").
+WhatsApp's Cloud API option is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns
+about WhatsApp's Meta secret: the check's line on the Deploy run names what it still needs instead
+("WhatsApp service on, Cloud API off (needs …)"). The WhatsApp service itself needs
+`EVOLUTION_API_URL` and `EVOLUTION_API_KEY`, which the App stack and the secret
+`insights/<env>/evolution-api` give every function: nothing to set by hand. With the configuration
+id set (2026-10-25) the line should read "WhatsApp service on, Cloud API on"; Meta's own Tech
+Provider steps (docs/whatsapp.md, "Owner's steps (Cloud API)") are not something it can see.
 
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary
@@ -98,7 +106,8 @@ aws lambda invoke --function-name insights-production-cron:live --cli-binary-for
 ```
 
 `config.json` then says which ad platforms, email integrations and sign-in options are on, what
-WhatsApp Embedded Signup still needs (`whatsapp.embeddedSignupNeeds`), and lists under
+the WhatsApp service and its Cloud API option still need (`whatsapp.evolutionNeeds`,
+`whatsapp.embeddedSignupNeeds`), and lists under
 `halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
 **Deploy to AWS** (Actions → Run workflow, on `main`) so new instances read it. For another
 environment, pass `--env <name>` to `put-secrets.mjs` and use `insights-<name>-cron:live`, then
@@ -116,6 +125,55 @@ If Node's connections time out on this PC's network (IPv6-only hotspot with NAT6
 `.github/workflows/aws-deploy.yml` runs after CI passes on `main` (or by hand): build → `cdk
 deploy` → migrate → smoke tests → automatic rollback of the `live` aliases if anything fails. It
 signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS keys in GitHub.
+
+It is two jobs, so the app's dependencies never run where the deploy role is reachable:
+
+- `build` installs everything, runs the AWS and CDK unit tests and builds the Lambda package
+  (`apps/aws/dist/function`, API + UI). It has no `id-token` permission: nothing in it can ask
+  GitHub for the token the deploy role trusts. The package goes to the Actions cache under a key
+  made of the run id and the commit (artifact storage is full on this plan; caches made on `main`
+  can't be written by pull requests).
+- `deploy` (environment `production`, `id-token: write`) installs only `infra/cdk`'s tools
+  (aws-cdk-lib, the CDK CLI, tsx) with `--ignore-scripts`, restores the package
+  (`fail-on-cache-miss`), and does the rest. A re-run of only `deploy` finds the same package.
+
+When the PC's connection drops calls, CDK can't reach STS: the log says its bootstrap roles
+"could not be used to assume ... Proceeding anyway". It then falls back to the deploy role, which
+is refused what only those roles may do (`ssm:GetParameter` on `/cdk-bootstrap/hnb659fds/version`),
+or a socket "did not establish a connection". When the CLI's very first call, the account lookup,
+doesn't get through, all it says is "Need to perform AWS calls for account ..., but no credentials
+have been configured" (the job always has them). Either way nothing in AWS changed. So "Deploy (CDK)"
+tries `cdk deploy` again a minute later when its output reads like the network, three attempts in
+all; any other failure goes straight to the rollback. Three network failures in a row: put the PC
+on a steadier connection, then re-run the `deploy` job. CloudTrail tells the two apart: a real
+refusal shows `AssumeRole` events with `AccessDenied`, while a dropped connection shows none.
+
+How much one run survives (aws-cdk 2.1143.0, from its source): every AWS call gets 10 s to connect;
+S3 and CloudFormation calls get 7 tries (about 90 s), the account lookup 3. Assuming CDK's roles
+gets the SDK's default of 3 tries (about 30 s), the one figure `AWS_MAX_ATTEMPTS` changes: the step
+sets it to 10 (about 2 minutes), so a drop of a minute there no longer fails the run. The step also
+sets the `NODE_OPTIONS` above: Node gives each of a host's addresses 250 ms before trying the next,
+less than the hotspot's ~300 ms round trip, and S3 names 16 of them, so most connects came down to
+the last address alone (6 of 15 to CDK's us-east-1 bucket got through within 10 s on 2026-10-23,
+10 of 15 at 5000 ms). A hand deploy from this PC on the hotspot does well to set both
+(`$env:AWS_MAX_ATTEMPTS = "10"`).
+
+A connection that goes quiet mid-call is a different failure: nothing ever times it out. The CLI
+gives each call 5 minutes (`requestTimeout`), but its HTTP handler only logs a warning when that
+passes, and it sets no socket timeout. On 2026-10-23 (Deploy 40032504218, attempt 1) the PC was in
+Modern Standby: CloudFormation finished `InsightsEdge-production` in 10 s, and the CLI waited 57
+minutes on that stack's status until the job hit its 60-minute limit. A job cancelled at its limit
+skips every later step, the rollback included. So the step also preloads
+`infra/cdk/scripts/stall-guard.cjs` (`--require` in its `NODE_OPTIONS`): a request that goes 2
+minutes without a byte either way ends with `ETIMEDOUT`, which the SDK retries like a dropped
+connection, and the `network` pattern catches it if every try fails. And the step stops itself at
+45 minutes, so a hang the guard misses fails the step and the rollback runs. A hand deploy can load
+it too: add `--require <repo>\infra\cdk\scripts\stall-guard.cjs` to `NODE_OPTIONS`.
+
+Dependency install scripts run, anywhere this repository is installed (CI, the deploy, a
+developer's machine), only for the packages `pnpm.onlyBuiltDependencies` in the root
+`package.json` names (esbuild, prisma, @prisma/engines). A new dependency that needs its install
+script is added there on purpose, after a look at what the script does.
 One-time setup in the repository's Settings → Environments → `production`: variable
 `AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output), optional `AWS_ALERT_EMAIL`,
 `GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` since 2026-10-16). Required reviewers and branch
@@ -195,17 +253,22 @@ about 13 (checks ~8, browser tests ~5, each job billed in whole minutes), its me
 much again, and a deploy ~5. CI (`.github/workflows/ci.yml`) therefore runs only what a change can
 affect:
 
-- Only Markdown files or `docs/` changed: no CI run, and so no deploy (nothing to ship).
+- Only Markdown files or `docs/` changed: a push to `main` starts no CI run, and so no deploy
+  (nothing to ship). A pull request still starts one: its first job finds nothing to test and the
+  other two skip (about a minute), so the checks main's merge block waits for report.
 - A pull request runs the browser tests only when it changes `apps/web`, `apps/aws`,
   `packages/shared`, the e2e stand-ins (`infra/cognito-local`, `infra/postgres`,
   `docker-compose.yml`), the dependencies or `ci.yml`, or has the label `e2e` (labels are read per
   push: add it, then push). A push to `main` always needs them before Deploy to AWS.
-- Each pull-request job that passes records the tree it tested: a commit status `ci/passed-<job>`
-  ("tree <tree>") on the pull request's head. The push to `main` that merges it looks these up first
-  (job "Already passed on a pull request?", about a minute) and skips each job that already passed
-  on exactly its tree. That holds
-  when `main` hasn't moved since the pull request's last run: of several pull requests merged back to
-  back, only the first saves anything.
+- Each pull-request job that passes records the code it tested: a commit status `ci/passed-<job>`
+  ("code <key>") on the pull request's head, where the key hashes the tested commit's files less
+  Markdown and `docs/` (`infra/runner/code-key.mjs`). Every run looks these up first (job "Already
+  passed on this code?", about a minute) and skips each job that already passed on the same code:
+  a pull request's run on its newest 30 commits, so a push that changed only Markdown or `docs/`
+  costs a minute; a push to `main` on the commits it was made from and the head of the pull request
+  it merged. That holds for `main` when its code hasn't moved since the pull request's last run: of
+  several pull requests merged back to back, only the first saves anything. Records made before
+  2026-10-29 name the exact tree ("tree <tree>") and still count.
 - The integration tests (`pnpm test:integration` and the migrations check, ~4 of the checks job's
   ~7.5 minutes) run only when something they read changed since a run where they passed. The checks
   job hashes the git ids of `apps/api`, `apps/worker`, `packages/`, `test-support/`,
@@ -221,13 +284,27 @@ affect:
   artifacts, which count against the account's Actions storage (GitHub Free: 500 MB for all its
   private repositories together, artifacts and Packages). Once that was used up, every upload
   failed with "Artifact storage quota has been hit", no pass was recorded, and every push to `main`
-  ran the whole ~45-minute suite. The only artifact left is the Playwright report of a failed e2e
-  run (7 days).
-- A newer push cancels the older run on the same pull request. On `main` it waits: the run in
-  progress finishes and deploys, then the newest waiting push runs (older waiting ones are dropped).
-  So merges minutes apart still deploy, at most one run behind. Before 2026-10-18 `main` cancelled
-  too, and that day only 2 of 8 main runs reached Deploy. Re-run a failed job only when it is flaky,
-  not to retry a real failure.
+  ran the whole ~45-minute suite. CI uploads no artifacts at all since 2026-10-30: a failed e2e
+  test's page snapshot (Playwright's error-context.md) is printed in the "Run pnpm e2e" log
+  instead, under "Page when it failed".
+- A newer push waits for the run in progress on the same branch; then the newest waiting push runs
+  (GitHub drops older waiting ones, "Canceling since a higher priority waiting request ... exists":
+  those never started). On `main` the run in progress finishes and deploys, so merges minutes apart
+  still deploy, at most one run behind. Before 2026-10-18 `main` cancelled, and that day only 2 of 8
+  main runs reached Deploy. Making a pull request a draft is the one event that cancels its run in
+  progress (holding it, below).
+- On a pull request, the checks and e2e jobs start `infra/runner/stop-when-superseded.mjs`, which
+  asks GitHub every minute for the pull request's head. Once a newer push arrives it compares the
+  code the run tests (the pull request merged into `main`) with GitHub's merge of the newer head
+  into `main`, Markdown and `docs/` aside. The same code (a push of only docs, or `main` merged into
+  the branch by hand) lets the run finish, and the run for that push then skips what it passed.
+  Other code, or a push that conflicts with `main`, cancels the run within a minute; the job's last
+  step, "Newer pushes while this job ran", prints why, and the run's Annotations show it. Comparing
+  the two heads instead would stop a run whenever `main` is merged into the branch: that lists
+  every file `main` changed since the branch's last merge. Until 2026-10-29 every push
+  cancelled the pull request's run in progress: a merge of a docs-only `main` into #290 cancelled
+  its run 27 minutes into the checks, and the PC had to start over.
+- Re-run a failed job only when it is flaky, not to retry a real failure.
 
 Minutes used so far this month: GitHub → Settings → Billing and licensing → Usage, or
 `gh api users/html-proof/settings/billing/usage/summary` (after `gh auth refresh -s user` once).
@@ -447,8 +524,12 @@ job signs in only with the OIDC deploy role and checks that it did.
 - The PC must be on, awake and plugged in: queued jobs wait up to 24 hours for the runner, then are
   cancelled. It's a laptop with Modern Standby, where the screen going off is the way into standby.
   Its screen goes off 2 minutes after the last input on AC and 3 on battery (as of 2026-10-20). On
-  AC it then never sleeps (`standby-timeout-ac` is 0) and a job runs on at full speed with the
-  screen off; on battery it sleeps right after (DRIPS: the CPU runs nothing) while a test's clock
+  AC it then never sleeps (`standby-timeout-ac` is 0) and a job usually runs on at full speed with
+  the screen off, but it still enters Modern Standby (Kernel-Power 506, `Reason` 12, on AC), and
+  connections can stall there: on 2026-10-23 that took the runner offline for more than 12 minutes (15:06Z)
+  and hung a deploy's `cdk deploy` (21:46Z, see "Deploy (GitHub Actions)"). Keeping the screen on
+  while jobs run ends both: `powercfg /change monitor-timeout-ac 0` (the owner's, elevated). On
+  battery it sleeps right after (DRIPS: the CPU runs nothing) while a test's clock
   keeps running, and it sleeps when the lid closes. On battery it also runs a job 2-3 times slower
   (the 5-minute e2e suite took 10-14). What that did: on 2026-10-18 it slept twice mid-pipeline;
   on 2026-10-19 a 78 s sleep (unplugged with the lid closed) failed `pnpm test:integration` with
@@ -487,11 +568,19 @@ job signs in only with the OIDC deploy role and checks that it did.
   integration tests and the e2e suite 2-3 times slower too and can time a test out even plugged in
   and awake (2026-10-19 20:28Z): re-run the job once the PC is quiet.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
-- "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
-  Actions storage is used up (see the CI list above). Only that report is lost; the pass records
-  are commit statuses. Storage per private repository:
+- With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
+  land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
+  its run. A cancelled run shows as failing checks, and held pull requests read as broken: on
+  2026-10-28 five were closed as failed with their work unmerged, and #293 looked failed on
+  2026-10-29. On a draft, CI cancels the queued or running run and skips every job (ci.yml), so the
+  checks are grey and GitHub won't merge it until it's marked ready: `gh pr ready <n>` runs
+  everything.
+- "Artifact storage quota has been hit": the account's 500 MB of Actions storage is used up (see
+  the CI list above). CI no longer uploads any artifact, so only a run of an older `ci.yml` shows
+  it (its Playwright report step; that run's red comes from the failed test, named in the "Run pnpm
+  e2e" log). On 2026-10-30 the whole account held ~1.3 MB of artifacts and uploads were still
+  refused; GitHub's meter needs `gh auth refresh -s user` to read. Storage per private repository:
   `gh api repos/html-proof/<repo>/actions/artifacts --paginate --jq '.artifacts[].size_in_bytes'`.
-  Deleting artifacts frees it once GitHub recounts (it says every 6-12 hours).
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
   what one pull request's job leaves behind the next job on that runner runs with. With the runner
   for main that stops short of main's CI and the deploy; without it, they run with it too. Only
@@ -511,6 +600,9 @@ job signs in only with the OIDC deploy role and checks that it did.
   and stops the host. `--replace` wipes the AWS copy first (the final copy at cutover).
 - Migrations after a deploy: `aws lambda invoke --function-name insights-production-cron:live
   --cli-binary-format raw-in-base64-out --payload '{"action":"migrate"}' out.json`.
+- The WhatsApp service's own database `evolution` and its role (secret `insights/production/evolution-db`)
+  are made by the cron's `evolution-db` action, which the WhatsApp stack runs when it is first
+  deployed. Again by hand (idempotent): the same command with `{"action":"evolution-db"}`.
 - psql: start the admin host, then `aws ssm start-session --target <instance id>` (needs the Session
   Manager plugin), credentials from the `insights/production/db-owner` secret. Stop it afterwards.
 - Restore: RDS point-in-time restore (any second in the last 14 days) to a new instance, or a dump
@@ -578,9 +670,16 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   - **Bot Fight Mode off.** On the Free plan it covers the whole zone and no rule can skip it, so it
     challenges Shopify's and Meta's webhooks and the deploy's smoke tests from GitHub (a failed smoke
     test rolls the deploy back). Bot traffic is handled by AWS WAF's rate limits and managed rules.
-  - **AI Labyrinth** on; **Security.txt** set with the same lines as
-    `apps/web/public/.well-known/security.txt` (Cloudflare answers that path at its edge). Both
-    expire 2027-10-15: renew the `Expires` line in both before then.
+  - **Where a device signed in from** (Settings → Security's device list and sign-in activity): the
+    viewer-request function passes Cloudflare's `CF-IPCountry` on as `x-insights-viewer-geo`, and
+    `CF-Region` / `CF-IPCity` too once the zone sends them: Rules → Transform Rules → Managed
+    Transforms → **Add visitor location headers** (any plan). Without it the list shows the country
+    only. Requests that don't come through Cloudflare get CloudFront's own `CloudFront-Viewer-*`.
+  - **AI Labyrinth** on. Cloudflare's own **Security.txt** (Security → Settings) is **off** since
+    2026-10-23: while on, Cloudflare answered `/.well-known/security.txt` at its edge and hid the
+    site's `apps/web/public/.well-known/security.txt` (it still gave the old contact address after
+    the site's file changed). The site's file is the one to edit; it expires 2027-10-15, so renew its
+    `Expires` line before then. Cloudflare's copy is kept, switched off: don't switch it back on.
   - Rollback: switch the two records back to **DNS only**. Nothing in AWS has to change: from
     anywhere but Cloudflare's ranges `CF-Connecting-IP` is ignored.
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
@@ -590,7 +689,9 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   serves other methods where they arrive (webhooks and pixel events don't follow redirects).
 - **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
   under bizinsights.io must serve HTTPS.
-- **Email**: the domain has no MX (no mailbox). SES sends from it (`no-reply@bizinsights.io`):
+- **Email**: Cloudflare Email Routing receives for the domain (MX `route1/2/3.mx.cloudflare.net`) and
+  forwards support@ and link@ to the owner's inbox ("App email", "Who each email comes from").
+  SES sends from it (`no-reply@`, `support@`, `link@`):
   identity `bizinsights.io` in ap-southeast-2 with Easy DKIM, its three `<token>._domainkey` CNAMEs
   → `<token>.dkim.amazonses.com` in this zone, DNS only (added 2026-10-16). The existing `_dmarc`
   record (p=quarantine, relaxed) passes on the DKIM signature. Replies go to a message's Reply-To.
@@ -735,6 +836,38 @@ retried twice while the owner waits, then from the `email` queue after 1, 5 and 
     answers 401 `invalid_signature` (404 `not_configured` means the secret isn't loaded).
   To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
 
+**Who each email comes from** (`packages/core/src/mail/senders.ts`, settings in
+`apps/aws/src/settings.ts`). A message names its purpose (`MailOptions.purpose`), and the provider
+takes the From address from the settings for that purpose; nothing a request carries can name a
+sender.
+
+| Purpose | From | Settings |
+| --- | --- | --- |
+| Sign-up, sign-in, email verification and password-reset codes; the temporary password | `BizInsights Support <support@bizinsights.io>` | `OTP_FROM_EMAIL`, `OTP_FROM_NAME` |
+| Dashboard invitations (shared links) | `BizInsights <link@bizinsights.io>` | `LINK_FROM_EMAIL`, `LINK_FROM_NAME` |
+| Staff Management: employee portal invitations | `BizInsights <staff@bizinsights.io>` | `STAFF_FROM_EMAIL`, `STAFF_FROM_NAME` |
+| Everything else (alerts, stock alerts, sign-in method notices, the daily cost report) | `bizinsights <no-reply@bizinsights.io>` | `EMAIL_FROM` |
+
+The codes sign off with the support address and the invitations add "Need help with bizinsights?
+Contact support@bizinsights.io" (`SUPPORT_EMAIL`); invitations still send replies to the person who
+sent them. An empty `OTP_FROM_EMAIL`, `LINK_FROM_EMAIL` or `STAFF_FROM_EMAIL` sends those emails from
+`EMAIL_FROM` again.
+
+- **Sending** from any `@bizinsights.io` address needs nothing more: Resend and SES both verify the
+  domain, not single addresses (checked 2026-10-23: `resend._domainkey` DKIM, SPF on `send.`, DMARC
+  `p=quarantine` with relaxed alignment, which Resend's DKIM passes). A sender on another domain
+  would be refused (`not_allowed`).
+- **Receiving**: Cloudflare **Email Routing**, on since 2026-10-24 (Cloudflare dashboard → Email
+  Service → **Email Routing** → bizinsights.io). It added three MX records (`route1/2/3.mx.cloudflare.net`),
+  the apex SPF `v=spf1 include:_spf.mx.cloudflare.net ~all` and its own DKIM key
+  `cf2024-1._domainkey`, all shown as *Locked* there; Resend's records on `send.` and
+  `resend._domainkey`, SES's DKIM CNAMEs and `_dmarc` are untouched. Destination
+  `bizinsightsaus@yahoo.com` (verified); rules `support@bizinsights.io`, `link@bizinsights.io` and
+  (since 2026-10-25) `staff@bizinsights.io` → that destination, all *Active*. The catch-all is off
+  (Drop), so mail to any other address is dropped: a new sender address needs its own rule. A new
+  destination must be verified (Cloudflare emails it a link) before a rule can use it. Check: send to support@bizinsights.io and see it in the Yahoo inbox, or its "Forwarded" line
+  in Email Routing → Activity log.
+
 **Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`
 aliases point at published versions, so changing `$LATEST` alone restarts nothing live. Publish the
 same code again and move the alias (what was done for v47 on 2026-10-16; the next CDK deploy publishes
@@ -759,7 +892,9 @@ Lambda `insights-production-cognito-email` (Auth stack; `apps/aws/src/cognitoEma
 `cognito-email.mjs` in the same package). Cognito encrypts each code with the KMS key
 `alias/insights-production-cognito-email`; the function decrypts it (AWS Encryption SDK), words the
 email for its trigger (`packages/core/src/mail/authEmails.ts`) and sends it through the app's mail
-provider (Resend, `RESEND_API_KEY` from `insights/production/app`) from `no-reply@bizinsights.io`.
+provider (Resend, `RESEND_API_KEY` from `insights/production/app`) from `support@bizinsights.io`
+(the support sender, "Who each email comes from" above; the Auth stack gives the function
+`OTP_FROM_EMAIL`, `OTP_FROM_NAME` and `SUPPORT_EMAIL`).
 So these emails aren't held to Cognito's own 50 a day from `no-reply@verificationemail.com`; they
 share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month).
 
@@ -784,12 +919,20 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Owner-only steps
 
-- **MFA on the root user** (Trusted Advisor "MFA on Root Account", red): sign in as root → account
-  menu (top right) → **Security credentials** → **Multi-factor authentication (MFA)** → **Assign MFA
-  device**, a passkey/security key or an authenticator app. It needs the owner's own device, so no
-  deploy can do it. `aws login` keeps working after it (the browser sign-in asks for the code).
+- **Mail to support@ and link@**: **done 2026-10-24**, Cloudflare Email Routing forwards both to
+  `bizinsightsaus@yahoo.com` ("Who each email comes from", above).
+- **MFA on the root user** (Trusted Advisor "MFA on Root Account"): **done 2026-10-22**, a
+  passkey/security key (`aws iam list-mfa-devices` as root lists it; `aws iam get-account-summary`
+  says `AccountMFAEnabled` 1). To add or replace one: sign in as root → account menu (top right) →
+  **Security credentials** → **Multi-factor authentication (MFA)** → **Assign MFA device**. Root
+  can hold up to eight, so a second one kept elsewhere means a lost key doesn't lock the account.
+  It needs the owner's own device, so no deploy can do it. `aws login` keeps working (the browser
+  sign-in asks for the key).
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
+- **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
+  the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
+  (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
   US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
   Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so
@@ -808,17 +951,20 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 - **Provider secrets**: nothing records that META_APP_SECRET (Meta app 971575545351940, App settings →
   Basic) and GOOGLE_ADS_CLIENT_SECRET (Google Cloud client "Insights web") were put in
   `insights/production/app` after the move from Cloudflare (the old Worker's values didn't move by
-  themselves), nor WHATSAPP_APP_SECRET and WHATSAPP_WEBHOOK_VERIFY_TOKEN (needed once Embedded
-  Signup gets its `WHATSAPP_CONFIG_ID`). Check with
+  themselves). WHATSAPP_WEBHOOK_VERIFY_TOKEN is set (2026-10-25); WHATSAPP_APP_SECRET isn't needed
+  while WhatsApp runs on the Meta Ads app (META_APP_SECRET serves). Check with
   `put-secrets.mjs --dry-run` ("Which provider secrets are there" above; the Deploy run's warnings
   say the same), add each missing one with `put-secrets.mjs --set <NAME>`, then run Deploy to AWS.
   Until then Meta Ads, Google Ads and AdSense say "Coming soon" and their connections don't sync.
 - **Custom domain**: done, bizinsights.io (above). The app has sent only bizinsights.io callbacks since
   2026-10-16, so Google and Meta need these redirect URIs registered now (exactly, and nothing on the old
   hosts once nothing uses them): `https://bizinsights.io/api/ads/google/callback` and
-  `https://bizinsights.io/api/ads/adsense/callback` on the Google client "Insights web";
-  `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app
-  971575545351940 (steps in [ads-review-packs.md](ads-review-packs.md)); and, once their clients
+  `https://bizinsights.io/api/ads/adsense/callback` on the Google client "Insights web", and
+  `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app 971575545351940
+  (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works); steps in
+  [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` is removed at both once
+  the release without Nango's code is live ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
+  and, once their clients
   exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
   earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →
@@ -838,14 +984,17 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
 | GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
+| CloudWatch: 33 alarms (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
-| **Total** | **~87.5** (~96 with GST) |
+| WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, on demand, 17.29; Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 |
+| **Total** | **~107.3** (~118 with GST) |
 
-With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
+The figures in this paragraph were worked out with CloudWatch at ~1.5, before the recount and the
+three alarms of 2026-10-29: add 0.80 (0.88 with GST) to each. They leave out the WhatsApp service, which adds ~19 (~21 with GST) to each
+(on Fargate Spot, `whatsapp.spot` in config.ts, its task would be about 5). With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
 brings it to ~72.8 (~80 with GST): that was the only combination under the US$80 budget before the
 audit stack. The owner chose to keep Advanced RDS (2026-10-18). The admin host adds
 ~3.9 while it runs. Before GuardDuty's trial ends the total is ~76. A paid **support plan** comes on
@@ -896,7 +1045,9 @@ monitor, so it is not in CDK. Detection needs about 10 days of history (from ~26
 AWS's default: `aws ce update-anomaly-subscription --region us-east-1 --subscription-arn
 arn:aws:ce::605411278365:anomalysubscription/b4c7c83e-dfb5-4310-b5c3-83da07099523
 --threshold-expression` with `{"And":[...]}` of `ANOMALY_TOTAL_IMPACT_ABSOLUTE` ≥ 100 and
-`ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40.
+`ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40. Its subscriber is set by hand too, so a new `budgetEmail` needs
+the same command with `--subscribers Address=<address>,Type=EMAIL` (done 2026-10-22 for
+bizinsightsaus@yahoo.com).
 
 **Daily cost email** (`costReport` in config.ts, on in production only): every morning at 07:00
 Melbourne time the `CostReport` schedule runs the cron function's `{"action":"cost-report"}`
@@ -946,6 +1097,9 @@ stopped the app. Now nothing the app needs is in one AZ only:
   CloudFormation moves the route only once the new one signals NAT is up). The public addresses
   are not fixed (nothing allowlists them); they change only when an instance is replaced.
 - **Functions** run in both AZs and Lambda uses the one that works.
+- **WhatsApp service**: one Fargate task (a WhatsApp session can't be open in two places), placed in
+  either AZ's private subnet. A task that stops is replaced, and sessions resume from its database
+  without a new QR code; meanwhile messages wait (docs/whatsapp.md, "Scaling").
 
 State on 2026-10-17 06:45Z (main 7379a95): RDS db.t4g.micro Multi-AZ (2a + standby 2b), NAT instances
 `insights-production-nat-a` (2a) and `-b` (2b), no NAT gateway. Trusted Advisor cleared the RDS finding at
@@ -1017,8 +1171,30 @@ What production does have, at no extra cost:
   `cron-missed-ticks`) and the next tick takes over.
 - Alarms on the topic `insights-production-alarms`: function errors (Cognito's email function too), throttles and latency, queue age,
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
-  and CPU, plus RDS's own events (availability, failure, failover, low storage, maintenance,
+  and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
+- Alarms on what the logs say (log metric filters in `infra/cdk/lib/app-stack.ts`): bursts of error
+  lines per function, texts on hold, automated messages refused, WhatsApp's service not answering;
+  and, each counted over an hour (what to do: [RUNBOOK.md](RUNBOOK.md)):
+  - `sync-jobs-failed-for-good`: 10 or more sync-queue jobs ran out of attempts in an hour (the
+    jobs function's `"sync job failed"` line with `"final":true` and `"attempts"` 6 or more, core's
+    `MAX_ATTEMPTS`). A failure no retry helps is final on its first attempt and isn't counted: a
+    paused or closed shop, refused access and the like come back with every daily reconcile, which
+    starts all stores in the same tick, so a few such stores would set it off every day. Each
+    failure already reaches its merchant (an alert, or the ad account's card); one store's jobs make
+    a handful at most, so ten is more than one store's.
+  - `ad-connections-need-merchants`: 10 or more ad connections turned to Reconnect or permission in
+    an hour (`"ad connection needs the merchant"`, logged once per connection when it turns, from
+    any of the three functions). One merchant's sign-in ending turns the accounts connected with it,
+    one to a few per store, and each sign-in ends at a time of its own; ten in an hour is a break at
+    the platform or in bizinsights' app. A store that connected ten or more ad accounts with one
+    sign-in can set it off alone: the lines' `storeId` tells.
+  - `ad-figures-differ`: the cron's daily check of stored ad figures against the platform found one
+    outside its tolerance (`"ad figures differ from the platform"`; [ads-setup.md](ads-setup.md),
+    "Checked against the platform"). It clears the hour after and fires again with the next day's
+    check while the difference stays.
+  - Cost: US$0.10 a month each (the cost table); the three metrics they count are within CloudWatch's
+    ten free custom metrics.
 
 ## Security checks (Trusted Advisor)
 
@@ -1046,7 +1222,7 @@ The five red security checks on 2026-10-18 and what answers each:
   the StackSet made it again. Its roles: `insights-account-stackset-admin` (only this account's
   StackSets may assume it) and `insights-account-stackset-exec` (stacks and analyzers only).
   Findings: IAM console → Access analyzer, per Region.
-- **MFA on Root Account**: the owner's step (Owner-only steps above).
+- **MFA on Root Account**: the owner's step (Owner-only steps above), done 2026-10-22.
 
 Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a check, or
 `aws support refresh-trusted-advisor-check --check-id <id> --region us-east-1`, asks sooner.
@@ -1056,7 +1232,9 @@ Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a
 One red and six yellow that day (the dashboard said "1 action, 5 investigation"; the sixth appeared
 the same morning), and what answers each:
 
-- **MFA on Root Account** (red): the owner's step, still; nothing in this repository can do it.
+- **MFA on Root Account** (red): the owner's step; nothing in this repository can do it. The owner
+  added a passkey/security key on 2026-10-22 13:49Z and the check read green at 13:50Z, which left
+  every Trusted Advisor check green (the excluded rows aside).
 - **AWS Lambda Functions Using Deprecated Runtimes** (yellow, the four functions): they ran Node
   22, which Lambda retires on 2027-04-30, and the check lists a runtime from 180 days out. They run
   Node 24 since 2026-10-21 (`NODEJS_24_X` in app-stack.ts and auth-stack.ts, `target: "node24"` in
@@ -1082,13 +1260,17 @@ the same morning), and what answers each:
   2026-10-21 (`aws ec2 stop-instances --region ap-southeast-2 --instance-ids <id>`). Its user data
   stops it on a fresh image's first boot only, so after any start, stop it.
 - **Single AZ Application Check** (yellow, the VPC): current, not stale: AWS re-reads it daily
-  about 12:52Z and the row's Last Updated Time moves. The facts say otherwise: egress leaves through
-  both NAT instances (NetworkOut 2026-10-18..20: nat-a 34, 47 and 47 MB a day, nat-b 41, 63 and
-  42), the functions run in both AZs and the database is Multi-AZ. What AWS infers from "egress
-  network patterns", and over what window, is not documented; the one-AZ NAT gateway went on
-  2026-10-17 06:22Z. Wait for it: if it is still yellow on about 2026-10-31 (a 14-day window fully
-  past), open a support case (Business Support until 2026-11-14) rather than excluding it. Its row
-  is the VPC itself, so excluding it would hide every future finding.
+  about 12:52Z and the row's Last Updated Time moves. The facts say otherwise, checked again on
+  2026-10-22: six subnets over 2a and 2b, the functions' network interfaces in both app subnets,
+  the database Multi-AZ (primary 2b, standby 2a), only gateway endpoints (no AZ), no NAT gateway,
+  and egress through both NAT instances every day since 2026-10-17 (NetworkOut 2026-10-18..21:
+  nat-a 34, 47, 47 and 18 MB a day, nat-b 41, 63, 42 and 22). What AWS infers from "egress network
+  patterns", and over what window, is not documented, and the check can't be refreshed; the one-AZ
+  NAT gateway went on 2026-10-17 06:22Z, five days before. On the owner's "fix it" the VPC's row was
+  excluded on 2026-10-22 (fault tolerance all green). An excluded row keeps being evaluated and
+  shows its live status (`list-recommendation-resources ... --exclusion-status excluded`): once it
+  reads ok, include it again, so a real single-AZ regression counts once more. If it is still yellow
+  in November, ask AWS Support what the check sees (Business Support until 2026-11-14).
 
 Exclusions are per row, in the Trusted Advisor API (a console "Exclude" does the same). To list
 them, and to undo one:

@@ -1,8 +1,10 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
+import type { AdLoginReason } from "@app/shared/ads";
+import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdLogin, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
 import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
+import { loginOfPlatform, loginWords } from "../settings/ads/LoginPanel";
 import { AD_PLATFORMS } from "./adPlatforms";
 import type { Note } from "./AdUi";
 import type { DemoConnected } from "./GoogleAdsDemoDialog";
@@ -13,7 +15,7 @@ const POLL_MS = 5_000;
 /** Why "Connect" didn't open the platform, in words. */
 function connectError(e: unknown, name: string): string {
   if (e instanceof ApiError && e.code === "rate_limited") return `You started connecting several times in the last few minutes. Wait a few minutes, then press the ${name} button again.`;
-  if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't switched on for bizinsights yet, so there's nothing to connect to. Please try again later.`;
+  if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't set up for bizinsights yet, so there's nothing to connect to. It's on our side, not yours: please try again later.`;
   return actionError(e, `start connecting ${name}`);
 }
 
@@ -37,8 +39,6 @@ export function useAdConnections(base: string | null) {
   // The Google Ads demo's connection flow (GoogleAdsDemoDialog) is open.
   const [demoOpen, setDemoOpen] = useState(false);
   const [confirming, setConfirming] = useState<AdConnection | null>(null);
-  // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so the page does.
-  const [backFromMeta, setBackFromMeta] = useState(false);
 
   // Another store chosen at the top (the page stays mounted): what was said or under way here was
   // about the last one. Not on the first store's arrival, which a note from the trip back can precede.
@@ -51,14 +51,13 @@ export function useAdConnections(base: string | null) {
       setDemoOpen(false);
       setChoosing(null);
       setConfirming(null);
-      setBackFromMeta(false);
     }
   }
 
-  useBackFromSignIn((provider) => {
+  // Back from the platform's sign-in without finishing it: the button isn't left on "Opening…".
+  useBackFromSignIn(() => {
     setLeaving(null);
     setBusy(null);
-    if (provider === "meta") setBackFromMeta(true);
   });
 
   // Looking again (a poll, or after an action): each look is numbered, and only the latest one's
@@ -97,16 +96,22 @@ export function useAdConnections(base: string | null) {
   const begin = (key: string) => {
     setBusy(key);
     setNote(null);
-    setBackFromMeta(false);
   };
 
+  /**
+   * "Continue with …": the browser goes to the platform's own sign-in (Facebook Login for Business, or
+   * Google's consent screen) for bizinsights' own app, and the platform sends it back to bizinsights'
+   * callback, which connects the account (the dashboard says so), asks which accounts to connect
+   * (Settings → Advertising), keeps a login that has no ad account yet, or says what went wrong. The
+   * card says "Connected" only once bizinsights has saved the account.
+   */
   const connect = async (p: AdProvider) => {
     if (!base) return;
     begin(`connect-${p}`);
     setLeaving(p);
     setGone((s) => new Map([...s].filter(([x]) => x !== p)));
     try {
-      const { url } = await api<{ url: string }>(`${base}/ads/${p}/connect`, { method: "POST" });
+      const { url } = await api<{ url: string }>(`${base}/ads/${p}/connect`, { method: "POST", body: {} });
       leavingForSignIn(p);
       window.location.assign(url);
       // The button stays busy while the browser leaves (useBackFromSignIn resets it if they come back).
@@ -179,6 +184,50 @@ export function useAdConnections(base: string | null) {
 
   const cancelDisconnect = useCallback(() => setConfirming(null), []);
 
+  /** "Check for ad accounts" on a sign-in connected with none yet: the platform is asked now, and what it lists is connected. */
+  const checkLogin = async (l: AdLogin) => {
+    if (!base) return;
+    const name = AD_PLATFORMS[l.provider].name;
+    begin(`login-check-${l.id}`);
+    try {
+      const r = await api<{ connected?: number; waiting?: boolean; reason?: AdLoginReason; ended?: boolean }>(`${base}/ads/logins/${l.id}/check`, { method: "POST", body: {}, timeoutMs: 58_000 });
+      setNote(
+        r.connected
+          ? { kind: "success", text: `Found ${r.connected} ${name} ad account${r.connected === 1 ? "" : "s"} and connected ${r.connected === 1 ? "it" : "them"}. The figures are on their way: the badge says Synchronizing until they're in.` }
+          : r.ended
+            ? { kind: "info", text: `Your ${loginOfPlatform(l)} no longer lets bizinsights in, so it was disconnected. Press ${AD_PLATFORMS[l.provider].button} to connect again.` }
+            : { kind: "info", text: loginWords({ provider: l.provider, reason: r.reason ?? l.reason }).text },
+      );
+      await reload();
+    } catch (e) {
+      setNote({ kind: "error", text: actionError(e, "check for ad accounts") });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Disconnect a sign-in that has no ad account yet: nothing was fetched with it, so only the access goes. */
+  const disconnectLogin = async (l: AdLogin) => {
+    if (!base) return;
+    const name = AD_PLATFORMS[l.provider].name;
+    begin(`login-delete-${l.id}`);
+    try {
+      const r = await api<{ ok: true; revoked?: RevokeOutcome }>(`${base}/ads/logins/${l.id}`, { method: "DELETE" }).catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) return { ok: true as const, revoked: undefined };
+        throw e;
+      });
+      const after = revokeNote(l.provider, r.revoked);
+      const text = `${name} is disconnected.`;
+      setNote(after?.kind === "info" ? { kind: "info", text: `${text} ${after.text}`, link: after.link, focus: true } : { kind: "success", text: after ? `${text} ${after.text}` : text, focus: true });
+      setGone((s) => new Map([...s, [l.provider, false]]));
+    } catch (e) {
+      setNote({ kind: "error", text: actionError(e, `disconnect ${name}`) });
+    } finally {
+      setBusy(null);
+      await reload();
+    }
+  };
+
   // ---- The Google Ads demo: a simulated account, connected and managed without any Google sign-in.
   const demoConnection = connections.find((c) => c.provider === "google" && c.demo) ?? null;
   const openDemo = () => {
@@ -239,8 +288,6 @@ export function useAdConnections(base: string | null) {
     setNote,
     leaving,
     setChoosing,
-    backFromMeta,
-    setBackFromMeta,
     connect,
     refresh,
     toggle,
@@ -248,6 +295,9 @@ export function useAdConnections(base: string | null) {
     askDisconnect: setConfirming,
     disconnect,
     cancelDisconnect,
+    /** A sign-in connected with no ad account yet. */
+    checkLogin,
+    disconnectLogin,
     /** The Google Ads demo. */
     demoEnabled: !!ads.data?.demo?.google,
     demoConnection,

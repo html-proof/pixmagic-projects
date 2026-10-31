@@ -5,6 +5,13 @@ name: Deploy to AWS
 # Setup (once): repository → Settings → Environments → "production", with the variable
 # AWS_DEPLOY_ROLE_ARN = the InsightsCi-production stack's DeployRoleArn output.
 # docs/aws-deployment.md has the rest.
+#
+# Two jobs. `build` installs every dependency, runs the unit tests and builds the Lambda package
+# (API + UI) with no way to reach AWS: it can't ask for an OIDC token. `deploy` is the only job
+# that can, and it installs only infra/cdk's tools (aws-cdk-lib, the CDK CLI, tsx), with no install
+# scripts, then deploys the package `build` made. So code from the app's ~1,500 dependencies (a
+# compromised package's install script, or anything that runs during the web build) never runs
+# where the deploy role, and through CDK's roles the whole account, is one request away.
 on:
   workflow_dispatch:
   workflow_run:
@@ -18,15 +25,19 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 # Every `run:` is bash: on a self-hosted Windows runner, Git Bash (see ci.yml).
 defaults:
   run:
     shell: bash
 
+env:
+  # The Lambda package `build` hands to `deploy`, in the Actions cache (artifact storage is full on
+  # this plan). Caches made on main can't be written by pull requests, and the key is this run's.
+  PACKAGE_KEY: aws-deploy-package-${{ github.run_id }}-${{ github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
-  deploy:
+  build:
     # By hand only from main: the production environment has no branch rule on this plan, and a
     # dispatch on any other branch would deploy code that never passed CI. After CI, only its run
     # for a push to main: `branches: [main]` above also matches a pull request from a branch named
@@ -36,15 +47,12 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
       || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     # The runner the repository variable SELF_HOSTED_MAIN_RUNNER names: the PC's runner for main,
-    # under its own account, which refuses every job but main's CI and this one from main
+    # under its own account, which refuses every job but main's CI and this workflow from main
     # (docs/aws-deployment.md). Pull-request jobs run code nobody has reviewed yet, and on a shared
-    # runner whatever they leave behind this job would run with, holding the deploy role. Without
-    # it, the same runner as CI: GitHub's ubuntu-latest, or SELF_HOSTED_RUNNER (ci.yml).
+    # runner whatever they leave behind (the cached Node, pnpm and store) both jobs would run with.
+    # Without it, the same runner as CI: GitHub's ubuntu-latest, or SELF_HOSTED_RUNNER (ci.yml).
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 60
-    environment: production
-    env:
-      AWS_REGION: ap-southeast-2
+    timeout-minutes: 45
     steps:
       - name: Git Bash and a lasting pnpm store (Windows runner)
         if: runner.os == 'Windows'
@@ -80,10 +88,61 @@ jobs:
           node-version: 24
           # A self-hosted runner keeps its pnpm store between runs (first step): no cache to move.
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+      # Install scripts run only for the packages package.json's pnpm.onlyBuiltDependencies names.
       - run: pnpm install --frozen-lockfile
         env: { DATABASE_URL: "postgresql://build:build@localhost:5432/build" }
       - name: Unit tests (AWS adapters, CDK)
         run: pnpm --filter @app/aws --filter @infra/cdk test
+      - name: Build the Lambda package (API + UI)
+        run: pnpm --filter @app/aws build
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/aws/dist/function
+          key: ${{ env.PACKAGE_KEY }}
+
+  deploy:
+    needs: build
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 60
+    environment: production
+    # The only job that can ask GitHub for the OIDC token the deploy role trusts.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-southeast-2
+    steps:
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: "true"
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install the pinned pnpm (cached on this runner)
+        run: node infra/runner/setup-pnpm.mjs
+      # infra/cdk's own dependencies only, and no package's install script runs (esbuild, which tsx
+      # uses, finds its binary through its platform package without one).
+      - name: Install the deploy tools only (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter @infra/cdk
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/aws/dist/function
+          key: ${{ env.PACKAGE_KEY }}
+          fail-on-cache-miss: true
       # This job's token carries the claims infra/cdk/lib/config.ts expects (githubDeployClaims):
       # checked before signing in, so a trust this token couldn't meet is never deployed, and a
       # mismatch reads plainly instead of as STS's "Not authorized". This file is the default
@@ -113,8 +172,6 @@ jobs:
         run: |
           if ! grep -q 'mode === "prove"' infra/cdk/scripts/oidc-trust.ts 2>/dev/null; then echo "::notice::This commit's oidc-trust.ts has no prove mode: nothing to prove."; exit 0; fi
           pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts prove --role "$ROLE" --region "$AWS_REGION"
-      - name: Build the Lambda package (API + UI)
-        run: pnpm --filter @app/aws build
       - name: Record the release being replaced
         id: before
         run: |
@@ -128,9 +185,40 @@ jobs:
         run: |
           d=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text 2>/dev/null | sha256sum | cut -c1-64) || d=""
           echo "digest=${d:-unknown}" >> "$GITHUB_OUTPUT"
+      # The PC's connection drops calls now and then: CDK then can't assume its bootstrap roles
+      # ("could not be used to assume ... Proceeding anyway", and the base role is refused what only
+      # they may do) or a socket never connects, and the deploy fails with nothing in AWS changed
+      # (2026-10-19, and twice on 2026-10-23). cdk deploy is safe to repeat, so a failure that reads
+      # like the network is tried again a minute later, three attempts in all. Any other failure goes
+      # straight to the rollback below. "no credentials have been configured" is the account lookup,
+      # STS's first call, that didn't get through: this job always has the deploy role's credentials.
+      # The CLI (aws-cdk 2.1143.0) gives S3 and CloudFormation calls 7 tries of 10 s to connect, the
+      # account lookup 3, and assuming its roles the SDK's default of 3 (about 30 s), which only
+      # AWS_MAX_ATTEMPTS changes: at 10 (about 2 minutes) a short drop there doesn't fail the run.
+      # Node tries each of a host's addresses for 250 ms before the next, under the hotspot's ~300 ms
+      # round trip: 6 of 15 connects to CDK's us-east-1 bucket got through within 10 s, against 10 of
+      # 15 at 5000 ms (2026-10-23). infra/cdk/test/deploy-network.test.ts checks `network` against
+      # the failed runs' logs.
+      # A call whose connection goes quiet would wait for ever: the CLI's 5-minute request limit only
+      # logs a warning. scripts/stall-guard.cjs ends it after 2 minutes without a byte, with
+      # ETIMEDOUT, which the SDK retries (Deploy 40032504218 sat 57 minutes on one in Modern
+      # Standby). And the step stops at 45 minutes, so whatever still hangs fails it and the
+      # rollback runs: a job cancelled at its own limit skips every step after this one.
       - name: Deploy (CDK)
         working-directory: infra/cdk
-        run: npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c schedules=${{ vars.AWS_SCHEDULES || 'off' }} -c alertEmail=${{ vars.AWS_ALERT_EMAIL }} -c googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}
+        timeout-minutes: 45
+        env: { AWS_MAX_ATTEMPTS: "10", NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000 --require ${{ github.workspace }}/infra/cdk/scripts/stall-guard.cjs" }
+        run: |
+          deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=${{ vars.AWS_SCHEDULES || 'off' }}" -c "alertEmail=${{ vars.AWS_ALERT_EMAIL }}" -c "googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}")
+          network='could not be used to assume|no credentials have been configured|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
+          log=$(mktemp)
+          for attempt in 1 2 3; do
+            if "${deploy[@]}" 2>&1 | tee "$log"; then exit 0; fi
+            if ! grep -qE "$network" "$log"; then exit 1; fi
+            if (( attempt < 3 )); then echo "::warning::cdk deploy failed on the network (attempt $attempt of 3); trying again in 60 s."; sleep 60; fi
+          done
+          echo "::error::cdk deploy failed on the network three times: check the PC's connection (docs/aws-deployment.md, Deploy (GitHub Actions))."
+          exit 1
       # Runtime settings changed (Google switched on, say): an instance that started between the App
       # stack's alias move and the Auth stack's update holds the old ones for its lifetime. Publish
       # the same code again and move `live` (docs/aws-deployment.md, "Restarting the functions"),

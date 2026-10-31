@@ -1,24 +1,27 @@
-import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
+import { buildApp, CLIENT_GEO_HEADER, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
-import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
-import { shopifyCheckReport } from "@app/core/reports";
-import { systemDb } from "@app/db";
-import { apiDeps, apiPath } from "./app.js";
+import { configReport, defaultShard, evolutionStatus, logger, memoryBlobs, memoryCoord, reportUnscopedSystemQueries, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
+import { productCheck, shopifyCheckReport } from "@app/core/reports";
+import { crossTenant, systemDb } from "@app/db";
+import { apiDeps, originCheck } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { costReportDeps, sendCostReport } from "./costReport.js";
 import { dynamoCoord } from "./dynamoCoord.js";
+import { ensureEvolutionDb, evolutionDbUrl, pruneEvolutionData } from "./evolutionDb.js";
 import { migrate, tableCounts } from "./migrate.js";
 import { nodeSmtpConnect } from "./nodeSmtp.js";
+import { apiPath } from "./paths.js";
 import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
+import { APP_SETTINGS } from "./settings.js";
 import { chooseMailer } from "./mailers.js";
+import { awsSmsProvider } from "./smsProvider.js";
 import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
 import { staticSite } from "./staticSite.js";
 
@@ -27,7 +30,7 @@ import { staticSite } from "./staticSite.js";
  * memory, timeout and trigger, so the UI, the API and the jobs always run the same build:
  *   - api:  the Lambda function URL behind CloudFront. The static UI (the Next.js export) and the
  *           API on one origin, so the session cookie stays first-party.
- *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email) → the worker's consume().
+ *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email, smsEvents, whatsapp) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
  *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }, or
  *           { "action": "shopify-check", "shop": "<shop>.myshopify.com" }), and the owner's daily
@@ -39,9 +42,14 @@ import { staticSite } from "./staticSite.js";
  */
 const here = dirname(fileURLToPath(import.meta.url));
 
+// A system query that names no row scope is logged with where it came from (docs/system-database-role.md).
+reportUnscopedSystemQueries();
+
 /** Set by the CloudFront viewer-request function from what CloudFront itself saw (infra/cdk). */
 const VIEWER_IP = "x-insights-viewer-ip";
 const VIEWER_HOST = "x-insights-viewer-host";
+/** Where the viewer is ("country|region|city"), from Cloudflare's visitor-location headers or CloudFront's own. */
+const VIEWER_GEO = "x-insights-viewer-geo";
 /** CloudFront adds this to every origin request; without it the function URL was called directly. */
 const ORIGIN_VERIFY = "x-origin-verify";
 
@@ -51,7 +59,7 @@ function droppedQueues(): Queues {
       logger.warn({ queue }, "no queues in this environment: job dropped");
     },
   });
-  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email") };
+  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email"), smsEvents: drop("smsEvents"), whatsapp: drop("whatsapp") };
 }
 
 function coordinator(): Coord {
@@ -83,6 +91,8 @@ function workerDeps(): WorkerDeps {
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,
+    // Customer Messaging: AWS End User Messaging SMS with the function's role (region per call).
+    sms: awsSmsProvider({ credentials, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
   };
 }
 
@@ -90,6 +100,10 @@ let secretsLoaded: Promise<void> | undefined;
 /** Cold start: secrets and settings into process.env, once per instance (retried after a failure). */
 function ensureSecrets(): Promise<void> {
   secretsLoaded ??= (async () => {
+    // The app's settings ship in this package, not in the functions' 4 KB environment (infra/cdk):
+    // a variable the function was given wins, and the secrets fill whatever is still empty, as
+    // when the settings were in the environment.
+    for (const [k, v] of Object.entries(APP_SETTINGS)) process.env[k] ??= v;
     await loadSecrets();
     // On AWS the function's own role makes Cognito's admin calls (least privilege, no long-lived keys).
     if (!process.env.COGNITO_ADMIN_ACCESS_KEY_ID && process.env.AWS_ACCESS_KEY_ID) {
@@ -136,13 +150,6 @@ function staticFiles() {
   return site;
 }
 
-function sameSecret(given: string | null, expected: string): boolean {
-  if (!given) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 type UrlEvent = { requestContext?: { domainName?: string; http?: { sourceIp?: string } } };
 
 const root = new Hono();
@@ -158,10 +165,14 @@ root.all("*", async (c) => {
   }
 
   await ensureSecrets();
-  const expected = process.env.ORIGIN_VERIFY;
-  const viaCloudFront = !!expected && sameSecret(request.headers.get(ORIGIN_VERIFY), expected);
+  const caller = originCheck(request.headers.get(ORIGIN_VERIFY), process.env.ORIGIN_VERIFY, process.env.NODE_ENV === "production");
   // Behind CloudFront, only CloudFront may call the API: that is what puts WAF in front of it.
-  if (expected && !viaCloudFront) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (caller === "forbidden") return Response.json({ error: "forbidden" }, { status: 403 });
+  if (caller === "unconfigured") {
+    logger.error({}, "ORIGIN_VERIFY is missing from the app's secret: API requests refused");
+    return Response.json({ error: "unavailable" }, { status: 503 });
+  }
+  const viaCloudFront = caller === "cloudfront";
 
   const viewerHost = viaCloudFront ? request.headers.get(VIEWER_HOST) : null;
   const origin = viewerHost ? `https://${viewerHost}` : event?.requestContext?.domainName ? `https://${event.requestContext.domainName}` : null;
@@ -174,21 +185,26 @@ root.all("*", async (c) => {
   // requests that carry the origin secret), and on a bare function URL the address Lambda saw.
   const headers = new Headers(request.headers);
   const clientIp = viaCloudFront ? request.headers.get(VIEWER_IP) : (event?.requestContext?.http?.sourceIp ?? null);
-  for (const h of ["x-real-ip", CLIENT_IP_HEADER, VIEWER_IP, VIEWER_HOST, ORIGIN_VERIFY]) headers.delete(h);
+  // Where the client is (Settings → Security's device list), the same way: only what the viewer function set.
+  const clientGeo = viaCloudFront ? request.headers.get(VIEWER_GEO) : null;
+  for (const h of ["x-real-ip", CLIENT_IP_HEADER, CLIENT_GEO_HEADER, VIEWER_IP, VIEWER_HOST, VIEWER_GEO, ORIGIN_VERIFY]) headers.delete(h);
   if (clientIp) headers.set(CLIENT_IP_HEADER, clientIp);
+  if (clientGeo) headers.set(CLIENT_GEO_HEADER, clientGeo);
   return app.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: "half" } as RequestInit));
 });
 const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "cost-report" | "config";
+  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "product-check" | "cost-report" | "config" | "evolution-db";
   /** verify: one store (its myshopify domain) instead of every connected one; shopify-check: the store. */
   shop?: string;
   /** verify: how many finished days back (7 by default). */
   days?: number;
   /** verify: record what differs, repair nothing. */
   dryRun?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
 }
 interface CronEvent {
   cron: string;
@@ -209,6 +225,11 @@ export const handler = async (event: unknown, context: unknown) => {
     return withLogContext({ cron }, async () => {
       try {
         const result = await runScheduled(cron, deps);
+        // Nightly: what the WhatsApp service (Evolution API) keeps of sent messages goes after 7 days.
+        if (cron === "15 3 * * *") {
+          const url = evolutionDbUrl(process.env, "owner");
+          if (url) (result as Record<string, unknown>).evolutionPruned = await pruneEvolutionData(url, 7).catch((err: unknown) => (logger.error({ err }, "evolution data prune failed; the next night tries again"), null));
+        }
         logger.info({ cron, ...result }, "scheduled run finished");
         return result;
       } catch (err) {
@@ -222,7 +243,7 @@ export const handler = async (event: unknown, context: unknown) => {
   const action = event && typeof event === "object" ? (event as Partial<Action>).action : undefined;
   if (action === "after-move") {
     // Once, after the database is copied in from another deployment (docs/aws-deployment.md, Cutover).
-    const result = await seedAfterMove(await jobs());
+    const result = await crossTenant("maintenance", async () => seedAfterMove(await jobs()));
     logger.info(result, "after-move repair queued");
     return result;
   }
@@ -230,27 +251,45 @@ export const handler = async (event: unknown, context: unknown) => {
     // After each deploy's migrations: stores whose orders lack their sales records or their
     // customer's history (seedSalesRereads), and new vs returning customers settled again.
     const deps = await jobs();
-    const settledDays = await settleAllCustomers(deps);
-    const queued = await seedSalesRereads(deps);
-    return { queued, settledDays };
+    return crossTenant("maintenance", async () => {
+      const settledDays = await settleAllCustomers(deps);
+      const queued = await seedSalesRereads(deps);
+      return { queued, settledDays };
+    });
   }
   if (action === "verify") {
     // Check stores' figures against Shopify now (docs/RUNBOOK.md); the daily check runs by itself.
     const e = event as Partial<Action>;
-    return startChecks(await jobs(), {
+    const deps = await jobs();
+    return crossTenant("maintenance", () => startChecks(deps, {
       shop: typeof e.shop === "string" ? e.shop : undefined,
       days: typeof e.days === "number" && e.days >= 1 && e.days <= 366 ? Math.floor(e.days) : undefined,
       dryRun: e.dryRun === true,
-    });
+    }));
   }
   if (action === "shopify-check") {
     // The reconciliation report for one store (core reports/shopifyCheck.ts): every figure of the
     // standard periods, ours next to Shopify's own reports, read live. Read-only; docs/RUNBOOK.md.
     const shop = (event as Partial<Action>).shop;
     const deps = await jobs();
-    const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
-    if (!store) return { error: "unknown_shop" };
-    return shopifyCheckReport(systemDb, store, deps);
+    return crossTenant("maintenance", async () => {
+      const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
+      if (!store) return { error: "unknown_shop" };
+      return shopifyCheckReport(systemDb, store, deps);
+    });
+  }
+  if (action === "product-check") {
+    const e = event as Partial<Action>;
+    const deps = await jobs();
+    return crossTenant("maintenance", async () => {
+      const stores = await systemDb.store.findMany({ where: { status: "active", ...(e.shop ? { shopDomain: e.shop } : {}) } });
+      const results = [];
+      for (const store of stores) {
+        try { results.push(await productCheck(systemDb, store, deps, e.dateFrom && e.dateTo ? { from: e.dateFrom, to: e.dateTo } : undefined)); }
+        catch (err) { results.push({ shop: store.shopDomain, status: "not_verifiable", reason: err instanceof Error ? err.message : "Report failed" }); }
+      }
+      return { results };
+    });
   }
   if (action === "cost-report") {
     // The owner's daily AWS cost email (costReport.ts): one Cost Explorer call, sent through Resend.
@@ -268,17 +307,35 @@ export const handler = async (event: unknown, context: unknown) => {
     // What this deployment has set up (core configReport.ts): booleans and setting names, never a
     // value. The deploy's smoke test warns about each provider whose secret is missing.
     await ensureSecrets();
-    return configReport();
+    const report = configReport();
+    // The WhatsApp service is private: only from in here can the deploy see that the functions reach it.
+    if (report.whatsapp.evolution) report.whatsapp.service = await evolutionStatus(defaultShard(), fetch);
+    return report;
+  }
+  if (action === "evolution-db") {
+    // The WhatsApp service's own database and role (evolutionDb.ts): CloudFormation invokes this before
+    // the service starts (infra/cdk/lib/whatsapp-stack.ts). Idempotent; the password comes from its secret.
+    await ensureSecrets();
+    const e = process.env;
+    if (!e.OWNER_DATABASE_URL || !e.EVOLUTION_DB_PASSWORD) throw new Error("DB_SECRET_ARN and EVOLUTION_DB_SECRET_ARN must be set");
+    const result = await ensureEvolutionDb({ databaseUrl: e.OWNER_DATABASE_URL, user: e.EVOLUTION_DB_USER || "evolution", password: e.EVOLUTION_DB_PASSWORD, database: "evolution" });
+    logger.info(result, "evolution database ready");
+    return result;
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();
-    if (!process.env.DATABASE_URL) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
-    if (action === "counts") return tableCounts(process.env.DATABASE_URL);
+    // The owner's login (only the cron is given it): migrations change tables, which the system role can't.
+    const ownerUrl = process.env.OWNER_DATABASE_URL;
+    if (!ownerUrl) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
+    if (action === "counts") return tableCounts(ownerUrl);
+    // Without it init.sql would make the system role with its development password.
+    if (process.env.NODE_ENV === "production" && !process.env.SYSTEM_DB_PASSWORD) throw new Error("SYSTEM_DB_SECRET_ARN is not set (insights/<env>/db-system)");
     const result = await migrate({
-      databaseUrl: process.env.DATABASE_URL,
+      databaseUrl: ownerUrl,
       migrationsDir: join(here, "migrations"),
       initSql: readFileSync(join(here, "init.sql"), "utf8"),
       appRlsPassword: process.env.APP_RLS_PASSWORD,
+      systemPassword: process.env.SYSTEM_DB_PASSWORD,
     });
     logger.info(result, "migrations applied");
     return result;

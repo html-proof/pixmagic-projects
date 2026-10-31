@@ -189,6 +189,39 @@ export const APP_STORE_APP = "appstore";
  */
 export const APP_STORE_APPS: readonly string[] = [APP_STORE_APP, "public"];
 
+/** The order, refund and checkout topics: protected customer data, which an App Store app may subscribe to only once Shopify approved that. */
+const ORDER_TOPICS = ["orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/fulfilled", "orders/partially_fulfilled", "orders/delete", "refunds/create", "checkouts/create", "checkouts/update"];
+const APP_TOPICS = ["products/create", "products/update", "products/delete", "app/uninstalled", "app/scopes_update", "app_subscriptions/update"];
+
+/**
+ * The webhook topics each of our apps subscribes to in its toml (shopify-app/shopify.app*.toml):
+ * Shopify sends them for every store connected through that app, so they need no per-store
+ * subscription and can't be listed through the Admin API. packages/core/test/appConfig.test.ts
+ * fails the build when a toml and this list differ. An app key not listed (a new extra app) is
+ * unknown: nothing is assumed about it.
+ */
+export const APP_WEBHOOK_TOPICS: Readonly<Record<string, readonly string[]>> = {
+  [DEFAULT_APP]: [...ORDER_TOPICS, ...APP_TOPICS],
+  pixmagic: [...ORDER_TOPICS, ...APP_TOPICS],
+  public: APP_TOPICS,
+  [APP_STORE_APP]: APP_TOPICS,
+};
+
+/** The topics Shopify sends a store through its app's toml, or null when the app isn't one of those above. */
+export const appWebhookTopics = (appKey: string): readonly string[] | null => APP_WEBHOOK_TOPICS[appKey] ?? null;
+
+/**
+ * The optional scopes each of our apps declares in its toml after the common SHOPIFY_OPTIONAL_SCOPES:
+ * what a store connected through it may give back (scopes.ts `revocableOptionalScopesFor`), which
+ * can be more than it is offered, since SHOPIFY_APP_OPTIONAL_SCOPES may lag the toml or be emptied
+ * again. packages/core/test/appConfig.test.ts fails the build when a toml and this list differ. An
+ * app key not listed declares nothing extra.
+ */
+export const APP_EXTRA_OPTIONAL_SCOPES: Readonly<Record<string, readonly string[]>> = {
+  [DEFAULT_APP]: ["read_reports"],
+  pixmagic: ["read_reports"],
+};
+
 /** A store as far as choosing its app goes. */
 export interface StoreApp {
   shopDomain: string;
@@ -205,13 +238,21 @@ export interface StoreApp {
  */
 export function appStoreWorkspace(stores: readonly StoreApp[]): boolean {
   if (!stores.length) return false;
-  const preview = new Set(
+  const preview = previewShops();
+  return stores.every((s) => APP_STORE_APPS.includes(s.shopifyAppKey) || preview.has(s.shopDomain));
+}
+
+/**
+ * SHOPIFY_APP_STORE_PREVIEW_SHOPS: stores treated as App Store installs though they are connected
+ * through another app (the App Store reviewer's test store). Unreadable entries are dropped.
+ */
+export function previewShops(): Set<string> {
+  return new Set(
     env()
       .SHOPIFY_APP_STORE_PREVIEW_SHOPS.split(",")
       .map((s) => normalizeShopDomain(s.trim()))
-      .filter(Boolean),
+      .filter((s): s is string => !!s),
   );
-  return stores.every((s) => APP_STORE_APPS.includes(s.shopifyAppKey) || preview.has(s.shopDomain));
 }
 
 /**

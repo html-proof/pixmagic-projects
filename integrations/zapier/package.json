@@ -1,0 +1,22 @@
+{
+  "name": "bizinsights-zapier",
+  "version": "1.2.0",
+  "description": "bizinsights on Zapier: a store's alerts and advertising results as Zap triggers and searches, and WhatsApp template messages as an action.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.20"
+  },
+  "dependencies": {
+    "zapier-platform-core": "19.2.1"
+  },
+  "devDependencies": {
+    "nock": "14.0.17"
+  },
+  "overrides": {
+    "form-data": "4.0.6"
+  }
+}

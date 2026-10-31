@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { buildClient, CommitmentPolicy, KmsKeyringNode, type KeyringNode } from "@aws-crypto/client-node";
-import { authEmail, env, isAuthEmailTrigger, logger, withLogContext, type Mailer } from "@app/core/mailer";
+import { authEmail, env, isAuthEmailTrigger, logger, withLogContext, type Mailer, type SenderSettings } from "@app/core/mailer";
 import { roleCredentials } from "./awsClient.js";
 import { chooseMailer, logMailer } from "./mailers.js";
 import { loadSecrets } from "./secrets.js";
@@ -9,7 +9,8 @@ import { loadSecrets } from "./secrets.js";
  * The user pool's Custom Email Sender trigger (infra/cdk auth-stack.ts): Cognito hands every email
  * it would send (sign-up and email-change codes, password resets, sign-in codes, temporary
  * passwords) to this function instead, with the code encrypted under the pool's KMS key, and the
- * function sends it through the app's mail provider (Resend; mailers.ts) from EMAIL_FROM.
+ * function sends it through the app's mail provider (Resend; mailers.ts) from the support sender
+ * (OTP_FROM_EMAIL, core/mail/senders.ts).
  *
  * Its own small bundle (cognito-email.mjs, scripts/build.mjs) in the same package as the app's
  * functions. Cognito invokes it asynchronously: a throw makes Lambda try twice more, and the same
@@ -62,6 +63,8 @@ export interface CognitoEmailDeps {
   mailer: Mailer;
   /** The app's address, for the sign-in link in a temporary-password email. */
   appUrl: string;
+  /** Who the emails are signed by (env() here; the From address is the mailer's, from the same settings). */
+  senders?: SenderSettings;
 }
 
 export type CognitoEmailResult = { sent: true; provider: string | null; messageId: string | null } | { sent: false; reason: "no_message" | "no_address" | "no_code" };
@@ -87,10 +90,10 @@ export async function sendCognitoEmail(event: CognitoEmailEvent, deps: CognitoEm
     }
     const decrypted = await deps.decrypt(ciphertext, event.userPoolId);
     const code = trigger === "CustomEmailSender_AdminCreateUser" ? unescapeTemporaryPassword(decrypted) : decrypted;
-    const message = authEmail({ trigger, code, name: event.request.userAttributes?.name, email, appUrl: deps.appUrl })!;
+    const message = authEmail({ trigger, code, name: event.request.userAttributes?.name, email, appUrl: deps.appUrl, senders: deps.senders })!;
     // A retried invocation brings the same ciphertext: the provider sends it once.
     const idempotencyKey = `cognito-${createHash("sha256").update(ciphertext).digest("hex").slice(0, 48)}`;
-    const receipt = await deps.mailer.send(email, message.subject, message.text, message.html, { idempotencyKey });
+    const receipt = await deps.mailer.send(email, message.subject, message.text, message.html, { idempotencyKey, purpose: message.purpose });
     const provider = receipt ? receipt.provider : null;
     const messageId = receipt ? receipt.messageId : null;
     logger.info({ trigger, provider, messageId }, "cognito email sent");
@@ -111,7 +114,7 @@ function deps(): Promise<CognitoEmailDeps> {
     const mailer = chooseMailer(process.env, roleCredentials());
     // Without a provider the codes would only be logged as "not sent": fail, so the alarm says so.
     if (mailer === logMailer) throw new Error("No mail provider for Cognito's emails: RESEND_API_KEY is not in the app secret");
-    return { decrypt: (ciphertext, userPoolId) => decryptCode(ciphertext, keyring, userPoolId), mailer, appUrl: env().APP_URL };
+    return { decrypt: (ciphertext, userPoolId) => decryptCode(ciphertext, keyring, userPoolId), mailer, appUrl: env().APP_URL, senders: env() };
   })().catch((err: unknown) => {
     ready = undefined;
     throw err;

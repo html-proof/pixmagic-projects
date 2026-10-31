@@ -23,9 +23,14 @@ import {
   localTime,
   normalizeShopDomain,
   parseKeyring,
+  pkceChallenge,
+  pkcePair,
   resolveCapabilities,
   resolvePreset,
+  WEEK_STARTS_ON,
+  safeEqual,
   saleValue,
+  scopeList,
   scopesForModule,
   signShopifyQuery,
   signWebhookBody,
@@ -76,6 +81,19 @@ describe("Shopify HMAC", () => {
   });
 });
 
+describe("safeEqual", () => {
+  it("is true only for the same string, whatever the lengths", () => {
+    expect(safeEqual("abc123", "abc123")).toBe(true);
+    expect(safeEqual("", "")).toBe(true);
+    expect(safeEqual("Café ☕", "Café ☕")).toBe(true);
+    expect(safeEqual("abc123", "abc124")).toBe(false);
+    expect(safeEqual("abc123", "abc12")).toBe(false);
+    expect(safeEqual("abc", "abc123")).toBe(false);
+    expect(safeEqual("abc", "")).toBe(false);
+    expect(safeEqual("Café", "Café")).toBe(false);
+  });
+});
+
 describe("token encryption", () => {
   const k1 = randomBytes(32).toString("base64");
   const k2 = randomBytes(32).toString("base64");
@@ -86,6 +104,13 @@ describe("token encryption", () => {
     expect(ct).not.toContain("shpat_secret");
     expect(decrypt(ct, ring, "store-1")).toBe("shpat_secret");
     expect(() => decrypt(ct, ring, "store-2")).toThrow();
+  });
+
+  it("refuses a truncated authentication tag", () => {
+    const ring = parseKeyring(`1:${k1}`);
+    const [v, iv, tag, data] = encrypt("shpat_secret", ring).split(".");
+    const short = Buffer.from(tag!, "base64").subarray(0, 4).toString("base64");
+    expect(() => decrypt([v, iv, short, data].join("."), ring)).toThrow();
   });
 
   it("supports key rotation", () => {
@@ -102,6 +127,16 @@ describe("token encryption", () => {
   });
 });
 
+describe("PKCE", () => {
+  it("makes a verifier RFC 7636 allows and its S256 challenge, never the verifier itself", () => {
+    const { verifier, challenge } = pkcePair();
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+    expect(pkceChallenge(verifier)).toBe(challenge);
+    expect(challenge).not.toBe(verifier);
+    expect(pkcePair().verifier).not.toBe(verifier);
+  });
+});
+
 describe("capabilities", () => {
   it("expands write_ to read_", () => {
     expect(expandScopes("write_orders").has("read_orders")).toBe(true);
@@ -110,7 +145,7 @@ describe("capabilities", () => {
   it("only enables modules backed by granted scopes", () => {
     const caps = resolveCapabilities(["read_orders"]);
     const on = caps.filter((c) => c.enabled).map((c) => c.id);
-    expect(on).toEqual(["sales_overview", "refunds", "channels", "order_timing", "fulfillment", "discount_codes", "recent_orders"]);
+    expect(on).toEqual(["sales_overview", "refunds", "channels", "order_timing", "fulfillment", "discount_codes", "recent_orders", "abandoned_checkouts"]);
     expect(caps.find((c) => c.id === "customers")?.missingScopes).toEqual(["read_customers"]);
     expect(caps.find((c) => c.id === "inventory")?.missingScopes).toEqual(["read_products"]);
   });
@@ -159,6 +194,16 @@ describe("capabilities", () => {
   it("maps a module back to the scopes a grant request must ask for", () => {
     expect(scopesForModule("funnel")).toEqual(["write_pixels", "read_customer_events"]);
     expect(scopesForModule("customers")).toEqual(["read_orders", "read_customers"]);
+  });
+
+  it("names scopes mid-sentence without lowering the Shopify name", () => {
+    // "Needs your permission in Shopify to read your Shopify reports", not "your shopify reports".
+    expect(scopeList(["read_reports"])).toBe("your Shopify reports");
+    expect(scopeList(["write_pixels", "read_customer_events"])).toBe("visit tracking and storefront visits");
+    expect(scopeList(["read_orders", "read_all_orders", "read_customers"])).toBe("your orders, orders older than 60 days and your customers");
+    // A scope without a label keeps its raw name.
+    expect(scopeList(["read_themes"])).toBe("read_themes");
+    expect(scopeList([])).toBe("");
   });
 
   it("labels Shopify sales channels in plain language", () => {
@@ -234,6 +279,40 @@ describe("dates & time zones", () => {
     expect(resolvePreset("lastmonth", new Date("2026-10-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2026-10-01", to: "2026-10-31" });
   });
 
+  it("resolves this week and last week as Monday-to-Sunday weeks", () => {
+    // Thursday 29 Oct 2026, 4:44:12 pm in Melbourne.
+    const now = new Date("2026-10-29T05:44:12Z");
+    const tz = "Australia/Melbourne";
+    expect(WEEK_STARTS_ON).toBe(1);
+    // This week so far, against the same weekdays of the week before, up to the same time of day.
+    expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, previous: { from: "2026-10-19", to: "2026-10-22", until: "16:44:12" } });
+    expect(resolvePreset("wtd", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-10-26", to: "2025-10-29", until: "16:44:12" });
+    // Last week is over: the whole week, against the whole week before it.
+    expect(resolvePreset("lastweek", now, tz)).toEqual({ range: { from: "2026-10-19", to: "2026-10-25" }, previous: { from: "2026-10-12", to: "2026-10-18" } });
+    // On a Monday, this week is that one day, and last week is the Monday-to-Sunday just ended.
+    const monday = new Date("2026-10-26T01:00:00Z");
+    expect(resolvePreset("wtd", monday, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-26" }, previous: { from: "2026-10-19", to: "2026-10-19", until: "12:00:00" } });
+    expect(resolvePreset("lastweek", monday, tz).range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
+    // On a Sunday, still the week that began on the Monday before; across a year's end too.
+    expect(resolvePreset("wtd", new Date("2026-11-01T01:00:00Z"), tz).range).toEqual({ from: "2026-10-26", to: "2026-11-01" });
+    expect(resolvePreset("lastweek", new Date("2027-01-02T01:00:00Z"), tz).range).toEqual({ from: "2026-12-21", to: "2026-12-27" });
+    // The store's own calendar: Monday morning in Melbourne is still Sunday in UTC.
+    expect(resolvePreset("wtd", new Date("2026-10-25T20:00:00Z"), tz).range).toEqual({ from: "2026-10-26", to: "2026-10-26" });
+    expect(resolvePreset("wtd", new Date("2026-10-25T20:00:00Z"), "UTC").range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
+  });
+
+  it("resolves this year from 1 January, and last year as the whole calendar year against the year before it", () => {
+    const now = new Date("2026-10-22T12:00:00Z");
+    // This year so far, against as many days just before it, up to the same time of day.
+    expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, previous: { from: "2025-03-12", to: "2025-12-31", until: "12:00:00" } });
+    expect(resolvePreset("ytd", now, "UTC", undefined, { mode: "year" }).previous).toEqual({ from: "2025-01-01", to: "2025-10-22", until: "12:00:00" });
+    // A whole year is over: compared whole, with the whole year before, leap years included.
+    expect(resolvePreset("lastyear", now, "UTC")).toEqual({ range: { from: "2025-01-01", to: "2025-12-31" }, previous: { from: "2024-01-01", to: "2024-12-31" } });
+    expect(resolvePreset("lastyear", new Date("2029-02-01T12:00:00Z"), "UTC").range).toEqual({ from: "2028-01-01", to: "2028-12-31" });
+    // The store's own calendar: 1 Jan in Sydney is still December in UTC.
+    expect(resolvePreset("ytd", new Date("2026-12-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2027-01-01", to: "2027-01-01" });
+  });
+
   it("only treats a finished, in-order custom range as one to report on", () => {
     const now = new Date("2026-10-02T12:00:00Z");
     expect(customRangeProblem({ from: "2026-09-01", to: "2026-09-15" })).toBeNull();
@@ -291,9 +370,10 @@ describe("dates & time zones", () => {
     expect(resolvePreset("custom", now, sydney, { from: "2026-10-09", to: "2026-10-09" }).range).toEqual({ from: "2026-10-09", to: "2026-10-09" });
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-09", to: "2026-10-09" })).toThrow("Range starts after today");
 
-    // The year limit counts the days actually reported.
-    expect(customRangeProblem({ from: "2025-10-09", to: "2026-12-31" }, today)).toBeNull();
-    expect(customRangeProblem({ from: "2025-10-08", to: "2026-12-31" }, today)).toBe("too_long");
+    // The 12-month limit counts the days actually reported: from 10 Oct 2025 up to today (9 Oct) is
+    // 12 months, from the 9th it is 12 months and a day.
+    expect(customRangeProblem({ from: "2025-10-10", to: "2026-12-31" }, today)).toBeNull();
+    expect(customRangeProblem({ from: "2025-10-09", to: "2026-12-31" }, today)).toBe("too_long");
   });
 });
 
@@ -483,6 +563,8 @@ describe("KPIs", () => {
     expect(d1.taxes).toBeCloseTo(11.5, 6);
     // Net 140 + shipping 5 + taxes 11.50; the gift card and the tip are in neither.
     expect(d1.totalSales).toBeCloseTo(156.5, 6);
+    // Total sales is already after the cancellation, which took 999 off it.
+    expect(d1.totalRefunded).toBe(999);
     // The gift card is an item sold (Shopify's net items sold), though no sale; the tip isn't.
     expect(d1.units).toBe(6 - 1);
     expect(d1.refundedOrders).toBe(1);
@@ -492,6 +574,8 @@ describe("KPIs", () => {
     expect(d3.refunds).toBe(45);
     expect(d3.taxes).toBe(-4.5);
     expect(d3.totalSales).toBe(-49.5);
+    // A refund lowers the day it was made, tax in, whenever the order was placed.
+    expect(d3.totalRefunded).toBe(49.5);
     expect(d3.units).toBe(-1);
     expect(d3.refundedOrders).toBe(1);
   });
@@ -542,6 +626,8 @@ describe("KPIs", () => {
     expect(s.shipping).toBe(5);
     expect(s.taxes).toBe(7);
     expect(s.totalSales).toBe(95 + 5 + 7);
+    // The cancellation (999) and the refund (49.50, tax in): total sales is already after both.
+    expect(s.totalRefunded).toBe(1048.5);
     // (gross − discounts) ÷ orders, before returns, as Shopify's average order value.
     expect(s.averageOrderValue).toBe(284.75);
     expect(s.refundRate).toBeCloseTo(1044 / 1139);
@@ -579,8 +665,38 @@ describe("KPIs", () => {
     expect(d.shipping).toBeCloseTo(-17.27, 6);
     expect(d.taxes).toBeCloseTo(-20.47, 6);
     expect(d.totalSales).toBeCloseTo(-(206.1 + 19 + 45.5), 6);
+    // The money given back: 225.10 on #2727S and 45.50 on #2804S.
+    expect(d.totalRefunded).toBeCloseTo(206.1 + 19 + 45.5, 6);
     expect(d.units).toBe(-1);
     expect(d.refundedOrders).toBe(2);
+  });
+
+  // PixMagic's sales records of 2026-10-19 and 2026-10-23, as Shopify gave them.
+  it("takes a refund off total sales by the money given back, and a return with none by nothing", () => {
+    const refunded = new Date("2026-10-19T04:20:14Z");
+    const kept = new Date("2026-10-23T04:23:10Z");
+    const records: SaleInput[] = [
+      // #2904S: the item (43 with 3.91 GST) and its shipping (19 with 1.73) refunded in full, 62 back.
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", quantity: -1, amount: -43, tax: -3.91 }),
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", lineType: "shipping", quantity: null, amount: -19, tax: -1.73 }),
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", lineType: "adjustment", quantity: null, amount: 62 }),
+      sale({ orderId: "r", happenedAt: refunded, actionType: "return", lineType: "adjustment", quantity: null, amount: -62 }),
+      // #2821S: the item and shipping returned, but nothing given back (the order stays paid): a
+      // refund discrepancy of +186 evens them out.
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", quantity: -1, amount: -167, tax: -15.18 }),
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", lineType: "shipping", quantity: null, amount: -19, tax: -1.73 }),
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", lineType: "adjustment", quantity: null, amount: 186 }),
+      // A gift card refunded the same day isn't in total sales, so it takes nothing off it either.
+      sale({ orderId: "k", happenedAt: kept, actionType: "return", lineType: "gift_card", quantity: -1, amount: -50 }),
+    ];
+    const daily = aggregateDaily([], records, "Australia/Melbourne", localDay);
+    const d19 = daily.get("2026-10-19")!;
+    expect(d19.totalRefunded).toBeCloseTo(62, 6);
+    expect(d19.totalSales).toBeCloseTo(-62, 6);
+    const d23 = daily.get("2026-10-23")!;
+    expect(d23.totalRefunded).toBeCloseTo(0, 6);
+    expect(d23.totalSales).toBeCloseTo(0, 6);
+    expect(summarize([...daily.values()]).totalRefunded).toBe(62);
   });
 
   it("returns null ratios for empty data instead of fake zeros", () => {

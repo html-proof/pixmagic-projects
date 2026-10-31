@@ -3,7 +3,7 @@
 // evaluator below runs it against an event's data. The tree is bounded (depth, size, list and
 // string lengths), so evaluating one is bounded too.
 
-import { z } from "zod";
+import { z } from "../zod";
 import { eventFields, fieldType, readPath, type FieldType } from "./events";
 
 export const COMPARISON_OPERATORS = [

@@ -1,268 +1,226 @@
 /**
- * Marketing campaigns. A campaign only ever goes to customers who opted in to WhatsApp marketing
- * and haven't opted out, and only after a merchant scheduled it and confirmed the recipient count.
- * Recipients are chosen when the campaign starts (not when it was written), so anyone who opted
- * out in between is left out, and each message checks consent again right before it is sent.
+ * Campaigns (docs/whatsapp.md, "Campaigns"): a marketing template to the store's customers who agreed
+ * to marketing messages, now or at a time, only after the merchant confirms the exact number of
+ * recipients. Opening a page never sends anything: launching is its own request, which refuses when
+ * the audience changed since the merchant saw its count.
+ *
+ * A campaign's recipients are its messages ("campaign:<id>:<contact>", unique per store), so a
+ * batch made twice messages nobody twice. Messages are spread out as they are made (a linked phone
+ * gets one every few seconds), go through the same sender and its checks (consent again, sending
+ * hours, daily limits), and a cancelled campaign's waiting messages are cancelled with it. A linked
+ * phone takes at most WA_CAMPAIGN_MAX.qr recipients: it isn't made for broadcasts.
  */
-import { Prisma, systemDb, withTenant, type Store, type WhatsappCampaign } from "@app/db";
+import { Prisma, systemDb, type Store, type WappCampaign, type WappTemplate } from "@app/db";
 import {
-  audienceSchema,
-  campaignCan,
-  campaignStatusAfter,
-  OCCASIONS,
-  templateMappingSchema,
-  templateShape,
-  type Audience,
-  type CampaignAction,
-  type CampaignStatus,
-  type TemplateComponent,
-  type WhatsappConfig,
+  QR_GAP_JITTER_MS,
+  QR_MIN_GAP_MS,
+  CLOUD_SENDS_PER_SECOND,
+  normalizePhone,
+  renderWaText,
+  variablesIn,
+  waAudienceSchema,
+  waCampaignSchema,
+  waLaunchSchema,
+  WaMissingValueError,
+  waSetupProgress,
+  WA_CAMPAIGN_MAX,
+  type WaAudience,
+  type WaProvider,
 } from "@app/shared";
 import { logger } from "../logger.js";
-import { WhatsappError } from "./errors.js";
-import { cancelScheduled, messageRow, waQueue, type WaDeps } from "./messages.js";
-import { contactFirstName, parseConfig } from "./store.js";
-import { storeName } from "./values.js";
+import { audit } from "../notify.js";
+import { businessNameOf, liveConnection, settingsOf, storeById, WA_MAX_QUEUE_DELAY_S, waDecrypt, waQueue, WhatsappError, type WaDeps } from "./common.js";
+import { contactFirstName } from "./contacts.js";
+import { queueMessage } from "./messages.js";
+import { templateUsable } from "./templates.js";
 
-/** Contacts a campaign with this audience would go to right now. */
-export async function audienceContactIds(storeId: string, audience: Audience, cfg: WhatsappConfig, limit = 100_000): Promise<string[]> {
-  const days = Math.max(1, audience.days);
-  const since = new Date(Date.now() - days * 86_400_000);
-  const segment =
-    audience.segment === "recent_buyers" ? Prisma.sql`AND o.last_order >= ${since}`
-    : audience.segment === "lapsed_buyers" ? Prisma.sql`AND o.last_order IS NOT NULL AND o.last_order < ${since}`
-    : audience.segment === "repeat_buyers" ? Prisma.sql`AND COALESCE(o.orders, 0) >= 2`
-    : audience.segment === "high_spenders" ? Prisma.sql`AND COALESCE(o.spent, 0) >= ${audience.minSpend}`
-    : Prisma.empty;
-  const countries = audience.countries.length ? Prisma.sql`AND c.country IN (${Prisma.join(audience.countries)})` : Prisma.empty;
-  // Shopify's SMS consent counts only when the merchant said their wording covers WhatsApp.
-  const source = cfg.smsConsentCountsForMarketing ? Prisma.empty : Prisma.sql`AND COALESCE(c.marketing_source, '') <> 'shopify_sms'`;
-  const rows = await systemDb.$queryRaw<Array<{ id: string }>>`
-    SELECT c.id FROM whatsapp_contacts c
-    LEFT JOIN (
-      SELECT contact_id, COUNT(*)::int AS orders, SUM(total_price) AS spent, MAX(order_created_at) AS last_order
-      FROM order_trackings WHERE store_id = ${storeId} AND cancelled_at IS NULL AND contact_id IS NOT NULL
-      GROUP BY contact_id
-    ) o ON o.contact_id = c.id
-    WHERE c.store_id = ${storeId} AND c.opted_out = false AND c.marketing_status = 'opted_in'
-    ${source} ${segment} ${countries}
-    ORDER BY c.created_at
-    LIMIT ${limit}`;
-  return rows.map((r) => r.id);
-}
-
-export async function estimateAudience(storeId: string, audience: unknown, cfg: WhatsappConfig) {
-  return (await audienceContactIds(storeId, audienceSchema.parse(audience ?? {}), cfg)).length;
-}
-
-export interface CampaignVariables {
-  greeting?: string;
-  discountPercentage?: string;
-  endDate?: string;
-}
-
-function campaignValues(store: Store, c: WhatsappCampaign) {
-  const v = (c.variables ?? {}) as CampaignVariables;
-  const occasion = OCCASIONS.find((o) => o.id === c.occasion);
-  return {
-    store_name: storeName(store),
-    occasion: v.greeting || occasion?.greeting || c.name,
-    discount_percentage: v.discountPercentage ?? null,
-    end_date: v.endDate ?? (c.endAt ? c.endAt.toISOString().slice(0, 10) : null),
-    discount_code: c.discountCode ?? null,
-  };
-}
-
-const BATCH = 500;
+/** Recipients made per batch. */
+const BATCH = 100;
 
 /**
- * Turn a due campaign into its messages (one per recipient, at most once each), then hand them
- * to the dispatcher. Returns the number of recipients.
+ * The audience's contacts as SQL (one statement for the count and the batches): opted in to
+ * marketing, not opted out, not on the do-not-message list (everything or marketing), not found
+ * missing from WhatsApp in the last 30 days, with a first name when the template greets customers by
+ * it (so the count the merchant confirms is the messages made), plus the merchant's filters.
  */
-export async function startCampaign(campaign: WhatsappCampaign, deps: WaDeps): Promise<number> {
-  const [store, settings] = await Promise.all([
-    systemDb.store.findUnique({ where: { id: campaign.storeId } }),
-    systemDb.whatsappSettings.findUnique({ where: { storeId: campaign.storeId } }),
-  ]);
-  if (!store || !settings) return 0;
-  // Claim it: only one sweeper turns it into messages.
-  const { count } = await systemDb.whatsappCampaign.updateMany({ where: { id: campaign.id, status: "scheduled" }, data: { status: "sending", startedAt: new Date() } });
-  if (!count) return 0;
-  const cfg = parseConfig(settings.config);
-  const ids = await audienceContactIds(store.id, audienceSchema.parse(campaign.audience ?? {}), cfg);
-  const mapping = templateMappingSchema.parse(campaign.mapping ?? {});
-  const base = campaignValues(store, campaign);
-  const now = new Date();
-  for (let i = 0; i < ids.length; i += BATCH) {
-    const contacts = await systemDb.whatsappContact.findMany({ where: { id: { in: ids.slice(i, i + BATCH) } } });
-    const rows = contacts.map((contact) =>
-      messageRow({
-        store,
-        kind: "campaign",
-        dedupeKey: `campaign:${campaign.id}:${contact.id}`,
-        contact,
-        template: { name: campaign.templateName, language: campaign.templateLanguage },
-        mapping,
-        values: { ...base, customer_name: contactFirstName(contact) || "there" },
-        media: campaign.mediaUrl ? { link: campaign.mediaUrl } : null,
-        scheduledFor: now,
-        campaignId: campaign.id,
-        clickUrl: campaign.linkUrl,
-      }),
-    );
-    await systemDb.whatsappMessage.createMany({ data: rows, skipDuplicates: true });
-  }
-  await systemDb.whatsappCampaign.update({ where: { id: campaign.id }, data: { estimatedRecipients: ids.length } });
-  if (ids.length) await waQueue(deps.queues).send({ kind: "whatsapp_dispatch", storeId: store.id });
-  logger.info({ campaignId: campaign.id, recipients: ids.length }, "whatsapp campaign started");
-  return ids.length;
-}
-
-/** Start due campaigns, end finished ones. Called on every sweeper tick. */
-export async function advanceCampaigns(deps: WaDeps): Promise<{ started: number; finished: number }> {
-  const now = new Date();
-  let started = 0;
-  const due = await systemDb.whatsappCampaign.findMany({ where: { status: "scheduled", startAt: { lte: now } }, take: 20 });
-  for (const c of due) {
-    if (c.endAt && c.endAt <= now) {
-      await systemDb.whatsappCampaign.update({ where: { id: c.id }, data: { status: "completed", completedAt: now } });
-      continue;
-    }
-    await startCampaign(c, deps);
-    started++;
-  }
-  let finished = 0;
-  const running = await systemDb.whatsappCampaign.findMany({ where: { status: { in: ["sending", "paused"] } }, select: { id: true, endAt: true, status: true } });
-  for (const c of running) {
-    if (c.endAt && c.endAt <= now) {
-      await cancelScheduled({ campaignId: c.id }, "campaign_ended");
-      await systemDb.whatsappCampaign.update({ where: { id: c.id }, data: { status: "completed", completedAt: now } });
-      finished++;
-      continue;
-    }
-    if (c.status !== "sending") continue;
-    const left = await systemDb.whatsappMessage.count({ where: { campaignId: c.id, status: { in: ["scheduled", "sending"] } } });
-    if (!left) {
-      await systemDb.whatsappCampaign.update({ where: { id: c.id }, data: { status: "completed", completedAt: now } });
-      finished++;
-    }
-  }
-  return { started, finished };
-}
-
-export interface CampaignMetrics {
-  recipients: number;
-  /** Not sent yet (scheduled or being sent). */
-  waiting: number;
-  sent: number;
-  delivered: number;
-  read: number;
-  failed: number;
-  skipped: number;
-  clicks: number;
-  /** Orders attributed to a click on the campaign's link, and their revenue. */
-  conversions: number;
-  revenue: number;
-  /** Orders that used the campaign's discount code while it ran and its attribution days after. */
-  codeOrders: { orders: number; revenue: number } | null;
-}
-
-/** What each campaign achieved, for several campaigns at once (a few queries, not a few per campaign). */
-export async function campaignMetrics(workspaceId: string, storeId: string, campaigns: WhatsappCampaign[], attributionDays: number): Promise<Map<string, CampaignMetrics>> {
-  const ids = campaigns.map((x) => x.id);
-  const out = new Map<string, CampaignMetrics>();
-  if (!ids.length) return out;
-  const [byStatus, clicks, attributed] = await withTenant(workspaceId, (tx) =>
-    Promise.all([
-      tx.whatsappMessage.groupBy({ by: ["campaignId", "status"], where: { campaignId: { in: ids }, workspaceId }, _count: { _all: true } }),
-      tx.whatsappMessage.groupBy({ by: ["campaignId"], where: { campaignId: { in: ids }, workspaceId, clickedAt: { not: null } }, _count: { _all: true } }),
-      tx.whatsappMessage.groupBy({ by: ["campaignId"], where: { campaignId: { in: ids }, workspaceId, attributedOrderId: { not: null } }, _count: { _all: true }, _sum: { attributedRevenue: true } }),
-    ]),
-  );
-  // Orders that used each campaign's discount code while it ran (and its attribution days after),
-  // for every campaign with a code at once: one query, not one per campaign.
+function audienceSql(storeId: string, a: WaAudience, opts: { after?: string | null; limit?: number; count?: boolean; firstName?: boolean }) {
   const now = Date.now();
-  const windows = campaigns.flatMap((camp) =>
-    camp.discountCode && camp.startedAt
-      ? [{ id: camp.id, code: camp.discountCode, since: camp.startedAt.toISOString(), until: new Date((camp.endAt?.getTime() ?? now) + attributionDays * 86_400_000).toISOString() }]
-      : [],
-  );
-  const codeRows = windows.length
-    ? await withTenant(workspaceId, (tx) =>
-        tx.$queryRaw<Array<{ id: string; orders: number; revenue: string }>>`
-          SELECT w.id, COUNT(o.id)::int AS orders, COALESCE(SUM(o.total_price), 0)::text AS revenue
-          FROM jsonb_to_recordset(${JSON.stringify(windows)}::jsonb) AS w(id text, code text, since text, until text)
-          LEFT JOIN orders o
-            ON o.store_id = ${storeId} AND o.workspace_id = ${workspaceId} AND o.cancelled_at IS NULL
-           AND o.shopify_created_at >= (w.since)::timestamptz AT TIME ZONE 'UTC'
-           AND o.shopify_created_at < (w.until)::timestamptz AT TIME ZONE 'UTC'
-           AND EXISTS (SELECT 1 FROM unnest(o.discount_codes) code WHERE lower(code) = lower(w.code))
-          GROUP BY w.id`,
-      )
-    : [];
-  for (const camp of campaigns) {
-    const n = (s: string[]) => byStatus.filter((b) => b.campaignId === camp.id && s.includes(b.status)).reduce((sum, b) => sum + b._count._all, 0);
-    const a = attributed.find((x) => x.campaignId === camp.id);
-    const r = codeRows.find((x) => x.id === camp.id);
-    out.set(camp.id, {
-      recipients: n(["scheduled", "sending", "sent", "delivered", "read", "failed", "skipped", "cancelled"]),
-      waiting: n(["scheduled", "sending"]),
-      sent: n(["sent", "delivered", "read"]),
-      delivered: n(["delivered", "read"]),
-      read: n(["read"]),
-      failed: n(["failed"]),
-      skipped: n(["skipped", "cancelled"]),
-      clicks: clicks.find((x) => x.campaignId === camp.id)?._count._all ?? 0,
-      conversions: a?._count._all ?? 0,
-      revenue: Number(a?._sum.attributedRevenue ?? 0),
-      codeOrders: r ? { orders: r.orders, revenue: Number(r.revenue) } : null,
-    });
+  const where: Prisma.Sql[] = [
+    Prisma.sql`c.store_id = ${storeId}`,
+    Prisma.sql`c.marketing = 'opted_in'`,
+    Prisma.sql`c.opted_out = false`,
+    Prisma.sql`(c.not_on_whatsapp_at IS NULL OR c.not_on_whatsapp_at < ${new Date(now - 30 * 86_400_000)})`,
+    Prisma.sql`NOT EXISTS (SELECT 1 FROM wapp_suppressions s WHERE s.store_id = c.store_id AND s.phone_hash = c.phone_hash AND s.scope IN ('all', 'marketing'))`,
+  ];
+  if (a.countries.length) where.push(Prisma.sql`c.country IN (${Prisma.join(a.countries)})`);
+  if (a.customerType === "new") where.push(Prisma.sql`c.orders_count = 1`);
+  if (a.customerType === "returning") where.push(Prisma.sql`c.orders_count > 1`);
+  if (a.orderedWithinDays) where.push(Prisma.sql`c.last_order_at >= ${new Date(now - a.orderedWithinDays * 86_400_000)}`);
+  if (a.notOrderedForDays) where.push(Prisma.sql`(c.last_order_at IS NULL OR c.last_order_at < ${new Date(now - a.notOrderedForDays * 86_400_000)})`);
+  if (a.minOrders) where.push(Prisma.sql`c.orders_count >= ${a.minOrders}`);
+  if (a.minSpent != null) where.push(Prisma.sql`c.total_spent >= ${a.minSpent}`);
+  if (opts.firstName) where.push(Prisma.sql`c.first_name_enc IS NOT NULL`);
+  if (opts.after) where.push(Prisma.sql`c.id > ${opts.after}`);
+  const cond = Prisma.join(where, " AND ");
+  if (opts.count) return Prisma.sql`SELECT count(*)::int AS n FROM wapp_contacts c WHERE ${cond}`;
+  return Prisma.sql`SELECT c.id FROM wapp_contacts c WHERE ${cond} ORDER BY c.id LIMIT ${opts.limit ?? BATCH}`;
+}
+
+/** Whether a template's text needs the customer's first name (contacts without one can't get it). */
+const greetsByName = (t: Pick<WappTemplate, "body"> | null) => !!t && variablesIn(t.body).includes("customer_first_name");
+
+/** How many customers the audience reaches now, for this template when one is picked. */
+export async function estimateWaAudience(storeId: string, audience: unknown, template: Pick<WappTemplate, "body"> | null = null): Promise<number> {
+  const a = waAudienceSchema.parse(audience);
+  const rows = await systemDb.$queryRaw<Array<{ n: number }>>(audienceSql(storeId, a, { count: true, firstName: greetsByName(template) }));
+  return rows[0]?.n ?? 0;
+}
+
+export async function saveCampaign(input: { store: Store; userId: string; id?: string; data: unknown; ip?: string }): Promise<WappCampaign> {
+  const c = waCampaignSchema.parse(input.data);
+  const template = await systemDb.wappTemplate.findFirst({ where: { id: c.templateId, storeId: input.store.id } });
+  if (!template) throw new WhatsappError("Pick one of this store's templates.", 400, "template_not_found");
+  if (template.category !== "marketing") throw new WhatsappError("Campaigns send marketing: pick a marketing template (it tells customers how to stop).", 400, "not_marketing");
+  const unsupported = variablesIn(template.body).filter((v) => v !== "customer_first_name" && v !== "store_name");
+  if (unsupported.length) throw new WhatsappError(`Campaigns can fill only {{customer_first_name}} and {{store_name}}; this template uses ${unsupported.map((v) => `{{${v}}}`).join(", ")}.`, 400, "unsupported_variables");
+  const data = { name: c.name, templateId: c.templateId, audience: c.audience as unknown as Prisma.InputJsonValue };
+  let row: WappCampaign;
+  if (input.id) {
+    const existing = await systemDb.wappCampaign.findFirst({ where: { id: input.id, storeId: input.store.id } });
+    if (!existing) throw new WhatsappError("Not found", 404, "not_found");
+    if (existing.status !== "draft") throw new WhatsappError("Only a draft campaign can be edited.", 409, "not_draft");
+    row = await systemDb.wappCampaign.update({ where: { id: existing.id }, data });
+  } else {
+    row = await systemDb.wappCampaign.create({ data: { ...data, workspaceId: input.store.workspaceId, storeId: input.store.id, createdByUserId: input.userId } });
   }
-  return out;
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: input.id ? "whatsapp.campaign_updated" : "whatsapp.campaign_created", targetType: "whatsapp_campaign", targetId: row.id, ip: input.ip });
+  return row;
+}
+
+export async function deleteCampaign(input: { store: Store; id: string; userId: string; ip?: string }) {
+  const c = await systemDb.wappCampaign.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!c) throw new WhatsappError("Not found", 404, "not_found");
+  if (c.status === "scheduled" || c.status === "sending") throw new WhatsappError("Cancel the campaign before deleting it.", 409, "campaign_running");
+  await systemDb.wappCampaign.delete({ where: { id: c.id } });
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.campaign_deleted", targetType: "whatsapp_campaign", targetId: c.id, metadata: { name: c.name }, ip: input.ip });
 }
 
 /**
- * Schedule (authorize) a draft campaign. The merchant confirms the recipient count they were
- * shown; if it changed since, nothing is scheduled and the new count comes back for them to
- * confirm. Needs an approved marketing template, a registered number and verified webhooks
- * (otherwise STOP replies couldn't reach us).
+ * Launches a draft: now, or at `scheduledAt`. Refused unless every check passes and the audience
+ * still has exactly the number of recipients the merchant confirmed.
  */
-export async function scheduleCampaign(
-  camp: WhatsappCampaign,
-  confirmRecipients: number,
-  approvedByUserId: string,
-): Promise<{ campaign: WhatsappCampaign; recipients: number } | { recipientsChanged: number }> {
-  if (camp.status !== "draft") throw new WhatsappError("This campaign is already scheduled or has run.", 409, "not_draft");
-  const storeId = camp.storeId;
-  const [conn, settings] = await Promise.all([systemDb.whatsappConnection.findUnique({ where: { storeId } }), systemDb.whatsappSettings.findUnique({ where: { storeId } })]);
-  if (!conn || conn.status !== "active" || !conn.registered) throw new WhatsappError("Connect and register your WhatsApp number first.", 409, "not_connected");
-  if (!conn.webhookVerifiedAt) {
-    throw new WhatsappError("Meta hasn't reached bizinsights' webhook yet, so opt-out replies couldn't be received. Finish the webhook step on Connect WhatsApp first.", 409, "webhook_unverified");
-  }
-  const template = await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: camp.templateName, language: camp.templateLanguage } } });
-  if (!template || template.status !== "APPROVED") throw new WhatsappError("The campaign's template isn't approved by Meta yet.", 409, "template_not_approved");
-  if (template.category !== "MARKETING") throw new WhatsappError("Campaigns must use a template Meta approved as Marketing.", 409, "not_marketing_template");
-  const shape = templateShape(template.components as unknown as TemplateComponent[]);
-  const mapping = templateMappingSchema.parse(camp.mapping ?? {});
-  if (mapping.body.length < shape.bodyVars) throw new WhatsappError(`The template has ${shape.bodyVars} variables; fill each one.`, 400, "mapping_incomplete");
-  if (shape.headerFormat === "IMAGE" && !camp.mediaUrl) throw new WhatsappError("This template needs an image: add the image's https link.", 400, "media_required");
-  if (shape.dynamicUrlButtons.length && !camp.linkUrl) throw new WhatsappError("This template has a link button: add where it should go.", 400, "link_required");
-  if (camp.endAt && camp.endAt <= new Date()) throw new WhatsappError("The campaign's end has already passed.", 400, "ended");
-  const estimate = await estimateAudience(storeId, camp.audience, parseConfig(settings?.config));
-  if (estimate !== confirmRecipients) return { recipientsChanged: estimate };
-  if (estimate === 0) throw new WhatsappError("No customers in this audience have opted in to WhatsApp marketing.", 409, "no_recipients");
-  const campaign = await systemDb.whatsappCampaign.update({
-    where: { id: camp.id },
-    data: { status: "scheduled", estimatedRecipients: estimate, approvedByUserId, approvedAt: new Date() },
-  });
-  return { campaign, recipients: estimate };
+export async function launchCampaign(deps: Pick<WaDeps, "queues">, input: { store: Store; id: string; userId: string; data: unknown; ip?: string }): Promise<WappCampaign> {
+  const l = waLaunchSchema.parse(input.data);
+  const c = await systemDb.wappCampaign.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!c) throw new WhatsappError("Not found", 404, "not_found");
+  if (c.status !== "draft") throw new WhatsappError("This campaign has already been launched.", 409, "not_draft");
+  const conn = await liveConnection(input.store.id);
+  const settings = await settingsOf(input.store);
+  const problems: string[] = [];
+  if (!conn || conn.status !== "connected") problems.push("WhatsApp isn't connected.");
+  const setup = waSetupProgress({ provider: (conn?.provider as WaProvider) ?? null, status: (conn?.status as "connected") ?? null, configuredAt: settings.configuredAt, orderUpdates: settings.orderUpdates, testVerifiedAt: settings.testVerifiedAt, testPassedAt: settings.testPassedAt });
+  if (!setup.done.test) problems.push("Finish the setup's test step first.");
+  if (!settings.marketingEnabled) problems.push("Marketing messages are switched off in Settings.");
+  if (settings.automationPausedAt) problems.push("All automation is paused.");
+  const template = await systemDb.wappTemplate.findFirst({ where: { id: c.templateId, storeId: input.store.id } });
+  if (!template || template.category !== "marketing") problems.push("Pick a marketing template.");
+  else if (!templateUsable(template, conn).ok) problems.push(`The template can't be used: ${templateUsable(template, conn).reason}`);
+  if (problems.length) throw new WhatsappError("This campaign can't be launched yet.", 409, "campaign_blocked", { problems });
+  const count = await estimateWaAudience(input.store.id, c.audience, template);
+  if (count !== l.confirmRecipients) throw new WhatsappError(`The audience now has ${count} recipients, not ${l.confirmRecipients}. Check it and confirm again.`, 409, "count_changed", { count });
+  if (count < 1) throw new WhatsappError("Nobody in this audience can receive marketing messages.", 409, "empty_audience");
+  const max = WA_CAMPAIGN_MAX[conn!.provider as WaProvider];
+  if (count > max) throw new WhatsappError(`A ${conn!.provider === "qr" ? "linked phone" : "connection"} can send a campaign to at most ${max} people. Narrow the audience.`, 409, "too_many_recipients", { count, max });
+  const at = l.scheduledAt && l.scheduledAt.getTime() > Date.now() ? l.scheduledAt : new Date();
+  const row = await systemDb.wappCampaign.update({ where: { id: c.id }, data: { status: "scheduled", scheduledAt: at, confirmedRecipients: count, launchedByUserId: input.userId, cursor: null, recipients: 0 } });
+  const delay = Math.max(0, Math.ceil((at.getTime() - Date.now()) / 1000));
+  if (delay <= WA_MAX_QUEUE_DELAY_S) await waQueue(deps.queues).send({ kind: "wapp_campaign", campaignId: c.id }, { delaySeconds: delay });
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.campaign_launched", targetType: "whatsapp_campaign", targetId: c.id, metadata: { recipients: count, scheduledAt: at.toISOString() }, ip: input.ip });
+  return row;
 }
 
-/** Pause, resume or cancel a campaign. Cancelling also cancels its messages that haven't gone out. */
-export async function changeCampaignState(camp: WhatsappCampaign, action: CampaignAction): Promise<CampaignStatus> {
-  if (!campaignCan(camp.status, action)) throw new WhatsappError(`A ${camp.status} campaign can't be ${action === "cancel" ? "cancelled" : action + "d"}.`, 409, "invalid_state");
-  const status = campaignStatusAfter(action, !!camp.startedAt);
-  await systemDb.whatsappCampaign.update({ where: { id: camp.id }, data: { status, ...(action === "cancel" ? { completedAt: new Date() } : {}) } });
-  if (action === "cancel") await cancelScheduled({ campaignId: camp.id }, "campaign_cancelled");
-  return status;
+export async function cancelCampaign(input: { store: Store; id: string; userId: string; ip?: string }): Promise<{ campaign: WappCampaign; cancelled: number }> {
+  const c = await systemDb.wappCampaign.findFirst({ where: { id: input.id, storeId: input.store.id } });
+  if (!c) throw new WhatsappError("Not found", 404, "not_found");
+  if (c.status !== "scheduled" && c.status !== "sending") throw new WhatsappError("Only a scheduled or sending campaign can be cancelled.", 409, "not_running");
+  const row = await systemDb.wappCampaign.update({ where: { id: c.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelReason: "merchant" } });
+  const { count } = await systemDb.wappMessage.updateMany({ where: { campaignId: c.id, status: "queued" }, data: { status: "cancelled", reason: "campaign_cancelled", finalAt: new Date(), payloadEnc: null } });
+  await audit({ workspaceId: input.store.workspaceId, actorUserId: input.userId, action: "whatsapp.campaign_cancelled", targetType: "whatsapp_campaign", targetId: c.id, metadata: { cancelled: count }, ip: input.ip });
+  return { campaign: row, cancelled: count };
+}
+
+/**
+ * The worker's half (wapp_campaign): when due, the next batch of recipients becomes messages, each
+ * timed a few seconds after the last; then the next batch, until the audience is done.
+ */
+export async function dispatchCampaign(deps: Pick<WaDeps, "queues">, campaignId: string): Promise<string> {
+  const c = await systemDb.wappCampaign.findUnique({ where: { id: campaignId } });
+  if (!c || (c.status !== "scheduled" && c.status !== "sending")) return "not_running";
+  if (c.materializedAt) return "done";
+  if (c.scheduledAt && c.scheduledAt.getTime() > Date.now() + 5_000) return "not_due";
+  const store = await storeById(c.storeId);
+  const conn = await liveConnection(c.storeId);
+  if (!store || !conn || conn.status !== "connected") {
+    // The sweep tries again; a connection down too long cancels the campaign there.
+    return "not_connected";
+  }
+  if (c.status === "scheduled") await systemDb.wappCampaign.update({ where: { id: c.id }, data: { status: "sending", startedAt: new Date() } });
+  const template = await systemDb.wappTemplate.findFirst({ where: { id: c.templateId, storeId: c.storeId } });
+  if (!template || !templateUsable(template, conn).ok) {
+    await systemDb.wappCampaign.update({ where: { id: c.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelReason: "template_unavailable" } });
+    return "template_unavailable";
+  }
+  const settings = await settingsOf(store);
+  const audience = waAudienceSchema.parse(c.audience);
+  const rows = await systemDb.$queryRaw<Array<{ id: string }>>(audienceSql(c.storeId, audience, { after: c.cursor, limit: BATCH, firstName: greetsByName(template) }));
+  const contacts = rows.length ? await systemDb.wappContact.findMany({ where: { id: { in: rows.map((r) => r.id) } }, orderBy: { id: "asc" } }) : [];
+  const step = conn.provider === "qr" ? QR_MIN_GAP_MS + QR_GAP_JITTER_MS / 2 : Math.ceil(1000 / CLOUD_SENDS_PER_SECOND);
+  // After the messages already made: a batch carries on where the last one's timing ended.
+  const last = await systemDb.wappMessage.findFirst({ where: { campaignId: c.id }, orderBy: { sendAfter: "desc" }, select: { sendAfter: true } });
+  let t = Math.max(Date.now(), (last?.sendAfter.getTime() ?? 0) + step);
+  let made = 0;
+  const cap = c.confirmedRecipients ?? WA_CAMPAIGN_MAX[conn.provider as WaProvider];
+  for (const contact of contacts) {
+    if (c.recipients + made >= cap) break;
+    const phone = normalizePhone(waDecrypt(contact.storeId, "phone", contact.phoneEnc), null);
+    if (!phone) continue;
+    let text: string;
+    try {
+      text = renderWaText(template.body, { store_name: businessNameOf(store, settings), customer_first_name: contactFirstName(contact) ?? undefined });
+    } catch (e) {
+      if (e instanceof WaMissingValueError) continue;
+      throw e;
+    }
+    const { created } = await queueMessage(deps, {
+      store,
+      conn,
+      source: "campaign",
+      category: "marketing",
+      phone,
+      contactId: contact.id,
+      payload: { text, meta: conn.provider === "cloud_api" && template.metaName ? { name: template.metaName, language: template.metaLanguage ?? "en", params: variablesIn(template.body).map((v) => (v === "customer_first_name" ? (contactFirstName(contact) ?? "") : businessNameOf(store, settings))) } : null },
+      templateId: template.id,
+      idempotencyKey: `campaign:${c.id}:${contact.id}`,
+      campaignId: c.id,
+      sendAfter: new Date(t),
+    });
+    if (created) {
+      made++;
+      t += step;
+    }
+  }
+  const lastId = contacts.at(-1)?.id ?? c.cursor;
+  const finished = contacts.length < BATCH || c.recipients + made >= cap;
+  await systemDb.wappCampaign.update({ where: { id: c.id }, data: { cursor: lastId, recipients: { increment: made }, ...(finished ? { materializedAt: new Date() } : {}) } });
+  if (!finished) await waQueue(deps.queues).send({ kind: "wapp_campaign", campaignId: c.id }, { delaySeconds: 2 });
+  logger.info({ campaignId: c.id, storeId: c.storeId, made, finished }, "whatsapp campaign batch made");
+  return finished ? "materialized" : "batch";
+}
+
+/** A campaign's results, from its messages. */
+export async function campaignReport(campaignId: string) {
+  const rows = await systemDb.wappMessage.groupBy({ by: ["status"], where: { campaignId }, _count: { _all: true } });
+  const by = Object.fromEntries(rows.map((r) => [r.status, r._count._all])) as Record<string, number>;
+  const n = (...s: string[]) => s.reduce((sum, k) => sum + (by[k] ?? 0), 0);
+  return { total: n(...Object.keys(by)), waiting: n("queued", "sending"), sent: n("accepted", "sent", "delivered", "read"), delivered: n("delivered", "read"), read: n("read"), failed: n("failed"), notSent: n("skipped", "cancelled") };
 }

@@ -4,7 +4,10 @@ import { systemDb } from "@app/db";
 import { buildApp } from "../src/app.js";
 import { unconfiguredCognito } from "../src/cognito.js";
 import { signSession, readSession, REVALIDATE_MS } from "../src/session.js";
-import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
+import { CLIENT_IP_HEADER } from "../src/context.js";
+import { LIMITS } from "../src/rateLimit.js";
+import { totpCode } from "./fakeCognito.js";
+import { clean, cookiesFrom, createWorkspace, emailedDeletionCode, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
 
 /**
  * Sign-in on Amazon Cognito: what each screen sends, what Cognito is asked, and what the person
@@ -347,6 +350,64 @@ describe("forgot password", () => {
     expect(await systemDb.authEvent.count({ where: { type: "password_reset" } })).toBe(1);
   });
 
+  it("emails the account's address that the password was reset", async () => {
+    await signIn(ctx, "u1", "a@x.com");
+    await post("/auth/password/forgot", { email: "a@x.com" });
+    const sentBefore = ctx.mailer.sent.length;
+    const code = ctx.auth.code("reset", "a@x.com");
+    expect((await post("/auth/password/reset", { email: "a@x.com", code, password: "brand-new-pass", confirmPassword: "brand-new-pass" })).statusCode).toBe(200);
+    const notice = ctx.mailer.sent.slice(sentBefore);
+    expect(notice).toEqual([expect.objectContaining({ to: "a@x.com", subject: "Your bizinsights password was reset" })]);
+    expect(notice[0]!.text).toContain("http://localhost:3001/forgot-password");
+  });
+
+  it("ends the sessions of the account the password signs in to, even after a Google sign-in moved the account to another address", async () => {
+    const { headers, user } = await signIn(ctx, "u1", "a@x.com");
+    // The account's address is now another one; the password user still has the old one.
+    await systemDb.user.update({ where: { id: user.id }, data: { email: "renamed@gmail.com" } });
+    await post("/auth/password/forgot", { email: "a@x.com" });
+    const reset = await post("/auth/password/reset", { email: "a@x.com", code: ctx.auth.code("reset", "a@x.com"), password: "brand-new-pass", confirmPassword: "brand-new-pass" });
+    expect(reset.statusCode).toBe(200);
+    expect((await get("/me", headers)).statusCode).toBe(401);
+    expect(await systemDb.authEvent.count({ where: { type: "password_reset", userId: user.id } })).toBe(1);
+  });
+
+  it("says so (503), never \"done\", when the sessions can't be ended", async () => {
+    const { headers } = await signIn(ctx, "u1", "a@x.com");
+    await post("/auth/password/forgot", { email: "a@x.com" });
+    const update = vi.spyOn(systemDb.user, "update").mockRejectedValueOnce(new Error("database unreachable"));
+    try {
+      const res = await post("/auth/password/reset", { email: "a@x.com", code: ctx.auth.code("reset", "a@x.com"), password: "brand-new-pass", confirmPassword: "brand-new-pass" });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe("sessions_not_ended");
+    } finally {
+      update.mockRestore();
+    }
+    // Nothing was recorded as reset: signing out everywhere is still to do, and the page says so.
+    expect(await systemDb.authEvent.count({ where: { type: "password_reset" } })).toBe(0);
+    expect((await get("/me", headers)).statusCode).toBe(200);
+  });
+
+  it("caps guesses at one address's code, whichever IPs they come from, and answers an unknown address the same", async () => {
+    ctx.auth.addUser({ sub: "v", email: "victim@x.com" });
+    await post("/auth/password/forgot", { email: "victim@x.com" });
+    const right = ctx.auth.code("reset", "victim@x.com");
+    const wrong = right === "000000" ? "111111" : "000000";
+    const reset = (email: string, code: string, i: number) =>
+      post("/auth/password/reset", { email, code, password: "a-new-password", confirmPassword: "a-new-password" }, { [CLIENT_IP_HEADER]: `10.0.1.${i}` });
+    for (let i = 0; i < LIMITS.resetVerifyEmail.max; i++) {
+      expect((await reset("victim@x.com", wrong, i)).json().error).toBe("invalid_code");
+      expect((await reset("nobody@x.com", wrong, i)).json().error).toBe("invalid_code");
+    }
+    // Even the right code, from yet another address.
+    const capped = await reset("victim@x.com", right, 99);
+    expect(capped.statusCode).toBe(429);
+    const unknown = await reset("nobody@x.com", wrong, 99);
+    expect(unknown.statusCode).toBe(429);
+    expect(unknown.json()).toEqual(capped.json());
+    expect(ctx.auth.users.get("v")!.password).not.toBe("a-new-password");
+  });
+
   it("names the account's other ways to sign in, which a new password doesn't end", async () => {
     const { user } = await signIn(ctx, "u1", "a@x.com");
     const reset = async () => {
@@ -424,7 +485,7 @@ describe("Continue with Google", () => {
   });
   afterEach(() => restore());
 
-  async function federated(person: { id: string; email: string | null; emailVerified?: boolean; name?: string }, provider = "google", returnTo?: string) {
+  async function federated(person: { id: string; email: string | null; emailVerified?: boolean; name?: string; picture?: string }, provider = "google", returnTo?: string) {
     const browser = testBrowser(ctx);
     const start = await browser.get(`/auth/oauth/${provider}/start${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`);
     expect(start.statusCode).toBe(302);
@@ -447,26 +508,134 @@ describe("Continue with Google", () => {
     expect(res.headers.location).not.toContain(JSON.parse((await ctx.deps.coord.peek(`oauth:signin:${url.searchParams.get("state")}`))!).verifier);
   });
 
-  it("signs a new person in, creates their user, and goes back where they were headed", async () => {
-    const { browser, finish } = await federated({ id: "g-1", email: "new@gmail.com", name: "New Person" }, "google", "/settings/stores?x=1");
+  it("signs a new person in, creates their user from the verified identity, and goes back where they were headed", async () => {
+    const picture = "https://lh3.googleusercontent.com/a/new-person=s96-c";
+    const { browser, finish } = await federated({ id: "g-1", email: "new@gmail.com", name: "New Person", picture }, "google", "/settings/stores?x=1");
     const res = await finish();
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ user: { email: "new@gmail.com", emailVerified: true, displayName: "New Person" }, redirect: "/settings/stores?x=1" });
+    expect(res.json()).toMatchObject({ user: { email: "new@gmail.com", emailVerified: true, displayName: "New Person", avatarUrl: picture }, redirect: "/settings/stores?x=1" });
     expect((await browser.get("/me")).statusCode).toBe(200);
-    expect((await systemDb.authIdentity.findFirstOrThrow()).method).toBe("google");
+    // No sign-up form: name, verified address, picture and the Google identity, nothing more.
+    const user = await systemDb.user.findUniqueOrThrow({ where: { email: "new@gmail.com" }, include: { identities: true, memberships: true } });
+    expect(user).toMatchObject({ emailVerified: true, displayName: "New Person", avatarUrl: picture, createdAt: expect.any(Date) });
+    expect(user.identities).toEqual([
+      expect.objectContaining({ provider: "cognito", subject: ctx.auth.users.get("google_g-1")!.sub, username: "google_g-1", method: "google", email: "new@gmail.com" }),
+    ]);
+    // A new account is nobody's administrator: no workspace, so no role anywhere yet.
+    expect(user.memberships).toEqual([]);
+    expect(await systemDb.authEvent.findFirst({ where: { type: "account_created", userId: user.id } })).toMatchObject({ metadata: expect.objectContaining({ method: "google" }) });
   });
 
-  it("links Google to the existing account with the same verified address (no duplicate)", async () => {
-    const { user, headers } = await signIn(ctx, "pw-sub", "merchant@gmail.com");
-    const ws = await createWorkspace(ctx, headers);
-    const res = await (await federated({ id: "g-2", email: "merchant@gmail.com" })).finish();
-    expect(res.json().user.id).toBe(user.id);
+  it("two first sign-ins with the same Google account at once make one account", async () => {
+    const a = await federated({ id: "g-race", email: "race@gmail.com" });
+    const b = await federated({ id: "g-race", email: "race@gmail.com" });
+    const [ra, rb] = await Promise.all([a.finish(), b.finish()]);
+    expect([ra.statusCode, rb.statusCode]).toEqual([200, 200]);
+    expect(ra.json().user.id).toBe(rb.json().user.id);
     expect(await systemDb.user.count()).toBe(1);
-    expect(await systemDb.authIdentity.count({ where: { userId: user.id } })).toBe(2);
-    expect(await systemDb.authEvent.count({ where: { type: "identity_linked", userId: user.id } })).toBe(1);
-    const again = await (await federated({ id: "g-2", email: "merchant@gmail.com" })).finish();
-    expect(again.json().user.id).toBe(user.id);
-    expect((await systemDb.membership.findFirstOrThrow({ where: { workspaceId: ws } })).userId).toBe(user.id);
+    expect(await systemDb.authIdentity.count()).toBe(1);
+  });
+
+  describe("an existing account with the Google account's address", () => {
+    const password = (uid: string) => ctx.auth.users.get(uid)!.password!;
+
+    it("links nothing and makes no second account until this browser signs in to that account; then the same button signs straight in", async () => {
+      const { user, headers } = await signIn(ctx, "pw-sub", "merchant@gmail.com");
+      const ws = await createWorkspace(ctx, headers);
+      const picture = "https://lh3.googleusercontent.com/a/merchant=s96-c";
+      const { browser, finish } = await federated({ id: "g-2", email: "merchant@gmail.com", picture });
+      const revokedBefore = ctx.auth.calls.filter((c) => c === "revokeRefreshToken").length;
+      const held = await finish();
+      expect(held.statusCode).toBe(200);
+      expect(held.json()).toEqual({ next: "link", provider: "google", email: "merchant@gmail.com" });
+      // No session from the Google sign-in (its refresh token handed back), nothing linked, no duplicate.
+      expect(held.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
+      expect(ctx.auth.calls.filter((c) => c === "revokeRefreshToken").length).toBe(revokedBefore + 1);
+      expect((await browser.get("/me")).statusCode).toBe(401);
+      expect(await systemDb.user.count()).toBe(1);
+      expect(await systemDb.authIdentity.count()).toBe(1);
+      expect((await browser.get("/auth/pending-link")).json()).toEqual({ pending: true, provider: "google", email: "merchant@gmail.com" });
+      expect(await systemDb.authEvent.count({ where: { type: "identity_link_pending", userId: user.id } })).toBe(1);
+
+      // A wrong password proves nothing: still held.
+      expect((await browser.post("/auth/login", { email: "merchant@gmail.com", password: "not-the-password" })).statusCode).toBe(401);
+      expect((await browser.get("/auth/pending-link")).json().pending).toBe(true);
+
+      // The account's own sign-in, in this browser: Google joins it, and the account's address hears of it.
+      const mailBefore = ctx.mailer.sent.length;
+      const signedIn = await browser.post("/auth/login", { email: "merchant@gmail.com", password: password("pw-sub") });
+      expect(signedIn.statusCode).toBe(200);
+      expect(signedIn.json().user).toMatchObject({ id: user.id, avatarUrl: picture });
+      expect((await systemDb.authIdentity.findMany({ where: { userId: user.id }, orderBy: { createdAt: "asc" } })).map((i) => i.method)).toEqual(["password", "google"]);
+      expect(await systemDb.authEvent.findFirst({ where: { type: "identity_linked", userId: user.id } })).toMatchObject({
+        metadata: expect.objectContaining({ method: "google", via: "sign_in", cognitoUsername: "google_g-2" }),
+      });
+      expect(ctx.mailer.sent.slice(mailBefore)).toEqual([expect.objectContaining({ to: "merchant@gmail.com", subject: "Google sign-in was added to your bizinsights account" })]);
+      expect((await browser.get("/auth/pending-link")).json()).toEqual({ pending: false });
+
+      // From now on Continue with Google signs in to the same account, its workspace and all.
+      const again = await (await federated({ id: "g-2", email: "merchant@gmail.com" })).finish();
+      expect(again.json().user.id).toBe(user.id);
+      expect(await systemDb.user.count()).toBe(1);
+      expect((await systemDb.membership.findFirstOrThrow({ where: { workspaceId: ws } })).userId).toBe(user.id);
+    });
+
+    it("needs the account's own second step: with two-step verification on, only the app's code links it", async () => {
+      const { user } = await signIn(ctx, "pw-mfa", "careful@gmail.com");
+      const secret = "JBSWY3DPEHPK3PXP";
+      ctx.auth.users.get("pw-mfa")!.totp = { secret, enabled: true };
+      const { browser, finish } = await federated({ id: "g-mfa", email: "careful@gmail.com" });
+      expect((await finish()).json().next).toBe("link");
+      expect((await browser.post("/auth/login", { email: "careful@gmail.com", password: password("pw-mfa") })).json()).toEqual({ next: "mfa" });
+      expect(await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } })).toBe(0);
+      expect((await browser.post("/auth/login/mfa", { code: totpCode(secret) })).statusCode).toBe(200);
+      expect(await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } })).toBe(1);
+    });
+
+    it("never links to another account this browser signs in to, nor from another browser, nor after \"Don't link\" or the hold running out", async () => {
+      const { user } = await signIn(ctx, "pw-owner", "owner@gmail.com");
+      const googleIdentities = () => systemDb.authIdentity.count({ where: { method: "google" } });
+
+      // Someone else signs in on this browser: nothing for their account, and the hold ends.
+      const first = await federated({ id: "g-owner", email: "owner@gmail.com" });
+      expect((await first.finish()).json().next).toBe("link");
+      const other = await first.browser.signIn("pw-other", "other@x.com");
+      expect(other.id).not.toBe(user.id);
+      expect(await googleIdentities()).toBe(0);
+      expect((await first.browser.get("/auth/pending-link")).json()).toEqual({ pending: false });
+
+      // The owner signs in on another browser: that browser held nothing.
+      const second = await federated({ id: "g-owner", email: "owner@gmail.com" });
+      expect((await second.finish()).json().next).toBe("link");
+      expect((await testBrowser(ctx).post("/auth/login", { email: "owner@gmail.com", password: password("pw-owner") })).statusCode).toBe(200);
+      expect(await googleIdentities()).toBe(0);
+
+      // "Don't link Google" lets it go.
+      expect((await second.browser.delete("/auth/pending-link")).json()).toEqual({ ok: true });
+      expect((await second.browser.get("/auth/pending-link")).json()).toEqual({ pending: false });
+      expect((await second.browser.post("/auth/login", { email: "owner@gmail.com", password: password("pw-owner") })).statusCode).toBe(200);
+      expect(await googleIdentities()).toBe(0);
+
+      // Held longer than its quarter of an hour: gone.
+      const third = await federated({ id: "g-owner", email: "owner@gmail.com" });
+      expect((await third.finish()).json().next).toBe("link");
+      advance(16 * 60_000);
+      expect((await third.browser.get("/auth/pending-link")).json()).toEqual({ pending: false });
+      expect((await third.browser.post("/auth/login", { email: "owner@gmail.com", password: password("pw-owner") })).statusCode).toBe(200);
+      expect(await googleIdentities()).toBe(0);
+      expect(await systemDb.user.count()).toBe(2);
+    });
+
+    it("refuses a second Google account for an account that signs in with another one, creating nothing", async () => {
+      const first = await (await federated({ id: "g-a", email: "team@shop.com" })).finish();
+      expect(first.statusCode).toBe(200);
+      const second = await (await federated({ id: "g-b", email: "team@shop.com" })).finish();
+      expect(second.statusCode).toBe(409);
+      expect(second.json().error).toBe("google_other_linked");
+      expect(second.headers["set-cookie"] ?? "").not.toMatch(/__(session|link)=[^;]/);
+      expect(await systemDb.user.count()).toBe(1);
+      expect(await systemDb.authIdentity.count()).toBe(1);
+    });
   });
 
   it("never links on an address the provider hasn't verified", async () => {
@@ -582,6 +751,18 @@ describe("Continue with Google", () => {
     expect(await systemDb.user.count()).toBe(1);
   });
 
+  it("keeps the picture current from Google, and keeps the one there is when Google sends none", async () => {
+    const [one, two] = ["https://lh3.googleusercontent.com/a/one", "https://lh3.googleusercontent.com/a/two"];
+    const first = await (await federated({ id: "g-pic", email: "pic@gmail.com", picture: one })).finish();
+    expect(first.json().user.avatarUrl).toBe(one);
+    ctx.auth.users.get("google_g-pic")!.picture = two;
+    const second = await (await federated({ id: "g-pic", email: "pic@gmail.com" })).finish();
+    expect(second.json().user).toMatchObject({ id: first.json().user.id, avatarUrl: two });
+    ctx.auth.users.get("google_g-pic")!.picture = null;
+    expect((await (await federated({ id: "g-pic", email: "pic@gmail.com" })).finish()).json().user.avatarUrl).toBe(two);
+    expect((await systemDb.user.findUniqueOrThrow({ where: { email: "pic@gmail.com" } })).avatarUrl).toBe(two);
+  });
+
   it("refuses a state from another browser, a replayed one, a cancelled sign-in and a doctored code", async () => {
     const a = await federated({ id: "g-3", email: "c@gmail.com" });
     // Another browser (no __oauth cookie) presenting this sign-in's code and state: login CSRF.
@@ -679,6 +860,7 @@ describe("account security", () => {
       post("/auth/account/password", { currentPassword, password, confirmPassword }, here.headers);
     expect((await change("not-the-password")).json().error).toBe("wrong_password");
     expect((await change(old, "short")).json().error).toBe("weak_password");
+    const sentBefore = ctx.mailer.sent.length;
     const res = await change(old);
     expect(res.statusCode).toBe(200);
     const nowHere = { cookie: cookiesFrom(res), ...ORIGIN };
@@ -686,6 +868,34 @@ describe("account security", () => {
     expect((await get("/me", there.headers)).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: old })).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: "a-better-password" })).statusCode).toBe(200);
+    // The account's address hears of it (only the change that went through).
+    expect(ctx.mailer.sent.slice(sentBefore)).toEqual([expect.objectContaining({ to: "a@x.com", subject: "Your bizinsights password was changed" })]);
+  });
+
+  it("tells the old address when the email changes, and signs out every other device but keeps this one", async () => {
+    const here = await signIn(ctx, "u1", "a@x.com");
+    const there = await signIn(ctx, "u1", "a@x.com");
+    const password = ctx.auth.users.get("u1")!.password!;
+    expect((await post("/auth/account/email", { email: "new@x.com", password }, here.headers)).statusCode).toBe(200);
+    const sentBefore = ctx.mailer.sent.length;
+    const done = await post("/auth/account/email/confirm", { code: ctx.auth.code("verify", "new@x.com") }, here.headers);
+    expect(done.statusCode).toBe(200);
+    // This browser carries on under its new session cookie; the old one and the other device's are refused.
+    const nowHere = { cookie: cookiesFrom(done), ...ORIGIN };
+    expect((await get("/me", nowHere)).json().user.email).toBe("new@x.com");
+    expect((await get("/me", there.headers)).statusCode).toBe(401);
+    expect((await get("/me", here.headers)).statusCode).toBe(401);
+    // Its device stays listed as signed in; the other one doesn't.
+    const devices = await systemDb.userSession.findMany({ where: { userId: here.user.id, endedAt: null } });
+    expect(devices).toHaveLength(1);
+    const session = nowHere.cookie.split("; ").find((c) => c.startsWith("__session="))!.slice("__session=".length);
+    expect(readSession(session)!.sid).toBe(devices[0]!.sid);
+    // Only the old address is told, and it sees the new one masked.
+    const notice = ctx.mailer.sent.slice(sentBefore);
+    expect(notice).toEqual([expect.objectContaining({ to: "a@x.com", subject: "The email address of your bizinsights account was changed" })]);
+    expect(notice[0]!.text).toContain("n***w@x.com");
+    expect(notice[0]!.text).not.toContain("new@x.com");
+    expect(notice[0]!.text).toContain("http://localhost:3001/support");
   });
 
   it("changes the email only after a code sent to the new address, and never onto someone else's", async () => {
@@ -720,20 +930,38 @@ describe("account security", () => {
     }
   });
 
-  it("deletes the account and its sign-in, but not while it is a workspace's only owner", async () => {
+  it("deletes the account and its sign-in with a code emailed to its address, but not while it is a workspace's only owner", async () => {
     const owner = await signIn(ctx, "u1", "a@x.com");
     const password = ctx.auth.users.get("u1")!.password!;
     const ws = await createWorkspace(ctx, owner.headers, "Solo Shop");
     const del = (payload: Record<string, unknown>) => post("/auth/account/delete", payload, owner.headers);
-    expect((await del({ confirm: "DELETE" })).json().error).toBe("password_required");
-    const blocked = await del({ confirm: "DELETE", password });
+    const askForCode = () => post("/auth/account/delete/code", {}, owner.headers);
+    // The password no longer deletes it: the emailed code does, and none was asked for yet.
+    expect((await del({ confirm: "DELETE", password })).statusCode).toBe(400);
+    expect((await del({ confirm: "DELETE", code: "123456" })).json().error).toBe("code_required");
+    // The only owner hears why before any code is emailed.
+    const sent = ctx.mailer.sent.length;
+    const blocked = await askForCode();
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json()).toMatchObject({ error: "sole_owner", workspaces: ["Solo Shop"] });
+    expect(ctx.mailer.sent.length).toBe(sent);
 
-    // A second owner takes over.
+    // A second owner takes over; the code goes to the account's address, from the support sender.
     const partner = await signIn(ctx, "u2", "b@x.com");
+    const second = await systemDb.membership.create({ data: { workspaceId: ws, userId: partner.user.id, role: "owner" } });
+    const asked = await askForCode();
+    expect(asked.json()).toMatchObject({ ok: true, challenge: { expiresAt: expect.any(Number), resendAt: expect.any(Number) } });
+    expect(ctx.mailer.sent.at(-1)).toMatchObject({ to: "a@x.com", subject: "Confirm deleting your bizinsights account" });
+    const code = emailedDeletionCode(ctx, "a@x.com");
+    // Another one only after the minute.
+    expect((await askForCode()).json().error).toBe("resend_cooldown");
+    expect((await del({ confirm: "DELETE", code: String((Number(code) + 1) % 1_000_000).padStart(6, "0") })).json().error).toBe("invalid_code");
+    expect((await del({ confirm: "delete", code })).statusCode).toBe(400);
+    // Left the only owner after the code was sent: refused, and the code isn't spent by the refusal.
+    await systemDb.membership.delete({ where: { id: second.id } });
+    expect((await del({ confirm: "DELETE", code })).statusCode).toBe(409);
     await systemDb.membership.create({ data: { workspaceId: ws, userId: partner.user.id, role: "owner" } });
-    const res = await del({ confirm: "DELETE", password });
+    const res = await del({ confirm: "DELETE", code });
     expect(res.statusCode).toBe(200);
     expect(await systemDb.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
     expect(ctx.auth.users.has("u1")).toBe(false);

@@ -17,13 +17,22 @@ export const metadata: Metadata = {
  * schema or the scopes, change this page too:
  *   - analytics store no customer personal data (packages/core/src/persist.ts: `customerKey` is a
  *     keyed HMAC, and orders keep no name, email, address or phone);
- *   - WhatsApp messaging, only once a merchant turns it on, stores customers' WhatsApp numbers and
- *     first names encrypted, with the retention in packages/core/src/whatsapp/scheduler.ts
- *     (RETENTION) and redaction in packages/core/src/whatsapp/events.ts (redactWhatsappCustomer);
+ *   - WhatsApp Automation, only once a merchant connects WhatsApp, stores the WhatsApp numbers and first
+ *     names of customers it messages, who write in, or who agree to marketing, encrypted, with their
+ *     consent history and message texts, the retention in packages/core/src/whatsapp/sweep.ts
+ *     (KEEP_RECORDS_MS, KEEP_RUNS_MS, the store's retentionDays) and redaction in
+ *     packages/core/src/whatsapp/privacy.ts (redactWhatsappCustomer); a linked phone's WhatsApp
+ *     session and a Cloud API number's access token are kept by bizinsights' own WhatsApp service
+ *     (Evolution API on AWS, docs/whatsapp.md), the token also encrypted in wapp_connections;
+ *   - Customer Messaging (SMS), only once a merchant sets up a sender, stores customers' mobile numbers
+ *     and first names encrypted, their SMS consent history and opt-outs, with the retention in
+ *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
- *   - the funnel stores hashed browser ids and cleaned page paths only (apps/api/src/routes/pixel.ts,
- *     packages/shared/src/journey.ts `cleanPath`);
+ *   - the funnel stores hashed browser ids, cleaned page paths, the products each visit saw, added to cart,
+ *     took to checkout and bought, and one word each for the kind of device, the country and where the visit
+ *     came from; the referring host and link tags the pixel sends for that are not kept (apps/api/src/routes/pixel.ts,
+ *     packages/shared/src/journey.ts `cleanPath`, packages/shared/src/funnel.ts `funnelDevice`, `arrivalSource`);
  *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
  *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL, and Meta's
@@ -40,7 +49,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-19";
+const UPDATED = "2026-10-28";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -99,7 +108,8 @@ const PROVIDERS = [
     purpose: "Sends bizinsights' own emails: sign-in and verification codes, team invitations and alerts, to the address each one is for.",
   },
   { name: "Shopify", purpose: "The source of your store data." },
-  { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages, only for stores that connect WhatsApp." },
+  { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages and reports whether each was delivered and read, only for stores that connect WhatsApp (a linked phone, or Meta's WhatsApp Business Platform)." },
+  { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
     purpose: "The source of advertising reports, only for stores that connect an advertising account.",
@@ -107,6 +117,11 @@ const PROVIDERS = [
   {
     name: "Google (Gmail API), Microsoft (Microsoft Graph) or your own SMTP provider",
     purpose: "Send the emails you set up, from the account you connect, only for workspaces that connect one.",
+  },
+  {
+    name: "Zapier",
+    purpose:
+      "Only for stores whose team connects bizinsights to their own Zapier account: receives the events and figures that team's Zaps ask for (alerts, advertising results, failed WhatsApp messages with the number masked), never customers' names, emails or full phone numbers. What Zapier does with them is under that team's own Zapier account and Zapier's terms.",
   },
 ] as const;
 
@@ -182,7 +197,7 @@ export default function PrivacyPage() {
         <p>
           The analytics we store contain none of your customers&apos; personal data: no names, email addresses, postal addresses or
           phone numbers are saved for the dashboard. The one feature that shows them, Customers to follow up, reads them from Shopify
-          while you look. WhatsApp messaging, if you turn it on, is the only exception. Both are described in section 3. Where the
+          while you look. WhatsApp and text messaging, if you turn them on, are the only exceptions. They are described in section 3. Where the
           dashboard distinguishes new from returning buyers, it uses a one-way keyed hash of the Shopify customer ID, scoped to a
           single store, from which no identity can be recovered.
         </p>
@@ -196,13 +211,19 @@ export default function PrivacyPage() {
           The funnel needs two further permissions, <code>write_pixels</code> and <code>read_customer_events</code>, and adds a
           Shopify web pixel to your storefront. The pixel runs only for shoppers who accept analytics tracking, and sends five events:
           page viewed, product viewed, added to cart, checkout started and checkout completed. Each event carries its time, the page
-          address and Shopify&apos;s anonymous browser ID.
+          address and Shopify&apos;s anonymous browser ID. When a shopper arrives from outside your store, the page view also carries
+          the name of the website they came from (its domain only, never the page), the link&apos;s campaign tags{" "}
+          <code>utm_source</code> and <code>utm_medium</code>, and whether the link carried an ad click ID (only that it did, never the
+          ID). Adds to cart and checkouts also carry which products they hold.
         </p>
         <p>
           We keep the page address without its query string, and never keep checkout, order-status or account addresses, because those
           carry a shopper&apos;s token. The browser ID is stored only as a one-way hash. From these events we record each visit&apos;s
-          landing page, last page, how far it progressed and which parts of the store it viewed. No names, email addresses or IP
-          addresses are stored.
+          landing page, last page, how far it progressed, which parts of the store and which product pages it viewed, which products
+          it added to cart, took to checkout and bought, the kind of device it came from (mobile, tablet or desktop, read from the
+          browser&apos;s own description of itself), its country (as our network places the request) and one word for where it came
+          from (for example Google, Instagram, Email or Direct). The website name and campaign tags are used to choose that word and
+          are not kept. No names, email addresses or IP addresses are stored.
         </p>
 
         <h3>Customers to follow up (only if you allow access to your customers)</h3>
@@ -214,18 +235,42 @@ export default function PrivacyPage() {
           database; we record only that the card was viewed, and by whom, in your workspace&apos;s audit log.
         </p>
 
-        <h3>WhatsApp messaging</h3>
+        <h3>WhatsApp messaging (WhatsApp Automation)</h3>
         <p>
-          To send the order updates, delivery updates, cart reminders, review requests and campaigns you switch on, bizinsights keeps each
-          customer&apos;s WhatsApp number and first name, encrypted with AES-256-GCM, together with a one-way keyed hash of the number
-          used to recognise replies. The dashboard shows numbers masked. We keep a record of what each customer agreed to and of every
-          opt-out, so that nobody who replied STOP is messaged again. Delivery addresses are used only to write the order confirmation
-          and are deleted once it is sent. Messages are sent through Meta&apos;s WhatsApp Business Platform.
+          To send the order updates, reminders, campaigns and replies you set up, bizinsights keeps the WhatsApp number and first name of
+          the customers an automation messages, who write to your business, or who agree to receive your marketing on WhatsApp. Both are
+          encrypted with AES-256-GCM, together with a one-way keyed hash of the number used to recognise replies; the dashboard shows
+          numbers masked. We keep a record of every consent and opt-out (when, how, and who recorded it), so that nobody who replied STOP
+          is messaged again, and the text of each message sent and received, encrypted, with its delivery reports. Messages leave through
+          bizinsights&apos; own WhatsApp service, which runs on our AWS infrastructure: either from a phone you link with a QR code (the
+          service keeps that phone&apos;s WhatsApp session, as WhatsApp Web does, until you disconnect) or through Meta&apos;s WhatsApp
+          Business Platform (the service keeps your WhatsApp Business account&apos;s access token, encrypted). Messages from people who
+          aren&apos;t already your customers in bizinsights are not kept, except a STOP, which is recorded only as a keyed hash of the
+          number.
         </p>
         <p>
-          Message history is kept for 180 days, unfinished-checkout links and names for 30 days, and order timelines for one year.
-          Customer reviews are kept until you delete your store from bizinsights. When Shopify asks us to erase a customer or your store,
-          all of it is deleted.
+          Message texts are kept for the period you choose in WhatsApp settings (90 days unless you change it, at most 365 days) and the
+          rest of each message&apos;s record for 365 days; what a failed message needs to be sent again, for at most 7 days; WhatsApp&apos;s
+          update notifications until they are processed (one that can&apos;t be processed, for up to 30 days); and automation run
+          records for 90 days. Records from bizinsights&apos; earlier WhatsApp feature (before 24 October 2026) are kept unchanged
+          until they are removed. When Shopify asks us to erase a customer or your store, all of it is deleted, including those earlier
+          records.
+        </p>
+
+        <h3>Text messages (Customer Messaging)</h3>
+        <p>
+          To send the order updates, checkout reminders and campaigns you set up, bizinsights keeps each customer&apos;s mobile number
+          and first name, encrypted with AES-256-GCM, together with a one-way keyed hash of the number. The dashboard shows numbers
+          masked. We keep the customer&apos;s text-message marketing consent as Shopify reports it, a history of every change to it with
+          where it came from, and every opt-out, so that nobody who opted out is texted again. Marketing texts go only to customers
+          who agreed to them in Shopify, and each one carries a link that stops them at once. Texts are sent through AWS End User
+          Messaging, which reports whether each one was delivered and what it cost.
+        </p>
+        <p>
+          The words of each text are kept for 30 days after it is delivered or fails, delivery reports for 180 days, unfinished
+          checkouts for 90 days (their links for 30), and the record of which texts were sent, and what they cost, for 13 months. When
+          Shopify asks us to erase a customer, their numbers, consent history and texts are deleted; we keep only a one-way hash of an
+          opted-out number, so that their opt-out keeps working. When Shopify asks us to erase your store, all of it is deleted.
         </p>
 
         <h3>Advertising accounts</h3>
@@ -241,7 +286,12 @@ export default function PrivacyPage() {
             spend, impressions, reach and clicks, and the conversions and purchases the platform attributes to its ads, per day, by
             device and by country;
           </li>
-          <li>for AdSense, your site&apos;s estimated earnings, page views and clicks.</li>
+          <li>
+            for AdSense, your site&apos;s estimated earnings, page views, ad impressions and clicks per site and day; and, when you open its
+            report, the same by country, device type or ad unit (with the ad unit&apos;s name), with ad requests, coverage and Active View
+            viewability. The report is read from AdSense when you open it; a copy is cached briefly (up to an hour) so reopening it is quick,
+            and it isn&apos;t kept with the figures below.
+          </li>
         </ul>
         <p>
           We keep these figures so the dashboard can compare periods. With each connection we also keep the platform&apos;s ID for the

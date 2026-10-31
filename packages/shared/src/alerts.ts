@@ -8,18 +8,23 @@
 //
 // Imported by the UI through `@app/shared/alerts`: no I/O, no node: imports.
 
+import { allows, hasFullAccess, type MemberAccess } from "./access";
+import { staffAccess, staffCan, type StaffRole } from "./staff/access";
+
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "privacy" | "inventory" | "general";
+export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "integrations" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
   shopify: "/settings/stores",
   ads: "/settings/ads",
+  integrations: "/settings/integrations",
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
-  whatsapp: "/whatsapp/automations",
+  whatsapp: "/dashboard/whatsapp-automation",
+  sms: "/messaging/billing",
   privacy: "/settings/privacy",
   inventory: "/inventory/low-stock",
   general: "/support",
@@ -130,7 +135,82 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   // Composed from the app's wording and the store's own counts (core's inventory alerts).
   if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
-  // The text a merchant wrote in a WhatsApp automation's "notify the team" step.
-  if (code.startsWith("wa_rule_")) return { severity, area: "whatsapp", title: "WhatsApp automation", body: message };
+  // WhatsApp Automation (core whatsapp/connection.ts and sweep.ts): worded here from the code alone.
+  if (code === "whatsapp_logged_out") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Link WhatsApp again",
+      body: "WhatsApp logged out the phone linked to bizinsights (it was unlinked on the phone, or WhatsApp ended the session), so nothing is being sent. Open WhatsApp Automation and link it again: messages waiting are sent if you do within 48 hours.",
+    };
+  }
+  if (code === "whatsapp_disconnected") {
+    return { severity, area: "whatsapp", title: "WhatsApp has been disconnected for 2 days", body: "The messages that were waiting to go were cancelled. Open WhatsApp Automation to connect it again." };
+  }
+  if (code === "whatsapp_provider_down") {
+    return { severity, area: "whatsapp", title: "WhatsApp messages are waiting", body: "bizinsights' WhatsApp service isn't answering, so messages wait and are sent once it is back. Nothing needs doing; contact bizinsights support if this lasts." };
+  }
+  // Raised on 2026-10-28, while QR linking was switched off for a day; resolved when the store links a phone again.
+  if (code === "whatsapp_qr_retired") {
+    return {
+      severity,
+      area: "whatsapp",
+      title: "Link your WhatsApp phone again",
+      body: "QR-code linking was switched off for a day, so your linked phone was disconnected, the messages waiting were cancelled (none was sent) and your automations were paused. QR-code linking is back: open WhatsApp Automation, link the phone again, then turn your automations back on.",
+    };
+  }
+  // Customer Messaging (core/sms): worded here from the code alone.
+  const budget = /^sms_budget_(50|80|100)$/.exec(code);
+  if (budget) {
+    const pct = budget[1]!;
+    return {
+      severity,
+      area: "sms",
+      title: pct === "100" ? "Your SMS budget for this month is used up" : `You've used ${pct}% of this month's SMS budget`,
+      body:
+        pct === "100"
+          ? "Texts that would go over the budget aren't sent while its hard stop is on. Raise the budget in Customer Messaging → SMS billing, or wait for next month."
+          : "Customer Messaging → SMS billing shows what was spent, by country and campaign, from what AWS charged for each text.",
+    };
+  }
+  if (code === "sms_sender_problem") {
+    return { severity, area: "sms", title: "Your SMS sender needs attention", body: "AWS refused the sender this store texts from, so texts are on hold. Customer Messaging → Sender configuration shows what AWS reported." };
+  }
+  if (code === "sms_account_limit") {
+    return { severity, area: "sms", title: "Texts are on hold: the SMS spending limit is reached", body: "The account's monthly SMS spending limit is reached, so texts wait until it is raised or the month ends. Contact support if this stays." };
+  }
+  // Zapier (core zapier/delivery.ts): an event Zapier never took, after its tries. Worded from the code alone.
+  if (code === "zapier_delivery_failed") {
+    return {
+      severity,
+      area: "integrations",
+      title: "Some events didn't reach Zapier",
+      body: "Zapier refused one of this store's events, or didn't answer after several tries, so the Zap waiting for it didn't run. Settings → Integrations → Zapier shows which and why; an owner or admin can send it again with Retry.",
+    };
+  }
   return { severity, area: "general", title: "Something needs your attention", body: "If this keeps showing, contact support and we'll look into it." };
+}
+
+/**
+ * Whether a member may see (and fix) an alert of this area: the bell's rule (GET .../alerts), which
+ * Zapier's "New alert" trigger follows for the person who connected it. Settings → Privacy requests
+ * needs audit:read; Settings → Advertising, "Manage integrations"; WhatsApp, "View campaigns"; the
+ * Shopify connection, Zapier's undelivered events (Retry is theirs) and the help page's alerts go to
+ * owners and admins.
+ */
+export function mayFixAlert(area: AlertArea, access: MemberAccess, staffRole: StaffRole | null): boolean {
+  switch (area) {
+    case "staff":
+      return staffCan(staffAccess(access.role, staffRole, access.permissions), "attendance:view");
+    case "email":
+      return allows(access, "email:read");
+    case "privacy":
+      return allows(access, "audit:read");
+    case "whatsapp":
+      return allows(access, "marketing.campaigns");
+    case "ads":
+      return allows(access, "integrations.manage");
+    default:
+      return hasFullAccess(access.role);
+  }
 }

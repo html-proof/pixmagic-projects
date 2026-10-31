@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { originCheck } from "../src/app.js";
 import { dynamoCoord } from "../src/dynamoCoord.js";
+import { API_PATH_PATTERNS, apiPath } from "../src/paths.js";
 import { loadSecrets } from "../src/secrets.js";
 import { parseHeaders, staticSite } from "../src/staticSite.js";
 
@@ -95,6 +97,29 @@ describe("the DynamoDB coordinator", () => {
   });
 });
 
+describe("which requests are the API's", () => {
+  // CloudFront's path patterns: `*` any run of characters, `?` one, the rest literal.
+  const cloudFront = (path: string) => API_PATH_PATTERNS.some((p) => new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(path));
+
+  it("strips /api and keeps the bare API paths", () => {
+    expect(apiPath("/api/me")).toBe("/me");
+    expect(apiPath("/api")).toBe("/");
+    expect(apiPath("/webhooks/shopify")).toBe("/webhooks/shopify");
+    expect(apiPath("/healthz")).toBe("/healthz");
+    expect(apiPath("/dashboard")).toBeNull();
+  });
+
+  // CloudFront sends the rest to a page of its own while the function can't answer (infra/cdk
+  // app-stack.ts): one path it got wrong would hide an API answer behind that page, or leave a page
+  // without it.
+  it("are the paths CloudFront keeps on the function, and no others", () => {
+    const api = ["/api", "/api/", "/api/me", "/api/auth/oauth/google/callback", "/webhooks/", "/webhooks/shopify/orders", "/pixel/v1/e", "/shopify/install", "/healthz", "/readyz"];
+    const ui = ["/", "/apis", "/apix/me", "/dashboard", "/settings/ads", "/login", "/webhooks", "/pixel", "/shopify", "/healthz/", "/readyz.html", "/API/me", "/support", "/_next/static/chunks/a.js"];
+    for (const p of api) expect([p, apiPath(p) !== null, cloudFront(p)]).toEqual([p, true, true]);
+    for (const p of ui) expect([p, apiPath(p), cloudFront(p)]).toEqual([p, null, false]);
+  });
+});
+
 describe("the static UI", () => {
   const root = mkdtempSync(join(tmpdir(), "site-"));
   mkdirSync(join(root, "auth"));
@@ -118,6 +143,8 @@ describe("the static UI", () => {
     expect(await get("/auth/callback")).toMatchObject({ status: 200, text: "callback" });
     const missing = await get("/nope");
     expect(missing).toMatchObject({ status: 404, text: "missing" });
+    // An address that can't be decoded is a bad request, shown with the same page.
+    expect(await get("/%E0%A4%A")).toMatchObject({ status: 400, text: "missing" });
   });
 
   it("applies the _headers rules, caches only hashed files, and never serves outside the folder", async () => {
@@ -129,6 +156,46 @@ describe("the static UI", () => {
     for (const p of ["/../package.json", "/%2e%2e/secret", "/_headers"]) expect((await get(p)).status).toBe(404);
     expect(parseHeaders("/*\n  A: 1\n")).toEqual({ A: "1" });
   });
+
+  it("enforces the pages' Content-Security-Policy: where scripts load from and what they may reach", () => {
+    const shipped = parseHeaders(readFileSync(new URL("../../web/public/_headers", import.meta.url), "utf8"));
+    // Enforced, not only reported: a report-only policy stops nothing.
+    expect(shipped["Content-Security-Policy-Report-Only"]).toBeUndefined();
+    const directives = new Map(
+      shipped["Content-Security-Policy"]!.split(";").map((d) => {
+        const [name, ...sources] = d.trim().split(/\s+/);
+        return [name!, sources] as const;
+      }),
+    );
+    expect(directives.get("default-src")).toEqual(["'self'"]);
+    for (const name of ["script-src", "connect-src", "frame-src"]) {
+      const sources = directives.get(name)!;
+      expect(sources, name).toContain("'self'");
+      // Only named hosts: no wildcard, no scheme on its own, no eval.
+      for (const s of sources) expect(s, `${name} ${s}`).not.toMatch(/^(\*|https?:|data:|blob:|'unsafe-eval')$/);
+    }
+    expect(directives.get("object-src")).toEqual(["'none'"]);
+    expect(directives.get("frame-ancestors")).toEqual(["'none'"]);
+    expect(directives.get("base-uri")).toEqual(["'self'"]);
+    expect(directives.get("form-action")).toEqual(["'self'"]);
+  });
+});
+
+describe("the function URL's origin check", () => {
+  const secret = "s3cret-origin-value-0123456789";
+  it("serves the API only to requests carrying CloudFront's secret", () => {
+    expect(originCheck(secret, secret, true)).toBe("cloudfront");
+    expect(originCheck(null, secret, true)).toBe("forbidden");
+    expect(originCheck("wrong", secret, true)).toBe("forbidden");
+    expect(originCheck(`${secret}x`, secret, true)).toBe("forbidden");
+  });
+
+  it("refuses in production when the secret is missing, instead of letting anyone around WAF", () => {
+    expect(originCheck(null, undefined, true)).toBe("unconfigured");
+    expect(originCheck("anything", "", true)).toBe("unconfigured");
+    // Locally there is no CloudFront.
+    expect(originCheck(null, undefined, false)).toBe("direct");
+  });
 });
 
 describe("secrets at cold start", () => {
@@ -137,6 +204,7 @@ describe("secrets at cold start", () => {
       app: { SESSION_SECRET: "s", APP_RLS_PASSWORD: "p@ss/w:rd" },
       cognito: { COGNITO_CLIENT_SECRET: "c" },
       db: { username: "app", password: "m a&s" },
+      system: { SYSTEM_DB_USER: "app_system", SYSTEM_DB_PASSWORD: "sy s&" },
     };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
       const { SecretId } = JSON.parse(await new Request(input, init).text());
@@ -149,6 +217,7 @@ describe("secrets at cold start", () => {
       APP_SECRET_ARN: "app",
       COGNITO_WORKER_SECRET_ARN: "cognito",
       DB_SECRET_ARN: "db",
+      SYSTEM_DB_SECRET_ARN: "system",
       DB_HOST: "db.example",
       DB_NAME: "app",
       SESSION_SECRET: "already-set",
@@ -156,7 +225,24 @@ describe("secrets at cold start", () => {
     await loadSecrets(env, fetchImpl);
     expect(env.SESSION_SECRET).toBe("already-set");
     expect(env.COGNITO_CLIENT_SECRET).toBe("c");
-    expect(env.DATABASE_URL).toBe("postgresql://app:m%20a%26s@db.example:5432/app?sslmode=verify-full");
+    // systemDb logs in as the system role (docs/system-database-role.md); the owner's login is the
+    // cron's alone, for migrate and the other maintenance actions.
+    expect(env.DATABASE_URL).toBe("postgresql://app_system:sy%20s%26@db.example:5432/app?sslmode=verify-full");
+    expect(env.OWNER_DATABASE_URL).toBe("postgresql://app:m%20a%26s@db.example:5432/app?sslmode=verify-full");
     expect(env.APP_DATABASE_URL).toBe("postgresql://app_rls:p%40ss%2Fw%3Ard@db.example:5432/app?sslmode=verify-full");
+  });
+
+  it("gives the api and jobs functions, which have no owner's secret, no owner's login", async () => {
+    const asked: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const { SecretId } = JSON.parse(await new Request(input, init).text());
+      asked.push(SecretId);
+      return new Response(JSON.stringify({ SecretString: JSON.stringify({ SYSTEM_DB_PASSWORD: "sys" }) }));
+    }) as typeof fetch;
+    const env: NodeJS.ProcessEnv = { AWS_REGION: "ap-southeast-2", AWS_ACCESS_KEY_ID: "AKIA", AWS_SECRET_ACCESS_KEY: "s", SYSTEM_DB_SECRET_ARN: "system", DB_HOST: "db.example", DB_NAME: "app" };
+    await loadSecrets(env, fetchImpl);
+    expect(asked).toEqual(["system"]);
+    expect(env.DATABASE_URL).toBe("postgresql://app_system:sys@db.example:5432/app?sslmode=verify-full");
+    expect(env.OWNER_DATABASE_URL).toBeUndefined();
   });
 });

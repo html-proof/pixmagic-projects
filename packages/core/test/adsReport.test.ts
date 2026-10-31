@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addDays, eachDay, type AdDayRow, type AdsenseDayRow } from "@app/shared";
+import { addDays, ADSENSE_FINALIZED_BY_DAY, adsenseFinalThrough, eachDay, type AdDayRow, type AdsenseDayRow } from "@app/shared";
+import { recheckDays } from "../src/adConnections/sync.js";
 import { adsenseFigures, adsFigures, daysToRead, type AdConn, type AdsAsk } from "../src/reports/ads.js";
 
 // Noon UTC on 19 Oct 2026: the 19th everywhere from Los Angeles to Melbourne... except where noted.
@@ -356,6 +357,95 @@ describe("AdSense figures", () => {
     expect(m.previous).toMatchObject({ from: null, to: null, earnings: null });
     expect(m.deltas.earnings).toBeNull();
   });
+
+  describe("estimated or final", () => {
+    const september = (over: Partial<AdsAsk> = {}) => week({ range: { from: "2026-09-01", to: "2026-09-30" }, previous: { from: "2026-08-01", to: "2026-08-30", until: "23:59:59" }, ...over });
+
+    it("calls a month final once AdSense finalized it and the sync read it again; this month's days stay estimated", () => {
+      // Synced on the 19th: September, the month before, was re-read through the 10th.
+      const s = sense();
+      const rows = eachDay("2026-08-01", TODAY).map((x) => day(s, "", x, 1));
+      const sept = adsenseFigures([s], rows, september())!;
+      expect(sept).toMatchObject({ current: { earnings: 30 }, finalThrough: "2026-09-30", final: true });
+      expect(sept.accounts[0]!.finalThrough).toBe("2026-09-30");
+      const thisWeek = adsenseFigures([s], rows, week())!;
+      expect(thisWeek).toMatchObject({ finalThrough: "2026-09-30", final: false });
+      // On the 5th, September's figures are still being finalized: only August is final.
+      const early = sense({ lastSyncedAt: new Date("2026-10-05T11:00:00Z") });
+      expect(adsenseFigures([early], rows, september({ now: new Date("2026-10-05T12:00:00Z") }))!).toMatchObject({ finalThrough: "2026-08-31", final: false });
+    });
+
+    it("goes by the account's own day, and by the account whose figures are final the least far", () => {
+      // 12:00 UTC on 10 Nov is already the 11th in Auckland: October is final there, not in UTC.
+      const at = new Date("2026-11-10T12:00:00Z");
+      const nz = sense({ id: "nz", timezone: "Pacific/Auckland", lastSyncedAt: at, historyFrom: "2026-08-01", syncedThrough: "2026-11-10" });
+      const utc = sense({ id: "utc", lastSyncedAt: at, historyFrom: "2026-08-01", syncedThrough: "2026-11-10" });
+      const october = { range: { from: "2026-10-01", to: "2026-10-31" }, previous: { from: "2026-09-01", to: "2026-09-30", until: "23:59:59" }, now: at };
+      const rows = (c: AdConn) => eachDay("2026-08-01", "2026-11-10").map((x) => day(c, "", x, 1));
+      expect(adsenseFigures([nz], rows(nz), week(october))!).toMatchObject({ finalThrough: "2026-10-31", final: true });
+      const both = adsenseFigures([nz, utc], [...rows(nz), ...rows(utc)], week(october))!;
+      expect(both.accounts.map((a) => a.finalThrough)).toEqual(["2026-10-31", "2026-09-30"]);
+      expect(both).toMatchObject({ current: { earnings: 62 }, finalThrough: "2026-09-30", final: false });
+    });
+
+    it("keeps an account whose syncs stopped as final only as it was when it last synced; never synced, nothing is final", () => {
+      // Last synced on 25 Sep: September's figures were read before AdSense finalized them.
+      const stopped = sense({ status: "error", errorCode: "temporary", lastSyncedAt: new Date("2026-09-25T11:00:00Z"), syncedThrough: "2026-09-25" });
+      const m = adsenseFigures([stopped], eachDay(d(-89), "2026-09-25").map((x) => day(stopped, "", x, 1)), september({ range: { from: "2026-09-01", to: "2026-09-20" } }))!;
+      expect(m).toMatchObject({ current: { earnings: 20 }, finalThrough: "2026-08-31", final: false });
+      // The part every account covers is final or not as a whole.
+      const partial = adsenseFigures([stopped], eachDay(d(-89), "2026-09-25").map((x) => day(stopped, "", x, 1)), week({ range: { from: "2026-08-20", to: "2026-09-30" } }))!;
+      expect(partial).toMatchObject({ current: null, partial: { from: "2026-08-20", to: "2026-09-25" }, final: false });
+      const fresh = sense({ lastSyncedAt: null, historyFrom: null, syncedThrough: null });
+      expect(adsenseFigures([fresh], [], september())!).toMatchObject({ finalThrough: null, final: false });
+      expect(adsenseFigures([fresh], [], september())!.accounts[0]!.finalThrough).toBeNull();
+    });
+
+    it("never lets a closed account, which isn't read again, hold later months back: its days since it closed are final zeros", () => {
+      const live = sense({ id: "live", historyFrom: "2026-07-01" });
+      // Closed on 20 Aug, last read that day: its August days stay AdSense's estimate, July's are final.
+      const closed = sense({ id: "old", accountId: "pub-2", status: "unavailable", errorCode: "account_closed", accountStatus: "closed", lastSyncedAt: new Date("2026-08-20T11:00:00Z"), historyFrom: "2026-07-01", syncedThrough: "2026-08-20" });
+      const rows = [...eachDay("2026-07-01", TODAY).map((x) => day(live, "", x, 1)), ...eachDay("2026-07-01", "2026-08-20").map((x) => day(closed, "", x, 1))];
+      // September: the closed account's part is zeros, so the live account's finalized September is final.
+      const sept = adsenseFigures([live, closed], rows, september())!;
+      expect(sept).toMatchObject({ current: { earnings: 30 }, finalThrough: "2026-09-30", final: true });
+      expect(sept.accounts.map((a) => a.finalThrough)).toEqual(["2026-09-30", "2026-07-31"]);
+      // August holds its estimated days: estimated.
+      const august = week({ range: { from: "2026-08-01", to: "2026-08-31" }, previous: { from: "2026-07-01", to: "2026-07-31", until: "23:59:59" } });
+      expect(adsenseFigures([live, closed], rows, august)!).toMatchObject({ current: { earnings: 51 }, finalThrough: "2026-07-31", final: false });
+      // Closed once every day it stored was final (read again on 15 Sep, after August was finalized): final through its today.
+      const settled = sense({ id: "old", accountId: "pub-2", status: "unavailable", errorCode: "account_closed", accountStatus: "closed", lastSyncedAt: new Date("2026-09-15T11:00:00Z"), historyFrom: "2026-07-01", syncedThrough: "2026-08-31" });
+      const alone = adsenseFigures([settled], eachDay("2026-07-01", "2026-08-31").map((x) => day(settled, "", x, 1)), august)!;
+      expect(alone).toMatchObject({ current: { earnings: 31 }, finalThrough: TODAY, final: true });
+      expect(alone.accounts[0]!.finalThrough).toBe(TODAY);
+    });
+
+    it("calls the month before final only once the daily re-check has read it all again (recheckDays)", () => {
+      const s = { provider: "adsense", timezone: "UTC" };
+      // Through the 10th the re-check reaches back to the first of the month before, which isn't final yet...
+      for (const x of eachDay("2026-11-01", `2026-11-${String(ADSENSE_FINALIZED_BY_DAY).padStart(2, "0")}`)) {
+        expect(addDays(x, -(recheckDays(s, new Date(`${x}T12:00:00Z`)) - 1)) <= "2026-10-01").toBe(true);
+        expect(adsenseFinalThrough(x)).toBe("2026-09-30");
+      }
+      // ...and from the 11th, when it counts as final, the re-check goes back to its 30 days.
+      expect(adsenseFinalThrough("2026-11-11")).toBe("2026-10-31");
+      expect(recheckDays(s, new Date("2026-11-11T12:00:00Z"))).toBe(30);
+    });
+  });
+});
+
+describe("a refresh someone asked for", () => {
+  it("is on every account's view, with when the last sync started; an account without them says null", () => {
+    const asked = new Date("2026-10-19T11:58:00Z");
+    const tried = new Date("2026-10-19T11:59:00Z");
+    const a = conn({ id: "a", syncRequestedAt: asked, lastSyncAttemptAt: tried });
+    const b = conn({ id: "b" });
+    const m = adsFigures([a, b], [...daily(a, d(-13), TODAY), ...daily(b, d(-13), TODAY)], week())!;
+    expect(m.accounts[0]).toMatchObject({ syncRequestedAt: asked, lastSyncAttemptAt: tried, lastSyncedAt: new Date("2026-10-19T11:00:00Z") });
+    expect(m.accounts[1]).toMatchObject({ syncRequestedAt: null, lastSyncAttemptAt: null });
+    const s = conn({ id: "s", provider: "adsense", accountId: "pub-1", syncRequestedAt: asked });
+    expect(adsenseFigures([s], [], week())!.accounts[0]).toMatchObject({ syncRequestedAt: asked, lastSyncAttemptAt: null });
+  });
 });
 
 describe("the store's own sales next to the ad spend", () => {
@@ -405,5 +495,45 @@ describe("the store's own sales next to the ad spend", () => {
     expect(adsFigures([meta, google], rows, week())!.sourced).toBeNull();
     const eur = conn({ id: "e", currency: "EUR" });
     expect(adsFigures([eur], daily(eur, d(-13), TODAY), week({ sourced: [{ provider: "meta", orders: 2, sales: 50 }] }))!.sourced).toEqual([{ provider: "meta", orders: 2, sales: 50, salesPerSpend: null }]);
+  });
+});
+
+describe("every campaign, for the campaign comparison", () => {
+  it("lists every campaign with its change on the totals' whole days, a campaign new in the range unchanged rather than up from $0", () => {
+    const meta = conn({ id: "m" });
+    const google = conn({ id: "g", provider: "google", accountId: "111" });
+    const rows = [
+      // Spring ran both weeks: $10 a day, then $20 a day in the range.
+      ...daily(meta, d(-13), d(-7)),
+      ...daily(meta, d(-6), TODAY, { spend: 20, purchaseValue: 100 }),
+      // Brand (Google) only started in the range.
+      ...daily(google, d(-6), TODAY, { campaignId: "7", campaignName: "Brand", spend: 5 }),
+      // Eleven small Meta campaigns: more than the dashboard's ten.
+      ...Array.from({ length: 11 }, (_, i) => row(meta, d(-2), { campaignId: `s${i}`, campaignName: `Small ${i}`, spend: 1 })),
+    ];
+    const top = adsFigures([meta, google], rows, week())!;
+    expect(top.campaigns).toHaveLength(10);
+    expect(top.campaigns[0]).not.toHaveProperty("change");
+
+    const all = adsFigures([meta, google], rows, week({ allCampaigns: true }))!;
+    expect(all.campaigns).toHaveLength(13);
+    const spring = all.campaigns.find((c) => c.name === "Spring")!;
+    // Today is still running: both sides stop at yesterday, as the totals' change does.
+    expect(spring.change).toEqual({
+      from: d(-13),
+      to: d(-8),
+      previous: { spend: 60, linkClicks: 120, purchases: 6, purchaseValue: 240, roas: 4 },
+      deltas: { spend: 1, linkClicks: 0, purchases: 0, purchaseValue: 1.5, roas: 0.25 },
+    });
+    const brand = all.campaigns.find((c) => c.name === "Brand")!;
+    expect(brand.change).toMatchObject({ previous: { spend: 0, roas: null }, deltas: { spend: null, roas: null } });
+  });
+
+  it("gives no campaign a change when the totals have none: never against days that aren't stored", () => {
+    // Its history starts in the range: the dates compared with aren't stored.
+    const meta = conn({ id: "m", historyFrom: d(-6) });
+    const m = adsFigures([meta], daily(meta, d(-6), TODAY), week({ allCampaigns: true }))!;
+    expect(m.notCompared).toBe("no_history");
+    expect(m.campaigns).toEqual([expect.objectContaining({ name: "Spring", spend: 70, change: null })]);
   });
 });

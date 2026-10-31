@@ -3,7 +3,7 @@ import { disconnectDb, systemDb } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import { encryptAdTokens, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, purgeStoreData, resetEnvCache, type FetchLike } from "@app/core";
 import { scheduleAdsSync, type WorkerDeps } from "../src/handlers.js";
-import { prunePixelDedupe } from "../src/index.js";
+import { prunePixelDedupe, pruneSignIns } from "../src/index.js";
 
 /** Security audit 2026-10-14: background-job controls (docs/security/SECURITY_AUDIT.md). */
 
@@ -79,5 +79,33 @@ describe("pixel dedupe pruning", () => {
     expect(await prunePixelDedupe(1)).toBe(1); // bounded per tick
     expect(await prunePixelDedupe()).toBe(1);
     expect((await systemDb.pixelEventSeen.findMany()).map((r) => r.eventId)).toEqual(["e:new"]);
+  });
+});
+
+describe("sign-in records pruning", () => {
+  it("removes device rows a month after their session ended and old sign-in activity, and keeps the rest of the security trail", async () => {
+    const user = await systemDb.user.create({ data: { email: "p@x.com" } });
+    const day = 86_400_000;
+    const ago = (days: number) => new Date(Date.now() - days * day);
+    const row = (sid: string, data: { endedAt?: Date; expiresAt: Date }) => ({ userId: user.id, sid, method: "password", ...data });
+    await systemDb.userSession.createMany({
+      data: [
+        row("ended-long-ago", { endedAt: ago(31), expiresAt: ago(28) }),
+        row("expired-long-ago", { expiresAt: ago(31) }),
+        row("ended-lately", { endedAt: ago(2), expiresAt: new Date(Date.now() + day) }),
+        row("live", { expiresAt: new Date(Date.now() + day) }),
+      ],
+    });
+    await systemDb.authEvent.createMany({
+      data: [
+        { userId: user.id, type: "signed_in", createdAt: ago(91) },
+        { userId: user.id, type: "sign_in_failed", createdAt: ago(95) },
+        { userId: user.id, type: "signed_in", createdAt: ago(3) },
+        { userId: user.id, type: "password_changed", createdAt: ago(200) },
+      ],
+    });
+    expect(await pruneSignIns()).toEqual({ sessions: 2, events: 2 });
+    expect((await systemDb.userSession.findMany({ orderBy: { sid: "asc" } })).map((r) => r.sid)).toEqual(["ended-lately", "live"]);
+    expect((await systemDb.authEvent.findMany({ orderBy: { createdAt: "asc" } })).map((e) => e.type)).toEqual(["password_changed", "signed_in"]);
   });
 });

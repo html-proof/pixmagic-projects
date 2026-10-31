@@ -374,7 +374,8 @@ function InsightNode({
   );
 }
 
-const TRAVEL_EASE = [0.45, 0, 0.25, 1] as const;
+/** Seconds per packet cycle: 2.6 s travelling, 2.2 s before the next (lp-packet-* in globals.css). */
+const PACKET_CYCLE = 4.8;
 
 /** The webhook stream. Fades out instead of vanishing mid-flight when scrolled back above "live". */
 function Packets({ flowing, axis }: { flowing: boolean; axis: "x" | "y" }) {
@@ -402,40 +403,32 @@ function Packets({ flowing, axis }: { flowing: boolean; axis: "x" | "y" }) {
 /**
  * One webhook notification travelling from the store to bizinsights. The wrapper spans the whole
  * line, so translating it by 100% of its own size carries the dot from one end to the other. It is
- * its own layer: the loop runs for as long as the diagram is on screen, and must not repaint it.
+ * its own layer moved by a CSS loop (runs on the compositor, and not at all in the diagram that a
+ * breakpoint hides), for as long as the diagram is on screen.
  */
 function Packet({ label, index, axis }: { label: string; index: number; axis: "x" | "y" }) {
-  const loop = { duration: 2.6, repeat: Infinity, repeatDelay: 2.2, delay: 0.4 + index * 1.2 };
-  const travel = axis === "x" ? { x: ["0%", "100%"] } : { y: ["0%", "100%"] };
+  const delay = `${0.4 + index * 1.2}s`;
   return (
-    <motion.div
-      className="lp-layer absolute inset-0"
-      initial={{ opacity: 0 }}
-      animate={{ ...travel, opacity: [0, 1, 1, 0] }}
-      transition={{
-        x: { ...loop, ease: TRAVEL_EASE },
-        y: { ...loop, ease: TRAVEL_EASE },
-        opacity: { ...loop, ease: "linear", times: [0, 0.16, 0.82, 1] },
-      }}
+    <div
+      className="lp-loop lp-layer absolute inset-0"
+      style={{ animation: `lp-packet-${axis} ${PACKET_CYCLE}s ${delay} infinite both, lp-packet-fade ${PACKET_CYCLE}s linear ${delay} infinite both` }}
     >
       {axis === "x" ? (
         <span className="absolute left-0 top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lp-cyan">
           <span className="absolute right-full top-1/2 h-px w-8 -translate-y-1/2 bg-gradient-to-r from-transparent to-lp-cyan/70" />
           {/* The label shows only mid-line, so it never sits on top of either node. */}
-          <motion.span
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0, 0, 1, 1, 0, 0] }}
-            transition={{ ...loop, ease: "linear", times: [0, 0.18, 0.3, 0.66, 0.78, 1] }}
-            className="lp-layer absolute bottom-full left-1/2 mb-[26px] -translate-x-1/2 whitespace-nowrap font-lp-mono text-[10px] uppercase tracking-[0.14em] text-lp-muted"
+          <span
+            className="lp-loop lp-layer absolute bottom-full left-1/2 mb-[26px] -translate-x-1/2 whitespace-nowrap font-lp-mono text-[10px] uppercase tracking-[0.14em] text-lp-muted"
+            style={{ animation: `lp-packet-label ${PACKET_CYCLE}s linear ${delay} infinite both` }}
           >
             {label}
-          </motion.span>
+          </span>
         </span>
       ) : (
         <span className="absolute left-[38px] top-0 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lp-cyan">
           <span className="absolute bottom-full left-1/2 h-8 w-px -translate-x-1/2 bg-gradient-to-b from-transparent to-lp-cyan/70" />
         </span>
       )}
-    </motion.div>
+    </div>
   );
 }

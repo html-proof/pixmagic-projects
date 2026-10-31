@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bulkOrdersQuery,
   graphqlOrderOverflow,
+  graphqlProductSchema,
   normalizeGraphqlOrder,
   normalizeGraphqlProduct,
   normalizeGraphqlVariant,
@@ -14,6 +15,8 @@ import {
   orderSalesQuery,
   ordersQuery,
   PAGE_SIZE,
+  PRODUCT_COLLECTIONS_QUERY,
+  productCollectionsOverflow,
   PRODUCTS_QUERY,
   restFulfillmentStatus,
   restProvisionalSales,
@@ -22,6 +25,7 @@ import {
 } from "../src/index.js";
 import { requestedCost } from "./queryCost.js";
 import { INVENTORY_LOCATION_QUERY, INVENTORY_LOCATIONS_QUERY, INVENTORY_PAGE_SIZE, ITEM_LEVEL_QUERY, LOCATION_LEVELS_QUERY, PRODUCT_MEDIA_QUERY } from "../src/inventory/queries.js";
+import { ABANDONED_PAGE_QUERY, CHECKOUTS_PAGE } from "../src/shopifyCheckouts.js";
 
 const MAX_COST = 1000;
 const m = (amount: string) => ({ shopMoney: { amount } });
@@ -124,8 +128,10 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
   });
 
   it("products and variants pages", () => {
-    expect(requestedCost(PRODUCTS_QUERY, { first: PAGE_SIZE.products })).toBe(853);
+    expect(requestedCost(PRODUCTS_QUERY, { first: PAGE_SIZE.products })).toBe(903);
     expect(requestedCost(VARIANTS_QUERY, { first: PAGE_SIZE.variants })).toBe(703);
+    // The rest of a product's collections, past the page's 10.
+    expect(requestedCost(PRODUCT_COLLECTIONS_QUERY)).toBe(254);
   });
 
   it("the Inventory module's pages and reads stay under the cap", () => {
@@ -134,6 +140,11 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
     expect(requestedCost(ITEM_LEVEL_QUERY)).toBe(3);
     expect(requestedCost(INVENTORY_LOCATION_QUERY)).toBe(2);
     expect(requestedCost(PRODUCT_MEDIA_QUERY)).toBe(39);
+  });
+
+  it("a page of Shopify's abandoned checkouts stays under the cap", () => {
+    expect(CHECKOUTS_PAGE).toBe(250);
+    expect(requestedCost(ABANDONED_PAGE_QUERY, { first: CHECKOUTS_PAGE })).toBe(753);
   });
 
   it("the estimator reproduces the old orders query being far over the cap", () => {
@@ -451,6 +462,26 @@ describe("product and variant normalizers", () => {
       weightUnit: "KILOGRAMS",
       createdAt: new Date("2025-06-01T00:00:00Z"),
     });
+  });
+
+  it("GraphQL products: collections withheld are unknown (the stored ones stay), and a page that didn't hold them all says where the rest start", () => {
+    const node = { id: "gid://shopify/Product/8", title: "Tee", status: "ACTIVE", vendor: null, productType: null, updatedAt: "2026-01-01T00:00:00Z", handle: "tee" };
+    // Withheld (null), or a list that doesn't read as one (caught as null): never "in no collection".
+    expect(normalizeGraphqlProduct({ ...node, collections: null }).collections).toBeUndefined();
+    const garbled = graphqlProductSchema.parse({ ...node, collections: { nodes: "nope" } });
+    expect(garbled.collections).toBeNull();
+    expect(normalizeGraphqlProduct(garbled).collections).toBeUndefined();
+    // In none: an empty list.
+    const none = graphqlProductSchema.parse({ ...node, collections: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } });
+    expect(normalizeGraphqlProduct(none).collections).toEqual([]);
+    expect(productCollectionsOverflow(none)).toBeNull();
+    const many = graphqlProductSchema.parse({
+      ...node,
+      collections: { pageInfo: { hasNextPage: true, endCursor: "c10" }, nodes: Array.from({ length: 10 }, (_, i) => ({ id: `gid://shopify/Collection/${i + 1}`, title: `C${i + 1}` })) },
+    });
+    expect(productCollectionsOverflow(many)).toBe("c10");
+    expect(normalizeGraphqlProduct(many).collections).toHaveLength(10);
+    expect(productCollectionsOverflow(garbled)).toBeNull();
   });
 
   it("REST products: description as plain text, tags split, options named, weights in GraphQL units", () => {

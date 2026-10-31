@@ -30,13 +30,15 @@ export function Navbar({ revealed = true, brandVisible = true }: { revealed?: bo
   return (
     <>
       <div ref={marker} aria-hidden className="pointer-events-none absolute left-0 top-6 h-px w-px" />
+      {/* No backdrop blur once scrolled: the page under the bar changes on every frame of a scroll,
+          so the GPU re-blurred it on every frame. A denser fill keeps the bar just as readable. */}
       <motion.header
         initial={false}
         animate={{ opacity: revealed ? 1 : 0, y: revealed ? 0 : -12 }}
         transition={{ duration: 0.8, ease: EASE }}
-        className={`lp-enter fixed left-1/2 top-3 z-[100] h-14 w-[calc(100%-24px)] max-w-[1380px] -translate-x-1/2 rounded-[18px] border transition-[background-color,border-color,box-shadow,backdrop-filter] duration-500 ease-lp md:top-6 md:h-16 md:w-[calc(100%-48px)] md:rounded-[20px] ${
+        className={`lp-enter fixed left-1/2 top-3 z-[100] h-14 w-[calc(100%-24px)] max-w-[1380px] -translate-x-1/2 rounded-[18px] border transition-[background-color,border-color,box-shadow] duration-500 ease-lp md:top-6 md:h-16 md:w-[calc(100%-48px)] md:rounded-[20px] ${
           scrolled
-            ? "border-lp-line-strong bg-[rgb(13_16_21/0.72)] shadow-[0_12px_40px_-12px_rgb(0_0_0/0.6)] backdrop-blur-xl"
+            ? "border-lp-line-strong bg-[rgb(13_16_21/0.94)] shadow-[0_12px_40px_-12px_rgb(0_0_0/0.6)]"
             : "border-lp-line bg-transparent shadow-[0_8px_30px_-18px_rgb(0_0_0/0.5)]"
         }`}
         style={{ pointerEvents: revealed ? "auto" : "none" }}

@@ -78,12 +78,12 @@ describe("rate limits on email-sending and creation endpoints", () => {
 });
 
 describe("emailed code guessing and sending", () => {
-  const reset = (code: string, ip = "1.1.1.1") =>
+  const reset = (code: string, ip = "1.1.1.1", email = "victim@x.com") =>
     ctx.app.inject({
       method: "POST",
       url: "/auth/password/reset",
       headers: { ...ORIGIN, [CLIENT_IP_HEADER]: ip },
-      payload: { email: "victim@x.com", code, password: "a-new-password", confirmPassword: "a-new-password" },
+      payload: { email, code, password: "a-new-password", confirmPassword: "a-new-password" },
     });
 
   it("caps guesses per IP, so even the right code is refused once they're spent (Cognito's own lockout comes on top)", async () => {
@@ -91,7 +91,8 @@ describe("emailed code guessing and sending", () => {
     await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: ORIGIN, payload: { email: "victim@x.com" } });
     const right = ctx.auth.code("reset", "victim@x.com");
     const wrong = right === "000000" ? "111111" : "000000";
-    for (let i = 0; i < LIMITS.codeVerifyIp.max; i++) expect((await reset(wrong)).json().error).toBe("invalid_code");
+    // Spread over addresses, so the per-address cap (resetVerifyEmail) doesn't come into it.
+    for (let i = 0; i < LIMITS.codeVerifyIp.max; i++) expect((await reset(wrong, "1.1.1.1", `guess${i}@x.com`)).json().error).toBe("invalid_code");
     expect((await reset(right)).statusCode).toBe(429);
     // Another IP is not affected.
     expect((await reset(right, "9.9.9.9")).statusCode).toBe(200);
@@ -214,11 +215,12 @@ describe("row level security coverage", () => {
     const owned = await systemDb.$queryRaw<Array<{ tablename: string }>>`
       SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tableowner = 'app_rls'`;
     expect(owned).toEqual([]);
-    const [grants] = await systemDb.$queryRaw<Array<{ otps: boolean; seen: boolean; identities: boolean; events: boolean }>>`
+    const [grants] = await systemDb.$queryRaw<Array<{ otps: boolean; seen: boolean; identities: boolean; events: boolean; sessions: boolean }>>`
       SELECT has_table_privilege('app_rls', 'public.email_otps', 'SELECT') AS otps,
              has_table_privilege('app_rls', 'public.pixel_events_seen', 'SELECT') AS seen,
              has_table_privilege('app_rls', 'public.auth_identities', 'SELECT') AS identities,
-             has_table_privilege('app_rls', 'public.auth_events', 'SELECT') AS events`;
-    expect(grants).toEqual({ otps: false, seen: false, identities: false, events: false });
+             has_table_privilege('app_rls', 'public.auth_events', 'SELECT') AS events,
+             has_table_privilege('app_rls', 'public.user_sessions', 'SELECT') AS sessions`;
+    expect(grants).toEqual({ otps: false, seen: false, identities: false, events: false, sessions: false });
   });
 });

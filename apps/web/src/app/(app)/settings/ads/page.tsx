@@ -3,24 +3,27 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
-import { BackFromFacebook } from "@/components/MetaAdsAccess";
 import { Alert } from "@/components/ui";
-import { AdPlatformCard } from "@/components/integrations/AdPlatformCard";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
 import { AD_PLATFORM_ORDER, AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
+import { AdPlatformPanel } from "@/components/settings/ads/AdPlatformPanel";
 import { AdsenseSites } from "@/components/settings/ads/AdsenseSites";
+import { AdvertisingHero } from "@/components/settings/ads/AdvertisingHero";
 import { ChooseAccounts } from "@/components/settings/ads/ChooseAccounts";
 import { callbackErrorMessage, isAdProvider, WRONG_LOGIN } from "@/components/settings/ads/callbackErrors";
+import { loginConnectedNote } from "@/components/settings/ads/LoginPanel";
 import { AD_STATE, type AdProvider } from "@/lib/adConnections";
 import { signInFinished } from "@/lib/adSignIn";
+import { AD_LOGIN_REASONS, type AdLoginReason } from "@app/shared/ads";
 
 // ---------------------------------------------------------------------------
 // Advertising integrations: connect and manage. The numbers themselves live on the dashboard's
 // Advertising section; this page is where accounts are connected, chosen, refreshed, reconnected,
-// shown or hidden, narrowed to sites (AdSense) and disconnected. The cards are the same as on
-// Connect your business (components/integrations).
+// shown or hidden, narrowed to sites (AdSense) and disconnected. Drawn after the owner's design
+// (components/settings/ads); the cards follow the same rules as Settings → Integrations' rows
+// (components/integrations/adPlatformParts.tsx).
 // ---------------------------------------------------------------------------
 
 export default function AdAccountsPage() {
@@ -29,13 +32,14 @@ export default function AdAccountsPage() {
   const manage = allowed("integrations.manage");
   const base = store ? `/workspaces/${workspace.id}/stores/${store.id}` : null;
   const ads = useAdConnections(base);
-  const { setChoosing } = ads;
+  const { setChoosing, setNote } = ads;
   const [error, setError] = useState<string | null>(null);
   const [pick, setPick] = useState<string | null>(null);
   // A sign-in came back with a login that reaches nothing: offer the platform's screen again.
   const [retry, setRetry] = useState<AdProvider | null>(null);
 
-  // Coming back from Meta or Google: a problem to explain, or accounts to choose, for the store that was connected.
+  // Coming back from Meta or Google: a problem to explain, accounts to choose, or a login connected with no
+  // ad account yet, for the store that was connected.
   useEffect(() => {
     // Not before the store list is known: ?store= has to pick the store the sign-in was for.
     if (storesStatus !== "ready") return;
@@ -44,13 +48,18 @@ export default function AdAccountsPage() {
     if (target && stores.some((s) => s.id === target)) setStoreId(target);
     const code = q.get("error");
     const choose = q.get("choose");
+    const waiting = q.get("waiting");
     const provider = q.get("provider");
     if (code) setError(callbackErrorMessage(code, provider));
     if (code && WRONG_LOGIN.has(code) && isAdProvider(provider)) setRetry(provider);
     // It becomes part of an API path: only ever the nonce the callback put there.
     if (choose && /^[A-Za-z0-9_-]{16,64}$/.test(choose)) setPick(choose);
-    if (code || choose) signInFinished();
-    if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
+    // Signed in and connected, with no ad account to read yet: the card says who, and the accounts follow by themselves.
+    if (waiting && isAdProvider(provider) && (AD_LOGIN_REASONS as readonly string[]).includes(waiting)) {
+      setNote({ kind: "success", text: loginConnectedNote(AD_PLATFORMS[provider].name, { provider, reason: waiting as AdLoginReason }) });
+    }
+    if (code || choose || waiting) signInFinished();
+    if (code || choose || waiting || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storesStatus]);
@@ -67,15 +76,14 @@ export default function AdAccountsPage() {
   if (storesStatus !== "ready") return <StoresPending />;
   if (!store || !base) {
     return (
-      <div className="card">
-        <h1 className="text-lg font-semibold">Advertising integrations</h1>
-        <p className="mt-1 text-sm text-muted">Connect a Shopify store first; ad accounts are connected to a store.</p>
+      <AdvertisingHero>
+        <p className="text-muted">Connect a Shopify store first; ad accounts are connected to a store.</p>
         {canManage(workspace.role) && (
-          <Link href="/onboarding" className="btn-primary mt-3 inline-flex">
+          <Link href="/onboarding" className="btn-primary inline-flex">
             Connect a store
           </Link>
         )}
-      </div>
+      </AdvertisingHero>
     );
   }
 
@@ -89,47 +97,21 @@ export default function AdAccountsPage() {
   const views = Object.fromEntries(AD_PLATFORM_ORDER.map((p) => [p, ads.view(p)])) as Record<AdProvider, ReturnType<typeof ads.view>>;
 
   return (
-    <div className="space-y-4">
-      <div className="card">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold">Advertising integrations</h1>
-            <p className="mt-1 text-sm text-muted">
-              Connect Google Ads and Meta Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads.
-              Once connected, the numbers appear on your{" "}
-              <Link className="text-accent underline" href="/dashboard">
-                dashboard
-              </Link>{" "}
-              and refresh by themselves. bizinsights only reads: it can&apos;t create, change or pause your ads, or spend money.
-            </p>
-            <p className="mt-2 text-sm text-muted">
-              Paid YouTube and Display ads belong to Google Ads. Facebook and Instagram ads belong to Meta Ads.
-              AdSense reports website ad earnings separately from advertising spend. Impressions count ad displays;
-              clicks count ad interactions, and do not necessarily equal visits to your website.
-            </p>
-            <p className="mt-2 text-sm">
-              For <strong>{storeName}</strong>
-              {stores.length > 1 ? <span className="text-muted"> (switch store at the top of the page)</span> : null}
-            </p>
-            {!manage && (
-              <p className="mt-2 text-sm text-muted">You can see how each account stands. Connecting, refreshing or disconnecting needs the Manage integrations permission: ask an owner or admin.</p>
-            )}
-          </div>
-          {ads.connections.length > 0 && (
-            <Link className="btn-secondary shrink-0" href="/dashboard">
-              View results
-            </Link>
-          )}
-        </div>
-      </div>
+    <div className="space-y-5">
+      <AdvertisingHero>
+        <p className="max-w-2xl text-muted">
+          Paid YouTube and Display ads belong to Google Ads. Facebook and Instagram ads belong to Meta Ads. AdSense reports website ad earnings separately from advertising spend.
+          Impressions count ad displays; clicks count ad interactions, and do not necessarily equal visits to your website.
+        </p>
+        <p>
+          For <strong>{storeName}</strong>
+          {stores.length > 1 ? <span className="text-muted"> (switch store at the top of the page)</span> : null}
+        </p>
+        {!manage && <p className="text-muted">You can see how each account stands. Connecting, refreshing or disconnecting needs the Manage integrations permission: ask an owner or admin.</p>}
+      </AdvertisingHero>
 
       <StateAnnouncer items={AD_PLATFORM_ORDER.map((p) => [AD_PLATFORMS[p].name, AD_STATE[views[p].state].label])} />
       {ads.note && <NoteAlert note={ads.note} onDismiss={() => ads.setNote(null)} />}
-      {ads.backFromMeta && (
-        <Alert kind="info">
-          <BackFromFacebook restricted={data?.restricted.meta ?? false} />
-        </Alert>
-      )}
       {error && (
         <Alert onDismiss={() => setError(null)}>
           {error}
@@ -154,10 +136,9 @@ export default function AdAccountsPage() {
       {pick && manage && <ChooseAccounts pick={pick} base={base} storeId={store.id} storeName={storeName} onLoaded={setChoosing} onDone={closePick} />}
 
       {AD_PLATFORM_ORDER.map((p) => (
-        <AdPlatformCard
+        <AdPlatformPanel
           key={p}
           provider={p}
-          variant="settings"
           answer={data}
           loadError={ads.loadError}
           connections={ads.connections.filter((c) => c.provider === p)}
@@ -166,14 +147,16 @@ export default function AdAccountsPage() {
           manage={manage}
           busy={ads.busy}
           leaving={ads.leaving === p}
-          showMetaNote={!ads.backFromMeta}
           onConnect={() => connect(p)}
+          base={base}
           onRefresh={() => void ads.refresh(p)}
           onToggle={(c) => void ads.toggle(c)}
           onDisconnect={ads.askDisconnect}
           onTryDemo={ads.openDemo}
           onDemoSync={() => void ads.syncDemo()}
           onDemoReset={() => void ads.resetDemo()}
+          onCheckLogin={(l) => void ads.checkLogin(l)}
+          onDisconnectLogin={(l) => void ads.disconnectLogin(l)}
           rowExtra={(c) => (c.provider === "adsense" ? <AdsenseSites c={c} base={base} manage={manage} onSaved={ads.reload} /> : null)}
         />
       ))}
@@ -181,7 +164,7 @@ export default function AdAccountsPage() {
       {manage && ads.connections.some((c) => data?.configured[c.provider]) && (
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className="btn-secondary" onClick={() => void ads.refresh()} disabled={!!ads.busy}>
-            {ads.busy === "sync-all" ? "Starting…" : "Refresh all"}
+            {ads.busy === "sync-all" ? "Starting…" : "Sync all now"}
           </button>
           <p className="text-xs text-muted">Numbers refresh by themselves through the day, and recent weeks are checked again daily for late conversions.</p>
         </div>
@@ -192,6 +175,10 @@ export default function AdAccountsPage() {
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>For each ad campaign and day: what was spent, impressions, clicks, and the conversions and their value the platform counts.</li>
           <li>From AdSense, for each site and day: estimated earnings, page views, impressions and clicks.</li>
+          <li>
+            In AdSense&apos;s report on its Advertising page, read when it&apos;s opened, cached briefly and not kept with the daily figures: the same
+            by country, device type or ad unit, with ad requests, coverage and Active View viewability.
+          </li>
           <li>Account names, currencies, time zones and status, so days and money line up and a closed or paused account is shown as such.</li>
           <li>Nothing about the people who saw your ads, and nothing is ever changed in your accounts.</li>
           <li>Access is stored encrypted on the server and never sent to your browser. Disconnecting deletes it and every number fetched with it.</li>

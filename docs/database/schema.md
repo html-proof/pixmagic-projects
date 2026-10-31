@@ -16,8 +16,10 @@ Workspace ──< Membership >── User           (role: owner | admin | analy
 
 - **Every tenant table carries `workspace_id`** (store-scoped ones also `store_id`), so row-level
   security can check it without joins.
-- **Two roles.** `app` owns the tables and runs migrations and system paths (`systemDb`: auth
-  bootstrap, webhooks, jobs; RLS does not apply to it). `app_rls` is what tenant reads use
+- **Three roles.** `app` owns the tables and runs migrations (the cron's `migrate` action only).
+  `app_system` is `systemDb`'s login (auth bootstrap, webhooks, jobs): no owner, so RLS applies, in
+  the row scope its entry point names; every workspace table also has a `system_all` policy that
+  opens it inside `crossTenant` ([system-database-role.md](../system-database-role.md)). `app_rls` is what tenant reads use
   (`withTenant(workspaceId, tx => ...)`): every tenant table has a `tenant_isolation` policy on
   `current_setting('app.workspace_id')`, set per transaction. `apps/api/test/security.test.ts`
   fails any new tenant table without a policy.
@@ -32,9 +34,12 @@ Workspace ──< Membership >── User           (role: owner | admin | analy
 | Store connection | `stores` (encrypted tokens, granted scopes, pixel key), `sync_jobs`, `webhook_events` | API (OAuth), worker |
 | Commerce data | `orders`, `order_line_items`, `refunds`, `products`, `product_variants` | worker (imports, webhooks) through `core/persist.ts` |
 | Aggregates | `daily_store_metrics` (one row per store and store-local day) | worker (`recomputeDays`) |
-| Storefront funnel | `funnel_visits`, `funnel_daily`, `pixel_events_seen` | API (`/pixel`) |
-| Advertising | `ad_connections` (encrypted tokens), `ad_campaign_daily`, `adsense_daily` | API (OAuth), worker (sync) |
-| WhatsApp | `whatsapp_connections`, `whatsapp_settings`, `whatsapp_templates`, `whatsapp_contacts`, `whatsapp_messages`, `whatsapp_message_events`, `whatsapp_campaigns`, `whatsapp_automation_rules`, `whatsapp_automation_runs`, `order_tracking`, `order_tracking_events`, `abandoned_checkouts`, `customer_reviews` | API, worker ([../whatsapp.md](../whatsapp.md)) |
+| Storefront funnel | `funnel_visits`, `funnel_product_visits`, `funnel_daily`, `pixel_events_seen` | API (`/pixel`) |
+| Shopping Funnel checklist | `funnel_action_checks` | API (`PUT …/funnel/actions/:id`) |
+| Advertising | `ad_connections` (the encrypted tokens of bizinsights' own sign-in), `ad_logins` (a sign-in connected with no ad account yet: its encrypted token in `access_token_enc`, key version `token_key_version`; migration `20261028100000_ad_logins_own_tokens`), `ad_campaign_daily`, `ad_campaigns` (each campaign's latest name and status, and Google's type, primary status and budget, Meta's budget: [advertising.md](../advertising.md#stored-campaign-facts)), `adsense_daily`, `ad_sync_runs`. The columns that named Nango connections, which brokered the sign-ins from 2026-10-22 to 2026-10-28, are no longer used and wait for a migration of their own to drop them, after the release that stopped using them (deploys swap the code before migrating, and a rollback still reads them): `ad_connections.source` (`direct` on every row; a row with anything else is never read and waits for a reconnect) and `source_login_id`, `ad_logins.source_login_id` and `nango_integration_key` ([ads-setup.md](../ads-setup.md#leaving-nango)) | API (connect: bizinsights' own sign-in), worker (sync) |
+| WhatsApp Automation | `wa_connections`, `wa_settings`, `wa_templates`, `wa_contacts`, `wa_consent_events`, `wa_messages`, `wa_message_events`, `wa_webhook_events`, `wa_workflows`, `wa_workflow_runs`, `wa_campaigns` | API, worker ([../whatsapp.md](../whatsapp.md)) |
+| WhatsApp (old, read by nothing; to be dropped) | `whatsapp_connections`, `whatsapp_settings`, `whatsapp_templates`, `whatsapp_contacts`, `whatsapp_messages`, `whatsapp_message_events`, `whatsapp_campaigns`, `whatsapp_automation_rules`, `whatsapp_automation_runs`, `order_trackings`, `order_tracking_events`, `abandoned_checkouts`, `customer_reviews` | erased on shop/redact and customers/redact only ([../whatsapp.md](../whatsapp.md#the-old-whatsapp-tables)) |
+| Zapier | `zapier_grants` (a store connected to a merchant's Zapier, and who allowed it), `zapier_tokens` (SHA-256 hashes only; no tenant access), `zapier_hooks` (Zaps' triggers), `zapier_events` (the outbox, 30 days), `zapier_deliveries` | API (OAuth, hooks), worker (deliveries) ([../zapier.md](../zapier.md)) |
 | Operations | `alerts`, `audit_logs` | API, worker |
 
 ## Conventions

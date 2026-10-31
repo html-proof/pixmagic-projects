@@ -4,7 +4,8 @@ Each workspace (organization) connects its own mailboxes — Gmail, Google Works
 Microsoft 365, or any provider over SMTP — verifies its sending domains, writes templates, and
 creates automations that send personalized email when business events happen (Shopify orders and
 abandoned checkouts, or custom events from its own systems). Everything lives under
-**Settings → Email integrations**.
+**Settings → Email integrations**; Marketing → **Automations** ([automations.md](automations.md))
+creates and watches the same rules in four steps, alongside SMS.
 
 API reference: [email-api.yaml](email-api.yaml) (OpenAPI 3.1). Conventions this follows:
 [architecture.md](architecture.md). Security summary: [security.md](security.md).
@@ -121,6 +122,7 @@ apps/api/src/routes/emailAccounts.ts    accounts, OAuth start/callback, SMTP, se
 apps/api/src/routes/emailContent.ts     catalog, domains, templates, automations
 apps/api/src/routes/emailActivity.ts    overview, analytics, messages, settings, suppressions, keys, audit
 apps/api/src/routes/emailPublic.ts      POST /v1/events, unsubscribe
+packages/core/src/email/actions.ts      retryEmailMessage, sendTemplateTest (also used by the Automations hub, docs/automations.md)
 apps/worker/src/handlers/integrations.ts runEmailJob (webhooks.ts: the Shopify webhook and GDPR hooks)
 apps/worker/src/index.ts                queue "email"; sweepEmail on the */15 cron
 apps/aws/src/nodeSmtp.ts                SmtpConnect over Node net/tls

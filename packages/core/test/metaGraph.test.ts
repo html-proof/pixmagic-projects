@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { AdsApiError, AdsRetryableError, metaAdAccounts, graph, metaRevokeAdsRead, WhatsappApiError, type FetchLike } from "../src/index.js";
+import { AdsApiError, AdsRetryableError, metaAdAccounts, metaRevokeAdsRead, type FetchLike } from "../src/index.js";
 import { graphCall, type GraphFailure } from "../src/metaGraph.js";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -150,7 +150,7 @@ describe("graphCall (the one Meta Graph API transport)", () => {
   });
 });
 
-describe("the ads and WhatsApp clients on it", () => {
+describe("the ads client on it", () => {
   const meta = (fetchImpl: FetchLike) => ({ appId: "app1", appSecret: "sec", version: "v25.0", fetchImpl });
 
   it("ads: the token stays out of every URL, paging included, and an outage is worth a retry", async () => {
@@ -174,17 +174,5 @@ describe("the ads and WhatsApp clients on it", () => {
     await expect(metaAdAccounts(meta(down), "T")).rejects.toBeInstanceOf(AdsRetryableError);
     const elsewhere = fake(() => json({ data: [], paging: { next: "https://evil.example/next" } }));
     await expect(metaAdAccounts(meta(elsewhere.fetchImpl), "T")).rejects.toMatchObject({ constructor: AdsApiError, status: 502 });
-  });
-
-  it("WhatsApp: Meta's wording and the action it implies; an outage is retryable", async () => {
-    const f = fake(() => json({ error: { message: "Invalid parameter", type: "OAuthException", code: 100, error_data: { details: "Unsupported get request" } } }, 400));
-    const err = await graph(f.fetchImpl, "T", "GET", "123", { version: "v25.0" }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(WhatsappApiError);
-    expect(err).toMatchObject({ httpStatus: 400, code: 100, title: "OAuthException", details: "Unsupported get request", action: "fail" });
-
-    const down: FetchLike = async () => {
-      throw new TypeError("fetch failed");
-    };
-    await expect(graph(down, "T", "GET", "123", { version: "v25.0" })).rejects.toMatchObject({ httpStatus: 503, title: "network", action: "retry" });
   });
 });

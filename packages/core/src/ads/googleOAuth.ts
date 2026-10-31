@@ -1,6 +1,6 @@
 /**
- * Google's OAuth for both Google Ads and AdSense, which sign in through the same Cloud OAuth
- * client: the consent screen (PKCE), code exchange, refresh, revoke and who the token belongs to.
+ * Google's OAuth for both Google Ads and AdSense, which sign in through the same Cloud OAuth client
+ * ("Insights web"): the consent screen (PKCE), code exchange, refresh, revoke and who the token belongs to.
  */
 import type { FetchLike } from "../shopify.js";
 import { AdsApiError, AdsAuthError, AdsRateLimitedError, AdsRetryableError, tokenExpiry, type TokenSet } from "./common.js";
@@ -23,15 +23,24 @@ export interface GoogleConsentOptions {
 }
 
 /**
- * Google's consent screen. `codeChallenge` is the PKCE S256 challenge: its verifier stays on the
- * server and goes with the code exchange.
+ * Asked for with every Google Ads and AdSense sign-in, next to the reporting permission: only who the
+ * Google account is (its `sub`), nothing about it.
+ * Without it Google's tokeninfo may not say whose a token is, and a disconnect then can't take the grant
+ * back (it never revokes a grant whose person it doesn't know: Google ends the whole grant, which may be
+ * someone else's connection too). Non-sensitive: no Google verification.
+ */
+export const GOOGLE_IDENTITY_SCOPE = "openid";
+
+/**
+ * Google's consent screen, for `scope` and who signs in (GOOGLE_IDENTITY_SCOPE). `codeChallenge` is the
+ * PKCE S256 challenge: its verifier stays on the server and goes with the code exchange.
  */
 export function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: string, state: string, codeChallenge?: string, opts: GoogleConsentOptions = {}): string {
   const q = new URLSearchParams({
     client_id: c.clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope,
+    scope: `${scope} ${GOOGLE_IDENTITY_SCOPE}`,
     // A refresh token: the access token lasts an hour and syncs run for months.
     access_type: "offline",
     // Google's account chooser, every time: otherwise a browser signed in to one Google account goes
@@ -76,8 +85,8 @@ export async function googleExchangeCode(c: GoogleOAuthClient, code: string, red
 }
 
 /**
- * A fresh one-hour access token from the stored refresh token. If Google hands back a new refresh
- * token with it, that one replaces the old (`rotated`), so the caller must store it.
+ * A fresh one-hour access token from the stored refresh token. If Google hands back a new refresh token with it, that one
+ * replaces the old (`rotated`), so the caller must store it.
  *
  * `requiredScope`: the permission the connection reads with. When Google lists the token's scopes
  * without it, the grant no longer covers reporting: AdsAuthError "scope_missing" (connect again with
@@ -118,7 +127,8 @@ export async function googleRevoke(c: Pick<GoogleOAuthClient, "fetchImpl">, toke
  *
  * A connection whose person is unknown holds back revoking anyone's grant on disconnect, so a
  * passing hiccup (no answer, a 5xx) is tried once more before giving up, and the id is read from
- * either name Google has used for it (`sub`, the older `user_id`).
+ * either name Google has used for it (`sub`, the older `user_id`). When tokeninfo doesn't name the
+ * person but the token carries `openid` (GOOGLE_IDENTITY_SCOPE), Google's OpenID userinfo is asked.
  */
 export async function googleUserId(c: GoogleOAuthClient, accessToken: string): Promise<string | null> {
   const url = `https://oauth2.googleapis.com/tokeninfo?${new URLSearchParams({ access_token: accessToken })}`;
@@ -128,12 +138,18 @@ export async function googleUserId(c: GoogleOAuthClient, accessToken: string): P
     if (res && res.status < 500) break;
   }
   if (!res) throw new AdsRetryableError("Google's token information didn't answer");
-  const body = (await res.json().catch(() => ({}))) as { sub?: unknown; user_id?: unknown; aud?: string; azp?: string; error?: string; error_description?: string };
+  const body = (await res.json().catch(() => ({}))) as { sub?: unknown; user_id?: unknown; aud?: string; azp?: string; scope?: string; error?: string; error_description?: string };
   if (!res.ok) {
     if (res.status === 400 || res.status === 401) throw new AdsAuthError(body.error_description ?? "Google didn't recognise the access token");
     throw new AdsRetryableError(`Google returned ${res.status}`);
   }
   // aud is the client the token is for, azp the one that asked for it: for our own tokens both are ours.
   if (body.aud !== c.clientId && body.azp !== c.clientId) throw new AdsAuthError("The Google token was issued to another app");
-  return [body.sub, body.user_id].find((v): v is string => typeof v === "string" && /^\d{1,40}$/.test(v)) ?? null;
+  const id = (v: unknown) => (typeof v === "string" && /^\d{1,40}$/.test(v) ? v : null);
+  const named = id(body.sub) ?? id(body.user_id);
+  if (named || !scopesOf(body.scope)?.includes(GOOGLE_IDENTITY_SCOPE)) return named;
+  // The token was issued to bizinsights (checked above) and may say who it is: Google's userinfo. Best effort.
+  const info = await (c.fetchImpl ?? fetch)("https://openidconnect.googleapis.com/v1/userinfo", { method: "GET", headers: { authorization: `Bearer ${accessToken}` } }).catch(() => null);
+  if (!info?.ok) return null;
+  return id(((await info.json().catch(() => ({}))) as { sub?: unknown }).sub);
 }

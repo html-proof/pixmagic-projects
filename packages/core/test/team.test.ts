@@ -37,6 +37,28 @@ describe("the invitation email", () => {
     expect(m.html).toContain('href="https://bizinsights.io/invite#token=abc"');
   });
 
+  it("signs off as the link sender, with where to get help, keeping replies for the inviter", () => {
+    const senders = {
+      EMAIL_FROM: "bizinsights <no-reply@bizinsights.io>",
+      OTP_FROM_EMAIL: "support@bizinsights.io",
+      OTP_FROM_NAME: "BizInsights Support",
+      LINK_FROM_EMAIL: "link@bizinsights.io",
+      LINK_FROM_NAME: "BizInsights",
+      STAFF_FROM_EMAIL: "staff@bizinsights.io",
+      STAFF_FROM_NAME: "BizInsights",
+      SUPPORT_EMAIL: "support@bizinsights.io",
+    };
+    const m = teamInvitationEmail({ ...base, senders });
+    expect(m.text).toContain("Questions? Reply to this email to reach Sam Owner.");
+    expect(m.text).toContain("Need help with bizinsights? Contact support@bizinsights.io.");
+    expect(m.text).toMatch(/Regards,\nBizInsights\nlink@bizinsights\.io$/);
+    expect(m.html).toContain('Need help with bizinsights? Contact <a href="mailto:support@bizinsights.io"');
+    expect(m.html).toContain('Regards,<br>BizInsights<br><a href="mailto:link@bizinsights.io"');
+    // The link's token stays in the fragment, which browsers never send to a server.
+    expect(m.html).toContain('href="https://bizinsights.io/invite#token=abc"');
+    expect(teamInvitationEmail({ ...base, senders: { ...senders, SUPPORT_EMAIL: "" } }).text).not.toContain("Need help");
+  });
+
   it("copes with an unknown time zone and keeps line breaks out of the subject", () => {
     const m = teamInvitationEmail({ ...base, workspace: "Evil\r\nBcc: x@y.z", timezone: "Not/AZone", message: null });
     expect(m.subject).not.toMatch(/[\r\n]/);

@@ -20,7 +20,7 @@ startLocalServer({
     GOOGLE_ADS_CLIENT_ID: "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     GOOGLE_ADS_CLIENT_SECRET: "placeholder-not-a-secret",
     // The Meta Ads app "Insights" (its Facebook Login for Business configuration, META_CONFIG_ID, is in
-    // the shipped settings). The WhatsApp app (1799660384680551) is another app.
+    // the shipped settings). WhatsApp runs on this app too (WHATSAPP_APP_ID is empty).
     META_APP_ID: "971575545351940",
     META_APP_SECRET: "placeholder-not-a-secret",
   },

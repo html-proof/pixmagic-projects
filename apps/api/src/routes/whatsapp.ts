@@ -1,571 +1,698 @@
 import { z } from "zod";
-import { Prisma, systemDb, withTenant, type WhatsappTemplate } from "@app/db";
+import { systemDb, withTenant, type Prisma, type Store, type WappAutomation, type WappCampaign, type WappTemplate } from "@app/db";
 import {
-  audit,
-  autoRegisterWhatsapp,
-  checkManualApp,
-  connectionPin,
-  connectWhatsapp,
-  discoverWhatsapp,
+  activateAutomation,
+  addWaSuppression,
+  automationInput,
+  automationProblemsFor,
+  campaignReport,
+  cancelCampaign,
+  checkConnection,
+  confirmTestVerification,
+  connectCloudApi,
+  connectCloudApiWithToken,
+  connectionOf,
+  createWaTemplate,
+  deleteAutomation,
+  deleteCampaign,
+  deleteWaTemplate,
   disconnectWhatsapp,
-  ensureSettings,
-  env,
-  logger,
-  parseConfig,
-  refreshConnection,
-  registerWhatsapp,
-  scheduleMessage,
-  setupManualWebhook,
-  storeName,
-  waCreateTemplate,
-  waExchangeCode,
-  waPlatformConfig,
-  waTokenInfo,
-  WhatsappApiError,
-  providerDetail,
-  sampleValues,
-  connectionToken,
-  numberOptedOut,
-  syncTemplates,
+  ensureCustomerWebhook,
+  evolutionConfigured,
+  estimateWaAudience,
+  launchCampaign,
+  metaSignupConfig,
+  pairingState,
+  pauseAutomation,
+  removeWaSuppression,
+  restartConnection,
+  retryMessage,
+  saveAutomation,
+  saveCampaign,
+  saveWaSettings,
+  sendManualMessage,
+  sendTestMessage,
+  setAutomationPaused,
+  setConsentByMerchant,
+  storeGraphql,
+  startPairing,
+  startTestVerification,
+  submitTemplateToMeta,
+  templateUsable,
+  templateUsage,
+  testAutomation,
+  tokenConnectAllowed,
+  triggerAvailability,
+  updateWaTemplate,
+  waConnectionView,
+  waDecrypt,
+  waMessageView,
+  waPhoneHash,
+  whatsappOverview,
+  WhatsappError,
 } from "@app/core";
 import {
+  addDays,
   allows,
-  KIND_INFO,
-  kindSetting,
-  libraryTemplate,
+  describeWaAudience,
+  describeWaCondition,
   normalizePhone,
-  NOTIFICATION_KINDS,
-  templateMappingSchema,
-  templateShape,
-  whatsappConfigSchema,
-  type KindSetting,
-  type TemplateComponent,
+  startOfLocalDay,
+  variablesIn,
+  waSampleValues,
+  waSkipLabel,
+  WA_CONSENT_SOURCE_LABEL,
+  WA_MESSAGE_STATUSES,
+  WA_TRIGGER_INFO,
+  type WaAudience,
+  type WaCondition,
+  type WaConsentSource,
 } from "@app/shared";
-import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { whatsappOpsRoutes } from "./whatsappOps.js";
-import { base, publicConnection, publicTemplate, waStore } from "./whatsappCommon.js";
 
 /**
- * WhatsApp for a store, for the signed-in merchant: connect the number (Meta's Embedded Signup,
- * or the merchant's own app and system-user token), choose what is sent and when, templates,
- * test sends, and the overview. Order timelines, carts, reviews, campaigns, automations and the
- * message history are in whatsappOps.ts.
- *
- * Reading is for any member; anything that changes what customers receive needs stores:manage.
- * Tokens and secrets are never returned.
+ * WhatsApp Automation's merchant API (docs/whatsapp.md), one store at a time. Who may do what:
+ *  - read anything here: "View campaigns" (marketing.campaigns); how the connection stands (the
+ *    overview, cut down to it, for Settings → Integrations): "View integration connection status" too;
+ *  - customers' numbers, names and what was said: "View contact information" as well;
+ *  - change what customers receive (settings, templates, automations, campaigns, sends): the
+ *    store's owners and admins (stores:manage), signed in themselves; a shared link never can;
+ *  - connect and disconnect the number: "Manage integrations", signed in themselves.
+ * Instance keys, webhook keys, QR codes (except to the person pairing), tokens and full numbers are
+ * never in an answer.
  */
+const base = "/workspaces/:ws/stores/:storeId/whatsapp";
+const idParam = z.string().min(1).max(40);
 
-/** Whether a notification's template is ready, and what's wrong if not. */
-function templateCheck(templates: WhatsappTemplate[], s: KindSetting): { state: "ready" | "pending" | "rejected" | "missing" | "unset"; problem: string | null; category: string | null } {
-  if (!s.templateName) return { state: "unset", problem: "Choose a template", category: null };
-  const t = templates.find((x) => x.name === s.templateName && x.language === s.language);
-  if (!t) return { state: "missing", problem: `"${s.templateName}" (${s.language}) isn't in your WhatsApp account`, category: null };
-  if (t.status === "PENDING" || t.status === "IN_APPEAL") return { state: "pending", problem: "Waiting for Meta's review", category: t.category };
-  if (t.status !== "APPROVED") return { state: "rejected", problem: `Meta says ${t.status.toLowerCase()}${t.rejectedReason ? `: ${t.rejectedReason}` : ""}`, category: t.category };
-  const shape = templateShape(t.components as unknown as TemplateComponent[]);
-  if (s.mapping.body.length < shape.bodyVars) return { state: "missing", problem: `The template has ${shape.bodyVars} variables; ${s.mapping.body.length} are filled`, category: t.category };
-  if (s.mapping.buttons.length < shape.dynamicUrlButtons.length) return { state: "missing", problem: "The template's link button needs a value", category: t.category };
-  return { state: "ready", problem: null, category: t.category };
+async function waStore(ws: string, storeId: string): Promise<Store> {
+  const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
+  if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
+  return store;
 }
 
-/** Meta refused a connect step: say so with Meta's reason (WhatsappConnectError answers itself, as a 400). */
-const connectError = (err: unknown): never => {
-  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-  throw err;
+const requireView = (c: Ctx, deps: Deps, ws: string) => requireWorkspace(c, deps, ws, "marketing.campaigns");
+
+type SignedIn = WorkspaceAccess & { user: NonNullable<WorkspaceAccess["user"]> };
+
+async function requireSignedIn(c: Ctx, deps: Deps, ws: string, need: "stores:manage" | "integrations.manage"): Promise<SignedIn> {
+  const a = await requireWorkspace(c, deps, ws, need);
+  if (!a.user || a.link) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  return a as SignedIn;
+}
+const requireManage = (c: Ctx, deps: Deps, ws: string) => requireSignedIn(c, deps, ws, "stores:manage");
+const requireConnect = (c: Ctx, deps: Deps, ws: string) => requireSignedIn(c, deps, ws, "integrations.manage");
+
+const seesContacts = (a: WorkspaceAccess) => allows(a.access, "customers.contact");
+function requireContacts(a: WorkspaceAccess) {
+  if (!seesContacts(a)) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
+}
+
+/** What the browser may know of each permission, so it shows only the buttons that work. */
+function waCan(a: WorkspaceAccess) {
+  const signedIn = !!a.user && !a.link;
+  return { connect: signedIn && allows(a.access, "integrations.manage"), manage: signedIn && allows(a.access, "stores:manage"), contacts: seesContacts(a) };
+}
+
+function templateView(t: WappTemplate, conn: Awaited<ReturnType<typeof connectionOf>>, usage?: { automations: number; campaigns: number }) {
+  const usable = templateUsable(t, conn);
+  return {
+    id: t.id,
+    name: t.name,
+    category: t.category,
+    body: t.body,
+    active: t.active,
+    variables: variablesIn(t.body),
+    usable: usable.ok,
+    unusableReason: usable.reason,
+    meta: t.metaName ? { name: t.metaName, language: t.metaLanguage, status: t.metaStatus, reason: t.metaReason, checkedAt: t.metaCheckedAt } : null,
+    usedBy: usage ?? null,
+    updatedAt: t.updatedAt,
+  };
+}
+
+function automationView(a: WappAutomation, problems: string[] | null, stats?: { queued: number; skipped: number }) {
+  const input = automationInput(a);
+  return {
+    id: a.id,
+    ...input,
+    status: a.status,
+    version: a.version,
+    triggerLabel: WA_TRIGGER_INFO[input.trigger]?.label ?? input.trigger,
+    conditionLabels: input.conditions.map((x: WaCondition) => describeWaCondition(x)),
+    problems,
+    stats: stats ?? null,
+    activatedAt: a.activatedAt,
+    lastRunAt: a.lastRunAt,
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt,
+  };
+}
+
+function campaignView(c: WappCampaign, report?: Awaited<ReturnType<typeof campaignReport>>) {
+  const audience = c.audience as unknown as WaAudience;
+  return {
+    id: c.id,
+    name: c.name,
+    templateId: c.templateId,
+    audience,
+    audienceLabel: describeWaAudience(audience),
+    status: c.status,
+    scheduledAt: c.scheduledAt,
+    confirmedRecipients: c.confirmedRecipients,
+    recipients: c.recipients,
+    startedAt: c.startedAt,
+    completedAt: c.completedAt,
+    cancelledAt: c.cancelledAt,
+    cancelReason: c.cancelReason,
+    report: report ?? null,
+    createdAt: c.createdAt,
+  };
+}
+
+const messageFilters = z.object({
+  status: z.enum(["waiting", "sent", "delivered", "read", "failed", "not_sent", "received", ...WA_MESSAGE_STATUSES]).optional(),
+  direction: z.enum(["out", "in"]).optional(),
+  source: z.enum(["automation", "campaign", "manual", "zapier", "test", "verification", "team_alert", "reply", "inbound"]).optional(),
+  automationId: idParam.optional(),
+  campaignId: idParam.optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  phone: z.string().trim().min(6).max(32).optional(),
+  cursor: z.string().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+const BUCKET_STATUSES: Record<string, string[]> = {
+  waiting: ["queued", "sending"],
+  sent: ["accepted", "sent"],
+  delivered: ["delivered"],
+  read: ["read"],
+  failed: ["failed"],
+  not_sent: ["skipped", "cancelled"],
+  received: ["received"],
 };
 
-const idSchema = z.string().trim().regex(/^\d{5,25}$/, "must be the numeric id from WhatsApp Manager");
-const accessTokenSchema = z.string().trim().min(20).max(1000).regex(/^[A-Za-z0-9_-]+$/, "doesn't look like a Meta access token");
-
 export function whatsappRoutes(app: App, deps: Deps) {
-  /** Everything the WhatsApp overview needs, in one call. */
+  // ---------------------------------------------------------------------------
+  // Overview
+  // ---------------------------------------------------------------------------
+
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
+    const a = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
     const store = await waStore(ws, storeId);
-    // The manual connection's verify token: for whoever may manage the connection.
-    const manage = allows(access.access, "integrations.manage");
-    const weekAgo = new Date(Date.now() - 7 * 86_400_000);
-    const data = await withTenant(ws, async (tx) => {
-      const [settings, conn, templates, byStatus, failed, rules, openCarts, pendingReviews, campaigns, scheduled] = await Promise.all([
-        tx.whatsappSettings.findUnique({ where: { storeId } }),
-        tx.whatsappConnection.findUnique({ where: { storeId } }),
-        tx.whatsappTemplate.findMany({ where: { storeId } }),
-        tx.whatsappMessage.groupBy({ by: ["status"], where: { storeId, workspaceId: ws, createdAt: { gte: weekAgo }, test: false }, _count: { _all: true } }),
-        tx.whatsappMessage.findMany({
-          where: { storeId, workspaceId: ws, status: "failed", createdAt: { gte: weekAgo } },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: { id: true, kind: true, orderName: true, errorTitle: true, phoneMasked: true, createdAt: true },
-        }),
-        tx.whatsappAutomationRule.count({ where: { storeId, workspaceId: ws, enabled: true } }),
-        tx.abandonedCheckout.count({ where: { storeId, workspaceId: ws, status: { in: ["open", "reminded"] } } }),
-        tx.customerReview.count({ where: { storeId, workspaceId: ws, status: "pending" } }),
-        tx.whatsappCampaign.findMany({ where: { storeId, workspaceId: ws, status: { in: ["scheduled", "sending", "paused"] } }, select: { id: true, name: true, status: true, startAt: true } }),
-        tx.whatsappMessage.count({ where: { storeId, workspaceId: ws, status: "scheduled" } }),
-      ]);
-      return { settings, conn, templates, byStatus, failed, rules, openCarts, pendingReviews, campaigns, scheduled };
-    });
-    const cfg = parseConfig(data.settings?.config);
-    const count = (s: string) => data.byStatus.find((b) => b.status === s)?._count._all ?? 0;
-    const notifications = NOTIFICATION_KINDS.map((k) => {
-      const s = kindSetting(cfg, k);
-      return { kind: k, enabled: s.enabled, templateName: s.templateName, check: templateCheck(data.templates, s) };
-    });
-    const platform = waPlatformConfig();
+    const can = waCan(a);
+    // Settings → Integrations, for someone who may see only how connections stand: the connection, nothing else.
+    if (!allows(a.access, "marketing.campaigns")) {
+      return c.json({ store: { id: store.id, name: store.name ?? store.shopDomain }, platform: { evolution: evolutionConfigured() }, connection: waConnectionView(await connectionOf(store.id)), can });
+    }
+    const overview = await whatsappOverview(store, { contacts: seesContacts(a) });
     return c.json({
-      platform: platform ? { embeddedSignup: true, appId: platform.appId, configId: platform.configId, version: platform.version } : { embeddedSignup: false },
-      webhookUrl: `${env().API_URL}/webhooks/whatsapp`,
-      enabled: !!data.settings,
-      connection: data.conn ? publicConnection(data.conn, manage) : null,
-      store: { name: storeName(store), timezone: store.timezone, currency: store.currency },
-      setup: {
-        connected: !!data.conn,
-        registered: !!data.conn?.registered,
-        webhookVerified: !!data.conn?.webhookVerifiedAt,
-        consentBasis: cfg.transactionalBasis,
-        notificationsReady: notifications.filter((n) => n.enabled && n.check.state === "ready").length,
-        approvedTemplates: data.templates.filter((t) => t.status === "APPROVED").length,
-      },
-      last7Days: {
-        sent: count("sent") + count("delivered") + count("read"),
-        delivered: count("delivered") + count("read"),
-        read: count("read"),
-        failed: count("failed"),
-        skipped: count("skipped"),
-      },
-      scheduled: data.scheduled,
-      notifications,
-      automationsEnabled: data.rules,
-      attention: {
-        failed: data.failed,
-        pendingTemplates: data.templates.filter((t) => t.status === "PENDING").length,
-        rejectedTemplates: data.templates.filter((t) => ["REJECTED", "PAUSED", "DISABLED"].includes(t.status)).length,
-        openCarts: data.openCarts,
-        pendingReviews: data.pendingReviews,
-        campaigns: data.campaigns,
-        problems: notifications.filter((n) => n.enabled && n.check.state !== "ready").map((n) => ({ kind: n.kind, problem: n.check.problem })),
-      },
+      ...overview,
+      can,
+      triggers: triggerAvailability(store),
+      // The Meta app's public ids, for Embedded Signup (only to those who may connect).
+      cloudSignup: can.connect ? metaSignupConfig() : null,
+      // Whether this workspace may also connect with a token of bizinsights' own Meta app (WHATSAPP_TOKEN_CONNECT_WORKSPACES).
+      tokenConnect: can.connect && !!metaSignupConfig() && tokenConnectAllowed(ws),
     });
   });
 
-  // ---------------------------------------------------------------- connecting
+  // ---------------------------------------------------------------------------
+  // Connecting (Steps 1-2)
+  // ---------------------------------------------------------------------------
 
-  /**
-   * Embedded Signup finished in the browser: exchange its code (it lives 30 seconds) for the
-   * business's token, check the number and account, subscribe webhooks, save.
-   */
-  app.post(`${base}/embedded`, async (c) => {
+  app.post(`${base}/connection`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    const a = await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    // The ids come from Meta's message to the page; when that never arrived, they're asked of Meta below.
-    const input = z
-      .object({
-        code: z.string().min(10).max(2000),
-        wabaId: idSchema.optional(),
-        phoneNumberId: idSchema.optional(),
-        businessId: idSchema.optional(),
-        // How Meta's flow finished (its WA_EMBEDDED_SIGNUP message): only "FINISH" is a new Cloud API number.
-        event: z.string().max(64).optional(),
-      })
-      .refine((v) => !!v.wabaId === !!v.phoneNumberId, "wabaId and phoneNumberId go together")
-      .parse(await body(c));
-    const cfg = waPlatformConfig();
-    if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this bizinsights server yet.", "not_configured");
-    let token: string;
-    try {
-      token = await waExchangeCode(cfg, input.code, deps.fetchImpl);
-    } catch (err) {
-      logger.warn({ err, storeId }, "whatsapp embedded signup code exchange failed");
-      throw new HttpError(400, "Meta didn't accept the sign-in (it expires after 30 seconds). Please press Connect again.", "exchange_failed");
-    }
-    let ids = input.wabaId && input.phoneNumberId ? { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId } : null;
-    if (ids) {
-      // The ids came from the browser: the account must be one this sign-up granted to bizinsights' app.
-      // (connectWhatsapp then checks the number is in that account, with the business's own token.)
-      const info = await waTokenInfo(token, deps.fetchImpl, `${cfg.appId}|${cfg.appSecret}`).catch((err: unknown) => {
-        logger.warn({ err, storeId }, "whatsapp embedded signup: couldn't inspect the token; relying on the account checks");
-        return null;
-      });
-      if (info?.appId && info.appId !== cfg.appId) throw new HttpError(400, "That sign-in was for a different Meta app. Please press Continue with WhatsApp again.", "wrong_app");
-      if (info?.wabaIds && !info.wabaIds.includes(ids.wabaId)) {
-        throw new HttpError(400, "Meta didn't give bizinsights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
-      }
-    }
-    if (!ids) {
-      const found = await discoverWhatsapp(token, deps.fetchImpl).catch(connectError);
-      const numbers = found.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));
-      if (numbers.length !== 1) {
-        throw new HttpError(400, "Meta didn't say which number you chose. Please press Continue with WhatsApp again.", "number_unknown");
-      }
-      ids = numbers[0]!;
-    }
-    let conn = await connectWhatsapp({ store, mode: "embedded", ...ids, businessId: input.businessId, accessToken: token, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
-    // The merchant just chose this number in Meta's own flow: register it so it can send straight away.
-    // Never a WhatsApp Business app number (coexistence) or one Meta didn't say how it finished.
-    const registration = input.event === "FINISH" ? await autoRegisterWhatsapp(conn, deps.fetchImpl) : { conn, outcome: conn.registered ? "already" : "pin_needed" };
-    conn = registration.conn;
-    await audit({
-      workspaceId: ws,
-      actorUserId: access.user!.id,
-      action: "whatsapp.connected",
-      targetType: "store",
-      targetId: storeId,
-      metadata: { mode: "embedded", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, event: input.event ?? null, registration: registration.outcome },
-      ip: clientIp(c),
-    });
-    return c.json({ connection: publicConnection(conn, true), registration: registration.outcome });
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const d = z.object({ method: z.enum(["qr", "code"]).default("qr"), phone: z.string().trim().max(32).nullable().optional(), country: z.string().trim().length(2).nullable().optional() }).parse(await body(c));
+    const pairing = await startPairing(deps, { store, userId: a.user.id, method: d.method, phone: d.phone, country: d.country, ip: clientIp(c) });
+    return c.json({ pairing }, 201, { "cache-control": "no-store" });
   });
 
-  /**
-   * The merchant's own Meta app, step one: from just the access token, the WhatsApp accounts and
-   * numbers it reaches and the app it belongs to. Nothing is saved.
-   */
-  app.post(`${base}/manual/discover`, async (c) => {
+  /** What the page polls while the phone scans: the provider's current code, or the state it reached. */
+  app.get(`${base}/connection/pairing`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const { accessToken } = z.object({ accessToken: accessTokenSchema }).parse(await body(c));
-    const found = await discoverWhatsapp(accessToken, deps.fetchImpl).catch(connectError);
-    return c.json(found);
-  });
-
-  /**
-   * The merchant's own Meta app: WABA id, phone number id, a system-user token and the app secret.
-   * The secret is checked against the token's app, and the app's webhook is pointed at bizinsights,
-   * so there's nothing to paste into Meta's dashboard (unless Meta wouldn't let us).
-   */
-  app.post(`${base}/manual`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    await requireConnect(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const input = z
-      .object({
-        wabaId: idSchema,
-        phoneNumberId: idSchema,
-        accessToken: accessTokenSchema,
-        // Without it, bizinsights can't verify Meta's deliveries, so it would never hear STOP replies.
-        appSecret: z.string().trim().regex(/^[a-f0-9]{32}$/i, "must be the 32-character app secret from your Meta app's Basic settings"),
-      })
-      .parse(await body(c));
-    const appId = await checkManualApp(input.accessToken, input.appSecret, deps.fetchImpl).catch(connectError);
-    let conn = await connectWhatsapp({ store, mode: "manual", ...input, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
-    const webhook = appId ? await setupManualWebhook(conn, appId, input.appSecret, deps.fetchImpl) : "failed";
-    if (webhook === "verified") conn = (await systemDb.whatsappConnection.findUnique({ where: { id: conn.id } })) ?? conn;
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "manual", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, webhook }, ip: clientIp(c) });
-    return c.json({ connection: publicConnection(conn, true), webhook });
+    await limit(deps.coord, `rl:wa-pairing:${store.id}`, LIMITS.waPairing);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ pairing: await pairingState(deps, conn) }, 200, { "cache-control": "no-store" });
   });
 
-  /** Register the number with the Cloud API (it can't send until it is). */
-  app.post(`${base}/register`, async (c) => {
+  app.post(`${base}/connection/cloud`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const { pin } = z.object({ pin: z.string().regex(/^\d{6}$/, "must be 6 digits") }).parse(await body(c));
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
-    const updated = await registerWhatsapp(conn, pin, deps.fetchImpl).catch(connectError);
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.number_registered", targetType: "store", targetId: storeId, ip: clientIp(c) });
-    return c.json({ connection: publicConnection(updated, true) });
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectCloudApi(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ connection: waConnectionView(conn) }, 201);
   });
 
   /**
-   * The number's two-step verification PIN, for an owner or admin who needs it (to move the number
-   * to another provider, say). Only known when bizinsights registered the number or the merchant typed it.
+   * Connecting with a token of bizinsights' own Meta app instead of Meta's window: only the
+   * workspaces in WHATSAPP_TOKEN_CONNECT_WORKSPACES (bizinsights' own team, e.g. to record Meta's App
+   * Review with the app's test number), and only a token Meta says is the app's, with both WhatsApp
+   * permissions for the account. It is kept like Embedded Signup's and never shown again.
    */
-  app.post(`${base}/pin`, async (c) => {
+  app.post(`${base}/connection/cloud-token`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-pin:${storeId}`, LIMITS.waRefresh);
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
-    const pin = connectionPin(conn);
-    if (!pin) throw new HttpError(404, "bizinsights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.pin_viewed", targetType: "store", targetId: storeId, ip: clientIp(c) });
-    c.header("cache-control", "no-store");
-    return c.json({ pin });
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectCloudApiWithToken(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ connection: waConnectionView(conn) }, 201);
   });
 
-  /** Read the number's status and the templates from Meta again. */
-  app.post(`${base}/refresh`, async (c) => {
+  app.post(`${base}/connection/check`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh);
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
-    try {
-      const updated = await refreshConnection(conn, deps.fetchImpl);
-      return c.json({ connection: publicConnection(updated, true) });
-    } catch (err) {
-      if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't answer as expected: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-      throw err;
-    }
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-refresh:${store.id}`, LIMITS.waRefresh);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await checkConnection(deps, conn)) });
   });
 
-  app.delete(base, async (c) => {
+  app.post(`${base}/connection/reconnect`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
-    await waStore(ws, storeId);
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Not connected", "not_connected");
-    await disconnectWhatsapp(conn, deps.fetchImpl);
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.disconnected", targetType: "store", targetId: storeId, metadata: { wabaId: conn.wabaId }, ip: clientIp(c) });
-    return c.json({ ok: true });
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectionOf(store.id);
+    if (!conn) throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await restartConnection(deps, conn, { userId: a.user.id, ip: clientIp(c) })) });
   });
 
-  // ---------------------------------------------------------------- settings
-
-  app.get(`${base}/settings`, async (c) => {
+  app.delete(`${base}/connection`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "marketing.campaigns");
-    await waStore(ws, storeId);
-    const [settings, templates] = await withTenant(ws, (tx) =>
-      Promise.all([tx.whatsappSettings.findUnique({ where: { storeId } }), tx.whatsappTemplate.findMany({ where: { storeId }, orderBy: [{ name: "asc" }, { language: "asc" }] })]),
-    );
-    const cfg = parseConfig(settings?.config);
-    return c.json({
-      enabled: !!settings,
-      config: { ...cfg, notifications: Object.fromEntries(NOTIFICATION_KINDS.map((k) => [k, kindSetting(cfg, k)])) },
-      checks: Object.fromEntries(NOTIFICATION_KINDS.map((k) => [k, templateCheck(templates, kindSetting(cfg, k))])),
-      basisSetAt: settings?.basisSetAt ?? null,
-      templates: templates.map(publicTemplate),
-    });
+    const a = await requireConnect(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${store.id}`, LIMITS.waConnect);
+    const conn = await connectionOf(store.id);
+    if (!conn || conn.status === "disconnected") throw new HttpError(404, "Not connected", "not_connected");
+    return c.json({ connection: waConnectionView(await disconnectWhatsapp(deps, conn, { userId: a.user.id, ip: clientIp(c) })) });
   });
 
-  /** Save the whole configuration. Turning a notification on needs a template chosen for it. */
+  // ---------------------------------------------------------------------------
+  // Settings and the test number (Steps 3-4)
+  // ---------------------------------------------------------------------------
+
   app.put(`${base}/settings`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const cfg = whatsappConfigSchema.parse(await body(c));
-    for (const k of NOTIFICATION_KINDS) {
-      const s = cfg.notifications[k];
-      if (s?.enabled && !s.templateName) throw new HttpError(400, `Choose a template for "${KIND_INFO[k].label}" before turning it on.`, "template_required");
-    }
-    if (cfg.sendWindowStart === cfg.sendWindowEnd) throw new HttpError(400, "The sending window needs different start and end hours.", "invalid_window");
-    const before = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
-    const prev = parseConfig(before?.config);
-    const basisChanged = !before || prev.transactionalBasis !== cfg.transactionalBasis;
-    await ensureSettings(store);
-    await systemDb.whatsappSettings.update({
-      where: { storeId },
-      data: {
-        config: cfg as unknown as Prisma.InputJsonValue,
-        updatedByUserId: access.user!.id,
-        ...(basisChanged ? { basisSetByUserId: access.user!.id, basisSetAt: new Date() } : {}),
-      },
-    });
-    const enabledNow = NOTIFICATION_KINDS.filter((k) => cfg.notifications[k]?.enabled);
-    const enabledBefore = NOTIFICATION_KINDS.filter((k) => prev.notifications[k]?.enabled);
-    await audit({
-      workspaceId: ws,
-      actorUserId: access.user!.id,
-      action: "whatsapp.settings_updated",
-      targetType: "store",
-      targetId: storeId,
-      metadata: {
-        turnedOn: enabledNow.filter((k) => !enabledBefore.includes(k)),
-        turnedOff: enabledBefore.filter((k) => !enabledNow.includes(k)),
-        ...(basisChanged ? { consentBasis: cfg.transactionalBasis } : {}),
-        smsConsentCountsForMarketing: cfg.smsConsentCountsForMarketing,
-      },
-      ip: clientIp(c),
-    });
+    await saveWaSettings({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
-  // ---------------------------------------------------------------- templates
+  app.post(`${base}/settings/pause`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const { paused } = z.object({ paused: z.boolean() }).parse(await body(c));
+    await setAutomationPaused({ store, userId: a.user.id, paused, ip: clientIp(c) });
+    return c.json({ ok: true, paused });
+  });
+
+  app.post(`${base}/test-number`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-test:${store.id}`, LIMITS.waTest);
+    const d = z.object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional() }).parse(await body(c));
+    return c.json(await startTestVerification(deps, { store, userId: a.user.id, phone: d.phone, country: d.country, ip: clientIp(c) }));
+  });
+
+  app.post(`${base}/test-number/verify`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const { code } = z.object({ code: z.string().trim().min(6).max(10) }).parse(await body(c));
+    await confirmTestVerification({ store, userId: a.user.id, code, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  app.post(`${base}/test-message`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-test:${store.id}`, LIMITS.waTest);
+    const d = z.object({ templateId: idParam.nullable().optional(), text: z.string().trim().max(1024).nullable().optional() }).parse(await body(c));
+    return c.json(await sendTestMessage(deps, { store, userId: a.user.id, templateId: d.templateId, text: d.text }), 201);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Messages
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/messages`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const f = messageFilters.parse(c.req.query());
+    if (f.phone) requireContacts(a);
+    const where: Prisma.WappMessageWhereInput = { storeId: store.id, workspaceId: ws };
+    if (f.status) where.status = { in: BUCKET_STATUSES[f.status] ?? [f.status] };
+    if (f.direction) where.direction = f.direction;
+    if (f.source) where.source = f.source;
+    if (f.automationId) where.automationId = f.automationId;
+    if (f.campaignId) where.campaignId = f.campaignId;
+    if (f.from || f.to) {
+      where.createdAt = { ...(f.from ? { gte: startOfLocalDay(f.from, store.timezone) } : {}), ...(f.to ? { lt: startOfLocalDay(addDays(f.to, 1), store.timezone) } : {}) };
+    }
+    if (f.phone) {
+      const p = normalizePhone(f.phone, null);
+      if (!p) throw new HttpError(400, "Search with a full international number (+61...).", "invalid_phone");
+      where.phoneHash = waPhoneHash(store.id, p.waId);
+    }
+    if (f.cursor) {
+      const [at, id] = f.cursor.split("_");
+      const t = new Date(Number(at));
+      if (!id || Number.isNaN(t.getTime())) throw new HttpError(400, "Bad cursor", "validation");
+      where.OR = [{ createdAt: { lt: t } }, { createdAt: t, id: { lt: id } }];
+    }
+    const rows = await withTenant(ws, (tx) => tx.wappMessage.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: f.limit + 1 }));
+    const page = rows.slice(0, f.limit);
+    const last = page.at(-1);
+    return c.json({ messages: page.map((m) => waMessageView(m, { contacts: seesContacts(a) })), nextCursor: rows.length > f.limit && last ? `${last.createdAt.getTime()}_${last.id}` : null });
+  });
+
+  app.get(`${base}/messages/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const m = await withTenant(ws, (tx) => tx.wappMessage.findFirst({ where: { id: idParam.parse(id), storeId: store.id, workspaceId: ws } }));
+    if (!m) throw new HttpError(404, "Not found", "not_found");
+    const events = await withTenant(ws, (tx) => tx.wappMessageEvent.findMany({ where: { messageId: m.id, workspaceId: ws }, orderBy: { occurredAt: "asc" } }));
+    return c.json({ message: waMessageView(m, { contacts: seesContacts(a) }), events: events.map((e) => ({ status: e.status, providerStatus: e.providerStatus, at: e.occurredAt })) });
+  });
+
+  app.post(`${base}/messages`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-send:${store.id}`, LIMITS.waSend);
+    const m = await sendManualMessage(deps, { store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ message: waMessageView(m, { contacts: seesContacts(a) }) }, 201);
+  });
+
+  app.post(`${base}/messages/:id/retry`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-send:${store.id}`, LIMITS.waSend);
+    const m = await retryMessage(deps, store, idParam.parse(id), { userId: a.user.id });
+    return c.json({ message: waMessageView(m, { contacts: seesContacts(a) }) });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Templates
+  // ---------------------------------------------------------------------------
 
   app.get(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "marketing.campaigns");
-    await waStore(ws, storeId);
-    const templates = await withTenant(ws, (tx) => tx.whatsappTemplate.findMany({ where: { storeId, workspaceId: ws }, orderBy: [{ name: "asc" }, { language: "asc" }] }));
-    return c.json({ templates: templates.map(publicTemplate) });
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const [rows, conn] = await Promise.all([withTenant(ws, (tx) => tx.wappTemplate.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { name: "asc" } })), connectionOf(store.id)]);
+    const usage = await templateUsage(store.id, rows.map((t) => t.id));
+    return c.json({ templates: rows.map((t) => templateView(t, conn, usage.get(t.id))), samples: waSampleValues(store.name) });
   });
 
-  /** Submit one of bizinsights' templates to Meta's review, in the merchant's account. */
   app.post(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
-    await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-template:${storeId}`, LIMITS.waTemplateCreate);
-    const { name, language } = z.object({ name: z.string(), language: z.string().regex(/^[a-z]{2,3}(_[A-Z]{2})?$/).default("en") }).parse(await body(c));
-    const lib = libraryTemplate(name);
-    if (!lib) throw new HttpError(400, "Choose a template from the library.", "unknown_template");
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    const e = env();
-    const buttons: Array<Record<string, unknown>> = [];
-    if (lib.urlButton) {
-      const root = lib.urlButton.base === "api" ? e.API_URL : e.APP_URL;
-      buttons.push({ type: "URL", text: lib.urlButton.text, url: `${root}${lib.urlButton.path}{{1}}`, example: [`${root}${lib.urlButton.path}${lib.urlButton.example}`] });
-    }
-    if (lib.stopButton) buttons.push({ type: "QUICK_REPLY", text: "Stop promotions" });
-    const components: Array<Record<string, unknown>> = [{ type: "BODY", text: lib.body, example: { body_text: [lib.examples] } }];
-    if (lib.footer) components.push({ type: "FOOTER", text: lib.footer });
-    if (buttons.length) components.push({ type: "BUTTONS", buttons });
-    try {
-      const created = await waCreateTemplate(conn.wabaId, connectionToken(conn), { name: lib.name, language, category: lib.category, components }, deps.fetchImpl);
-      await syncTemplates(conn, connectionToken(conn), deps.fetchImpl).catch((err: unknown) => logger.warn({ err }, "template sync after create failed"));
-      await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.template_submitted", targetType: "store", targetId: storeId, metadata: { name: lib.name, language }, ip: clientIp(c) });
-      return c.json({ id: created.id, status: created.status, category: created.category });
-    } catch (err) {
-      if (err instanceof WhatsappApiError) {
-        // Already there (Meta's "content in this language already exists"): just refresh the list.
-        if (err.code === 100 && /already exists/i.test(err.details ?? "")) {
-          await syncTemplates(conn, connectionToken(conn), deps.fetchImpl);
-          return c.json({ status: "EXISTS" });
-        }
-        throw new HttpError(502, `Meta didn't accept the template: ${providerDetail(err.details ?? err.title)}`, "meta_error");
-      }
-      throw err;
-    }
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const t = await createWaTemplate(store, { data: await body(c), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ template: templateView(t, await connectionOf(store.id)) }, 201);
   });
 
-  /** Send one template to the merchant's own phone, with example values. */
-  app.post(`${base}/test`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+  app.put(`${base}/templates/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest);
-    const input = z
-      .object({
-        templateName: z.string().min(1).max(512),
-        language: z.string().max(15).default("en"),
-        phone: z.string().min(6).max(30),
-        kind: z.enum(NOTIFICATION_KINDS).optional(),
-        mapping: templateMappingSchema.optional(),
-        /** For a template with an image header: a public https image. */
-        mediaUrl: z.string().url().startsWith("https://").max(2000).optional(),
-      })
-      .parse(await body(c));
-    const phone = normalizePhone(input.phone, null);
-    if (!phone) throw new HttpError(400, "Enter the number in international format, starting with + and the country code.", "invalid_phone");
-    // A test skips the consent checks a real send makes, so it must at least respect a STOP.
-    if (await numberOptedOut(storeId, phone.waId)) throw new HttpError(409, "That number replied STOP to this store, so nothing (not even a test) can be sent to it.", "opted_out");
-    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-    if (!conn || conn.workspaceId !== ws) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    const settings = await ensureSettings(store);
-    const cfg = parseConfig(settings.config);
-    const template = await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: input.templateName, language: input.language } } });
-    if (!template) throw new HttpError(404, "That template isn't in your WhatsApp account. Press Refresh on Message templates.", "template_missing");
-    const shape = templateShape(template.components as unknown as TemplateComponent[]);
-    const mapping =
-      input.mapping ??
-      (input.kind ? kindSetting(cfg, input.kind).mapping : null) ??
-      libraryTemplate(template.name)?.mapping ?? { body: Array.from({ length: shape.bodyVars }, () => "custom_text" as const), buttons: shape.dynamicUrlButtons.map(() => "custom_text" as const), fixed: {} };
-    const { message } = await scheduleMessage(
-      {
-        store,
-        kind: "test",
-        dedupeKey: `test:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-        contact: null,
-        template: { name: template.name, language: template.language },
-        mapping: { ...mapping, fixed: { ...Object.fromEntries([...Array(shape.bodyVars).keys()].map((i) => [`body.${i + 1}`, "Test"])), "button.0": "test", ...mapping.fixed } },
-        values: sampleValues(store, cfg),
-        media: input.mediaUrl ? { link: input.mediaUrl } : null,
-        scheduledFor: new Date(),
-        test: { to: phone.waId },
-      },
-      deps,
-    );
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.test_sent", targetType: "store", targetId: storeId, metadata: { template: template.name }, ip: clientIp(c) });
-    return c.json({ messageId: message.id, status: message.status });
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const t = await updateWaTemplate(store, idParam.parse(id), { data: await body(c), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ template: templateView(t, await connectionOf(store.id)) });
   });
 
-  // ---------------------------------------------------------------- analytics
-
-  app.get(`${base}/analytics`, async (c) => {
-    const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "marketing.campaigns");
+  app.delete(`${base}/templates/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
     const store = await waStore(ws, storeId);
-    const days = z.coerce.number().int().min(1).max(180).default(30).parse(c.req.query("days") ?? undefined);
-    const since = new Date(Date.now() - days * 86_400_000);
-    const scope = { storeId, workspaceId: ws };
-    const r = await withTenant(ws, async (tx) => {
-      const [statuses, kinds, daily, carts, recovered, reviews, rated, campaignMsgs, attributed, billable, clicks] = await Promise.all([
-        tx.whatsappMessage.groupBy({ by: ["status"], where: { ...scope, test: false, createdAt: { gte: since } }, _count: { _all: true } }),
-        tx.whatsappMessage.groupBy({ by: ["kind", "status"], where: { ...scope, test: false, createdAt: { gte: since } }, _count: { _all: true } }),
-        tx.$queryRaw<Array<{ day: string; sent: number; delivered: number; read: number; failed: number }>>`
-          SELECT to_char(created_at, 'YYYY-MM-DD') AS day,
-                 COUNT(*) FILTER (WHERE status IN ('sent','delivered','read'))::int AS sent,
-                 COUNT(*) FILTER (WHERE status IN ('delivered','read'))::int AS delivered,
-                 COUNT(*) FILTER (WHERE status = 'read')::int AS read,
-                 COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
-          FROM whatsapp_messages
-          WHERE store_id = ${storeId} AND workspace_id = ${ws} AND test = false AND created_at >= ${since}
-          GROUP BY 1 ORDER BY 1`,
-        tx.abandonedCheckout.groupBy({ by: ["status"], where: { ...scope, checkoutCreatedAt: { gte: since } }, _count: { _all: true } }),
-        tx.abandonedCheckout.groupBy({ by: ["currency"], where: { ...scope, status: "recovered", completedAt: { gte: since } }, _sum: { recoveredRevenue: true }, _count: { _all: true } }),
-        tx.customerReview.count({ where: { ...scope, submittedAt: { gte: since } } }),
-        // The average leaves out reviews removed for breaking the policy, as the Reviews page does.
-        tx.customerReview.aggregate({ where: { ...scope, submittedAt: { gte: since }, status: { in: ["published", "pending"] } }, _avg: { rating: true } }),
-        tx.whatsappMessage.count({ where: { ...scope, test: false, campaignId: { not: null }, sentAt: { gte: since } } }),
-        tx.$queryRaw<Array<{ currency: string; orders: number; revenue: string }>>`
-          SELECT COALESCE(t.currency, ${store.currency}) AS currency, COUNT(*)::int AS orders, COALESCE(SUM(m.attributed_revenue), 0)::text AS revenue
-          FROM whatsapp_messages m LEFT JOIN order_trackings t ON t.store_id = m.store_id AND t.shopify_order_id = m.attributed_order_id
-          WHERE m.store_id = ${storeId} AND m.workspace_id = ${ws} AND m.attributed_order_id IS NOT NULL AND m.attributed_at >= ${since}
-          GROUP BY 1`,
-        tx.whatsappMessage.groupBy({ by: ["pricingCategory"], where: { ...scope, test: false, billable: true, sentAt: { gte: since } }, _count: { _all: true } }),
-        tx.whatsappMessage.count({ where: { ...scope, test: false, clickedAt: { gte: since } } }),
-      ]);
-      return { statuses, kinds, daily, carts, recovered, reviews, rated, campaignMsgs, attributed, billable, clicks };
-    });
-    const n = (s: string) => r.statuses.find((x) => x.status === s)?._count._all ?? 0;
-    const group = (kind: string) =>
-      kind.startsWith("abandoned_cart") ? "carts"
-      : kind.startsWith("review") ? "reviews"
-      : (["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"] as string[]).includes(kind) ? "delivery"
-      : (NOTIFICATION_KINDS as readonly string[]).includes(kind) ? "orders"
-      : kind;
-    const byGroup: Record<string, { sent: number; delivered: number; read: number; failed: number; skipped: number }> = {};
-    for (const k of r.kinds) {
-      const g = (byGroup[group(k.kind)] ??= { sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0 });
-      const c2 = k._count._all;
-      if (["sent", "delivered", "read"].includes(k.status)) g.sent += c2;
-      if (["delivered", "read"].includes(k.status)) g.delivered += c2;
-      if (k.status === "read") g.read += c2;
-      if (k.status === "failed") g.failed += c2;
-      if (k.status === "skipped" || k.status === "cancelled") g.skipped += c2;
+    await deleteWaTemplate(store, idParam.parse(id), { userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  /** Cloud API: submit a template for Meta's review. */
+  app.post(`${base}/templates/:id/submit`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-template:${store.id}`, LIMITS.waTemplateCreate);
+    const conn = await connectionOf(store.id);
+    const t = await systemDb.wappTemplate.findFirst({ where: { id: idParam.parse(id), storeId: store.id } });
+    if (!t) throw new HttpError(404, "Not found", "not_found");
+    if (!conn || conn.provider !== "cloud_api" || conn.status !== "connected") throw new WhatsappError("Templates are reviewed by Meta only on a Cloud API connection.", 409, "not_cloud_api");
+    const updated = await submitTemplateToMeta(deps, conn, t, waSampleValues(store.name) as Record<string, string>);
+    return c.json({ template: templateView(updated, conn) });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Automations
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/automations`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const rows = await withTenant(ws, (tx) => tx.wappAutomation.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { createdAt: "asc" } }));
+    const since = new Date(Date.now() - 30 * 86_400_000);
+    const runs = await withTenant(ws, (tx) => tx.wappAutomationRun.groupBy({ by: ["automationId", "outcome"], where: { storeId: store.id, workspaceId: ws, createdAt: { gte: since } }, _count: { _all: true } }));
+    const out = [];
+    for (const r of rows) {
+      const stats = { queued: 0, skipped: 0 };
+      for (const x of runs.filter((x) => x.automationId === r.id)) stats[x.outcome === "queued" ? "queued" : "skipped"] += x._count._all;
+      out.push(automationView(r, await automationProblemsFor(store, r), stats));
     }
-    const cartCount = (s: string) => r.carts.find((x) => x.status === s)?._count._all ?? 0;
+    return c.json({ automations: out, triggers: triggerAvailability(store) });
+  });
+
+  app.post(`${base}/automations`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await saveAutomation({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) });
+    return c.json({ automation: automationView(r, await automationProblemsFor(store, r)) }, 201);
+  });
+
+  app.get(`${base}/automations/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await withTenant(ws, (tx) => tx.wappAutomation.findFirst({ where: { id: idParam.parse(id), storeId: store.id, workspaceId: ws } }));
+    if (!r) throw new HttpError(404, "Not found", "not_found");
+    const runs = await withTenant(ws, (tx) => tx.wappAutomationRun.findMany({ where: { automationId: r.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 50 }));
+    const messages = await withTenant(ws, (tx) => tx.wappMessage.findMany({ where: { id: { in: runs.map((x) => x.messageId).filter((x): x is string => !!x) }, workspaceId: ws }, select: { id: true, status: true } }));
+    const statusOf = new Map(messages.map((m) => [m.id, m.status]));
     return c.json({
-      days,
-      currency: store.currency,
-      messages: {
-        sent: n("sent") + n("delivered") + n("read"),
-        delivered: n("delivered") + n("read"),
-        read: n("read"),
-        failed: n("failed"),
-        skipped: n("skipped") + n("cancelled"),
-        scheduled: n("scheduled") + n("sending"),
-        clicks: r.clicks,
-      },
-      byGroup,
-      daily: r.daily,
-      carts: {
-        withPhone: r.carts.reduce((s, x) => s + x._count._all, 0),
-        reminded: cartCount("reminded") + cartCount("recovered"),
-        recovered: cartCount("recovered"),
-        completedWithoutReminder: cartCount("completed"),
-        revenue: r.recovered.map((x) => ({ currency: x.currency, amount: Number(x._sum.recoveredRevenue ?? 0), orders: x._count._all })),
-      },
-      reviews: { submitted: r.reviews, average: r.rated._avg.rating ? Math.round(r.rated._avg.rating * 10) / 10 : null },
-      campaigns: { messages: r.campaignMsgs, conversions: r.attributed.map((x) => ({ currency: x.currency, orders: x.orders, revenue: Number(x.revenue) })) },
-      billable: r.billable.map((b) => ({ category: b.pricingCategory ?? "unknown", messages: b._count._all })),
+      automation: automationView(r, await automationProblemsFor(store, r)),
+      runs: runs.map((x) => ({ id: x.id, subject: x.subjectLabel, outcome: x.outcome, reason: x.reason, reasonLabel: waSkipLabel(x.reason), detail: x.detail, testMode: x.testMode, messageId: x.messageId, messageStatus: x.messageId ? (statusOf.get(x.messageId) ?? null) : null, at: x.createdAt })),
     });
   });
 
-  whatsappOpsRoutes(app, deps);
-}
+  app.put(`${base}/automations/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await saveAutomation({ store, userId: a.user.id, id: idParam.parse(id), data: await body(c), ip: clientIp(c) });
+    return c.json({ automation: automationView(r, await automationProblemsFor(store, r)) });
+  });
 
+  app.delete(`${base}/automations/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await deleteAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  app.post(`${base}/automations/:id/activate`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await activateAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c), subscribeCustomers: () => ensureCustomerWebhook(store, storeGraphql(store, deps.coord, deps.fetchImpl)) });
+    return c.json({ automation: automationView(r, []) });
+  });
+
+  app.post(`${base}/automations/:id/pause`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await pauseAutomation({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ automation: automationView(r.automation, null), cancelled: r.cancelled });
+  });
+
+  app.post(`${base}/automations/:id/test`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-test:${store.id}`, LIMITS.waTest);
+    return c.json(await testAutomation(deps, { store, id: idParam.parse(id), userId: a.user.id }), 201);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Campaigns
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/campaigns`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const rows = await withTenant(ws, (tx) => tx.wappCampaign.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 100 }));
+    const out = [];
+    for (const r of rows) out.push(campaignView(r, r.status === "draft" ? undefined : await campaignReport(r.id)));
+    return c.json({ campaigns: out });
+  });
+
+  app.post(`${base}/campaigns/estimate`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-estimate:${store.id}`, LIMITS.waEstimate);
+    const { audience, templateId } = z.object({ audience: z.unknown(), templateId: idParam.nullable().optional() }).parse(await body(c));
+    const template = templateId ? await withTenant(ws, (tx) => tx.wappTemplate.findFirst({ where: { id: templateId, storeId: store.id, workspaceId: ws } })) : null;
+    return c.json({ count: await estimateWaAudience(store.id, audience, template) });
+  });
+
+  app.post(`${base}/campaigns`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    return c.json({ campaign: campaignView(await saveCampaign({ store, userId: a.user.id, data: await body(c), ip: clientIp(c) })) }, 201);
+  });
+
+  app.get(`${base}/campaigns/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireView(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await withTenant(ws, (tx) => tx.wappCampaign.findFirst({ where: { id: idParam.parse(id), storeId: store.id, workspaceId: ws } }));
+    if (!r) throw new HttpError(404, "Not found", "not_found");
+    return c.json({ campaign: campaignView(r, await campaignReport(r.id)) });
+  });
+
+  app.put(`${base}/campaigns/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    return c.json({ campaign: campaignView(await saveCampaign({ store, userId: a.user.id, id: idParam.parse(id), data: await body(c), ip: clientIp(c) })) });
+  });
+
+  app.delete(`${base}/campaigns/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await deleteCampaign({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  /** Launch (now or later): only with the exact recipient count the merchant confirmed. */
+  app.post(`${base}/campaigns/:id/launch`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    return c.json({ campaign: campaignView(await launchCampaign(deps, { store, id: idParam.parse(id), userId: a.user.id, data: await body(c), ip: clientIp(c) })) });
+  });
+
+  app.post(`${base}/campaigns/:id/cancel`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const r = await cancelCampaign({ store, id: idParam.parse(id), userId: a.user.id, ip: clientIp(c) });
+    return c.json({ campaign: campaignView(r.campaign), cancelled: r.cancelled });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Customers: consent and the do-not-message list
+  // ---------------------------------------------------------------------------
+
+  app.get(`${base}/contacts`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireView(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    const q = z.object({ phone: z.string().trim().min(6).max(32).optional(), consent: z.enum(["opted_in", "opted_out", "unknown"]).optional(), cursor: idParam.optional() }).parse(c.req.query());
+    const where: Prisma.WappContactWhereInput = { storeId: store.id, workspaceId: ws };
+    if (q.phone) {
+      const p = normalizePhone(q.phone, null);
+      if (!p) throw new HttpError(400, "Search with a full international number (+61...).", "invalid_phone");
+      where.phoneHash = waPhoneHash(store.id, p.waId);
+    }
+    if (q.consent === "opted_out") where.optedOut = true;
+    else if (q.consent) where.marketing = q.consent;
+    if (q.cursor) where.id = { lt: q.cursor };
+    const rows = await withTenant(ws, (tx) => tx.wappContact.findMany({ where, orderBy: { id: "desc" }, take: 51 }));
+    const page = rows.slice(0, 50);
+    const events = await withTenant(ws, (tx) => tx.wappConsentEvent.findMany({ where: { workspaceId: ws, contactId: { in: page.map((r) => r.id) } }, orderBy: { occurredAt: "desc" } }));
+    return c.json({
+      contacts: page.map((r) => ({
+        id: r.id,
+        phone: r.phoneMasked,
+        firstName: r.firstNameEnc ? waDecrypt(r.storeId, "name", r.firstNameEnc) : null,
+        country: r.country,
+        optedOut: r.optedOut,
+        optedIn: r.optedIn,
+        marketing: r.marketing,
+        lastInboundAt: r.lastInboundAt,
+        lastOutboundAt: r.lastOutboundAt,
+        ordersCount: r.ordersCount,
+        history: events.filter((e) => e.contactId === r.id).slice(0, 5).map((e) => ({ scope: e.scope, status: e.status, source: e.source, sourceLabel: WA_CONSENT_SOURCE_LABEL[e.source as WaConsentSource] ?? e.source, note: e.note, at: e.occurredAt })),
+      })),
+      nextCursor: rows.length > 50 ? page.at(-1)!.id : null,
+    });
+  });
+
+  app.post(`${base}/contacts/consent`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    const d = z
+      .object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional(), scope: z.enum(["all", "order_updates", "marketing"]), status: z.enum(["opted_in", "opted_out"]), note: z.string().trim().max(300).nullable().optional() })
+      .parse(await body(c));
+    const contact = await setConsentByMerchant(store, { ...d, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ contact: { id: contact.id, phone: contact.phoneMasked, optedOut: contact.optedOut, optedIn: contact.optedIn, marketing: contact.marketing } });
+  });
+
+  app.get(`${base}/suppressions`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireView(c, deps, ws);
+    requireContacts(a);
+    const store = await waStore(ws, storeId);
+    const rows = await withTenant(ws, (tx) => tx.wappSuppression.findMany({ where: { storeId: store.id, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 200 }));
+    return c.json({ suppressions: rows.map((r) => ({ id: r.id, phone: r.phoneMasked, scope: r.scope, reason: r.reason, note: r.note, createdAt: r.createdAt })) });
+  });
+
+  app.post(`${base}/suppressions`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    const d = z.object({ phone: z.string().trim().min(6).max(32), country: z.string().trim().length(2).nullable().optional(), scope: z.enum(["all", "marketing"]), note: z.string().trim().max(300).nullable().optional() }).parse(await body(c));
+    const row = await addWaSuppression(store, { ...d, userId: a.user.id, ip: clientIp(c) });
+    return c.json({ suppression: { id: row.id, phone: row.phoneMasked, scope: row.scope } }, 201);
+  });
+
+  app.delete(`${base}/suppressions/:id`, async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const a = await requireManage(c, deps, ws);
+    const store = await waStore(ws, storeId);
+    await removeWaSuppression(store, idParam.parse(id), { userId: a.user.id, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+}

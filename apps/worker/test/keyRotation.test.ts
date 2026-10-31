@@ -37,37 +37,33 @@ describe("rotating the token encryption key", () => {
       data: { workspaceId: ws.id, storeId: store.id, provider: "meta", accountId: "act_1", currency: "USD", timezone: "UTC", ...encryptAdTokens(store.id, "meta", { accessToken: "EAA_ad", refreshToken: null, expiresAt: null }) },
     });
     const sid = store.id;
-    const conn = await systemDb.whatsappConnection.create({
+    // WhatsApp Automation: the instance's keys and linked number, the test number, a contact, a message and a webhook body.
+    const conn = await systemDb.wappConnection.create({
       data: {
-        workspaceId: ws.id, storeId: sid, mode: "manual", wabaId: "1", phoneNumberId: "2", tokenKeyVersion: 1,
-        accessTokenEnc: waEncrypt(sid, "access", "EAA_wa"), appSecretEnc: waEncrypt(sid, "app_secret", "app-secret"),
-        verifyTokenEnc: waEncrypt(sid, "verify", "verify-token"), pinEnc: waEncrypt(sid, "pin", "123456"),
+        workspaceId: ws.id,
+        storeId: sid,
+        provider: "qr",
+        status: "connected",
+        shard: "a",
+        instanceName: "bi_000000000000000000000001",
+        instanceTokenEnc: waEncrypt(sid, "instance_token", "tok"),
+        webhookKeyEnc: waEncrypt(sid, "webhook_key", "key"),
+        phoneEnc: waEncrypt(sid, "linked_phone", "+61400000009"),
       },
     });
-    const contact = await systemDb.whatsappContact.create({
-      data: { workspaceId: ws.id, storeId: sid, phoneHash: "h", phoneEnc: waEncrypt(sid, "phone", "919000000001"), phoneMasked: "001", firstNameEnc: waEncrypt(sid, "name", "Asha") },
+    await systemDb.wappSettings.create({ data: { workspaceId: ws.id, storeId: sid, testPhoneEnc: waEncrypt(sid, "test_phone", "+61400000001") } });
+    const contact = await systemDb.wappContact.create({
+      data: { workspaceId: ws.id, storeId: sid, phoneHash: "h", phoneEnc: waEncrypt(sid, "phone", "+919000000001"), phoneMasked: "001", firstNameEnc: waEncrypt(sid, "name", "Asha") },
     });
-    const message = await systemDb.whatsappMessage.create({
-      data: { workspaceId: ws.id, storeId: sid, kind: "test", dedupeKey: "d", scheduledFor: new Date(), paramsEnc: waEncrypt(sid, "params", '{"a":1}'), clickUrlEnc: waEncrypt(sid, "click", "https://shop.test/x") },
+    const message = await systemDb.wappMessage.create({
+      data: { workspaceId: ws.id, storeId: sid, source: "manual", type: "text", idempotencyKey: "k", payloadEnc: waEncrypt(sid, "payload", '{"text":"hi"}'), previewEnc: waEncrypt(sid, "preview", "hi") },
     });
-    const tracking = await systemDb.orderTracking.create({
-      data: {
-        workspaceId: ws.id, storeId: sid, shopifyOrderId: "1", orderName: "#1", tokenHash: "th", tokenEnc: waEncrypt(sid, "track", "track-token"),
-        reviewTokenHash: "rh", reviewTokenEnc: waEncrypt(sid, "review", "review-token"), currency: "USD", totalPrice: 10, items: [], orderCreatedAt: new Date(), expiresAt: new Date(Date.now() + 86_400_000),
-      },
-    });
-    const checkout = await systemDb.abandonedCheckout.create({
-      data: {
-        workspaceId: ws.id, storeId: sid, checkoutToken: "c", currency: "USD", totalPrice: 10, items: [], checkoutCreatedAt: new Date(), lastActivityAt: new Date(),
-        customerNameEnc: waEncrypt(sid, "name", "Ravi"), recoveryUrlEnc: waEncrypt(sid, "recovery", "https://shop.test/recover"),
-      },
-    });
+    const hook = await systemDb.wappWebhookEvent.create({ data: { workspaceId: ws.id, storeId: sid, connectionId: conn.id, event: "MESSAGES_UPSERT", bodyHash: "b", bodyEnc: waEncrypt(sid, "webhook", '{"event":"messages.upsert"}') } });
 
-    // Retention sweeps measure from updatedAt (e.g. clearing a failed message's details after 7
-    // days), so re-encrypting must not make old rows look recently touched.
+    // The sweep measures a send cut off mid-call from updatedAt: re-encrypting must not make an old
+    // row look recently touched.
     const longAgo = new Date("2026-01-01T00:00:00Z");
-    await systemDb.whatsappMessage.updateMany({ where: { id: message.id }, data: { updatedAt: longAgo } });
-    await systemDb.abandonedCheckout.updateMany({ where: { id: checkout.id }, data: { updatedAt: longAgo } });
+    await systemDb.wappMessage.updateMany({ where: { id: message.id }, data: { updatedAt: longAgo } });
 
     useKeys(`${NEW},${OLD}`);
     // 1 store + 1 ad connection + 5 WhatsApp rows.
@@ -77,21 +73,17 @@ describe("rotating the token encryption key", () => {
     useKeys(NEW);
     expect(await getAccessToken(store, memoryCoord())).toBe("shpat_k");
     expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: ad.id } }))).toBe("EAA_ad");
-    const c = await systemDb.whatsappConnection.findUniqueOrThrow({ where: { id: conn.id } });
-    expect([waDecrypt(sid, "access", c.accessTokenEnc), waDecrypt(sid, "app_secret", c.appSecretEnc!), waDecrypt(sid, "verify", c.verifyTokenEnc!), waDecrypt(sid, "pin", c.pinEnc!)]).toEqual([
-      "EAA_wa", "app-secret", "verify-token", "123456",
-    ]);
-    expect(c.tokenKeyVersion).toBe(2);
-    const k = await systemDb.whatsappContact.findUniqueOrThrow({ where: { id: contact.id } });
-    expect([waDecrypt(sid, "phone", k.phoneEnc), waDecrypt(sid, "name", k.firstNameEnc!)]).toEqual(["919000000001", "Asha"]);
-    const m = await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: message.id } });
-    expect([waDecrypt(sid, "params", m.paramsEnc!), waDecrypt(sid, "click", m.clickUrlEnc!)]).toEqual(['{"a":1}', "https://shop.test/x"]);
+    const c = await systemDb.wappConnection.findUniqueOrThrow({ where: { id: conn.id } });
+    expect([waDecrypt(sid, "instance_token", c.instanceTokenEnc!), waDecrypt(sid, "webhook_key", c.webhookKeyEnc!), waDecrypt(sid, "linked_phone", c.phoneEnc!)]).toEqual(["tok", "key", "+61400000009"]);
+    const settings = await systemDb.wappSettings.findUniqueOrThrow({ where: { storeId: sid } });
+    expect(waDecrypt(sid, "test_phone", settings.testPhoneEnc!)).toBe("+61400000001");
+    const k = await systemDb.wappContact.findUniqueOrThrow({ where: { id: contact.id } });
+    expect([waDecrypt(sid, "phone", k.phoneEnc), waDecrypt(sid, "name", k.firstNameEnc!)]).toEqual(["+919000000001", "Asha"]);
+    const m = await systemDb.wappMessage.findUniqueOrThrow({ where: { id: message.id } });
+    expect([waDecrypt(sid, "payload", m.payloadEnc!), waDecrypt(sid, "preview", m.previewEnc!)]).toEqual(['{"text":"hi"}', "hi"]);
     expect(m.updatedAt).toEqual(longAgo);
-    const t = await systemDb.orderTracking.findUniqueOrThrow({ where: { id: tracking.id } });
-    expect([waDecrypt(sid, "track", t.tokenEnc), waDecrypt(sid, "review", t.reviewTokenEnc)]).toEqual(["track-token", "review-token"]);
-    const a = await systemDb.abandonedCheckout.findUniqueOrThrow({ where: { id: checkout.id } });
-    expect([waDecrypt(sid, "name", a.customerNameEnc!), waDecrypt(sid, "recovery", a.recoveryUrlEnc!)]).toEqual(["Ravi", "https://shop.test/recover"]);
-    expect(a.updatedAt).toEqual(longAgo);
+    const w = await systemDb.wappWebhookEvent.findUniqueOrThrow({ where: { id: hook.id } });
+    expect(waDecrypt(sid, "webhook", w.bodyEnc!)).toBe('{"event":"messages.upsert"}');
   });
 
   it("a Google token refreshed between adding the key and re-encrypting is sealed whole with the new key, so removing the old one strands nothing", async () => {
@@ -157,7 +149,7 @@ describe("rotating the token encryption key", () => {
     const meta = await systemDb.adConnection.create({
       data: { workspaceId: ws.id, storeId: store.id, provider: "meta", accountId: "act_1", currency: "USD", timezone: "UTC", ...encryptAdTokens(store.id, "meta", { accessToken: "EAA_ad", refreshToken: null, expiresAt: null }) },
     });
-    const contact = await systemDb.whatsappContact.create({ data: { workspaceId: ws.id, storeId: store.id, phoneHash: "h", phoneEnc: waEncrypt(store.id, "phone", "919000000001"), phoneMasked: "001" } });
+    const contact = await systemDb.wappContact.create({ data: { workspaceId: ws.id, storeId: store.id, phoneHash: "h", phoneEnc: waEncrypt(store.id, "phone", "919000000001"), phoneMasked: "001" } });
     // And a store token that no key opens (damaged), which fails its part.
     const broken = await systemDb.store.create({
       data: { workspaceId: ws.id, shopDomain: "x.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-x", accessTokenEnc: encryptAdTokens(store.id, "meta", { accessToken: "x", refreshToken: null, expiresAt: null }).accessTokenEnc, tokenKeyVersion: 2 },
@@ -173,7 +165,7 @@ describe("rotating the token encryption key", () => {
     // The parts after the failing one ran all the same.
     useKeys(V3);
     expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: meta.id } }))).toBe("EAA_ad");
-    expect(waDecrypt(store.id, "phone", (await systemDb.whatsappContact.findUniqueOrThrow({ where: { id: contact.id } })).phoneEnc)).toBe("919000000001");
+    expect(waDecrypt(store.id, "phone", (await systemDb.wappContact.findUniqueOrThrow({ where: { id: contact.id } })).phoneEnc)).toBe("919000000001");
     // Once the damaged row is dealt with, nothing is left.
     await systemDb.store.delete({ where: { id: broken.id } });
     useKeys(`${V3},${NEW}`);

@@ -14,8 +14,12 @@ export const testEnv = {
   NODE_ENV: "test",
   APP_URL: "http://localhost:3001",
   API_URL: "http://localhost:4000",
-  DATABASE_URL: `postgresql://app:${password}@127.0.0.1:${port}/${db}`,
+  // systemDb's login is the system role, as in production (docs/system-database-role.md): row-level
+  // security applies to it. Migrations and resetDb's TRUNCATE need the owner (OWNER_DATABASE_URL).
+  DATABASE_URL: `postgresql://app_system:app_system@127.0.0.1:${port}/${db}`,
+  OWNER_DATABASE_URL: `postgresql://app:${password}@127.0.0.1:${port}/${db}`,
   APP_DATABASE_URL: `postgresql://app_rls:app_rls@127.0.0.1:${port}/${db}`,
+  APP_SYSTEM_DATABASE_URL: `postgresql://app_system:app_system@127.0.0.1:${port}/${db}`,
   SESSION_SECRET: "test-session-secret-0123456789",
   TOKEN_ENCRYPTION_KEYS: "1:MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
   OTP_PEPPER: "test-pepper-123",
@@ -35,5 +39,13 @@ export const testEnv = {
   SHOPIFY_APP_SECRET_CLIENT: "client_secret",
   SHOPIFY_APP_SECRET_PUBLIC: "public_secret",
   SHOPIFY_APP_SECRET_APPSTORE: "appstore_secret",
+  // The senders production has (apps/aws/src/settings.ts; core/mail/senders.ts).
+  OTP_FROM_EMAIL: "support@bizinsights.io",
+  OTP_FROM_NAME: "BizInsights Support",
+  LINK_FROM_EMAIL: "link@bizinsights.io",
+  LINK_FROM_NAME: "BizInsights",
+  STAFF_FROM_EMAIL: "staff@bizinsights.io",
+  STAFF_FROM_NAME: "BizInsights",
+  SUPPORT_EMAIL: "support@bizinsights.io",
   LOG_LEVEL: "silent",
 };

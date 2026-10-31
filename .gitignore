@@ -35,3 +35,6 @@ cdk.out
 
 # Local remnants of the retired Worker deployment (may contain secrets).
 apps/cloudflare/
+
+# Country flags copied from country-flag-icons at build time (apps/web/scripts/copy-flags.mjs)
+apps/web/public/flags/

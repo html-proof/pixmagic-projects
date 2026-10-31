@@ -1,11 +1,24 @@
 import { Prisma, systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
-import type { NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
-import { revokeAdAccessIfUnused } from "./adConnections.js";
+import { logger } from "./logger.js";
+import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
+import { releaseAdLoginsWhere, revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
+import { purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
+import { purgeZapierStoreOps } from "./zapier/manage.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
+
+const historicalLineSelect = { shopifyId: true, productShopifyId: true, variantShopifyId: true, sku: true, title: true } as const;
+type HistoricalLine = Pick<NormalizedLineItem, "productShopifyId" | "variantShopifyId" | "sku" | "title">;
+
+/** Deleted products/variants become null in GraphQL; keep identities already learned for this line. */
+function retainLineHistory(line: NormalizedLineItem, before?: HistoricalLine): NormalizedLineItem {
+  return { ...line, productShopifyId: line.productShopifyId ?? before?.productShopifyId ?? null,
+    variantShopifyId: line.variantShopifyId ?? before?.variantShopifyId ?? null,
+    sku: line.sku ?? before?.sku ?? null, title: line.title.trim() ? line.title : before?.title ?? "" };
+}
 
 /**
  * Customers are never stored; only a keyed hash scoped to the store, and only
@@ -103,10 +116,14 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
       create: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: o.shopifyId },
       update: data,
     });
+    const previousLines = current ? await tx.orderLineItem.findMany({
+      where: { workspaceId: store.workspaceId, storeId: store.id, orderId: order.id }, select: historicalLineSelect,
+    }) : [];
+    const previousById = new Map(previousLines.map(line => [line.shopifyId, line]));
     await tx.orderLineItem.deleteMany({ where: { orderId: order.id } });
     if (o.lineItems.length) {
       await tx.orderLineItem.createMany({
-        data: o.lineItems.map((li) => ({
+        data: o.lineItems.map(line => retainLineHistory(line, previousById.get(line.shopifyId))).map((li) => ({
           workspaceId: store.workspaceId,
           storeId: store.id,
           orderId: order.id,
@@ -385,12 +402,16 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
     const idFor = new Map(written.map((w) => [w.shopify_id, w.id]));
     if (!idFor.size) return;
 
+    const previousLines = await tx.orderLineItem.findMany({
+      where: { workspaceId: store.workspaceId, storeId: store.id, orderId: { in: [...idFor.values()] } }, select: historicalLineSelect,
+    });
+    const previousById = new Map(previousLines.map(line => [line.shopifyId, line]));
     await tx.$executeRaw`DELETE FROM order_line_items WHERE order_id = ANY(${[...idFor.values()]}::text[])`;
 
     const items = rows.flatMap((o) => {
       const orderId = idFor.get(o.shopifyId);
       return orderId
-        ? o.lineItems.map((li) => ({
+        ? o.lineItems.map(line => retainLineHistory(line, previousById.get(line.shopifyId))).map((li) => ({
             order_id: orderId,
             shopify_id: li.shopifyId,
             product_shopify_id: li.productShopifyId,
@@ -594,6 +615,7 @@ export async function bulkUpsertProducts(store: Pick<Store, "id" | "workspaceId"
   for (const p of partial) await upsertProduct(store, p);
   const rows = all.filter((p) => p.handle !== undefined);
   if (!rows.length) return;
+  // Collections Shopify withheld (undefined, sent as NULL) keep the stored ones, as upsertProduct does.
   await systemDb.$executeRaw`
     INSERT INTO products (id, workspace_id, store_id, shopify_id, title, status, vendor, product_type, shopify_created_at, shopify_updated_at,
                           handle, description, tags, category, collections, image_url, online_store_url)
@@ -606,14 +628,14 @@ export async function bulkUpsertProducts(store: Pick<Store, "id" | "workspaceId"
       ${rows.map((p) => ts(p.createdAt))}::text[], ${rows.map((p) => ts(p.updatedAt))}::text[],
       ${rows.map((p) => p.handle ?? null)}::text[], ${rows.map((p) => p.description ?? null)}::text[],
       ${rows.map((p) => JSON.stringify(p.tags ?? []))}::text[], ${rows.map((p) => p.category ?? null)}::text[],
-      ${rows.map((p) => JSON.stringify(p.collections ?? []))}::text[], ${rows.map((p) => p.imageUrl ?? null)}::text[],
+      ${rows.map((p) => (p.collections === undefined ? null : JSON.stringify(p.collections)))}::text[], ${rows.map((p) => p.imageUrl ?? null)}::text[],
       ${rows.map((p) => p.onlineStoreUrl ?? null)}::text[]
     ) AS s(shopify_id, title, status, vendor, product_type, created_at, updated_at, handle, description, tags, category, collections, image_url, online_store_url)
     ON CONFLICT (store_id, shopify_id) DO UPDATE SET
       title = EXCLUDED.title, status = EXCLUDED.status, vendor = EXCLUDED.vendor,
       product_type = EXCLUDED.product_type, shopify_created_at = EXCLUDED.shopify_created_at,
       shopify_updated_at = EXCLUDED.shopify_updated_at, handle = EXCLUDED.handle, description = EXCLUDED.description,
-      tags = EXCLUDED.tags, category = EXCLUDED.category, collections = EXCLUDED.collections,
+      tags = EXCLUDED.tags, category = EXCLUDED.category, collections = COALESCE(EXCLUDED.collections, products.collections),
       image_url = EXCLUDED.image_url, online_store_url = EXCLUDED.online_store_url
     WHERE products.shopify_updated_at <= EXCLUDED.shopify_updated_at`;
 }
@@ -719,6 +741,8 @@ export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: 
  *    Shipping lines make shipping, duty lines duties, and fees, additional fees and lines of no
  *    known type additional fees (`chargeLine` in @app/shared): those three and taxes go to total
  *    sales only. Gift cards and tips count nowhere, as in Shopify's reports.
+ *  - Total refunded: a return action's sales (refunds, returns, cancellations) with their tax, all
+ *    lines but gift cards: what they took off total sales that day.
  *  - Every sale keeps the sign Shopify gave it: a refund's adjustment lines come in pairs of both
  *    signs, and only their sum is what it took back (`saleValue` in @app/shared).
  *
@@ -734,9 +758,9 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
     await tx.$executeRaw`
     ${dayTotals(store, days)}
     INSERT INTO daily_store_metrics
-      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, orders, order_value, units,
+      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, total_refunded, orders, order_value, units,
        orders_with_customer, returning_customer_orders, refunded_orders)
-    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, orders, order_value, units,
+    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, total_refunded, orders, order_value, units,
            orders_with_customer, returning_customer_orders, refunded_orders
     FROM t
     ON CONFLICT (store_id, day) DO UPDATE SET
@@ -748,6 +772,7 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
       duties = EXCLUDED.duties,
       additional_fees = EXCLUDED.additional_fees,
       total_sales = EXCLUDED.total_sales,
+      total_refunded = EXCLUDED.total_refunded,
       orders = EXCLUDED.orders,
       order_value = EXCLUDED.order_value,
       units = EXCLUDED.units,
@@ -799,6 +824,7 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
              SUM(tax) FILTER (WHERE line_type <> 'gift_card') AS taxes,
              SUM(value) FILTER (WHERE line_type = 'duty') AS duties,
              SUM(value) FILTER (WHERE line_type NOT IN ('shipping', 'product', 'adjustment', 'gift_card', 'duty')) AS fees,
+             -SUM(value + tax) FILTER (WHERE action_type = 'return' AND line_type <> 'gift_card') AS refunded,
              (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'order'))::int AS units_in,
              (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'return'))::int AS units_out,
              (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return' AND line_type <> 'gift_card'))::int AS ro
@@ -812,6 +838,7 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
              COALESCE(s.duties, 0) AS duties, COALESCE(s.fees, 0) AS additional_fees,
              COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0)
                + COALESCE(s.duties, 0) + COALESCE(s.fees, 0) AS total_sales,
+             COALESCE(s.refunded, 0) AS total_refunded,
              COALESCE(o.orders, 0) AS orders, COALESCE(s.placed, 0) AS order_value,
              COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0) AS units,
              COALESCE(o.owc, 0) AS orders_with_customer, COALESCE(o.ret, 0) AS returning_customer_orders, COALESCE(s.ro, 0) AS refunded_orders
@@ -913,6 +940,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.inventorySyncRun.deleteMany({ where: { storeId } }),
     systemDb.inventorySettings.deleteMany({ where: { storeId } }),
     systemDb.dailyStoreMetrics.deleteMany({ where: { storeId } }),
+    // The full history's import plan, year by year: the next import plans its own.
+    systemDb.orderHistoryWindow.deleteMany({ where: { storeId } }),
     // The store's own sales calculation (which lines Custom sales counts) goes with its figures.
     systemDb.salesCalculation.deleteMany({ where: { storeId } }),
     // Its checks against Shopify describe data that is gone.
@@ -920,29 +949,46 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.shopifyReport.deleteMany({ where: { storeId } }),
     systemDb.funnelDaily.deleteMany({ where: { storeId } }),
     systemDb.funnelVisit.deleteMany({ where: { storeId } }),
+    systemDb.funnelProductVisit.deleteMany({ where: { storeId } }),
+    systemDb.funnelActionCheck.deleteMany({ where: { storeId } }),
     systemDb.pixelEventSeen.deleteMany({ where: { storeId } }),
     // Connected ad accounts belong to the store too: their numbers and their tokens go with it.
     systemDb.adCampaignDaily.deleteMany({ where: { storeId } }),
     systemDb.adsenseDaily.deleteMany({ where: { storeId } }),
     systemDb.adConnection.deleteMany({ where: { storeId } }),
-    // WhatsApp: customers' numbers, messages, timelines, reviews, and the store's own credentials.
-    systemDb.whatsappMessageEvent.deleteMany({ where: { storeId } }),
-    systemDb.whatsappMessage.deleteMany({ where: { storeId } }),
-    systemDb.whatsappContact.deleteMany({ where: { storeId } }),
-    systemDb.orderTrackingEvent.deleteMany({ where: { storeId } }),
-    systemDb.orderTracking.deleteMany({ where: { storeId } }),
-    systemDb.abandonedCheckout.deleteMany({ where: { storeId } }),
-    systemDb.customerReview.deleteMany({ where: { storeId } }),
-    systemDb.whatsappCampaign.deleteMany({ where: { storeId } }),
-    systemDb.whatsappAutomationRun.deleteMany({ where: { storeId } }),
-    systemDb.whatsappAutomationRule.deleteMany({ where: { storeId } }),
-    systemDb.whatsappTemplate.deleteMany({ where: { storeId } }),
-    systemDb.whatsappConnection.deleteMany({ where: { storeId } }),
-    systemDb.whatsappSettings.deleteMany({ where: { storeId } }),
+    // WhatsApp Automation: customers' numbers, consent, messages, automations, campaigns and the
+    // store's connection (its Evolution API instance goes first: the erase's caller deletes it).
+    // Then what the retired WhatsApp features still hold until their tables are dropped.
+    ...purgeWhatsappStoreOps(storeId),
+    ...purgeLegacyWhatsappOps(storeId),
+    // Customer Messaging (SMS): customers' numbers, consent history, texts, costs, and the store's sender.
+    systemDb.smsDeliveryEvent.deleteMany({ where: { storeId } }),
+    systemDb.smsCostRecord.deleteMany({ where: { storeId } }),
+    systemDb.smsMessageJob.deleteMany({ where: { storeId } }),
+    systemDb.smsCampaignRecipient.deleteMany({ where: { storeId } }),
+    systemDb.smsCampaign.deleteMany({ where: { storeId } }),
+    systemDb.smsSegment.deleteMany({ where: { storeId } }),
+    systemDb.smsAutomationRule.deleteMany({ where: { storeId } }),
+    systemDb.smsTemplateVersion.deleteMany({ where: { storeId } }),
+    systemDb.smsTemplate.deleteMany({ where: { storeId } }),
+    systemDb.smsCheckout.deleteMany({ where: { storeId } }),
+    systemDb.smsConsentRecord.deleteMany({ where: { storeId } }),
+    systemDb.smsContactOrder.deleteMany({ where: { storeId } }),
+    systemDb.smsContact.deleteMany({ where: { storeId } }),
+    systemDb.smsSuppression.deleteMany({ where: { storeId } }),
+    systemDb.smsTestNumber.deleteMany({ where: { storeId } }),
+    systemDb.smsAuditLog.deleteMany({ where: { storeId } }),
+    systemDb.smsSenderConfiguration.deleteMany({ where: { storeId } }),
+    systemDb.smsSetup.deleteMany({ where: { storeId } }),
+    // Zapier: the store's connections (their tokens stop working), its Zaps' triggers and its outbox.
+    ...purgeZapierStoreOps(storeId),
     // The orders and visits are gone, and where their history started with them: the next import
-    // and pixel record their own.
-    systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null } }),
+    // and pixel record their own. So is from when the orders carry their customer: the connect that
+    // brings the store back records it again (connectStore.ts).
+    systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null, customersFrom: null } }),
   ]);
   // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
   for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);
+  // A sign-in still waiting for its ad accounts goes too, with its grant.
+  await releaseAdLoginsWhere({ storeId }, fetchImpl).catch((err: unknown) => logger.warn({ err, storeId }, "a waiting ad login wasn't let go with its store"));
 }

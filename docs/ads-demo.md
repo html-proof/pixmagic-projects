@@ -10,9 +10,10 @@ a separate mode that never falls back to the demo.
 
 ## What a merchant sees
 
-1. Settings → **Connect your business** (or Settings → **Advertising**): the Google Ads card offers
-   **Try demo** next to (or, while the real sign-in isn't set up on this server, instead of)
-   **Continue with Google Ads**. Members with "Manage integrations" see it.
+1. Settings → **Advertising**: the Google Ads card offers **Try demo** next to (or, while the real
+   sign-in isn't set up on this server, instead of) **Continue with Google Ads**. On Settings →
+   **Integrations**, the Google Ads card offers it under its **Connect** button (or as its only button
+   while the Google Ads sign-in isn't set up). Members with "Manage integrations" see it.
 2. **Try demo** opens bizinsights' own five-screen flow: an explanation (no Google account or data is
    used), the demo account (`DEMO-ADS-001`, "Demo Business Marketing", the store's currency and time
    zone), the demo's fictional data permissions (not Google OAuth scopes), "Connecting…" while the
@@ -25,9 +26,10 @@ a separate mode that never falls back to the demo.
    data**, **Reset demo data**, **Disconnect demo**. "Continue with Google Ads" stays beside it for
    the real thing.
 4. Its figures show wherever a Google Ads account's do, marked **DEMO DATA**: the dashboard's
-   Advertising section and Marketing panel (its spend is **not** set against the store's own sales:
-   `sales`, `shareOfSales` and `sourced` are left out of the ads module while a demo is among the
-   accounts), the Google Ads live report, and the **Google Ads Analytics** page (`/ads/google`).
+   Advertising section and the Advertising area's pages ([advertising.md](advertising.md); its spend
+   is **not** set against the store's own sales: `sales`, `shareOfSales` and `sourced` are left out of
+   the ads module while a demo is among the accounts), the Google Ads live report, and the **Google
+   Ads Analytics** page (`/advertising/google/analytics`; the old `/ads/google` opens it).
 5. **Disconnect** deletes the demo and its figures; nothing is handed back (there was no grant) and
    no other connection is touched.
 
@@ -47,8 +49,22 @@ a separate mode that never falls back to the demo.
   the 90-day trends are relative to the demo's **epoch**, the day it was connected (in its own time
   zone), so figures never shift as days pass. Also here: the splits by device, country (home country
   by currency, Google's geo target ids), age group and audience segment, each scaled to add up to the
-  totals exactly; the live report by campaign, ad group (two per campaign, none for Performance Max),
-  device and country; and the simulated store next to the demo (modeled attribution).
+  totals exactly; the live report by campaign (with the fields a real campaign row has: Google's primary
+  status and its reasons from `demoPrimaryStatus`, as of the account's today whatever the dates: Paused for
+  the paused one, Limited by budget where an ordinary day's clicks then (its base with its trends as of
+  today) would cost more than the daily budget, so its spend is held down, Eligible otherwise; and a `DAILY` budget, never a total), ad group (two per campaign, none for Performance Max),
+  device and country, and down from a campaign: its two ad groups, a Performance Max campaign's two
+  asset groups, an ad group's two or three ads (unnamed, as most Google ad types are, so named by
+  their type and a stable id from the seed), each level split from the one above so it adds up to it
+  to the cent; the **keywords** of the two Search campaigns (Search Advertising: running shoes; Lead
+  Generation: shoe fittings), four or five per ad group with a match type and a Quality Score from 3
+  to 9 (from the seed), adding up to their ad group exactly; the **search terms** in the shape of
+  Google's `campaign_search_term_view` (one per campaign and term): each Search keyword's own words
+  and a variant or two, and seven or eight product searches for the Shopping and Performance Max
+  campaigns, carrying only part of each campaign's figures (75-90% for Search, 60-80% Shopping,
+  35-55% Performance Max: the rest stands for terms below Google's privacy threshold and placements
+  with no search term), so the terms never add up to more than the campaign (no brand is named in
+  either); and the simulated store next to the demo (modeled attribution).
 - **Source adapter** (`packages/core/src/ads/googleAdsSource.ts`): `GoogleAdsSource` answers
   `campaignDays`, `accountHealth` and `report`; `GoogleAdsDemoProvider` from the generator,
   `GoogleAdsProductionProvider` from Google's API with the OAuth client and the person's token.
@@ -101,9 +117,14 @@ changes "Manage integrations" (`integrations.manage`).
 | `POST /demo/reset` (`{ seed? }`) | A new seed (or the one given), figures deleted and generated again. |
 | `GET /analytics` | Everything the analytics page shows, for `?connection=` (the demo by default) and the dashboard's date query (`preset`, `from`, `to`, `compare`, `cfrom`, `cto`). |
 | `GET /analytics/overview`, `/campaigns` (`q`, `status`, `type`, `sort`, `dir`, `page`, `pageSize`), `/performance`, `/conversions`, `/devices`, `/audience`, `/recommendations`, `/combined` | Slices of the same. Also under `/demo/…` (the brief's names). |
+| `GET /analytics/export?part=` | One section as CSV (`overview`, `campaigns`, `days`, `weeks`, `months`, `devices`, `audience`, `recommendations`, `combined`), with the same query as `/analytics`. Needs "Export approved reports" as well, in the audit log; a demo's file is named `…-demo-simulated-…` and its first row says the figures are simulated ([advertising.md](advertising.md), "Reports and downloads"). |
 
-The existing `GET …/ads/google/report` (campaign, ad group, device, country) answers for the demo
-too, generated instead of fetched.
+The existing `GET …/ads/google/report` (campaign, ad group, device, country, keyword, search term,
+and down from a campaign with `campaign=` / `adGroup=`, the demo's own ids such as `demo-c2` and
+`demo-c2-core`) answers for the demo too, generated instead of fetched: a Google-shaped id is refused
+there (400). Keywords and search terms have the account's, campaign's or ad group's own figures on
+top, as a real account's do; the demo's spend none of Google's operations, so neither of their guards
+(70% of the day's allowance, 25 reads per ad account a day: [ads-setup.md](ads-setup.md)) applies.
 
 A connect answer:
 
@@ -127,9 +148,9 @@ A connect answer:
 
 Local server ([local-dev.md](local-dev.md)): `pnpm --filter @app/aws dev --settings` with
 `GOOGLE_ADS_DEMO_ENABLED=1` (the example env sets it). Sign in, connect a store (or insert one as
-the e2e helpers do), open Settings → Connect your business → **Try demo**. The local server runs the
+the e2e helpers do), open Settings → Integrations → **Try demo**. The local server runs the
 queue in-process, so the demo's 90 days land within seconds; **Open demo dashboard** opens
-`/ads/google`.
+`/advertising/google/analytics`.
 
 Tests:
 
@@ -157,10 +178,10 @@ disconnect, and a view-only member).
 
 ## The real Google Ads connection
 
-Unchanged by the demo, and the only way to real figures: "Continue with Google Ads" opens Google's
-own sign-in (authorization code flow with PKCE and single-use state, `routes/ads.ts`), the callback
-exchanges the code on the server, tokens are stored encrypted, the person picks the accounts their
-login reaches, and the sync reads them through the Google Ads API. What it still needs at Google is
+Unchanged by the demo, and the only way to real figures: "Continue with Google Ads" sends the browser
+to Google's own consent screen and back (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works),
+`routes/ads.ts`), bizinsights keeps the tokens encrypted, the person picks the accounts their login
+reaches, and the sync reads them through the Google Ads API. What it still needs at Google is
 in [integrations-readiness.md](integrations-readiness.md): Google's verification of the `adwords`
 scope (until then `GOOGLE_ADS_OAUTH_VERIFIED` stays empty and the card warns about Google's
 "unverified app" screen) and an API access level that admits real accounts (`GOOGLE_ADS_ENABLED`).

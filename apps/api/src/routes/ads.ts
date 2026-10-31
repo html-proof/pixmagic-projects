@@ -1,13 +1,14 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { dbReachable, systemDb, withTenant, type AdConnection } from "@app/db";
+import { dbReachable, systemDb, withTenant, type AdConnection, type AdLogin } from "@app/db";
 import {
   AD_PROVIDER_NAME,
+  AdConsentNeededError,
+  AdLoginWaitingError,
+  AdNoRefreshTokenError,
+  AdPermissionMissingError,
   adsConfigured,
   adsRestricted,
-  adsenseAccounts,
-  adsenseAuthorizeUrl,
-  adsenseConfig,
   adsenseReportForConnection,
   AdsApiError,
   AdsAuthError,
@@ -19,48 +20,42 @@ import {
   AdsRetryableError,
   AdsUnavailableError,
   adToday,
-  adsRedirectUri,
   AD_REPORT_BUDGET_MS,
   audit,
-  countGoogleAdsOperations,
-  countingGoogleAdsFetch,
+  checkAdLogin,
   dropUnusedGrant,
   enqueueAdCatchUp,
   enqueueAdSync,
   env,
-  googleAdAccounts,
-  googleAuthorizeUrl,
-  googleClient,
-  googleConfig,
-  googleAdsPaused,
-  googleExchangeCode,
   googleReportForConnection,
-  googleUserId,
-  holdPendingAdConnect,
-  holdsReusableRefreshToken,
   disconnectGoogleAdsDemo,
+  dropAdLoginOf,
+  googleAdsBudget,
+  googleAdsBudgetAllows,
   googleAdsConnectionStatus,
   googleAdsDemoEnabled,
+  googleAdsPaused,
   googleProductionMissing,
+  holdAdLogin,
+  holdPendingAdConnect,
   isDemoConnection,
   logger,
   providerDetail,
-  metaAdAccounts,
-  metaAuthorizeUrl,
-  metaConfig,
-  metaExchangeCode,
-  metaGrantedPermissions,
   META_REPORT_JOB,
   metaReportForConnection,
-  metaUserId,
-  pauseGoogleAds,
   peekPendingAdConnect,
   pendingTokens,
+  readAdSignIn,
+  releaseAdLogin,
   REQUIRED_AD_SCOPE,
-  reusableRefreshToken,
   revokeAdAccessIfUnused,
   saveAdConnections,
+  startAdSignIn,
+  takeAdSignInState,
   takePendingAdConnect,
+  toCsv,
+  AD_SIGN_IN_TTL_S,
+  type AdSignInProgress,
   type AdAccountList,
   type AdsenseLiveReport,
   type GoogleReport,
@@ -70,45 +65,54 @@ import {
 } from "@app/core";
 import {
   AD_CONNECTION_STATUSES,
+  AD_LOGIN_REASONS,
   AD_PROVIDERS,
   ADSENSE_REPORT_LEVELS,
+  addDays,
   adErrorMessage,
   adStatusCode,
   allows,
   daysBetweenInclusive,
   GOOGLE_REPORT_LEVELS,
+  googleParentFits,
   googleReportMetrics,
   isAdAccountStatus,
   isAdErrorCode,
   isDay,
+  isDemoObjectId,
+  isGoogleDetailLevel,
+  isGoogleObjectId,
+  isMetaObjectId,
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
+  metaParentFits,
   metaReportMetrics,
-  pkcePair,
   randomToken,
   safeEqual,
   sha256Hex,
   type AdConnectionStatus,
   type AdProvider,
 } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, memberAllows, requireWorkspace, type Deps } from "../context.js";
+import { googleReportTable, metaReportTable, type CsvTable } from "@app/core/reports";
+import { body, clientIp, HttpError, loadUser, memberAllows, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
 /**
- * "Continue with Meta" / "Continue with Google Ads": connect a store's ad accounts, read-only, so
- * the dashboard can show what's spent on ads next to what the store sells. "Continue with Google
- * AdSense" connects the other direction: what the store's site earns from ads shown on it.
+ * A store's ad accounts, read-only, so the dashboard can show what's spent on ads next to what the
+ * store sells (Meta Ads, Google Ads), and what the store's site earns from ads shown on it (Google
+ * AdSense): the connections and their sync history, the account choice, showing or hiding an account,
+ * Sync now, disconnecting, and the live reports.
  *
- * The OAuth round trip mirrors the Shopify connect: single-use state in the coordinator, bound
- * to this browser by a cookie, and the callback only accepted for the person who started it.
- * When the sign-in can see several accounts (and some are new), the person chooses which to
- * connect on the integrations page; the sign-in's tokens wait, encrypted, in the coordinator.
- * A finished connection lands on the dashboard, where the numbers are. A sign-in that ends
+ * "Continue with Meta Ads" / "Google Ads" / "Google AdSense": bizinsights' own sign-in with the
+ * platform (core's adConnections/signIn.ts), read-only. The OAuth round trip mirrors the Shopify
+ * connect: single-use state in the coordinator, bound to this browser by a cookie, and the callback
+ * only accepted for the person who started it. When the sign-in can see several accounts (and some are
+ * new), the person chooses which to connect here; the sign-in's tokens wait, encrypted, in the
+ * coordinator. A finished connection lands on the dashboard, where the numbers are. A sign-in that ends
  * without a connection gives its grant back to the platform, unless something else relies on it.
  */
 
-const STATE_TTL_S = 600;
 const STATE_COOKIE = "ads_oauth_state";
 /**
  * The sign-ins this browser started that haven't come back yet, newest first. A second press of the
@@ -118,25 +122,42 @@ const STATE_COOKIE = "ads_oauth_state";
 const MAX_PENDING_STATES = 5;
 const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
 
-const cookieOpts = () => ({ path: "/", httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production", maxAge: STATE_TTL_S });
+const cookieOpts = () => ({ path: "/", httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production", maxAge: AD_SIGN_IN_TTL_S });
 
-interface AdsState {
-  userId: string;
-  workspaceId: string;
-  storeId: string;
-  provider: AdProvider;
-  /** PKCE verifier (Google): kept here on the server; only its challenge went to the browser. */
-  codeVerifier?: string;
-  /**
-   * Google: false when the consent screen was skipped (the person already gave bizinsights a working
-   * refresh token, holdsReusableRefreshToken). A sign-in that then brings none asks again with it.
-   */
-  consent?: boolean;
+/**
+ * How long a callback waits for the database before giving up on it. A database failover takes 10-20
+ * seconds, and the person has just been through the platform's sign-in, which is not theirs to repeat
+ * because of us.
+ */
+const CALLBACK_DB_WAIT_MS = 20_000;
+const DB_POLL_MS = 1_000;
+
+/** The database didn't answer before the callback's deadline. `cause` is the step's own error. */
+class DbUnavailable extends Error {}
+
+/**
+ * Run one database step of the callback, waiting out an outage: when the step fails and the database
+ * doesn't answer, wait for it to answer again (until `deadline`) and run the step again. A failure while
+ * the database answers is the step's own, and is thrown as it is.
+ */
+async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise<T>): Promise<T> {
+  const answers = deps.dbHealthy ?? (() => dbReachable());
+  for (;;) {
+    try {
+      return await step();
+    } catch (err) {
+      if (await answers()) throw err;
+      do {
+        if (Date.now() + DB_POLL_MS > deadline) throw new DbUnavailable("database unreachable", { cause: err });
+        await new Promise((r) => setTimeout(r, DB_POLL_MS));
+      } while (!(await answers()));
+    }
+  }
 }
 
 const providerSchema = z.enum(AD_PROVIDERS);
 
-/** The callback's ?error= for each way a login can have nothing to connect (the settings page words each one, per platform). */
+/** The ?error= (or finish code) for each way a login can have nothing to connect (the settings page words each one, per platform). */
 const NO_ACCOUNTS_ERROR: Record<NoAdAccountsReason, string> = {
   no_ads_account: "no_accounts",
   manager_only: "manager_only",
@@ -183,6 +204,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     accountStatus: isAdAccountStatus(c.accountStatus) ? c.accountStatus : null,
     accountStatusDetail: c.accountStatusDetail,
     lastSyncedAt: c.lastSyncedAt,
+    /** When the last sync started, whatever came of it ("Last attempted"). */
+    lastSyncAttemptAt: c.lastSyncAttemptAt,
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
     historyFrom: c.historyFrom,
@@ -231,6 +254,31 @@ export async function publicConnections(ws: string, rows: AdConnection[], viewer
   return rows.map((r) => publicConnection(r, ctx));
 }
 
+/**
+ * A sign-in kept connected while it reaches no ad account (core's logins.ts), as the browser may see it:
+ * who it signed in as and why nothing is connected yet. Never a token or the platform's ids.
+ */
+async function publicLogins(ws: string, rows: AdLogin[], viewer: { id: string | null; seesEmail: boolean }) {
+  const userIds = [...new Set(rows.map((r) => r.connectedByUserId).filter((id): id is string => !!id))];
+  const members = userIds.length
+    ? await withTenant(ws, (tx) => tx.membership.findMany({ where: { workspaceId: ws, userId: { in: userIds } }, select: { userId: true, user: { select: { displayName: true, email: true } } } }))
+    : [];
+  const connectors = new Map(members.map((m) => [m.userId, { name: m.user.displayName, email: m.user.email }]));
+  return rows.map((r) => {
+    const connector = r.connectedByUserId ? connectors.get(r.connectedByUserId) : undefined;
+    return {
+      id: r.id,
+      provider: r.provider,
+      /** The name the platform's sign-in went by ("Connected as …"), when the platform said. */
+      name: r.loginName,
+      reason: (AD_LOGIN_REASONS as readonly string[]).includes(r.reason) ? r.reason : "no_ads_account",
+      connectedAt: r.createdAt,
+      checkedAt: r.checkedAt,
+      connectedBy: connector ? { name: connector.name, email: viewer.seesEmail ? connector.email : null, you: r.connectedByUserId === viewer.id } : null,
+    };
+  });
+}
+
 export async function storeInWorkspace(ws: string, storeId: string) {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true, status: true } }));
   if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
@@ -242,7 +290,7 @@ export async function storeInWorkspace(ws: string, storeId: string) {
  * them back, not only when they pressed the button. The sign-in can take minutes, and someone
  * removed or demoted in between (or a store disconnected or moved) must not get accounts attached.
  */
-async function mayStillConnect(ws: string, storeId: string, userId: string): Promise<boolean> {
+export async function mayStillConnect(ws: string, storeId: string, userId: string): Promise<boolean> {
   const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId } } });
   if (!memberAllows(m, "integrations.manage")) return false;
   return !!(await systemDb.store.findFirst({ where: { id: storeId, workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true } }));
@@ -253,15 +301,25 @@ async function mayStillConnect(ws: string, storeId: string, userId: string): Pro
  * catch-up is its first 90 days, after which its history is walked back; one connected before
  * fetches what it missed. Each card says "Synchronizing" until its catch-up lands.
  */
-async function connectAccounts(
+export async function connectAccounts(
   deps: Deps,
   ip: string | undefined,
-  input: { workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccountList; tokens: TokenSet; userId: string; externalUserId?: string | null },
+  input: {
+    workspaceId: string;
+    storeId: string;
+    provider: AdProvider;
+    accounts: AdAccountList;
+    tokens: TokenSet;
+    userId: string;
+    externalUserId?: string | null;
+  },
 ) {
   const saved = await saveAdConnections(input);
   for (const conn of saved) {
     if (conn.enabled) await enqueueAdCatchUp(deps.queues, conn, { interactive: true });
   }
+  // The store has accounts of this platform now: a login that was waiting for some isn't needed any more.
+  if (saved.length) await dropAdLoginOf(input.storeId, input.provider, deps.fetchImpl);
   await audit({
     workspaceId: input.workspaceId,
     actorUserId: input.userId,
@@ -299,39 +357,8 @@ async function ownPending(deps: Deps, nonce: string, userId: string | undefined,
   return p;
 }
 
-/**
- * How long a callback waits for the database before giving up on it. Production's Postgres is reached
- * through a tunnel that drops for 10-20 seconds at a time, and the person has just been through the
- * platform's sign-in, which is not theirs to repeat because of us.
- */
-const CALLBACK_DB_WAIT_MS = 20_000;
-const DB_POLL_MS = 1_000;
-
-/** The database didn't answer before the callback's deadline. `cause` is the step's own error. */
-class DbUnavailable extends Error {}
-
-/**
- * Run one database step of the callback, waiting out an outage: when the step fails and the database
- * doesn't answer, wait for it to answer again (until `deadline`) and run the step again. A failure while
- * the database answers is the step's own, and is thrown as it is.
- */
-async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise<T>): Promise<T> {
-  const answers = deps.dbHealthy ?? (() => dbReachable());
-  for (;;) {
-    try {
-      return await step();
-    } catch (err) {
-      if (await answers()) throw err;
-      do {
-        if (Date.now() + DB_POLL_MS > deadline) throw new DbUnavailable("database unreachable", { cause: err });
-        await new Promise((r) => setTimeout(r, DB_POLL_MS));
-      } while (!(await answers()));
-    }
-  }
-}
-
-/** The callback's ?error= for a platform failure during the sign-in (after the person said yes), logged as it deserves. */
-function connectFailure(err: unknown, provider: AdProvider, storeId: string): string {
+/** The finish's error code for a platform failure during the sign-in (after the person said yes), logged as it deserves. */
+export function connectFailure(err: unknown, provider: AdProvider, storeId: string): string {
   // bizinsights' Google Cloud project isn't approved for real Google Ads accounts yet: say so, don't blame the account.
   if (err instanceof AdsNotApprovedError) {
     logger.warn({ err, provider, storeId }, "google ads: project not approved for production accounts");
@@ -339,12 +366,13 @@ function connectFailure(err: unknown, provider: AdProvider, storeId: string): st
   }
   // The login reaches nothing that can be connected. Which case it is decides what the person should do.
   if (err instanceof AdsNoAccountsError) {
-    logger.info({ reason: err.reason, detail: err.message, provider, storeId }, "ads: nothing to connect for this login");
+    // Meta's diagnosis says who signed in and what the grant holds (docs/ads-setup.md reads it); the login's name stays out.
+    logger.info({ reason: err.reason, detail: err.message, provider, storeId, ...(err.diagnosis ? { diagnosis: err.diagnosis } : {}) }, "ads: nothing to connect for this login");
     return NO_ACCOUNTS_ERROR[err.reason];
   }
   // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
   if (provider === "adsense" && err instanceof AdsApiError && err.status === 403 && /adsense account/i.test(err.message)) return "no_accounts";
-  // The platform's API isn't switched on for bizinsights, or its client was refused: ours to fix.
+  // The platform's API isn't switched on for bizinsights, or its client (Meta: our appsecret_proof) was refused: ours to fix.
   if (err instanceof AdsApiError && err.errorCode === "not_configured") {
     logger.error({ err, provider, storeId }, "ad platform connect failed on our set-up");
     return "not_configured";
@@ -408,6 +436,17 @@ const reportDates = z
   .refine((v) => !v.cfrom || !v.cto || v.cfrom <= v.cto, "cfrom is after cto")
   .refine((v) => !v.cfrom || !v.cto || daysBetweenInclusive(v.cfrom, v.cto) <= MAX_CUSTOM_DAYS, "Compare up to a year at a time");
 
+/**
+ * A drill-down's ids in a report's query: Meta's campaign and ad set ids (digits); Google Ads' campaign
+ * and ad group ids (digits, or the demo's own "demo-…", which only a demo connection takes: checked once
+ * the connection is known).
+ */
+const metaObjectId = z.string().refine(isMetaObjectId, "must be one of Meta's ids (digits)");
+const googleObjectId = z.string().refine((v) => isGoogleObjectId(v) || isDemoObjectId(v), "must be one of Google Ads' ids");
+
+/** The part of a report's cache key that says what it was under: "-" for the whole account. */
+const parentKey = (...ids: Array<string | undefined>) => ids.map((id) => id ?? "-").join(":");
+
 interface ReportRange {
   from: string;
   to: string;
@@ -425,21 +464,110 @@ const rangesOf = (q: { from: string; to: string; cfrom?: string; cto?: string })
  * Read a report's ranges, each from the cache or the platform (all at once, so a comparison takes no
  * longer than one range), and cache what was read: days that are over change little, today's keep
  * coming in. The first failure is thrown once every read has ended, the ranges that worked cached.
+ * `opts.ttl`: how long a range is kept, when not the usual 10 minutes with today and an hour without;
+ * `opts.onMiss`: run once before anything is read, only when some range must be (a guard that throws).
  */
-async function readRanges<T>(deps: Deps, ranges: ReportRange[], today: string, key: (r: ReportRange) => string, read: (r: ReportRange) => Promise<T>, rateKey: string) {
+async function readRanges<T>(
+  deps: Deps,
+  ranges: ReportRange[],
+  today: string,
+  key: (r: ReportRange) => string,
+  read: (r: ReportRange) => Promise<T>,
+  rateKey: string,
+  opts: { ttl?: (r: ReportRange) => number; onMiss?: () => Promise<void> } = {},
+) {
   const cached = await Promise.all(ranges.map((r) => deps.coord.peek(key(r))));
-  if (cached.some((c) => !c)) await limit(deps.coord, rateKey, LIMITS.adsReport);
+  if (cached.some((c) => !c)) {
+    await limit(deps.coord, rateKey, LIMITS.adsReport);
+    await opts.onMiss?.();
+  }
   const results = await Promise.allSettled(
     ranges.map(async (r, i) => {
       if (cached[i]) return JSON.parse(cached[i]!) as T;
       const report = await read(r);
-      await deps.coord.put(key(r), JSON.stringify(report), r.to >= today ? 600 : 3600);
+      await deps.coord.put(key(r), JSON.stringify(report), opts.ttl?.(r) ?? (r.to >= today ? 600 : 3600));
       return report;
     }),
   );
   const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
   if (failed) throw failed.reason;
   return { reports: results.map((r) => (r as PromiseFulfilledResult<T>).value), cached: cached.every(Boolean) };
+}
+
+/**
+ * A live report's download (`format=csv`): the answer the page shows, so every range is read back from
+ * where the page's read cached it, and the platform isn't asked again. One no longer kept (they last 10
+ * minutes to 6 hours) answers report_expired: the page then reads the report again, as a refresh
+ * would, and downloads what it shows. Read before the download is counted (sendCsv), so an answer no
+ * longer kept doesn't use one of the person's downloads: only a cache read, nothing is asked.
+ */
+async function cachedRanges<T>(deps: Deps, ranges: ReportRange[], key: (r: ReportRange) => string, name: string): Promise<T[]> {
+  const cached = await Promise.all(ranges.map((r) => deps.coord.peek(key(r))));
+  if (cached.some((c) => !c)) throw new HttpError(409, `This ${name} report was read a while ago and isn't kept any more. Open it again, then download it.`, "report_expired");
+  return cached.map((c) => JSON.parse(c!) as T);
+}
+
+/**
+ * The Advertising area's own downloads (a live report, the Google Ads analytics page's sections) need
+ * "Export approved reports" besides what the page needs; checked before anything is read.
+ */
+function mayDownload(a: WorkspaceAccess): void {
+  if (!allows(a.access, "reports.export")) throw new HttpError(403, "You don't have permission to download reports.", "forbidden");
+}
+
+/**
+ * Send one of those downloads: at most LIMITS.dashboardExports in 10 minutes with the dashboard's own
+ * (one allowance per person), in the audit log as report.exported with what was downloaded (as
+ * routes/exports.ts does), and sent as an attachment. `read` builds the table once the allowance is
+ * checked, so a download over it reads nothing (a live report's cached answer is looked up before, so
+ * one no longer kept isn't counted as a download: cachedRanges).
+ */
+export async function sendCsv(c: Ctx, deps: Deps, a: WorkspaceAccess, storeId: string, read: () => Promise<{ name: string; table: CsvTable; metadata: Record<string, unknown> }>) {
+  await limit(deps.coord, `rl:dashboard-export:${a.user?.id ?? a.workspaceId}`, LIMITS.dashboardExports, "Too many downloads. Wait a few minutes and try again.");
+  const { name, table, metadata } = await read();
+  const csv = toCsv(table.header, table.rows);
+  await audit({ workspaceId: a.workspaceId, actorUserId: a.user?.id ?? null, action: "report.exported", targetType: "store", targetId: storeId, metadata, ip: clientIp(c) }).catch((err: unknown) =>
+    logger.warn({ err }, "audit failed"),
+  );
+  const filename = `${name}.csv`.replace(/[^A-Za-z0-9._-]/g, "_");
+  // Headers set on the context (the access fingerprint) go with it, as with any other answer.
+  c.header("content-type", "text/csv; charset=utf-8");
+  c.header("content-disposition", `attachment; filename="${filename}"`);
+  c.header("content-length", String(csv.length));
+  return c.body(csv as unknown as ArrayBuffer, 200);
+}
+
+/** A live report's download's name and audit entry: the platform, account, level, what it was opened from and the dates. */
+function liveReportFile(platform: "meta" | "google", conn: AdConnection, level: string, parent: Record<string, string | undefined>, q: { from: string; to: string; cfrom?: string; cto?: string }) {
+  const demo = isDemoConnection(conn);
+  const opened = Object.entries(parent).filter((e): e is [string, string] => e[1] !== undefined);
+  return {
+    name: ["bizinsights", platform === "meta" ? "meta-ads" : "google-ads", ...(demo ? ["demo-simulated"] : []), conn.accountId, level, ...opened.flat(), q.from, "to", q.to].join("-"),
+    metadata: { section: "ads_live_report", platform, level, account: conn.id, ...Object.fromEntries(opened), from: q.from, to: q.to, ...(q.cfrom && q.cto ? { cfrom: q.cfrom, cto: q.cto } : {}), ...(demo ? { demo: true } : {}) },
+  };
+}
+
+/**
+ * Before Google is asked for keywords or search terms (never for a cached answer or the demo's):
+ * bizinsights' daily Google Ads operations aren't past the share these reports may use
+ * (GOOGLE_ADS_DETAIL_SHARE: the syncs keep the rest), and this ad account hasn't had its
+ * LIMITS.adsGoogleDetail for the day. While Google says the allowance is used up, the answer is the
+ * report's own (quota_exhausted), given before the account's count: Google isn't asked, so none of the
+ * account's reads is used.
+ */
+async function googleDetailAllowed(deps: Deps, connectionId: string): Promise<void> {
+  const budget = await googleAdsBudget(deps.coord);
+  if (budget.paused) throw new HttpError(503, adErrorMessage("quota_exhausted", "google")!, "quota_exhausted");
+  if (!googleAdsBudgetAllows(budget, "detail")) {
+    throw new HttpError(503, "Keyword and search-term reports are paused for a few hours so your Google Ads figures keep syncing: bizinsights has used most of today's Google Ads allowance. Reports already read stay available.", "google_detail_paused", 3600);
+  }
+  await limit(
+    deps.coord,
+    `rl:ads-gdetail:${connectionId}`,
+    LIMITS.adsGoogleDetail,
+    "This ad account's keywords and search terms have been read from Google as often as they can be today. Reports already read stay available; other dates can be read tomorrow.",
+    "google_detail_limit",
+  );
 }
 
 /** The figures of each platform's report (its totals and every row carry them). */
@@ -466,16 +594,47 @@ export function adsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, ["marketing.ads", "integrations.status"]);
     await storeInWorkspace(ws, storeId);
-    const rows = await withTenant(ws, (tx) => tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }));
-    const connections = await publicConnections(ws, rows, { id: access.user?.id ?? null, seesEmail: allows(access.access, "integrations.manage") });
+    const [rows, waiting] = await withTenant(ws, async (tx) => [
+      await tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }),
+      await tx.adLogin.findMany({ where: { workspaceId: ws, storeId }, orderBy: { provider: "asc" } }),
+    ] as const);
+    const viewer = { id: access.user?.id ?? null, seesEmail: allows(access.access, "integrations.manage") };
+    const connections = await publicConnections(ws, rows, viewer);
     return c.json({
       configured: adsConfigured(),
       restricted: adsRestricted(),
       connections,
+      /** Sign-ins connected with no ad account yet (Meta): the card says who, and their accounts follow by themselves. */
+      logins: await publicLogins(ws, waiting, viewer),
       /** Which platforms offer a simulated account ("Try demo"): Google Ads, when this server switches it on. */
       demo: { google: googleAdsDemoEnabled() },
       /** The settings each platform's real sign-in still lacks on this server, by name (empty once set up). */
       missing: { google: googleProductionMissing() },
+    });
+  });
+
+  /** The last syncs of one connection, newest first (ad_sync_runs): when, what was asked, and what came of it. */
+  app.get("/workspaces/:ws/stores/:storeId/ads/connections/:id/syncs", async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    await requireWorkspace(c, deps, ws, ["marketing.ads", "integrations.status"]);
+    const found = await withTenant(ws, async (tx) => {
+      const conn = await tx.adConnection.findFirst({ where: { id, workspaceId: ws, storeId }, select: { id: true, provider: true } });
+      if (!conn) return null;
+      const runs = await tx.adSyncRun.findMany({
+        where: { workspaceId: ws, connectionId: id },
+        orderBy: { startedAt: "desc" },
+        take: 20,
+        select: { trigger: true, since: true, until: true, outcome: true, rows: true, reason: true, source: true, startedAt: true, finishedAt: true },
+      });
+      return { provider: conn.provider as AdProvider, runs };
+    });
+    if (!found) throw new HttpError(404, "Not found", "not_found");
+    return c.json({
+      runs: found.runs.map((r) => ({
+        ...r,
+        // A failure worded from its code, as the card words the connection's own (never a platform's raw text).
+        message: r.outcome === "failed" && isAdErrorCode(r.reason) ? adErrorMessage(r.reason, found.provider) : null,
+      })),
     });
   });
 
@@ -487,28 +646,15 @@ export function adsRoutes(app: App, deps: Deps) {
     const user = access.user!;
     if (!user.emailVerified) throw new HttpError(403, "Verify your email first", "email_unverified");
     await storeInWorkspace(ws, storeId);
-    const meta = metaConfig();
-    const google = googleConfig();
-    const adsense = adsenseConfig();
-    if ((provider === "meta" && !meta) || (provider === "google" && !google) || (provider === "adsense" && !adsense)) {
-      throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
-    }
+    if (!adsConfigured()[provider]) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
+    // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.
+    if (provider === "google" && (await googleAdsPaused(deps.coord))) throw new HttpError(503, adErrorMessage("quota_exhausted", "google")!, "rate_limited", 3600);
     // Each sign-in writes a coordinator item and its callback lists accounts against the platform's quota.
     await limit(deps.coord, `rl:ads-connect:${user.id}`, LIMITS.adsConnect, "That's a lot of sign-ins in a short time. Wait a few minutes and try again.");
     const nonce = randomToken(24);
-    // Google takes PKCE on top of the client secret: a code intercepted on its way back is useless without the verifier.
-    const pkce = provider === "meta" ? null : pkcePair();
-    // Google's consent screen only for someone without a working refresh token from it yet: each consent
-    // hands out another, and Google ends a login's oldest past 100 (see holdsReusableRefreshToken).
-    const consent = provider === "meta" ? true : !(await holdsReusableRefreshToken(provider, user.id));
-    const state: AdsState = { userId: user.id, workspaceId: ws, storeId, provider, ...(pkce ? { codeVerifier: pkce.verifier } : {}), ...(consent ? {} : { consent: false }) };
-    await deps.coord.put(`oauth:ads:${nonce}`, JSON.stringify(state), STATE_TTL_S);
+    const url = await startAdSignIn(deps.coord, nonce, { userId: user.id, workspaceId: ws, storeId, provider });
+    if (!url) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
     setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
-    const redirectUri = adsRedirectUri(provider);
-    const url =
-      provider === "meta" ? metaAuthorizeUrl(meta!, redirectUri, nonce)
-      : provider === "google" ? googleAuthorizeUrl(google!, redirectUri, nonce, pkce!.challenge, { forceConsent: consent })
-      : adsenseAuthorizeUrl(adsense!, redirectUri, nonce, pkce!.challenge, { forceConsent: consent });
     return c.json({ url });
   });
 
@@ -516,7 +662,7 @@ export function adsRoutes(app: App, deps: Deps) {
   app.get("/ads/:provider/callback", async (c) => {
     const appUrl = env().APP_URL;
     const parsed = providerSchema.safeParse(c.req.param("provider"));
-    // Problems and the account choice stay on the integrations page; success goes to the numbers.
+    // Problems, the account choice and a login still waiting for its accounts stay on the integrations page; success goes to the numbers.
     const back = (params: Record<string, string>, storeId?: string) =>
       c.redirect(`${appUrl}/settings/ads?${new URLSearchParams({ ...params, ...(storeId ? { store: storeId } : {}) })}`);
     const toDashboard = (provider: AdProvider, accounts: number, storeId: string) =>
@@ -535,21 +681,13 @@ export function adsRoutes(app: App, deps: Deps) {
       if (rest.length) setCookie(c, STATE_COOKIE, rest.join("."), cookieOpts());
       else deleteCookie(c, STATE_COOKIE, { path: "/" });
       if (!ours) return back({ error: "state_mismatch", provider });
-      const raw = await deps.coord.take(`oauth:ads:${q.state}`);
-      if (!raw) return back({ error: "state_expired", provider });
-      const state = JSON.parse(raw) as AdsState;
+      const state = await takeAdSignInState(deps.coord, q.state!);
+      if (!state) return back({ error: "state_expired", provider });
       if (state.provider !== provider) return back({ error: "state_mismatch", provider }, state.storeId);
       // They pressed Cancel / "Not now" on the platform's screen.
       if (q.error || !q.code) return back({ error: q.error === "access_denied" || q.error_reason === "user_denied" ? "denied" : "missing_params", provider }, state.storeId);
-
-      // The platform's keys: Google Ads accounts already connected keep working with new connections
-      // switched off (googleClient), so a sign-in started before the switch can still finish.
-      const metaCfg = provider === "meta" ? metaConfig(deps.fetchImpl) : null;
-      const googleCfg = provider === "google" ? googleClient(deps.fetchImpl) : null;
-      const adsenseCfg = provider === "adsense" ? adsenseConfig(deps.fetchImpl) : null;
-      if (!metaCfg && !googleCfg && !adsenseCfg) return back({ error: "not_configured", provider }, state.storeId);
       // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.
-      if (googleCfg && (await googleAdsPaused(deps.coord))) return back({ error: "rate_limited", provider }, state.storeId);
+      if (provider === "google" && (await googleAdsPaused(deps.coord))) return back({ error: "rate_limited", provider }, state.storeId);
 
       // Still no database at the deadline: go on with the sign-in and hold it for the person (below).
       // Then the check that they are who started it happens when they finish (ownPending).
@@ -559,83 +697,53 @@ export function adsRoutes(app: App, deps: Deps) {
       });
       if (user === null || (user && user.id !== state.userId)) return back({ error: "session_mismatch", provider }, state.storeId);
 
-      const redirectUri = adsRedirectUri(provider);
-      let tokens: TokenSet | undefined;
-      let accounts: AdAccountList;
-      let externalUserId: string | null = null;
-      // The refresh token is one this person gave before (Google sent none): never revoked on their behalf here.
-      let reused = false;
+      const progress: AdSignInProgress = { externalUserId: null, reusedRefreshToken: false };
       /**
        * End without a connection: the grant this sign-in made goes back to the platform first, unless
        * it can't be told whose it is or something else relies on it (dropUnusedGrant). Best effort.
        */
       const fail = async (error: string) => {
-        if (tokens) await dropUnusedGrant(provider, tokens, externalUserId, deps.fetchImpl, { coord: deps.coord, reusedRefreshToken: reused });
+        if (progress.tokens) await dropUnusedGrant(provider, progress.tokens, progress.externalUserId, deps.fetchImpl, { coord: deps.coord, reusedRefreshToken: progress.reusedRefreshToken });
         return back({ error, provider }, state.storeId);
       };
-      // The person can untick the one permission on the platform's screen: then nothing can be read.
-      const granted = (t: TokenSet) => !t.grantedScopes || t.grantedScopes.includes(REQUIRED_AD_SCOPE[provider]);
-      // Who signed in, so a later disconnect knows whether anything else still relies on their grant. Never blocks a connect.
-      /** The login's Google Ads accounts, its searches counted against the daily operations (and Google saying they're used up pausing them), as a sync's are. */
-      const googleDiscovery = async (cfg: NonNullable<typeof googleCfg>, accessToken: string) => {
-        const counter = countingGoogleAdsFetch(cfg.fetchImpl);
-        try {
-          return await googleAdAccounts({ ...cfg, fetchImpl: counter.fetchImpl }, accessToken);
-        } catch (err) {
-          if (err instanceof AdsRateLimitedError && err.errorCode === "quota_exhausted") await pauseGoogleAds(deps.coord, err.retryAfterS).catch(() => undefined);
-          throw err;
-        } finally {
-          await countGoogleAdsOperations(deps.coord, counter.operations());
-        }
-      };
-      const whoIs = (p: Promise<string | null>) =>
-        p.catch((err: unknown) => {
-          logger.warn({ err, provider }, "ad platform user id lookup failed");
-          return null;
-        });
+      let accounts: AdAccountList;
       try {
-        if (metaCfg) {
-          tokens = await metaExchangeCode(metaCfg, q.code, redirectUri);
-          // A Login for Business system-user token may not answer /me/permissions; then the account list below is the test.
-          tokens.grantedScopes = await metaGrantedPermissions(metaCfg, tokens.accessToken).catch((err: unknown) => {
-            if (err instanceof AdsApiError) return undefined;
-            throw err;
-          });
-          externalUserId = await whoIs(metaUserId(metaCfg, tokens.accessToken));
-          if (!granted(tokens)) return await fail("permission_missing");
-          accounts = await metaAdAccounts(metaCfg, tokens.accessToken);
-        } else {
-          const cfg = (googleCfg ?? adsenseCfg)!;
-          tokens = await googleExchangeCode(cfg, q.code, redirectUri, state.codeVerifier);
-          externalUserId = await whoIs(googleUserId(cfg, tokens.accessToken));
-          if (!granted(tokens)) return await fail("permission_missing");
-          // Google sends a refresh token on consent; a person who gave one before keeps using theirs.
-          if (!tokens.refreshToken) {
-            tokens.refreshToken = await db(() => reusableRefreshToken(provider, externalUserId));
-            reused = !!tokens.refreshToken;
-          }
-          if (!tokens.refreshToken && state.consent === false) {
-            // The consent screen was skipped, and this login is one bizinsights holds no refresh token for:
-            // ask again, with it this time (Google always sends one then).
-            const again = randomToken(24);
-            const pkce = pkcePair();
-            await deps.coord.put(`oauth:ads:${again}`, JSON.stringify({ ...state, codeVerifier: pkce.verifier, consent: true } satisfies AdsState), STATE_TTL_S);
-            setCookie(c, STATE_COOKIE, [again, ...rest].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
-            return c.redirect(
-              googleCfg
-                ? googleAuthorizeUrl(googleCfg, redirectUri, again, pkce.challenge, { forceConsent: true })
-                : adsenseAuthorizeUrl(adsenseCfg!, redirectUri, again, pkce.challenge, { forceConsent: true }),
-            );
-          }
-          if (!tokens.refreshToken) return await fail("no_refresh_token");
-          accounts = googleCfg ? await googleDiscovery(googleCfg, tokens.accessToken) : await adsenseAccounts(cfg, tokens.accessToken);
-        }
+        accounts = await readAdSignIn(state, q.code, progress, { coord: deps.coord, fetchImpl: deps.fetchImpl });
       } catch (err) {
+        if (err instanceof AdConsentNeededError) {
+          // The consent screen was skipped, and this login is one bizinsights holds no refresh token for:
+          // ask again, with it this time (Google always sends one then).
+          const again = randomToken(24);
+          const url = await startAdSignIn(deps.coord, again, { userId: state.userId, workspaceId: state.workspaceId, storeId: state.storeId, provider }, { consent: true });
+          if (!url) return back({ error: "not_configured", provider }, state.storeId);
+          setCookie(c, STATE_COOKIE, [again, ...rest].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
+          return c.redirect(url);
+        }
+        if (err instanceof AdPermissionMissingError) return await fail("permission_missing");
+        if (err instanceof AdNoRefreshTokenError) return await fail("no_refresh_token");
+        if (err instanceof AdLoginWaitingError && user && progress.tokens) {
+          // Signed in and granted, with no ad account to list yet (or the platform slow to list them): connected
+          // all the same, never refused. The card says who is connected, and the accounts follow by themselves.
+          // Logged as a refusal used to be, with Meta's diagnosis of the empty list (docs/ads-setup.md reads it).
+          connectFailure(err.cause, provider, state.storeId);
+          if (!(await db(() => mayStillConnect(state.workspaceId, state.storeId, user.id)))) return await fail("not_allowed");
+          await db(() =>
+            holdAdLogin(
+              { workspaceId: state.workspaceId, storeId: state.storeId, provider, tokens: progress.tokens!, externalUserId: progress.externalUserId, loginName: err.loginName, userId: user.id, reason: err.reason },
+              deps.fetchImpl,
+            ),
+          );
+          await audit({ workspaceId: state.workspaceId, actorUserId: user.id, action: "ads.login_connected", targetType: "store", targetId: state.storeId, metadata: { provider, reason: err.reason }, ip: clientIp(c) }).catch(
+            (e: unknown) => logger.warn({ err: e }, "audit failed"),
+          );
+          return back({ waiting: err.reason, provider }, state.storeId);
+        }
         // Ours, not the platform's.
         if (err instanceof DbUnavailable) throw err;
-        return await fail(connectFailure(err, provider, state.storeId));
+        return await fail(connectFailure(err instanceof AdLoginWaitingError ? err.cause : err, provider, state.storeId));
       }
       if (!accounts.length) return await fail("no_accounts");
+      const tokens = progress.tokens!;
 
       // One account, or a reconnect that sees nothing new: there's nothing to choose. A list the platform
       // cut short always goes to the choice, which says so.
@@ -648,7 +756,9 @@ export function adsRoutes(app: App, deps: Deps) {
           const known = await db(() => systemDb.adConnection.findMany({ where: { storeId: state.storeId, provider }, select: { accountId: true } }));
           const knownIds = new Set(known.map((k) => k.accountId));
           if (!accounts.truncated && (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId)))) {
-            const saved = await db(() => connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens: tokens!, userId: user.id, externalUserId }));
+            const saved = await db(() =>
+              connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, userId: user.id, externalUserId: progress.externalUserId }),
+            );
             return toDashboard(provider, saved.length, state.storeId);
           }
         } catch (err) {
@@ -658,7 +768,16 @@ export function adsRoutes(app: App, deps: Deps) {
       }
       if (dbDown) logger.warn({ provider, storeId: state.storeId }, "database unreachable after an ad platform sign-in; holding it for the person to finish");
       const pick = randomToken(24);
-      await holdPendingAdConnect(deps.coord, pick, { userId: state.userId, workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, externalUserId, reusedRefreshToken: reused });
+      await holdPendingAdConnect(deps.coord, pick, {
+        userId: state.userId,
+        workspaceId: state.workspaceId,
+        storeId: state.storeId,
+        provider,
+        accounts,
+        tokens,
+        externalUserId: progress.externalUserId,
+        reusedRefreshToken: progress.reusedRefreshToken,
+      });
       return back({ choose: pick, provider }, state.storeId);
     } catch (err) {
       // A browser navigation: land on a page that says what happened, never on raw JSON.
@@ -807,18 +926,61 @@ export function adsRoutes(app: App, deps: Deps) {
   });
 
   /**
+   * "Check for ad accounts" on a connected sign-in that has none yet: Meta is asked now (as the cron tick
+   * does every hour), and the accounts it lists are connected. `connected`: how many; `waiting`: still
+   * none (or more than are connected without asking: `reason` "choose"); `ended`: the access is gone.
+   */
+  app.post("/workspaces/:ws/stores/:storeId/ads/logins/:id/check", async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    await limit(deps.coord, `rl:ads-sync:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsSync);
+    await storeInWorkspace(ws, storeId);
+    const row = await withTenant(ws, (tx) => tx.adLogin.findFirst({ where: { id, workspaceId: ws, storeId } }));
+    if (!row) throw new HttpError(404, "Not found", "not_found");
+    const r = await checkAdLogin(row, deps, { interactive: true });
+    if (r.outcome === "connected") return c.json({ connected: r.connected });
+    if (r.outcome === "ended") return c.json({ ended: true });
+    return c.json({ waiting: true, reason: r.outcome === "waiting" ? r.reason : row.reason });
+  });
+
+  /** Disconnect a sign-in that has no ad account yet: it goes, and its grant goes back to the platform unless something else relies on it. */
+  app.delete("/workspaces/:ws/stores/:storeId/ads/logins/:id", async (c) => {
+    const { ws, storeId, id } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    const row = await withTenant(ws, (tx) => tx.adLogin.findFirst({ where: { id, workspaceId: ws, storeId } }));
+    if (!row) throw new HttpError(404, "Not found", "not_found");
+    const revoked = await releaseAdLogin(row, deps.fetchImpl);
+    await audit({ workspaceId: ws, actorUserId: access.user?.id ?? null, action: "ads.login_disconnected", targetType: "store", targetId: storeId, metadata: { provider: row.provider, revoked }, ip: clientIp(c) }).catch(
+      (err: unknown) => logger.warn({ err }, "audit failed"),
+    );
+    return c.json({ ok: true, revoked });
+  });
+
+  /**
    * The Meta Ads report for one connected account and range: campaigns, ad sets or ads with reach,
-   * frequency, link clicks, purchases and their value, asked of Meta for exactly those dates; with
+   * frequency, link clicks, purchases and their value (by each ad set's own attribution setting, and
+   * under 1-day click, 7-day click and 1-day view), asked of Meta for exactly those dates; with
    * cfrom/cto, the same for the comparison's dates. Read-only, and cached briefly so the dashboard's
    * polling doesn't spend Meta's rate limit. Both ranges are read at once, within one deadline that
-   * fits the request's time.
+   * fits the request's time. A drill-down: `campaign` (its ad sets or ads) and `adset` (its ads), each
+   * Meta's own id; the totals are then the campaign's or ad set's own (metaReport).
+   *
+   * `format=csv` downloads the answer on screen (cachedRanges, metaReportTable): every row, with each
+   * attribution window's purchases, for a member who may also export reports; in the audit log.
    */
   app.get("/workspaces/:ws/stores/:storeId/ads/meta/report", async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "marketing.campaigns");
+    const csv = c.req.query("format") === "csv";
+    if (csv) mayDownload(access);
     await storeInWorkspace(ws, storeId);
     // Meta keeps 37 months of insights; a year at a time is what the dashboard asks for.
-    const q = z.object({ level: z.enum(META_REPORT_VIEWS).default("campaign") }).and(reportDates).parse(c.req.query());
+    const q = z
+      .object({ level: z.enum(META_REPORT_VIEWS).default("campaign"), campaign: metaObjectId.optional(), adset: metaObjectId.optional() })
+      .refine((v) => metaParentFits(v.level, v), "Only a campaign's ad sets or ads, or an ad set's ads, are read under it")
+      .and(reportDates)
+      .parse(c.req.query());
+    const parent = { ...(q.campaign !== undefined ? { campaign: q.campaign } : {}), ...(q.adset !== undefined ? { adset: q.adset } : {}) };
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id: q.connection, workspaceId: ws, storeId, provider: "meta" } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
     if (conn.status === "reconnect") throw new HttpError(409, ACCESS_ENDED.meta, "reconnect");
@@ -826,12 +988,23 @@ export function adsRoutes(app: App, deps: Deps) {
     const today = adToday(conn);
     const deadline = Date.now() + META_REPORT_JOB.budgetMs;
     // Days that are over change little (Meta still revises purchases for a while); today's keep coming in.
+    // The key's version moves whenever a report gains figures (v3: the rows' campaign and ad set ids, and the
+    // purchases under each attribution window), so none cached without them is read back; a drill-down's
+    // parent is part of what was asked.
+    const key = (r: ReportRange) => `ads-report:v3:${conn.id}:${q.level}:${parentKey(q.campaign, q.adset)}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`;
+    if (csv) {
+      const [report, compared] = await cachedRanges<MetaReport>(deps, rangesOf(q), key, "Meta Ads");
+      return sendCsv(c, deps, access, storeId, async () => {
+        const table = metaReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, today });
+        return { ...liveReportFile("meta", conn, q.level, parent, q), table };
+      });
+    }
     const { reports, cached } = await readRanges<MetaReport>(
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-report:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
-      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline, ...(r.compare ? { statuses: false } : {}) }),
+      key,
+      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent, ...(r.compare ? { statuses: false } : {}) }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "meta", conn.id);
@@ -841,31 +1014,70 @@ export function adsRoutes(app: App, deps: Deps) {
   });
 
   /**
-   * The Google Ads report for one connected account and range: campaigns (with status, type and
-   * daily budget), ad groups, devices or countries, asked of Google for exactly those dates; with
+   * The Google Ads report for one connected account and range: campaigns (with status, primary status
+   * and its reasons, type and budget), ad groups, devices or countries, asked of Google for exactly those dates; with
    * cfrom/cto, the comparison's too. Read-only, cached briefly, and counted against bizinsights' daily
-   * allowance of Google Ads API operations like the syncs.
+   * allowance of Google Ads API operations like the syncs. A drill-down: `campaign` (its ad groups, or a
+   * Performance Max campaign's asset groups) and `adGroup` (its ads); one operation a range, with the
+   * rows added up as the totals (googleReport).
+   *
+   * Keywords and search terms (`level=keyword|search_term`, for the account, one campaign or (keywords)
+   * one ad group): only when someone opens them, two operations a range, held to their own share of the
+   * day's allowance and to LIMITS.adsGoogleDetail reads per ad account a day (googleDetailAllowed), and
+   * cached longer (30 minutes while the range ends today or yesterday, which Google may still be finishing;
+   * 6 hours once it ended before that). The demo's are generated, with neither guard.
+   *
+   * `format=csv` downloads the answer on screen at any level (cachedRanges, googleReportTable), never
+   * asking Google, for a member who may also export reports; in the audit log. The demo's file says
+   * it is simulated.
    */
   app.get("/workspaces/:ws/stores/:storeId/ads/google/report", async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "marketing.campaigns");
+    const csv = c.req.query("format") === "csv";
+    if (csv) mayDownload(access);
     await storeInWorkspace(ws, storeId);
-    const q = z.object({ level: z.enum(GOOGLE_REPORT_LEVELS).default("campaign") }).and(reportDates).parse(c.req.query());
+    const q = z
+      .object({ level: z.enum(GOOGLE_REPORT_LEVELS).default("campaign"), campaign: googleObjectId.optional(), adGroup: googleObjectId.optional() })
+      .refine(
+        (v) => googleParentFits(v.level, v),
+        "Asset groups are read under a campaign, ads under an ad group, search terms for the account or a campaign, keywords for the account, a campaign or an ad group, and campaigns, devices and countries for the whole account",
+      )
+      .and(reportDates)
+      .parse(c.req.query());
+    const parent = { ...(q.campaign !== undefined ? { campaign: q.campaign } : {}), ...(q.adGroup !== undefined ? { adGroup: q.adGroup } : {}) };
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id: q.connection, workspaceId: ws, storeId, provider: "google" } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
+    // Google's own ids for a real account (they go into its query), the demo's for the demo.
+    if (!Object.values(parent).every(isDemoConnection(conn) ? isDemoObjectId : isGoogleObjectId)) throw new HttpError(400, "That campaign or ad group isn't one this account has.", "validation");
     if (conn.status === "reconnect") throw new HttpError(409, ACCESS_ENDED.google, "reconnect");
     const account = { id: conn.id, accountId: conn.accountId, name: conn.accountName, currency: conn.currency, timezone: conn.timezone };
     const today = adToday(conn);
     // Both ranges' calls end within one deadline, so the answer comes within the request's time.
     const deadline = Date.now() + AD_REPORT_BUDGET_MS;
     // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
+    // The key's version moves whenever a report gains figures (v4: the rows' match type and Quality Score, and
+    // a campaign's primary status and total budget; v3 their campaign and ad group ids), so none cached without
+    // them is read back; a drill-down's parent is part of what was asked.
+    const detail = isGoogleDetailLevel(q.level);
+    const key = (r: ReportRange) => `ads-greport:v4:${conn.id}:${q.level}:${parentKey(q.campaign, q.adGroup)}:${r.from}:${r.to}`;
+    if (csv) {
+      const [report, compared] = await cachedRanges<GoogleReport>(deps, rangesOf(q), key, "Google Ads");
+      return sendCsv(c, deps, access, storeId, async () => {
+        const table = googleReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, today, demo: isDemoConnection(conn) });
+        return { ...liveReportFile("google", conn, q.level, parent, q), table };
+      });
+    }
     const { reports, cached } = await readRanges<GoogleReport>(
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-greport:${conn.id}:${q.level}:${r.from}:${r.to}`,
-      (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline }),
+      key,
+      (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
+      // Keywords and search terms cost the most to read and are opened again and again on the same dates. A
+      // range ending yesterday is kept as briefly as one with today: just after midnight, Google is still filling it.
+      detail ? { ttl: (r) => (r.to >= addDays(today, -1) ? 1800 : 21_600), ...(isDemoConnection(conn) ? {} : { onMiss: () => googleDetailAllowed(deps, conn.id) }) } : {},
     ).catch((err: unknown) => {
       throw reportFailure(err, "google", conn.id);
     });
@@ -912,7 +1124,10 @@ export function adsRoutes(app: App, deps: Deps) {
    * "Sync now" / "Refresh": bring every shown account up to date (or one platform's). An account this
    * login can't read now, or that the platform won't report on, is asked whether it is back (and
    * catches up if so). One waiting for a reconnect is left alone: only connecting again helps it.
-   * `queued`: the accounts sent off; one already on its way isn't sent again.
+   * `queued`: the accounts sent off; one already on its way isn't sent again. While a platform is paused
+   * for bizinsights' own limit there (Google's daily allowance, Meta's hourly app limit), its accounts
+   * are sent all the same: the job reads nothing and marks the card with why (quota_exhausted,
+   * rate_limited), so the answer and its "Synchronizing" mean what they always do.
    */
   app.post("/workspaces/:ws/stores/:storeId/ads/sync", async (c) => {
     const { ws, storeId } = c.req.param();

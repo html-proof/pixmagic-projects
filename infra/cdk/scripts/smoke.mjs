@@ -90,11 +90,20 @@ export function configCheck(invoke, envName) {
         `Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --env ${envName} --set ${c.secretSetting}, then ${restart} so the functions read it (docs/aws-deployment.md).`,
     ),
   );
+  // The WhatsApp service is private: the cron function says whether it reaches it.
+  if (report.whatsapp.service && !report.whatsapp.service.reachable) {
+    warnings.push(
+      warning(
+        "WhatsApp's service doesn't answer",
+        `The functions can't reach Evolution API (stack InsightsWhatsapp-${envName}), so no store can connect WhatsApp or send. Check its ECS service and logs (docs/whatsapp.md, Runbook).`,
+      ),
+    );
+  }
   const on = (flags) => Object.keys(flags).filter((k) => flags[k]).join("+") || "none";
-  const needs = Array.isArray(report.whatsapp.embeddedSignupNeeds) && report.whatsapp.embeddedSignupNeeds.length ? ` (needs ${report.whatsapp.embeddedSignupNeeds.join(", ")})` : "";
+  const needs = (list) => (Array.isArray(list) && list.length ? ` (needs ${list.join(", ")})` : "");
   const detail = [
     `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)})`,
-    `WhatsApp Embedded Signup ${report.whatsapp.embeddedSignup ? "on" : `off${needs}`}`,
+    `WhatsApp service ${!report.whatsapp.evolution ? `off${needs(report.whatsapp.evolutionNeeds)}` : !report.whatsapp.service ? "on" : report.whatsapp.service.reachable ? `on (Evolution ${report.whatsapp.service.version ?? "?"} answers)` : "on but NOT reachable"}, Cloud API ${report.whatsapp.embeddedSignup ? "on" : `off${needs(report.whatsapp.embeddedSignupNeeds)}`}`,
     `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
     `Google sign-in ${report.auth.google ? "on" : "off"}`,
     `emailed sign-in code ${report.auth.loginCode ? "on" : "off"}`,
@@ -152,6 +161,22 @@ async function main() {
   await check("unknown page is a 404 page", async () => {
     const r = await get(`${base}/no-such-page-${randomBytes(4).toString("hex")}`);
     expect(r.status === 404, `status ${r.status}`);
+  });
+  // What CloudFront shows for a page while the function can't answer (app-stack.ts): asked of the
+  // fallback directly, since the app is up. Any path is the page, as a 503, and its styles and
+  // scripts load through the app's address from S3, which doesn't need the function.
+  await check("page shown while the app can't answer", async () => {
+    const r = await get(`https://${app.FallbackDomain}/dashboard`);
+    const html = await r.text();
+    expect(r.status === 503, `status ${r.status}`);
+    expect(/Service temporarily unavailable/.test(html), "not the unavailable page");
+    expect(/no-store/.test(r.headers.get("cache-control") ?? ""), `cache-control ${r.headers.get("cache-control")}`);
+    const assets = [...new Set(html.match(/\/_next\/static\/[^"'\s)]+\.(?:css|js)/g) ?? [])];
+    expect(assets.some((a) => a.endsWith(".css")), "no stylesheet in the page");
+    const rs = await Promise.all(assets.map((a) => get(`${base}${a}`)));
+    const bad = rs.map((res, i) => [assets[i], res]).filter(([, res]) => res.status !== 200 || !fromS3(res));
+    expect(!bad.length, bad.map(([a, res]) => `${a}: ${res.status} ${res.headers.get("server")}`).join("; "));
+    return `${assets.length} files`;
   });
   await check("static assets cached at the edge", async () => {
     const html = await (await get(`${base}/login`)).text();
@@ -253,6 +278,10 @@ async function main() {
     const r = await get(`${base}/api/me`, { headers: { origin: "https://evil.example" } });
     const acao = r.headers.get("access-control-allow-origin");
     expect(!acao || (acao !== "*" && acao !== "https://evil.example"), `access-control-allow-origin ${acao}`);
+  });
+  await check("WhatsApp service's webhook without its token is refused", async () => {
+    const r = await get(`${base}/api/webhooks/whatsapp/evolution/bi_000000000000000000000000`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(r.status === 401, `status ${r.status}`);
   });
   await check("Shopify webhook with a bad signature is refused", async () => {
     const r = await get(`${base}/api/webhooks/shopify`, {

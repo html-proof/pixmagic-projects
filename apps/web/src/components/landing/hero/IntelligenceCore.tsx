@@ -35,41 +35,43 @@ const RING_PATHS = RINGS.map((ring) => {
 });
 
 /*
- * The orbit points ride their rings on the compositor. An ellipse is two sine waves a quarter turn
- * apart, so each point sits in two nested full-size layers: one swings left-right (rx) and one
- * up-down (ry), both eased as a sine, inside a wrapper rotated by the ring's tilt. A percentage
- * translate of a full-size layer is a percentage of the core, so the orbit scales with it.
- * (They used to be SMIL <animateMotion>, which re-laid out the SVG on the main thread every frame:
- * on a mid-range phone that alone held the hero at ~23 frames a second instead of ~36.)
+ * The orbit points ride their rings on the compositor, one layer per point: a full-size layer
+ * whose keyframes walk the ring's tilted ellipse in ORBIT_STEPS straight steps (a percentage
+ * translate of a full-size layer is a percentage of the core, so the orbit scales with it). The
+ * copy drawn over the sphere carries its show/hide step in the same keyframes.
+ * One animation per point, not two nested ones per axis and a third for the front copy's step:
+ * while the page draws frames for its other motion (the particles, the scroll), Chrome updates
+ * every running animation's style on each of them, and fifteen of these cost the hero ~1.5 ms a
+ * frame. (They were SMIL <animateMotion> before that, which re-laid out the SVG every frame.)
  */
-const SINE = `linear(${Array.from({ length: 17 }, (_, k) => {
-  const s = k / 16;
-  return `${((1 - Math.cos(Math.PI * s)) / 2).toFixed(4)} ${(s * 100).toFixed(2)}%`;
-}).join(", ")})`;
-/** Browsers without `linear()` (Safari < 17.2) keep the closest cubic to a sine half-wave. */
-const SINE_FALLBACK = "cubic-bezier(0.37, 0, 0.63, 1)";
+/** Straight steps per orbit: under half a pixel from the true ellipse on the largest ring. */
+const ORBIT_STEPS = 48;
 /** Each ring's point starts this many seconds further round. */
 const STAGGER = 7;
 /** SVG units as a percentage of the core element (which spans the whole viewBox). */
 const pct = (units: number) => `${((units / (HALF * 2)) * 100).toFixed(3)}%`;
 
 const ORBIT_CSS = RINGS.map((ring, i) => {
-  const half = ring.period / 2;
-  const rx = pct(ring.r * U);
-  const ry = pct(ring.r * U * ring.squash);
-  const start = -i * STAGGER;
+  const rx = ring.r * U;
+  const ry = rx * ring.squash;
+  const cos = Math.cos(rad(ring.tilt));
+  const sin = Math.sin(rad(ring.tilt));
   // From the right-hand end: x runs +rx → -rx while y goes 0 → +ry → 0 (the front half, below the
   // sphere's centre), then back round behind it. The front copy shows for that first half only.
+  const steps = Array.from({ length: ORBIT_STEPS + 1 }, (_, k) => {
+    const t = (k / ORBIT_STEPS) * Math.PI * 2;
+    const x = rx * Math.cos(t);
+    const y = ry * Math.sin(t);
+    return `${((k / ORBIT_STEPS) * 100).toFixed(3)}%{transform:translate(${pct(x * cos - y * sin)},${pct(x * sin + y * cos)})}`;
+  }).join("");
+  const timing = `${ring.period}s linear ${-i * STAGGER}s infinite`;
   return [
-    `@keyframes lp-orbit-x-${i}{from{transform:translateX(${rx})}to{transform:translateX(-${rx})}}`,
-    `@keyframes lp-orbit-y-${i}{from{transform:translateY(-${ry})}to{transform:translateY(${ry})}}`,
-    `.lp-orbit-x-${i}{animation:lp-orbit-x-${i} ${half}s ${SINE_FALLBACK} ${start}s infinite alternate;animation-timing-function:${SINE}}`,
-    `.lp-orbit-y-${i}{animation:lp-orbit-y-${i} ${half}s ${SINE_FALLBACK} ${start - ring.period / 4}s infinite alternate;animation-timing-function:${SINE}}`,
-    `.lp-orbit-front-${i}{animation:lp-orbit-front ${ring.period}s step-end ${start}s infinite}`,
+    `@keyframes lp-orbit-${i}{${steps}}`,
+    `@keyframes lp-orbit-front-${i}{${steps}0%,49.99%{opacity:1}50%,100%{opacity:0}}`,
+    `.lp-orbit-${i}{animation:lp-orbit-${i} ${timing}}`,
+    `.lp-orbit-front-${i}{animation:lp-orbit-front-${i} ${timing}}`,
   ].join("\n");
-})
-  .concat("@keyframes lp-orbit-front{0%{opacity:1}50%{opacity:0}100%{opacity:0}}")
-  .join("\n");
+}).join("\n");
 
 /** A dot of radius `r` (SVG units), centred in its full-size orbit layer. */
 function Dot({ r, className }: { r: number; className: string }) {
@@ -84,15 +86,7 @@ function Dot({ r, className }: { r: number; className: string }) {
 
 /** Ring `index`'s moving point. `front`: the copy drawn over the sphere, shown on the front half only. */
 function OrbitPoint({ index, front = false, children }: { index: number; front?: boolean; children: ReactNode }) {
-  return (
-    <div className="absolute inset-0" style={{ transform: `rotate(${RINGS[index].tilt}deg)` }}>
-      <div className={`lp-loop absolute inset-0 lp-orbit-x-${index}`}>
-        <div className={`lp-loop absolute inset-0 lp-orbit-y-${index}`}>
-          {front ? <div className={`lp-loop absolute inset-0 lp-orbit-front-${index}`}>{children}</div> : children}
-        </div>
-      </div>
-    </div>
-  );
+  return <div className={`lp-loop absolute inset-0 ${front ? "lp-orbit-front-" : "lp-orbit-"}${index}`}>{children}</div>;
 }
 
 /** Layered gradients only (no box-shadow), so the shading holds at every size and scale. */

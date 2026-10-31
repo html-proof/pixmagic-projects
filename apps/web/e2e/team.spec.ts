@@ -10,7 +10,7 @@ import { asNewVisitor, signUp, uniqueEmail } from "./helpers";
  * The API side (every refusal, redaction and race) is covered by apps/api/test/team.test.ts.
  */
 
-const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 async function createWorkspace(page: Page, name: string): Promise<string> {
@@ -86,6 +86,15 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(row).toContainText("Email sent");
   await expect(row).toContainText("Custom");
   await expect(row).toContainText("60 days left");
+  // Who can see a section: the client for Customer details, nobody but the owner for Finance.
+  const section = page.getByLabel("Section filter");
+  await section.selectOption({ label: "Can see Customer details" });
+  await expect(row).toBeVisible();
+  await section.selectOption({ label: "Can see Finance" });
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId("team-row").filter({ hasText: ownerEmail }).filter({ visible: true })).toHaveCount(1);
+  await section.selectOption({ label: "All sections" });
+  await expect(row).toBeVisible();
 
   // ---- The email, and its link (the token after #, never sent to a server).
   const mail = await latestMail(client);
@@ -115,7 +124,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   // Opened from the link: their notifications, but no account pages (they never signed in to one).
   await expect(nav.getByRole("link", { name: "Notifications" })).toBeVisible();
   await expect(guest.getByTestId("member-badge")).toContainText("no sign-in needed");
-  for (const hidden of ["Sales & Orders", "Marketing", "Discounts", "Analytics", "Team & Access", "Settings", "WhatsApp", "Business Overview", "My Account"]) {
+  for (const hidden of ["Sales & Orders", "Advertising", "Discounts", "Analytics", "Team & Access", "Settings", "WhatsApp", "Business Overview", "My Account"]) {
     await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
   }
   const { rows } = await db.query("SELECT m.role, m.permissions FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1", [client]);
@@ -132,6 +141,22 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(guest).not.toHaveURL(/\/settings\/stores/);
   await guest.goto("/settings/profile");
   await expect(guest).not.toHaveURL(/\/settings\/profile/);
+  // Every owner's and admin's page, and the pages of areas that weren't shared: the page never shows.
+  for (const path of ["/settings/api-keys", "/settings/billing", "/settings/audit", "/settings/workspace", "/settings/integrations", "/staff", "/inventory/movements"]) {
+    await guest.goto(path);
+    await expect(guest, path).not.toHaveURL(new RegExp(`${path}$`));
+    await expect(guest.getByTestId("access-notice"), path).toContainText("You don't have access to that page.");
+  }
+  // An address with no page at all is the not-found page, outside the app: nothing of the workspace.
+  await guest.goto("/dashboard/setting");
+  await expect(guest.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await expect(sidebar(guest).getByRole("link", { name: "Products" })).toHaveCount(0);
+  // And their APIs refuse the shared session outright, whatever the page would have done.
+  const adminApis = await guest.evaluate(
+    async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees", "email/accounts"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
+    ws,
+  );
+  expect(adminApis.filter(([, status]) => status !== 403)).toEqual([]);
 
   // ---- The same link on another device opens the dashboard again, with what was shared.
   const ctx2 = await browser.newContext();
@@ -142,7 +167,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(sidebar(phone).getByRole("link", { name: "Products" })).toBeVisible();
   await ctx2.close();
 
-  // ---- The owner swaps Customers for Marketing; the client's screen follows by itself.
+  // ---- The owner swaps Customers for Marketing (advertising); the client's screen follows by itself.
   await guest.goto("/dashboard");
   await expect(nav.getByRole("link", { name: "Customers" })).toBeVisible();
   await page.reload();
@@ -158,7 +183,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   await edit.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText(`Access for ${client} updated.`)).toBeVisible();
 
-  await expect(nav.getByRole("link", { name: "Marketing" })).toBeVisible({ timeout: 15_000 });
+  await expect(nav.getByRole("link", { name: "Advertising" })).toBeVisible({ timeout: 15_000 });
   await expect(nav.getByRole("link", { name: "Customers" })).toHaveCount(0);
   await expect(guest.getByTestId("access-notice")).toContainText("was just updated");
   // And the API refuses what was taken away, straight away.
@@ -255,7 +280,7 @@ test("a browser signed in to another account opens a shared link: the account st
   await expect(shared.getByTestId("member-badge")).toContainText("View only");
   const nav = sidebar(shared);
   await expect(nav.getByRole("link", { name: "Products" })).toBeVisible();
-  for (const hidden of ["Sales & Orders", "Customers", "Marketing", "Team & Access", "Settings"]) await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
+  for (const hidden of ["Sales & Orders", "Customers", "Advertising", "Team & Access", "Settings"]) await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
   // Nothing can be changed from it, whatever is tried.
   const tryInvite = await shared.evaluate(async (w) => {
     const r = await fetch(`/api/workspaces/${w}/team/invitations`, { method: "POST", headers: { "content-type": "application/json", "x-bi-context": "shared" }, body: JSON.stringify({ email: "x@example.com", role: "viewer", permissions: [] }) });

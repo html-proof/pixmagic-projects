@@ -43,6 +43,13 @@ describe("Meta", () => {
     expect(url.origin + url.pathname).toBe("https://www.facebook.com/v25.0/dialog/oauth");
     expect(url.searchParams.get("scope")).toBe("ads_read");
     expect(url.searchParams.get("state")).toBe("st");
+    expect(url.searchParams.get("client_id")).toBe("app1");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://app/api/integrations/meta/callback");
+    expect(url.searchParams.get("response_type")).toBe("code");
+    // A permission declined last time is asked for again (Meta won't show it otherwise).
+    expect(url.searchParams.get("auth_type")).toBe("rerequest");
+    // Never the app secret.
+    expect(url.searchParams.has("client_secret")).toBe(false);
 
     const f = fake((u) =>
       u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "LONG", expires_in: 5_184_000 }) : json({ access_token: "SHORT", expires_in: 3600 }),
@@ -88,13 +95,15 @@ describe("Meta", () => {
     const url = new URL(metaAuthorizeUrl({ ...meta(fetch), configId: "cfg9" }, "https://app/cb", "st"));
     expect(url.searchParams.get("config_id")).toBe("cfg9");
     expect(url.searchParams.has("scope")).toBe(false);
+    // The configuration says what is asked: no rerequest of a scope that isn't sent.
+    expect(url.searchParams.has("auth_type")).toBe(false);
   });
 });
 
 describe("Google", () => {
   it("asks for offline access to Google Ads reporting", async () => {
     const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords openid");
     expect(url.searchParams.get("access_type")).toBe("offline");
 
     const f = fake(async (_u, init) => {
@@ -122,7 +131,7 @@ describe("Google", () => {
       if (u.pathname === "/v25/customers/111/googleAds:searchStream" && query.includes("segments.conversion_action_category = 'PURCHASE'")) {
         return json([{ results: [{ campaign: { id: "5" }, segments: { date: "2026-10-01", conversionActionCategory: "PURCHASE" }, metrics: { conversions: 1, conversionsValue: 40 } }] }]);
       }
-      if (u.pathname === "/v25/customers/111/googleAds:searchStream") return json([{ results: [{ campaign: { id: "5", name: "Brand" }, segments: { date: "2026-10-01" }, metrics: { costMicros: "2500000", impressions: "50", clicks: "3", conversions: 2, conversionsValue: 55 } }] }]);
+      if (u.pathname === "/v25/customers/111/googleAds:searchStream") return json([{ results: [{ campaign: { id: "5", name: "Brand", status: "ENABLED" }, segments: { date: "2026-10-01" }, metrics: { costMicros: "2500000", impressions: "50", clicks: "3", conversions: 2, conversionsValue: 55 } }] }]);
       if (u.pathname === "/v25/customers/222/googleAds:searchStream" && query.endsWith("FROM customer")) return json([{ results: [{ customer: { id: "222", descriptiveName: "Agency", manager: true } }] }]);
       if (u.pathname === "/v25/customers/222/googleAds:searchStream") {
         expect(headers.get("login-customer-id")).toBe("222");
@@ -136,7 +145,11 @@ describe("Google", () => {
       { accountId: "444", name: "Client", currency: "USD", timezone: "America/New_York", loginCustomerId: "222", status: null },
     ]);
     const rows = await googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-01");
-    expect(rows).toEqual([{ provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, linkClicks: 3, conversions: 2, conversionValue: 55, purchases: 1, purchaseValue: 40, leads: 0 }]);
+    // Google gave none of the campaign's facts (type, primary status, budget): read, and none, never made up.
+    const noFacts = { channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: null, budgetAmount: null };
+    expect(rows).toEqual([
+      { provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, linkClicks: 3, conversions: 2, conversionValue: 55, purchases: 1, purchaseValue: 40, leads: 0, campaignStatus: "ENABLED", campaignFacts: noFacts },
+    ]);
     await expect(googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01' OR 1=1 --", "2026-10-01")).rejects.toThrow("Invalid date range");
   });
 });
@@ -158,7 +171,7 @@ describe("AdSense", () => {
   it("asks for offline, read-only access to AdSense, with no developer token", () => {
     const url = new URL(adsenseAuthorizeUrl(adsense(fetch), "https://app/api/ads/adsense/callback", "st"));
     expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly openid");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("redirect_uri")).toBe("https://app/api/ads/adsense/callback");
   });

@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { recomputeDays } from "@app/core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { logger, recomputeDays } from "@app/core";
 import { systemDb, withTenant } from "@app/db";
-import { addDays, localDay, resolvePreset, yearEarlier } from "@app/shared";
+import { addDays, adsenseFinalThrough, localDay, monthsEarlier, resolvePreset, yearEarlier } from "@app/shared";
 import { storeOverview, syncProblem } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -26,6 +26,8 @@ interface SeedOrder {
   id: string;
   createdAt: string | Date;
   cancelled?: boolean;
+  /** Shopify's payment state, lowercase; paid when not given. */
+  financial?: string | null;
   subtotal?: number;
   discounts?: number;
   tax?: number;
@@ -80,7 +82,7 @@ async function seedOrder(store: Store, o: SeedOrder) {
       shopifyCreatedAt: created,
       shopifyUpdatedAt: created,
       cancelledAt: o.cancelled ? created : null,
-      financialStatus: "paid",
+      financialStatus: o.financial === undefined ? "paid" : o.financial,
       subtotal,
       totalDiscounts: o.discounts ?? 0,
       totalTax: tax,
@@ -186,8 +188,9 @@ describe("order modules (store time zone, DST weekend)", () => {
     const { modules: m, range, data } = res.json();
     expect(range).toEqual({ from: "2026-03-07", to: "2026-03-09" });
 
-    // B 8 + C 4 + D 2.40 (F's 100 is reversed by its cancellation); B 5 + D 3.
-    expect(m.sales_overview.current).toMatchObject({ tax: 14.4, shipping: 8, netSales: 200, totalSales: 222.4, returns: 500, orders: 5 });
+    // B 8 + C 4 + D 2.40 (F's 100 is reversed by its cancellation); B 5 + D 3. The cancellation took
+    // F's 600 (tax in) off total sales: what the Total sales tile says refunds took.
+    expect(m.sales_overview.current).toMatchObject({ tax: 14.4, shipping: 8, netSales: 200, totalSales: 222.4, totalRefunded: 600, returns: 500, orders: 5 });
 
     expect(m.channels.items).toEqual([
       { source: "web", label: "Online Store", orders: 3, sales: 150, share: 0.75 },
@@ -222,20 +225,79 @@ describe("order modules (store time zone, DST weekend)", () => {
     ]);
     expect(m.catalog.products).toEqual({ active: 2, draft: 0, archived: 0, total: 2 });
 
-    expect(data).toEqual({ orders: 6, products: 2, variants: 0, oldestOrderDay: "2026-03-06", newestOrderDay: "2026-03-09", historyFrom: "2026-03-06" });
+    // Where the dates begin (no creation date read yet: the first order's day), and the orders older
+    // than Shopify's 60 days out of reach until Shopify approves bizinsights for them.
+    expect(data).toEqual({ orders: 6, products: 2, variants: 0, oldestOrderDay: "2026-03-06", newestOrderDay: "2026-03-09", historyFrom: "2026-03-06", createdDay: null, startDay: "2026-03-06", history: { access: "awaiting_shopify", years: [] } });
   });
 
-  it("lists the latest orders overall, flagging cancelled ones", async () => {
+  it("lists the latest orders placed in the dates, flagging cancelled ones, and counts the dates' cancellations", async () => {
     const { a, ws, store } = await owner();
     await seedWeekend(store);
-    // A 7-day preset around "now" does not include March, but recent orders are not range-limited.
-    const res = await overview(a.headers, ws, store.id, "preset=7d");
-    const items = res.json().modules.recent_orders.items;
+    // Dates without any of them: none, like every other section for those dates.
+    const none = (await overview(a.headers, ws, store.id, "preset=7d")).json().modules.recent_orders;
+    expect(none).toEqual({ items: [], cancelledInRange: 0 });
+    const res = await overview(a.headers, ws, store.id, "preset=custom&from=2026-03-01&to=2026-03-31");
+    const { items, cancelledInRange } = res.json().modules.recent_orders;
     expect(items.map((o: { name: string }) => o.name)).toEqual(["#F", "#E", "#D", "#C", "#B", "#A"]);
+    // F was cancelled on 9 Mar (New York): counted on the day of the cancellation.
+    expect(cancelledInRange).toBe(1);
+    // The weekend alone: A (Friday night, New York) isn't in it.
+    const weekend = (await overview(a.headers, ws, store.id, RANGE)).json().modules.recent_orders.items;
+    expect(weekend.map((o: { name: string }) => o.name)).toEqual(["#F", "#E", "#D", "#C", "#B"]);
     expect(items[0]).toMatchObject({ shopifyId: "F", createdAt: "2026-03-09T20:00:00.000Z", total: 600, cancelled: true, channel: "Online Store", units: 5, fulfillmentStatus: "unfulfilled", financialStatus: "paid" });
     expect(items[4]).toMatchObject({ name: "#B", total: 113, units: 3, cancelled: false, fulfillmentStatus: "fulfilled" });
     expect(items[1]).toMatchObject({ channel: "Unknown", fulfillmentStatus: null });
     expect(typeof items[0].id).toBe("string");
+  });
+
+  it("says how the dates' orders went: completed, awaiting payment, unsuccessful, what was sent, and checkouts left", async () => {
+    const { a, ws, store } = await owner([...ALL_SCOPES, "write_pixels", "read_customer_events"]);
+    await seedWeekend(store);
+    // Without the storefront pixel there is no count of checkouts left, which isn't the same as none.
+    const before = (await overview(a.headers, ws, store.id, RANGE)).json().modules.order_outcomes;
+    // The Orders tile's 5 orders: B, C, D and E paid, F cancelled (and left out of what is to send).
+    expect(before).toEqual({
+      orders: 5,
+      outcome: { completed: 4, awaitingPayment: 0, unsuccessful: 1, cancelled: 1, paymentFailed: 0, refunded: 0 },
+      // B sent (3 items), C partly, D still to send; E's status isn't known yet, so it is in none of the three.
+      shipping: { orders: 4, sent: 1, partlySent: 1, notSent: 1, items: 9, itemsSent: 3 },
+      checkouts: null,
+    });
+
+    // Monday 9 March (New York): cash on delivery not paid yet, a payment voided, an authorization run out, one refunded in full.
+    const monday = (id: string, financial: string, hour: number, fulfillment = "unfulfilled") =>
+      seedOrder(store, { id, createdAt: `2026-03-09T${hour}:00:00Z`, financial, subtotal: 10, fulfillment, lines: [{ product: "p1", qty: 2, price: 5 }] });
+    await monday("G", "pending", 14);
+    await monday("H", "voided", 15);
+    await monday("I", "expired", 16);
+    await monday("J", "refunded", 17, "restocked");
+    await monday("K", "authorized", 18, "fulfilled");
+    // An order of gift cards only isn't an order of the Orders tile.
+    await systemDb.order.create({
+      data: { workspaceId: ws, storeId: store.id, shopifyId: "GC", name: "#GC", currency: "USD", localDay: "2026-03-09", shopifyCreatedAt: new Date("2026-03-09T19:00:00Z"), shopifyUpdatedAt: new Date(), giftCardOnly: true, financialStatus: "pending", subtotal: 50, totalDiscounts: 0, totalTax: 0, totalShipping: 0, totalPrice: 50 },
+    });
+    // The pixel counted Monday in full: four shoppers started a checkout, one bought; one never got that far.
+    await systemDb.store.update({ where: { id: store.id }, data: { pixelInstalled: true, pixelInstalledAt: new Date("2026-03-08T12:00:00Z") } });
+    const visit = (day: string, visitor: string, step: number) => systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day, visitor, furthestStep: step } });
+    for (const [visitor, step] of [["v1", 3], ["v2", 3], ["v3", 4], ["v4", 2]] as const) await visit("2026-03-09", visitor, step);
+    await visit("2026-03-08", "v5", 3);
+    await recomputeDays(store, ["2026-03-09"]);
+
+    const res = (await overview(a.headers, ws, store.id, "preset=custom&from=2026-03-09&to=2026-03-09")).json();
+    // Monday's orders (D was Sunday night in New York), as the Orders tile counts them.
+    expect(res.modules.sales_overview.current.orders).toBe(7);
+    expect(res.modules.order_outcomes).toEqual({
+      orders: 7,
+      // E paid; G pending and K authorized wait on the money; F cancelled, H and I failed, J refunded.
+      outcome: { completed: 1, awaitingPayment: 2, unsuccessful: 4, cancelled: 1, paymentFailed: 2, refunded: 1 },
+      // E, G and K go ahead: K sent (2 items), G still to send, E's status not known yet.
+      shipping: { orders: 3, sent: 1, partlySent: 0, notSent: 1, items: 8, itemsSent: 2 },
+      checkouts: { started: 3, completed: 1, left: 2, from: null },
+    });
+    // The pixel began in the middle of Sunday: the weekend's checkouts count from Monday, and say so.
+    expect((await overview(a.headers, ws, store.id, RANGE)).json().modules.order_outcomes.checkouts).toEqual({ started: 3, completed: 1, left: 2, from: "2026-03-09" });
+    // Dates before the pixel: not counted.
+    expect((await overview(a.headers, ws, store.id, "preset=custom&from=2026-03-07&to=2026-03-07")).json().modules.order_outcomes.checkouts).toBeNull();
   });
 
   it("returns empty, honest module values for a store without data", async () => {
@@ -248,13 +310,19 @@ describe("order modules (store time zone, DST weekend)", () => {
     expect(m.fulfillment).toEqual({ current: { orders: 0, fulfilled: 0, partiallyFulfilled: 0, unfulfilled: 0, avgHoursToFulfill: null }, openNow: 0, oldestOpenDays: null });
     expect(m.discount_codes.items).toEqual([]);
     expect(m.recent_orders.items).toEqual([]);
+    expect(m.order_outcomes).toEqual({
+      orders: 0,
+      outcome: { completed: 0, awaitingPayment: 0, unsuccessful: 0, cancelled: 0, paymentFailed: 0, refunded: 0 },
+      shipping: { orders: 0, sent: 0, partlySent: 0, notSent: 0, items: 0, itemsSent: 0 },
+      checkouts: null,
+    });
     expect(m.inventory).toEqual({
       current: { trackedVariants: 0, unitsInStock: 0, stockValueAtCost: null, variantsWithCost: 0, retailValue: 0, outOfStock: 0, lowStock: 0 },
       lowStockItems: [],
     });
     expect(m.catalog).toEqual({ products: { active: 0, draft: 0, archived: 0, total: 0 }, variants: 0, topVendors: [] });
     expect(m.sales_overview.current).toMatchObject({ tax: 0, shipping: 0 });
-    expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null });
+    expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null, history: { access: "awaiting_shopify", years: [] } });
   });
 });
 
@@ -270,15 +338,16 @@ describe("date ranges", () => {
     expect(res.statusCode).toBe(200);
     const s = res.json().modules.sales_overview;
     // Only the 6th and 8th have daily rows; the chart used to be just those two points.
-    // Each day carries the lines of its total sales too (here none besides net sales).
+    // Each day carries the lines of its total sales too (here none besides net sales), what its
+    // orders sold for, and how many were a customer's first (none here: no customer on them).
     const lines = { shipping: 0, tax: 0, duties: 0, additionalFees: 0 };
-    const quiet = { netSales: 0, totalSales: 0, ...lines, orders: 0, refunds: 0, averageOrderValue: null };
+    const quiet = { netSales: 0, totalSales: 0, ...lines, orders: 0, units: 0, refunds: 0, averageOrderValue: null, orderValue: 0, newCustomerOrders: 0 };
     expect(s.series).toEqual([
       { day: "2026-03-05", ...quiet },
-      { day: "2026-03-06", netSales: 40, totalSales: 40, ...lines, orders: 1, refunds: 0, averageOrderValue: 40 },
+      { day: "2026-03-06", netSales: 40, totalSales: 40, ...lines, orders: 1, units: 1, refunds: 0, averageOrderValue: 40, orderValue: 40, newCustomerOrders: 0 },
       { day: "2026-03-07", ...quiet },
       // C was cancelled the same day: an order of the day, and its 99 a return, as in Shopify's reports.
-      { day: "2026-03-08", netSales: 55, totalSales: 55, ...lines, orders: 2, refunds: 99, averageOrderValue: 77 },
+      { day: "2026-03-08", netSales: 55, totalSales: 55, ...lines, orders: 2, units: 2, refunds: 99, averageOrderValue: 77, orderValue: 154, newCustomerOrders: 0 },
       { day: "2026-03-09", ...quiet },
     ]);
     expect(s.current).toMatchObject({ netSales: 95, totalSales: 95, orders: 3 });
@@ -301,6 +370,14 @@ describe("date ranges", () => {
     // Nothing was imported before today's order: earlier months are "none", not $0 months.
     expect(y.months.slice(0, -1).every((m: { coverage: string }) => m.coverage === "none")).toBe(true);
     expect(y.total).toBe(70);
+    // The same months of the two years before, whole, for the overview's monthly comparison: none
+    // of them imported here, so each says so rather than reading as a $0 month.
+    expect(y.past.map((p: { year: number }) => p.year)).toEqual([y.year - 1, y.year - 2]);
+    for (const p of y.past as Array<{ year: number; total: number; months: Array<{ month: string; to: string; current: boolean; coverage: string }> }>) {
+      expect(p.months.map((m) => m.month)).toEqual(y.months.map((m: { month: string }) => `${p.year}${m.month.slice(4)}`));
+      expect(p.months.every((m) => m.coverage === "none" && !m.current)).toBe(true);
+      expect(p.total).toBe(0);
+    }
   });
 
   it("reports a custom range up to the store's today, and compares it with as many days before", async () => {
@@ -353,7 +430,7 @@ describe("date ranges", () => {
     expect(m.sales_overview.previous).toMatchObject({ grossSales: 70, netSales: 60, totalSales: 60, orders: 2, units: 3, averageOrderValue: 35 });
     expect(m.sales_overview.current).toMatchObject({ netSales: 50, orders: 1 });
     expect(m.sales_overview.deltas.orders).toBe(-0.5);
-    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5, imported: true });
+    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5, imported: true, reached: [2, 2, 1, 1, 1] });
     expect(m.funnel.visits).toBe(1);
 
     // Saturday on its own is still the whole day, as daily_store_metrics holds it.
@@ -452,6 +529,14 @@ describe("what the dates are compared with", () => {
     expect(m.ads.sales.deltas.costPerOrder).toBeCloseTo(-0.3335, 3);
     // Shopify credits the order from the Facebook ad to Meta: $100 of sales for Meta's $40. The Instagram post carried no ad tag, and the direct order isn't anyone's.
     expect(m.ads.sourced).toEqual([{ provider: "meta", orders: 1, sales: 100, salesPerSpend: 2.5 }]);
+    // Paid vs organic, by the same visits (last click): the tagged Facebook ad paid, the untagged Instagram post organic, the typed address direct.
+    expect(m.traffic.split).toEqual([
+      { id: "paid", label: "Paid ads", orders: 1, sales: 100, share: 0.5 },
+      { id: "organic", label: "Organic", orders: 1, sales: 40, share: 0.2 },
+      { id: "email", label: "Email and messages", orders: 0, sales: 0, share: 0 },
+      { id: "direct", label: "Direct", orders: 1, sales: 60, share: 0.3 },
+      { id: "unknown", label: "Not recorded", orders: 0, sales: 0, share: 0 },
+    ]);
     // Today in the dates: the ads' change stops at yesterday, so the store's whole-range figures aren't compared.
     const running = (await overview(a.headers, ws, store.id, "preset=30d")).json().modules;
     expect(running.ads.sales).toMatchObject({ netSales: 250, orders: 4, previous: null, deltas: { salesPerSpend: null, costPerOrder: null } });
@@ -592,7 +677,7 @@ describe("what the dates are compared with", () => {
 
     // After the pixel was in place, visits compare; the newer Meta account's figures don't reach back yet.
     const mid = await compared(d(-15), d(-13));
-    expect(mid.modules.funnel.previous).toEqual({ visits: 1, conversionRate: 1, imported: true });
+    expect(mid.modules.funnel.previous).toEqual({ visits: 1, conversionRate: 1, imported: true, reached: [1, 1, 1, 1, 1] });
     expect(mid.modules.funnel.deltas).toEqual({ visits: 1, conversionRate: -0.5 });
     expect(mid.modules.ads.previous.imported).toBe(false);
     expect(mid.modules.ads.deltas.spend).toBeNull();
@@ -664,6 +749,97 @@ describe("ad figures only for the days the accounts have stored", () => {
     }
   };
 
+  it("answers the Advertising pages with their modules only, narrowed to a platform or an account, part of the spend never set against the store's sales", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const google = await adAccount(store, "google", "123");
+    const sense = await adAccount(store, "adsense", "pub-1");
+    await spendDays(store, meta, d(-13), today, 10);
+    await spendDays(store, google, d(-13), today, 5);
+    await earnDays(store, sense, "", d(-13), today, 2);
+    await seedOrder(store, { id: "S1", createdAt: `${d(-2)}T17:00:00Z`, lines: [{ qty: 1, price: 210 }] });
+    await recomputeDays(store, [d(-2)]);
+    const ask = async (qs: string) => (await overview(a.headers, ws, store.id, `preset=7d&parts=advertising${qs}`)).json().modules;
+
+    const all = await ask("");
+    // Only what the Advertising pages show: the rest of the dashboard isn't computed.
+    expect(all).toHaveProperty("sales_overview");
+    for (const left of ["top_products", "recent_orders", "inventory", "catalog", "order_timing"]) expect(all).not.toHaveProperty(left);
+    expect(all.ads.byProvider.map((p: { provider: string }) => p.provider).sort()).toEqual(["google", "meta"]);
+    // Every spend platform together: Shopify's net sales per unit of all of it (MER).
+    expect(all.ads.sales).toMatchObject({ netSales: 210, salesPerSpend: 2 });
+    expect(all.adsense.current.earnings).toBe(14);
+    // Every campaign, each with its change on the totals' whole days (today isn't over: through yesterday).
+    expect(all.ads.campaigns).toEqual(expect.arrayContaining([expect.objectContaining({ provider: "meta", name: "Spring", spend: 70, change: expect.objectContaining({ previous: expect.objectContaining({ spend: 60 }), deltas: expect.objectContaining({ spend: 0 }) }) })]));
+
+    // One platform: its own figures, not set against the store's sales; no AdSense.
+    const metaOnly = await ask("&platform=meta");
+    expect(metaOnly.ads.byProvider.map((p: { provider: string }) => p.provider)).toEqual(["meta"]);
+    expect(metaOnly.ads.current.spend).toBe(70);
+    expect(metaOnly.ads.sales).toBeNull();
+    expect(metaOnly.ads.shareOfSales).toBeNull();
+    expect(metaOnly).not.toHaveProperty("adsense");
+    // One account: its own figures only.
+    const one = await ask(`&account=${google.id}`);
+    expect(one.ads.accounts.map((x: { id: string }) => x.id)).toEqual([google.id]);
+    expect(one.ads.current.spend).toBe(35);
+    expect(one.ads.sales).toBeNull();
+    expect(one).not.toHaveProperty("adsense");
+    // AdSense alone: money in, its earnings next to the store's sales, no spend.
+    const earned = await ask("&platform=adsense");
+    expect(earned).not.toHaveProperty("ads");
+    expect(earned.adsense).toMatchObject({ current: { earnings: 14 }, vsSales: 14 / 210 });
+
+    // The dashboard's own question isn't narrowed, and keeps its top ten campaigns without changes.
+    const dash = (await overview(a.headers, ws, store.id, "preset=7d&platform=meta")).json().modules;
+    expect(dash.ads.byProvider).toHaveLength(2);
+    expect(dash).toHaveProperty("adsense");
+    expect(dash.ads.campaigns[0]).not.toHaveProperty("change");
+  });
+
+  it("gives each campaign its status as the last sync read it, for the campaign filters; one not read yet has none", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const google = await adAccount(store, "google", "123");
+    await spendDays(store, meta, d(-6), today, 10);
+    await spendDays(store, google, d(-6), today, 5);
+    await systemDb.adCampaign.create({ data: { workspaceId: ws, storeId: store.id, connectionId: meta.id, provider: "meta", accountId: "act_1", campaignId: "1", name: "Spring", status: "CAMPAIGN_PAUSED", checkedAt: new Date() } });
+    const campaigns = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Array<{ provider: string; status: string | null; statusGroup: string | null }>;
+    const by = Object.fromEntries(campaigns.map((c) => [c.provider, [c.status, c.statusGroup]]));
+    expect(by).toEqual({ meta: ["CAMPAIGN_PAUSED", "paused"], google: [null, null] });
+    // Another workspace's campaign of the same id never lends its status.
+    const otherWs = (await systemDb.workspace.create({ data: { name: "B" } })).id;
+    const otherStore = await createStore(otherWs, "b.myshopify.com", ALL_SCOPES, { timezone: TZ });
+    const theirs = await adAccount(otherStore, "google", "123");
+    await systemDb.adCampaign.create({ data: { workspaceId: otherWs, storeId: otherStore.id, connectionId: theirs.id, provider: "google", accountId: "123", campaignId: "1", name: "Spring", status: "ENABLED", checkedAt: new Date() } });
+    const again = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Array<{ provider: string; status: string | null }>;
+    expect(again.find((c) => c.provider === "google")!.status).toBeNull();
+  });
+
+  it("gives each campaign Google's type, primary status and budget, and Meta's budget, as the last sync stored them; unread stays null", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const google = await adAccount(store, "google", "123");
+    await spendDays(store, meta, d(-6), today, 10);
+    await spendDays(store, google, d(-6), today, 5);
+    const at = { workspaceId: ws, storeId: store.id, campaignId: "1", name: "Spring", checkedAt: new Date() };
+    await systemDb.adCampaign.create({ data: { ...at, connectionId: meta.id, provider: "meta", accountId: "act_1", status: "ACTIVE", budgetPeriod: "LIFETIME", budgetAmount: 900 } });
+    await systemDb.adCampaign.create({
+      data: { ...at, connectionId: google.id, provider: "google", accountId: "123", status: "ENABLED", channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+    });
+    type Row = { provider: string; channelType: string | null; primaryStatus: string | null; primaryStatusReasons: string[]; budgetPeriod: string | null; budgetAmount: number | null };
+    const campaigns = (await overview(a.headers, ws, store.id, "preset=7d&parts=advertising")).json().modules.ads.campaigns as Row[];
+    const by = Object.fromEntries(campaigns.map(({ provider, channelType, primaryStatus, primaryStatusReasons, budgetPeriod, budgetAmount }) => [provider, { channelType, primaryStatus, primaryStatusReasons, budgetPeriod, budgetAmount }]));
+    expect(by).toEqual({
+      meta: { channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: "LIFETIME", budgetAmount: 900 },
+      google: { channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+    });
+    // The download carries them too, in the platform's own words.
+    const table = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export/table?section=ads_campaigns&preset=7d&platform=google`, headers: a.headers });
+    expect(table.statusCode).toBe(200);
+    expect(table.json().rows[0].slice(3, 9)).toEqual(["ENABLED", "LIMITED", "BUDGET_CONSTRAINED", "SEARCH", 40, "DAILY"]);
+  });
+
   it("never shows 0 for an account whose access ended or that was never read, and keeps a healthy platform's figures", async () => {
     const { a, ws, store } = await owner();
     const meta = await adAccount(store, "meta", "act_1");
@@ -695,21 +871,24 @@ describe("ad figures only for the days the accounts have stored", () => {
     expect(m.adsense.series.every((x: { earnings: number | null }) => x.earnings === null)).toBe(true);
   });
 
-  it("gives what it holds of a 366-day range, with the days before the accounts' history missing", async () => {
+  it("gives what it holds of a 12-month range, with the days before the accounts' history missing", async () => {
     const { a, ws, store } = await owner();
     const meta = await adAccount(store, "meta", "act_1");
     const sense = await adAccount(store, "adsense", "pub-1");
     await spendDays(store, meta, d(-89), today, 1);
     await earnDays(store, sense, "", d(-89), today, 2);
 
-    const res = await overview(a.headers, ws, store.id, `preset=custom&from=${d(-365)}&to=${today}`);
+    // 12 months up to today: from the day after the same date a year ago.
+    const from = addDays(yearEarlier(today), 1);
+    const res = await overview(a.headers, ws, store.id, `preset=custom&from=${from}&to=${today}`);
     expect(res.statusCode).toBe(200);
     const m = res.json().modules;
-    expect(m.ads.series).toHaveLength(366);
-    expect(m.ads.series.filter((x: { spend: number | null }) => x.spend === null)).toHaveLength(276);
+    const days = dayDiff(from, today) + 1;
+    expect(m.ads.series).toHaveLength(days);
+    expect(m.ads.series.filter((x: { spend: number | null }) => x.spend === null)).toHaveLength(days - 90);
     expect(m.ads).toMatchObject({ current: null, partial: { from: d(-89), to: today, totals: { spend: 90 } }, notCompared: "no_history", previous: { imported: false } });
     expect(m.adsense).toMatchObject({ current: null, partial: { from: d(-89), to: today, totals: { earnings: 180 } }, notCompared: "no_history" });
-    expect(m.adsense.series.filter((x: { earnings: number | null }) => x.earnings === null)).toHaveLength(276);
+    expect(m.adsense.series.filter((x: { earnings: number | null }) => x.earnings === null)).toHaveLength(days - 90);
   });
 
   it("says when an account's days follow another time zone, and leaves a day it hasn't reached missing", async () => {
@@ -834,6 +1013,26 @@ describe("ad figures only for the days the accounts have stored", () => {
     expect(m.adsense.accounts[0]).toMatchObject({ unsplitThrough: today, coversRange: false, coverage: { from: null, through: null } });
     expect(m.adsense.series.every((x: { earnings: number | null }) => x.earnings === null)).toBe(true);
   });
+
+  it("says whether AdSense's earnings are final, and that a refresh someone asked for is on its way", async () => {
+    const { a, ws, store } = await owner();
+    const asked = new Date();
+    const sense = await adAccount(store, "adsense", "pub-1", { syncRequestedAt: asked, lastSyncAttemptAt: asked });
+    await earnDays(store, sense, "", d(-89), today, 1);
+    // Synced today: final up to the end of last month after the 10th, of the month before by then.
+    const finalThrough = adsenseFinalThrough(today)!;
+    const monthStart = `${finalThrough.slice(0, 8)}01`;
+
+    const month = (await overview(a.headers, ws, store.id, `preset=custom&from=${monthStart}&to=${finalThrough}`)).json().modules.adsense;
+    expect(month).toMatchObject({ finalThrough, final: true, current: { earnings: Number(finalThrough.slice(8)) } });
+    expect(month.accounts[0]).toMatchObject({ finalThrough, syncRequestedAt: asked.toISOString(), lastSyncAttemptAt: asked.toISOString() });
+    // The last 7 days are AdSense's estimate still.
+    expect((await overview(a.headers, ws, store.id, "preset=7d")).json().modules.adsense).toMatchObject({ finalThrough, final: false });
+    // Every ad account says it, spend as well.
+    const meta = await adAccount(store, "meta", "act_1");
+    const ads = (await overview(a.headers, ws, store.id, "preset=7d")).json().modules.ads;
+    expect(ads.accounts.find((x: { id: string }) => x.id === meta.id)).toMatchObject({ syncRequestedAt: null, lastSyncAttemptAt: null });
+  });
 });
 
 describe("channels and catalog details", () => {
@@ -873,7 +1072,7 @@ describe("live updates (dashboard polls every 15 s)", () => {
 
   it("re-pulls recent orders and the catalog from Shopify at most once per window, however often it is polled", async () => {
     const { a, ws, store } = await owner();
-    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date() } });
+    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date(), shopCreatedAt: new Date("2022-03-14T03:00:00Z") } });
     ctx.deps.queues.clear();
     expect((await overview(a.headers, ws, store.id)).statusCode).toBe(200);
     expect(sent()).toEqual(["orders:2", "products:-", "variants:-"]);
@@ -887,9 +1086,23 @@ describe("live updates (dashboard polls every 15 s)", () => {
     expect(ctx.deps.queues.sent.sync).toHaveLength(3);
   });
 
-  it("a sync still making progress holds refreshes off; one that died in an outage does not", async () => {
+  it("reads when Shopify created a store connected before that was read, once a day until it is known", async () => {
     const { a, ws, store } = await owner(["read_orders"]);
     await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date() } });
+    ctx.deps.queues.clear();
+    await overview(a.headers, ws, store.id);
+    expect(sent()).toEqual(["orders:2", "shop:-"]);
+    // No jobs wait on it: the worker must not start any queued orders job a second time.
+    expect(ctx.deps.queues.sent.sync.find((m) => m.kind === "shop")).toMatchObject({ waitingJobIds: [] });
+    await systemDb.syncJob.updateMany({ where: { storeId: store.id }, data: { status: "succeeded" } });
+    ctx.deps.queues.clear();
+    await overview(a.headers, ws, store.id);
+    expect(sent()).toEqual([]);
+  });
+
+  it("a sync still making progress holds refreshes off; one that died in an outage does not", async () => {
+    const { a, ws, store } = await owner(["read_orders"]);
+    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date(), shopCreatedAt: new Date("2022-03-14T03:00:00Z") } });
     const ago = (min: number) => new Date(Date.now() - min * 60_000);
     // A refresh started 15 minutes ago; its last page landed a minute ago.
     const job = await systemDb.syncJob.create({
@@ -984,9 +1197,10 @@ describe("scopes and tenancy", () => {
     await seedVariant(productsOnly, "p1", "v1", { qty: 4, price: 10 });
 
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
-    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
+    // The owner's own costs (Settings → Costs) go with the sales they're set against.
+    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
-    expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null });
+    expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null, history: { access: "awaiting_shopify", years: [] } });
 
     const p = (await overview(a.headers, ws, productsOnly.id)).json();
     expect(Object.keys(p.modules).sort()).toEqual(["catalog", "inventory"]);
@@ -1094,3 +1308,255 @@ describe("where sales come from", () => {
   });
 });
 
+describe("Meta and Google advertising from the store's own orders", () => {
+  it("gives the Advertising pages each platform's Shopify sales with no ad account connected, compared, day by day, narrowed like the ad modules", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    const today = localDay(new Date(), TZ);
+    const day = (n: number) => addDays(today, n);
+    const at = (n: number) => `${day(n)}T16:00:00Z`;
+    await seedOrder(store, { id: "F1", createdAt: at(-3), subtotal: 100, traffic: { source: "facebook", medium: "paid", campaign: "Spring" } });
+    await seedOrder(store, { id: "I1", createdAt: at(-3), subtotal: 40, traffic: { source: "instagram", medium: "unpaid" } });
+    await seedOrder(store, { id: "G1", createdAt: at(-2), subtotal: 60, traffic: { source: "google", medium: "paid", campaign: "Brand" } });
+    await seedOrder(store, { id: "D1", createdAt: at(-2), subtotal: 80, traffic: { source: "direct", medium: "direct" } });
+    await seedOrder(store, { id: "P1", createdAt: at(-2), subtotal: 10 });
+    // The dates compared with (the six days before).
+    await seedOrder(store, { id: "F0", createdAt: at(-10), subtotal: 50, traffic: { source: "facebook", medium: "paid", campaign: "Spring" } });
+    const range = `preset=custom&from=${day(-6)}&to=${day(-1)}`;
+    const ask = async (qs: string) => (await overview(a.headers, ws, store.id, `${range}${qs}`)).json().modules;
+
+    const all = await ask("&parts=advertising");
+    // Nothing connected: no ad module, and the store's own record of each platform instead.
+    expect(all).not.toHaveProperty("ads");
+    const m = all.ads_from_shopify;
+    expect(m).toMatchObject({ currency: store.currency, storeSales: 290, pending: 1, compared: { from: day(-12), to: day(-7) } });
+    const [meta, google] = m.platforms;
+    expect(meta).toMatchObject({ provider: "meta", orders: 2, sales: 140, paidOrders: 1, paidSales: 100, previous: { orders: 1, sales: 50, paidOrders: 1, paidSales: 50 } });
+    expect(meta.share).toBeCloseTo(140 / 290);
+    expect(meta.deltas.sales).toBeCloseTo(1.8);
+    expect(meta.sources.map((s: { source: string; sales: number }) => [s.source, s.sales])).toEqual([
+      ["facebook", 100],
+      ["instagram", 40],
+    ]);
+    expect(meta.campaigns).toEqual([{ source: "facebook", label: "Facebook", campaign: "Spring", orders: 1, sales: 100, paidSales: 100 }]);
+    expect(meta.daily).toHaveLength(6);
+    expect(meta.daily.find((d: { day: string }) => d.day === day(-3))).toEqual({ day: day(-3), orders: 2, sales: 140, paidSales: 100 });
+    expect(meta.daily.find((d: { day: string }) => d.day === day(-2))).toEqual({ day: day(-2), orders: 0, sales: 0, paidSales: 0 });
+    expect(google).toMatchObject({ provider: "google", orders: 1, sales: 60, paidSales: 60, previous: { orders: 0, sales: 0 } });
+    // Nothing before to set a change against: none, rather than an infinite one.
+    expect(google.deltas.sales).toBeNull();
+
+    // One platform's page: that platform only. AdSense and one account have no such figures.
+    expect((await ask("&parts=advertising&platform=meta")).ads_from_shopify.platforms.map((p: { provider: string }) => p.provider)).toEqual(["meta"]);
+    expect(await ask("&parts=advertising&platform=adsense")).not.toHaveProperty("ads_from_shopify");
+    expect(await ask("&parts=advertising&account=some-account")).not.toHaveProperty("ads_from_shopify");
+    // The dashboard's own question doesn't compute them.
+    expect(await ask("")).not.toHaveProperty("ads_from_shopify");
+  });
+});
+
+
+describe("top 100 product performance", () => {
+  const range = "dateFrom=2026-03-08&dateTo=2026-03-09";
+  async function request(headers: Record<string, string>, ws: string, storeId: string, params = range) {
+    return ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/analytics/products/top-selling?${params}`, headers });
+  }
+  it("groups variants without duplicating orders, retains previous-only variants, and uses real net metrics", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedProduct(store, "p1", "Renamed product", "active");
+    await seedOrder(store, { id: "before", createdAt: "2026-03-06T18:00:00Z", lines: [{ product: "p1", variant: "old", qty: 4, price: 10 }] });
+    await seedOrder(store, { id: "now", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p1", variant: "v1", qty: 3, price: 10, discount: 5 }, { product: "p1", variant: "v2", qty: 5, price: 20 }] });
+    await seedOrder(store, { id: "cancelled", createdAt: "2026-03-08T19:00:00Z", cancelled: true, lines: [{ product: "p1", variant: "v1", qty: 2, price: 10 }] });
+    const res = await request(a.headers, ws, store.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 1, complete: true, baseline: true });
+    expect(res.json().items[0]).toMatchObject({ rank: 1, title: "Renamed product", units: 8, grossUnits: 10, returnedUnits: 2, revenue: 125, grossSales: 150, discounts: 5, returns: 20, orders: 2, growth: 100, previousUnits: 4 });
+    expect(res.json().items[0].variants).toHaveLength(3);
+  });
+  it("ranks all products before limiting and pages ranks through 100", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "many", createdAt: "2026-03-08T18:00:00Z", lines: Array.from({length: 125}, (_,i) => ({ product: `p${i}`, qty: i + 1, price: 1 })) });
+    const res = await request(a.headers, ws, store.id, `${range}&limit=25&page=4`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(100);
+    expect(res.json().items[0]).toMatchObject({ rank: 76, productId: "p49", units: 50 });
+    expect(res.json().items.at(-1)).toMatchObject({ rank: 100, productId: "p25", units: 26 });
+    const revenue = await request(a.headers, ws, store.id, `${range}&sortBy=revenue&search=p124`);
+    expect(revenue.json().items).toHaveLength(1);
+    expect(revenue.json().items[0].productId).toBe("p124");
+  });
+  it("does not combine unrelated historical lines with missing product IDs", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "deleted", createdAt: "2026-03-08T18:00:00Z", lines: [{ qty: 2, price: 10 }, { qty: 3, price: 20 }] });
+    const res = await request(a.headers, ws, store.id);
+    expect(res.json()).toMatchObject({ complete: false, baseline: false, unknownIdentitySales: 2, items: [] });
+  });
+  it("validates filters, checks scopes and isolates tenant stores", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    expect((await request(a.headers, ws, store.id, `${range}&limit=101`)).statusCode).toBe(400);
+    expect((await request(a.headers, ws, store.id, "dateFrom=2026-03-08")).statusCode).toBe(400);
+    expect((await request(a.headers, ws, store.id, "dateFrom=2026-02-30&dateTo=2026-03-09")).statusCode).toBe(400);
+    const other = await createWorkspace(ctx, a.headers, "Other");
+    const foreign = await createStore(other, "foreign.myshopify.com", ALL_SCOPES);
+    expect((await request(a.headers, ws, foreign.id)).statusCode).toBe(404);
+    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: ["read_products"] } });
+    expect((await request(a.headers, ws, store.id)).statusCode).toBe(403);
+  });
+});
+
+describe("product reporting completeness and reversals", () => {
+  async function report(headers: Record<string, string>, ws: string, storeId: string, from = "2026-03-08", to = from) {
+    return ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/analytics/products/top-selling?dateFrom=${from}&dateTo=${to}`, headers });
+  }
+  it("withholds rankings for an incomplete import instead of ranking a partial population", async () => {
+    const { a, ws, store } = await owner();
+    await seedOrder(store, { id: "partial", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p", qty: 3, price: 10 }] });
+    expect((await report(a.headers, ws, store.id)).json()).toMatchObject({ complete: false, items: [], total: 0 });
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-03-01T00:00:00Z"), status: "active" } });
+    const order = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id } });
+    await systemDb.order.update({ where: { id: order.id }, data: { salesUpdatedAt: null } });
+    expect((await report(a.headers, ws, store.id)).json()).toMatchObject({ complete: false, pendingOrders: 1, items: [] });
+  });
+  it("books partial refunds on the reversal date and retains return-only negative products", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "partialRefund", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p", qty: 3, price: 20, discount: 5 }] });
+    const order = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id } });
+    await systemDb.orderSale.create({ data: { workspaceId: ws, storeId: store.id, orderId: order.id, shopifyId: "partialRefund-return", localDay: "2026-03-09", happenedAt: new Date("2026-03-09T18:00:00Z"), actionType: "return", lineType: "product", lineItemShopifyId: "partialRefund-0", quantity: 1, amount: -18.33, discount: 0, tax: 0 } });
+    expect((await report(a.headers, ws, store.id, "2026-03-08", "2026-03-09")).json().items[0]).toMatchObject({ units: 2, grossUnits: 3, returnedUnits: 1, grossSales: 60, discounts: 5, returns: 18.33, revenue: 36.67 });
+    expect((await report(a.headers, ws, store.id, "2026-03-09")).json().items[0]).toMatchObject({ units: -1, revenue: -18.33, orders: 0, returnedUnits: 1 });
+  });
+  it("aggregates more than 10,000 orders without a retrieval cap", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    const at = new Date("2026-03-08T18:00:00Z");
+    const ids = Array.from({length: 10001}, (_, i) => `scale-${i}`);
+    await systemDb.order.createMany({ data: ids.map(id => ({ id, workspaceId: ws, storeId: store.id, shopifyId: id, name: id, currency: "USD", localDay: "2026-03-08", shopifyCreatedAt: at, shopifyUpdatedAt: at, salesUpdatedAt: at, subtotal: 1, totalDiscounts: 0, totalTax: 0, totalShipping: 0, totalPrice: 1 })) });
+    await systemDb.orderLineItem.createMany({ data: ids.map(id => ({ workspaceId: ws, storeId: store.id, orderId: id, shopifyId: id, productShopifyId: "popular", title: "Popular", quantity: 1, price: 1, discount: 0 })) });
+    await systemDb.orderSale.createMany({ data: ids.map(id => ({ workspaceId: ws, storeId: store.id, orderId: id, shopifyId: id, lineItemShopifyId: id, localDay: "2026-03-08", happenedAt: at, actionType: "order", lineType: "product", quantity: 1, amount: 1, discount: 0, tax: 0 })) });
+    const errors = vi.spyOn(logger, "error");
+    const result = await report(a.headers, ws, store.id);
+    const diagnostics = JSON.stringify(errors.mock.calls, (_key, value) => value instanceof Error ? { name: value.name, message: value.message } : value);
+    errors.mockRestore();
+    expect(result.statusCode, diagnostics).toBe(200);
+    expect(result.json().items[0]).toMatchObject({ units: 10001, revenue: 10001, orders: 10001 });
+  }, 60000);
+});
+
+describe("comparison coverage for product rankings", () => {
+  it("withholds only growth when previous orders or their line mappings are unverified", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "prior-unverified", createdAt: "2026-03-07T18:00:00Z", lines: [{ product: "p", qty: 10, price: 10 }] });
+    await seedOrder(store, { id: "verified-current", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p", qty: 20, price: 10 }] });
+    const prior = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id, shopifyId: "prior-unverified" } });
+    await systemDb.order.update({ where: { id: prior.id }, data: { salesUpdatedAt: null } });
+    const request = () => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/analytics/products/top-selling?dateFrom=2026-03-08&dateTo=2026-03-08`, headers: a.headers });
+    let res = await request();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ complete: true, baseline: false, pendingBaselineOrders: 1 });
+    expect(res.json().items[0]).toMatchObject({ units: 20, revenue: 200, growth: null, trendScore: null });
+    await systemDb.order.update({ where: { id: prior.id }, data: { salesUpdatedAt: new Date() } });
+    await systemDb.orderLineItem.deleteMany({ where: { orderId: prior.id } });
+    res = await request();
+    expect(res.json()).toMatchObject({ complete: true, baseline: false, pendingBaselineOrders: 0 });
+    expect(res.json().items[0]).toMatchObject({ units: 20, growth: null });
+  });
+});
+
+describe("historical dates, up to 12 months at a time", () => {
+  const today = localDay(new Date(), TZ);
+
+  it("takes the last 6 and 12 months, and any calendar year, however long ago", async () => {
+    const { a, ws, store } = await owner();
+    for (const [preset, from] of [["6m", addDays(monthsEarlier(today, 6), 1)], ["12m", addDays(yearEarlier(today), 1)]] as const) {
+      const res = await overview(a.headers, ws, store.id, `preset=${preset}`);
+      expect(res.statusCode, preset).toBe(200);
+      expect(res.json().range, preset).toEqual({ from, to: today });
+    }
+    // 2023 on its own, compared with 2022: an older year is a question like this one.
+    await seedOrder(store, { id: "Y23", createdAt: "2023-06-01T16:00:00Z", lines: [{ qty: 1, price: 80 }] });
+    await seedOrder(store, { id: "Y22", createdAt: "2022-06-01T16:00:00Z", lines: [{ qty: 1, price: 40 }] });
+    await recomputeDays(store, ["2023-06-01", "2022-06-01"]);
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0) } });
+    const res = await overview(a.headers, ws, store.id, "preset=custom&from=2023-01-01&to=2023-12-31&compare=year");
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.range).toEqual({ from: "2023-01-01", to: "2023-12-31" });
+    expect(body.previous).toMatchObject({ from: "2022-01-01", to: "2022-12-31", compare: "year", imported: true });
+    expect(body.modules.sales_overview.current).toMatchObject({ netSales: 80, orders: 1 });
+    expect(body.modules.sales_overview.previous).toMatchObject({ netSales: 40, orders: 1 });
+    expect(body.modules.sales_overview.deltas.netSales).toBe(1);
+    expect(body.modules.sales_overview.series).toHaveLength(365);
+    // The leap year 2024, all 366 days of it, is 12 months too.
+    expect((await overview(a.headers, ws, store.id, "preset=custom&from=2024-01-01&to=2024-12-31")).statusCode).toBe(200);
+  });
+
+  it("refuses more than 12 months at once, for the dates and for what they're compared with", async () => {
+    const { a, ws, store } = await owner();
+    for (const qs of [
+      "preset=custom&from=2023-01-01&to=2024-01-01",
+      "preset=custom&from=2025-03-15&to=2026-03-15",
+      "preset=custom&from=2026-01-01&to=2026-01-31&compare=custom&cfrom=2024-01-01&cto=2025-01-01",
+    ]) {
+      const res = await overview(a.headers, ws, store.id, qs);
+      expect(res.statusCode, qs).toBe(400);
+      expect(res.json(), qs).toMatchObject({ error: "invalid_range", message: expect.stringContaining("12 months") });
+    }
+    // The downloads read the same rule.
+    const csv = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=sales&preset=custom&from=2023-01-01&to=2024-01-01`, headers: a.headers });
+    expect(csv.statusCode).toBe(400);
+  });
+
+  it("keeps custom dates from starting before Shopify created the store, and says where its dates begin", async () => {
+    const { a, ws, store } = await owner();
+    // 14 Mar 2022, 3 am UTC is still the 13th in New York.
+    await systemDb.store.update({ where: { id: store.id }, data: { shopCreatedAt: new Date("2022-03-14T03:00:00Z") } });
+    const before = await overview(a.headers, ws, store.id, "preset=custom&from=2022-01-01&to=2022-12-31");
+    expect(before.statusCode).toBe(400);
+    expect(before.json().message).toContain("first day");
+    const from = await overview(a.headers, ws, store.id, "preset=custom&from=2022-03-13&to=2022-12-31&compare=year");
+    expect(from.statusCode).toBe(200);
+    // A comparison reaching back before the store holds no orders: said, not refused.
+    expect(from.json().previous).toMatchObject({ from: "2021-03-13", imported: false });
+    expect(from.json().data).toMatchObject({ createdDay: "2022-03-13", startDay: "2022-03-13" });
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers: a.headers });
+    expect(list.json().stores[0]).toMatchObject({ startDay: "2022-03-13", shopCreatedAt: "2022-03-14T03:00:00.000Z" });
+  });
+
+  it("says how far the full order history has got, a year at a time, once the store holds read_all_orders", async () => {
+    const { a, ws, store } = await owner([...ALL_SCOPES, "read_all_orders"]);
+    const year = (y: number, status: string, orders: number) => ({
+      workspaceId: ws,
+      storeId: store.id,
+      planJobId: "j",
+      syncJobId: "j",
+      year: y,
+      fromAt: new Date(`${y}-01-01T05:00:00Z`),
+      toAt: new Date(`${y + 1}-01-01T05:00:00Z`),
+      status,
+      orders,
+      withCustomers: true,
+    });
+    await systemDb.orderHistoryWindow.createMany({ data: [year(2026, "done", 40), year(2025, "done", 120), year(2024, "running", 0), year(2023, "queued", 0)] });
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2025-01-01T05:00:00Z") } });
+    const { data } = (await overview(a.headers, ws, store.id)).json();
+    expect(data.history).toEqual({
+      access: "granted",
+      years: [
+        { year: 2026, status: "done", orders: 40, finishedAt: null },
+        { year: 2025, status: "done", orders: 120, finishedAt: null },
+        { year: 2024, status: "running", orders: 0, finishedAt: null },
+        { year: 2023, status: "queued", orders: 0, finishedAt: null },
+      ],
+    });
+    expect(data.historyFrom).toBe("2025-01-01");
+    // 2024 isn't in yet: compared with, it says so rather than showing a drop.
+    const prev = (await overview(a.headers, ws, store.id, "preset=custom&from=2025-01-01&to=2025-12-31&compare=year")).json().previous;
+    expect(prev).toMatchObject({ from: "2024-01-01", imported: false });
+  });
+});
