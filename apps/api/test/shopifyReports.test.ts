@@ -109,6 +109,22 @@ describe("Shopify's own figures on the dashboard", () => {
     // Nothing they can't see is fetched for them either.
     expect(reportJobs()).toEqual([]);
   });
+
+  it("gives Shopify's gross profit only to a member shown costs too, and asks Shopify for it only then", async () => {
+    const { ws, store } = await owner();
+    const v = await signIn(ctx, "uv", "v@x.com");
+    // The breakdown alone, as legacy viewers and analysts and API keys hold it.
+    const membership = await systemDb.membership.create({ data: { workspaceId: ws, userId: v.user.id, role: "custom", permissions: ["analytics.sales", "finance.breakdown"] } });
+    const body = (await overview(v.headers, ws, store.id)).json();
+    expect(body.modules.profit).toBeUndefined();
+    expect(body.capabilities.some((c: { id: string }) => c.id === "profit")).toBe(false);
+    // The check of the sales figures is the breakdown's.
+    expect(body.modules.shopify_check).toMatchObject({ status: "loading" });
+    expect(reportJobs().flatMap((j) => j.requests.map((r) => r.dataset))).toEqual(["sales"]);
+
+    await systemDb.membership.update({ where: { id: membership.id }, data: { permissions: ["analytics.sales", "finance.breakdown", "inventory.view", "inventory.costs"] } });
+    expect((await overview(v.headers, ws, store.id)).json().modules.profit).toMatchObject({ status: "loading" });
+  });
 });
 
 describe("the reconciliation report (GET .../shopify-check)", () => {
@@ -223,6 +239,19 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
     await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "finance.reports"] } });
     expect((await check()).statusCode).toBe(403);
     await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "finance.breakdown", "finance.reports"] } });
-    expect((await check()).statusCode).toBe(200);
+    const metrics = async () => {
+      const res = await check();
+      expect(res.statusCode).toBe(200);
+      return new Set((res.json().periods as Array<{ rows: Array<{ metric: string }> }>).flatMap((p) => p.rows.map((r) => r.metric)));
+    };
+    // Shopify's gross profit and cost of goods sold are costs: not without "View costs and stock value".
+    const without = await metrics();
+    expect(without.has("Net sales")).toBe(true);
+    expect(without.has("Gross profit")).toBe(false);
+    expect(without.has("Cost of goods sold")).toBe(false);
+    await systemDb.membership.update({ where: { id: m.id }, data: { permissions: ["analytics.sales", "finance.breakdown", "finance.reports", "inventory.view", "inventory.costs"] } });
+    const withCosts = await metrics();
+    expect(withCosts.has("Gross profit")).toBe(true);
+    expect(withCosts.has("Cost of goods sold")).toBe(true);
   });
 });

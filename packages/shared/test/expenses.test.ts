@@ -80,6 +80,10 @@ describe("net profit", () => {
     expect(netProfit({ ...known, productCosts: null, adSpend: null, complete: false })).toEqual({ value: null, gaps: ["product_costs", "ad_spend", "costs_not_complete"] });
     expect(netProfit({ ...known, uncosted: 12 })).toEqual({ value: null, gaps: ["uncosted_sales"] });
     expect(netProfit({ ...known, adSpend: "hidden" })).toEqual({ value: null, gaps: ["ads_hidden"] });
+    // A member not shown Shopify's product costs: net profit would give them away.
+    expect(netProfit({ ...known, productCosts: "hidden" })).toEqual({ value: null, gaps: ["product_costs_hidden"] });
+    // Hidden comes before every other product-cost reason: none of them is this member's to know.
+    expect(netProfit({ ...known, productCosts: "hidden", uncosted: 12 })).toEqual({ value: null, gaps: ["product_costs_hidden"] });
   });
 
   it("never takes Shopify's 0 for the cost of goods when no sale had a cost recorded", () => {

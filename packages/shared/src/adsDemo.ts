@@ -20,6 +20,7 @@ import {
   googleRowBlank,
   isGoogleDetailLevel,
   minorUnitsPerUnit,
+  type AdCampaignFacts,
   type AdDayRow,
   type GoogleReportLevel,
   type GoogleReportMetrics,
@@ -463,6 +464,15 @@ export function demoPrimaryStatus(ctx: DemoContext, c: DemoCampaign, today: stri
   const clicks = p.impressions * Math.max(0.3, 1 + p.trend * pos) * p.ctr;
   const cost = clicks * p.cpcUsd * Math.max(0.2, 1 + p.cpcTrend * pos);
   return cost > c.dailyBudgetUsd ? { primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] } : { primaryStatus: "ELIGIBLE", primaryStatusReasons: [] };
+}
+
+/**
+ * A demo campaign's facts as a sync stores them (ad_campaigns), as Google's campaign query would give them
+ * on `today`: its channel type, its primary status then (demoPrimaryStatus) and its daily budget.
+ */
+export function demoCampaignStoredFacts(ctx: DemoContext, c: DemoCampaign, today: string): AdCampaignFacts {
+  const { primaryStatus, primaryStatusReasons } = demoPrimaryStatus(ctx, c, today);
+  return { channelType: c.type, primaryStatus, primaryStatusReasons, budgetPeriod: "DAILY", budgetAmount: demoMoney(c.dailyBudgetUsd, ctx.currency) };
 }
 
 /** A campaign as the campaign table and the report list it: its settings, in the account's currency. */

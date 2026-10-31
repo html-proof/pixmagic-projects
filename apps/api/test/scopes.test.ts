@@ -316,6 +316,33 @@ describe("optional scope requests", () => {
       expect(ctx.deps.queues.sent.sync.find((j) => j.kind === "orders")?.sinceDays).toBeUndefined();
     });
 
+    it("records when read_customers was granted, before the re-read it queues", async () => {
+      const store = await connectedStore(ws, ["read_orders", "read_products"]);
+      ctx.setFetch(grantedScopesResponse(["read_orders", "read_products", "read_customers"]));
+      const before = Date.now();
+      const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/refresh`, headers });
+      expect(res.statusCode).toBe(200);
+      const at = (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom!;
+      expect(at.getTime()).toBeGreaterThanOrEqual(before);
+      expect(at.getTime()).toBeLessThanOrEqual(Date.now());
+      // The worker moves it back to that import's window once it is in, as it was queued since.
+      const reread = await systemDb.syncJob.findFirstOrThrow({ where: { storeId: store.id, kind: "orders" } });
+      expect(reread.createdAt.getTime()).toBeGreaterThanOrEqual(at.getTime());
+    });
+
+    it("leaves a recorded grant alone when other scopes arrive, and doesn't record one granted before it was recorded", async () => {
+      const recorded = new Date("2026-09-01T10:00:00Z");
+      const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+      await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: recorded } });
+      ctx.setFetch(grantedScopesResponse(["read_orders", "read_customers", "write_pixels"]));
+      await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/refresh`, headers });
+      expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toEqual(recorded);
+
+      await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: null, grantedScopes: ["read_orders", "read_customers"] } });
+      await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/refresh`, headers });
+      expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).customersFrom).toBeNull();
+    });
+
     it("queues nothing when the merchant granted nothing new", async () => {
       const store = await connectedStore(ws, ["read_orders", "read_products"]);
       ctx.setFetch(grantedScopesResponse(["read_orders", "read_products"]));
@@ -327,10 +354,13 @@ describe("optional scope requests", () => {
 
     it("records a scope the merchant revoked", async () => {
       const store = await connectedStore(ws, ["read_orders", "read_products", "read_customers"]);
+      await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date("2026-09-01T10:00:00Z") } });
       ctx.setFetch(grantedScopesResponse(["read_orders", "read_products"]));
       await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store.id}/scopes/refresh`, headers });
       const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
       expect(after.grantedScopes).toEqual(["read_orders", "read_products"]);
+      // Orders updated from now on lose their customer: a grant again starts over.
+      expect(after.customersFrom).toBeNull();
       expect(ctx.deps.queues.sent.sync).toEqual([]);
     });
 
@@ -393,6 +423,7 @@ describe("optional scope requests", () => {
 
       it("revokes it, reconciles the stored scopes and relocks the module", async () => {
         const store = await connectedStore(ws, ["read_orders", "read_products", "read_customers"]);
+        await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date("2026-09-01T10:00:00Z") } });
         const shopify = revokeResponses({ revoked: ["read_customers"], after: ["read_orders", "read_products"] });
         ctx.setFetch(shopify.fetchImpl);
 
@@ -405,6 +436,7 @@ describe("optional scope requests", () => {
 
         const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
         expect(after.grantedScopes).toEqual(["read_orders", "read_products"]);
+        expect(after.customersFrom).toBeNull();
 
         // The merchant can ask for it again: the module is locked, not dead.
         const caps = res.json().capabilities as Array<{ id: string; enabled: boolean; requestableScopes: string[] }>;
@@ -455,6 +487,7 @@ describe("optional scope requests", () => {
         // something that is done. The stored scopes must still drop it, or the dashboard keeps
         // offering a module whose scope the token no longer has.
         const store = await connectedStore(ws, ["read_orders", "read_products", "read_customers"]);
+        await systemDb.store.update({ where: { id: store.id }, data: { customersFrom: new Date("2026-09-01T10:00:00Z") } });
         ctx.setFetch(async (_input, init) => {
           if (String(init?.body ?? "").includes("appRevokeAccessScopes")) {
             return gql({ appRevokeAccessScopes: { revoked: [{ handle: "read_customers" }], userErrors: [] } });
@@ -468,6 +501,7 @@ describe("optional scope requests", () => {
         expect(res.json().scopes).toEqual(["read_orders", "read_products"]);
         const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
         expect(after.grantedScopes).toEqual(["read_orders", "read_products"]);
+        expect(after.customersFrom).toBeNull();
         expect(await systemDb.auditLog.count({ where: { action: "store.scopes_revoked" } })).toBe(1);
       });
 

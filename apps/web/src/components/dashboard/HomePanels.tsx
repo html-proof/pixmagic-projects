@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, Split, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
 import type { AdSpendProvider } from "@app/shared/ads";
 import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
@@ -14,7 +14,7 @@ import { Donut, type DonutSlice } from "./Charts";
 import { fmtDateTime, fmtDay, fmtMoneyCompact, fmtTimes, humanize, plural } from "./format";
 import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
-import { OrderName } from "./Modules";
+import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
 import { comparableAds, costsOf, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
 import type { Topic } from "./topics";
@@ -318,10 +318,10 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
  * (`profitOf`); then it is worked out from revenue (net sales, shipping and fees). Otherwise it says
  * what is missing.
  */
-export function ProfitOverview({ ov, currency, adsOn, adsOffered, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; adsOffered: boolean; manageCosts: boolean }) {
+export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; adsOffered: boolean; costsOn: boolean; manageCosts: boolean }) {
   const net = ov.modules.sales_overview!.current.netSales;
   const k = costsOf(ov, currency, adsOn);
-  const profit = profitOf(ov, k, { offered: adsOffered, shown: adsOn });
+  const profit = profitOf(ov, k, { offered: adsOffered, shown: adsOn }, costsOn);
   const isNet = profit?.value !== null && profit?.value !== undefined;
   const money = (n: number) => fmtMoney(n, currency);
   // Net profit is out of revenue; what is left without it, out of net sales.
@@ -362,7 +362,7 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, manageCosts }:
             ) : (
               <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />
             )}
-            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
+            {costsOn && <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />}
             {adsOn && <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />}
             {k.yourCosts !== null && <LegendRow color={YOUR_COSTS} label="Your costs" value={money(k.yourCosts)} share={share(k.yourCosts)} />}
             <LegendRow color={SALES} label={isNet ? "Net profit" : "Left after these costs"} value={money(left)} share={share(left)} />
@@ -519,6 +519,53 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
   );
 }
 
+// ---- Paid vs organic ----------------------------------------------------------------------------
+
+/**
+ * The store's sales by how each order's last visit came (the traffic module's split): paid ads against
+ * organic search, social and other websites, then email, direct and not recorded. Shopify's own record
+ * of the visit (last click), so it needs no ad account and never mixes in what a platform claims.
+ */
+export function PaidVsOrganic({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+  const t = ov.modules.traffic!;
+  const split = t.split!;
+  const paid = split.find((p) => p.id === "paid");
+  const organic = split.find((p) => p.id === "organic");
+  const any = split.some((p) => p.orders > 0 || p.sales !== 0);
+  const money = (n: number) => fmtMoney(n, currency);
+  return (
+    <HomeCard
+      id="paid-organic"
+      title="Paid vs organic sales"
+      sub="Net sales by the visit Shopify recorded before each order: an ad, or a search, post or website."
+      icon={<Disc icon={Split} className="bg-emerald-600 text-white dark:bg-emerald-500" />}
+      action={<DetailsLink onClick={() => onOpen("channels")} />}
+    >
+      {any ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 divide-x divide-border">
+            <Figure label="From paid ads" value={fmtPct(paid?.share ?? null)} change={<span className="text-xs tabular-nums text-muted">{paid ? money(paid.sales) : "—"}</span>} />
+            <div className="pl-3">
+              <Figure label="Organic" value={fmtPct(organic?.share ?? null)} change={<span className="text-xs tabular-nums text-muted">{organic ? money(organic.sales) : "—"}</span>} />
+            </div>
+          </div>
+          <div className="mt-4">
+            <TrafficSplitBar split={split} currency={currency} />
+          </div>
+        </>
+      ) : (
+        <p className="text-sm text-muted">{t.pending > 0 ? "Where these orders came from is still being read from Shopify." : "No sales with a recorded visit in these dates."}</p>
+      )}
+      {t.pending > 0 && any && (
+        <p className="mt-2 text-xs text-muted">
+          {fmtNum(t.pending)} more {t.pending === 1 ? "order is" : "orders are"} still being read from Shopify, and {t.pending === 1 ? "isn't" : "aren't"} in these figures yet.
+        </p>
+      )}
+      <TrafficSplitNote />
+    </HomeCard>
+  );
+}
+
 // ---- Top products -------------------------------------------------------------------------------
 
 export function TopProductsHome({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
@@ -572,7 +619,7 @@ export function TopProductsHome({ ov, currency, onOpen }: { ov: Overview; curren
 
 // ---- Expenses breakdown -------------------------------------------------------------------------
 
-export function ExpensesBreakdown({ ov, currency, adsOn, manage, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; manage: boolean; manageCosts: boolean }) {
+export function ExpensesBreakdown({ ov, currency, adsOn, costsOn, manage, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; costsOn: boolean; manage: boolean; manageCosts: boolean }) {
   const k = costsOf(ov, currency, adsOn);
   const money = (n: number) => fmtMoney(n, currency);
   const total = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
@@ -601,7 +648,7 @@ export function ExpensesBreakdown({ ov, currency, adsOn, manage, manageCosts }: 
             <span className="text-[11px] leading-tight text-muted">Costs we can see</span>
           </Donut>
           <ul className="w-full min-w-0 flex-1 space-y-2.5">
-            <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />
+            {costsOn && <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />}
             {adsOn && (
               <>
                 <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />

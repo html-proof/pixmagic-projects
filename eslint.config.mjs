@@ -20,6 +20,8 @@ export default tseslint.config(
       "apps/web/playwright-report/**",
       "packages/db/src/generated/**",
       "shopify-app/**",
+      // Session worktrees (.claude/worktrees/*) are whole copies of the repo inside the main checkout.
+      ".claude/**",
     ],
   },
   js.configs.recommended,

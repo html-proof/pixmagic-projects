@@ -1,5 +1,6 @@
 "use client";
 import { useState, type ReactNode } from "react";
+import { seesModule } from "@app/shared/access";
 import type { CompareMode } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { seesTopic } from "@/lib/access";
@@ -162,7 +163,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       )}
 
       {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
-      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn })} />}
+      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn }, seesModule(access, "profit"))} />}
 
       <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">

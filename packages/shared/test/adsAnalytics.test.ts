@@ -129,9 +129,20 @@ describe("campaigns", () => {
     expect(c).toMatchObject({ spend: 0, activeDays: 0, budget: 0, budgetUse: null, status: "PAUSED" });
   });
 
+  it("carries Google's primary status and the budget's period; a total budget isn't paced over the dates", () => {
+    const synced = campaignAnalytics(rows, range, [
+      { id: "a", name: "Alpha", type: "SEARCH", status: "ENABLED", startDay: null, dailyBudget: 10, primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", totalBudget: null },
+      { id: "b", name: "Beta", type: "PERFORMANCE_MAX", status: "ENABLED", startDay: null, dailyBudget: null, primaryStatus: "ELIGIBLE", primaryStatusReasons: [], budgetPeriod: "CUSTOM_PERIOD", totalBudget: 5000 },
+    ]);
+    expect(synced.find((c) => c.id === "a")).toMatchObject({ primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budget: 100, budgetUse: 1 });
+    expect(synced.find((c) => c.id === "b")).toMatchObject({ primaryStatus: "ELIGIBLE", budgetPeriod: "CUSTOM_PERIOD", totalBudget: 5000, dailyBudget: null, budget: null, budgetUse: null });
+    // Settings without a period (a demo's, older callers): a daily budget is a daily one.
+    expect(list.find((c) => c.id === "a")).toMatchObject({ budgetPeriod: "DAILY", primaryStatus: null, primaryStatusReasons: [], totalBudget: null });
+  });
+
   it("names a campaign from its rows when it has no settings", () => {
     const bare = campaignAnalytics(rows, range);
-    expect(bare.find((c) => c.id === "a")).toMatchObject({ name: "Alpha", type: null, dailyBudget: null, budget: null });
+    expect(bare.find((c) => c.id === "a")).toMatchObject({ name: "Alpha", type: null, dailyBudget: null, budget: null, budgetPeriod: null, primaryStatus: null });
   });
 
   it("searches, filters, sorts (nulls last) and pages", () => {

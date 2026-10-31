@@ -12,7 +12,7 @@ import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
-import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
+import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, PaidVsOrganic, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
@@ -21,7 +21,7 @@ import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
-import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
+import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
 import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
 
@@ -336,6 +336,8 @@ export default function DashboardPage() {
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
   // Advertising on the home page: only where the workspace offers it and this member is shown it.
   const adsOn = offers("ads") && seesTopic(access, "ads", offers);
+  // Shopify's cost of goods sold: only for a member the API gives its gross profit to.
+  const costsOn = seesModule(access, "profit");
   const manage = allowed("integrations.manage");
   const s = m?.sales_overview;
   const custom = appliedCustom(s);
@@ -529,7 +531,7 @@ export default function DashboardPage() {
       {ov && s && (
         <div className="grid gap-4 xl:grid-cols-3">
           <SalesVsAdSpend ov={ov} currency={cur} adsOn={adsOn} manage={manage} />
-          <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} adsOffered={offers("ads")} manageCosts={canManage(workspace.role)} />
+          <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} adsOffered={offers("ads")} costsOn={costsOn} manageCosts={canManage(workspace.role)} />
         </div>
       )}
 
@@ -539,8 +541,10 @@ export default function DashboardPage() {
           {s && <SalesPerformance ov={ov} currency={cur} onOpen={detail.open} />}
           {/* Not in a workspace that leaves advertising out (lib/features.ts), nor for a member not shown it. */}
           {adsOn && <AdvertisingPerformance ov={ov} manage={manage} />}
+          {/* Paid vs organic: Shopify's own record of each order's visit, so it shows with or without ad accounts. */}
+          {m?.traffic?.split && <PaidVsOrganic ov={ov} currency={cur} onOpen={detail.open} />}
           {m?.top_products && <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} />}
-          {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} manage={manage} manageCosts={canManage(workspace.role)} />}
+          {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} costsOn={costsOn} manage={manage} manageCosts={canManage(workspace.role)} />}
           {m?.recent_orders && <RecentOrdersHome ov={ov} currency={cur} onOpen={detail.open} />}
           <KeyInsights ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview", offers)} />
         </div>
@@ -557,7 +561,7 @@ export default function DashboardPage() {
           {justGranted.length > 0 && (
             <div className="mb-2">
               <Alert kind="success">
-                Thanks — Shopify granted {justGranted.join(" and ")}. We&apos;re importing the data behind it now; this page will fill in by itself.
+                Thanks — Shopify granted access to {scopeList(justGranted)}. We&apos;re importing the data behind it now; this page will fill in by itself.
               </Alert>
             </div>
           )}

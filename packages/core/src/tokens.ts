@@ -5,6 +5,7 @@ import { shopifyApp } from "./apps.js";
 import { exchangeForExpiringToken, refreshAccessToken, ShopifyHttpError, type FetchLike, type TokenResponse } from "./shopify.js";
 import { logger } from "./logger.js";
 import type { Coord } from "./coord.js";
+import { customersFromChange } from "./scopes.js";
 
 let ring: { spec: string; keys: Keyring } | undefined;
 export function keyring(): Keyring {
@@ -40,6 +41,15 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const tokenLock = (storeId: string) => `lock:token-refresh:${storeId}`;
 const LOCK_TTL_MS = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The scopes a new token holds, the row's when Shopify's answer names none, and with them from when
+ * orders carry their customer (a grant or a revoke the token is the first to tell of).
+ */
+function scopesOf(row: Pick<Store, "grantedScopes">, t: TokenResponse) {
+  const grantedScopes = t.scopes.length ? t.scopes : row.grantedScopes;
+  return { grantedScopes, ...customersFromChange(row.grantedScopes, grantedScopes, new Date()) };
+}
 
 /** True when the row's access token is good for at least `ms` more; a non-expiring one always is. */
 const validFor = (row: Pick<Store, "accessTokenExpiresAt">, ms: number) =>
@@ -126,7 +136,7 @@ async function rotate(storeId: string, fetchImpl: FetchLike, minValidityMs: numb
     const { count } = await systemDb.store.updateMany({
       where: { id: row.id, refreshTokenEnc: presented },
       // Keep previously granted scopes if the refresh response omits them.
-      data: { ...encryptTokenFields(row.id, t), grantedScopes: t.scopes.length ? t.scopes : row.grantedScopes },
+      data: { ...encryptTokenFields(row.id, t), ...scopesOf(row, t) },
     });
     if (count) logger.info({ storeId }, "rotated shopify access token");
     else logger.warn({ storeId }, "store's token was replaced while it was refreshed; the replacement stays");
@@ -156,7 +166,7 @@ export async function migrateToExpiringToken(store: Pick<Store, "id">, coord: Co
     // 7 days gets the same pair back.
     const { count } = await systemDb.store.updateMany({
       where: { id: row.id, accessTokenEnc: row.accessTokenEnc },
-      data: { ...encryptTokenFields(row.id, t), grantedScopes: t.scopes.length ? t.scopes : row.grantedScopes },
+      data: { ...encryptTokenFields(row.id, t), ...scopesOf(row, t) },
     });
     if (count) logger.info({ storeId: row.id, shop: row.shopDomain }, "moved store to an expiring shopify token");
     return count > 0;

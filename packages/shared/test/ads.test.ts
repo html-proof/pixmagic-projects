@@ -10,7 +10,10 @@ import {
   adTotals,
   CAMPAIGN_STATUS_GROUP_LABEL,
   CAMPAIGN_STATUS_GROUPS,
+  campaignBudgetWords,
   campaignStatusGroup,
+  googleCampaignFacts,
+  metaCampaignFacts,
   campaignTotals,
   canCompareFrom,
   commonCoverage,
@@ -883,5 +886,47 @@ describe("the store's own sales next to the ad spend", () => {
     expect(trafficSourcePlatform("youtube")).toBe("google");
     expect(trafficSourcePlatform("tiktok")).toBeNull();
     expect(trafficSourcePlatform(null)).toBeNull();
+  });
+});
+
+describe("a campaign's facts as a sync stores them (ad_campaigns)", () => {
+  it("Google: channel type, primary status and reasons, and the budget for its period, from the campaign query's row", () => {
+    expect(
+      googleCampaignFacts({
+        campaign: { advertisingChannelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED", "BUDGET_CONSTRAINED", "UNKNOWN"] },
+        campaignBudget: { period: "DAILY", amountMicros: "40000000" },
+      }),
+    ).toEqual({ channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 });
+    // A campaign total budget: the whole amount, for the campaign's own dates.
+    expect(googleCampaignFacts({ campaign: { advertisingChannelType: "DEMAND_GEN", primaryStatus: "ELIGIBLE" }, campaignBudget: { period: "CUSTOM_PERIOD", totalAmountMicros: 500_000_000 } })).toMatchObject({
+      budgetPeriod: "CUSTOM_PERIOD",
+      budgetAmount: 500,
+      primaryStatusReasons: [],
+    });
+    // Google leaves a field at its default out: an unknown enum is none, and an amount without its period can't be said.
+    expect(googleCampaignFacts({ campaign: { advertisingChannelType: "UNKNOWN", primaryStatus: "UNSPECIFIED" }, campaignBudget: { amountMicros: "1000000" } })).toEqual({
+      channelType: null,
+      primaryStatus: null,
+      primaryStatusReasons: [],
+      budgetPeriod: null,
+      budgetAmount: null,
+    });
+    expect(googleCampaignFacts({ campaign: { advertisingChannelType: "SHOPPING" }, campaignBudget: { period: "DAILY" } })).toMatchObject({ channelType: "SHOPPING", budgetPeriod: null, budgetAmount: null });
+  });
+
+  it("Meta: the campaign's own budget, daily or lifetime, or none (its ad sets hold them); never a type or primary status", () => {
+    expect(metaCampaignFacts({ dailyBudget: 25, lifetimeBudget: null })).toEqual({ channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: "DAILY", budgetAmount: 25 });
+    expect(metaCampaignFacts({ dailyBudget: null, lifetimeBudget: 900 })).toMatchObject({ budgetPeriod: "LIFETIME", budgetAmount: 900 });
+    expect(metaCampaignFacts({ dailyBudget: null, lifetimeBudget: null })).toMatchObject({ budgetPeriod: null, budgetAmount: null });
+  });
+
+  it("a budget in words, by its period; none when it can't be said", () => {
+    const money = (n: number) => `$${n.toFixed(2)}`;
+    expect(campaignBudgetWords("DAILY", 40, money)).toBe("$40.00 a day");
+    expect(campaignBudgetWords("CUSTOM_PERIOD", 500, money)).toBe("$500.00 total");
+    expect(campaignBudgetWords("LIFETIME", 900, money)).toBe("$900.00 lifetime");
+    expect(campaignBudgetWords("DAILY", null, money)).toBeNull();
+    expect(campaignBudgetWords(null, 40, money)).toBeNull();
+    expect(campaignBudgetWords("SOMETHING_NEW", 40, money)).toBeNull();
   });
 });

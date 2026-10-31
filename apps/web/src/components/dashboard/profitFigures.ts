@@ -87,17 +87,18 @@ export interface NetProfit {
 /**
  * Net profit for the dates (`netProfit` in @app/shared/expenses), or why not. Revenue is total sales
  * less taxes and duties: net sales, shipping and additional fees, the lines a member who may see the
- * owner's costs is shown too. Ad spend: none connected is 0 (other ads are the owner's costs); a
- * member not shown the ads gets no net profit, which would give the spend away. Null for a member
- * not shown the owner's costs or those lines.
+ * owner's costs is shown too. Ad spend: none connected is 0 (other ads are the owner's costs). A
+ * member not shown the ads, or Shopify's product costs (`costsOn`: Team & Access, `seesModule(access,
+ * "profit")`), gets no net profit, which would give them away. Null for a member not shown the
+ * owner's costs or those lines.
  */
-export function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown: boolean }): NetProfit | null {
+export function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown: boolean }, costsOn: boolean): NetProfit | null {
   const e = ov.modules.expenses;
   const c = ov.modules.sales_overview?.current;
   if (!e || !c || c.shipping === undefined || c.additionalFees === undefined) return null;
   const revenue = Math.round((c.netSales + c.shipping + c.additionalFees) * 100) / 100;
   const adSpend = !ads.offered ? 0 : !ads.shown ? "hidden" : k.adState === "missing" ? 0 : k.adSpend;
-  const productCosts = k.productState === "not_recorded" ? "not_recorded" : k.productCosts;
+  const productCosts = !costsOn ? "hidden" : k.productState === "not_recorded" ? "not_recorded" : k.productCosts;
   return { ...netProfit({ revenue, productCosts, uncosted: k.uncosted, adSpend, yourCosts: e.current.total, complete: e.complete }), revenue };
 }
 
@@ -114,9 +115,9 @@ export interface ProfitCardFigures {
   netNote: string;
 }
 
-export function profitCardFigures(ov: Overview, currency: string, ads: { offered: boolean; shown: boolean }): ProfitCardFigures {
+export function profitCardFigures(ov: Overview, currency: string, ads: { offered: boolean; shown: boolean }, costsOn: boolean): ProfitCardFigures {
   const k = costsOf(ov, currency, ads.shown);
-  const p = profitOf(ov, k, ads);
+  const p = profitOf(ov, k, ads, costsOn);
   return {
     noCostRecorded: k.productState === "not_recorded",
     net: p?.value ?? null,

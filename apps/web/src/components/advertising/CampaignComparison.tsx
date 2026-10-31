@@ -1,9 +1,19 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { CAMPAIGN_STATUS_GROUP_LABEL, CAMPAIGN_STATUS_GROUPS, isGoogleObjectId, isMetaObjectId, type AdSpendProvider, type CampaignStatusGroup } from "@app/shared/ads";
+import {
+  CAMPAIGN_STATUS_GROUP_LABEL,
+  CAMPAIGN_STATUS_GROUPS,
+  campaignBudgetWords,
+  googleCampaignStatus,
+  isGoogleObjectId,
+  isMetaObjectId,
+  type AdSpendProvider,
+  type CampaignStatusGroup,
+} from "@app/shared/ads";
 import { isDemoObjectId } from "@app/shared/adsDemo";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { campaignTypeLabel } from "@/lib/googleAds";
 import { BEING_READ, ChangeNote, ComparedLine } from "@/components/dashboard/AdsCommon";
 import { shownFigures } from "@/components/dashboard/adFigures";
 import { DemoChip } from "@/components/dashboard/Advertising";
@@ -45,6 +55,26 @@ function matches(c: Campaign, query: string, status: StatusFilter) {
 
 /** The platform's own word, as a reader would write it (CAMPAIGN_PAUSED → "Campaign paused"). */
 const statusWords = (s: string) => s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
+
+/**
+ * A campaign's delivery: Google's primary status in words, with why it isn't serving in full (Limited:
+ * limited by budget...), when the last sync read one; otherwise the platform's own status word (Meta's
+ * effective_status, Google's campaign.status before its primary status was read).
+ */
+function CampaignStatus({ c }: { c: Campaign }) {
+  const d = googleCampaignStatus(c.primaryStatus, c.primaryStatusReasons);
+  if (d) {
+    return (
+      <>
+        <span className="whitespace-nowrap" data-testid="campaign-primary-status">
+          {d.label}
+        </span>
+        {d.reasons.length > 0 && <span className="block text-muted">{d.reasons.join(", ")}</span>}
+      </>
+    );
+  }
+  return c.status ? <span className="whitespace-nowrap">{statusWords(c.status)}</span> : <span className="text-muted">Not read yet</span>;
+}
 
 /**
  * Where a campaign's ad sets (Meta) or ad groups (Google) are: its platform's page, narrowed to its
@@ -153,11 +183,13 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
         </p>
       ) : (
         <div className="-mx-1 overflow-x-auto">
-          <table className="w-full min-w-[72rem] text-sm" data-testid="campaign-comparison">
+          <table className="w-full min-w-[84rem] text-sm" data-testid="campaign-comparison">
             <thead className="text-left text-xs text-muted">
               <tr>
                 <th className="px-1 pb-2 font-normal">Campaign</th>
                 <th className="px-1 pb-2 font-normal">Status</th>
+                <th className="px-1 pb-2 font-normal">Type</th>
+                <th className="px-1 pb-2 font-normal">Budget</th>
                 <th className="px-1 pb-2 text-right font-normal">Spend</th>
                 <th className="px-1 pb-2 text-right font-normal">Share of spend</th>
                 <th className="px-1 pb-2 text-right font-normal">Spend change</th>
@@ -207,8 +239,14 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
                         {c.complete === false ? " · its account's figures stop before these dates end" : ""}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-1 py-2 text-xs" title={c.status ? `${P.name} says ${c.status}` : undefined}>
-                      {c.status ? statusWords(c.status) : <span className="text-muted">Not read yet</span>}
+                    <td className="max-w-[12rem] px-1 py-2 text-xs" title={c.primaryStatus ? `${P.name} says ${c.primaryStatus}` : c.status ? `${P.name} says ${c.status}` : undefined}>
+                      <CampaignStatus c={c} />
+                    </td>
+                    <td className="whitespace-nowrap px-1 py-2 text-xs" data-testid="campaign-type">
+                      {c.provider === "google" ? campaignTypeLabel(c.channelType ?? null) : <span className="text-muted">—</span>}
+                    </td>
+                    <td className="whitespace-nowrap px-1 py-2 text-xs tabular-nums" data-testid="campaign-budget">
+                      {campaignBudgetWords(c.budgetPeriod, c.budgetAmount, money) ?? <span className="text-muted">—</span>}
                     </td>
                     <td className="px-1 py-2 text-right tabular-nums">{money(c.spend)}</td>
                     <td className="px-1 py-2 text-right tabular-nums">{total ? fmtPct(c.spend / total) : "—"}</td>
@@ -235,8 +273,9 @@ export function CampaignComparison({ ov }: { ov: Overview }) {
       )}
       <p className="mt-3 text-xs text-muted">
         Purchases, their value and ROAS are what each platform credits to its own ads: a sale can be counted by both, and they aren&apos;t your Shopify orders. A campaign&apos;s change
-        compares the same whole days as the totals above; one that spent nothing in the dates compared is new, not up from $0. A status is the platform&apos;s own, as of the
-        account&apos;s last sync.
+        compares the same whole days as the totals above; one that spent nothing in the dates compared is new, not up from $0. A status, Google&apos;s campaign type and a budget
+        are the platform&apos;s own as of the account&apos;s last sync: what they are now, not during these dates. A Meta campaign without a budget of its own has its budgets on
+        its ad sets.
       </p>
     </Panel>
   );

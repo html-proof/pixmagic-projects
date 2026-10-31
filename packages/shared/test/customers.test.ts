@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acquiredTotals, addMonths, cohortGrid, customerFigures, customerHistoryStart, customersKnownDay, monthIndex, monthsBetween, perCustomer, type CohortCount, type CustomerDay } from "../src/customers";
+import { acquiredTotals, addMonths, cohortGrid, customerFigures, customerHistoryStart, customersKnownDay, monthIndex, monthsBetween, perCustomer, recordedCustomerStart, type CohortCount, type CustomerDay } from "../src/customers";
 import { addDays } from "../src/dates";
 
 describe("calendar months", () => {
@@ -49,6 +49,34 @@ describe("from when customers are known", () => {
     expect(customerHistoryStart("2026-07-03", known("2026-07-06", false, true))).toBe("2026-07-07");
     // Orders without a customer in between still decide.
     expect(customerHistoryStart("2026-07-03", { ...known("2026-07-06", true, true), linkedBefore: true })).toBe("2026-07-07");
+  });
+});
+
+describe("from when customers are known, as recorded (stores.customers_from)", () => {
+  it("starts the day after the recorded moment, which was part way through its day, in the store's own time", () => {
+    // The re-read started at 10:00 UTC on 21 August: 20:00 in Melbourne.
+    const reread = new Date("2026-08-21T10:00:00Z");
+    expect(recordedCustomerStart("2026-06-01", reread, "UTC")).toBe("2026-08-22");
+    expect(recordedCustomerStart("2026-06-01", reread, "Australia/Melbourne")).toBe("2026-08-22");
+    // 01:00 on the 22nd in Melbourne.
+    expect(recordedCustomerStart("2026-06-01", new Date("2026-08-21T15:00:00Z"), "Australia/Melbourne")).toBe("2026-08-23");
+    // Midnight is no part of a day: that day is whole.
+    expect(recordedCustomerStart("2026-06-01", new Date("2026-08-21T00:00:00Z"), "UTC")).toBe("2026-08-21");
+  });
+
+  it("isn't swayed by the orders: guest days and orders linked out of turn change nothing", () => {
+    // Where customersKnownDay would read a start from the orders, the recorded one stays.
+    expect(recordedCustomerStart("2026-03-01", new Date("2026-08-14T09:30:00Z"), "UTC")).toBe("2026-08-15");
+  });
+
+  it("never starts before the first whole imported day, and from it for the whole history read with customers", () => {
+    expect(recordedCustomerStart("2026-08-15", new Date("2026-06-16T10:00:00Z"), "UTC")).toBe("2026-08-15");
+    expect(recordedCustomerStart("2019-04-02", new Date(0), "UTC")).toBe("2019-04-02");
+  });
+
+  it("is unknown while no imported day is", () => {
+    expect(recordedCustomerStart(null, new Date("2026-08-21T10:00:00Z"), "UTC")).toBeNull();
+    expect(recordedCustomerStart(null, new Date(0), "UTC")).toBeNull();
   });
 });
 

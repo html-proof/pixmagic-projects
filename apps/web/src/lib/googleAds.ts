@@ -77,6 +77,12 @@ export interface AnalyticsAccount {
 
 export type AdsDeltas = { [K in keyof AdsMetrics]: number | null };
 
+/** Where the campaigns' types, statuses and budgets come from: a demo's generator, or a real account's last sync (`asOf`: the latest it read). */
+export interface CampaignSettingsSource {
+  source: "generated" | "synced";
+  asOf: string | null;
+}
+
 /** GET .../ads/google/analytics */
 export interface GoogleAdsAnalytics {
   account: AnalyticsAccount;
@@ -89,6 +95,8 @@ export interface GoogleAdsAnalytics {
   series: { day: AdsPeriod[]; week: AdsPeriod[]; month: AdsPeriod[] };
   /** Null without "View campaigns". */
   campaigns: CampaignAnalytics[] | null;
+  /** Absent from older answers. */
+  campaignSettings?: CampaignSettingsSource;
   conversions: { series: ConversionDay[]; top: CampaignAnalytics[] | null };
   devices: DemoBreakdownRow[] | null;
   audience: { age: DemoBreakdownRow[] | null; countries: DemoBreakdownRow[] | null; segments: DemoBreakdownRow[] | null; devices: DemoBreakdownRow[] | null; note: string | null };

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appOptionalScopes,
+  customersFromChange,
   declaredOptionalScopes,
   fetchGrantedScopes,
   logger,
@@ -196,6 +197,28 @@ describe("scopeFollowUpKinds", () => {
   it("queues nothing for a scope with no backfill behind it", () => {
     expect(scopeFollowUpKinds([])).toEqual([]);
     expect(scopeFollowUpKinds(["read_orders"])).toEqual([]);
+  });
+});
+
+describe("customersFromChange", () => {
+  const at = new Date("2026-10-30T03:00:00Z");
+
+  it("records the moment read_customers arrives: orders read from then on carry their customer", () => {
+    expect(customersFromChange(["read_orders"], ["read_orders", "read_customers"], at)).toEqual({ customersFrom: at });
+    // write_customers holds read_customers.
+    expect(customersFromChange(["read_orders"], ["read_orders", "write_customers"], at)).toEqual({ customersFrom: at });
+  });
+
+  it("clears it when read_customers goes: a grant again starts over", () => {
+    expect(customersFromChange(["read_orders", "read_customers"], ["read_orders"], at)).toEqual({ customersFrom: null });
+    expect(customersFromChange(["read_customers"], [], at)).toEqual({ customersFrom: null });
+  });
+
+  it("leaves it alone while read_customers stays, or stays away", () => {
+    // Held all along (granted before it was recorded, maybe): the start isn't moved to now.
+    expect(customersFromChange(["read_orders", "read_customers"], ["read_orders", "read_customers", "write_pixels"], at)).toEqual({});
+    expect(customersFromChange(["read_customers"], ["write_customers"], at)).toEqual({});
+    expect(customersFromChange(["read_orders"], ["read_orders", "read_products"], at)).toEqual({});
   });
 });
 

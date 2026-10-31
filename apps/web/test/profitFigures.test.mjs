@@ -44,10 +44,10 @@ test("a store that records no cost per item has its product costs not recorded, 
   assert.equal(k.productState, "not_recorded");
   // So what is left isn't "after product costs", and its share is no margin.
   assert.equal(marginKnown(k), false);
-  const p = profitOf(ov, k, noAds);
+  const p = profitOf(ov, k, noAds, true);
   assert.equal(p.value, null);
   assert.deepEqual(p.gaps, ["no_cost_recorded"]);
-  const f = profitCardFigures(ov, "AUD", noAds);
+  const f = profitCardFigures(ov, "AUD", noAds, true);
   assert.equal(f.noCostRecorded, true);
   assert.equal(f.net, null);
   assert.match(f.netNote, /^No sale in these dates has a cost recorded in Shopify/);
@@ -62,8 +62,8 @@ test("some sales costed: Shopify's cost of goods is the product costs, but what 
   assert.equal(k.productCosts, 650);
   assert.equal(k.productState, "known");
   assert.equal(marginKnown(k), false);
-  assert.deepEqual(profitOf(ov, k, noAds).gaps, ["uncosted_sales"]);
-  assert.equal(profitCardFigures(ov, "AUD", noAds).noCostRecorded, false);
+  assert.deepEqual(profitOf(ov, k, noAds, true).gaps, ["uncosted_sales"]);
+  assert.equal(profitCardFigures(ov, "AUD", noAds, true).noCostRecorded, false);
 });
 
 test("every sale costed, or nothing sold: the cost of goods is known and the share is a margin", () => {
@@ -83,18 +83,30 @@ test("the gross profit card gives Business profit overview's net profit, or its 
   const profit = { grossProfit: 1350, costOfGoodsSold: 650, netSalesWithCost: 2000, netSalesWithoutCost: 0, profitOnCosted: 1350, marginOnCosted: 0.675 };
   const ov = overview(profit);
   // Revenue 2,050 (net sales + shipping) − 650 − 300 of the owner's costs, no ads offered.
-  assert.equal(profitOf(ov, costsOf(ov, "AUD", false), noAds).value, 1100);
-  const f = profitCardFigures(ov, "AUD", noAds);
+  assert.equal(profitOf(ov, costsOf(ov, "AUD", false), noAds, true).value, 1100);
+  const f = profitCardFigures(ov, "AUD", noAds, true);
   assert.equal(f.net, 1100);
   assert.match(f.netNote, /as in Business profit overview/);
   // The costs list not marked complete: no figure, and the overview's own words for why.
-  const open = profitCardFigures(overview(profit, { expenses: { total: 300, complete: false } }), "AUD", noAds);
+  const open = profitCardFigures(overview(profit, { expenses: { total: 300, complete: false } }), "AUD", noAds, true);
   assert.equal(open.net, null);
   assert.equal(open.netNote, expenses.PROFIT_GAP_WORDS.costs_not_complete);
   // Ads offered but not shown to this member: net profit would give the spend away.
-  assert.equal(profitCardFigures(ov, "AUD", { offered: true, shown: false }).netNote, expenses.PROFIT_GAP_WORDS.ads_hidden);
+  assert.equal(profitCardFigures(ov, "AUD", { offered: true, shown: false }, true).netNote, expenses.PROFIT_GAP_WORDS.ads_hidden);
   // A member not shown the owner's costs.
-  const hidden = profitCardFigures(overview(profit, { expenses: null }), "AUD", noAds);
+  const hidden = profitCardFigures(overview(profit, { expenses: null }), "AUD", noAds, true);
   assert.equal(hidden.net, null);
   assert.doesNotMatch(hidden.netNote, /doesn't know/);
+});
+
+test("a member not shown Shopify's product costs gets no net profit, and isn't told whether costs are recorded", () => {
+  const profit = { grossProfit: 1350, costOfGoodsSold: 650, netSalesWithCost: 2000, netSalesWithoutCost: 0, profitOnCosted: 1350, marginOnCosted: 0.675 };
+  const ov = overview(profit);
+  const p = profitOf(ov, costsOf(ov, "AUD", false), noAds, false);
+  assert.equal(p.value, null);
+  assert.deepEqual(p.gaps, ["product_costs_hidden"]);
+  assert.equal(profitCardFigures(ov, "AUD", noAds, false).netNote, expenses.PROFIT_GAP_WORDS.product_costs_hidden);
+  // Not "no cost recorded" either: that would say what Shopify's cost of goods sold is.
+  const uncosted = overview({ grossProfit: 2000, costOfGoodsSold: 0, netSalesWithCost: 0, netSalesWithoutCost: 2000, profitOnCosted: 0, marginOnCosted: null });
+  assert.deepEqual(profitOf(uncosted, costsOf(uncosted, "AUD", false), noAds, false).gaps, ["product_costs_hidden"]);
 });

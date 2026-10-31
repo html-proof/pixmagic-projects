@@ -329,6 +329,12 @@ model Store {
   // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole
   // history was imported, null when no import has recorded it. Set by the worker's orders sync.
   ordersHistoryFrom     DateTime?   @map("orders_history_from")
+  // From when every stored order carries its customer (read_customers; docs/customer-analytics.md):
+  // the moment the store granted it (core `customersFromChange`), moved back to the start of the
+  // first full orders import queued since then once it is in (the epoch for the whole history; the
+  // worker's orders sync). Null without read_customers, and for a store that granted it before this
+  // column existed: the customer report then infers the day from the orders (`customersKnownDay`).
+  customersFrom         DateTime?   @map("customers_from")
   // When Shopify created the store (Shop.createdAt), read with its details by the "shop" sync job;
   // null until it has been. The dashboard's dates begin on its day, or an earlier order's
   // (storeStartDay in @app/shared/dates): the earliest day custom dates may start, the years offered.
@@ -1376,7 +1382,17 @@ model AdCampaign {
   name         String
   /** The platform's own word: Google's campaign.status (ENABLED, PAUSED, REMOVED), Meta's effective_status (ACTIVE, PAUSED, ARCHIVED, WITH_ISSUES...). Null: not read yet. */
   status       String?
-  /** When a sync last read the status. */
+  /** Google's campaign.advertising_channel_type (SEARCH, SHOPPING, PERFORMANCE_MAX...). Null for Meta, and until read. */
+  channelType  String?  @map("channel_type")
+  /** Google's campaign.primary_status (ELIGIBLE, LIMITED, LEARNING, NOT_ELIGIBLE...): how it serves now. Null for Meta, and until read. */
+  primaryStatus String? @map("primary_status")
+  /** Google's campaign.primary_status_reasons (BUDGET_CONSTRAINED...); empty when none, for Meta, and until read. */
+  primaryStatusReasons String[] @default([]) @map("primary_status_reasons")
+  /** The budget's period as the platform says it: DAILY; Google's CUSTOM_PERIOD (one total over the campaign's own dates); Meta's LIFETIME. Null: none on the campaign (a Meta campaign whose budgets are its ad sets'), or not read. */
+  budgetPeriod String?  @map("budget_period")
+  /** The budget for that period, in the account's currency. */
+  budgetAmount Decimal? @map("budget_amount") @db.Decimal(18, 2)
+  /** When a sync last read the status (and the fields above, when its platform gives them). */
   checkedAt    DateTime @map("checked_at")
   connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 

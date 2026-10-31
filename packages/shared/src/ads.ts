@@ -270,6 +270,43 @@ export interface AdDayRow {
    * effective_status, read alongside), kept per campaign (ad_campaigns), not per day. Absent: not read.
    */
   campaignStatus?: string | null;
+  /** What the platform says about the campaign now beyond its status, read with the same calls; kept per campaign like it. Absent: not read. */
+  campaignFacts?: AdCampaignFacts;
+}
+
+/**
+ * A campaign's settings and delivery as its platform states them now (not for any dates): Google's
+ * channel type, primary status and its reasons, and budget, read with the daily figures' own query;
+ * Meta's campaign budget, from the campaign list read for its status. Kept in ad_campaigns.
+ */
+export interface AdCampaignFacts {
+  /** Google's campaign.advertising_channel_type (SEARCH, SHOPPING, PERFORMANCE_MAX...); null for Meta, and when Google gives none. */
+  channelType: string | null;
+  /** Google's campaign.primary_status (ELIGIBLE, LIMITED...; googleCampaignStatus words it); null for Meta, and when Google gives none. */
+  primaryStatus: string | null;
+  primaryStatusReasons: string[];
+  /**
+   * DAILY; Google's CUSTOM_PERIOD (one total over the campaign's own dates); Meta's LIFETIME. Null when the
+   * campaign has no budget of its own (a Meta campaign whose budgets are its ad sets') or none is given.
+   */
+  budgetPeriod: string | null;
+  /** The budget for that period, in the account's currency; null with the period. */
+  budgetAmount: number | null;
+}
+
+/** A campaign's budget in words ("A$40.00 a day", "A$500.00 total", "A$900.00 lifetime"); null when there is none to say. */
+export function campaignBudgetWords(period: string | null | undefined, amount: number | null | undefined, money: (n: number) => string): string | null {
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return null;
+  if (period === "DAILY") return `${money(amount)} a day`;
+  if (period === "CUSTOM_PERIOD") return `${money(amount)} total`;
+  if (period === "LIFETIME") return `${money(amount)} lifetime`;
+  return null;
+}
+
+/** A Meta campaign's budget (MetaObjectDetails, in the account's currency): a daily or a lifetime one, or none (its ad sets hold the budgets). */
+export function metaCampaignFacts(d: { dailyBudget: number | null; lifetimeBudget: number | null }): AdCampaignFacts {
+  const budget = d.dailyBudget !== null ? { budgetPeriod: "DAILY", budgetAmount: d.dailyBudget } : d.lifetimeBudget !== null ? { budgetPeriod: "LIFETIME", budgetAmount: d.lifetimeBudget } : { budgetPeriod: null, budgetAmount: null };
+  return { channelType: null, primaryStatus: null, primaryStatusReasons: [], ...budget };
 }
 
 /**
@@ -1168,7 +1205,9 @@ export function metaAttributionLabel(setting: string | null | undefined): string
 
 /** One result of googleAds:searchStream for the campaign query (JSON field names are camelCase). */
 export interface GoogleAdsRow {
-  campaign?: { id?: string; name?: string; status?: string };
+  campaign?: { id?: string; name?: string; status?: string; advertisingChannelType?: string; primaryStatus?: string; primaryStatusReasons?: string[] };
+  /** amount_micros for a DAILY budget, total_amount_micros for a CUSTOM_PERIOD one (Google sets one or the other). */
+  campaignBudget?: { amountMicros?: string | number; totalAmountMicros?: string | number; period?: string };
   segments?: { date?: string };
   metrics?: { costMicros?: string | number; impressions?: string | number; clicks?: string | number; conversions?: string | number; conversionsValue?: string | number };
 }
@@ -1524,6 +1563,28 @@ export function googleCampaignStatus(status: string | null | undefined, reasons:
     .sort((a, b) => rank(a) - rank(b))
     .map((r) => GOOGLE_STATUS_REASON[r] ?? r.toLowerCase().replace(/_/g, " "));
   return { label: GOOGLE_PRIMARY_STATUS[s] ?? `${s[0]}${s.slice(1).toLowerCase().replace(/_/g, " ")}`, reasons: words };
+}
+
+/**
+ * A campaign's facts from one row of the sync's campaign query (googleCampaignDays): its channel type,
+ * primary status and reasons, and its budget, the amount Google sets for the budget's period (a period
+ * Google doesn't name leaves the budget unknown: an amount can't be said without it). Google leaves out
+ * a field at its default, so an absent reason list is none and an absent enum is unknown.
+ */
+export function googleCampaignFacts(r: Pick<GoogleAdsRow, "campaign" | "campaignBudget">): AdCampaignFacts {
+  const period = googleEnum(r.campaignBudget?.period);
+  const micros = (v: string | number | undefined) => {
+    const n = Number(v);
+    return v === undefined || v === "" || !Number.isFinite(n) ? null : r2(n / 1_000_000);
+  };
+  const amount = period === "DAILY" ? micros(r.campaignBudget?.amountMicros) : period === "CUSTOM_PERIOD" ? micros(r.campaignBudget?.totalAmountMicros) : null;
+  return {
+    channelType: googleEnum(r.campaign?.advertisingChannelType),
+    primaryStatus: googleEnum(r.campaign?.primaryStatus),
+    primaryStatusReasons: [...new Set((r.campaign?.primaryStatusReasons ?? []).filter((x) => googleEnum(x) !== null))],
+    budgetPeriod: amount === null ? null : period,
+    budgetAmount: amount,
+  };
 }
 
 /** A Quality Score as Google gives it (1 to 10); anything else, Google's "too little data" included, is none. */

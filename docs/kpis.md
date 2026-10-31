@@ -469,6 +469,27 @@ a webhook's `landing_site` / `referring_site` live (`packages/shared/src/traffic
 - It's the store's view (the last visit before buying). An ad platform credits sales by its own rules
   (view-throughs, other devices), so its numbers differ, and the two are never added together.
 
+### Paid vs organic (dashboard "Paid vs organic sales", and on "Where your sales come from")
+
+The same net sales, grouped by how each order's last visit came (`TRAFFIC_SPLITS` and `trafficSplitOf` in
+`packages/shared/src/traffic.ts`; the traffic module's `split`):
+
+| Split | `traffic_medium` | What it is |
+| --- | --- | --- |
+| Paid ads | `paid` | a link tagged as an ad (above) |
+| Organic | `unpaid`, `referral` | a search engine, social network or other website, without an ad tag |
+| Email and messages | `email` | email, SMS and Shopify's message tactics |
+| Direct | `direct` | a typed or bookmarked address |
+| Not recorded | `unknown` | no visit recorded (point of sale, draft orders, apps) |
+
+- **Last click, from Shopify's journey**: never what Meta or Google credit to their ads, which count earlier clicks
+  and views too. Every place it shows says so.
+- An ad whose links carry no tags reads as organic (Facebook and Instagram add none by themselves): the note says to
+  add utm_medium=paid.
+- Each split's share is of the sales whose source is read; orders still being read (`pending`) are left out and
+  counted beside it. A split with no orders is listed at zero.
+- Team & Access: "View conversion attribution", like the tagged-ads figures (`redactOverview` drops `split`).
+
 ## Ads (Meta Ads, Google Ads)
 
 Reference implementation: `packages/shared/src/ads.ts` (`adTotals`, `adSeries`, the coverage helpers)
