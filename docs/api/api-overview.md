@@ -138,6 +138,22 @@ report figures, and the messaging channels' counts (WhatsApp sent, delivered, re
 secret is in the answer: no token, no password, no full phone number (a number is masked, and the
 SMS sender is never named by its AWS resource name).
 
+### Meta, found through Shopify
+
+`GET /workspaces/:ws/stores/:storeId/meta/discovery` (Integration status) answers where the store's
+Meta stands for bizinsights on six states of its own (`@app/shared/metaDiscovery`): `NOT_CONNECTED`,
+`CONNECTED_IN_SHOPIFY` (the store's Shopify orders came from Facebook or Instagram, and bizinsights
+holds no Meta sign-in: `marker` `CONNECTED_IN_SHOPIFY_BUT_NOT_AUTHORIZED_FOR_OUR_APP`),
+`AUTHORIZED_FOR_OUR_APP`, `TOKEN_EXPIRED`, `REAUTH_REQUIRED`, `PERMISSION_MISSING`. With it: what the
+orders show (counts with View traffic sources, ad-link ones with View conversion attribution), the
+Meta assets read (ad accounts, campaigns), the caller's own Meta sign-in for another store that can
+serve this one (`reuse`), and the `action` offered (`reuse`, `connect`, `reconnect`, or none).
+`shopifySharesMetaAccess` is always false: Shopify gives no app its Meta access.
+`POST /workspaces/:ws/stores/:storeId/ads/meta/reuse` (Manage integrations) connects the store with
+that sign-in, without Meta's screen: `{ connected }`, or `{ choose }` (a pending choice's nonce, as
+after a sign-in) when it reaches several ad accounts; 404 `reuse_unavailable`, 409 `reuse_ended` or
+`no_accounts`. [meta-discovery.md](../meta-discovery.md).
+
 ## Endpoints
 
 Generated from the route files (`apps/api/src/routes/*.ts`); "Access" is the permission each
@@ -147,6 +163,7 @@ route checks, or how a public route is protected.
 | --- | --- | --- | --- |
 Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/ads` | dashboard:read | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/:provider/connect` | stores:manage | ads.ts |
+| POST | `/workspaces/:ws/stores/:storeId/ads/meta/reuse` | integrations.manage | ads.ts |
 | GET | `/ads/:provider/callback` | public (signed/origin-checked) | ads.ts |
 | GET | `/workspaces/:ws/stores/:storeId/ads/pending/:nonce` | stores:manage | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/pending/:nonce` | stores:manage | ads.ts |
@@ -172,6 +189,7 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/integrations` | integrations.status | integrations.ts |
+| GET | `/workspaces/:ws/stores/:storeId/meta/discovery` | integrations.status | integrations.ts |
 | POST | `/pixel/:key` | per-store ingest key, rate-limited | pixel.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/request` | stores:manage | scopes.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/refresh` | stores:manage | scopes.ts |

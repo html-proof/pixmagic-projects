@@ -9,6 +9,7 @@ import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { comparedWith, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
 import { fmtRange } from "@/components/dashboard/format";
 import type { Overview } from "@/components/dashboard/types";
+import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
 import { apiHref, friendlyError, isTransient } from "@/lib/api";
@@ -220,16 +221,22 @@ export function NotConnected({ ov, platform, compact = false }: { ov: Overview; 
       {hidden ? "Manage ad accounts" : `Connect ${platform ? name : "advertising accounts"}`}
     </Link>
   ) : undefined;
+  // Meta, found through the store's Shopify connection: seen in its orders, or a sign-in of theirs to use here.
+  const meta = !hidden && (platform === "meta" || !platform) ? <StoreMetaDiscovery compact boxed /> : null;
   if (compact) {
     return (
-      <Banner testid="advertising-not-connected" title={title} body={`${body.trim()} Below, in the meantime: what your Shopify orders show.`}>
-        {action}
-      </Banner>
+      <>
+        <Banner testid="advertising-not-connected" title={title} body={`${body.trim()} Below, in the meantime: what your Shopify orders show.`}>
+          {action}
+        </Banner>
+        {meta}
+      </>
     );
   }
   return (
-    <div data-testid="advertising-not-connected">
+    <div data-testid="advertising-not-connected" className="space-y-4">
       <EmptyState title={title} body={body.trim()} action={action} />
+      {meta}
     </div>
   );
 }

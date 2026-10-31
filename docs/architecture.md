@@ -117,6 +117,13 @@ channel's accounts and reasons stay with whoever may open its own page (the SMS 
 campaigns, and neither SMS's nor email's with an API key). The answer's shape, the mappings and who
 is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
 
+Meta has a second answer of its own, `GET /workspaces/:ws/stores/:storeId/meta/discovery` (core's
+`integrations/metaDiscovery.ts`, `@app/shared/metaDiscovery`): Meta found through the store's
+Shopify connection, on six states from NOT_CONNECTED to AUTHORIZED_FOR_OUR_APP, from bizinsights'
+own Meta sign-ins and the store's orders from Facebook and Instagram. Shopify never shares its Meta
+access with an app, so Meta seen only in Shopify is never "connected":
+[meta-discovery.md](meta-discovery.md).
+
 ## Worker conventions (`apps/worker`)
 
 - A queue message is processed by `consume()`; a job that throws is retried with backoff up to
