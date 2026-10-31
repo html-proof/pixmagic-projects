@@ -227,7 +227,7 @@ export function NoPermission({ what }: { what: string }) {
   return (
     <div className="card" data-testid="inventory-no-permission">
       <p className="font-medium">You don&apos;t have access to {what}</p>
-      <p className="mt-1 text-sm text-muted">Ask an owner or admin of this workspace to give it to you in Settings → People &amp; access.</p>
+      <p className="mt-1 text-sm text-muted">Ask an owner or admin of this workspace to give it to you in Team &amp; Access.</p>
     </div>
   );
 }

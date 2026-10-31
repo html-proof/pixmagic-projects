@@ -145,16 +145,18 @@ test("store permissions say which are optional for every role, and Disconnect re
 
   await db.query("UPDATE memberships SET role = 'owner' WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, email]);
   await page.reload();
+  let dialogText = "";
+  page.once("dialog", (d) => {
+    dialogText = d.message();
+    void d.accept();
+  });
   await page.getByRole("button", { name: `Disconnect ${shop}` }).click();
-  // The app's own dialog (not the browser's), honest about what Disconnect does not do.
-  const confirm = page.getByRole("dialog", { name: `Disconnect ${shop}?` });
-  await expect(confirm).toContainText("uninstall the app from your Shopify admin");
-  await confirm.getByRole("button", { name: "Disconnect" }).click();
-  await expect(confirm).toHaveCount(0);
   await expect(async () => {
     const { rows } = await db.query("SELECT status FROM stores WHERE id = $1", [storeId]);
     expect(rows[0].status).toBe("uninstalled");
   }).toPass({ timeout: 10_000 });
+  // Honest about what Disconnect does not do.
+  expect(dialogText).toContain("uninstall the app from your Shopify admin");
 });
 
 // Settings → Billing is hidden until paid plans launch (src/lib/features.ts), but the e2e build

@@ -46,10 +46,8 @@ test("an owner creates an SMS automation in four steps, tests it on themself and
   const { hub, store } = await ownerWithSender(page);
 
   await page.goto("/dashboard");
-  // Marketing opens on its first tab, Automations.
-  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Marketing" }).click();
+  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Automations" }).click();
   await expect(page).toHaveURL(/\/automations\/?$/);
-  await expect(page.getByTestId("area-tabs-marketing").getByRole("link", { name: "Automations" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Automations", level: 1 })).toBeVisible();
   await expect(page.getByTestId("channel-whatsapp")).toContainText("On its own page");
   await page.getByRole("link", { name: "Create automation" }).first().click();

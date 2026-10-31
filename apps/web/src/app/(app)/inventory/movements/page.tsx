@@ -51,7 +51,7 @@ export default function MovementsPage() {
   return (
     <>
       <PageHeader
-        title="Stock movements"
+        title="Inventory movements"
         sub="Every stock change bizinsights has seen in Shopify, and every change made here with who made it. Shopify doesn't share its own adjustment history, so changes before bizinsights started following the stock aren't here."
       />
       <div className="card space-y-3">

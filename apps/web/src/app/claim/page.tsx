@@ -122,7 +122,7 @@ function Claim() {
           <>
             <h1 className="text-xl font-semibold">{storeLabel} already has a bizinsights account</h1>
             <p className="text-sm text-muted">
-              Sign in to the account it belongs to, or ask that account&apos;s owner to invite you from Settings → People &amp; access.
+              Sign in to the account it belongs to, or ask that account&apos;s owner to invite you from Settings, then Members.
             </p>
             {user ? (
               <div className="flex flex-wrap gap-2">

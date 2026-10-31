@@ -358,7 +358,7 @@ export function SenderConfiguration() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Sender name" sub="Which AWS number or sender ID your texts come from, the countries it reaches, your budget and limits, and the switches that let texts go out." />
+      <PageHeader title="SMS Sender" sub="Which AWS number or sender ID your texts come from, the countries it reaches, your budget and limits, and the switches that let texts go out." />
       <ModeBanner mode={data.mode} showLive />
 
       <div className="grid gap-4 lg:grid-cols-2">

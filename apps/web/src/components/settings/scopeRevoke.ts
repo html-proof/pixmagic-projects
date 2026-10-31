@@ -24,9 +24,9 @@ export function revokeWords(scope: string, domain: string) {
   const what = scopeList([scope]);
   const stops = stopsWithout(scope);
   return {
-    title: `Stop letting bizinsights read ${what}?`,
+    question: `Stop letting bizinsights read ${what} for ${domain}?`,
+    consequence: stops.length ? `${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(stops)} will stop working until you grant it again.` : "Nothing on your dashboard uses it today.",
     button: `Remove ${what} permission for ${domain}`,
     failed: `We couldn't remove ${what}. Please try again.`,
-    body: `For ${domain}. ${stops.length ? `${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(stops)} will stop working until you grant it again.` : "Nothing on your dashboard uses it today."}`,
   };
 }

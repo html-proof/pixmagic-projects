@@ -22,24 +22,23 @@ const { revokeWords } = await load("../src/components/settings/scopeRevoke.ts", 
 
 test("Shopify keeps its capital in every sentence about removing the reports permission", () => {
   const w = revokeWords("read_reports", "x.myshopify.com");
-  assert.equal(w.title, "Stop letting bizinsights read your Shopify reports?");
+  assert.equal(w.question, "Stop letting bizinsights read your Shopify reports for x.myshopify.com?");
   assert.equal(w.button, "Remove your Shopify reports permission for x.myshopify.com");
   assert.equal(w.failed, "We couldn't remove your Shopify reports. Please try again.");
   for (const s of Object.values(w)) assert.doesNotMatch(s, /shopify reports/);
 });
 
 test("removing the reports permission names the sales check and the product costs too, not only its reports", () => {
-  const { body } = revokeWords("read_reports", "x.myshopify.com");
-  assert.match(body, /^For x\.myshopify\.com\. /);
-  for (const part of ["Sessions and visitors (Shopify)", "Gross profit", "the check of your sales against Shopify's sales report", "the product costs and net profit in Business profit overview"]) assert.ok(body.includes(part), `${part}: ${body}`);
-  assert.match(body, / will stop working until you grant it again\.$/);
+  const { consequence } = revokeWords("read_reports", "x.myshopify.com");
+  for (const part of ["Sessions and visitors (Shopify)", "Gross profit", "the check of your sales against Shopify's sales report", "the product costs and net profit in Business profit overview"]) assert.ok(consequence.includes(part), `${part}: ${consequence}`);
+  assert.match(consequence, / will stop working until you grant it again\.$/);
   // The daily check beside the store's status reads orders and keeps working: not named.
-  assert.doesNotMatch(body, /Checked against Shopify/);
+  assert.doesNotMatch(consequence, /Checked against Shopify/);
 });
 
 test("other permissions read as before, lower case mid-sentence", () => {
   const w = revokeWords("read_customers", "x.myshopify.com");
-  assert.equal(w.title, "Stop letting bizinsights read your customers?");
-  assert.match(w.body, /will stop working until you grant it again\.$/);
-  assert.equal(revokeWords("read_locations_unused", "x.myshopify.com").body, "For x.myshopify.com. Nothing on your dashboard uses it today.");
+  assert.equal(w.question, "Stop letting bizinsights read your customers for x.myshopify.com?");
+  assert.match(w.consequence, /will stop working until you grant it again\.$/);
+  assert.equal(revokeWords("read_locations_unused", "x.myshopify.com").consequence, "Nothing on your dashboard uses it today.");
 });

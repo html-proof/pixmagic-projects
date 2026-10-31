@@ -28,7 +28,7 @@ export default function InventoryOverviewPage() {
   return (
     <>
       <PageHeader
-        title="Stock overview"
+        title="Inventory overview"
         sub={status ? `${status.store.name} · ${SOURCE_NOTE[status.status.source]}` : undefined}
         actions={status && <RangePicker value={range} onChange={setRange} timeZone={tz} />}
       />

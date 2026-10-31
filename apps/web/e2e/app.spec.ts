@@ -316,7 +316,7 @@ test("Account Security: change the password, see how the account signs in, sign 
   await expect(other).toHaveURL(/\/dashboard/);
 
   await page.goto("/settings/security");
-  await expect(page.getByRole("heading", { name: "Sign-in & security", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Security", exact: true })).toBeVisible();
   await expect(page.getByText("Email and password", { exact: true })).toBeVisible();
   // Both devices are listed, this one first; the other can be signed out from here.
   const devices = page.locator("section", { has: page.getByRole("heading", { name: "Your sign-in devices", exact: true }) });
@@ -614,8 +614,8 @@ test("a workspace installed from the App Store shows only what the listing descr
   await page.goto("/dashboard");
   const nav = page.getByRole("navigation", { name: "App" });
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Sales" })).toBeVisible();
-  for (const name of ["Marketing", "Staff"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
+  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging", "Automations"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(page.getByTestId("about-data")).toBeVisible();
   await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
 
@@ -624,8 +624,8 @@ test("a workspace installed from the App Store shows only what the listing descr
   await expect(page.getByTestId("int-shopify")).toBeVisible();
   for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense", "int-zapier"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
-  await expect(settings.getByRole("link", { name: "Connections" })).toHaveAttribute("aria-current", "page");
-  for (const name of ["Ad accounts", "Email"]) await expect(settings.getByRole("link", { name, exact: true })).toHaveCount(0);
+  await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
+  for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
 
   // Their pages are closed as well, typed in or bookmarked.
   for (const path of ["/whatsapp", "/messaging", "/automations", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
