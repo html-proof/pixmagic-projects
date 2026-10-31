@@ -244,4 +244,18 @@ describe("the funnel page's abandoned checkouts module", () => {
     const both = await abandonedCheckoutsModule(tx([...rows, kept("2026-10-30|2026-10-30|13:05:00", values(6, 1, 120)), kept("2026-10-29|2026-10-29|13:05:00", values(4, 2, 80))]), store, running, { today, now });
     expect(both.module).toMatchObject({ until: "13:05:00", current: { abandoned: 6 }, previous: { recovered: 2 } });
   });
+
+  it("doesn't ask again at each new mark of a running range while Shopify's refusal is under 6 hours old", async () => {
+    const running = { range: { from: "2026-10-30", to: "2026-10-30" }, previous: { from: "2026-10-29", to: "2026-10-29", until: "13:07:42" } };
+    const denied = (minutes: number) => [
+      kept("2026-10-30|2026-10-30|13:00:00", null, "access_denied", new Date(now.getTime() - minutes * 60_000)),
+      kept("2026-10-29|2026-10-29|13:00:00", null, "access_denied", new Date(now.getTime() - minutes * 60_000)),
+    ];
+    const recent = await abandonedCheckoutsModule(tx(denied(6)), store, running, { today, now });
+    expect(recent.module).toMatchObject({ status: "access_denied", previousStatus: "access_denied", current: null });
+    expect(recent.refresh).toEqual([]);
+    // After 6 hours it is asked again, at this mark.
+    const old = await abandonedCheckoutsModule(tx(denied(361)), store, running, { today, now });
+    expect(old.refresh.map((r) => r.window.until)).toEqual(["13:05:00", "13:05:00"]);
+  });
 });

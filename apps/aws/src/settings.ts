@@ -21,12 +21,12 @@ export const APP_SETTINGS = {
   // Optional scopes only some apps declare, on top of the line above: "appKey:scope,scope;appKey:scope"
   // (packages/core/src/scopes.ts appOptionalScopes), each in that app's toml too (appConfig.test.ts).
   // read_reports (Shopify's reports: its sessions, online store visitors, gross profit, the "Checked
-  // against Shopify" check) is declared in shopify.app.toml and shopify.app.pixmagic.toml but offered
-  // to nobody yet: once `shopify app deploy` has released both and the PixMagic app has its Level 2
-  // protected customer data fields selected, this becomes "default:read_reports;pixmagic:read_reports"
-  // (docs/shopify-setup.md, "Shopify's reports"). "appstore" and "public" get it only after App Store
-  // review and Shopify's Level 2 approval for them.
-  "SHOPIFY_APP_OPTIONAL_SCOPES": "",
+  // against Shopify" check) is declared in shopify.app.toml and shopify.app.pixmagic.toml, and offered
+  // on both since `shopify app deploy` released those tomls with it and the PixMagic app had its Level 2
+  // protected customer data fields selected (docs/shopify-setup.md, "Shopify's reports"). Never ahead
+  // of the released version: Shopify sends a merchant asked for an undeclared scope to an error page.
+  // "appstore" and "public" get it only after App Store review and Shopify's Level 2 approval for them.
+  "SHOPIFY_APP_OPTIONAL_SCOPES": "default:read_reports;pixmagic:read_reports",
   "SHOPIFY_API_VERSION": "2026-10",
   // Stores the main app may be installed on. Empty means any store, which only holds once
   // Shopify has approved it for public distribution: until then it installs only on stores in

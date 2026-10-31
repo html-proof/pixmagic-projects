@@ -273,14 +273,30 @@ export interface ShopifyReportsJob {
 export const shopifyReportsQueue = (queues: Queues) => queues.sync as unknown as Producer<ShopifyReportsJob>;
 
 /**
- * Queue a fetch of these reports, once per store and set of windows a minute: the dashboard asks
- * on every poll, and every open tab polls.
+ * How long a queued fetch holds its reports. The dashboard asks on every poll, every open tab polls,
+ * and the sync queue the fetch rides can be busy for minutes (imports, ad syncs): meanwhile a poll
+ * queues only what isn't already on its way. A fetch that never ran is queued again after this, as
+ * a failed call is asked again.
+ */
+export const REPORT_QUEUED_MS = 10 * 60_000;
+
+/**
+ * Queue a fetch of the reports that aren't already queued or being fetched; false when there was
+ * none. Each report is held on its own, so a poll while a fetch is half done (it keeps its answers
+ * one by one) doesn't queue the rest again either.
  */
 export async function requestShopifyReports(deps: { queues: Queues; coord: Coord }, store: Pick<Store, "id">, requests: ReportRequest[]) {
-  if (!requests.length) return false;
-  const key = `shopifyql:${store.id}:${requests.map((r) => `${r.dataset}@${windowKey(r.window)}`).sort().join(",")}`;
-  if ((await deps.coord.hit(key, 60)) > 1) return false;
-  await shopifyReportsQueue(deps.queues).send({ kind: "shopify_reports", storeId: store.id, requests });
+  const marker = (r: ReportRequest) => `shopifyql:${store.id}:${r.dataset}@${windowKey(r.window)}`;
+  const held = await Promise.all(requests.map((r) => deps.coord.acquire(marker(r), REPORT_QUEUED_MS).catch(() => false)));
+  const queued = requests.filter((_, i) => held[i]);
+  if (!queued.length) return false;
+  try {
+    await shopifyReportsQueue(deps.queues).send({ kind: "shopify_reports", storeId: store.id, requests: queued });
+  } catch (err) {
+    // Not queued after all: the next poll asks again.
+    await Promise.all(queued.map((r) => deps.coord.release(marker(r)).catch(() => undefined)));
+    throw err;
+  }
   return true;
 }
 

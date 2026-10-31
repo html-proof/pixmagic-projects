@@ -147,6 +147,8 @@ export const expensesComplete = (completeFrom: string | null, range: DateRange) 
 export type ProfitGap =
   /** Shopify's cost of goods sold isn't known (its profit report needs access to Shopify's reports). */
   | "product_costs"
+  /** Shopify's profit report answered, but no sale in the dates had a cost recorded: its 0 isn't the cost. */
+  | "no_cost_recorded"
   /** The member isn't shown Shopify's cost of goods sold ("View costs and stock value"), which net profit would give away. */
   | "product_costs_hidden"
   /** Some sales have no cost recorded in Shopify, so the cost of goods is short of the truth. */
@@ -161,8 +163,12 @@ export type ProfitGap =
 export interface NetProfitInputs {
   /** What the store kept from its sales: total sales less taxes and duties (net sales + shipping + additional fees). */
   revenue: number;
-  /** Shopify's cost of goods sold for the dates; null when not known, "hidden" when the member may not see it. */
-  productCosts: number | null | "hidden";
+  /**
+   * Shopify's cost of goods sold for the dates; null when not known, "not_recorded" when its profit
+   * report answered but no sale had a cost recorded (it counts those at no cost, so its 0 isn't one),
+   * "hidden" when the member may not see it.
+   */
+  productCosts: number | null | "not_recorded" | "hidden";
   /** Sales with no cost recorded in Shopify (their cost isn't in productCosts); null when not known. */
   uncosted: number | null;
   /**
@@ -185,6 +191,7 @@ export function netProfit(i: NetProfitInputs): { value: number | null; gaps: Pro
   const gaps: ProfitGap[] = [];
   if (i.productCosts === "hidden") gaps.push("product_costs_hidden");
   else if (i.productCosts === null) gaps.push("product_costs");
+  else if (i.productCosts === "not_recorded") gaps.push("no_cost_recorded");
   else if (i.uncosted !== null && i.uncosted > 0) gaps.push("uncosted_sales");
   if (i.adSpend === "hidden") gaps.push("ads_hidden");
   else if (i.adSpend === null) gaps.push("ad_spend");
@@ -197,6 +204,7 @@ export function netProfit(i: NetProfitInputs): { value: number | null; gaps: Pro
 /** Each gap in a sentence, for under the profit card. */
 export const PROFIT_GAP_WORDS: Record<ProfitGap, string> = {
   product_costs: "Product costs come from Shopify's profit report, which isn't available for this store yet.",
+  no_cost_recorded: "No sale in these dates has a cost recorded in Shopify (each product's cost per item).",
   product_costs_hidden: "Net profit includes Shopify's product costs, which you aren't shown.",
   uncosted_sales: "Some sales have no cost recorded in Shopify, so the cost of goods sold is short.",
   ad_spend: "A connected ad account's spend isn't known for every day of these dates, or isn't in the store's currency.",

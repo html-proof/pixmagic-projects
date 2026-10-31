@@ -553,7 +553,8 @@ export const OVERVIEW_MODULE_ACCESS = {
   shopify_sessions: ["analytics.conversion"],
   profit: ["finance.breakdown"],
   shopify_check: ["finance.breakdown"],
-  // The owner's own costs (Settings → Costs): money figures as sensitive as the cost of goods beside them.
+  // The owner's own costs (Settings → Costs): money figures that go with the sales breakdown; Shopify's
+  // cost of goods sold beside them needs "View costs and stock value" too (OVERVIEW_MODULE_ALSO_NEEDS).
   expenses: ["finance.breakdown"],
   // Not modules of the overview: the live customer lists (GET .../contacts) and Shopify's abandoned
   // checkouts counted (GET .../abandoned-checkouts, the Shopping Funnel's card), named here so the

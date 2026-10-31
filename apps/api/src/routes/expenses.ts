@@ -6,7 +6,8 @@ import type { App } from "../app.js";
 
 /**
  * A store's own costs (Settings → Costs, docs/kpis.md "Costs and net profit"). Reading them needs
- * finance.breakdown, as Shopify's cost of goods beside them does; changing them is for owners and
+ * finance.breakdown (Shopify's cost of goods sold beside them needs "View costs and stock value"
+ * too); changing them is for owners and
  * admins (stores:manage), as the store's sales calculation is: they change what the whole team's
  * dashboard says, and every change is in the audit log with what it was before. A shared link and a
  * workspace API key never change them (routeAccess.test.ts).
