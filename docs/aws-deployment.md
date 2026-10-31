@@ -253,7 +253,9 @@ about 13 (checks ~8, browser tests ~5, each job billed in whole minutes), its me
 much again, and a deploy ~5. CI (`.github/workflows/ci.yml`) therefore runs only what a change can
 affect:
 
-- Only Markdown files or `docs/` changed: no CI run, and so no deploy (nothing to ship).
+- Only Markdown files or `docs/` changed: a push to `main` starts no CI run, and so no deploy
+  (nothing to ship). A pull request still starts one: its first job finds nothing to test and the
+  other two skip (about a minute), so the checks main's merge block waits for report.
 - A pull request runs the browser tests only when it changes `apps/web`, `apps/aws`,
   `packages/shared`, the e2e stand-ins (`infra/cognito-local`, `infra/postgres`,
   `docker-compose.yml`), the dependencies or `ci.yml`, or has the label `e2e` (labels are read per
