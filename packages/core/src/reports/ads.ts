@@ -23,6 +23,7 @@ import {
   sameDays,
   siteTotals,
   trafficSourcePlatform,
+  type AdCampaignFacts,
   type AdDayRow,
   type AdsenseDayRow,
   type AdSpendProvider,
@@ -30,6 +31,7 @@ import {
   type Comparison,
   type DateRange,
 } from "@app/shared";
+import { campaignKeyOf, storedCampaigns, type StoredCampaign } from "../adConnections/campaigns.js";
 import { adToday } from "../adConnections/sync.js";
 import { num, r2, type Scope } from "./common.js";
 import { salesByOrder } from "./orders.js";
@@ -91,8 +93,11 @@ export interface AdsAsk {
   previousRead?: boolean;
   /** Every campaign, each with its change (`campaignChanges`), rather than the 10 that spent most: the Advertising area's campaign comparison. */
   allCampaigns?: boolean;
-  /** Each campaign's status at its platform as the last sync read it (ad_campaigns), by provider:accountId:campaignId. */
-  campaignStatuses?: Map<string, string | null>;
+  /**
+   * Each campaign as its platform described it to the last sync (ad_campaigns): its status, and Google's
+   * channel type, primary status and budget, Meta's budget. By provider:accountId:campaignId.
+   */
+  campaignSettings?: Map<string, Pick<StoredCampaign, "status" | keyof AdCampaignFacts>>;
 }
 
 /** Orders (and their net sales, in the store's currency) that Shopify's visit record credits to one platform's ads. */
@@ -394,14 +399,28 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
      * The campaigns that spent most (every one, with `allCampaigns`, each with its `change`); `complete`
      * false: its account's figures stop before the range ends.
      */
-    campaigns: campaignTotals(inRange, ask.allCampaigns ? Number.POSITIVE_INFINITY : 10).map((c) => ({
-      ...c,
-      complete: covering.has(`${c.provider}:${c.accountId}`),
-      /** The platform's own word for its delivery now (null: not read yet), and the group the campaign filters use. */
-      status: ask.campaignStatuses?.get(campaignKey(c)) ?? null,
-      statusGroup: campaignStatusGroup(ask.campaignStatuses?.get(campaignKey(c))),
-      ...(changeOf ? { change: changeOf(c) } : {}),
-    })),
+    campaigns: campaignTotals(inRange, ask.allCampaigns ? Number.POSITIVE_INFINITY : 10).map((c) => {
+      const s = ask.campaignSettings?.get(campaignKey(c));
+      return {
+        ...c,
+        complete: covering.has(`${c.provider}:${c.accountId}`),
+        /** The platform's own word for its delivery now (null: not read yet), and the group the campaign filters use. */
+        status: s?.status ?? null,
+        statusGroup: campaignStatusGroup(s?.status),
+        /** Google's channel type and primary status (with its reasons) as of the last sync; null (none) for Meta and while unread. */
+        channelType: s?.channelType ?? null,
+        primaryStatus: s?.primaryStatus ?? null,
+        primaryStatusReasons: s?.primaryStatusReasons ?? [],
+        /**
+         * The campaign's budget as of the last sync, in its account's currency: DAILY, Google's CUSTOM_PERIOD
+         * (one total over the campaign's own dates) or Meta's LIFETIME; null when none is known (a Meta
+         * campaign whose budgets are its ad sets', or not read yet).
+         */
+        budgetPeriod: s?.budgetPeriod ?? null,
+        budgetAmount: s?.budgetAmount ?? null,
+        ...(changeOf ? { change: changeOf(c) } : {}),
+      };
+    }),
     /** Ad spend as a share of the store's net sales: same currency and every day known only. */
     shareOfSales: !demo && all.current && currency === ask.storeCurrency && ask.netSales !== null && ask.netSales > 0 ? all.current.spend / ask.netSales : null,
     /** The store's own sales (Shopify's net sales and orders) set against the ad spend, with the change (salesVsSpend); null with a demo among the accounts. */
@@ -593,8 +612,8 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
   };
   const read = daysToRead(conns, ask);
   const raw = await tx.adCampaignDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, OR: read.OR } });
-  const statuses = await tx.adCampaign.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: conns.map((c) => c.id) } }, select: { provider: true, accountId: true, campaignId: true, status: true } });
-  ask.campaignStatuses = new Map(statuses.map((s) => [`${s.provider}:${s.accountId}:${s.campaignId}`, s.status]));
+  const stored = await storedCampaigns(tx, { workspaceId: ws, storeId, connectionId: { in: conns.map((c) => c.id) } });
+  ask.campaignSettings = new Map(stored.map((s) => [campaignKeyOf(s), s]));
   const rows = raw.map((r) => ({
     connectionId: r.connectionId,
     provider: r.provider as AdSpendProvider,

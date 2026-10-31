@@ -100,3 +100,98 @@ describe("campaign statuses", () => {
     expect(await systemDb.adCampaign.count()).toBe(0);
   });
 });
+
+const facts = (connectionId: string) =>
+  systemDb.adCampaign
+    .findMany({ where: { connectionId }, orderBy: { campaignId: "asc" }, select: { campaignId: true, status: true, channelType: true, primaryStatus: true, primaryStatusReasons: true, budgetPeriod: true, budgetAmount: true } })
+    .then((rows) => rows.map((r) => ({ ...r, budgetAmount: r.budgetAmount === null ? null : Number(r.budgetAmount) })));
+
+describe("campaign facts: type, primary status and budget", () => {
+  it("Google: read in the days' own query (one operation), kept per campaign; a sync Google refuses them to keeps what was known", async () => {
+    const conn = await connection("google");
+    const day = today();
+    let refuse = false;
+    const queries: string[] = [];
+    const google: FetchLike = async (_input, init) => {
+      const query = (JSON.parse(String(init?.body)) as { query: string }).query;
+      queries.push(query);
+      if (refuse && query.includes("primary_status")) {
+        return json([{ error: { code: 400, status: "INVALID_ARGUMENT", message: "bad field", details: [{ "@type": "type.googleapis.com/google.ads.googleads.v25.errors.GoogleAdsFailure", errors: [{ errorCode: { queryError: "UNRECOGNIZED_FIELD" }, message: "bad field" }] }] } }], 400);
+      }
+      const extra = (c: Record<string, unknown>, b: Record<string, unknown>) => (query.includes("primary_status") ? { campaign: c, campaignBudget: b } : { campaign: { id: c.id, name: c.name, status: c.status } });
+      return json([
+        {
+          results: [
+            { ...extra({ id: "5", name: "Brand", status: "ENABLED", advertisingChannelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"] }, { period: "DAILY", amountMicros: "40000000" }), segments: { date: day }, metrics: { costMicros: "2000000", impressions: "20", clicks: "2", conversions: 0 } },
+            { ...extra({ id: "6", name: "Launch", status: "ENABLED", advertisingChannelType: "PERFORMANCE_MAX", primaryStatus: "ELIGIBLE" }, { period: "CUSTOM_PERIOD", totalAmountMicros: "500000000" }), segments: { date: day }, metrics: { costMicros: "1000000", impressions: "10", clicks: "1", conversions: 0 } },
+          ],
+        },
+      ]);
+    };
+    await syncAdConnection(conn.id, day, day, google);
+    // One query: the facts cost no operation of their own.
+    expect(queries).toHaveLength(1);
+    expect(await facts(conn.id)).toEqual([
+      { campaignId: "5", status: "ENABLED", channelType: "SEARCH", primaryStatus: "LIMITED", primaryStatusReasons: ["BUDGET_CONSTRAINED"], budgetPeriod: "DAILY", budgetAmount: 40 },
+      { campaignId: "6", status: "ENABLED", channelType: "PERFORMANCE_MAX", primaryStatus: "ELIGIBLE", primaryStatusReasons: [], budgetPeriod: "CUSTOM_PERIOD", budgetAmount: 500 },
+    ]);
+    // Google refuses the facts' fields this time: the days are read without them, and the facts stay as last read.
+    refuse = true;
+    queries.length = 0;
+    expect(await syncAdConnection(conn.id, day, day, google)).toMatchObject({ skipped: false, stored: 2 });
+    expect(queries).toHaveLength(2);
+    expect((await facts(conn.id)).map((c) => [c.campaignId, c.primaryStatus, c.budgetAmount])).toEqual([["5", "LIMITED", 40], ["6", "ELIGIBLE", 500]]);
+  });
+
+  it("Meta: each campaign's own budget from the same campaign list as its status, in the account's currency; a list without its settings keeps the budgets", async () => {
+    const conn = await connection("meta");
+    const day = today();
+    let bare = false;
+    const asked: string[] = [];
+    const meta: FetchLike = async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/act_1/insights") && u.searchParams.get("level") === "account") return json({ data: [] });
+      if (u.pathname.endsWith("/act_1/insights")) {
+        return json({
+          data: [
+            { campaign_id: "9", campaign_name: "Spring", date_start: day, spend: "5", impressions: "100", clicks: "4", inline_link_clicks: "3" },
+            { campaign_id: "10", campaign_name: "Evergreen", date_start: day, spend: "3", impressions: "50", clicks: "1", inline_link_clicks: "1" },
+            { campaign_id: "11", campaign_name: "By ad set", date_start: day, spend: "1", impressions: "20", clicks: "0", inline_link_clicks: "0" },
+          ],
+        });
+      }
+      if (u.pathname.endsWith("/act_1/campaigns")) {
+        const fields = u.searchParams.get("fields") ?? "";
+        asked.push(fields);
+        // Meta refusing the settings' fields (a permission it no longer grants): the list is read again for statuses alone.
+        if (bare && fields.includes("daily_budget")) return json({ error: { message: "(#100) Tried accessing nonexisting field (daily_budget)", type: "OAuthException", code: 100 } }, 400);
+        return json({
+          data: bare
+            ? [{ id: "9", effective_status: "PAUSED" }, { id: "10", effective_status: "ACTIVE" }, { id: "11", effective_status: "ACTIVE" }]
+            : [
+                { id: "9", effective_status: "ACTIVE", daily_budget: "2500" },
+                { id: "10", effective_status: "ACTIVE", lifetime_budget: "90000" },
+                { id: "11", effective_status: "ACTIVE" },
+              ],
+        });
+      }
+      return json({ error: { message: `unexpected ${u.pathname}`, code: 100 } }, 400);
+    };
+    await syncAdConnection(conn.id, day, day, meta);
+    expect(asked).toHaveLength(1);
+    expect(await facts(conn.id)).toEqual([
+      { campaignId: "10", status: "ACTIVE", channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: "LIFETIME", budgetAmount: 900 },
+      // Its budgets are its ad sets': none of its own.
+      { campaignId: "11", status: "ACTIVE", channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: null, budgetAmount: null },
+      { campaignId: "9", status: "ACTIVE", channelType: null, primaryStatus: null, primaryStatusReasons: [], budgetPeriod: "DAILY", budgetAmount: 25 },
+    ]);
+    bare = true;
+    await syncAdConnection(conn.id, day, day, meta);
+    // The status is read again; the budgets weren't, so they stay as last read.
+    expect((await facts(conn.id)).map((c) => [c.campaignId, c.status, c.budgetPeriod, c.budgetAmount])).toEqual([
+      ["10", "ACTIVE", "LIFETIME", 900],
+      ["11", "ACTIVE", null, null],
+      ["9", "PAUSED", "DAILY", 25],
+    ]);
+  });
+});

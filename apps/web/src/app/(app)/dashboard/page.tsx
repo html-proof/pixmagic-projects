@@ -12,7 +12,7 @@ import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
-import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
+import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, PaidVsOrganic, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
@@ -539,6 +539,8 @@ export default function DashboardPage() {
           {s && <SalesPerformance ov={ov} currency={cur} onOpen={detail.open} />}
           {/* Not in a workspace that leaves advertising out (lib/features.ts), nor for a member not shown it. */}
           {adsOn && <AdvertisingPerformance ov={ov} manage={manage} />}
+          {/* Paid vs organic: Shopify's own record of each order's visit, so it shows with or without ad accounts. */}
+          {m?.traffic?.split && <PaidVsOrganic ov={ov} currency={cur} onOpen={detail.open} />}
           {m?.top_products && <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} />}
           {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} manage={manage} manageCosts={canManage(workspace.role)} />}
           {m?.recent_orders && <RecentOrdersHome ov={ov} currency={cur} onOpen={detail.open} />}

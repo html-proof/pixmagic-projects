@@ -868,6 +868,8 @@ export interface MetaListing {
   objects: Map<string, { status: string; details: MetaObjectDetails }>;
   /** Campaigns, when counted: every campaign read, by state; null otherwise. */
   counts: MetaCampaignCounts | null;
+  /** False when Meta refused the settings' fields and the list was read for the statuses alone: the settings aren't known, not empty. */
+  detailed: boolean;
 }
 
 /**
@@ -896,7 +898,8 @@ export async function metaListed(
   const objects: MetaListing["objects"] = new Map();
   const counts = level === "campaign" && opts.count ? noMetaCampaignCounts() : null;
   const wanted = new Set(ids.filter((id) => /^\d{1,30}$/.test(id)));
-  if (!wanted.size && !counts) return { objects, counts };
+  let detailed = true;
+  if (!wanted.size && !counts) return { objects, counts, detailed };
   const act = metaAccountId(accountId);
   if (!/^act_\d{1,30}$/.test(act)) throw new AdsApiError(`Invalid Meta ad account ${accountId}`, 400);
   // The account's own campaign count needs the account's list.
@@ -912,10 +915,11 @@ export async function metaListed(
     if (!refusedParameter(err)) throw err;
     logger.warn({ err, act, level }, "meta: the settings fields were refused; reading delivery statuses alone");
     page = await first("id,effective_status");
+    detailed = false;
   }
   const cut = (): MetaListing => {
     if (counts) counts.complete = false;
-    return { objects, counts };
+    return { objects, counts, detailed };
   };
   for (let i = 1; ; i++) {
     for (const o of page.data ?? []) {
@@ -923,8 +927,8 @@ export async function metaListed(
       if (o.id && o.effective_status && wanted.has(o.id)) objects.set(o.id, { status: o.effective_status, details: metaObjectDetails(o, opts.currency) });
     }
     const next = page.paging?.next;
-    if (!next) return { objects, counts };
-    if (!counts && objects.size >= wanted.size) return { objects, counts };
+    if (!next) return { objects, counts, detailed };
+    if (!counts && objects.size >= wanted.size) return { objects, counts, detailed };
     if (i >= STATUS_PAGES) return cut();
     try {
       page = await metaGet<Page>(c, next, {}, accessToken, limit);

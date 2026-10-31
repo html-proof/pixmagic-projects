@@ -1382,7 +1382,17 @@ model AdCampaign {
   name         String
   /** The platform's own word: Google's campaign.status (ENABLED, PAUSED, REMOVED), Meta's effective_status (ACTIVE, PAUSED, ARCHIVED, WITH_ISSUES...). Null: not read yet. */
   status       String?
-  /** When a sync last read the status. */
+  /** Google's campaign.advertising_channel_type (SEARCH, SHOPPING, PERFORMANCE_MAX...). Null for Meta, and until read. */
+  channelType  String?  @map("channel_type")
+  /** Google's campaign.primary_status (ELIGIBLE, LIMITED, LEARNING, NOT_ELIGIBLE...): how it serves now. Null for Meta, and until read. */
+  primaryStatus String? @map("primary_status")
+  /** Google's campaign.primary_status_reasons (BUDGET_CONSTRAINED...); empty when none, for Meta, and until read. */
+  primaryStatusReasons String[] @default([]) @map("primary_status_reasons")
+  /** The budget's period as the platform says it: DAILY; Google's CUSTOM_PERIOD (one total over the campaign's own dates); Meta's LIFETIME. Null: none on the campaign (a Meta campaign whose budgets are its ad sets'), or not read. */
+  budgetPeriod String?  @map("budget_period")
+  /** The budget for that period, in the account's currency. */
+  budgetAmount Decimal? @map("budget_amount") @db.Decimal(18, 2)
+  /** When a sync last read the status (and the fields above, when its platform gives them). */
   checkedAt    DateTime @map("checked_at")
   connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 

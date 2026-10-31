@@ -113,7 +113,15 @@ export interface CampaignSettings {
   /** ENABLED, PAUSED or REMOVED when known. */
   status: string | null;
   startDay: string | null;
+  /** A daily budget's amount; null for a total budget, and when none is known. */
   dailyBudget: number | null;
+  /** How Google rates its delivery now (campaign.primary_status: ELIGIBLE, LIMITED...) and why; none when not known. */
+  primaryStatus?: string | null;
+  primaryStatusReasons?: string[];
+  /** DAILY, or CUSTOM_PERIOD for one total over the campaign's own dates; null when no budget is known. */
+  budgetPeriod?: string | null;
+  /** A CUSTOM_PERIOD budget's whole amount; null otherwise. */
+  totalBudget?: number | null;
 }
 
 export interface CampaignAnalytics extends AdsMetrics {
@@ -123,9 +131,17 @@ export interface CampaignAnalytics extends AdsMetrics {
   status: string | null;
   startDay: string | null;
   dailyBudget: number | null;
+  primaryStatus: string | null;
+  primaryStatusReasons: string[];
+  budgetPeriod: string | null;
+  totalBudget: number | null;
   /** The days of the range the campaign ran on (had a stored row). */
   activeDays: number;
-  /** Its budget for those days (daily budget × active days) and the share of it spent; null without a budget. */
+  /**
+   * Its budget for those days (daily budget × active days) and the share of it spent; null without a daily
+   * budget (a total one covers the campaign's own dates, not these). A real account's daily budget is the
+   * one Google states now, as of the last sync: a budget changed within the dates isn't followed.
+   */
   budget: number | null;
   budgetUse: number | null;
   /** The range's first half against its second: how the campaign is moving. */
@@ -134,7 +150,7 @@ export interface CampaignAnalytics extends AdsMetrics {
 
 /**
  * Every campaign that has a row in the range, with its settings when `settings` has them (a demo's
- * from the generator, a real account's from the stored name alone). Biggest spend first.
+ * from the generator, a real account's as its last sync stored them: ad_campaigns). Biggest spend first.
  */
 export function campaignAnalytics(rows: ReadonlyArray<AdDayRow>, range: { from: string; to: string }, settings: ReadonlyArray<CampaignSettings> = []): CampaignAnalytics[] {
   const by = new Map<string, AdDayRow[]>();
@@ -159,6 +175,10 @@ export function campaignAnalytics(rows: ReadonlyArray<AdDayRow>, range: { from: 
         status: s?.status ?? null,
         startDay: s?.startDay ?? null,
         dailyBudget: s?.dailyBudget ?? null,
+        primaryStatus: s?.primaryStatus ?? null,
+        primaryStatusReasons: s?.primaryStatusReasons ?? [],
+        budgetPeriod: s?.budgetPeriod ?? (s?.dailyBudget !== null && s?.dailyBudget !== undefined ? "DAILY" : null),
+        totalBudget: s?.totalBudget ?? null,
         activeDays,
         budget,
         budgetUse: budget !== null && budget > 0 ? m.spend / budget : null,
