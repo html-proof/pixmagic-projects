@@ -40,9 +40,7 @@ test("an owner links a phone, configures, verifies their number and sees WhatsAp
   const testNumber = `614${String(Date.now()).slice(-8)}`;
 
   await page.goto("/dashboard");
-  // WhatsApp is one of Marketing's tabs.
-  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Marketing" }).click();
-  await page.getByTestId("area-tabs-marketing").getByRole("link", { name: "WhatsApp", exact: true }).click();
+  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "WhatsApp", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\/whatsapp-automation\/?/);
   await expect(page.getByRole("heading", { name: /WhatsApp Automation/ }).first()).toBeVisible({ timeout: 15_000 });
 

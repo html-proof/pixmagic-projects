@@ -217,11 +217,11 @@ function TeamAccess() {
             Settings
           </Link>
           <ChevronRight aria-hidden className="h-3.5 w-3.5 text-muted" />
-          <span aria-current="page" className="font-medium">People &amp; access</span>
+          <span aria-current="page" className="font-medium">Team &amp; Access</span>
         </nav>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-[1.75rem] font-bold leading-tight tracking-tight">People &amp; access</h1>
+            <h1 className="text-[1.75rem] font-bold leading-tight tracking-tight">Team &amp; Access</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted">Manage who can access your business dashboard and control exactly what information they can see.</p>
           </div>
           <div className="flex items-center gap-2">

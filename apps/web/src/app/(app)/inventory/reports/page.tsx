@@ -53,7 +53,7 @@ export default function InventoryReportsPage() {
 
   return (
     <>
-      <PageHeader title="Stock reports" sub="Stock over time, what sells and what doesn't, and where stock is." actions={status && <RangePicker value={range} onChange={setRange} timeZone={tz} />} />
+      <PageHeader title="Inventory reports" sub="Stock over time, what sells and what doesn't, and where stock is." actions={status && <RangePicker value={range} onChange={setRange} timeZone={tz} />} />
       <ConnectCard capability="stock_levels" />
       {error && !data ? (
         <LoadError what="the reports" error={error} onRetry={reload} busy={loading} />

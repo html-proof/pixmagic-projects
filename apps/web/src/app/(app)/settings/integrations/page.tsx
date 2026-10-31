@@ -3,8 +3,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
-import { ChannelIcon } from "@/components/automations/HubUi";
-import type { ChannelConnection, ConnectionState } from "@/components/automations/types";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
 import { AdRow, rowState } from "@/components/integrations/AdRow";
@@ -18,18 +16,16 @@ import { ZAPIER_CARD } from "@/lib/features";
 import { waHref, WA_PAGE, WhatsappIcon } from "@/components/whatsapp/WaUi";
 import type { WaOverview } from "@/components/whatsapp/types";
 import { stateInfo, type AdProvider, type StateTone } from "@/lib/adConnections";
-import { canOpenPage } from "@/lib/access";
 import { friendlyError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// Settings → Connections (the owner's design, 2026-10-23; every connection on one page since the
-// redesign's phase 1): the "One Click Setup" banner, then a card per platform, Google Ads, Shopify,
-// WhatsApp, Text messages (SMS), Email, Meta Ads and Google AdSense, each with where it stands, one
-// button that opens the platform's own sign-in (Manage once connected) and what it brings
+// Settings → Integrations (the owner's design, 2026-10-23): the "One Click Setup" banner, then a card
+// per platform, Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSense, each with where it stands,
+// one button that opens the platform's own sign-in (Manage once connected) and what it brings
 // (components/integrations/IntegrationRow.tsx, AdRow.tsx). Nothing here asks for an app id, a key or a
 // token: bizinsights' own Shopify, Google and Meta apps do that part. Accounts are managed in depth on
-// Settings → Shopify stores, Settings → Ad accounts and each Marketing channel's pages; signing in with
-// Google is on Settings → Sign-in & security.
+// Settings → Shopify, Settings → Advertising and WhatsApp Automation (/dashboard/whatsapp-automation); signing in with Google is on
+// Settings → Security.
 // ---------------------------------------------------------------------------
 
 /** Shopify's and WhatsApp's states. The ad rows' are in lib/adConnections.ts (AD_STATE). */
@@ -69,35 +65,8 @@ function whatsappState(o: WaOverview | null, failed: boolean): State {
 
 const AD_ROWS: AdProvider[] = ["google", "meta", "adsense"];
 
-/** Text messages' and Email's states, as the Automations hub reads them (GET …/automations/connections). */
-const HUB_STATE: Record<ConnectionState, State> = {
-  connected: "connected",
-  needs_attention: "action_required",
-  not_connected: "not_connected",
-  unavailable: "unavailable",
-  elsewhere: "unknown",
-};
-
-/** Text messages and Email: their own pages (Marketing), where each connects and is managed. */
-const CHANNEL_ROW = {
-  sms: {
-    name: "Text messages (SMS)",
-    sub: "Text your customers order updates, reminders and offers. bizinsights sends them: you need no AWS account and give no keys.",
-    brings: ["Order updates", "Reminders", "Campaigns"],
-    connect: "/messaging/setup",
-    manage: "/messaging",
-  },
-  email: {
-    name: "Email",
-    sub: "Send order emails and campaigns from your own Gmail, Outlook or other mailbox.",
-    brings: ["Order emails", "Automations", "Campaigns"],
-    connect: "/settings/email/accounts",
-    manage: "/settings/email",
-  },
-} as const;
-
 export default function IntegrationsPage() {
-  const { me, workspace, store, storesStatus, offers, allowed, access } = useApp();
+  const { workspace, store, storesStatus, offers, allowed } = useApp();
   // Connecting a Shopify store needs owner or admin rights; WhatsApp and ad accounts, "Manage integrations".
   const manageStores = canManage(workspace.role);
   const manage = allowed("integrations.manage");
@@ -107,10 +76,6 @@ export default function IntegrationsPage() {
   const showAds = offers("ads");
   const wa = useApi<WaOverview>(storeBase && showWa ? `${storeBase}/whatsapp` : null);
   const ads = useAdConnections(storeBase && showAds ? storeBase : null);
-  const channelRows = (["sms", "email"] as const).filter((ch) => offers(ch));
-  const channels = useApi<{ connections: ChannelConnection[] }>(
-    channelRows.length ? `/workspaces/${workspace.id}/automations/connections${store ? `?storeId=${encodeURIComponent(store.id)}` : ""}` : null,
-  );
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   // Another store chosen at the top: a WhatsApp note was about the last one (the ad notes reset in useAdConnections).
   const [noteFor, setNoteFor] = useState(storeBase);
@@ -134,14 +99,9 @@ export default function IntegrationsPage() {
   const waConn = wa.data?.connection && wa.data.connection.status !== "disconnected" ? wa.data.connection : null;
   const shopState = shopifyState(store);
   const shownWa: State = store ? waState : "not_connected";
-  const channelState = (ch: "sms" | "email"): State => {
-    const c = channels.data?.connections.find((x) => x.channel === ch);
-    return c ? HUB_STATE[c.state] : channels.error ? "unknown" : "checking";
-  };
   const announced: Array<[string, string]> = [
     ["Shopify", STATE[shopState].label],
     ...(showWa && store ? [["WhatsApp", STATE[waState].label] as [string, string]] : []),
-    ...channelRows.map((ch): [string, string] => [CHANNEL_ROW[ch].name, STATE[channelState(ch)].label]),
     ...(showAds
       ? AD_ROWS.map((p): [string, string] => {
           const r = rowState(ads, store, p);
@@ -150,47 +110,14 @@ export default function IntegrationsPage() {
       : []),
   ];
   const adRow = (p: AdProvider) => showAds && <AdRow provider={p} ads={ads} store={store} manage={manage} />;
-  const channelRow = (ch: "sms" | "email") => {
-    const row = CHANNEL_ROW[ch];
-    const c = channels.data?.connections.find((x) => x.channel === ch);
-    const state = channelState(ch);
-    // Only someone who may open the channel's own pages gets a button to them.
-    const opens = canOpenPage(row.manage, access, workspace.staffRole ?? null, !!me.shared, offers);
-    const fix = c?.problems.find((x) => x.fix)?.fix?.href;
-    return (
-      <IntegrationRow
-        key={ch}
-        testid={`int-${ch}`}
-        state={state}
-        logo={
-          <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent/10 text-accent">
-            <ChannelIcon channel={ch} className="h-6 w-6" />
-          </span>
-        }
-        name={row.name}
-        sub={row.sub}
-        pill={pill(state)}
-        action={
-          !c || !opens ? null : state === "connected" || state === "action_required" ? (
-            <ManageLink name={row.name} href={state === "action_required" ? (fix ?? row.manage) : row.manage} attention={state === "action_required"} />
-          ) : state === "not_connected" && c.allowed ? (
-            <ConnectButton name={row.name} href={row.connect} testid={`int-${ch}-connect`} />
-          ) : null
-        }
-        brings={[...row.brings]}
-      >
-        {c ? <p className="text-muted">{c.summary}</p> : channels.error ? <p className="text-muted">We couldn&apos;t check {row.name} just now. {friendlyError(channels.error)}</p> : null}
-      </IntegrationRow>
-    );
-  };
 
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Connections</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Integrations</h1>
         <p className="mt-2 max-w-2xl leading-relaxed text-muted">
           {showAds
-            ? "Everything bizinsights connects to, in one place: your Shopify store, your ad accounts (Google Ads, Meta Ads, AdSense) and the ways you message customers (WhatsApp, text messages, email)."
+            ? "Connect your business accounts and get your data from Shopify, Google Ads, Meta Ads and AdSense, all in one place. Track performance, optimize campaigns and grow your business effortlessly."
             : "Connect your Shopify store and get its orders, products, customers and sales in one place. Track performance and grow your business effortlessly."}
         </p>
         {!manage && (
@@ -296,8 +223,6 @@ export default function IntegrationsPage() {
             )}
           </IntegrationRow>
         )}
-
-        {channelRows.map(channelRow)}
 
         {adRow("meta")}
         {adRow("adsense")}
