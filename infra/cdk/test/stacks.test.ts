@@ -25,6 +25,7 @@ const { AuthStack } = await import("../lib/auth-stack.js");
 const { CiStack } = await import("../lib/ci-stack.js");
 const { AuditStack, ACCOUNT_REGIONS, ANALYZER_NAME } = await import("../lib/audit-stack.js");
 const { viewerRequestCode } = await import("../lib/viewer-request.js");
+const { MIGRATE_BEFORE_LIVE_CODE, MIGRATE_BEFORE_LIVE_FAILED } = await import("../lib/migrate-before-live.js");
 const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 
 function synth(context: Record<string, string> = {}) {
@@ -483,6 +484,134 @@ describe("the app stack", () => {
     const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && ids.every((id) => r.DependsOn?.includes(id))).length;
     expect(waiting("AWS::CloudFront::Distribution")).toBe(1);
     expect(waiting("AWS::Lambda::Alias")).toBe(1);
+  });
+});
+
+describe("migrations before the switch (migrate-before-live.ts)", () => {
+  type Resource = { Type: string; Properties: Json; DependsOn?: string[]; DeletionPolicy?: string };
+  const resources = (tpl: Template) => tpl.toJSON().Resources as Record<string, Resource>;
+  const ofType = (tpl: Template, type: string) => Object.entries(resources(tpl)).filter(([, r]) => r.Type === type);
+  const fnNamed = (tpl: Template, name: string) => Object.entries(resources(tpl)).find(([, r]) => r.Type === "AWS::Lambda::Function" && r.Properties.FunctionName === name);
+
+  let off: ReturnType<typeof synth>;
+  beforeAll(() => {
+    off = synth({ migrate: "off" });
+  });
+
+  it("runs the new cron version's migrations before any live alias moves, alongside the uploads", () => {
+    const gates = ofType(t.app, "Custom::MigrateBeforeLive");
+    expect(gates).toHaveLength(1);
+    const [gateId, gate] = gates[0]!;
+    // The cron's new version: a Version's Ref is its qualified ARN (insights-production-cron:<n>).
+    const [cronId] = fnNamed(t.app, "insights-production-cron")!;
+    const [versionId] = ofType(t.app, "AWS::Lambda::Version").find(([, v]) => v.Properties.FunctionName?.Ref === cronId)!;
+    expect(gate.Properties).toMatchObject({ Target: { Ref: versionId }, RuntimeParam: "/insights/production/runtime", ServiceTimeout: "960" });
+    const aliases = ofType(t.app, "AWS::Lambda::Alias");
+    expect(aliases).toHaveLength(3);
+    for (const [, alias] of aliases) expect(alias.DependsOn).toContain(gateId);
+    const uploads = ofType(t.app, "Custom::CDKBucketDeployment").map(([id]) => id);
+    expect(uploads.length).toBeGreaterThan(0);
+    for (const id of uploads) expect(gate.DependsOn ?? []).not.toContain(id);
+  });
+
+  it("lets the gate invoke only cron versions, and read only its own stack and the runtime parameter", () => {
+    const [, fn] = fnNamed(t.app, "insights-production-migrate-before-live")!;
+    const roleId = fn.Properties.Role["Fn::GetAtt"][0];
+    const policies = Object.values(resources(t.app)).filter((r) => r.Type === "AWS::IAM::Policy" && r.Properties.Roles.some((role: Json) => role.Ref === roleId));
+    expect(policies.flatMap((p) => p.Properties.PolicyDocument.Statement)).toEqual([
+      { Effect: "Allow", Action: "lambda:InvokeFunction", Resource: "arn:aws:lambda:ap-southeast-2:605411278365:function:insights-production-cron:*" },
+      { Effect: "Allow", Action: "cloudformation:DescribeStacks", Resource: { Ref: "AWS::StackId" } },
+      { Effect: "Allow", Action: "ssm:GetParameter", Resource: "arn:aws:ssm:ap-southeast-2:605411278365:parameter/insights/production/runtime" },
+    ]);
+    // Outside the VPC, with no environment, and not index.handler (which names the app's three functions).
+    expect(fn.Properties).toMatchObject({ Handler: "index.onEvent", Runtime: "nodejs24.x", Timeout: 840, Code: { ZipFile: MIGRATE_BEFORE_LIVE_CODE } });
+    expect(fn.Properties.VpcConfig).toBeUndefined();
+    expect(fn.Properties.Environment).toBeUndefined();
+    t.app.hasResource("AWS::Logs::LogGroup", { Properties: { LogGroupName: "/aws/lambda/insights-production-migrate-before-live" }, DeletionPolicy: "Delete" });
+  });
+
+  it("fits its handler inline, with nothing an untagged template literal would mangle", () => {
+    expect(MIGRATE_BEFORE_LIVE_CODE.length).toBeLessThan(4096);
+    for (const s of ["\\", "`", "${"]) expect(MIGRATE_BEFORE_LIVE_CODE).not.toContain(s);
+    expect(MIGRATE_BEFORE_LIVE_CODE).toContain(MIGRATE_BEFORE_LIVE_FAILED);
+  });
+
+  it("shows what the gate did in the deploy's output", () => {
+    t.app.hasOutput("MigratedBeforeLive", { Value: { "Fn::GetAtt": ["MigrateBeforeLive", "Applied"] } });
+  });
+
+  it("moves live as before with -c migrate=off, gate and all gone", () => {
+    expect(ofType(off.app, "Custom::MigrateBeforeLive")).toEqual([]);
+    expect(fnNamed(off.app, "insights-production-migrate-before-live")).toBeUndefined();
+    for (const [, alias] of ofType(off.app, "AWS::Lambda::Alias")) expect(alias.DependsOn ?? []).not.toContain("MigrateBeforeLive");
+    expect((off.app.toJSON().Outputs as Record<string, unknown>).MigratedBeforeLive).toBeUndefined();
+  });
+
+  it("is on unless asked off, in every environment", () => {
+    for (const [value, on] of [[undefined, true], ["", true], ["on", true], ["yes", true], ["off", false]] as const) {
+      expect(envConfig((k) => (k === "migrate" ? value : undefined)).migrateBeforeLive, String(value)).toBe(on);
+    }
+    expect(envConfig((k) => (k === "env" ? "staging" : undefined)).migrateBeforeLive).toBe(true);
+  });
+
+  it("leaves no dependency cycle for CloudFormation to refuse on the merge's deploy", () => {
+    // DependsOn, Ref, Fn::GetAtt and Fn::Sub's ${X}: every edge CloudFormation orders by.
+    const refs = (v: Json, out: Set<string>) => {
+      if (Array.isArray(v)) for (const x of v) refs(x, out);
+      else if (v && typeof v === "object") {
+        if (typeof v.Ref === "string") out.add(v.Ref);
+        if (Array.isArray(v["Fn::GetAtt"])) out.add(v["Fn::GetAtt"][0]);
+        const sub = v["Fn::Sub"];
+        if (sub) for (const m of String(Array.isArray(sub) ? sub[0] : sub).matchAll(/\$\{([^}.]+)/g)) out.add(m[1]!);
+        for (const x of Object.values(v)) refs(x, out);
+      }
+    };
+    for (const tpl of [t.app, off.app]) {
+      const all = resources(tpl);
+      const edges = Object.fromEntries(
+        Object.entries(all).map(([id, r]) => {
+          const out = new Set<string>(r.DependsOn ?? []);
+          refs(r.Properties, out);
+          return [id, [...out].filter((x) => x in all)];
+        }),
+      );
+      const state: Record<string, "visiting" | "done"> = {};
+      const visit = (id: string, path: string[]): void => {
+        if (state[id] === "done") return;
+        if (state[id] === "visiting") throw new Error(`cycle: ${[...path, id].join(" -> ")}`);
+        state[id] = "visiting";
+        for (const next of edges[id]!) visit(next, [...path, id]);
+        state[id] = "done";
+      };
+      for (const id of Object.keys(all)) visit(id, []);
+    }
+  });
+
+  it("gets its switch from the repository variable through env, and never retries a failed migration", () => {
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8").replace(/\r\n/g, "\n");
+    const step = (name: string) => new RegExp(`^ {6}- name: ${name}\\n((?: {8}.*\\n)+)`, "m").exec(workflow)?.[1] ?? "";
+    const deploy = step("Deploy \\(CDK\\)");
+    expect(deploy).toContain(`MIGRATE: "\${{ vars.AWS_MIGRATE_BEFORE_LIVE || 'on' }}"`);
+    const run = deploy.slice(deploy.indexOf("run: |"));
+    expect(run).toContain('-c "migrate=$MIGRATE"');
+    expect(run).not.toContain("${{");
+    const guard = run.indexOf(`grep -q "${MIGRATE_BEFORE_LIVE_FAILED}" "$log"`);
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(run.indexOf('grep -qE "$network" "$log"'));
+    // The migrate after the switch stays (grants, passwords, a commit from before the gate) and says when it applied anything:
+    // never sent twice by the CLI, bounded by the step, and its warning on a line of its own (the payload ends without one).
+    const migrations = step("Database migrations");
+    expect(migrations).toContain("--cli-read-timeout 0");
+    expect(migrations).toMatch(/^ {8}timeout-minutes: 10$/m);
+    expect(migrations).toContain("cat out.json; echo\n");
+    expect(migrations).toContain("if grep -q FunctionError meta.json; then exit 1; fi");
+    expect(migrations).toContain("::warning::Migrations applied only after the new code went live");
+    // The rollback waits for the App stack to settle, so a late alias move can't undo it.
+    const rollback = step("Roll back on failure");
+    expect(rollback.indexOf("aws cloudformation describe-stacks --stack-name InsightsApp-production")).toBeGreaterThan(0);
+    expect(rollback.indexOf("aws cloudformation describe-stacks")).toBeLessThan(rollback.indexOf("node infra/cdk/scripts/rollback.mjs"));
+    expect(workflow.indexOf("- name: Deploy (CDK)")).toBeLessThan(workflow.indexOf("- name: Database migrations"));
+    expect(workflow.indexOf("- name: Database migrations")).toBeLessThan(workflow.indexOf("- name: Smoke tests"));
   });
 });
 
@@ -1128,6 +1257,7 @@ describe("Lambda runtimes (Trusted Advisor AWS Lambda Functions Using Deprecated
       "insights-production-cognito-email",
       "insights-production-cron",
       "insights-production-jobs",
+      "insights-production-migrate-before-live",
     ]);
   });
 

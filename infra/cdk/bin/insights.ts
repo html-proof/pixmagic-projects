@@ -13,12 +13,13 @@ import { WhatsappStack } from "../lib/whatsapp-stack.js";
  * Insights on AWS. Stacks, deployed in this order (cdk works it out from the references):
  *   InsightsEdge-<env>  us-east-1        WAF web ACL for CloudFront; production: the Region's S3 access log bucket
  *   InsightsData-<env>  ap-southeast-2   VPC, NAT, RDS PostgreSQL, DynamoDB, S3 (and the Region's access log bucket), secrets, admin host
- *   InsightsApp-<env>   ap-southeast-2   SQS, Lambda (api, jobs, cron), CloudFront, schedules, alarms, budget
+ *   InsightsApp-<env>   ap-southeast-2   SQS, Lambda (api, jobs, cron), CloudFront, schedules, alarms, budget; runs each release's migrations before moving `live`
  *   InsightsAuth-<env>  ap-southeast-2   Cognito (infra/aws/cognito.yaml) + the runtime parameter
  *   InsightsWhatsapp-<env> ap-southeast-2 WhatsApp's Evolution API service (ECS Fargate, Cloud Map), after App (its cron makes the service's database)
  *   InsightsCi-<env>    ap-southeast-2   GitHub OIDC deploy role
  *   InsightsAudit-production  ap-southeast-2   CloudTrail (all Regions), IAM Access Analyzer in every Region, access logs of CDK's bucket (account-wide, production only)
- * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...
+ * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...,
+ *   -c migrate=off (`live` moves before the release's migrations: only to get past a broken gate; run the migrate command right after)
  * docs/aws-deployment.md is the runbook.
  */
 const app = new App();

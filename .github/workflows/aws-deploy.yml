@@ -12,6 +12,9 @@ name: Deploy to AWS
 # scripts, then deploys the package `build` made. So code from the app's ~1,500 dependencies (a
 # compromised package's install script, or anything that runs during the web build) never runs
 # where the deploy role, and through CDK's roles the whole account, is one request away.
+#
+# cdk deploy runs each release's migrations on its new cron version before the `live` aliases
+# move (infra/cdk/lib/migrate-before-live.ts), so new code never reads a column that isn't there yet.
 on:
   workflow_dispatch:
   workflow_run:
@@ -204,16 +207,29 @@ jobs:
       # ETIMEDOUT, which the SDK retries (Deploy 40032504218 sat 57 minutes on one in Modern
       # Standby). And the step stops at 45 minutes, so whatever still hangs fails it and the
       # rollback runs: a job cancelled at its own limit skips every step after this one.
+      # The App stack runs the new release's migrations on its new cron version before it moves
+      # `live` (infra/cdk/lib/migrate-before-live.ts; AWS_MIGRATE_BEFORE_LIVE=off only to get past a
+      # broken gate). A migration that failed in AWS is no dropped connection, whatever its error says
+      # (a database's "connect ETIMEDOUT" matches `network`), and trying again would cost a full App
+      # update and rollback each time: never run again. Repository variables reach the script through
+      # env, never spliced into it.
       - name: Deploy (CDK)
         working-directory: infra/cdk
         timeout-minutes: 45
-        env: { AWS_MAX_ATTEMPTS: "10", NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000 --require ${{ github.workspace }}/infra/cdk/scripts/stall-guard.cjs" }
+        env:
+          AWS_MAX_ATTEMPTS: "10"
+          NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000 --require ${{ github.workspace }}/infra/cdk/scripts/stall-guard.cjs"
+          SCHEDULES: "${{ vars.AWS_SCHEDULES || 'off' }}"
+          ALERT_EMAIL: "${{ vars.AWS_ALERT_EMAIL }}"
+          GOOGLE_CLIENT_ID: "${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}"
+          MIGRATE: "${{ vars.AWS_MIGRATE_BEFORE_LIVE || 'on' }}"
         run: |
-          deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=${{ vars.AWS_SCHEDULES || 'off' }}" -c "alertEmail=${{ vars.AWS_ALERT_EMAIL }}" -c "googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}")
+          deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=$SCHEDULES" -c "alertEmail=$ALERT_EMAIL" -c "googleClientId=$GOOGLE_CLIENT_ID" -c "migrate=$MIGRATE")
           network='could not be used to assume|no credentials have been configured|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
           log=$(mktemp)
           for attempt in 1 2 3; do
             if "${deploy[@]}" 2>&1 | tee "$log"; then exit 0; fi
+            if grep -q "migrate-before-live failed" "$log"; then echo "::error::The App stack's migrate gate failed, so it rolled back with no live alias moved. The reason above says why: the cron's own error is a failed migration; an AWS error (AccessDenied, Throttling, ServiceException) means none ran, and Deploy can be run again (docs/aws-deployment.md, Migrations before the switch)."; exit 1; fi
             if ! grep -qE "$network" "$log"; then exit 1; fi
             if (( attempt < 3 )); then echo "::warning::cdk deploy failed on the network (attempt $attempt of 3); trying again in 60 s."; sleep 60; fi
           done
@@ -253,12 +269,23 @@ jobs:
             aws lambda update-alias --function-name "$n" --name live --function-version "$v" > /dev/null
             echo "$n: live $live -> $v"
           done
+      # The App stack already ran this release's migrations before moving `live`, so this normally
+      # applies nothing. It stays for init.sql's grants and the roles' passwords from their secrets,
+      # and for a commit from before the gate or deployed with AWS_MIGRATE_BEFORE_LIVE=off, whose
+      # migrations run only here, after the switch: the warning names them. No read timeout (0): at
+      # the CLI's 60 s default a slow migrate was sent a second time (migrate.ts's lock now queues
+      # any duplicate). The step's own 10 minutes bound the wait instead, leaving the job time to roll
+      # back after a Deploy (CDK) that used its 45; a longer migration fails the step while it still
+      # commits, and running Deploy again then applies nothing. The payload has no newline of its
+      # own: `echo` ends its line, so a warning after it starts one (only such a line is a command).
       - name: Database migrations
+        timeout-minutes: 10
         run: |
-          aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out \
+          aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --cli-read-timeout 0 \
             --payload '{"action":"migrate"}' out.json > meta.json
-          cat out.json
+          cat out.json; echo
           if grep -q FunctionError meta.json; then exit 1; fi
+          node -e 'const a = JSON.parse(require("fs").readFileSync("out.json", "utf8")).applied || []; if (a.length) console.log("::warning::Migrations applied only after the new code went live: " + a.join(", ") + " (docs/aws-deployment.md, Migrations before the switch).");' || echo "::warning::Couldn't read what migrate applied (out.json)."
       - name: Re-read sales records a release left missing
         # Queues work only (seedSalesRereads in apps/worker); its failure is no reason to roll back.
         continue-on-error: true
@@ -278,6 +305,18 @@ jobs:
         run: |
           if [[ ! -f infra/cdk/scripts/oidc-trust.ts ]]; then echo "::notice::This commit has no infra/cdk/scripts/oidc-trust.ts: nothing to check."; exit 0; fi
           pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts assume --role "$ROLE" --region "$AWS_REGION"
+      # The aliases move inside the App stack's update, after its migrate gate. A Deploy (CDK) cut off
+      # mid-update (its 45 minutes, a stack beside App failing) leaves CloudFormation still going, and
+      # a rollback before it settles would be undone by the alias move that follows. So wait for the
+      # App stack to settle first, 5 minutes at most (the job's own limit has to leave room for it).
       - name: Roll back on failure
         if: failure() && steps.before.outputs.versions != '' && steps.trust.outcome != 'failure'
-        run: node infra/cdk/scripts/rollback.mjs --env production --to "${{ steps.before.outputs.versions }}"
+        timeout-minutes: 8
+        env: { VERSIONS: "${{ steps.before.outputs.versions }}" }
+        run: |
+          for i in $(seq 1 30); do
+            s=$(aws cloudformation describe-stacks --stack-name InsightsApp-production --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo unknown)
+            [[ "$s" == *_IN_PROGRESS ]] || break
+            echo "InsightsApp-production is $s: waiting for it to settle before rolling back ($i of 30)."; sleep 10
+          done
+          node infra/cdk/scripts/rollback.mjs --env production --to "$VERSIONS"

@@ -26,6 +26,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
 import { API_PATH_PATTERNS } from "../../../apps/aws/src/paths.js";
 import { FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
+import { migrateBeforeLive } from "./migrate-before-live.js";
 
 /** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
 const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
@@ -210,7 +211,8 @@ export class AppStack extends Stack {
       }
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: [`arn:aws:ssm:${cfg.region}:${cfg.account}:parameter${this.runtimeParam}`] }));
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ses:SendEmail", "ses:SendRawEmail"], resources: [`arn:aws:ses:${cfg.region}:${cfg.account}:identity/*`, `arn:aws:ses:${cfg.region}:${cfg.account}:configuration-set/*`] }));
-      // Releases move the `live` alias; rolling back moves it to the previous version (scripts/rollback.mjs).
+      // Releases move the `live` alias once the new cron version has run the release's migrations
+      // (MigrateBeforeLive below); rolling back moves it to the previous version (scripts/rollback.mjs).
       const alias = new lambda.Alias(this, `Live-${name}`, { aliasName: "live", version: f.currentVersion });
       return { fn: f, alias };
     };
@@ -218,6 +220,13 @@ export class AppStack extends Stack {
     const jobs = fn("jobs", 1024, Duration.seconds(900), "Insights background jobs (SQS)");
     const cron = fn("cron", 1024, Duration.seconds(900), "Insights scheduled sweeps + maintenance actions");
     this.apiRole = api.fn.role!;
+    // A release's migrations ship in its package, so only its new code can run them. Run after the
+    // deploy, they left new code reading a column that wasn't there yet (stores.customers_from,
+    // release 141, ~67 s). So the new cron version migrates first and the three `live` aliases wait
+    // for it: a failed migration fails the stack before any of them moves (migrate-before-live.ts).
+    // The S3 uploads go on alongside; Live-api also waits for them (below).
+    const migrated = cfg.migrateBeforeLive ? migrateBeforeLive(this, cfg, cron.fn.currentVersion, this.runtimeParam) : undefined;
+    if (migrated) for (const f of [api, jobs, cron]) f.alias.node.addDependency(migrated);
     // Customer Messaging's calls to AWS End User Messaging SMS, each function only what it does.
     // Sending is scoped to this account's configuration sets and origination identities, in any
     // region (Indian local routes are in ap-south-1); the Describe calls have no resource-level
@@ -661,6 +670,7 @@ export class AppStack extends Stack {
     new CfnOutput(this, "FallbackDomain", { value: fallback.distributionDomainName, description: "Where CloudFront gets the page it shows while the app can't answer (any path; a 503)" });
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
+    if (migrated) new CfnOutput(this, "MigratedBeforeLive", { value: migrated.getAttString("Applied"), description: "What the migrate gate did with the newest cron version before moving live (applied, or why it skipped)" });
     new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });
   }
 }
