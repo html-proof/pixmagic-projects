@@ -289,6 +289,11 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 A bug fix comes with the test that would have caught it. CI also checks the dependency audit, that
 the migrations produce exactly `schema.prisma`, and that the Lambda package builds.
 
+A release's migrations are applied before its code goes live ([aws-deployment.md](aws-deployment.md),
+"Migrations before the switch"), so the release before keeps running on them for up to a minute of
+every deploy: a migration adds, never drops or renames what the previous release reads, and a new
+NOT NULL column has a default (drops take two releases).
+
 ## Known structural debt
 
 ### Frontend transport and recovery

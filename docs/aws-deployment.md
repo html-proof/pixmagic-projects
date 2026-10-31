@@ -18,6 +18,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Page while the server is down | A page request the function can't answer (connection failure, timeout, 429/5xx) fails over to the site's own "Service temporarily unavailable" page as a 503: a second distribution (stack output `FallbackDomain`) serves `_fallback/unavailable.html` from the same bucket for any path. The API's paths never fail over, so its own 502/503 messages reach the app. The smoke test fetches the page from the fallback. | `infra/cdk/lib/app-stack.ts`, `apps/web/src/app/unavailable`, `apps/aws/src/paths.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: GitHub variable `AWS_SCHEDULES=on`) | `runScheduled()` in `apps/worker` |
+| Migrations before the switch | Lambda `insights-production-migrate-before-live` (App stack, runs only during deploys, through the custom resource `MigrateBeforeLive`) runs a release's migrations on its new cron version before the `live` aliases move ("Migrations before the switch" below) | `infra/cdk/lib/migrate-before-live.ts`, `apps/aws/src/migrate.ts` |
 | Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
@@ -50,6 +51,12 @@ pnpm --filter @app/aws build
 cd infra/cdk
 npx cdk deploy --all --require-approval never
 ```
+
+The App stack runs the release's migrations on its new cron version before it moves `live`
+("Migrations before the switch" below), so a hand deploy needs no migrate step of its own. Run the
+migrate command ("Database" below) after `put-secrets.mjs` (it sets the roles' passwords), after a
+deploy with `-c migrate=off`, and once the Auth stack exists after a new environment's first deploy
+(the gate skips while there is nothing live or no runtime parameter yet).
 
 Then, after the first deploy or a change of secrets:
 
@@ -123,8 +130,10 @@ If Node's connections time out on this PC's network (IPv6-only hotspot with NAT6
 ## Deploy (GitHub Actions)
 
 `.github/workflows/aws-deploy.yml` runs after CI passes on `main` (or by hand): build → `cdk
-deploy` → migrate → smoke tests → automatic rollback of the `live` aliases if anything fails. It
-signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS keys in GitHub.
+deploy` (the App stack runs the release's migrations on its new cron version, then moves `live`) →
+migrate again (normally nothing new: grants, passwords) → smoke tests → automatic rollback of the
+`live` aliases if anything fails. It signs in with GitHub OIDC (role in the `InsightsCi-production`
+stack), no AWS keys in GitHub.
 
 It is two jobs, so the app's dependencies never run where the deploy role is reachable:
 
@@ -245,6 +254,69 @@ aws iam update-assume-role-policy --role-name insights-production-github-deploy 
 Every action in the workflows is pinned to a commit SHA, with its version in a comment (a tag can
 be moved to other code; a SHA can't). Dependabot (`.github/dependabot.yml`) proposes updates once a
 month, all in one pull request.
+
+### Migrations before the switch
+
+A release's migrations ship in its own package, so only its new code can run them. Until
+2026-10-31 the workflow ran them after `cdk deploy` had moved `live`: in release 141 the API's
+alias moved at 06:13:11Z and the migrations ran at 06:14:18Z, about 67 s of new code reading
+`stores.customers_from` before it existed (Prisma reads every column, so every read of a store
+failed). Now the App stack's custom resource `MigrateBeforeLive` invokes the NEW cron version
+(`insights-production-cron:<n>`) with `{"action":"migrate"}`, and the three `live` aliases wait
+for it. The S3 uploads run alongside; Live-api also waits for them.
+
+Its handler (`insights-production-migrate-before-live`, `infra/cdk/lib/migrate-before-live.ts`)
+decides in this order, and its log line and the stack output `MigratedBeforeLive` say which:
+
+1. Delete: nothing to do (`-c migrate=off`, or a commit from before the gate).
+2. `skipped: rollback or nothing newer`: the version isn't newer than the one it last ran. A
+   CloudFormation rollback sends exactly that, so a rollback never calls anything (and never runs
+   an older init.sql, whose blanket GRANT would give app_rls back tables a newer one revokes). A
+   hand `cdk deploy` of an older commit is different: it publishes that code as a NEWER version,
+   which the gate runs, so deploy an older commit with `-c migrate=off` ("Roll back" below).
+3. `skipped: stack <status>`: a new environment's first creation; nothing is live yet.
+4. `skipped: no /insights/<env>/runtime yet`: App exists without Auth, whose parameter the new
+   cron needs; Auth deploys after App, so the gate would otherwise never let it.
+5. Runs the migrations and answers `applied <names> (<n> in all)`.
+
+It runs once per new package (every new commit), never on a re-run of the same one. When the gate
+fails, the App stack fails before any alias moves: CloudFormation rolls the stack back (2-5
+runner minutes), the main distribution never starts updating (it waits for the Function URL,
+which waits for the API's alias), "Deploy (CDK)" prints `::error::` and doesn't try again (a
+database's `connect ETIMEDOUT` is no dropped connection), and "Roll back on failure" finds every
+alias already where it was. The reason, after `migrate-before-live failed (nothing moved to the
+new release):`, tells the two kinds apart. The cron's own error (`errorMessage`, `Migration <name>
+failed: ...`) is a failed migration: fix it in a new commit. An AWS error name (AccessDenied,
+TooManyRequestsException, ServiceException, ...) means it couldn't check the stack or reach the
+cron, and no migration ran: run Deploy again; `AWS_MIGRATE_BEFORE_LIVE=off` is not the answer to it. A migration gets 14 minutes through the gate: split a longer one. A
+migrate can arrive twice (CDK's provider framework calls the handler again when its call fails);
+`migrate.ts` takes a Postgres advisory lock before it reads what has run, so the second waits and
+then applies nothing.
+
+The contract it brings: the release before keeps running on the new schema for up to a minute of
+every deploy (between the migration and the alias move), and after any rollback. A migration adds;
+it never drops or renames what the previous release reads, and a new NOT NULL column has a default
+([database/migrations.md](database/migrations.md)).
+
+Where to read it: the cdk line `Custom::MigrateBeforeLive`, the output
+`InsightsApp-production.MigratedBeforeLive`, the log group
+`/aws/lambda/insights-production-migrate-before-live`, and the cron's `migrations applied`. When
+the deploy that creates the gate fails (its first deploy, or the first after turning it back on),
+CloudFormation's rollback deletes the gate's two log groups with it: read the reason on the
+`Custom::MigrateBeforeLive` line of the cdk output (the handler's error and its trace) and the
+cron's log `/aws/lambda/insights-production-cron`. A `::warning::` from "Database migrations"
+("Migrations applied only after the new code went live") means the gate didn't run them: find out
+why in its log.
+
+**A broken gate.** Set the repository variable `AWS_MIGRATE_BEFORE_LIVE=off` (Settings → Secrets and
+variables → Actions → Variables) and run Deploy to AWS again: the gate is deleted, `live` moves as
+before and "Database migrations" migrates after it, with 10 minutes for it (a longer migration
+fails that step and rolls the aliases back while it still commits; running Deploy again then
+applies nothing). By hand: `-c migrate=off`. Delete the variable
+to turn it back on (its re-creation runs migrate once, nothing new). Should the App stack ever stop
+in `UPDATE_ROLLBACK_FAILED` on `MigrateBeforeLive` (it shouldn't: the handler answers a rollback
+without a call), the owner, after `aws login`, runs `aws cloudformation continue-update-rollback
+--stack-name InsightsApp-production --resources-to-skip MigrateBeforeLive`; the deploy role can't.
 
 ### Keeping within GitHub's included minutes
 
@@ -598,8 +670,14 @@ job signs in only with the OIDC deploy role and checks that it did.
   `node infra/cdk/scripts/migrate-data.mjs`. It backs up to `C:\Users\Seban\insights-backups`,
   restores through the admin host, runs the migrate action, compares exact row counts per table
   and stops the host. `--replace` wipes the AWS copy first (the final copy at cutover).
-- Migrations after a deploy: `aws lambda invoke --function-name insights-production-cron:live
-  --cli-binary-format raw-in-base64-out --payload '{"action":"migrate"}' out.json`.
+- Migrations run inside every `cdk deploy`, before `live` moves ("Migrations before the switch"),
+  unless it was deployed with `-c migrate=off`. Again by hand: after a `-c migrate=off` deploy this
+  applies the release's migrations; otherwise it applies nothing new and re-applies init.sql's
+  grants and the roles' passwords. In Windows PowerShell (in Git Bash, without the backslashes):
+
+  ```powershell
+  aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --cli-read-timeout 960 --payload '{\"action\":\"migrate\"}' migrate.json
+  ```
 - The WhatsApp service's own database `evolution` and its role (secret `insights/production/evolution-db`)
   are made by the cron's `evolution-db` action, which the WhatsApp stack runs when it is first
   deployed. Again by hand (idempotent): the same command with `{"action":"evolution-db"}`.
@@ -705,7 +783,11 @@ app to `d2mr8m2p1qkh58.cloudfront.net`.
 
 `node infra/cdk/scripts/rollback.mjs` moves the `live` aliases of api, jobs and cron to the previous
 version (UI included, it ships in the api package). The next deploy moves them forward again.
-Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore. Cognito's email
+Migrations are not undone, and neither a CloudFormation rollback nor rollback.mjs re-runs one.
+Infrastructure: `cdk deploy --all -c migrate=off` of the previous commit. Without `-c migrate=off`
+the gate runs that commit's migrate on its newly published cron version, and its older init.sql's
+blanket GRANT gives app_rls back any table a newer init.sql revokes, until the next forward deploy;
+don't run the migrate command after it either. Data: point-in-time restore. Cognito's email
 function has no alias (rollback.mjs leaves it): to have Cognito send its own emails again, deploy
 the Auth stack with `-c cognitoEmail=off` ("Sign-in emails" below).
 

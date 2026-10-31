@@ -3,6 +3,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pg from "pg";
 
+/** Any fixed number, the same in every release: the advisory lock each migrate holds while it runs. */
+export const MIGRATE_LOCK = 4_172_906_301;
+
 /**
  * Bring the database up to date: run the Prisma migrations that haven't run yet, in order, and
  * record each in `_prisma_migrations` exactly as `prisma migrate deploy` does (same table, same
@@ -11,13 +14,21 @@ import pg from "pg";
  * the tenant role's from the app secret.
  *
  * Runs inside the function (a direct invocation: `{ "action": "migrate" }`), so the database's
- * master password never leaves AWS. Idempotent: run it after every deploy.
+ * master password never leaves AWS. Idempotent, and one run at a time (an advisory lock): every
+ * deploy runs it before the new code goes live (infra/cdk/lib/migrate-before-live.ts), and again after.
  */
 export async function migrate(input: { databaseUrl: string; migrationsDir: string; initSql: string; appRlsPassword?: string; systemPassword?: string }) {
   const client = new pg.Client({ connectionString: input.databaseUrl });
   await client.connect();
   const applied: string[] = [];
   try {
+    // One migrate at a time. A run can be sent twice: CloudFormation's custom-resource framework
+    // calls the deploy's gate again when its call to Lambda fails, and the CLI re-sends an invoke
+    // it stopped waiting for. Two runs would both start the same migration (two _prisma_migrations
+    // rows, a backfill applied twice). Taken before `done` is read, so the second waits, then finds
+    // the first's work recorded (or tries what failed again, and fails the same way). A session
+    // lock: client.end() below, or the connection closing when the function stops, releases it.
+    await client.query(`SELECT pg_advisory_lock(${MIGRATE_LOCK})`);
     await client.query(`CREATE TABLE IF NOT EXISTS "_prisma_migrations" (
       "id" VARCHAR(36) PRIMARY KEY NOT NULL,
       "checksum" VARCHAR(64) NOT NULL,

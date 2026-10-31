@@ -55,6 +55,14 @@ export interface EnvConfig {
    */
   schedulesEnabled: boolean;
   /**
+   * The App stack runs a new release's migrations on its new cron version and moves the `live`
+   * aliases only once they succeeded (migrate-before-live.ts). On in every environment, so a plain
+   * `cdk deploy --all` from a PC gets it too. `-c migrate=off` (the deploy workflow: repository
+   * variable AWS_MIGRATE_BEFORE_LIVE=off) moves `live` first and leaves migrating to the workflow's
+   * migrate step or the hand command, as before: only to get past a broken gate.
+   */
+  migrateBeforeLive: boolean;
+  /**
    * The app's own address instead of CloudFront's. DNS for it is at Cloudflare (records DNS only,
    * pointing at the distribution); the certificate is in ACM in us-east-1 (CloudFront's region),
    * validated by a CNAME there (docs/aws-deployment.md, "Domain: bizinsights.io"). Page requests on any
@@ -124,7 +132,7 @@ export interface EnvConfig {
 const ACCOUNT = "605411278365";
 const REGION = "ap-southeast-2";
 
-const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled" | "alertEmail">> = {
+const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled" | "migrateBeforeLive" | "alertEmail">> = {
   production: {
     name: "production",
     account: ACCOUNT,
@@ -201,6 +209,8 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
   return {
     ...base,
     schedulesEnabled: String(context("schedules") ?? "off") === "on",
+    // Only "off" turns it off: unset, empty or a typo keeps the safe default.
+    migrateBeforeLive: String(context("migrate") ?? "on") !== "off",
     alertEmail: String(context("alertEmail") ?? ""),
     cognitoCustomEmail: cognitoEmail === undefined || cognitoEmail === "" ? base.cognitoCustomEmail : String(cognitoEmail) === "on",
     budgetEmail: budgetEmail === undefined || budgetEmail === "" ? base.budgetEmail : String(budgetEmail),

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { MIGRATE_BEFORE_LIVE_CODE, MIGRATE_BEFORE_LIVE_FAILED } from "../lib/migrate-before-live.js";
 
 /**
  * "Deploy (CDK)" in aws-deploy.yml runs cdk deploy again when the failed run's output matches
@@ -11,6 +12,9 @@ const pattern = /^\s*network='([^']+)'\s*$/m.exec(workflow)?.[1];
 // grep -E and JavaScript read an alternation of plain words the same way.
 const network = new RegExp(pattern ?? "(?!)");
 const matches = (output: string) => output.split(/\r?\n/).some((line) => network.test(line));
+// A migration that failed in AWS (the App stack's gate) is checked first and never run again.
+const guard = /grep -q "([^"]+)" "\$log"/.exec(workflow)?.[1];
+const retried = (output: string) => !(guard && output.includes(guard)) && matches(output);
 
 /** What the failed Deploy to AWS runs printed, word for word (their CI timestamps cut off). */
 const FAILED = {
@@ -68,5 +72,29 @@ describe("what Deploy (CDK) runs again", () => {
     ]) {
       expect(matches(output), output).toBe(false);
     }
+  });
+});
+
+describe("what Deploy (CDK) never runs again", () => {
+  it("reads the gate's words from the step, the same the handler fails with", () => {
+    expect(guard).toBe(MIGRATE_BEFORE_LIVE_FAILED);
+    expect(MIGRATE_BEFORE_LIVE_CODE).toContain(MIGRATE_BEFORE_LIVE_FAILED);
+  });
+
+  it("is a migration that failed in AWS, even when its error reads like the network", () => {
+    const output = [
+      "InsightsApp-production | 12/17 | 11:43:05 am | UPDATE_FAILED        | Custom::MigrateBeforeLive | MigrateBeforeLive/Default (MigrateBeforeLive) Received response status [FAILED] from custom resource. Message returned: migrate-before-live failed (nothing moved to the new release): {\"errorMessage\":\"connect ETIMEDOUT 10.0.3.12:5432\"}",
+      "❌  InsightsApp-production failed: ToolkitError: The stack named InsightsApp-production failed to deploy: UPDATE_ROLLBACK_COMPLETE",
+    ].join("\n");
+    expect(matches(output)).toBe(true);
+    expect(retried(output)).toBe(false);
+  });
+
+  it("still runs again every run that failed on the network", () => {
+    for (const lines of Object.values(FAILED)) expect(retried(lines.join("\n"))).toBe(true);
+  });
+
+  it("is not the gate timing out (a failure of its own: the rollback runs at once)", () => {
+    expect(retried("Received response status [FAILED] from custom resource. Message returned: Task timed out after 840.00 seconds")).toBe(false);
   });
 });

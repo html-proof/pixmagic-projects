@@ -28,9 +28,9 @@ committed with the code that needs it. Nobody edits a production schema by hand.
 ## Rules for a migration production can take
 
 - **Additive first.** Add columns as nullable or with a default, add tables and indexes. The code
-  that was live before the deploy must keep working on the new schema, because the migration stays
-  if the code is rolled back; and the new code briefly runs on the old schema, between the deploy
-  and the migration step (below).
+  that was live before the deploy must keep working on the new schema: the deploy migrates before
+  the new code goes live, so the old code runs on the new schema for up to a minute of every
+  deploy, and again whenever the code is rolled back (the migration stays).
 - **Removing or renaming** takes two releases: stop using it (deploy), then drop it (next migration).
 - **Data changes** (backfills) go in the migration only when they are quick and idempotent;
   anything long is a maintenance task (`apps/worker/ops/`) run separately.
@@ -46,17 +46,19 @@ Production's database is `app` on RDS PostgreSQL ([../aws-deployment.md](../aws-
 The deploy applies migrations, not a person: merging to `main` runs Deploy to AWS
 (`.github/workflows/aws-deploy.yml`), which
 
-1. deploys the new code (`cdk deploy`);
-2. invokes the cron function's `migrate` action (`apps/aws/src/migrate.ts`): every pending
-   migration in order, each in its own transaction and recorded in `_prisma_migrations` exactly
-   as `prisma migrate deploy` does, then the grants in `infra/postgres/init.sql`;
+1. `cdk deploy` publishes the new code, and before the `live` aliases move, the App stack invokes
+   the NEW cron version's `migrate` action (`apps/aws/src/migrate.ts`): every pending migration in
+   order, each in its own transaction and recorded in `_prisma_migrations` exactly as `prisma
+   migrate deploy` does, then the grants in `infra/postgres/init.sql`. One run at a time: it holds
+   a Postgres advisory lock while it works ([../aws-deployment.md](../aws-deployment.md#migrations-before-the-switch));
+2. invokes `migrate` again on `live` (normally applies nothing; a warning names anything it did);
 3. runs the smoke tests.
 
-If step 2 or 3 fails, the functions go back to the previous versions; an applied migration stays.
-To rerun the action (it is idempotent):
+If the migration fails, nothing moves to the new code. If step 2 or 3 fails, the functions go back
+to the previous versions; an applied migration stays. To rerun the action (it is idempotent):
 
 ```bash
-aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{"action":"migrate"}' out.json
+aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --cli-read-timeout 960 --payload '{"action":"migrate"}' out.json
 ```
 
 RDS keeps 14 days of point-in-time restore, so there is no separate backup step.

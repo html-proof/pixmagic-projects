@@ -8,7 +8,10 @@
 //
 // Without --to, each alias moves to the version just before its current one.
 //
-// Database migrations are not undone: releases are written to run on the newer schema.
+// Database migrations are not undone: releases are written to run on the newer schema. The App
+// stack runs a release's migrations before it moves `live` (lib/migrate-before-live.ts), so the
+// release before runs on the newer schema for up to a minute of every deploy too; nothing re-runs a
+// migrate on a rollback.
 import { execFileSync } from "node:child_process";
 
 const args = process.argv.slice(2);
