@@ -6,6 +6,7 @@ import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
 import { declaredScopes, optionalScopesFor } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
+import { adsFromShopifyModule } from "./adsFromShopify.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
@@ -46,6 +47,8 @@ export interface AdsView {
   account?: string;
   /** Every campaign, each with its change, rather than the 10 that spent most. */
   allCampaigns?: boolean;
+  /** Meta's and Google's figures from the store's own orders as well (`ads_from_shopify`), for a platform with no ad account connected. */
+  fromShopify?: boolean;
 }
 
 /**
@@ -241,6 +244,18 @@ export async function storeOverview(
   // Which platforms this server can connect at all: the dashboard only offers those.
   const configured = adsConfigured();
   if (sees("ad_configured") && (configured.meta || configured.google || configured.adsense)) modules.ad_configured = configured;
+  // Meta and Google as the store's orders record them (packages/shared/src/adsFromShopify.ts): what the
+  // Advertising pages show of a platform with no ad account connected, from the orders' own visits
+  // (the traffic sources, read with the channels capability). Never for one account, or AdSense alone.
+  if (adsView.fromShopify && !account && platform !== "adsense" && enabled.has("channels") && sees("ads_from_shopify")) {
+    modules.ads_from_shopify = await adsFromShopifyModule(tx, scope, dates, {
+      currency: store.currency,
+      timeZone: store.timezone,
+      compare: previousImported,
+      historyFrom: data.historyFrom,
+      provider: platform,
+    });
+  }
 
   if (enabled.has("channels")) {
     modules.channels = await channels(tx, scope, range);

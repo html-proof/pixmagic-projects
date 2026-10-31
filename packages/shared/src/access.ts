@@ -10,6 +10,7 @@
 //
 // Imported by the UI through `@app/shared/access`: no I/O, relative imports stay extensionless.
 
+import { adsFromShopifyWithoutAttribution, type AdsFromShopify } from "./adsFromShopify";
 import { can as roleCan, type Permission, type Role } from "./roles";
 import { MONTH_LINES } from "./sales";
 
@@ -527,6 +528,9 @@ export const OVERVIEW_MODULE_ACCESS = {
   funnel: ["analytics.conversion"],
   channels: ["analytics.traffic"],
   traffic: ["analytics.traffic"],
+  // Meta's and Google's sales from the store's own orders (adsFromShopify.ts): orders by where their
+  // visit came from, on the Advertising pages; their tagged-ad figures need attribution (redactFields).
+  ads_from_shopify: ["analytics.traffic"],
   order_timing: ["analytics.behavior"],
   fulfillment: ["orders.fulfillment"],
   discount_codes: ["discounts.codes"],
@@ -676,6 +680,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   if (isObj(ads) && !g.has("marketing.campaigns")) out.ads = omit(ads, ["campaigns"]);
   // Orders Shopify's visit record credits to each platform's ads: attribution, like the traffic module's paid figures.
   if (isObj(out.ads) && !g.has("marketing.attribution")) out.ads = omit(out.ads, ["sourced"]);
+  // The same from the store's orders alone, for a platform not connected: its tagged-ad figures and campaigns.
+  if (isObj(out.ads_from_shopify) && !g.has("marketing.attribution")) out.ads_from_shopify = adsFromShopifyWithoutAttribution(out.ads_from_shopify as unknown as AdsFromShopify);
   const codes = out.discount_codes;
   if (isObj(codes) && Array.isArray(codes.items) && !g.has("discounts.performance")) {
     out.discount_codes = { ...codes, items: codes.items.map((i: unknown) => omit(i, ["discount", "sales"])) };
