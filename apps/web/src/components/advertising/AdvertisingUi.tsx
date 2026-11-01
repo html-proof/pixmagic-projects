@@ -1,18 +1,18 @@
 "use client";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { Download, Printer } from "lucide-react";
+import { CheckCircle2, Download, Printer, RefreshCw } from "lucide-react";
 import { hasFullAccess } from "@app/shared/access";
 import type { AdProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { comparedWith, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
-import { fmtRange } from "@/components/dashboard/format";
+import { fmtDateTime, fmtRange } from "@/components/dashboard/format";
 import type { Overview } from "@/components/dashboard/types";
 import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
-import { apiHref, friendlyError, isTransient } from "@/lib/api";
+import { apiHref, friendlyError, isTransient, liveDataChanged } from "@/lib/api";
 import type { AccountChoice, AdvertisingState } from "./useAdvertising";
 
 // ---------------------------------------------------------------------------
@@ -25,6 +25,9 @@ export const PLATFORM: Record<AdProvider, { name: string; Icon: (p: { size?: num
   google: { name: "Google Ads", Icon: GoogleIcon },
   adsense: { name: "Google AdSense", Icon: GoogleIcon },
 };
+
+/** Each spend platform keeps its colour on every chart (the dashboard's Advertising section's). */
+export const PLATFORM_COLOR: Record<"meta" | "google", string> = { meta: "var(--viz-cat-1)", google: "var(--viz-cat-2)" };
 
 /** The menu of the platform's accounts: all of them, or one. Only with two or more to pick from. */
 export function AccountSelect({ accounts, value, onChange, all = "All accounts" }: { accounts: AccountChoice[]; value: string | null; onChange: (id: string | null) => void; all?: string }) {
@@ -120,6 +123,31 @@ export function AdvertisingHeader({
         <CompareDates r={r} />
       </div>
     </div>
+  );
+}
+
+/**
+ * When the ad accounts' figures were last brought in from the platforms (the least recently synced
+ * account's last sync that worked, so every figure is at least that fresh), and Refresh to read the
+ * stored figures again now rather than on the page's next look. Refresh doesn't ask the platforms:
+ * Settings → Advertising's Sync data now does.
+ */
+export function SyncedNow({ ov }: { ov: Overview }) {
+  const times = [ov.modules.ads?.updatedAt, ov.modules.adsense?.updatedAt].filter((t): t is string => !!t).sort();
+  const accounts = (ov.modules.ads?.accounts.length ?? 0) + (ov.modules.adsense?.accounts.length ?? 0);
+  if (!accounts) return null;
+  const at = times[0] ?? null;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted" data-testid="ads-synced">
+      <span className="inline-flex items-center gap-1.5">
+        <CheckCircle2 aria-hidden className={`h-4 w-4 ${at ? "text-good" : "text-muted"}`} />
+        {at ? `Last synced: ${fmtDateTime(at, ov.store.timezone)}` : "Not synced yet"}
+      </span>
+      <button type="button" className="btn-secondary h-9 gap-1.5 px-3 text-sm" onClick={liveDataChanged} title="Read the figures again now">
+        <RefreshCw aria-hidden className="h-4 w-4" />
+        Refresh
+      </button>
+    </span>
   );
 }
 

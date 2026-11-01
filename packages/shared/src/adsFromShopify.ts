@@ -1,5 +1,6 @@
 import { isClosedAdAccount, trafficSourcePlatform, type AdSpendProvider } from "./ads";
 import { eachDay, type Comparison, type DateRange } from "./dates";
+import { FUNNEL_STEPS, PURCHASED_STEP } from "./journey";
 import { delta } from "./kpi";
 import { TRAFFIC_LABEL, type TrafficSource } from "./traffic";
 
@@ -62,6 +63,11 @@ export interface ShopifyAdPlatform extends ShopifyAdFigures {
    * days. Absent without the pixel, or without "View conversion rates" (the funnel's visits).
    */
   visits?: number | null;
+  /**
+   * Those visits by how far they went in the store, each counted once at its furthest step (`AdJourney`);
+   * null with `visits`. Absent with `visits`, and from answers that predate it.
+   */
+  journey?: AdJourney | null;
   /** The dates compared with; null when they weren't (`AdsFromShopify.compared`). */
   previous: ShopifyAdFigures | null;
   deltas: { orders: number | null; sales: number | null; paidSales?: number | null };
@@ -86,10 +92,35 @@ export interface AdsFromShopify {
   visitsFrom?: string | null;
 }
 
-/** Storefront visits by where they came from (funnel_visits.source), and the first day any visit's source was recorded. */
+/**
+ * Storefront visits by where they came from (funnel_visits.source), and the first day any visit's source
+ * was recorded. `furthestStep`: how far those visits went (FUNNEL_STEPS); rows without it count as visits only.
+ */
 export interface SourcedVisits {
   from: string | null;
-  rows: ReadonlyArray<{ source: string; visits: number }>;
+  rows: ReadonlyArray<{ source: string; visits: number; furthestStep?: number }>;
+}
+
+/**
+ * The storefront visits from a platform's sites that reached each step of the Shopping Funnel or a later
+ * one: the same visits throughout, so each step is a share of the one before. Visits, not orders: a visit
+ * that bought counts once however many orders it placed, and an order whose visit the pixel didn't see
+ * isn't here.
+ */
+export interface AdJourney {
+  visits: number;
+  viewedProduct: number;
+  addedToCart: number;
+  startedCheckout: number;
+  purchased: number;
+}
+
+/** Visits by furthest step → the visits that reached each step or a later one. */
+export function adJourney(rows: ReadonlyArray<{ visits: number; furthestStep?: number }>): AdJourney {
+  const at = FUNNEL_STEPS.map(() => 0);
+  for (const r of rows) at[Math.min(Math.max(r.furthestStep ?? 0, 0), PURCHASED_STEP)]! += r.visits;
+  const reached = (k: number) => at.slice(k).reduce((a, b) => a + b, 0);
+  return { visits: reached(0), viewedProduct: reached(1), addedToCart: reached(2), startedCheckout: reached(3), purchased: reached(4) };
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -164,10 +195,17 @@ export function adsFromShopify(input: {
         sales: before ? delta(total.sales, before.sales) : null,
         paidSales: before ? delta(total.paidSales, before.paidSales) : null,
       },
-      ...(input.visits ? { visits: visitsFrom ? input.visits.rows.filter((x) => trafficSourcePlatform(x.source) === provider).reduce((a, x) => a + x.visits, 0) : null } : {}),
+      ...(input.visits ? visitsOf(input.visits.rows.filter((x) => trafficSourcePlatform(x.source) === provider), !!visitsFrom) : {}),
     };
   });
   return { currency: input.currency, platforms, storeSales, pending, compared: previousRows ? input.compared : null, historyFrom, ...(input.visits ? { visitsFrom } : {}) };
+}
+
+/** A platform's visits and how far they went; null both while none of the dates' days is counted. */
+function visitsOf(rows: SourcedVisits["rows"], counted: boolean): Pick<ShopifyAdPlatform, "visits" | "journey"> {
+  if (!counted) return { visits: null, journey: null };
+  const journey = adJourney(rows);
+  return { visits: journey.visits, journey };
 }
 
 /**
@@ -182,7 +220,7 @@ export function visitsCounted(from: string | null, range: DateRange): string | n
 /** The module without the storefront's visits (the funnel's, "View conversion rates"). */
 export function adsFromShopifyWithoutVisits(m: AdsFromShopify): AdsFromShopify {
   const { visitsFrom: _from, ...rest } = m;
-  return { ...rest, platforms: m.platforms.map(({ visits: _visits, ...p }) => p) };
+  return { ...rest, platforms: m.platforms.map(({ visits: _visits, journey: _journey, ...p }) => p) };
 }
 
 const PAID = ["paidOrders", "paidSales"] as const;

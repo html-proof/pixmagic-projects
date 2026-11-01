@@ -8,9 +8,11 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 
 | Page | Path | What it shows |
 | --- | --- | --- |
-| Overview | `/advertising` | Every spend platform together: ad spend, the platforms' own purchases, purchase value and ROAS, the store's Shopify net sales per unit of spend (MER) and AdSense's estimated earnings on a tile of their own; then Shopify's sales against the spend, the platform cards, the daily charts and the platforms side by side. |
+| Overview (Advertising Performance) | `/advertising` | Every spend platform together, the owner's design ("Advertising Performance", below): ad spend, link clicks, impressions, the platforms' own purchases, purchase value and ROAS, then CPC, CTR, cost per purchase, the store's sales per unit of spend (MER), store visits from the ad sites and AdSense's earnings on tiles of their own; spend against purchase value by day, week or month with ROAS under it, the spend by platform, the funnel from an ad to a purchase, a card each for Meta Ads and Google Ads, key insights, the top campaigns, where buyers came from, profitability, and Meta against Google. |
 | Meta Ads | `/advertising/meta` | The Meta accounts' details (the dashboard's former ads panel, for Meta alone) and Meta's live report, which opens a campaign to its ad sets and an ad set to its ads ("Down from a campaign", below) and counts purchases by each ad set's own setting or one attribution window ("Meta attribution windows"). |
 | Google Ads | `/advertising/google` | The same for Google Ads, each campaign with Google's delivery status and its budget ("Google campaign delivery and budgets") (a campaign opens to its ad groups, a Performance Max campaign to its asset groups, an ad group to its ads), with **Keywords** and **Search terms** tabs for the account and for an opened campaign or ad group ("Keywords and search terms", below), and the way to **Account analytics** (`/advertising/google/analytics`, formerly `/ads/google`: one account, the demo's too, [ads-demo.md](ads-demo.md)). |
+| Shopify attribution | `/advertising/attribution` | What the store's own orders record of Meta and Google, connected or not ("Shopify attribution", below): sales and orders from their sites, the tagged-ad part and its ad cost per order, new and returning customers, refunds, the store funnel from their visits, the store's sales against the spend with both ways of crediting a sale, and each platform by site, by campaign and by day. |
+| Profitability | `/advertising/profitability` | Did the ads make money ("Profitability", below): the platforms' purchase value less the spend, with Shopify's margin what's left after the products and the break-even ROAS, each platform on its own; then the store's net profit from every cost bizinsights knows. |
 | AdSense | `/advertising/adsense` | AdSense's earnings by site from the stored days, each figure marked Estimated or Final; and AdSense's live report by country, device type or ad unit, with ad requests, coverage and Active View viewability (read when opened and cached briefly, never stored with the days). |
 | Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change; a campaign's name opens it in its platform's live report. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
@@ -19,6 +21,72 @@ The stored days behind these pages are kept current by the syncs: one sync per a
 paused for every account while Meta says bizinsights' app is over its hourly request limit
 ([ads-setup.md](ads-setup.md), "Syncing"). During that pause Meta's live report answers "Meta is busy right now.
 Try again in a minute." without asking Meta, as it does when Meta throttles one account.
+
+## Advertising Performance
+
+The overview follows the owner's mock (2026-11-01): tinted KPI tiles with each figure's shape over the dates,
+then cards. Every figure is one the API already sends (`parts=advertising`); deliberate differences from the
+mock, so nothing on the page is made up:
+
+- **No ad images.** Neither platform's creative is read ("Down from a campaign"), so a platform card shows its
+  logo and accounts where the mock has an ad picture.
+- **Funnel in two parts.** Impressions and link clicks are the platforms' own count; store visits, added to
+  cart, started checkout and purchased are what the storefront pixel saw of visits from the platforms' sites
+  (`journey` on each `ads_from_shopify` platform: the visits from Facebook and Instagram, Google and YouTube
+  by their furthest step, counted as the Shopping Funnel counts them). A click isn't always a visit, and a
+  visit from those sites isn't always from an ad, so no rate joins the two parts. Without the pixel or "View
+  conversion rates" the store part says so.
+- **ROAS on its own scale** under the spend and purchase value columns: never a second axis on one chart.
+- **"Audience" is where buyers came from** (Facebook, Instagram, Google, YouTube by sales, from the orders)
+  with the whole store's new and returning customers; age, gender, country, device and placement are read
+  live on the Meta Ads and Google Ads pages, not on every visit to the overview.
+- **Key insights** (`advertisingInsights` in `@app/shared/adInsights`): a few sentences from the figures on
+  the page (spend outpacing purchases, the purchase value's change, the platform with the better ROAS, a
+  platform crediting less than it cost, no purchases at all, the break-even ROAS at Shopify's margin, what a
+  ROAS means); one whose figures aren't known is left out.
+- **Meta Ads vs Google Ads** marks the platform that does better on each measure where one can (a higher
+  click-through rate or ROAS, a lower cost per click, per 1,000 impressions or per purchase), by each
+  platform's own count; spend, impressions, clicks and purchases are sizes, never marked.
+- **Last synced** is the least recently synced account's last sync; **Refresh** reads the stored figures
+  again (it doesn't ask the platforms: Settings → Advertising's Sync data now does).
+- A platform card follows `ad_sources`: the platform's own figures, or its Shopify attribution (badged so,
+  never a spend or ROAS), or the way to connect it. With no ad account at all the page is the Shopify orders'
+  view of both platforms, as before.
+
+## Shopify attribution
+
+`/advertising/attribution`: the store's side, connected or not. Orders count for the site their last visit came
+from (the last click), as the traffic module counts them; their sales are net sales.
+
+- **What your store recorded**: sales and orders from Meta's and Google's sites and their average order; the
+  part through links tagged as ads ("View conversion attribution") and the **ad cost per tagged-ad order**
+  (all spend divided by those orders, only with every day of the spend in the store's currency, never the
+  demo's); the whole store's net sales, average order, new and returning customers, **ad spend per new
+  customer** (spend divided by every new customer, whatever brought them, said so) and refunds (net sales are
+  already after returns).
+- The funnel and where buyers came from, as on the overview; the store's sales against the spend with the
+  platforms' and Shopify's credit side by side (`ads-vs-sales`, formerly on the overview); and each platform
+  from the orders by site, campaign and day (`FromShopify`), which says the platform's own figures are on its
+  page once it's connected.
+- `parts=advertising` carries the store's `customers` and `refunds` modules for this, each under its own
+  Team & Access permission as on the dashboard.
+
+## Profitability
+
+`/advertising/profitability` (and the overview's Profitability summary): a ROAS of 4x isn't a profit, so two
+answers are kept apart.
+
+- **From the platforms' purchases**: ad spend, attributed revenue (the platforms' purchase value), ROAS, and
+  **advertising profit before product costs** (purchase value less spend). With Shopify's profit report (its
+  margin on the sales it has a cost per item for, `marginOnCosted`, in the store's currency, never with the
+  demo): **after product costs (estimate)** = purchase value x that margin less spend, and the **break-even
+  ROAS** = 1 / margin. The page says it's an estimate: the products those purchases were for may cost more
+  or less. Per platform on the full page, with the sales Shopify credits to its tagged ads beside it.
+- **Your whole store**: revenue, product costs, ad spend, Shopify and payment fees (the owner's costs in the
+  Shopify plan, Shopify apps and payment fees categories), other expenses (the rest of Settings → Costs) and
+  **net profit**: the dashboard's Business profit overview's figure (`profitOf`, `netProfit`), or every
+  reason it can't be given yet. `parts=advertising` carries `profit` and `expenses` for this, each under its
+  own permission.
 
 ## The question
 

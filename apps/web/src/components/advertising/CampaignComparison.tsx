@@ -30,7 +30,7 @@ import { PLATFORM } from "./AdvertisingUi";
 // campaign's name opens its ad sets or ad groups in its platform's live report.
 // ---------------------------------------------------------------------------
 
-type Campaign = NonNullable<AdsModule["campaigns"]>[number];
+export type Campaign = NonNullable<AdsModule["campaigns"]>[number];
 type SortKey = "spend" | "purchaseValue" | "roas" | "linkClicks" | "ctr" | "cpc" | "impressions";
 const SORTS: Array<[SortKey, string]> = [
   ["spend", "Spend"],
@@ -61,7 +61,7 @@ const statusWords = (s: string) => s.charAt(0) + s.slice(1).toLowerCase().replac
  * limited by budget...), when the last sync read one; otherwise the platform's own status word (Meta's
  * effective_status, Google's campaign.status before its primary status was read).
  */
-function CampaignStatus({ c }: { c: Campaign }) {
+export function CampaignStatus({ c }: { c: Campaign }) {
   const d = googleCampaignStatus(c.primaryStatus, c.primaryStatusReasons);
   if (d) {
     return (
@@ -82,7 +82,7 @@ function CampaignStatus({ c }: { c: Campaign }) {
  * the tab). None for the "Other campaigns" row (what Meta's account spent beyond its listed campaigns)
  * or an id the report doesn't take.
  */
-function drillHref(c: Campaign, connectionId: string | undefined): string | null {
+export function drillHref(c: Campaign, connectionId: string | undefined): string | null {
   if (!connectionId) return null;
   const known = c.provider === "meta" ? isMetaObjectId(c.campaignId) : isGoogleObjectId(c.campaignId) || isDemoObjectId(c.campaignId);
   if (!known) return null;

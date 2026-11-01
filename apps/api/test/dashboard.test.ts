@@ -762,8 +762,10 @@ describe("ad figures only for the days the accounts have stored", () => {
     const ask = async (qs: string) => (await overview(a.headers, ws, store.id, `preset=7d&parts=advertising${qs}`)).json().modules;
 
     const all = await ask("");
-    // Only what the Advertising pages show: the rest of the dashboard isn't computed.
+    // Only what the Advertising pages show: the rest of the dashboard isn't computed. The store's
+    // customers and refunds come along for Shopify attribution and profitability.
     expect(all).toHaveProperty("sales_overview");
+    for (const kept of ["customers", "refunds"]) expect(all).toHaveProperty(kept);
     for (const left of ["top_products", "recent_orders", "inventory", "catalog", "order_timing"]) expect(all).not.toHaveProperty(left);
     expect(all.ads.byProvider.map((p: { provider: string }) => p.provider).sort()).toEqual(["google", "meta"]);
     // Every spend platform together: Shopify's net sales per unit of all of it (MER).
@@ -1444,19 +1446,22 @@ describe("Meta and Google advertising from the store's own orders", () => {
     const today = localDay(new Date(), TZ);
     const day = (n: number) => addDays(today, n);
     await seedOrder(store, { id: "F1", createdAt: `${day(-3)}T16:00:00Z`, subtotal: 100, traffic: { source: "facebook", medium: "paid" } });
-    const visit = (on: string, visitor: string, source: string | null) => systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day: on, visitor, source } });
+    const visit = (on: string, visitor: string, source: string | null, furthestStep = 0) => systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day: on, visitor, source, furthestStep } });
     // Sources recorded from day -4 on: the visit before has none, and isn't counted as anyone's.
     await visit(day(-5), "v0", null);
-    await visit(day(-4), "v1", "facebook");
-    await visit(day(-3), "v2", "instagram");
+    await visit(day(-4), "v1", "facebook", 2);
+    await visit(day(-3), "v2", "instagram", 4);
     await visit(day(-3), "v3", "google");
-    await visit(day(-3), "v4", "direct");
+    await visit(day(-3), "v4", "direct", 4);
     const m = (await overview(a.headers, ws, store.id, `preset=custom&from=${day(-6)}&to=${day(-1)}`)).json().modules;
     expect(m.ads_from_shopify.visitsFrom).toBe(day(-4));
     expect(m.ads_from_shopify.platforms.map((p: { provider: string; visits: number }) => [p.provider, p.visits])).toEqual([
       ["meta", 2],
       ["google", 1],
     ]);
+    // How far those visits went in the store: one of Meta's added to cart, the other bought.
+    expect(m.ads_from_shopify.platforms[0].journey).toEqual({ visits: 2, viewedProduct: 2, addedToCart: 2, startedCheckout: 1, purchased: 1 });
+    expect(m.ads_from_shopify.platforms[1].journey).toEqual({ visits: 1, viewedProduct: 0, addedToCart: 0, startedCheckout: 0, purchased: 0 });
   });
 });
 
