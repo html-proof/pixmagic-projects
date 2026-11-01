@@ -182,11 +182,16 @@ jobs:
           echo "versions=api=$(v api),jobs=$(v jobs),cron=$(v cron)" >> "$GITHUB_OUTPUT"
       # The functions read /insights/production/runtime (the Auth stack's: Cognito's ids and domain,
       # COGNITO_IDENTITY_PROVIDERS) once per cold start, and the Auth stack deploys after the App
-      # stack has moved `live`. A digest only: nothing of the value goes into the log.
+      # stack has moved `live`. A digest only: nothing of the value goes into the log (the CLI's
+      # error, on stderr, has none of it, and says why a read failed).
+      # MSYS_NO_PATHCONV: Git Bash hands a native program an argument that starts with / as a Windows
+      # path, so aws.exe asked SSM for "C:/Program Files/Git/insights/production/runtime", which the
+      # deploy role may not read, and every Deploy from 2026-10-19 to 11-01 warned and restarted nothing.
       - name: Runtime settings before the deploy
         id: runtime_before
+        env: { MSYS_NO_PATHCONV: "1" }
         run: |
-          d=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text 2>/dev/null | sha256sum | cut -c1-64) || d=""
+          d=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text | sha256sum | cut -c1-64) || d=""
           echo "digest=${d:-unknown}" >> "$GITHUB_OUTPUT"
       # The PC's connection drops calls now and then: CDK then can't assume its bootstrap roles
       # ("could not be used to assume ... Proceeding anyway", and the base role is refused what only
@@ -243,11 +248,11 @@ jobs:
       # so each restart writes this run's id into the description, replacing an earlier one's: a
       # second change on the same commit (Google switched off again) restarts them too.
       - name: Restart the functions on changed runtime settings
-        env: { BEFORE: "${{ steps.runtime_before.outputs.digest }}", RUN: "${{ github.run_id }}.${{ github.run_attempt }}" }
+        env: { BEFORE: "${{ steps.runtime_before.outputs.digest }}", RUN: "${{ github.run_id }}.${{ github.run_attempt }}", MSYS_NO_PATHCONV: "1" }
         run: |
           set -euo pipefail
-          after=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text 2>/dev/null | sha256sum | cut -c1-64) || after=""
-          # Not readable (the deploy role without ssm:GetParameter on it): no way to tell, so no restart.
+          after=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text | sha256sum | cut -c1-64) || after=""
+          # Not readable (the CLI's error above, or the step before's, says why): no way to tell, so no restart.
           if [[ "$BEFORE" == "unknown" || -z "$after" ]]; then echo "::warning::Couldn't read the runtime settings: the functions weren't restarted for them (docs/aws-deployment.md, Restarting the functions)."; exit 0; fi
           if [[ "$BEFORE" == "$after" ]]; then echo "Runtime settings unchanged: nothing to restart."; exit 0; fi
           echo "Runtime settings changed: publishing fresh versions of api, jobs and cron."

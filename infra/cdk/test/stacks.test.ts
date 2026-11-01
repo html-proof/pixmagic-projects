@@ -1139,6 +1139,22 @@ describe("IAM", () => {
     for (const s of statements) expect([s.Action].flat().some((a) => a === "*" || a === "lambda:*" || a === "ssm:*")).toBe(false);
   });
 
+  it("asks SSM for the parameter the deploy role may read, under the runner's Git Bash too", () => {
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8").replace(/\r\n/g, "\n");
+    const steps = workflow.split(/^ {6}- (?=name: |uses: |run: )/m).slice(1);
+    // Git Bash turns an argument that starts with / into a Windows path for a native program: aws.exe
+    // asked for "C:/Program Files/Git/insights/production/runtime", outside the grant, and every
+    // Deploy from 2026-10-19 to 11-01 warned that it couldn't read the settings.
+    const slashArgs = steps.filter((s) => /^\s*[^#\n]*\baws [a-z0-9-]+ [a-z0-9-]+ [^\n]*--[a-z-]+ \//m.test(s));
+    expect(slashArgs.map((s) => s.split("\n")[0])).toEqual(["name: Runtime settings before the deploy", "name: Restart the functions on changed runtime settings"]);
+    for (const s of slashArgs) {
+      expect(s).toMatch(/^ {8}env: \{[^\n]*\bMSYS_NO_PATHCONV: "1"/m);
+      expect(s).toContain("aws ssm get-parameter --name /insights/production/runtime ");
+      // The CLI's error stays in the log: it has none of the value, and says why a read failed.
+      expect(s).not.toMatch(/aws ssm get-parameter[^\n]*2>/);
+    }
+  });
+
   it("lets the deploy role read everything the workflow's smoke tests check", () => {
     type Policy = { Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[] }> } } };
     const actions = Object.values(t.ci.findResources("AWS::IAM::Policy")).flatMap((p) => (p as Policy).Properties.PolicyDocument.Statement.flatMap((s) => [s.Action].flat()));
