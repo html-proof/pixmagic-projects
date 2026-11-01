@@ -75,15 +75,15 @@ export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
 }
 
 /**
- * `parts=advertising`: only what the Advertising pages show (the ad modules, Meta's and Google's
- * figures from the store's own orders, and the store's sales and traffic they're set against), with
- * every campaign; the rest of the dashboard isn't computed.
+ * `parts=advertising`: only what the Advertising pages show (the ad modules, where Meta's and
+ * Google's figures come from and their figures from the store's own orders, and the store's sales and
+ * traffic they're set against), with every campaign; the rest of the dashboard isn't computed.
  * `parts=funnel`: only what the Shopping Funnel page shows (the funnel in full, narrowed by
  * `funnelQuery`, and the orders, Shopify sessions and traffic sources beside it).
  * `parts=sheet`: only what the Profit sheet shows (/sheet): the sales day by day, the visits day by
  * day beside the funnel's summary, and the ad spend day by day.
  */
-const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "ads_from_shopify", "sales_overview", "channels", "traffic"]);
+const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "ad_sources", "ads_from_shopify", "sales_overview", "channels", "traffic"]);
 const FUNNEL_MODULES: ReadonlySet<string> = new Set(["funnel", "shopify_sessions", "sales_overview", "channels", "traffic"]);
 const SHEET_MODULES: ReadonlySet<string> = new Set(["sales_overview", "funnel", "ads", "ad_connections"]);
 const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery, parts: z.enum(["advertising", "funnel", "sheet"]).optional() });

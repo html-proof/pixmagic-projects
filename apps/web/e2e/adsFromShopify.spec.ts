@@ -58,28 +58,38 @@ test("with no ad account connected, Advertising shows Meta's and Google's sales 
   await seedOrder(ws, storeId, "F0", day(-10), 70, { source: "facebook", medium: "paid", campaign: "Spring sale" });
   const dates = `preset=custom&from=${day(-7)}&to=${day(-1)}`;
 
-  // The dashboard's advertising card: each platform's sales from the orders, not an empty "connect" box.
+  // The dashboard's advertising card: a tab each, both from the orders and labelled so, not an empty "connect" box.
   await page.goto(`/dashboard?${dates}`);
-  const card = page.getByTestId("home-ads-from-orders");
-  await expect(card).toContainText("Meta Ads");
-  await expect(card).toContainText("$140.00");
-  await expect(card).toContainText("Google Ads");
-  await expect(card).toContainText("$60.00");
-  await expect(page.getByTestId("home-advertising").getByRole("link", { name: "Connect ad accounts" })).toBeVisible();
+  const card = page.getByTestId("home-advertising");
+  await expect(card.getByRole("tab", { name: "Meta Ads" })).toHaveAttribute("aria-selected", "true");
+  const metaTab = card.getByTestId("home-ads-meta");
+  await expect(metaTab).toHaveAttribute("data-source", "shopify");
+  await expect(metaTab.getByTestId("ad-source-badge")).toHaveText("Shopify attribution");
+  await expect(metaTab).toContainText("$140.00");
+  await expect(metaTab).toContainText("Top campaign: Spring sale");
+  // No spend is known without Meta itself: no ad spend or ROAS figure, never a $0.
+  await expect(metaTab.getByText("Ad spend", { exact: true })).toHaveCount(0);
+  await expect(metaTab.getByText("ROAS", { exact: true })).toHaveCount(0);
+  await expect(metaTab.getByRole("link", { name: "Connect Meta Ads" })).toBeVisible();
   // Meta, found through Shopify: seen in these orders (the three of the last 90 days), and said not to be authorized for bizinsights.
-  const found = page.getByTestId("home-advertising").getByTestId("meta-discovery");
+  const found = metaTab.getByTestId("meta-discovery");
   await expect(found).toHaveAttribute("data-state", "CONNECTED_IN_SHOPIFY");
   await expect(found).toHaveAttribute("data-marker", "CONNECTED_IN_SHOPIFY_BUT_NOT_AUTHORIZED_FOR_OUR_APP");
   await expect(found).toContainText("Not authorized for bizinsights yet");
   await expect(found).toContainText("3 orders from Facebook and Instagram in the last 90 days");
   await expect(found).toContainText("Shopify doesn't share its own Meta access with other apps");
+  await card.getByRole("tab", { name: "Google Ads" }).click();
+  const googleTab = card.getByTestId("home-ads-google");
+  await expect(googleTab).toHaveAttribute("data-source", "shopify");
+  await expect(googleTab).toContainText("$60.00");
+  await expect(googleTab.getByRole("link", { name: "Connect Google Ads" })).toBeVisible();
 
   // The Advertising overview: both platforms from the orders, under one line saying none is connected.
   await page.goto(`/advertising?${dates}`);
   await expect(page.getByTestId("advertising-not-connected")).toContainText("No ad accounts are connected to this store");
   await expect(page.getByTestId("advertising-not-connected").getByRole("link", { name: "Connect advertising accounts" })).toBeVisible();
   const meta = page.getByTestId("shopify-ads-meta");
-  await expect(meta).toContainText("From your Shopify orders");
+  await expect(meta.getByTestId("ad-source-badge")).toHaveText("Shopify attribution");
   // $140 against $70 the week before: up 100%. Of the store's $250, 56%.
   await expect(meta.getByTestId("shopify-meta-sales-value")).toHaveText("$140.00");
   await expect(meta.getByTestId("shopify-meta-sales")).toContainText("▲ 100%");

@@ -6,6 +6,7 @@ import { AdsenseDetail } from "@/components/dashboard/AdsensePanel";
 import { Explained } from "@/components/dashboard/Explain";
 import { AccountGone, AccountSelect, AdvertisingBody, AdvertisingHeader, DownloadCsv, NotConnected, PLATFORM } from "./AdvertisingUi";
 import { FromShopify } from "./FromShopify";
+import { fromShopifyOf } from "./sources";
 import { useAccountChoices, useAdvertising } from "./useAdvertising";
 
 // ---------------------------------------------------------------------------
@@ -13,7 +14,8 @@ import { useAccountChoices, useAdvertising } from "./useAdvertising";
 // details for that platform's accounts alone, or one of them. One platform's spend is never set
 // against the store's whole sales here (the overview does that, for all of it); AdSense's earnings
 // sit next to the store's sales as on the dashboard, except for one account picked. Meta Ads or
-// Google Ads with no account connected shows what the store's Shopify orders record of it instead.
+// Google Ads with no account connected shows what the store's Shopify orders record of it instead, and
+// so does one whose access ended before the dates were read, under its accounts' own state.
 // ---------------------------------------------------------------------------
 
 const ABOUT: Record<AdProvider, string> = {
@@ -71,6 +73,8 @@ export function PlatformPage({ platform }: { platform: AdProvider }) {
             <>
               <AdsDetail ov={ov} />
               <Explained topic="ads" ov={ov} currency={ov.modules.ads.currency} />
+              {/* Its access ended before these dates were read: the store's own orders meanwhile. */}
+              {!s.account && <FromShopify ov={ov} platforms={fromShopifyOf(ov, platform)} />}
             </>
           ) : (
             <>

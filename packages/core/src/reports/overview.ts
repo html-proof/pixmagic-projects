@@ -1,12 +1,27 @@
 import type { Store, Tx } from "@app/db";
-import { comparisonImported, delta, localDay, pastYearBreakdown, resolveCapabilities, storeStartDay, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import {
+  adPlatformSources,
+  comparisonImported,
+  delta,
+  localDay,
+  pastYearBreakdown,
+  resolveCapabilities,
+  storeStartDay,
+  summarize,
+  yearBreakdown,
+  type AdPlatformSource,
+  type AdProvider,
+  type Comparison,
+  type DailyMetricsRow,
+  type DateRange,
+} from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { expensesModule } from "../expenses.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
 import { declaredScopes, optionalScopesFor } from "../scopes.js";
-import { adsenseModule, adsModule } from "./ads.js";
-import { adsFromShopifyModule } from "./adsFromShopify.js";
+import { adsenseModule, adsModule, type AdsFigures } from "./ads.js";
+import { adSourceFacts, adsFromShopifyModule } from "./adsFromShopify.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
@@ -244,16 +259,28 @@ export async function storeOverview(
   // Which platforms this server can connect at all: the dashboard only offers those.
   const configured = adsConfigured();
   if (sees("ad_configured") && (configured.meta || configured.google || configured.adsense)) modules.ad_configured = configured;
-  // Meta and Google as the store's orders record them (packages/shared/src/adsFromShopify.ts): what the
-  // Advertising pages show of a platform with no ad account connected, from the orders' own visits
-  // (the traffic sources, read with the channels capability). Never for one account, or AdSense alone.
-  if (adsView.fromShopify && !account && platform !== "adsense" && enabled.has("channels") && sees("ads_from_shopify")) {
+  // Where Meta's and Google's figures come from, each on its own (adPlatformSources in
+  // packages/shared/src/adsFromShopify.ts): the platform's own while its accounts sync or have the
+  // dates stored, the store's orders otherwise (their traffic sources, read with the channels
+  // capability, and the member sees them). Worked out on every read, so connecting, losing access and
+  // reconnecting switch it with nothing to set. Never for one account, or AdSense alone.
+  const fromOrders = enabled.has("channels") && sees("ads_from_shopify");
+  let sources: AdPlatformSource[] | null = null;
+  if (sees("ad_sources") && !account && platform !== "adsense") {
+    sources = adPlatformSources(await adSourceFacts(tx, scope, modules.ads as AdsFigures | undefined), fromOrders).filter((s) => !platform || s.provider === platform);
+    modules.ad_sources = sources;
+  }
+  // Meta and Google as the store's orders record them: the Advertising pages' for a platform with no ad
+  // account, and the dashboard's for a platform whose source is the orders.
+  if (fromOrders && !account && platform !== "adsense" && (adsView.fromShopify || sources?.some((s) => s.source === "shopify"))) {
     modules.ads_from_shopify = await adsFromShopifyModule(tx, scope, dates, {
       currency: store.currency,
       timeZone: store.timezone,
       compare: previousImported,
       historyFrom: data.historyFrom,
       provider: platform,
+      // The storefront pixel's visits from each platform's sites, while it records them.
+      visits: capabilities.some((c) => c.id === "funnel" && c.enabled),
     });
   }
 
