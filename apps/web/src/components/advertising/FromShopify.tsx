@@ -2,14 +2,14 @@
 import type { ReactNode } from "react";
 import type { AdSpendProvider } from "@app/shared/ads";
 import type { AdsFromShopify, ShopifyAdPlatform } from "@app/shared/adsFromShopify";
-import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { BarRow } from "@/components/dashboard/Charts";
-import { fmtMoneyCompact, fmtSpan, plural } from "@/components/dashboard/format";
+import { fmtDay, fmtMoneyCompact, fmtSpan, plural } from "@/components/dashboard/format";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { Delta } from "@/components/dashboard/Primitives";
 import type { Overview } from "@/components/dashboard/types";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { PLATFORM } from "./AdvertisingUi";
+import { adSourcesOf, SourceBadge } from "./sources";
 
 // ---------------------------------------------------------------------------
 // Meta Ads and Google Ads as the store's own orders record them (the API's `ads_from_shopify`,
@@ -53,13 +53,12 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
         <div className="min-w-0 flex-1">
           <h2 id={`shopify-${p.provider}-h`} className="flex flex-wrap items-center gap-2 font-semibold">
             {P.name}
-            <span className="inline-flex items-center gap-1 rounded-full bg-border/60 px-2 py-0.5 text-[11px] font-medium text-muted">
-              <ShopifyIcon size={12} /> From your Shopify orders
-            </span>
+            <SourceBadge provider={p.provider} source="shopify" />
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-muted">
-            Orders whose visit came from {SITES[p.provider]}, as Shopify recorded it, and their sales. Connect {P.name} to add what you spent, the impressions and clicks, and what{" "}
-            {p.provider === "meta" ? "Meta" : "Google"} credits to its ads.
+            Orders whose visit came from {SITES[p.provider]}, as Shopify recorded it, and their sales.{" "}
+            {adSourcesOf(ov, p.provider)[0]?.state === "access_lost" ? `${P.name}'s access has ended: reconnect it to bring back` : `Connect ${P.name} to add`} what you spent, the
+            impressions and clicks, and what {p.provider === "meta" ? "Meta" : "Google"} credits to its ads.
           </p>
         </div>
       </div>
@@ -85,6 +84,12 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
             </Tile>
             <Tile label="Share of your sales" value={fmtPct(p.share)} testid={`shopify-${p.provider}-share`}>
               <p>Of {money(m.storeSales)} in sales from every source.</p>
+              {p.visits !== undefined && p.visits !== null && (
+                <p data-testid={`shopify-${p.provider}-visits`}>
+                  {plural(p.visits, "store visit")} from {SITES[p.provider]}
+                  {m.visitsFrom && m.visitsFrom > ov.range.from ? ` since ${fmtDay(m.visitsFrom)}` : ""}, as your storefront pixel recorded them.
+                </p>
+              )}
             </Tile>
             {tagged && (
               <Tile label="From links tagged as ads" value={money(p.paidSales ?? 0)} testid={`shopify-${p.provider}-tagged`}>

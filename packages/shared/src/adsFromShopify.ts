@@ -1,4 +1,4 @@
-import { trafficSourcePlatform, type AdSpendProvider } from "./ads";
+import { isClosedAdAccount, trafficSourcePlatform, type AdSpendProvider } from "./ads";
 import { eachDay, type Comparison, type DateRange } from "./dates";
 import { delta } from "./kpi";
 import { TRAFFIC_LABEL, type TrafficSource } from "./traffic";
@@ -56,6 +56,12 @@ export interface ShopifyAdPlatform extends ShopifyAdFigures {
   campaigns?: Array<{ source: TrafficSource; label: string; campaign: string; orders: number; sales: number; paidSales: number }>;
   /** Every day of the dates; null on a day before the store's imported orders start (unknown, never 0). */
   daily: Array<{ day: string; orders: number | null; sales: number | null; paidSales?: number | null }>;
+  /**
+   * Visits to the storefront that arrived from the platform's sites, as the storefront pixel recorded
+   * them (funnel_visits), counted from `AdsFromShopify.visitsFrom`; null: it recorded none of the dates'
+   * days. Absent without the pixel, or without "View conversion rates" (the funnel's visits).
+   */
+  visits?: number | null;
   /** The dates compared with; null when they weren't (`AdsFromShopify.compared`). */
   previous: ShopifyAdFigures | null;
   deltas: { orders: number | null; sales: number | null; paidSales?: number | null };
@@ -73,6 +79,17 @@ export interface AdsFromShopify {
   compared: Comparison | null;
   /** The first day of the store's imported orders. */
   historyFrom: string | null;
+  /**
+   * The day the platforms' `visits` count from: the dates' first, or the later day the storefront pixel
+   * began to record where visits came from. Null: none of the dates' days. Absent with `visits`.
+   */
+  visitsFrom?: string | null;
+}
+
+/** Storefront visits by where they came from (funnel_visits.source), and the first day any visit's source was recorded. */
+export interface SourcedVisits {
+  from: string | null;
+  rows: ReadonlyArray<{ source: string; visits: number }>;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -106,8 +123,11 @@ export function adsFromShopify(input: {
   compared: Comparison | null;
   currency: string;
   historyFrom: string | null;
+  /** The storefront pixel's visits over the dates (from `visitsCounted`'s day); absent without the pixel. */
+  visits?: SourcedVisits | null;
 }): AdsFromShopify {
   const { rows, days, previousRows, range, historyFrom } = input;
+  const visitsFrom = input.visits ? visitsCounted(input.visits.from, range) : undefined;
   const storeSales = r2(rows.reduce((a, x) => a + x.sales, 0));
   const pending = rows.filter((x) => !x.source).reduce((a, x) => a + x.orders, 0);
   const platforms = input.providers.map((provider): ShopifyAdPlatform => {
@@ -144,9 +164,25 @@ export function adsFromShopify(input: {
         sales: before ? delta(total.sales, before.sales) : null,
         paidSales: before ? delta(total.paidSales, before.paidSales) : null,
       },
+      ...(input.visits ? { visits: visitsFrom ? input.visits.rows.filter((x) => trafficSourcePlatform(x.source) === provider).reduce((a, x) => a + x.visits, 0) : null } : {}),
     };
   });
-  return { currency: input.currency, platforms, storeSales, pending, compared: previousRows ? input.compared : null, historyFrom };
+  return { currency: input.currency, platforms, storeSales, pending, compared: previousRows ? input.compared : null, historyFrom, ...(input.visits ? { visitsFrom } : {}) };
+}
+
+/**
+ * The first day of `range` whose visits are counted: its first, or the later day the pixel began to
+ * record where visits came from (`from`); null when that is after the dates, or it never has.
+ */
+export function visitsCounted(from: string | null, range: DateRange): string | null {
+  if (!from || from > range.to) return null;
+  return from > range.from ? from : range.from;
+}
+
+/** The module without the storefront's visits (the funnel's, "View conversion rates"). */
+export function adsFromShopifyWithoutVisits(m: AdsFromShopify): AdsFromShopify {
+  const { visitsFrom: _from, ...rest } = m;
+  return { ...rest, platforms: m.platforms.map(({ visits: _visits, ...p }) => p) };
 }
 
 const PAID = ["paidOrders", "paidSales"] as const;
@@ -174,4 +210,62 @@ export function adsFromShopifyWithoutAttribution(m: AdsFromShopify): AdsFromShop
       };
     }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Where each spend platform's figures come from, Meta and Google each on its own: the platform's own
+// API (its connected ad accounts' stored days) first, the store's Shopify orders above otherwise, and
+// nothing rather than a made-up figure. Decided on every read, so connecting a platform replaces its
+// Shopify figures with its own at once, a connection whose access ends falls back to the orders, and
+// reconnecting brings the platform's own back, with nothing for the merchant to switch.
+// ---------------------------------------------------------------------------
+
+/** Where a spend platform's figures come from: its own API, the store's Shopify orders, or nowhere. */
+export type AdDataSource = "platform" | "shopify" | "none";
+
+/**
+ * The platform's connection to the store. "connected": an account shown on the store that still syncs
+ * (or a retry may fix; or closed, whose spend is a real 0). "access_lost": every account shown needs
+ * someone to act (reconnect, a login with access) or the platform won't report on it. "waiting": a
+ * sign-in connected with no ad account yet. "hidden": accounts connected, every one hidden from the
+ * store. "not_connected": none of these.
+ */
+export type AdConnectionState = "connected" | "access_lost" | "waiting" | "hidden" | "not_connected";
+
+export interface AdPlatformSource {
+  provider: AdSpendProvider;
+  source: AdDataSource;
+  state: AdConnectionState;
+}
+
+/** What decides one platform's source. */
+export interface AdSourceFacts {
+  /** Its accounts shown on the store (enabled), as ad_connections hold them. */
+  accounts: ReadonlyArray<{ status: string; errorCode: string | null; accountStatus: string | null }>;
+  /** Its own figures cover the dates: their totals, or up to the last day stored while the rest is still to come. */
+  figures: boolean;
+  /** Its accounts connected but hidden from the store. */
+  hidden: number;
+  /** A sign-in of it is connected with no ad account yet. */
+  waiting: boolean;
+}
+
+/** Statuses (AD_CONNECTION_STATUSES) a sync can't get out of by itself: someone has to reconnect, or the platform won't report. */
+const NEEDS_SOMEONE: ReadonlySet<string> = new Set(["reconnect", "permission", "unavailable"]);
+const accessLost = (a: AdSourceFacts["accounts"][number]) => NEEDS_SOMEONE.has(a.status) && !isClosedAdAccount(a);
+
+/**
+ * Each spend platform's source. Its own figures whenever its accounts still sync, or have stored the
+ * dates even from an account whose access has ended since (what the platform reported then stays
+ * true); otherwise the store's orders, when `attribution` (the store's traffic sources are read, and
+ * the member may see them); otherwise none. A platform whose access ended and with no orders to show
+ * keeps its own view, which says what to reconnect.
+ */
+export function adPlatformSources(facts: Record<AdSpendProvider, AdSourceFacts>, attribution: boolean): AdPlatformSource[] {
+  return (["meta", "google"] as const).map((provider) => {
+    const f = facts[provider];
+    const state: AdConnectionState = f.accounts.length ? (f.accounts.every(accessLost) ? "access_lost" : "connected") : f.waiting ? "waiting" : f.hidden > 0 ? "hidden" : "not_connected";
+    const own = state === "connected" || (state === "access_lost" && (f.figures || !attribution));
+    return { provider, state, source: own ? "platform" : attribution ? "shopify" : "none" };
+  });
 }

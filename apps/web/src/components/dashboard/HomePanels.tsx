@@ -3,9 +3,11 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { ArrowRight, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Clock, Info, Lightbulb, Megaphone, OctagonAlert, Package, PackageCheck, Plus, ReceiptText, Rocket, ShoppingCart, Split, TriangleAlert, Wallet, type LucideIcon } from "lucide-react";
 import type { Health } from "@app/shared/health";
-import { trafficSourcePlatform, type AdSpendProvider } from "@app/shared/ads";
+import type { AdSpendProvider } from "@app/shared/ads";
+import type { AdConnectionState } from "@app/shared/adsFromShopify";
 import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
 import type { OrderOutcomes } from "@app/shared/orders";
+import { adSourcesOf, SourceBadge } from "@/components/advertising/sources";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -19,7 +21,7 @@ import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
 import { comparableAds, costsOf, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
 import type { Topic } from "./topics";
-import type { Overview, RecentOrder, TrafficModule } from "./types";
+import type { Overview, RecentOrder } from "./types";
 
 // ---------------------------------------------------------------------------
 // The dashboard under its four headline numbers, in the owner's design (2026-10-24): sales against
@@ -436,83 +438,242 @@ export function SalesPerformance({ ov, currency, onOpen }: { ov: Overview; curre
 
 // ---- Advertising performance --------------------------------------------------------------------
 
-/**
- * Meta's and Google's sales as the store's own orders record them (the traffic module: the visit before
- * each order came from Facebook or Instagram, Google or YouTube), for the card while no ad account is
- * connected. Null without the traffic sources, or with no sale from either.
- */
-function salesFromOrders(t: TrafficModule | undefined) {
-  if (!t) return null;
-  const by: Record<AdSpendProvider, { orders: number; sales: number; share: number | null }> = { meta: { orders: 0, sales: 0, share: null }, google: { orders: 0, sales: 0, share: null } };
-  for (const x of t.items) {
-    const p = trafficSourcePlatform(x.source);
-    if (!p) continue;
-    by[p].orders += x.orders;
-    by[p].sales += x.sales;
-    by[p].share = x.share === null ? by[p].share : (by[p].share ?? 0) + x.share;
-  }
-  return by.meta.orders + by.google.orders > 0 ? by : null;
+/** The sites each spend platform's visits come from, in words. */
+const SITES: Record<AdSpendProvider, string> = { meta: "Facebook and Instagram", google: "Google and YouTube" };
+
+/** Where to connect an ad platform, or the line for a member who can't. */
+function ConnectAds({ manage, label }: { manage: boolean; label: string }) {
+  return manage ? (
+    <Link href="/settings/integrations" className="btn-primary text-xs">
+      {label}
+    </Link>
+  ) : (
+    <p className="text-xs text-muted">A workspace admin can connect it.</p>
+  );
 }
 
-/** Each connected ad platform's spend, clicks and return on ad spend, one tab each; with none, what the store's orders show of them. */
-export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: boolean }) {
+/** "Source:" and the badge naming where a tab's figures come from. */
+function SourceLine({ provider, source }: { provider: AdSpendProvider; source: "platform" | "shopify" }) {
+  return (
+    <p className="mb-3 flex items-center gap-1.5 text-xs text-muted">
+      Source <SourceBadge provider={provider} source={source} />
+    </p>
+  );
+}
+
+/**
+ * A platform's own figures (its API, through the connected ad accounts): spend, clicks and return on ad
+ * spend, the rest of what it reports beneath, and the orders Shopify itself credits to its ads beside
+ * them, each labelled with where it comes from.
+ */
+function PlatformAds({ ov, provider, state, manage }: { ov: Overview; provider: AdSpendProvider; state: AdConnectionState; manage: boolean }) {
   const ads = ov.modules.ads;
-  const providers = (ads?.byProvider ?? []).filter((p) => p.accounts.length > 0);
-  const [picked, setPicked] = useState<AdSpendProvider | null>(null);
-  const p = providers.find((x) => x.provider === picked) ?? providers[0];
-  const icon = <Disc icon={Megaphone} className="bg-sky-600 text-white dark:bg-sky-500" />;
-  const fromOrders = !ads || !p ? salesFromOrders(ov.modules.traffic) : null;
-  if (fromOrders) {
-    const money = (n: number) => fmtMoney(n, ov.store.currency);
+  const p = ads?.byProvider.find((x) => x.provider === provider);
+  const { name } = PROVIDER[provider];
+  const lost = state === "access_lost" && (
+    <p className="mt-2 text-xs text-warn" data-testid="home-ads-access-lost">
+      {name}&apos;s access has ended: these are the days it reported before.{" "}
+      {manage ? (
+        <Link href="/settings/integrations" className="font-medium underline">
+          Reconnect {name}
+        </Link>
+      ) : (
+        "A workspace admin can reconnect it."
+      )}
+    </p>
+  );
+  if (!ads || !p) {
+    // Its accounts report in another currency than the platform added up here: its own page shows them.
     return (
-      <HomeCard
-        id="advertising"
-        title="Advertising performance"
-        sub="No ad account is connected: these are your Shopify orders whose visit came from each platform."
-        icon={icon}
-        action={<DetailsLink href="/advertising" />}
-      >
-        <div className="grid grid-cols-2 gap-3 divide-x divide-border" data-testid="home-ads-from-orders">
-          {(["meta", "google"] as const).map((x, i) => {
-            const { name, Icon } = PROVIDER[x];
-            return (
-              <div key={x} className={i ? "pl-3" : ""}>
-                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold">
-                  <Icon size={16} />
-                  {name}
-                </p>
-                <Figure
-                  label={x === "meta" ? "Sales from Facebook and Instagram" : "Sales from Google and YouTube"}
-                  value={money(fromOrders[x].sales)}
-                  change={
-                    <span className="text-xs text-muted">
-                      {plural(fromOrders[x].orders, "order")}
-                      {fromOrders[x].share !== null && <> · {fmtPct(fromOrders[x].share)} of sales</>}
-                    </span>
-                  }
-                />
-              </div>
-            );
-          })}
-        </div>
-        <p className="mt-4 text-xs text-muted">
-          The visit Shopify recorded before each order (the last click). Connect Google Ads or Meta Ads to add what you spend, the clicks and the return on ad spend.
+      <>
+        <SourceLine provider={provider} source="platform" />
+        <p className="text-sm text-muted">
+          {name}&apos;s accounts report in another currency than your other ad accounts, so they aren&apos;t added up here.{" "}
+          <Link href={`/advertising/${provider}`} className="font-medium text-accent hover:underline">
+            See {name}
+          </Link>
         </p>
-        {/* Meta, found through the store's Shopify connection: seen in these orders, or a sign-in of theirs to use here. */}
+        {lost}
+      </>
+    );
+  }
+  const { totals, through } = shownFigures(p);
+  const money = (n: number) => fmtMoney(n, ads.currency);
+  const series = ads.seriesByProvider.find((x) => x.provider === provider)?.series ?? [];
+  const clicks = totals ? (totals.linkClicks ?? totals.clicks) : null;
+  const sourced = p.demo ? undefined : ads.sourced?.find((x) => x.provider === provider);
+  const more: Array<[string, string]> = totals
+    ? [
+        ["Impressions", fmtNum(totals.impressions)],
+        ["CTR", fmtPct(totals.ctr)],
+        ["CPC", totals.cpc === null ? "—" : money(totals.cpc)],
+        ["CPM", totals.cpm === null ? "—" : money(totals.cpm)],
+        ["Conversions", fmtNum(totals.conversions)],
+        ["Conversion value", totals.conversionValue === null ? "—" : money(totals.conversionValue)],
+      ]
+    : [];
+  return (
+    <>
+      <SourceLine provider={provider} source="platform" />
+      <div className="grid grid-cols-3 gap-3 divide-x divide-border">
+        <Figure label="Ad spend" value={totals ? money(totals.spend) : "—"} change={<ChangeText value={p.deltas.spend} neutral />} />
+        <div className="pl-3">
+          <Figure label={totals?.linkClicks !== null ? "Link clicks" : "Clicks"} value={clicks !== null ? fmtNum(clicks) : "—"} change={<ChangeText value={p.deltas.linkClicks} />} />
+        </div>
+        <div className="pl-3">
+          <Figure label="ROAS" value={fmtTimes(totals?.roas ?? null)} change={<ChangeText value={p.deltas.roas} />} />
+        </div>
+      </div>
+      {more.length > 0 && (
+        <dl className="mt-3 grid grid-cols-3 gap-x-3 gap-y-1.5 text-xs" data-testid="home-ads-more">
+          {more.map(([label, value]) => (
+            <div key={label} className="min-w-0">
+              <dt className="truncate text-muted">{label}</dt>
+              <dd className="truncate font-semibold tabular-nums">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {!totals && !lost && <p className="mt-2 text-xs text-muted">Some days of these dates haven&apos;t been read from {name} yet.</p>}
+      {totals && through && <p className="mt-2 text-xs text-muted">Figures {upToWords(through)}.</p>}
+      {lost}
+      {sourced && (
+        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted" data-testid="home-ads-sourced">
+          <SourceBadge provider={provider} source="shopify" />
+          {plural(sourced.orders, "order")} · {fmtMoney(sourced.sales, ov.store.currency)} from {SITES[provider]}&apos;s tagged ads
+          {sourced.salesPerSpend !== null && <> · {fmtTimes(sourced.salesPerSpend)} of the spend</>}
+        </p>
+      )}
+      <div className="mt-4 flex-1">
+        <LineChart
+          days={series.map((d) => d.day)}
+          series={[{ key: "spend", label: "Ad spend", color: AD_SPEND, values: series.map((d) => d.spend) }]}
+          bars
+          today={ov.today}
+          height={150}
+          label={`${name} spend by day`}
+          format={money}
+          fmtAxis={(v) => fmtMoneyCompact(v, ads.currency)}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * A platform's sales as the store's Shopify orders record them (the last visit before each order came
+ * from its sites): sales, orders and the tagged-ad part or the share of sales, the storefront's visits
+ * from it while the pixel records them, the campaign that sold most. Nothing of what was spent, shown
+ * or clicked, which only the platform knows: no spend, no ROAS, never a 0 standing in for them.
+ */
+function ShopifyAds({ ov, provider, state, manage }: { ov: Overview; provider: AdSpendProvider; state: AdConnectionState; manage: boolean }) {
+  const m = ov.modules.ads_from_shopify;
+  const p = m?.platforms.find((x) => x.provider === provider);
+  const { name } = PROVIDER[provider];
+  const lost = state === "access_lost";
+  if (!m || !p) return <NoAdSource provider={provider} state={state} manage={manage} />;
+  const money = (n: number) => fmtMoney(n, m.currency);
+  const none = p.orders === 0 && p.sales === 0;
+  const tagged = p.paidSales !== undefined;
+  const top = p.campaigns?.[0];
+  const visits = p.visits ?? null;
+  return (
+    <>
+      <SourceLine provider={provider} source="shopify" />
+      {none ? (
+        <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-border px-4 py-6 text-center" data-testid="home-ads-shopify-none">
+          <p className="max-w-sm text-sm text-muted">
+            No sales from {SITES[provider]} recorded in these dates: none of your Shopify orders came from a visit there.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-3 divide-x divide-border">
+            <Figure label={`Sales from ${SITES[provider]}`} value={money(p.sales)} change={<ChangeText value={p.deltas.sales} />} />
+            <div className="pl-3">
+              <Figure label="Orders" value={fmtNum(p.orders)} change={<ChangeText value={p.deltas.orders} />} />
+            </div>
+            <div className="pl-3">
+              {tagged ? (
+                <Figure label="From tagged ads" value={money(p.paidSales ?? 0)} change={<ChangeText value={p.deltas.paidSales ?? null} />} />
+              ) : (
+                <Figure label="Share of sales" value={fmtPct(p.share)} />
+              )}
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-muted" data-testid="home-ads-shopify-more">
+            {tagged && <>{fmtPct(p.share)} of your sales</>}
+            {visits !== null && (
+              <>
+                {tagged ? " · " : ""}
+                {plural(visits, "store visit")} from them{m.visitsFrom && m.visitsFrom > ov.range.from ? ` since ${fmtDay(m.visitsFrom)}` : ""}
+              </>
+            )}
+            {top && (
+              <>
+                {tagged || visits !== null ? " · " : ""}
+                Top campaign: <span className="font-medium text-text">{top.campaign}</span> ({money(top.sales)})
+              </>
+            )}
+          </p>
+          <div className="mt-4 flex-1">
+            <LineChart
+              days={p.daily.map((d) => d.day)}
+              series={[{ key: "sales", label: `Sales from ${SITES[provider]}`, color: SALES, values: p.daily.map((d) => d.sales) }]}
+              area
+              today={ov.today}
+              height={150}
+              label={`Sales from ${SITES[provider]} by day, from your Shopify orders`}
+              format={money}
+              fmtAxis={(v) => fmtMoneyCompact(v, m.currency)}
+            />
+          </div>
+        </>
+      )}
+      <p className="mt-3 text-xs text-muted">
+        The visit Shopify recorded before each order (the last click). Ad spend, impressions, clicks and ROAS come only from {name} itself:{" "}
+        {lost ? `its access has ended, so reconnect it to bring them back.` : `connect it to add them.`}
+      </p>
+      {/* Meta, found through the store's Shopify connection: seen in these orders, or a sign-in of theirs to use here. */}
+      {provider === "meta" && !lost && (
         <div className="mt-3 border-t border-border pt-3 empty:hidden">
           <StoreMetaDiscovery compact />
         </div>
-        <div className="mt-3">
-          {manage ? (
-            <Link href="/settings/integrations" className="btn-primary text-xs">Connect ad accounts</Link>
-          ) : (
-            <p className="text-xs text-muted">A workspace admin can connect them.</p>
-          )}
-        </div>
-      </HomeCard>
-    );
-  }
-  if (!ads || !p) {
+      )}
+      <div className="mt-3">
+        <ConnectAds manage={manage} label={`${lost ? "Reconnect" : "Connect"} ${name}`} />
+      </div>
+    </>
+  );
+}
+
+/** Neither the platform nor the store's orders have anything to show: what that means, and the way to connect it. */
+function NoAdSource({ provider, state, manage }: { provider: AdSpendProvider; state: AdConnectionState; manage: boolean }) {
+  const { name, Icon } = PROVIDER[provider];
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-4 py-8 text-center" data-testid="home-ads-no-source">
+      <Icon size={22} />
+      <p className="max-w-xs text-sm text-muted">
+        {state === "access_lost" ? `${name}'s access has ended.` : `${name} isn't connected.`} Connect it to see what your ads cost and what they bring back. Your Shopify
+        orders&apos; visit sources aren&apos;t available here, so there&apos;s nothing from {SITES[provider]} to show meanwhile.
+      </p>
+      <ConnectAds manage={manage} label={`${state === "access_lost" ? "Reconnect" : "Connect"} ${name}`} />
+    </div>
+  );
+}
+
+/**
+ * Meta Ads and Google Ads, a tab each, every one from its own source (adSourcesOf: the API's
+ * `ad_sources`): the platform's API once its ad accounts are connected, the store's Shopify orders
+ * before that or while its access is lost, said by a badge on each. Connecting, disconnecting or
+ * reconnecting a platform switches its tab by itself on the next read. Nothing from either: the way
+ * to connect them, never a $0.
+ */
+export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: boolean }) {
+  const sources = adSourcesOf(ov);
+  const [picked, setPicked] = useState<AdSpendProvider | null>(null);
+  const icon = <Disc icon={Megaphone} className="bg-sky-600 text-white dark:bg-sky-500" />;
+  if (sources.every((s) => s.source === "none")) {
     return (
       <HomeCard id="advertising" title="Advertising performance" sub="Ad spend, clicks and return on ad spend across your ad platforms." icon={icon}>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-4 py-8 text-center">
@@ -530,60 +691,56 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
       </HomeCard>
     );
   }
-  const { totals, through } = shownFigures(p);
-  const money = (n: number) => fmtMoney(n, ads.currency);
-  const series = ads.seriesByProvider.find((x) => x.provider === p.provider)?.series ?? [];
-  const clicks = totals ? (totals.linkClicks ?? totals.clicks) : null;
+  const sold = (p: AdSpendProvider) => ov.modules.ads_from_shopify?.platforms.some((x) => x.provider === p && (x.orders !== 0 || x.sales !== 0));
+  // A platform's own figures first, then the one with Shopify sales, then the first.
+  const first = sources.find((s) => s.source === "platform") ?? sources.find((s) => s.source === "shopify" && sold(s.provider)) ?? sources[0]!;
+  const s = sources.find((x) => x.provider === picked) ?? first;
+  const demo = (p: AdSpendProvider) => !!ov.modules.ads?.byProvider.find((x) => x.provider === p)?.demo;
   return (
     <HomeCard
       id="advertising"
       title="Advertising performance"
-      sub="Ad spend, clicks and return on ad spend across your ad platforms."
+      sub="Each platform's own figures once it's connected; until then, your Shopify orders that came from it."
       icon={icon}
-      action={<DetailsLink href="/advertising" />}
+      action={<DetailsLink href={`/advertising/${s.provider}`} />}
     >
       <div role="tablist" aria-label="Ad platform" className="flex gap-1 rounded-xl bg-bg p-1">
-        {providers.map((x) => {
+        {sources.map((x) => {
           const { name, Icon } = PROVIDER[x.provider];
-          const on = x.provider === p.provider;
+          const on = x.provider === s.provider;
           return (
             <button
               key={x.provider}
+              id={`home-ads-tab-${x.provider}`}
               type="button"
               role="tab"
               aria-selected={on}
+              aria-controls="home-ads-panel"
               onClick={() => setPicked(x.provider)}
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${on ? "bg-surface text-text shadow-[var(--shadow)]" : "text-muted hover:text-text"}`}
             >
               <Icon size={16} />
               {name}
-              {x.demo && <span className="rounded-full bg-warn/10 px-1.5 text-[10px] font-semibold text-warn">Demo</span>}
+              {x.source === "platform" && demo(x.provider) && <span className="rounded-full bg-warn/10 px-1.5 text-[10px] font-semibold text-warn">Demo</span>}
             </button>
           );
         })}
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-3 divide-x divide-border">
-        <Figure label="Ad spend" value={totals ? money(totals.spend) : "—"} change={<ChangeText value={p.deltas.spend} neutral />} />
-        <div className="pl-3">
-          <Figure label={totals?.linkClicks !== null ? "Link clicks" : "Clicks"} value={clicks !== null ? fmtNum(clicks) : "—"} change={<ChangeText value={p.deltas.linkClicks} />} />
-        </div>
-        <div className="pl-3">
-          <Figure label="ROAS" value={fmtTimes(totals?.roas ?? null)} change={<ChangeText value={p.deltas.roas} />} />
-        </div>
-      </div>
-      {!totals && <p className="mt-2 text-xs text-muted">Some days of these dates haven&apos;t been read from {PROVIDER[p.provider].name} yet.</p>}
-      {totals && through && <p className="mt-2 text-xs text-muted">Figures {upToWords(through)}.</p>}
-      <div className="mt-4 flex-1">
-        <LineChart
-          days={series.map((d) => d.day)}
-          series={[{ key: "spend", label: "Ad spend", color: AD_SPEND, values: series.map((d) => d.spend) }]}
-          bars
-          today={ov.today}
-          height={170}
-          label={`${PROVIDER[p.provider].name} spend by day`}
-          format={money}
-          fmtAxis={(v) => fmtMoneyCompact(v, ads.currency)}
-        />
+      <div
+        id="home-ads-panel"
+        role="tabpanel"
+        aria-labelledby={`home-ads-tab-${s.provider}`}
+        className="mt-4 flex min-w-0 flex-1 flex-col"
+        data-testid={`home-ads-${s.provider}`}
+        data-source={s.source}
+      >
+        {s.source === "platform" ? (
+          <PlatformAds key={s.provider} ov={ov} provider={s.provider} state={s.state} manage={manage} />
+        ) : s.source === "shopify" ? (
+          <ShopifyAds key={s.provider} ov={ov} provider={s.provider} state={s.state} manage={manage} />
+        ) : (
+          <NoAdSource provider={s.provider} state={s.state} manage={manage} />
+        )}
       </div>
     </HomeCard>
   );

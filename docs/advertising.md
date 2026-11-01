@@ -198,27 +198,48 @@ table (whose purchase headings name the window) and the "Purchases vs before" ch
   stay each ad set's own setting: the windows are the live report's only (`windows` in `MetaLiveReportOptions`), and
   neither the syncs nor the daily "Checked against Meta" read asks for them.
 
-## No ad account connected: the Shopify orders stand in
+## Where each platform's figures come from
 
-A spend platform with no account on the dashboard isn't an empty page. Its figures come from the
-store's own orders instead: the visit Shopify recorded before each order (docs/kpis.md, "Where sales
-come from") came from Facebook or Instagram (Meta Ads) or from Google or YouTube (Google Ads). That
-needs only `read_orders`, nothing to connect, and stays current with the store's own sync.
+Meta Ads and Google Ads are decided apart, on every read of the overview (`adPlatformSources` in
+`@app/shared/adsFromShopify`, its facts read by core `adSourceFacts`), and returned as the module
+`ad_sources`: one `{ provider, source, state }` per platform.
+
+| Source | When | What shows |
+| --- | --- | --- |
+| `platform` (badge "Meta Ads API" / "Google Ads API") | The platform has an account shown on the store that still syncs (or a retry may fix it, or it was closed: its spend is a real 0), or its stored days cover the dates even though its access has ended since. | Its own spend, impressions, clicks, CTR, CPC, CPM, conversions, conversion value and ROAS from the stored days, with the orders Shopify credits to its tagged ads beside them (`ads.sourced`, badged Shopify attribution). |
+| `shopify` (badge "Shopify attribution") | No account shown (never connected, removed, every one hidden, or a sign-in still waiting for an ad account), or every account's access ended (`reconnect`, `permission`, `unavailable` and not closed) before the dates were read. | The store's own orders that came from its sites (below). Never spend, impressions, clicks or ROAS. |
+| `none` | Neither: the store's traffic sources aren't read, or the member can't see them ("View traffic sources"). | The way to connect it, never a $0. |
+
+`state` says why: `connected`, `access_lost`, `waiting`, `hidden` or `not_connected`. Nothing is stored or
+switched: connecting a platform replaces its Shopify figures with its own on the next read, losing access
+falls back to the orders, and reconnecting brings the platform's own back. The platform's own figures and the
+Shopify-attributed sales are never added together. Team & Access: `ad_sources` goes with "View advertising analytics".
+
+## The Shopify orders stand in
+
+A spend platform whose source is `shopify` isn't an empty page. Its figures come from the store's own
+orders instead: the visit Shopify recorded before each order (docs/kpis.md, "Where sales come from")
+came from Facebook or Instagram (Meta Ads) or from Google or YouTube (Google Ads). That needs only
+`read_orders`, nothing to connect, and stays current with the store's own sync.
 
 - **Where:** the overview (both platforms while nothing is connected; beside connected platforms, the
-  others that sold anything), the Meta Ads and Google Ads pages (their platform), and the dashboard's
-  Advertising performance card (from the traffic module it already has). Each sits under one line that
-  says the platform isn't connected (or that its login waits for an ad account, or that its accounts are
-  hidden) with the way to connect it (`NotConnected compact` in components/advertising/AdvertisingUi.tsx).
+  others that sold anything), the Meta Ads and Google Ads pages (their platform; under the accounts'
+  own state when their access ended), and the dashboard's Advertising performance card, a tab per
+  platform, each with its source badge. Each says the platform isn't connected (or that its login waits
+  for an ad account, or that its accounts are hidden, or that its access ended) with the way to connect it.
 - **What:** per platform, its sales (net sales) and orders with the change on the dates compared with,
   its share of the store's sales, the part from links tagged as ads, day by day, by site (Facebook and
-  Instagram; Google and YouTube) and by the campaign named in the links (utm_campaign). Never spend,
-  impressions or clicks, which only the platform knows, and never what the platform credits to its ads.
-- **API:** the module `ads_from_shopify` of `…/overview?parts=advertising` (`AdsView.fromShopify`; core
+  Instagram; Google and YouTube) and by the campaign named in the links (utm_campaign); and, while the
+  storefront pixel records where visits came from, the store visits from its sites (`visits`, counted from
+  `visitsFrom`: the days before the pixel recorded sources are left out, never counted as none). Never
+  spend, impressions or clicks, which only the platform knows, and never what the platform credits to its ads.
+  A platform with no such orders in the dates says so, with no 0 figures.
+- **API:** the module `ads_from_shopify` of `…/overview`: on the Advertising pages (`parts=advertising`,
+  `AdsView.fromShopify`), and on the dashboard while a platform's source is `shopify`. Core
   `adsFromShopifyModule` in packages/core/src/reports/adsFromShopify.ts, the figures in
-  `@app/shared/adsFromShopify`). Not for one account picked or for AdSense alone. Team & Access: "View
+  `@app/shared/adsFromShopify`. Not for one account picked or for AdSense alone. Team & Access: "View
   traffic sources"; its tagged-ad figures and campaigns also "View conversion attribution", as the traffic
-  module's.
+  module's; its visits also "View conversion rates", as the Shopping Funnel's.
 - **AdSense** has no stand-in: what ads shown on a site earn isn't in the orders, so its page only offers
   to connect it, and says why.
 
