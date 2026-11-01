@@ -97,6 +97,11 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     timeout-minutes: 5
+    # This job failing only means nothing was confirmed: the checks and e2e jobs then run in full,
+    # and the run's result is theirs. Without this, a failure here failed the whole run, so Deploy to
+    # AWS skipped it whatever the tests said: main for #317 (1375ab11, 2026-11-01), where the PC
+    # couldn't download actions/checkout from codeload.github.com before this job's first step.
+    continue-on-error: true
     # statuses: write to record a pass again on a pull request's head.
     permissions:
       contents: read
