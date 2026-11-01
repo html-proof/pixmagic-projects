@@ -554,6 +554,9 @@ export const OVERVIEW_MODULE_ACCESS = {
   // (gross profit with the costs permission too, OVERVIEW_MODULE_ALSO_NEEDS).
   shopify_sessions: ["analytics.conversion"],
   profit: ["finance.breakdown"],
+  // The product costs worked out from each product's cost per item when Shopify's report gives none
+  // (productCosts in packages/core/src/reports/products.ts): costs too, as the gross profit is.
+  product_costs: ["finance.breakdown"],
   shopify_check: ["finance.breakdown"],
   // The owner's own costs (Settings → Costs): money figures that go with the sales breakdown; Shopify's
   // cost of goods sold beside them needs "View costs and stock value" too (OVERVIEW_MODULE_ALSO_NEEDS).
@@ -572,6 +575,7 @@ export const OVERVIEW_MODULE_ACCESS = {
  */
 const OVERVIEW_MODULE_ALSO_NEEDS: Partial<Record<keyof typeof OVERVIEW_MODULE_ACCESS, readonly AccessKey[]>> = {
   profit: ["inventory.costs"],
+  product_costs: ["inventory.costs"],
 };
 
 export function seesModule(access: MemberAccess, module: string): boolean {

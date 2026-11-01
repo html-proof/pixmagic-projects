@@ -664,6 +664,11 @@ export interface Overview {
     /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
     shopify_sessions?: ShopifySessionsModule;
     profit?: ProfitModule;
+    /**
+     * Product costs from the store's orders at each product's cost per item in Shopify (core
+     * productCosts), while Shopify's profit report gives none: absent while it does or is on its way.
+     */
+    product_costs?: ProductCostsModule;
     shopify_check?: ShopifyCheckModule;
     /** The owner's own costs (Settings → Costs) for the dates; needs finance.breakdown. */
     expenses?: ExpensesModule;
@@ -774,6 +779,11 @@ export interface ProfitModule extends ReportAnswer {
   } | null;
   previous: { grossProfit: number | null } | null;
   deltas: { grossProfit: number | null };
+}
+
+/** The items sold in the dates at their cost per item in Shopify now, and the net sales of items with and without one. */
+export interface ProductCostsModule {
+  current: { costOfGoodsSold: number; netSalesWithCost: number; netSalesWithoutCost: number };
 }
 
 export interface ShopifyCheckModule extends ReportAnswer {

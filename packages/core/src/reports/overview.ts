@@ -27,7 +27,7 @@ import type { Scope } from "./common.js";
 import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderOutcomes, orderTiming, recentOrders, traffic } from "./orders.js";
 import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
-import { productPerformance } from "./products.js";
+import { productCosts, productPerformance } from "./products.js";
 import { shopifyModules } from "./shopify.js";
 
 /**
@@ -315,6 +315,13 @@ export async function storeOverview(
     { sessions: enabled.has("shopify_sessions"), profit: enabled.has("profit"), check: checkSales },
   );
   Object.assign(modules, shopify.modules);
+  // Product costs from the store's orders at each product's cost per item in Shopify (productCosts),
+  // while Shopify's profit report gives none: not granted, or refused or failed. Not while its answer
+  // is on the way, so the figure doesn't change source from one poll to the next.
+  const report = shopify.modules.profit as { status: string } | undefined;
+  if (on("top_products") && sees("product_costs") && (!report || (report.status !== "ready" && report.status !== "loading"))) {
+    modules.product_costs = await productCosts(tx, scope, range);
+  }
   const failed =
     store.status === "error"
       ? await tx.syncJob.findFirst({ where: { storeId, workspaceId: ws, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } })
