@@ -10,7 +10,7 @@
 //
 // Imported by the UI through `@app/shared/access`: no I/O, relative imports stay extensionless.
 
-import { adsFromShopifyWithoutAttribution, type AdsFromShopify } from "./adsFromShopify";
+import { adsFromShopifyWithoutAttribution, adsFromShopifyWithoutVisits, type AdsFromShopify } from "./adsFromShopify";
 import { can as roleCan, type Permission, type Role } from "./roles";
 import { MONTH_LINES } from "./sales";
 
@@ -547,6 +547,8 @@ export const OVERVIEW_MODULE_ACCESS = {
   adsense: ["marketing.ads"],
   ad_connections: ["marketing.ads"],
   ad_configured: ["marketing.ads"],
+  // Where Meta's and Google's figures come from (adPlatformSources): the platform's own, or the store's orders.
+  ad_sources: ["marketing.ads"],
   // Shopify's own figures (packages/core/src/reports/shopify.ts): its sessions with the funnel, its
   // gross profit and the check of the sales figures against its sales report with the breakdown
   // (gross profit with the costs permission too, OVERVIEW_MODULE_ALSO_NEEDS).
@@ -683,6 +685,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   if (isObj(out.ads) && !g.has("marketing.attribution")) out.ads = omit(out.ads, ["sourced"]);
   // The same from the store's orders alone, for a platform not connected: its tagged-ad figures and campaigns.
   if (isObj(out.ads_from_shopify) && !g.has("marketing.attribution")) out.ads_from_shopify = adsFromShopifyWithoutAttribution(out.ads_from_shopify as unknown as AdsFromShopify);
+  // Its storefront visits from each platform's sites: the Shopping Funnel's visits, "View conversion rates".
+  if (isObj(out.ads_from_shopify) && !g.has("analytics.conversion")) out.ads_from_shopify = adsFromShopifyWithoutVisits(out.ads_from_shopify as unknown as AdsFromShopify);
   const codes = out.discount_codes;
   if (isObj(codes) && Array.isArray(codes.items) && !g.has("discounts.performance")) {
     out.discount_codes = { ...codes, items: codes.items.map((i: unknown) => omit(i, ["discount", "sales"])) };

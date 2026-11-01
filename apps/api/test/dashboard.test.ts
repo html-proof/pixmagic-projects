@@ -1198,12 +1198,15 @@ describe("scopes and tenancy", () => {
 
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
     // The owner's own costs (Settings → Costs) go with the sales they're set against.
-    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
+    // With no ad account, Meta's and Google's figures come from the orders (ad_sources, ads_from_shopify).
+    expect(Object.keys(o.modules).sort()).toEqual(["ad_sources", "ads_from_shopify", "channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
     expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null, history: { access: "awaiting_shopify", years: [] } });
 
     const p = (await overview(a.headers, ws, productsOnly.id)).json();
-    expect(Object.keys(p.modules).sort()).toEqual(["catalog", "inventory"]);
+    // No orders read: no source for Meta's or Google's figures, said as such (ad_sources "none"), never figures.
+    expect(Object.keys(p.modules).sort()).toEqual(["ad_sources", "catalog", "inventory"]);
+    expect(p.modules.ad_sources.map((s: { source: string }) => s.source)).toEqual(["none", "none"]);
     expect(p.modules.inventory.current).toMatchObject({ trackedVariants: 1, unitsInStock: 4, lowStock: 1 });
     expect(p.data).toMatchObject({ products: 1, variants: 1, orders: 0 });
   });
@@ -1350,8 +1353,110 @@ describe("Meta and Google advertising from the store's own orders", () => {
     expect((await ask("&parts=advertising&platform=meta")).ads_from_shopify.platforms.map((p: { provider: string }) => p.provider)).toEqual(["meta"]);
     expect(await ask("&parts=advertising&platform=adsense")).not.toHaveProperty("ads_from_shopify");
     expect(await ask("&parts=advertising&account=some-account")).not.toHaveProperty("ads_from_shopify");
-    // The dashboard's own question doesn't compute them.
-    expect(await ask("")).not.toHaveProperty("ads_from_shopify");
+    // The dashboard's own question computes them too while neither platform is connected (ad_sources).
+    expect((await ask("")).ads_from_shopify.platforms.map((p: { provider: string; sales: number }) => [p.provider, p.sales])).toEqual([
+      ["meta", 140],
+      ["google", 60],
+    ]);
+  });
+
+  it("picks each platform's source on every read: its own figures once connected, the orders before that and after its access ends, each store its own", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    const today = localDay(new Date(), TZ);
+    const day = (n: number) => addDays(today, n);
+    const at = (n: number) => `${day(n)}T16:00:00Z`;
+    await seedOrder(store, { id: "F1", createdAt: at(-3), subtotal: 100, traffic: { source: "facebook", medium: "paid", campaign: "Spring" } });
+    await seedOrder(store, { id: "G1", createdAt: at(-2), subtotal: 60, traffic: { source: "google", medium: "paid", campaign: "Brand" } });
+    const range = `preset=custom&from=${day(-6)}&to=${day(-1)}`;
+    const ask = async (qs = range) => (await overview(a.headers, ws, store.id, qs)).json().modules;
+    const sourcesOf = (m: { ad_sources: Array<{ provider: string; source: string; state: string }> }) => Object.fromEntries(m.ad_sources.map((s) => [s.provider, [s.source, s.state]]));
+    const shopifySales = (m: { ads_from_shopify: { platforms: Array<{ provider: string; sales: number }> } }, p: string) => m.ads_from_shopify.platforms.find((x) => x.provider === p)?.sales;
+    const connect = (storeOf: Store, provider: "meta" | "google", accountId: string) =>
+      systemDb.adConnection.create({
+        data: { workspaceId: storeOf.workspaceId, storeId: storeOf.id, provider, accountId, currency: "USD", timezone: TZ, accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom: "2020-01-01", syncedThrough: today, lastSyncedAt: new Date() },
+      });
+    const spend = (storeOf: Store, conn: { id: string; provider: string; accountId: string }, on: string, amount: number) =>
+      systemDb.adCampaignDaily.create({
+        data: { workspaceId: storeOf.workspaceId, storeId: storeOf.id, connectionId: conn.id, provider: conn.provider, accountId: conn.accountId, campaignId: "1", campaignName: "Spring", day: on, spend: amount, impressions: 1000, clicks: 20, linkClicks: 10 },
+      });
+
+    // Another workspace's store, with Meta and Google of its own and far bigger sales: never in this one's answer.
+    const b = await signIn(ctx, "ub", "b@x.com");
+    const wsB = await createWorkspace(ctx, b.headers, "B");
+    const storeB = await createStore(wsB, "b.myshopify.com", ALL_SCOPES, { timezone: TZ, name: "Other Shop" });
+    await systemDb.store.update({ where: { id: storeB.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(storeB, { id: "F1", createdAt: at(-3), subtotal: 999, traffic: { source: "instagram", medium: "paid" } });
+    await spend(storeB, await connect(storeB, "google", "999-999-9999"), day(-3), 500);
+
+    // A: Shopify only. Both platforms from the store's orders, on the dashboard as on the Advertising pages.
+    let m = await ask();
+    expect(sourcesOf(m)).toEqual({ meta: ["shopify", "not_connected"], google: ["shopify", "not_connected"] });
+    expect(m).not.toHaveProperty("ads");
+    expect([shopifySales(m, "meta"), shopifySales(m, "google")]).toEqual([100, 60]);
+    // The other store sees its own Google figures and Instagram sale, none of this one's.
+    const other = (await overview(b.headers, wsB, storeB.id, range)).json().modules;
+    expect(sourcesOf(other)).toEqual({ meta: ["shopify", "not_connected"], google: ["platform", "connected"] });
+    expect(shopifySales(other, "meta")).toBe(999);
+    expect(other.ads.byProvider.map((p: { provider: string; spend: number }) => [p.provider, p.spend])).toEqual([["google", 500]]);
+    // Nor can it ask for this one's.
+    expect((await overview(b.headers, wsB, store.id, range)).statusCode).toBe(404);
+
+    // B: Meta connected. Meta's own figures, Google's still the orders, with no Google sign-in asked for.
+    const meta = await connect(store, "meta", "act_1");
+    await spend(store, meta, day(-3), 40);
+    m = await ask();
+    expect(sourcesOf(m)).toEqual({ meta: ["platform", "connected"], google: ["shopify", "not_connected"] });
+    expect(m.ads.byProvider).toEqual([expect.objectContaining({ provider: "meta", spend: 40, impressions: 1000, linkClicks: 10, ctr: 0.01, cpc: 4, cpm: 40 })]);
+    expect(shopifySales(m, "google")).toBe(60);
+    // The orders Shopify credits to Meta's ads, beside Meta's own figures.
+    expect(m.ads.sourced).toEqual([{ provider: "meta", orders: 1, sales: 100, salesPerSpend: 2.5 }]);
+
+    // Meta's access ends before these dates were read: back to the orders, until it is reconnected.
+    await systemDb.adConnection.update({ where: { id: meta.id }, data: { status: "reconnect", errorCode: "auth_expired", syncedThrough: day(-5) } });
+    m = await ask();
+    expect(sourcesOf(m).meta).toEqual(["shopify", "access_lost"]);
+    expect(shopifySales(m, "meta")).toBe(100);
+    // Dates it stored before its access ended stay Meta's own.
+    expect(sourcesOf(await ask(`preset=custom&from=${day(-6)}&to=${day(-5)}`)).meta).toEqual(["platform", "access_lost"]);
+    await systemDb.adConnection.update({ where: { id: meta.id }, data: { status: "active", errorCode: null, syncedThrough: today } });
+    expect(sourcesOf(await ask()).meta).toEqual(["platform", "connected"]);
+
+    // D: Google connected too. Both their own, and the orders aren't read for the dashboard at all.
+    await spend(store, await connect(store, "google", "123-456-7890"), day(-2), 25);
+    m = await ask();
+    expect(sourcesOf(m)).toEqual({ meta: ["platform", "connected"], google: ["platform", "connected"] });
+    expect(m).not.toHaveProperty("ads_from_shopify");
+    // One platform's page: that platform's source alone.
+    expect((await ask(`${range}&parts=advertising&platform=google`)).ad_sources).toEqual([{ provider: "google", source: "platform", state: "connected" }]);
+
+    // Meta disconnected (its accounts removed): back to the orders.
+    await systemDb.adCampaignDaily.deleteMany({ where: { connectionId: meta.id } });
+    await systemDb.adConnection.delete({ where: { id: meta.id } });
+    m = await ask();
+    expect(sourcesOf(m)).toEqual({ meta: ["shopify", "not_connected"], google: ["platform", "connected"] });
+    expect(shopifySales(m, "meta")).toBe(100);
+  });
+
+  it("counts the storefront's visits from each platform's sites while the pixel records where they came from", async () => {
+    const { a, ws, store } = await owner([...ALL_SCOPES, "write_pixels", "read_customer_events"]);
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active", pixelInstalled: true, pixelInstalledAt: new Date(0) } });
+    const today = localDay(new Date(), TZ);
+    const day = (n: number) => addDays(today, n);
+    await seedOrder(store, { id: "F1", createdAt: `${day(-3)}T16:00:00Z`, subtotal: 100, traffic: { source: "facebook", medium: "paid" } });
+    const visit = (on: string, visitor: string, source: string | null) => systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day: on, visitor, source } });
+    // Sources recorded from day -4 on: the visit before has none, and isn't counted as anyone's.
+    await visit(day(-5), "v0", null);
+    await visit(day(-4), "v1", "facebook");
+    await visit(day(-3), "v2", "instagram");
+    await visit(day(-3), "v3", "google");
+    await visit(day(-3), "v4", "direct");
+    const m = (await overview(a.headers, ws, store.id, `preset=custom&from=${day(-6)}&to=${day(-1)}`)).json().modules;
+    expect(m.ads_from_shopify.visitsFrom).toBe(day(-4));
+    expect(m.ads_from_shopify.platforms.map((p: { provider: string; visits: number }) => [p.provider, p.visits])).toEqual([
+      ["meta", 2],
+      ["google", 1],
+    ]);
   });
 });
 

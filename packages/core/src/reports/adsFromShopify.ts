@@ -1,5 +1,17 @@
 import { Prisma, type Tx } from "@app/db";
-import { adsFromShopify, PLATFORM_SOURCES, type AdSpendProvider, type Comparison, type DateRange, type SourcedDay, type SourcedSales } from "@app/shared";
+import {
+  adsFromShopify,
+  PLATFORM_SOURCES,
+  visitsCounted,
+  type AdSourceFacts,
+  type AdSpendProvider,
+  type Comparison,
+  type DateRange,
+  type SourcedDay,
+  type SourcedSales,
+  type SourcedVisits,
+} from "@app/shared";
+import type { AdsFigures } from "./ads.js";
 import { localMoment, MERCHANDISE, num, SALE_VALUE, type Scope } from "./common.js";
 
 // ---------------------------------------------------------------------------
@@ -54,24 +66,66 @@ async function byDay(tx: Tx, { ws, storeId }: Scope, r: DateRange, sources: read
 }
 
 /**
- * The Advertising pages' Meta and Google figures from the store's orders (`provider`: one of them only),
- * for the dates and, when `compare` (their orders imported, as the dashboard's sales compare), for the
- * dates compared with.
+ * The storefront pixel's visits over the dates from the platforms' sources (funnel_visits, one per
+ * visitor and day, as the Shopping Funnel counts them), from the first day it recorded where visits
+ * came from: the days before have no source, so they are left out rather than counted as none.
+ */
+async function visitsBySource(tx: Tx, { ws, storeId }: Scope, r: DateRange, sources: readonly string[]): Promise<SourcedVisits> {
+  const [first] = await tx.$queryRaw<Array<{ day: string }>>`
+    SELECT day FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId} AND source IS NOT NULL ORDER BY day LIMIT 1`;
+  const from = first?.day ?? null;
+  const counted = visitsCounted(from, r);
+  if (!counted) return { from, rows: [] };
+  const rows = await tx.$queryRaw<Array<{ source: string; visits: number }>>`
+    SELECT source, COUNT(*)::int AS visits FROM funnel_visits
+    WHERE workspace_id = ${ws} AND store_id = ${storeId} AND day BETWEEN ${counted} AND ${r.to} AND source = ANY(${sources}::text[])
+    GROUP BY 1`;
+  return { from, rows: rows.map((x) => ({ source: x.source, visits: num(x.visits) })) };
+}
+
+/**
+ * Meta's and Google's figures from the store's orders (`provider`: one of them only), for the dates
+ * and, when `compare` (their orders imported, as the dashboard's sales compare), for the dates compared
+ * with; `visits`: the storefront pixel records visits (the funnel capability), so they are counted too.
  */
 export async function adsFromShopifyModule(
   tx: Tx,
   scope: Scope,
   dates: { range: DateRange; previous: Comparison },
-  opts: { currency: string; timeZone: string; compare: boolean; historyFrom: string | null; provider?: AdSpendProvider },
+  opts: { currency: string; timeZone: string; compare: boolean; historyFrom: string | null; provider?: AdSpendProvider; visits?: boolean },
 ) {
   const { range, previous } = dates;
   const providers: AdSpendProvider[] = opts.provider ? [opts.provider] : ["meta", "google"];
   const sources = providers.flatMap((p) => PLATFORM_SOURCES[p]);
   const until = opts.compare && previous.until ? localMoment(previous.to, previous.until, opts.timeZone) : null;
-  const [rows, days, previousRows] = await Promise.all([
+  const [rows, days, previousRows, visits] = await Promise.all([
     bySource(tx, scope, range, null),
     byDay(tx, scope, range, sources),
     opts.compare ? bySource(tx, scope, previous, until) : null,
+    opts.visits ? visitsBySource(tx, scope, range, sources) : null,
   ]);
-  return adsFromShopify({ providers, rows, days, previousRows, range, compared: previous, currency: opts.currency, historyFrom: opts.historyFrom });
+  return adsFromShopify({ providers, rows, days, previousRows, range, compared: previous, currency: opts.currency, historyFrom: opts.historyFrom, visits });
+}
+
+/**
+ * What decides where Meta's and Google's figures come from (adPlatformSources in @app/shared): the
+ * accounts the ads module counted for the store and whether each platform's figures cover the dates
+ * (`ads`: null or absent with no account shown), its hidden accounts, and a sign-in still waiting for
+ * an ad account.
+ */
+export async function adSourceFacts(tx: Tx, { ws, storeId }: Scope, ads: AdsFigures | null | undefined): Promise<Record<AdSpendProvider, AdSourceFacts>> {
+  const [hidden, waiting] = await Promise.all([
+    tx.adConnection.groupBy({ by: ["provider"], where: { workspaceId: ws, storeId, enabled: false, provider: { in: ["meta", "google"] } }, _count: { _all: true } }),
+    tx.adLogin.findMany({ where: { workspaceId: ws, storeId, provider: { in: ["meta", "google"] } }, select: { provider: true } }),
+  ]);
+  const of = (p: AdSpendProvider): AdSourceFacts => {
+    const own = ads?.byProvider.find((b) => b.provider === p);
+    return {
+      accounts: (ads?.accounts ?? []).filter((a) => a.provider === p),
+      figures: !!own && (own.current !== null || own.soFar !== null),
+      hidden: hidden.find((h) => h.provider === p)?._count._all ?? 0,
+      waiting: waiting.some((l) => l.provider === p),
+    };
+  };
+  return { meta: of("meta"), google: of("google") };
 }
