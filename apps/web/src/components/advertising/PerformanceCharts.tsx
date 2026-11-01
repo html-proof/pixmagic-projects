@@ -60,11 +60,6 @@ export function PerformanceOverview({ a, ov }: { a: AdsModule; ov: Overview }) {
         <EmptyNote>No ad activity in these dates.</EmptyNote>
       ) : (
         <>
-          <ul className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-hidden>
-            <Legend color={SPEND} label="Ad spend" />
-            <Legend color={VALUE} label="Purchase value (platforms')" />
-            <Legend color={ROAS} label="ROAS" line />
-          </ul>
           <LineChart
             days={days}
             series={[
@@ -99,15 +94,6 @@ export function PerformanceOverview({ a, ov }: { a: AdsModule; ov: Overview }) {
   );
 }
 
-function Legend({ color, label, line = false }: { color: string; label: string; line?: boolean }) {
-  return (
-    <li className="flex items-center gap-1.5 text-muted">
-      <span className={line ? "h-0.5 w-3.5 rounded-full" : "h-2.5 w-2.5 rounded-sm"} style={{ background: color }} />
-      {label}
-    </li>
-  );
-}
-
 /** How the spend splits between the platforms: a ring, the total in the middle, each platform named with its amount and share. */
 export function PlatformShare({ a }: { a: AdsModule }) {
   const { totals } = shownFigures(a);
@@ -119,7 +105,7 @@ export function PlatformShare({ a }: { a: AdsModule }) {
       {total === null ? (
         <EmptyNote>{UNAVAILABLE}: some days of the spend haven&apos;t been read yet.</EmptyNote>
       ) : (
-        <div className="flex flex-1 flex-col items-center gap-4 sm:flex-row xl:flex-col 2xl:flex-row">
+        <div className="flex flex-1 flex-col items-center gap-4 @sm:flex-row">
           <Donut
             size={150}
             thickness={20}

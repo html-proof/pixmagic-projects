@@ -42,6 +42,8 @@ export interface AdInsightInput {
 
 export interface AdInsightFormat {
   money: (n: number) => string;
+  /** One unit of the currency, whole: "₹1", "$1". */
+  unit: string;
   /** A fraction as a percentage: 0.287 → "28.7%". */
   pct: (n: number) => string;
   /** A ratio: 4.32 → "4.32×". */
@@ -90,7 +92,7 @@ export function advertisingInsights(input: AdInsightInput, f: AdInsightFormat, l
       out.push({
         id: "best_roas",
         tone: "good",
-        text: `${NAME[best!.provider]} returns the most per ${f.money(1)}: ${f.times(best!.roas)} against ${NAME[next!.provider]}'s ${f.times(next!.roas)}, each by its own count.`,
+        text: `${NAME[best!.provider]} returns the most per ${f.unit} spent: ${f.times(best!.roas)}, against ${f.times(next!.roas)} for ${NAME[next!.provider]}, each by its own count.`,
       });
     }
   }
@@ -118,7 +120,7 @@ export function advertisingInsights(input: AdInsightInput, f: AdInsightFormat, l
     out.push({
       id: "roas_meaning",
       tone: "info",
-      text: `A ROAS of ${f.times(roas)} means the platforms credit ${f.money(roas)} of purchases to every ${f.money(1)} spent: before product costs, fees and your other costs, so it isn't profit.`,
+      text: `A ROAS of ${f.times(roas)} means the platforms credit ${f.money(roas)} of purchases to every ${f.unit} spent: before product costs, fees and your other costs, so it isn't profit.`,
     });
   }
 

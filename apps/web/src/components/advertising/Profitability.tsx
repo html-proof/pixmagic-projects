@@ -67,6 +67,8 @@ export function ProfitSummary({ ov, full = false }: { ov: Overview; full?: boole
   const fees = byCategory.filter((c) => FEES.has(c.category)).reduce((n, c) => n + c.amount, 0);
   const other = byCategory.filter((c) => !FEES.has(c.category)).reduce((n, c) => n + c.amount, 0);
   const manageCosts = canManage(workspace.role);
+  // No costs kept at all: say so rather than a 0 that reads as "none were spent".
+  const none = ov.modules.expenses?.count === 0;
   return (
     <AdCard
       id="ads-profit"
@@ -114,8 +116,8 @@ export function ProfitSummary({ ov, full = false }: { ov: Overview; full?: boole
             <Line label="Revenue" sub="Net sales, shipping and fees, without tax" value={money(profit.revenue)} />
             {costsOn && <Line label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} />}
             <Line label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} />
-            <Line label="Shopify and payment fees" sub="Your costs: Shopify plan, apps, payment fees" value={money(fees)} />
-            <Line label="Other expenses" sub="Your other costs (Settings → Costs)" value={money(other)} />
+            <Line label="Shopify and payment fees" sub="Your costs: Shopify plan, apps, payment fees" value={none ? "None entered" : money(fees)} />
+            <Line label="Other expenses" sub="Your other costs (Settings → Costs)" value={none ? "None entered" : money(other)} />
             <Line
               strong
               label="Net profit"

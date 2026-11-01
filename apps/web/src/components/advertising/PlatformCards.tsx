@@ -84,8 +84,8 @@ function OwnFigures({ a, p, ov, manage, lost }: { a: AdsModule; p: AdsProviderFi
   const updated = p.updatedAt ? fmtRelative(p.updatedAt) : null;
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
-        <div className={`flex shrink-0 flex-col items-center justify-center gap-2 rounded-xl bg-gradient-to-br p-4 text-center sm:w-36 ${WASH[p.provider]}`}>
+      <div className="flex min-w-0 flex-col gap-4 @md:flex-row">
+        <div className={`flex shrink-0 flex-col items-center justify-center gap-2 rounded-xl bg-gradient-to-br p-4 text-center @md:w-36 ${WASH[p.provider]}`}>
           <Logo size={34} />
           <p className="text-xs font-medium text-text/80">{plural(accounts.length, "account")}</p>
           <p className="line-clamp-2 text-[11px] text-muted">{accounts.map((acc) => acc.name ?? acc.accountId).join(", ")}</p>

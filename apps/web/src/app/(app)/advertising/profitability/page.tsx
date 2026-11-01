@@ -26,14 +26,16 @@ export default function AdProfitabilityPage() {
       />
       <AdvertisingBody s={s} what="your advertising profitability">
         {(ov) => (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-            <ProfitSummary ov={ov} full />
-            {ov.modules.ads && (
-              <div className="space-y-4">
-                <KeyInsights a={ov.modules.ads} ov={ov} />
-                <PlatformShare a={ov.modules.ads} />
-              </div>
-            )}
+          <div className="@container">
+            <div className="grid gap-4 @7xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+              <ProfitSummary ov={ov} full />
+              {ov.modules.ads && (
+                <div className="grid gap-4 @4xl:grid-cols-2 @7xl:grid-cols-1 @7xl:content-start">
+                  <KeyInsights a={ov.modules.ads} ov={ov} />
+                  <PlatformShare a={ov.modules.ads} />
+                </div>
+              )}
+            </div>
           </div>
         )}
       </AdvertisingBody>

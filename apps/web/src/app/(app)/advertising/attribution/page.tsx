@@ -28,15 +28,15 @@ export default function ShopifyAttributionPage() {
       />
       <AdvertisingBody s={s} what="your Shopify attribution">
         {(ov) => (
-          <>
+          <div className="@container space-y-4">
             <AttributionSummary ov={ov} />
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="grid gap-4 @4xl:grid-cols-2">
               <AdFunnel ov={ov} />
               <SalesBySite ov={ov} />
             </div>
             {ov.modules.ads && <SalesVsSpend a={ov.modules.ads} ov={ov} />}
             <FromShopify ov={ov} platforms={["meta", "google"]} />
-          </>
+          </div>
         )}
       </AdvertisingBody>
     </>

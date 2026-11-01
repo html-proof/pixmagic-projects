@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { advertisingInsights, type AdInsightInput } from "../src/adInsights";
 
-const f = { money: (n: number) => `$${n.toFixed(2)}`, pct: (n: number) => `${(n * 100).toFixed(1)}%`, times: (n: number) => `${n.toFixed(2)}×` };
+const f = { money: (n: number) => `$${n.toFixed(2)}`, unit: "$1", pct: (n: number) => `${(n * 100).toFixed(1)}%`, times: (n: number) => `${n.toFixed(2)}×` };
 
 const meta = { provider: "meta" as const, spend: 7620, purchases: 3120, purchaseValue: 32918.4, roas: 4.32 };
 const google = { provider: "google" as const, spend: 5230, purchases: 1120, purchaseValue: 18043.5, roas: 3.45 };
@@ -19,7 +19,7 @@ describe("the Advertising overview's key insights", () => {
     expect(ids).toEqual(["value_change", "best_roas", "share", "roas_meaning"]);
     const text = advertisingInsights(base, f, 10).map((i) => i.text);
     expect(text[0]).toBe("The purchase value your platforms credit to their ads is up 28.7% vs 1 – 30 Sep.");
-    expect(text[1]).toContain("Meta Ads returns the most per $1.00: 4.32× against Google Ads's 3.45×");
+    expect(text[1]).toBe("Meta Ads returns the most per $1 spent: 4.32×, against 3.45× for Google Ads, each by its own count.");
     expect(text[2]).toBe("Meta Ads took 59.3% of your ad spend.");
     expect(text[3]).toContain("isn't profit");
   });

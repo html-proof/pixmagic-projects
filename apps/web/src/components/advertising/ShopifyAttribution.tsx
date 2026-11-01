@@ -1,6 +1,5 @@
 "use client";
 import type { ReactNode } from "react";
-import { ShoppingBag } from "lucide-react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { plural } from "@/components/dashboard/format";
 import { ChangeText } from "@/components/dashboard/HomeCards";
@@ -53,10 +52,8 @@ export function AttributionSummary({ ov }: { ov: Overview }) {
         </>
       }
       sub="From your Shopify orders, whatever the ad platforms claim. Orders count for the site their last visit came from (the last click)."
-      icon={ShoppingBag}
-      tint="green"
     >
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @4xl:grid-cols-4">
         {m && (
           <>
             <Fig label="Sales from Meta and Google sites" value={money(sales)} sub={`${plural(orders, "order")} · Facebook, Instagram, Google and YouTube`} testid="attr-sales" />

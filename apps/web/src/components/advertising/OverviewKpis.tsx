@@ -57,7 +57,7 @@ function Tile({
   return (
     <div className={`card lift animate-rise flex min-w-0 flex-col rounded-2xl ${small ? "p-3 sm:p-4" : ""}`} data-testid={testid}>
       <div className="flex min-w-0 items-start gap-3">
-        <span aria-hidden className={`flex shrink-0 items-center justify-center rounded-full text-white shadow-sm ${small ? "h-8 w-8" : "h-10 w-10"} ${t.disc}`}>
+        <span aria-hidden className={`shrink-0 items-center justify-center rounded-full text-white shadow-sm ${small ? "hidden h-8 w-8 @md:flex" : "flex h-10 w-10"} ${t.disc}`}>
           <IconCmp className={small ? "h-4 w-4" : "h-5 w-5"} strokeWidth={2} />
         </span>
         <div className="min-w-0 flex-1">
@@ -155,7 +155,7 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
         </p>
       )}
       {a && (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid grid-cols-1 gap-3 @md:grid-cols-2 @3xl:grid-cols-3 @7xl:grid-cols-6">
           <FigureTile<AdTotals> label="Total ad spend" icon={Wallet} tint="blue" source={`All platforms · ${a.currency}`} fig={a} accounts={counted} ov={ov} pick={(t) => money(t.spend)} delta={a.deltas.spend} neutral spark={spark((d) => d.spend)} testid="kpi-spend" />
           <FigureTile<AdTotals> label="Link clicks" icon={MousePointerClick} tint="violet" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : fmtNum(t.linkClicks))} delta={a.deltas.linkClicks} spark={spark((d) => d.linkClicks)} testid="kpi-clicks" />
           <FigureTile<AdTotals> label="Impressions" icon={Eye} tint="green" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => fmtNum(t.impressions)} delta={changeOn(a, (t) => t.impressions)} spark={spark((d) => d.impressions)} testid="kpi-impressions" />
@@ -164,7 +164,7 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
           <FigureTile<AdTotals> label="ROAS" icon={Trophy} tint="violet" source="Purchase value ÷ spend · platforms' own" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtTimes(t.roas))} delta={a.deltas.roas} spark={spark(dailyRoas)} testid="kpi-roas" />
         </div>
       )}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 2xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @6xl:grid-cols-6">
         {a && (
           <>
             <FigureTile<AdTotals> small label="Average CPC" icon={Target} tint="blue" source="Spend ÷ link clicks" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.cpc === null ? "—" : money(t.cpc))} delta={changeOn(a, (t) => t.cpc)} invert testid="kpi-cpc" />

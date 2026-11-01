@@ -48,7 +48,7 @@ export function AdCard({
         </div>
         {action && <div className="shrink-0 pt-0.5 print:hidden">{action}</div>}
       </div>
-      <div className="mt-4 flex min-w-0 flex-1 flex-col">{children}</div>
+      <div className="@container mt-4 flex min-w-0 flex-1 flex-col">{children}</div>
     </section>
   );
 }

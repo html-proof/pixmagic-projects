@@ -59,13 +59,13 @@ export default function AdvertisingOverviewPage() {
           const accounts = [...(a?.accounts ?? []), ...(ov.modules.adsense?.accounts ?? [])];
           const left = accounts.filter((acc) => !acc.counted);
           return (
-            <>
+            <div className="@container space-y-4">
               <AdStatusNotes accounts={accounts} manage={manage} />
               <OverviewKpis ov={ov} />
               {a && (
                 <>
-                  <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                    <div className="lg:col-span-2 2xl:col-span-1">
+                  <div className="grid gap-4 @4xl:grid-cols-2 @7xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                    <div className="@4xl:col-span-2 @7xl:col-span-1">
                       <PerformanceOverview a={a} ov={ov} />
                     </div>
                     <PlatformShare a={a} />
@@ -73,15 +73,15 @@ export default function AdvertisingOverviewPage() {
                   </div>
                 </>
               )}
-              <div className="grid gap-4 xl:grid-cols-3">
+              <div className="grid gap-4 @4xl:grid-cols-2 @7xl:grid-cols-3">
                 <PlatformCard ov={ov} provider="meta" manage={manage} />
                 <PlatformCard ov={ov} provider="google" manage={manage} />
-                {a ? <KeyInsights a={a} ov={ov} /> : <SalesBySite ov={ov} />}
+                <div className="@4xl:col-span-2 @7xl:col-span-1">{a ? <KeyInsights a={a} ov={ov} /> : <SalesBySite ov={ov} />}</div>
               </div>
               {a && (
                 <>
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                    {a.campaigns ? <TopCampaigns a={a} /> : <PlatformsVs a={a} />}
+                  <div className="grid gap-4 @4xl:grid-cols-2 @7xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                    <div className="@4xl:col-span-2 @7xl:col-span-1">{a.campaigns ? <TopCampaigns a={a} /> : <PlatformsVs a={a} />}</div>
                     <SalesBySite ov={ov} />
                     <ProfitSummary ov={ov} />
                   </div>
@@ -97,7 +97,7 @@ export default function AdvertisingOverviewPage() {
               {a && <MeasuresDiffer />}
               {a && <Definitions items={AD_DEFINITIONS} title="What the ad figures mean" />}
               <p className="text-xs text-muted">{plural(accounts.length, "account")} connected · updated about every hour, the last 30 days again daily.</p>
-            </>
+            </div>
           );
         }}
       </AdvertisingBody>

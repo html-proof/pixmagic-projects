@@ -3,7 +3,7 @@ import { AlertTriangle, Info, Lightbulb, TrendingDown, TrendingUp, type LucideIc
 import { advertisingInsights, type AdInsightTone } from "@app/shared/adInsights";
 import { fmtMoney, fmtPct } from "@/lib/api";
 import { shownFigures } from "@/components/dashboard/adFigures";
-import { fmtSpan, fmtTimes } from "@/components/dashboard/format";
+import { fmtMoneyWhole, fmtSpan, fmtTimes } from "@/components/dashboard/format";
 import type { AdsModule, Overview } from "@/components/dashboard/types";
 import { AdCard, EmptyNote } from "./AdCard";
 
@@ -41,7 +41,7 @@ export function KeyInsights({ a, ov }: { a: AdsModule; ov: Overview }) {
       margin: shopifyMargin(ov, a),
       demo: a.demo,
     },
-    { money: (n) => fmtMoney(n, a.currency), pct: (n) => fmtPct(n), times: (n) => fmtTimes(n) },
+    { money: (n) => fmtMoney(n, a.currency), unit: fmtMoneyWhole(1, a.currency), pct: (n) => fmtPct(n), times: (n) => fmtTimes(n) },
   );
   return (
     <AdCard id="ads-insights" title="Key insights" sub="What stands out in these dates, from the figures on this page." icon={Lightbulb} tint="amber">
