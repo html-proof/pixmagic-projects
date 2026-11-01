@@ -57,7 +57,7 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-muted">
             Orders whose visit came from {SITES[p.provider]}, as Shopify recorded it, and their sales.{" "}
-            {adSourcesOf(ov, p.provider)[0]?.state === "access_lost" ? `${P.name}'s access has ended: reconnect it to bring back` : `Connect ${P.name} to add`} what you spent, the
+            {adSourcesOf(ov, p.provider)[0]?.state === "access_lost" ? `bizinsights' access to ${P.name} has ended: reconnect it to bring back` : `Connect ${P.name} to add`} what you spent, the
             impressions and clicks, and what {p.provider === "meta" ? "Meta" : "Google"} credits to its ads.
           </p>
         </div>

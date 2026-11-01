@@ -472,7 +472,7 @@ function PlatformAds({ ov, provider, state, manage }: { ov: Overview; provider: 
   const { name } = PROVIDER[provider];
   const lost = state === "access_lost" && (
     <p className="mt-2 text-xs text-warn" data-testid="home-ads-access-lost">
-      {name}&apos;s access has ended: these are the days it reported before.{" "}
+      bizinsights&apos; access to {name} has ended: these are the days it reported before.{" "}
       {manage ? (
         <Link href="/settings/integrations" className="font-medium underline">
           Reconnect {name}
@@ -488,7 +488,7 @@ function PlatformAds({ ov, provider, state, manage }: { ov: Overview; provider: 
       <>
         <SourceLine provider={provider} source="platform" />
         <p className="text-sm text-muted">
-          {name}&apos;s accounts report in another currency than your other ad accounts, so they aren&apos;t added up here.{" "}
+          Your {name} accounts report in another currency than your other ad accounts, so they aren&apos;t added up here.{" "}
           <Link href={`/advertising/${provider}`} className="font-medium text-accent hover:underline">
             See {name}
           </Link>
@@ -541,7 +541,7 @@ function PlatformAds({ ov, provider, state, manage }: { ov: Overview; provider: 
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted" data-testid="home-ads-sourced">
           <SourceBadge provider={provider} source="shopify" />
           {plural(sourced.orders, "order")} · {fmtMoney(sourced.sales, ov.store.currency)} from {SITES[provider]}&apos;s tagged ads
-          {sourced.salesPerSpend !== null && <> · {fmtTimes(sourced.salesPerSpend)} of the spend</>}
+          {sourced.salesPerSpend !== null && <> · {fmtTimes(sourced.salesPerSpend)} the spend in sales</>}
         </p>
       )}
       <div className="mt-4 flex-1">
@@ -654,7 +654,7 @@ function NoAdSource({ provider, state, manage }: { provider: AdSpendProvider; st
     <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-4 py-8 text-center" data-testid="home-ads-no-source">
       <Icon size={22} />
       <p className="max-w-xs text-sm text-muted">
-        {state === "access_lost" ? `${name}'s access has ended.` : `${name} isn't connected.`} Connect it to see what your ads cost and what they bring back. Your Shopify
+        {state === "access_lost" ? `bizinsights' access to ${name} has ended. Reconnect` : `${name} isn't connected. Connect`} it to see what your ads cost and what they bring back. Your Shopify
         orders&apos; visit sources aren&apos;t available here, so there&apos;s nothing from {SITES[provider]} to show meanwhile.
       </p>
       <ConnectAds manage={manage} label={`${state === "access_lost" ? "Reconnect" : "Connect"} ${name}`} />
