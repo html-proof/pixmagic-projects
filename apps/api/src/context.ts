@@ -62,7 +62,7 @@ export class HttpError extends Error {
  */
 export function requireAppOrigin(c: Ctx) {
   const origin = c.req.header("origin") ?? c.req.header("referer");
-  let ok = false;
+  let ok: boolean;
   try {
     ok = !!origin && new URL(origin).origin === new URL(env().APP_URL).origin;
   } catch {

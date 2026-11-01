@@ -196,7 +196,7 @@ export async function checkDomain(d: EmailDomain, deps: Pick<EmailDeps, "fetchIm
 
   const owned = results.ownership!.status === "pass";
   const wasVerified = d.verificationStatus === "verified" || d.verificationStatus === "recheck_required";
-  let status = d.verificationStatus;
+  let status: string;
   let failures = d.consecutiveFailures;
   let verifiedAt = d.ownershipVerifiedAt;
   if (owned) {

@@ -2,31 +2,32 @@
 // (`pnpm typecheck`); this catches what the compiler doesn't: hooks used wrongly or with stale
 // dependencies, unused code, `any`, and the usual JavaScript pitfalls.
 import js from "@eslint/js";
+import { defineConfig, globalIgnores } from "eslint/config";
 import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
-export default tseslint.config(
-  {
-    ignores: [
-      "**/node_modules/**",
-      "**/dist/**",
-      "**/.next/**",
-      "**/coverage/**",
-      "**/cdk.out/**",
-      "apps/web/out/**",
-      "apps/web/out-*/**",
-      "apps/web/next-env.d.ts",
-      "apps/web/test-results/**",
-      "apps/web/playwright-report/**",
-      "packages/db/src/generated/**",
-      "shopify-app/**",
-      // Session worktrees are whole copies of the repo inside the main checkout. (.claude/*.mjs, the
-      // committed demo servers, are still linted.)
-      ".claude/worktrees/**",
-    ],
-  },
+// The only config: ESLint 10 looks for eslint.config.* from each file's folder up, so one placed in
+// a subfolder would replace this one for everything below it.
+export default defineConfig(
+  globalIgnores([
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "**/cdk.out/**",
+    "apps/web/out/**",
+    "apps/web/out-*/**",
+    "apps/web/next-env.d.ts",
+    "apps/web/test-results/**",
+    "apps/web/playwright-report/**",
+    "packages/db/src/generated/**",
+    "shopify-app/**",
+    // Session worktrees are whole copies of the repo inside the main checkout, each with its own
+    // eslint.config.mjs. (.claude/*.mjs, the committed demo servers, are still linted.)
+    ".claude/worktrees/**",
+  ]),
   js.configs.recommended,
-  ...tseslint.configs.recommended,
+  tseslint.configs.recommended,
   {
     rules: {
       // `_name` marks a value that is deliberately unused (a destructured field left out, a

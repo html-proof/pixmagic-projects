@@ -107,7 +107,7 @@ export function CloudSignup({ base, signup, onConnected }: { base: string; signu
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      let host = "";
+      let host: string;
       try {
         host = new URL(event.origin).hostname;
       } catch {

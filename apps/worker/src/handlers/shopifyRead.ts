@@ -190,7 +190,7 @@ async function fetchOrderAgreements(
     let current: RawAgreement | null = null;
     const sales: unknown[] = [];
     let salesCursor: string | null = null;
-    let next: Page<unknown>["pageInfo"] | null = null;
+    let next: Page<unknown>["pageInfo"];
     for (;;) {
       const d: { order: ({ updatedAt: string; agreements: Page<RawAgreement> } & Record<string, unknown>) | null } = await gql(deps, store, pace, query, {
         id: orderId,
@@ -210,7 +210,7 @@ async function fetchOrderAgreements(
       salesCursor = info.endCursor;
     }
     if (current) agreements.push({ ...current, sales: { nodes: sales } });
-    if (!next?.hasNextPage || !next.endCursor) {
+    if (!next.hasNextPage || !next.endCursor) {
       return { updatedAt: updatedAt ?? new Date().toISOString(), agreements, history: history ?? { customerOrderIndex: null, customerOrderCount: null } };
     }
     cursor = next.endCursor;

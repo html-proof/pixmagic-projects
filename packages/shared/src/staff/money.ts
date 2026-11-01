@@ -36,7 +36,7 @@ export function isCurrencyCode(code: string): boolean {
 export function currencyExponent(currency: string): number {
   const cached = exponents.get(currency);
   if (cached !== undefined) return cached;
-  let exp = 2;
+  let exp: number;
   try {
     exp = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
   } catch {

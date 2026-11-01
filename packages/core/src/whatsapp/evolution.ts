@@ -202,7 +202,7 @@ export function evolutionClient(shard: string, fetchImpl: FetchLike) {
       }
       clearTimeout(timer);
       const text = await res.text().catch(() => "");
-      let body: unknown = null;
+      let body: unknown;
       try {
         body = text ? JSON.parse(text) : null;
       } catch {
