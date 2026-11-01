@@ -1,11 +1,13 @@
 "use client";
 import { FlaskConical } from "lucide-react";
-import type { StoreSummary } from "@/components/AppContext";
+import { META_STATE_INFO } from "@app/shared/metaDiscovery";
+import { useApp, type StoreSummary } from "@/components/AppContext";
 import { friendlyError } from "@/lib/api";
 import { accountLabel, adLoginOf, stateInfo, type AdConnection, type AdProvider, type AdState } from "@/lib/adConnections";
 import { loginOfPlatform, loginWords } from "../settings/ads/LoginPanel";
 import { AD_PLATFORMS } from "./adPlatforms";
 import { ConnectButton, IntegrationRow, ManageLink, RowPill } from "./IntegrationRow";
+import { MetaDiscoveryNote, useMetaDiscovery } from "./MetaDiscovery";
 import type { useAdConnections } from "./useAdConnections";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +59,17 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
   // Signed in with no ad account yet: connected, its accounts follow by themselves.
   const login = mine.length ? null : adLoginOf(answer, p);
 
+  // Meta, found through the store's Shopify connection (MetaDiscovery.tsx): seen in Shopify's orders
+  // with nothing authorized for bizinsights, a sign-in of theirs to reuse, or one that stopped.
+  const { workspace, allowed } = useApp();
+  const discoveryBase = p === "meta" && store && allowed("integrations.status") ? `/workspaces/${workspace.id}/stores/${store.id}` : null;
+  const discovery = useMetaDiscovery(discoveryBase).data;
+  const seenInShopify = !mine.length && !login && discovery?.state === "CONNECTED_IN_SHOPIFY";
+  const metaNote =
+    discovery && discoveryBase && store && (discovery.state !== "NOT_CONNECTED" || discovery.action === "reuse") ? (
+      <MetaDiscoveryNote d={discovery} storeBase={discoveryBase} storeId={store.id} connectHere={false} />
+    ) : null;
+
   const action =
     mine.length > 0 || login ? (
       <ManageLink name={P.name} href="/settings/ads" attention={ATTENTION.has(state)} />
@@ -80,6 +93,7 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
       <p data-testid={`int-${p}-accounts`}>
         <span className="text-muted">{mine.length > 1 ? "Accounts" : "Account"}:</span> {accountsLine(mine)}
       </p>
+      {metaNote}
       {/* Only the demo so far: the real sign-in is still to be had. */}
       {canAct && configured && mine.every((c) => c.demo) && (
         <button type="button" className="text-accent underline-offset-2 hover:underline" onClick={connect} disabled={!!ads.busy} data-testid={`int-add-${p}`}>
@@ -92,6 +106,8 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
       <span className="text-muted">Signed in as:</span> {login.name ?? `Your ${loginOfPlatform(login)}`}
       <span className="text-muted"> · {loginWords(login).short}</span>
     </p>
+  ) : metaNote ? (
+    metaNote
   ) : state === "coming_soon" ? (
     <p className="text-muted">{P.name} sign-in is being switched on for bizinsights.</p>
   ) : canAct && configured && demoOffered ? (
@@ -111,7 +127,13 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
       logo={<P.Icon size={p === "meta" ? 46 : 42} />}
       name={P.name}
       sub={SUB[p]}
-      pill={<RowPill label={s.label} tone={s.tone} busy={s.busy} state={state} />}
+      pill={
+        seenInShopify ? (
+          <RowPill label={META_STATE_INFO.CONNECTED_IN_SHOPIFY.label} tone="info" state="connected_in_shopify" />
+        ) : (
+          <RowPill label={s.label} tone={s.tone} busy={s.busy} state={state} />
+        )
+      }
       action={action}
       brings={P.reads.map((r) => r.label)}
     >

@@ -10,13 +10,14 @@ import type { StateTone } from "@/lib/adConnections";
 // one button (Connect, or Manage once connected) and the chips of what it brings.
 // ---------------------------------------------------------------------------
 
-const TONE_COLOR: Record<StateTone, string> = { good: "var(--good)", warn: "var(--warn)", danger: "var(--danger)", neutral: "var(--muted)" };
+/** "info": Meta seen in Shopify, with nothing authorized for bizinsights (MetaDiscovery.tsx): known, and not a connection. */
+const TONE_COLOR: Record<StateTone | "info", string> = { good: "var(--good)", warn: "var(--warn)", danger: "var(--danger)", neutral: "var(--muted)", info: "var(--info)" };
 
 /**
  * Where a platform stands, as a tinted pill with a dot: the label always says it, the colour backs it
  * up, and the dot pulses while something is under way.
  */
-export function RowPill({ label, tone, busy = false, state }: { label: string; tone: StateTone; busy?: boolean; state: string }) {
+export function RowPill({ label, tone, busy = false, state }: { label: string; tone: StateTone | "info"; busy?: boolean; state: string }) {
   return (
     <span className="tone-pill px-3 py-1 text-[0.8125rem] font-medium" style={{ ["--tone" as string]: TONE_COLOR[tone] }} data-testid="platform-state" data-state={state}>
       <span aria-hidden className="relative inline-flex size-2 shrink-0">

@@ -31,6 +31,7 @@
     "./salesCalculation": "./src/salesCalculation.ts",
     "./sms": "./src/sms.ts",
     "./messaging": "./src/messaging.ts",
+    "./metaDiscovery": "./src/metaDiscovery.ts",
     "./orders": "./src/orders.ts",
     "./whatsapp": "./src/whatsapp.ts",
     "./traffic": "./src/traffic.ts",

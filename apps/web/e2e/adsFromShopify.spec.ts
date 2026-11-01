@@ -66,6 +66,13 @@ test("with no ad account connected, Advertising shows Meta's and Google's sales 
   await expect(card).toContainText("Google Ads");
   await expect(card).toContainText("$60.00");
   await expect(page.getByTestId("home-advertising").getByRole("link", { name: "Connect ad accounts" })).toBeVisible();
+  // Meta, found through Shopify: seen in these orders (the three of the last 90 days), and said not to be authorized for bizinsights.
+  const found = page.getByTestId("home-advertising").getByTestId("meta-discovery");
+  await expect(found).toHaveAttribute("data-state", "CONNECTED_IN_SHOPIFY");
+  await expect(found).toHaveAttribute("data-marker", "CONNECTED_IN_SHOPIFY_BUT_NOT_AUTHORIZED_FOR_OUR_APP");
+  await expect(found).toContainText("Not authorized for bizinsights yet");
+  await expect(found).toContainText("3 orders from Facebook and Instagram in the last 90 days");
+  await expect(found).toContainText("Shopify doesn't share its own Meta access with other apps");
 
   // The Advertising overview: both platforms from the orders, under one line saying none is connected.
   await page.goto(`/advertising?${dates}`);
@@ -94,9 +101,11 @@ test("with no ad account connected, Advertising shows Meta's and Google's sales 
   await expect(page.getByTestId("advertising-not-connected").getByRole("link", { name: "Connect Meta Ads" })).toBeVisible();
   await expect(page.getByTestId("shopify-meta-sales-value")).toHaveText("$140.00");
   await expect(page.getByTestId("shopify-ads-google")).toHaveCount(0);
+  await expect(page.getByTestId("meta-discovery")).toHaveAttribute("data-state", "CONNECTED_IN_SHOPIFY");
 
   // AdSense: what a site earns from ads isn't in the orders, so there's only the way to connect it.
   await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "AdSense" }).click();
   await expect(page.getByTestId("advertising-not-connected")).toContainText("Shopify doesn't record them");
   await expect(page.getByTestId("ads-from-shopify")).toHaveCount(0);
+  await expect(page.getByTestId("meta-discovery")).toHaveCount(0);
 });

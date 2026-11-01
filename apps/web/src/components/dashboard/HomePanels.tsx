@@ -7,6 +7,7 @@ import { trafficSourcePlatform, type AdSpendProvider } from "@app/shared/ads";
 import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
 import type { OrderOutcomes } from "@app/shared/orders";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
+import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { shownFigures, upToWords } from "./adFigures";
@@ -497,6 +498,10 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
         <p className="mt-4 text-xs text-muted">
           The visit Shopify recorded before each order (the last click). Connect Google Ads or Meta Ads to add what you spend, the clicks and the return on ad spend.
         </p>
+        {/* Meta, found through the store's Shopify connection: seen in these orders, or a sign-in of theirs to use here. */}
+        <div className="mt-3 border-t border-border pt-3 empty:hidden">
+          <StoreMetaDiscovery compact />
+        </div>
         <div className="mt-3">
           {manage ? (
             <Link href="/settings/integrations" className="btn-primary text-xs">Connect ad accounts</Link>

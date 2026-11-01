@@ -46,6 +46,8 @@ import {
   peekPendingAdConnect,
   pendingTokens,
   readAdSignIn,
+  readReusedMetaSignIn,
+  reusableMetaSignIn,
   releaseAdLogin,
   REQUIRED_AD_SCOPE,
   revokeAdAccessIfUnused,
@@ -61,6 +63,7 @@ import {
   type GoogleReport,
   type MetaReport,
   type NoAdAccountsReason,
+  type ReusedMetaSignIn,
   type TokenSet,
 } from "@app/core";
 import {
@@ -656,6 +659,47 @@ export function adsRoutes(app: App, deps: Deps) {
     if (!url) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
     setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
     return c.json({ url });
+  });
+
+  /**
+   * Connect this store's Meta ad accounts with the Meta sign-in the person already gave bizinsights
+   * for another of their stores (core's adConnections/reuse.ts): Meta's screen isn't shown again for a
+   * permission bizinsights holds already. As after a sign-in, one ad account (or only ones connected
+   * already) connects at once (`connected`); more wait for the person's choice on Settings →
+   * Advertising (`choose`, the pending choice's nonce).
+   */
+  app.post("/workspaces/:ws/stores/:storeId/ads/meta/reuse", async (c) => {
+    const { ws, storeId } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
+    const user = access.user!;
+    if (!user.emailVerified) throw new HttpError(403, "Verify your email first", "email_unverified");
+    await storeInWorkspace(ws, storeId);
+    if (!adsConfigured().meta) throw new HttpError(503, `${AD_PROVIDER_NAME.meta} isn't set up on this server yet.`, "not_configured");
+    // It lists the sign-in's ad accounts against Meta's quota, as a sign-in's callback does.
+    await limit(deps.coord, `rl:ads-connect:${user.id}`, LIMITS.adsConnect, "That's a lot of sign-ins in a short time. Wait a few minutes and try again.");
+    const source = await reusableMetaSignIn(user.id, storeId);
+    if (!source) throw new HttpError(404, "You have no Meta sign-in to use here. Connect Meta instead.", "reuse_unavailable");
+    let read: ReusedMetaSignIn;
+    try {
+      read = await readReusedMetaSignIn(source, deps.fetchImpl);
+    } catch (err) {
+      if (err instanceof AdsAuthError) throw new HttpError(409, "Meta no longer accepts that sign-in. Connect Meta to sign in again.", "reuse_ended");
+      if (err instanceof AdsNoAccountsError) throw new HttpError(409, "That Meta sign-in reaches no ad account. Connect Meta with a Facebook login that can see this store's ads.", "no_accounts");
+      const code = connectFailure(err, "meta", storeId);
+      if (code === "not_configured" || code === "temporarily_unavailable") throw new HttpError(503, "Meta didn't answer just now. Try again in a minute.", code, 60);
+      throw new HttpError(502, "Meta didn't list your ad accounts. Try again, or connect Meta instead.", code);
+    }
+    logger.info({ storeId, fromStoreId: source.storeId, accounts: read.accounts.length }, "ads: meta sign-in reused for another store");
+    const known = await systemDb.adConnection.findMany({ where: { storeId, provider: "meta" }, select: { accountId: true } });
+    const knownIds = new Set(known.map((k) => k.accountId));
+    if (!read.accounts.truncated && (read.accounts.length === 1 || read.accounts.every((a) => knownIds.has(a.accountId)))) {
+      const saved = await connectAccounts(deps, clientIp(c), { workspaceId: ws, storeId, provider: "meta", accounts: read.accounts, tokens: read.tokens, userId: user.id, externalUserId: read.externalUserId });
+      return c.json({ connected: saved.length });
+    }
+    const pick = randomToken(24);
+    // The grant powers the other store already: cancelling this choice must never take it back (dropUnusedGrant).
+    await holdPendingAdConnect(deps.coord, pick, { userId: user.id, workspaceId: ws, storeId, provider: "meta", accounts: read.accounts, tokens: read.tokens, externalUserId: read.externalUserId, reusedRefreshToken: true });
+    return c.json({ choose: pick });
   });
 
   /** Step 2: the platform sends the browser back here with a code (or with the person's "no"). */

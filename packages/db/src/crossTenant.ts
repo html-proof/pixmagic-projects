@@ -16,7 +16,7 @@ export const CROSS_TENANT_REASONS = {
   already_connected:
     "Whether a WhatsApp number is connected to a store of another workspace (a number is unique across bizinsights): only yes or no comes back.",
   ad_grants:
-    "A person's own Google or Meta grant, which may power connections in several workspaces: whether it still powers one before bizinsights takes it back at the platform (taking it back ends every connection on it), who granted the connections that never learned it, and the refresh token they gave before, reused on their next sign-in (adConnections/connect.ts).",
+    "A person's own Google or Meta grant, which may power connections in several workspaces: whether it still powers one before bizinsights takes it back at the platform (taking it back ends every connection on it), who granted the connections that never learned it, the refresh token they gave before, reused on their next sign-in (adConnections/connect.ts), and their own Meta sign-in for another of their stores, used for a new store without Meta's screen (adConnections/reuse.ts).",
 
   // --- API requests outside /workspaces/:ws (apps/api/src/rowScope.ts lists the paths).
   sign_in: "Sign-in, sign-up, account and session routes: the person's own workspaces and memberships, before any one workspace is chosen.",
