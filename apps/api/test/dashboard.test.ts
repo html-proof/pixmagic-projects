@@ -1198,12 +1198,15 @@ describe("scopes and tenancy", () => {
 
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
     // The owner's own costs (Settings → Costs) go with the sales they're set against.
-    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
+    // With no ad account, Meta's and Google's figures come from the orders (ad_sources, ads_from_shopify).
+    expect(Object.keys(o.modules).sort()).toEqual(["ad_sources", "ads_from_shopify", "channels", "discount_codes", "expenses", "fulfillment", "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
     expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null, history: { access: "awaiting_shopify", years: [] } });
 
     const p = (await overview(a.headers, ws, productsOnly.id)).json();
-    expect(Object.keys(p.modules).sort()).toEqual(["catalog", "inventory"]);
+    // No orders read: no source for Meta's or Google's figures, said as such (ad_sources "none"), never figures.
+    expect(Object.keys(p.modules).sort()).toEqual(["ad_sources", "catalog", "inventory"]);
+    expect(p.modules.ad_sources.map((s: { source: string }) => s.source)).toEqual(["none", "none"]);
     expect(p.modules.inventory.current).toMatchObject({ trackedVariants: 1, unitsInStock: 4, lowStock: 1 });
     expect(p.data).toMatchObject({ products: 1, variants: 1, orders: 0 });
   });
