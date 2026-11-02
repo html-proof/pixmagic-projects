@@ -143,11 +143,13 @@ describe("reading what the store's marketing apps report to Shopify", () => {
 
   it("keeps a window cut at the page limit only up to the day before the last it reached", async () => {
     const store = await makeStore();
-    // Every page full: the days come oldest first, so the newest are the ones cut off.
+    // Every page full: the days come oldest first, so the newest are the ones cut off. Every page the
+    // same rows, too: a row repeated on a later page is kept once (49 days of 20 channels).
     const full = Array.from({ length: 1000 }, (_, i) => channelRow(day(-89 + Math.floor(i / 20)), `Channel ${i % 20}`, "App", "1.00", 1));
     answer = (q) => (q.includes("marketing_campaign") ? table([]) : table(full));
     const res = await runShopifyMarketing({ kind: "shopify_marketing", storeId: store.id, mode: "recent" }, deps);
-    expect(res).toMatchObject({ status: "done", from: day(-89), to: day(-41) });
+    expect(res).toMatchObject({ status: "done", from: day(-89), to: day(-41), rows: 980 });
+    expect(await systemDb.shopifyMarketingDay.count({ where: { storeId: store.id } })).toBe(980);
     expect(await systemDb.shopifyMarketingDay.count({ where: { storeId: store.id, day: { gt: day(-41) } } })).toBe(0);
     expect(await systemDb.shopifyMarketingSync.findUniqueOrThrow({ where: { storeId: store.id } })).toMatchObject({ syncedThrough: day(-41) });
   });

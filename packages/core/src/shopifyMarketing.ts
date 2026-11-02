@@ -89,6 +89,9 @@ function tableRows(answer: ShopifyqlTable["shopifyqlQuery"]): Array<Record<strin
   });
 }
 
+/** A row's key as kept within a store (day, channel, app, campaign; '' for no app, no campaign). */
+const rowKey = (r: Pick<MarketingRow, "day" | "channel" | "app" | "campaign">) => [r.day, r.channel, r.app ?? "", r.campaign ?? ""].join("\u0000");
+
 /**
  * Shopify's rows in ours. A day comes as "2026-10-01" (or with a time after it); a row without one, or
  * a campaign row without a campaign (its figures are in the channel's whole day), is left out. A row
@@ -105,7 +108,7 @@ export function parseMarketingRows(level: MarketingLevel, answer: ShopifyqlTable
     if (level === "campaign" && !campaign) continue;
     const row: MarketingRow = { day, channel, app, campaign, spend: null, impressions: null, clicks: null, orders: null, sales: null, newCustomers: null };
     for (const [shopify, ours] of Object.entries(MARKETING_METRICS)) row[ours] = toNumber(r[shopify]);
-    const key = [day, channel, app ?? "", campaign ?? ""].join("\u0000");
+    const key = rowKey(row);
     const had = out.get(key);
     if (!had) out.set(key, row);
     else {
@@ -134,7 +137,8 @@ export async function fetchShopifyMarketing(store: MarketingStore, w: DateRange,
   try {
     const accessToken = await getAccessToken(store, deps.coord, deps.fetchImpl);
     const call = { shop: store.shopDomain, accessToken, apiVersion: env().SHOPIFY_API_VERSION, fetchImpl: deps.fetchImpl };
-    const rows: MarketingRow[] = [];
+    // By their key: a row Shopify repeats on a later page (its order not quite stable) is kept once, as first read.
+    const rows = new Map<string, MarketingRow>();
     let to = w.to;
     for (const level of ["channel", "campaign"] as const) {
       for (let page = 0; page < MARKETING_MAX_PAGES; page++) {
@@ -149,7 +153,10 @@ export async function fetchShopifyMarketing(store: MarketingStore, w: DateRange,
         }
         const got = tableRows(data.shopifyqlQuery).length;
         const parsed = parseMarketingRows(level, data.shopifyqlQuery);
-        rows.push(...parsed);
+        for (const r of parsed) {
+          const key = rowKey(r);
+          if (!rows.has(key)) rows.set(key, r);
+        }
         if (got < MARKETING_PAGE) break;
         if (page === MARKETING_MAX_PAGES - 1) {
           const last = parsed.reduce((d, r) => (r.day > d ? r.day : d), w.from);
@@ -161,7 +168,7 @@ export async function fetchShopifyMarketing(store: MarketingStore, w: DateRange,
     }
     // Not even its first day fits: a store this busy needs smaller windows than bizinsights reads.
     if (to < w.from) return { error: "unsupported" };
-    return { rows: rows.filter((r) => r.day <= to), to };
+    return { rows: [...rows.values()].filter((r) => r.day <= to), to };
   } catch (err) {
     return { error: reportErrorOf(err, store.shopDomain, "marketing_engagements") };
   }
