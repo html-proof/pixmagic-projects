@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits } from "@app/shared";
+import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits, type ShopifyMarketing } from "@app/shared";
 import {
   audit,
   latestReconciliation,
   logger,
+  requestShopifyMarketing,
   requestShopifyReports,
   revocableOptionalScopesFor,
   revocableScopes,
@@ -76,9 +77,10 @@ export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
 
 /**
  * `parts=advertising`: only what the Advertising pages show (the ad modules, where Meta's and
- * Google's figures come from and their figures from the store's own orders, and the store's sales,
- * traffic, customers and refunds they're set against, with Shopify's product costs and the owner's own
- * costs for the profitability figures), with every campaign; the rest of the dashboard isn't computed.
+ * Google's figures come from, the spend their apps report to Shopify and their figures from the
+ * store's own orders, and the store's sales, Shopify sessions, traffic, customers and refunds they're
+ * set against, with Shopify's product costs and the owner's own costs for the profitability figures),
+ * with every campaign; the rest of the dashboard isn't computed.
  * `parts=funnel`: only what the Shopping Funnel page shows (the funnel in full, narrowed by
  * `funnelQuery`, and the orders, Shopify sessions and traffic sources beside it).
  * `parts=sheet`: only what the Profit sheet shows (/sheet): the sales day by day, the visits day by
@@ -91,6 +93,8 @@ const ADVERTISING_MODULES: ReadonlySet<string> = new Set([
   "ad_configured",
   "ad_sources",
   "ads_from_shopify",
+  "shopify_marketing",
+  "shopify_sessions",
   "sales_overview",
   "channels",
   "traffic",
@@ -215,6 +219,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
 
     let polled: Parameters<typeof autoRefresh>[1] | null = null;
     let reports: ReportRequest[] = [];
+    let marketingFirstRead = false;
     const body = await withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
       if (!store) throw new HttpError(404, "Not found", "not_found");
@@ -223,6 +228,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
       const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
       const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView, { visitsByDay: q.parts === "sheet" }), access);
       reports = report.shopifyRefresh;
+      // Granted Shopify's reports and never read its marketing report: read it now rather than at the next tick.
+      marketingFirstRead = (report.modules.shopify_marketing as ShopifyMarketing | undefined)?.status === "syncing";
       return {
         store: publicStore(store),
         syncProblem: report.syncProblem,
@@ -245,6 +252,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       await autoRefresh(deps, polled).catch((err) => logger.warn({ err, storeId }, "auto refresh failed"));
       // Shopify's own report figures this answer lacked or held stale: the worker fetches them, a later poll shows them.
       if (reports.length) await requestShopifyReports(deps, polled, reports).catch((err) => logger.warn({ err, storeId }, "shopify reports request failed"));
+      if (marketingFirstRead) await requestShopifyMarketing(deps, polled, "recent").catch((err) => logger.warn({ err, storeId }, "shopify marketing request failed"));
     }
     return c.json(body);
   });

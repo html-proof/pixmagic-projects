@@ -30,7 +30,7 @@ test("Shopify keeps its capital in every sentence about removing the reports per
 
 test("removing the reports permission names the sales check and the product costs too, not only its reports", () => {
   const { consequence } = revokeWords("read_reports", "x.myshopify.com");
-  for (const part of ["Sessions and visitors (Shopify)", "Gross profit", "the check of your sales against Shopify's sales report", "the product costs and net profit in Business profit overview"]) assert.ok(consequence.includes(part), `${part}: ${consequence}`);
+  for (const part of ["Sessions and visitors (Shopify)", "Gross profit", "Ad spend reported to Shopify", "the check of your sales against Shopify's sales report", "the product costs and net profit in Business profit overview"]) assert.ok(consequence.includes(part), `${part}: ${consequence}`);
   assert.match(consequence, / will stop working until you grant it again\.$/);
   // The daily check beside the store's status reads orders and keeps working: not named.
   assert.doesNotMatch(consequence, /Checked against Shopify/);

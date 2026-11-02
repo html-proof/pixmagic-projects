@@ -14,14 +14,16 @@ import { ChangeText } from "@/components/dashboard/HomeCards";
 import type { AdsModule, AdsProviderFigures, Overview } from "@/components/dashboard/types";
 import { AdCard, CardLink, EmptyNote, MiniFigure } from "./AdCard";
 import { PLATFORM_COLOR } from "./AdvertisingUi";
+import { MarketingPlatformFigures } from "./ShopifyMarketing";
 import { adSourcesOf, SourceBadge } from "./sources";
 
 // ---------------------------------------------------------------------------
 // Meta Ads and Google Ads on the Advertising overview, a card each, from wherever the platform's figures
 // come from (`ad_sources`): its own API once an account is connected (spend, impressions, clicks and the
-// purchases it credits to its ads, with what Shopify credits beside them), the store's Shopify orders
-// before that or once its access has ended (never a spend, click or ROAS, which only the platform knows),
-// or the way to connect it. Then the two side by side, with which does better on each measure.
+// purchases it credits to its ads, with what Shopify credits beside them); before that or once its access
+// has ended, what its app reports to Shopify (`marketing`: spend, impressions, clicks, by the channel's
+// own count) or else the store's Shopify orders (never a spend, click or ROAS, which only the platform
+// knows); or the way to connect it. Then the two side by side, with which does better on each measure.
 // ---------------------------------------------------------------------------
 
 const NAME: Record<AdSpendProvider, string> = { meta: "Meta Ads", google: "Google Ads" };
@@ -211,6 +213,13 @@ export function PlatformCard({ ov, provider, manage }: { ov: Overview; provider:
           <EmptyNote>
             Your {NAME[provider]} accounts report in another currency than your other ad accounts, so they aren&apos;t added up here: see {NAME[provider]}.
           </EmptyNote>
+        ) : src.marketing && ov.modules.shopify_marketing ? (
+          <>
+            <MarketingPlatformFigures ov={ov} provider={provider} />
+            <div className="pt-3">
+              <ConnectLink manage={manage} provider={provider} state={src.state} />
+            </div>
+          </>
         ) : src.source === "shopify" ? (
           <ShopifyFigures ov={ov} provider={provider} state={src.state} manage={manage} />
         ) : (

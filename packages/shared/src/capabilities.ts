@@ -20,6 +20,7 @@ export type ModuleId =
   | "catalog"
   | "shopify_sessions"
   | "profit"
+  | "shopify_marketing"
   | "abandoned_checkouts"
   | "stock_levels"
   | "stock_adjustments";
@@ -133,6 +134,14 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
     description: "Shopify's gross profit and cost of goods sold, from the cost per item recorded with each sale.",
     requiredScopes: ["read_reports"],
   },
+  // What the store's marketing apps (Facebook & Instagram, Google & YouTube...) report to Shopify about
+  // their ads (packages/core/src/shopifyMarketing.ts): Meta's and Google's spend with nothing else to connect.
+  {
+    id: "shopify_marketing",
+    title: "Ad spend reported to Shopify",
+    description: "The spend, impressions and clicks your Facebook & Instagram, Google & YouTube and other marketing apps report to Shopify, without connecting each ad account.",
+    requiredScopes: ["read_reports"],
+  },
   // Shopify's own abandoned checkouts list, counted and added up (packages/core/src/shopifyCheckouts.ts):
   // counts, money and dates only, never who the shoppers were.
   {
@@ -191,7 +200,7 @@ export const SCOPE_LABELS: Record<string, { title: string; description: string }
   },
   read_reports: {
     title: "Your Shopify reports",
-    description: "Shopify's own sessions, visitors and gross profit figures, and its sales report to check ours against.",
+    description: "Shopify's own sessions, visitors and gross profit figures, the ad spend your marketing apps report to it, and its sales report to check ours against.",
   },
   read_inventory: {
     title: "Your stock levels",

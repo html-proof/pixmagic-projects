@@ -283,6 +283,53 @@ switched: connecting a platform replaces its Shopify figures with its own on the
 falls back to the orders, and reconnecting brings the platform's own back. The platform's own figures and the
 Shopify-attributed sales are never added together. Team & Access: `ad_sources` goes with "View advertising analytics".
 
+A platform whose source isn't `platform` also carries `marketing: true` when its app reports its spend to
+Shopify for the dates (below): its spend, impressions and clicks then come from that report, badged
+"Reported to Shopify", with the store's orders from its sites beside them. Never while its own API's
+figures are shown, so no spend is counted twice.
+
+## Shopify marketing: the spend the store's apps report to Shopify
+
+The first place bizinsights looks for Meta's and Google's spend, with nothing to connect but Shopify. The
+Facebook & Instagram app, the Google & YouTube app and other channel apps send Shopify their own figures
+for the campaigns they run for the store (Shopify's `marketingEngagementCreate`); Shopify's ShopifyQL
+dataset `marketing_engagements` gives them back by day, channel (`marketing_channel`: "Meta Ads",
+"Google Ads", or the app's name), app (`marketing_app_name`) and campaign (`marketing_campaign`). It needs
+`read_reports`, as Shopify's sessions and gross profit do (capability `shopify_marketing`, "Ad spend
+reported to Shopify").
+
+A connected Facebook or Google channel doesn't guarantee spend: only what the app reports is there. A
+channel that reports clicks or sales but no spend has its spend "Data unavailable" (`no_spend`), and a
+platform that reports nothing to Shopify is `unavailable`: no figure at all, never a 0. Orders and sales in
+this report are the channel's own claim (its attribution), not the store's orders.
+
+- **Reading:** packages/core/src/shopifyMarketing.ts, run by the worker (apps/worker/src/shopifyMarketing.ts)
+  as the sync-queue job `shopify_marketing`. The 15-minute tick queues, on per-store leases: the last 3 days
+  every 6 hours (`recent`; after a gap, from the day before the last day read), the last 7 days once a day
+  (`reconcile`, for Shopify's up-to-24-hour delay and channels revising their spend), and the history back to
+  the store's first day 90 days at a time (`backfill`, one walk at a time; each window queues the next). A
+  store read for the first time gets its last 90 days first, also asked for by the dashboard's first visit.
+  Each read asks both levels (channel and campaign), paging by 1,000 rows, and replaces the stored rows of
+  its days in one transaction: a row's key is store, day, channel, app and campaign, so reading a day again
+  never counts it twice. Shopify refusing (no access, a report it won't run) is kept on the store's sync row
+  (`last_error`, `consecutive_failures`) for the next schedule; a failed call is retried by the queue's
+  backoff (Shopify's throttling is waited out in `shopifyGraphqlWithCost`).
+- **Tables:** `shopify_marketing_days` (campaign `''` = the channel's whole day, what totals add up; the
+  named campaigns only its breakdown) and `shopify_marketing_syncs` (`covered_from`, `synced_through`,
+  `backfilled`, the last read's outcome). Both under row-level security; deleted with the store.
+- **API:** the module `shopify_marketing` of `…/overview` (dashboard and `parts=advertising`):
+  Meta and Google always (each `reported`, `no_spend` or `unavailable`, with totals, CTR, CPC, CPM, ROAS,
+  cost per order, cost per new customer, day by day, the 10 campaigns that spent most and the last day
+  reported), the other channels that reported spend, every reported spend together, the sync state and the
+  first day read. Compared with the dates before only once the dates are over and read back that far.
+  Built by `@app/shared/shopifyMarketing`. Team & Access: "View advertising analytics"; its campaigns also
+  "View campaigns".
+- **Where:** the overview's "Ad spend reported to Shopify" card (total advertising expenses, each part named
+  by where it comes from: a platform's own API or its report to Shopify; per platform; other channels;
+  campaigns; Shopify's own sessions, visitors and conversion rate), the platform cards and the dashboard's
+  Advertising performance tab of a platform whose figures come from it. Each figure says its source, dates,
+  currency (the store's: Shopify reports every channel in it) and when it was last read.
+
 ## The Shopify orders stand in
 
 A spend platform whose source is `shopify` isn't an empty page. Its figures come from the store's own

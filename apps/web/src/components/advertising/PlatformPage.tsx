@@ -6,6 +6,7 @@ import { AdsenseDetail } from "@/components/dashboard/AdsensePanel";
 import { Explained } from "@/components/dashboard/Explain";
 import { AccountGone, AccountSelect, AdvertisingBody, AdvertisingHeader, DownloadCsv, NotConnected, PLATFORM } from "./AdvertisingUi";
 import { FromShopify } from "./FromShopify";
+import { MarketingPlatformCard } from "./ShopifyMarketing";
 import { fromShopifyOf } from "./sources";
 import { useAccountChoices, useAdvertising } from "./useAdvertising";
 
@@ -15,7 +16,8 @@ import { useAccountChoices, useAdvertising } from "./useAdvertising";
 // against the store's whole sales here (the overview does that, for all of it); AdSense's earnings
 // sit next to the store's sales as on the dashboard, except for one account picked. Meta Ads or
 // Google Ads with no account connected shows what the store's Shopify orders record of it instead, and
-// so does one whose access ended before the dates were read, under its accounts' own state.
+// so does one whose access ended before the dates were read, under its accounts' own state; before them,
+// what its app reports to Shopify when it reports its spend there.
 // ---------------------------------------------------------------------------
 
 const ABOUT: Record<AdProvider, string> = {
@@ -73,14 +75,16 @@ export function PlatformPage({ platform }: { platform: AdProvider }) {
             <>
               <AdsDetail ov={ov} />
               <Explained topic="ads" ov={ov} currency={ov.modules.ads.currency} />
-              {/* Its access ended before these dates were read: the store's own orders meanwhile. */}
+              {/* Its access ended before these dates were read: what its app reports to Shopify, and the store's own orders, meanwhile. */}
+              {!s.account && <MarketingPlatformCard ov={ov} provider={platform} />}
               {!s.account && <FromShopify ov={ov} platforms={fromShopifyOf(ov, platform)} />}
             </>
           ) : (
-            <>
-              <NotConnected ov={ov} platform={platform} compact={!!ov.modules.ads_from_shopify} />
+            <div className="space-y-4">
+              <NotConnected ov={ov} platform={platform} compact={!!ov.modules.ads_from_shopify || !!ov.modules.shopify_marketing} />
+              <MarketingPlatformCard ov={ov} provider={platform} />
               <FromShopify ov={ov} platforms={[platform]} />
-            </>
+            </div>
           )
         }
       </AdvertisingBody>

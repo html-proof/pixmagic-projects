@@ -13,6 +13,7 @@
     "./adsAnalytics": "./src/adsAnalytics.ts",
     "./adsDemo": "./src/adsDemo.ts",
     "./adsFromShopify": "./src/adsFromShopify.ts",
+    "./shopifyMarketing": "./src/shopifyMarketing.ts",
     "./alerts": "./src/alerts.ts",
     "./auth": "./src/auth.ts",
     "./businessEvents": "./src/businessEvents.ts",

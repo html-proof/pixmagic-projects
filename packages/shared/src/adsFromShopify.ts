@@ -252,9 +252,10 @@ export function adsFromShopifyWithoutAttribution(m: AdsFromShopify): AdsFromShop
 
 // ---------------------------------------------------------------------------
 // Where each spend platform's figures come from, Meta and Google each on its own: the platform's own
-// API (its connected ad accounts' stored days) first, the store's Shopify orders above otherwise, and
-// nothing rather than a made-up figure. Decided on every read, so connecting a platform replaces its
-// Shopify figures with its own at once, a connection whose access ends falls back to the orders, and
+// API (its connected ad accounts' stored days) first; otherwise what Shopify has: the spend its app
+// reports to Shopify (`marketing`, shopifyMarketing.ts) and the store's orders above; and nothing
+// rather than a made-up figure. Decided on every read, so connecting a platform replaces its Shopify
+// figures with its own at once, a connection whose access ends falls back to Shopify's, and
 // reconnecting brings the platform's own back, with nothing for the merchant to switch.
 // ---------------------------------------------------------------------------
 
@@ -274,6 +275,12 @@ export interface AdPlatformSource {
   provider: AdSpendProvider;
   source: AdDataSource;
   state: AdConnectionState;
+  /**
+   * Its spend, impressions and clicks come from what its app (Facebook & Instagram, Google & YouTube)
+   * reports to Shopify (`shopify_marketing`): Shopify has its spend for the dates and its own API's
+   * figures aren't shown. Never beside them, so no spend is counted twice. Absent: false.
+   */
+  marketing?: boolean;
 }
 
 /** What decides one platform's source. */
@@ -296,14 +303,16 @@ const accessLost = (a: AdSourceFacts["accounts"][number]) => NEEDS_SOMEONE.has(a
  * Each spend platform's source. Its own figures whenever its accounts still sync, or have stored the
  * dates even from an account whose access has ended since (what the platform reported then stays
  * true); otherwise the store's orders, when `attribution` (the store's traffic sources are read, and
- * the member may see them); otherwise none. A platform whose access ended and with no orders to show
- * keeps its own view, which says what to reconnect.
+ * the member may see them); otherwise none. Beside the orders (or with none), the spend its app
+ * reported to Shopify when `marketing` says Shopify has it for the dates. A platform whose access
+ * ended, with neither orders nor reported spend to show, keeps its own view, which says what to reconnect.
  */
-export function adPlatformSources(facts: Record<AdSpendProvider, AdSourceFacts>, attribution: boolean): AdPlatformSource[] {
+export function adPlatformSources(facts: Record<AdSpendProvider, AdSourceFacts>, attribution: boolean, marketing: Partial<Record<AdSpendProvider, boolean>> = {}): AdPlatformSource[] {
   return (["meta", "google"] as const).map((provider) => {
     const f = facts[provider];
+    const reported = !!marketing[provider];
     const state: AdConnectionState = f.accounts.length ? (f.accounts.every(accessLost) ? "access_lost" : "connected") : f.waiting ? "waiting" : f.hidden > 0 ? "hidden" : "not_connected";
-    const own = state === "connected" || (state === "access_lost" && (f.figures || !attribution));
-    return { provider, state, source: own ? "platform" : attribution ? "shopify" : "none" };
+    const own = state === "connected" || (state === "access_lost" && (f.figures || (!attribution && !reported)));
+    return { provider, state, source: own ? "platform" : attribution ? "shopify" : "none", ...(reported && !own ? { marketing: true } : {}) };
   });
 }

@@ -10,7 +10,8 @@ import { PerformanceOverview, PlatformShare } from "@/components/advertising/Per
 import { PlatformCard, PlatformsVs } from "@/components/advertising/PlatformCards";
 import { ProfitSummary } from "@/components/advertising/Profitability";
 import { SalesBySite } from "@/components/advertising/SalesBySite";
-import { fromShopifyOf } from "@/components/advertising/sources";
+import { ShopifyMarketingCard } from "@/components/advertising/ShopifyMarketing";
+import { adSourcesOf, fromShopifyOf } from "@/components/advertising/sources";
 import { TopCampaigns } from "@/components/advertising/TopCampaigns";
 import { useAdvertising } from "@/components/advertising/useAdvertising";
 import { AdStatusNotes, AD_DEFINITIONS, Definitions } from "@/components/dashboard/AdsCommon";
@@ -22,8 +23,9 @@ import { plural } from "@/components/dashboard/format";
  * against that value over the dates, how the spend splits, and the funnel from an ad shown to a purchase
  * in the store; Meta Ads and Google Ads a card each (from their own API, or the store's Shopify orders
  * while one isn't connected or its access ended, `ad_sources`); what stands out; the campaigns that spent
- * most, where the buyers came from and whether it made money; the two platforms side by side. With no
- * ad account at all, what the store's Shopify orders show of Meta and Google instead (FromShopify).
+ * most, where the buyers came from and whether it made money; the two platforms side by side. Beside
+ * them, what the store's marketing apps report to Shopify (ShopifyMarketingCard). With no ad account at
+ * all, that report first, Meta and Google from it, and what the store's Shopify orders show of them (FromShopify).
  */
 export default function AdvertisingOverviewPage() {
   const { allowed } = useApp();
@@ -50,10 +52,17 @@ export default function AdvertisingOverviewPage() {
           const a = ov.modules.ads;
           if (!a && !ov.modules.adsense) {
             return (
-              <>
-                <NotConnected ov={ov} compact={!!ov.modules.ads_from_shopify} />
+              <div className="@container space-y-4">
+                <NotConnected ov={ov} compact={!!ov.modules.ads_from_shopify || !!ov.modules.shopify_marketing} />
+                <ShopifyMarketingCard ov={ov} />
+                {adSourcesOf(ov).some((x) => x.marketing) && (
+                  <div className="grid gap-4 @4xl:grid-cols-2">
+                    <PlatformCard ov={ov} provider="meta" manage={manage} />
+                    <PlatformCard ov={ov} provider="google" manage={manage} />
+                  </div>
+                )}
                 <FromShopify ov={ov} platforms={fromShopifyOf(ov)} />
-              </>
+              </div>
             );
           }
           const accounts = [...(a?.accounts ?? []), ...(ov.modules.adsense?.accounts ?? [])];
@@ -78,6 +87,7 @@ export default function AdvertisingOverviewPage() {
                 <PlatformCard ov={ov} provider="google" manage={manage} />
                 <div className="@4xl:col-span-2 @7xl:col-span-1">{a ? <KeyInsights a={a} ov={ov} /> : <SalesBySite ov={ov} />}</div>
               </div>
+              <ShopifyMarketingCard ov={ov} />
               {a && (
                 <>
                   <div className="grid gap-4 @4xl:grid-cols-2 @7xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">

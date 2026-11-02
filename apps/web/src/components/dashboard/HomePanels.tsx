@@ -7,7 +7,7 @@ import type { AdSpendProvider } from "@app/shared/ads";
 import type { AdConnectionState } from "@app/shared/adsFromShopify";
 import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
 import type { OrderOutcomes } from "@app/shared/orders";
-import { adSourcesOf, SourceBadge } from "@/components/advertising/sources";
+import { adSourcesOf, SourceBadge, type BadgeSource } from "@/components/advertising/sources";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -456,7 +456,7 @@ function ConnectAds({ manage, label }: { manage: boolean; label: string }) {
 }
 
 /** "Source:" and the badge naming where a tab's figures come from. */
-function SourceLine({ provider, source }: { provider: AdSpendProvider; source: "platform" | "shopify" }) {
+function SourceLine({ provider, source }: { provider: AdSpendProvider; source: BadgeSource }) {
   return (
     <p className="mb-3 flex items-center gap-1.5 text-xs text-muted">
       Source <SourceBadge provider={provider} source={source} />
@@ -650,6 +650,60 @@ function ShopifyAds({ ov, provider, state, manage }: { ov: Overview; provider: A
   );
 }
 
+/**
+ * A platform's spend, impressions and clicks as its app (Facebook & Instagram, Google & YouTube) reports
+ * them to Shopify (`shopify_marketing`), while its own API isn't connected: the channel's own count, a
+ * figure it didn't report "Data unavailable", and the store's orders from its sites beside it when read.
+ */
+function MarketingAds({ ov, provider, state, manage }: { ov: Overview; provider: AdSpendProvider; state: AdConnectionState; manage: boolean }) {
+  const m = ov.modules.shopify_marketing;
+  const g = m?.platforms.find((x) => x.platform === provider);
+  const { name } = PROVIDER[provider];
+  if (!m || !g?.totals) return <NoAdSource provider={provider} state={state} manage={manage} />;
+  const t = g.totals;
+  const money = (n: number) => fmtMoney(n, m.currency);
+  const or = (v: number | null, show: (n: number) => string) => (v === null ? "Data unavailable" : show(v));
+  const orders = ov.modules.ads_from_shopify?.platforms.find((x) => x.provider === provider);
+  return (
+    <>
+      <SourceLine provider={provider} source="marketing" />
+      <div className="grid grid-cols-3 gap-3 divide-x divide-border">
+        <Figure label="Spend" value={or(t.spend, money)} change={g.previous ? <ChangeText value={g.deltas.spend} neutral /> : undefined} />
+        <div className="pl-3">
+          <Figure label="Clicks" value={or(t.clicks, fmtNum)} change={g.previous ? <ChangeText value={g.deltas.clicks} /> : undefined} />
+        </div>
+        <div className="pl-3">
+          <Figure label="ROAS (its count)" value={or(t.roas, (n) => fmtTimes(n))} change={g.previous ? <ChangeText value={g.deltas.roas} /> : undefined} />
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-muted" data-testid="home-ads-marketing-more">
+        {or(t.impressions, fmtNum)} impressions · CTR {or(t.ctr, fmtPct)} · CPC {or(t.cpc, money)}
+        {orders && (orders.orders !== 0 || orders.sales !== 0) && <> · {money(orders.sales)} of your Shopify sales came from {SITES[provider]}</>}
+      </p>
+      {g.availability === "reported" && (
+        <div className="mt-4 flex-1">
+          <LineChart
+            days={g.daily.map((d) => d.day)}
+            series={[{ key: "spend", label: `${name} spend reported to Shopify`, color: AD_SPEND, values: g.daily.map((d) => d.spend) }]}
+            area
+            today={ov.today}
+            height={150}
+            label={`${name} spend by day, as its app reports it to Shopify`}
+            format={money}
+            fmtAxis={(v) => fmtMoneyCompact(v, m.currency)}
+          />
+        </div>
+      )}
+      <p className="mt-3 text-xs text-muted">
+        What {g.apps.join(", ") || name} reports to Shopify, {m.sync.lastSyncedAt ? `read ${fmtDateTime(m.sync.lastSyncedAt, ov.store.timezone)}` : "not read yet"}. Connect {name} for its own report: it then replaces these, never adds to them.
+      </p>
+      <div className="mt-3">
+        <ConnectAds manage={manage} label={`${state === "access_lost" ? "Reconnect" : "Connect"} ${name}`} />
+      </div>
+    </>
+  );
+}
+
 /** Neither the platform nor the store's orders have anything to show: what that means, and the way to connect it. */
 function NoAdSource({ provider, state, manage }: { provider: AdSpendProvider; state: AdConnectionState; manage: boolean }) {
   const { name, Icon } = PROVIDER[provider];
@@ -667,8 +721,8 @@ function NoAdSource({ provider, state, manage }: { provider: AdSpendProvider; st
 
 /**
  * Meta Ads and Google Ads, a tab each, every one from its own source (adSourcesOf: the API's
- * `ad_sources`): the platform's API once its ad accounts are connected, the store's Shopify orders
- * before that or while its access is lost, said by a badge on each. Connecting, disconnecting or
+ * `ad_sources`): the platform's API once its ad accounts are connected; before that or while its access
+ * is lost, what its app reports to Shopify, or else the store's Shopify orders; said by a badge on each. Connecting, disconnecting or
  * reconnecting a platform switches its tab by itself on the next read. Nothing from either: the way
  * to connect them, never a $0.
  */
@@ -676,7 +730,7 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
   const sources = adSourcesOf(ov);
   const [picked, setPicked] = useState<AdSpendProvider | null>(null);
   const icon = <Disc icon={Megaphone} className="bg-sky-600 text-white dark:bg-sky-500" />;
-  if (sources.every((s) => s.source === "none")) {
+  if (sources.every((s) => s.source === "none" && !s.marketing)) {
     return (
       <HomeCard id="advertising" title="Advertising performance" sub="Ad spend, clicks and return on ad spend across your ad platforms." icon={icon}>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-4 py-8 text-center">
@@ -695,15 +749,15 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
     );
   }
   const sold = (p: AdSpendProvider) => ov.modules.ads_from_shopify?.platforms.some((x) => x.provider === p && (x.orders !== 0 || x.sales !== 0));
-  // A platform's own figures first, then the one with Shopify sales, then the first.
-  const first = sources.find((s) => s.source === "platform") ?? sources.find((s) => s.source === "shopify" && sold(s.provider)) ?? sources[0]!;
+  // A platform's own figures first, then one whose spend Shopify has, then the one with Shopify sales, then the first.
+  const first = sources.find((s) => s.source === "platform") ?? sources.find((s) => s.marketing) ?? sources.find((s) => s.source === "shopify" && sold(s.provider)) ?? sources[0]!;
   const s = sources.find((x) => x.provider === picked) ?? first;
   const demo = (p: AdSpendProvider) => !!ov.modules.ads?.byProvider.find((x) => x.provider === p)?.demo;
   return (
     <HomeCard
       id="advertising"
       title="Advertising performance"
-      sub="Each platform's own figures once it's connected; until then, your Shopify orders that came from it."
+      sub="Each platform's own figures once it's connected; until then, what its app reports to Shopify, or your Shopify orders that came from it."
       icon={icon}
       action={<DetailsLink href={`/advertising/${s.provider}`} />}
     >
@@ -736,9 +790,12 @@ export function AdvertisingPerformance({ ov, manage }: { ov: Overview; manage: b
         className="mt-4 flex min-w-0 flex-1 flex-col"
         data-testid={`home-ads-${s.provider}`}
         data-source={s.source}
+        data-marketing={s.marketing ? "true" : undefined}
       >
         {s.source === "platform" ? (
           <PlatformAds key={s.provider} ov={ov} provider={s.provider} state={s.state} manage={manage} />
+        ) : s.marketing ? (
+          <MarketingAds key={s.provider} ov={ov} provider={s.provider} state={s.state} manage={manage} />
         ) : s.source === "shopify" ? (
           <ShopifyAds key={s.provider} ov={ov} provider={s.provider} state={s.state} manage={manage} />
         ) : (
