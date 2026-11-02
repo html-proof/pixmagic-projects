@@ -77,8 +77,9 @@ calls no provider: it composes what each module already says about itself.
 ```
 
 Modules, always all of them and in this order: `shopify`, `meta_ads`, `google_ads`, `adsense`,
-`whatsapp`, `sms`, `email`. The Zapier app (PR #275) adds its module once it merges. The answer
-doesn't leave out what an App Store workspace doesn't offer: the UI does (`lib/features.ts`).
+`whatsapp`, `sms`, `email`. Zapier isn't one: its Settings card reads `GET …/zapier`
+([../zapier.md](../zapier.md#settings--integrations)). The answer doesn't leave out what an App
+Store workspace doesn't offer: the UI does (`lib/features.ts`).
 
 | Status | Means |
 | --- | --- |

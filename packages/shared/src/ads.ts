@@ -334,7 +334,8 @@ export function campaignStatusGroup(status: string | null | undefined): Campaign
  * too). Purchases, their value and return on ad spend are on purchases only: Google's conversions
  * count every action set as one (leads, sign-ups, calls...), so they stay as "conversions" and are
  * never called purchases. A figure some day doesn't have yet (rows stored before it was read) makes
- * the total null, never a short count.
+ * the total null, never a short count. Purchases are each platform's own claim: rows of more than one
+ * platform add up claims that can overlap (`claimsAddUp`).
  */
 export interface AdTotals {
   spend: number;
@@ -417,6 +418,16 @@ export function adTotals(rows: AdDayRow[]): AdTotals {
     roas: known(purchaseValue, spend),
   };
 }
+
+/**
+ * Whether the purchases, purchase value, ROAS and cost per purchase of rows from these platforms may
+ * be shown as one figure: only when they are one platform's. Each platform credits purchases to its
+ * own ads by its own rules (Meta's attribution windows, Google's conversion settings), and both can
+ * claim the same order, so their claims added together can count it twice. Spend, impressions and
+ * clicks are each platform's own and add up; across platforms, the store's own sales (MER) count
+ * every order once.
+ */
+export const claimsAddUp = (providers: readonly AdSpendProvider[]) => new Set(providers).size <= 1;
 
 // ---------------------------------------------------------------------------
 // What the stored days cover. A day an ad account has no figures stored for (it was never read, its

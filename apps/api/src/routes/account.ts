@@ -573,11 +573,12 @@ export function accountRoutes(app: App, deps: Deps) {
     return names;
   }
 
+  // Nothing in the app deletes a workspace: support does, on request (the privacy policy says so too).
   const soleOwnerRefusal = (c: Ctx, names: string[]) =>
     c.json(
       {
         error: "sole_owner",
-        message: `You're the only owner of ${names.join(", ")}. Delete ${names.length > 1 ? "those workspaces" : "that workspace"} or make someone else an owner first.`,
+        message: `You're the only owner of ${names.join(", ")}. Make someone else an owner first, or email ${env().SUPPORT_EMAIL || "support"} to have ${names.length > 1 ? "those workspaces and their" : "that workspace and its"} data deleted.`,
         workspaces: names,
       },
       409,

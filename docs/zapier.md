@@ -27,7 +27,7 @@ within minutes.
 
 | Kind | Key | What a Zap gets |
 | --- | --- | --- |
-| Trigger | `alert_raised` | Every bizinsights alert for the store, worded as the bell words it (`describeAlert`): a Shopify sync or webhook problem, an ad account that needs reconnecting, WhatsApp disconnected, an email account to reconnect... |
+| Trigger | `alert_raised` | Every bizinsights alert for the store, worded as the bell words it (`describeAlert`): a Shopify sync or webhook problem, an ad account that needs reconnecting, WhatsApp disconnected, an email account to reconnect, stock running low or sold out... |
 | Trigger | `ad_spend_threshold` | Once per day or month (the trigger's choice) when the store's stored Meta, Google or combined ad spend reaches an amount |
 | Trigger | `adsense_earnings_threshold` | The same on AdSense's estimated earnings; or, with "When" set to below, once a finished day or month ended under the amount |
 | Trigger | `ads_daily_summary` | Once a day: yesterday's spend, impressions, clicks, conversions and platform-attributed purchase value / ROAS per platform, AdSense's estimates, and Shopify's own sales for the day |
@@ -70,10 +70,11 @@ connected in the merchant's Zapier account; bizinsights is the last step):
  hooks.zapier.com/hooks/... ◄── POST event ── worker (sync queue, kind "zapier") ◄── zapier_deliveries ◄── zapier_events (outbox)
                                                                                                           ▲
    raiseAlert (core notify.ts) ── alert_raised ──────────────────────────────────────────────────────────┤
+   notifyStockAlerts (core inventory/alerts.ts) ── alert_raised (the bell's stock alert) ─────────────────┤
    audit (core notify.ts) ── integration_connected / integration_disconnected ────────────────────────────┤
    runAdsSync (worker) ── zapierAfterAdSync ── thresholds, daily summary, sync_completed ─────────────────┤
    orders/paid webhook (worker handlers/webhooks.ts) ── order_paid ──────────────────────────────────────┤
-   applyMessageStatus (core whatsapp/messages.ts) ── whatsapp_message_failed ─────────────────────────────┘
+   sendQueuedMessage, applyMessageStatus (core whatsapp/messages.ts) ── whatsapp_message_failed ──────────┘
    cron */15 (last in the tick) ── sweepZapier: unqueued and due deliveries, stuck ones, summaries, retention
 ```
 
@@ -131,10 +132,12 @@ not_configured` until `ZAPIER_CLIENT_ID`, `ZAPIER_CLIENT_SECRET` and `ZAPIER_RED
 `/api/zapier/*` takes **only** `Authorization: Bearer zat_…`. Session cookies are never read there,
 a shared link or a workspace API key (`sk_`) is a 401, and a `zat_` token opens nothing outside it
 (every other route reads cookies or `sk_` keys only). The store is the connection's: no route takes
-one. Each request re-checks the member (as above): one who lost access gets **401** with
-`WWW-Authenticate: Bearer error="invalid_token"`, so Zapier refreshes, fails, and asks for the
-connection again. Per connection 300 requests a minute; tokens that don't verify, 120 per IP per 10
-minutes. Exempt from the app-wide per-IP limit (Zapier calls for every merchant from a few addresses).
+one. Each request re-checks the member (as above): one who lost access gets **401**
+`invalid_token`, so Zapier refreshes, fails, and asks for the connection again. The Zapier app keys
+on the 401 status itself (`integrations/zapier/lib/api.js`): the `WWW-Authenticate` header the route
+also sets reaches Zapier renamed `x-amzn-Remapped-WWW-Authenticate` (Lambda Function URLs remap it),
+so nothing relies on it. Per connection 300 requests a minute; tokens that don't verify, 120 per IP
+per 10 minutes. Exempt from the app-wide per-IP limit (Zapier calls for every merchant from a few addresses).
 
 | Route | What |
 | --- | --- |
@@ -165,11 +168,11 @@ or discount code.
 
 | Event | `data` | Written by | Once per |
 | --- | --- | --- | --- |
-| `alert_raised` | `alert_id, severity, area, title, body, fix_url, raised_at`: `describeAlert`'s wording, never the internal message | `raiseAlert` (an alert about no store goes to every store's triggers in the workspace) | alert and store |
+| `alert_raised` | `alert_id, severity, area, title, body, fix_url, raised_at`: `describeAlert`'s wording, never the internal message | `raiseAlert` (an alert about no store goes to every store's triggers in the workspace), and `notifyStockAlerts` when it opens the bell's stock alert (`inventory_stock`, not through `raiseAlert`: stock alerts send their own email) | alert and store |
 | `ad_spend_threshold` | `trigger {platform, period, amount, direction}, period, period_start, period_end, period_complete, spend, currency, accounts[], last_successful_sync_at, freshness_note` | `zapierAfterAdSync` (worker, after a successful ad sync), for that trigger only | trigger and period |
 | `adsense_earnings_threshold` | the same with `earnings_estimated`, each account's `data_through`, and `estimates_note` (Google's estimates, adjusted after the month); `trigger.direction` says whether it was reached or ended below | the same | trigger and period |
 | `ads_daily_summary` | `day, platforms[{platform, spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, accounts}], adsense, shopify {net_sales, total_sales, orders, currency}, accounts_without_the_day, freshness_note, attribution_note` | after an ad sync, and the cron sweep | store and day |
-| `whatsapp_message_failed` | `message_id, source, type, category, phone_masked, reason, reason_text, automation_id, campaign_id, failed_at, view_url` | `applyMessageStatus` when a customer's message becomes failed (not tests, codes or team alerts) | message |
+| `whatsapp_message_failed` | `message_id, source, type, category, phone_masked, reason, reason_text, automation_id, campaign_id, failed_at, view_url`. `reason` is the message's own: `provider_rejected` ("WhatsApp refused it") when WhatsApp refused the send or reported it failed, `gave_up` ("Couldn't be sent after several tries") when it couldn't be sent or wasn't confirmed | `sendQueuedMessage` and `applyMessageStatus` when a customer's message becomes failed (not tests, codes or team alerts) | message |
 | `integration_connected` | `integration` (`meta_ads`, `google_ads`, `adsense`, `whatsapp`, `zapier`), `integration_name, accounts` (ad accounts connected, else null), `connected_at, settings_url`. Never who did it | `audit()` (core notify.ts), from the rows `ads.connected`, `whatsapp.connected`, `zapier.connected` (not the Google Ads demo, nor a sign-in still waiting for an ad account) | audit row |
 | `integration_disconnected` | the same with `disconnected_at`, from `ads.disconnected`, `whatsapp.disconnected`, `zapier.disconnected` | the same | audit row |
 | `sync_completed` | `integration, integration_name, connection_id, account_id, account_name, synced_at, data_through`. No figures: those are the advertising triggers' and searches' | `zapierAfterAdSync` after each successful sync of a real ad account | account and hour (UTC) |
@@ -199,8 +202,8 @@ or discount code.
   ROAS are each platform's own attribution, never store revenue; Shopify's sales are beside them.
 - **Per person**: an alert goes only to triggers whose member could see it in the bell (`mayFixAlert`:
   ads → Manage integrations, WhatsApp → View campaigns, email → View integration status, staff →
-  attendance, privacy → audit log, Shopify, Zapier's undelivered events and general → owners and
-  admins). Ad triggers need "View advertising analytics", WhatsApp's "View campaigns and their
+  attendance, privacy → audit log, Shopify, stock, Zapier's undelivered events and general → owners
+  and admins). Ad triggers need "View advertising analytics", WhatsApp's "View campaigns and their
   performance", the integration and sync triggers "View integration connection status" (which every
   member who may connect Zapier has), "Order paid" "View sales and revenue". The daily summary's
   `shopify` block is `null` for someone without "View sales and revenue". Checked when the event is
@@ -224,8 +227,7 @@ for its variables; bizinsights queues it on the store's own WhatsApp ([whatsapp.
   the business's name from WhatsApp Settings; `{{customer_first_name}}` is the Zap's value, else the
   name bizinsights has for the number (the First name field fills it in). Values are put on one line
   (Meta refuses new lines, tabs and runs of spaces in a parameter), at most 200 characters
-  (`value_too_long`); a value the template needs and the Zap didn't give is refused (`missing_values`)
-  before anything is recorded.
+  (`value_too_long`); a value the template needs and the Zap didn't give is refused (`missing_values`).
 - **Consent**, checked now and again when it is sent ([whatsapp.md](whatsapp.md), "Consent"). "The
   customer agreed to WhatsApp messages from you" = Yes records the customer's consent (order updates,
   or marketing for a marketing template) with source `zapier`, the member as actor and "Where they
@@ -234,6 +236,11 @@ for its variables; bizinsights queues it on the store's own WhatsApp ([whatsapp.
   agreement even under "Customers told at checkout", which covers the store's own customers. A
   customer who replied STOP: 409 `opted_out` (only their START undoes it). Marketing templates need
   marketing switched on and the customer's marketing yes.
+- **A refused request records nothing**: the checks read the number's contact (`contactByPhone`) and
+  weigh the Zap's "agreed" as it would be recorded; the contact (number, first name) and the consent
+  are written only once the message will be queued. A value too long or missing, no consent, STOP or a
+  marketing template with marketing off records no consent and leaves the contact as it was (none,
+  for a number bizinsights didn't know).
 - **Once per key**: Unique key (required: map the lead's or order's id; Zapier doesn't give an action
   the trigger item's id) makes a template go once per key **per store**, whichever Zap or connection
   sends it: a replayed task, a copied Zap, Zapier connected again or by another owner (a new grant)
@@ -247,8 +254,8 @@ for its variables; bizinsights queues it on the store's own WhatsApp ([whatsapp.
   (429: Zapier holds the task and tries again).
 - **What Zapier gets back**: the message id, its status (`queued`), the masked number, the template,
   whether consent was recorded, when it may go out, and a link to the WhatsApp page's Messages (source
-  "Zapier"). What happens next is the WhatsApp page's; a message Meta refuses fires **WhatsApp Message
-  Failed**.
+  "Zapier"). What happens next is the WhatsApp page's; a message Meta refuses, or that can't be sent,
+  fires **WhatsApp Message Failed** (its `reason` says which).
 - **Audit**: `whatsapp.message_sent` with `via: "zapier"`, the grant, the Zap's id and whether consent
   was recorded.
 - **Testing the step in Zapier sends a real message** (Zapier runs an action for real when it is
@@ -394,15 +401,16 @@ side it calls is live, through a staging version the owner tries first:
   a rotation and not after, not configured, a member who loses the permission (401) or is removed,
   store deleted, cookies / links / `sk_` keys refused, cross-tenant 404s, SSRF on subscribe, data
   permissions (the new triggers' too), AdSense's direction, trigger audit rows, the new triggers'
-  samples, alerts into the outbox, searches with mixed currencies, the Settings card, Disconnect and
-  Retry.
+  samples, alerts into the outbox (the bell's stock alert too, once while open), searches with mixed
+  currencies, the Settings card, Disconnect and Retry.
 - `apps/api/test/zapierWhatsapp.test.ts`: the scope on the consent page (owners and admins only,
   unticked by default, unknown scopes refused), the template list, a lead who agreed sent a template
   with the Zap's values through the store's linked phone, consent recorded with its note, once per key
   per store (Zapier connected again, a second owner; another template with the same key sends; no key
-  refused), missing values (nothing recorded), a lead without consent, STOP, marketing consent, Pause all
-  automation, another store's template, a demoted member, not connected, a bad number; on Meta's
-  Business Platform, a template Meta hasn't approved isn't offered or sent.
+  refused), missing values and a lead without consent (no contact, no consent recorded), STOP (the
+  contact left as it was), marketing consent, Pause all automation, another store's template, a demoted
+  member, a send that wasn't confirmed reaching WhatsApp Message Failed as `gave_up`, not connected, a
+  bad number; on Meta's Business Platform, a template Meta hasn't approved isn't offered or sent.
 - `apps/api/test/routeAccess.test.ts`: every new route classified; Zapier's bearer-only routes.
 - `apps/worker/test/zapier.test.ts`: delivered once, dedupe, 5xx backoff, max attempts, 410, refusals
   and redirects, lost access, the per-store cap, the sweep, redaction, thresholds (once per period,
@@ -433,8 +441,6 @@ side it calls is live, through a staging version the owner tries first:
   and a day's spend keeps arriving for days after it (platforms report late).
 - **Shopify syncs in "Ad account synced"**: only ad accounts; Shopify's own syncs are continuous
   (webhooks), so there is no "finished" moment to report.
-- **A `zapier` module in `GET …/integrations`**: that route comes with PR #283, not on `main` when
-  this was built; add the module there once it lands.
 - **Not verified here**: a real Zapier account (registering, pushing, a live Zap), Zapier's own style
   checks (`zapier validate` against Zapier's servers), and the consent page in a browser against the
   deployed site.

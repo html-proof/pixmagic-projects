@@ -11,14 +11,14 @@
  * one of the store's templates the WhatsApp page would send now (on Meta's WhatsApp Business Platform,
  * one Meta approved: a Zap doesn't know whether the customer wrote in the last 24 hours).
  */
-import { systemDb, type WappTemplate, type ZapierGrant } from "@app/db";
-import { allows, normalizePhone, renderWaText, sha256Hex, variablesIn, WaMissingValueError, waSkipLabel, WA_CATEGORY_INFO, type WaTemplateCategory } from "@app/shared";
+import { Prisma, systemDb, type WappContact, type WappTemplate, type ZapierGrant } from "@app/db";
+import { allows, maskPhone, normalizePhone, renderWaText, sha256Hex, variablesIn, WaMissingValueError, waSkipLabel, WA_CATEGORY_INFO, type NormalizedPhone, type WaTemplateCategory } from "@app/shared";
 import { ZAPIER_SCOPE_INFO, ZAPIER_WA_SENDS_PER_MINUTE, ZAPIER_WA_VALUE_MAX, zapierFillable, zapierWaValue, zapierWhatsappSendSchema } from "@app/shared/zapier";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
-import { businessNameOf, connectionCanSend, liveConnection, settingsOf, type WaDeps } from "../whatsapp/common.js";
-import { contactFirstName, recordConsent, upsertContact } from "../whatsapp/contacts.js";
+import { businessNameOf, connectionCanSend, liveConnection, settingsOf, waPhoneHash, type WaDeps } from "../whatsapp/common.js";
+import { contactByPhone, contactFirstName, recordConsent, upsertContact } from "../whatsapp/contacts.js";
 import { consentBlock, queueMessage } from "../whatsapp/messages.js";
 import { templateUsable } from "../whatsapp/templates.js";
 import type { AuthorizerAccess } from "./access.js";
@@ -83,10 +83,45 @@ export interface ZapierWhatsappSent {
 }
 
 /**
+ * The number's contact as it will stand once the message is queued, for the checks: the one bizinsights
+ * knows (or a new one, as upsertContact makes it) with the Zap's consent applied as recordConsent applies
+ * it. Nothing is written here.
+ */
+function contactToBe(store: { id: string; workspaceId: string }, phone: NormalizedPhone, known: WappContact | null, agreed: "order_updates" | "marketing" | null, now: Date): WappContact {
+  const c: WappContact = known ?? {
+    id: "",
+    workspaceId: store.workspaceId,
+    storeId: store.id,
+    phoneHash: waPhoneHash(store.id, phone.waId),
+    phoneEnc: "",
+    phoneMasked: maskPhone(phone.e164),
+    country: phone.country,
+    firstNameEnc: null,
+    shopifyCustomerId: null,
+    optedOut: false,
+    optedIn: false,
+    marketing: "unknown",
+    consentUpdatedAt: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+    notOnWhatsappAt: null,
+    ordersCount: 0,
+    totalSpent: new Prisma.Decimal(0),
+    lastOrderAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  // An older change never overrides a newer one (recordConsent).
+  if (!agreed || (c.consentUpdatedAt && now < c.consentUpdatedAt)) return c;
+  return agreed === "marketing" ? { ...c, marketing: "opted_in", optedOut: false } : { ...c, optedIn: true, optedOut: false };
+}
+
+/**
  * Queues one template message for a Zap. Refused with words the merchant reads in Zapier when it
  * can't go: not connected, a number that isn't one, a template that isn't approved, a value missing,
- * no consent, the customer replied STOP. Once queued, what happens to it is the WhatsApp page's
- * (and the "WhatsApp Message Failed" trigger's, if Meta refuses it).
+ * no consent, the customer replied STOP. A request refused records nothing: the customer's contact and
+ * their consent are written only once the message will be queued. Once queued, what happens to it is
+ * the WhatsApp page's (and the "WhatsApp Message Failed" trigger's, if Meta refuses it or it can't be sent).
  */
 export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">, grant: ZapierGrant, who: AuthorizerAccess, data: unknown, now = new Date()): Promise<ZapierWhatsappSent> {
   requireWhatsappSend(grant, who);
@@ -117,10 +152,11 @@ export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">,
   }
 
   const settings = await settingsOf(store);
-  let contact = await upsertContact(store, phone, { firstName: d.first_name ?? null });
-  // The values first: a message refused for one records nothing.
+  // Only read until every check below has passed.
+  const known = await contactByPhone(store.id, phone);
+  // The values first.
   const values: Record<string, string | undefined> = { ...valuesIn, store_name: businessNameOf(store, settings) };
-  if (!values.customer_first_name) values.customer_first_name = contactFirstName(contact) ?? undefined;
+  if (!values.customer_first_name) values.customer_first_name = d.first_name ?? (known && contactFirstName(known)) ?? undefined;
   const tooLong = Object.entries(values).find(([, v]) => (v?.length ?? 0) > ZAPIER_WA_VALUE_MAX);
   if (tooLong) throw new ZapierError(`The value for {{${tooLong[0]}}} is longer than ${ZAPIER_WA_VALUE_MAX} characters.`, 400, "value_too_long");
   let text: string;
@@ -131,23 +167,14 @@ export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">,
     throw e;
   }
 
-  let consentRecorded = false;
-  if (d.customer_agreed) {
-    if (contact.optedOut) throw new ZapierError("This customer replied STOP to the store's WhatsApp. Only they can opt back in, by replying START.", 409, "opted_out");
-    contact = await recordConsent(contact, {
-      scope: category === "marketing" ? "marketing" : "order_updates",
-      status: "opted_in",
-      source: "zapier",
-      actorUserId: grant.userId,
-      note: `A Zap said the customer agreed${d.consent_note ? `: ${d.consent_note}` : "."}`,
-      at: now,
-    });
-    consentRecorded = true;
-  }
-  let block = await consentBlock(contact, category, settings);
+  const scope = category === "marketing" ? "marketing" : "order_updates";
+  if (d.customer_agreed && known?.optedOut) throw new ZapierError("This customer replied STOP to the store's WhatsApp. Only they can opt back in, by replying START.", 409, "opted_out");
+  // Consent as it will stand with the Zap's "agreed" recorded.
+  const toBe = contactToBe(store, phone, known, d.customer_agreed ? scope : null, now);
+  let block = await consentBlock(toBe, category, settings);
   // "Customers told at checkout" covers the store's own customers, who went through its checkout. A
   // number bizinsights knows only from a Zap (a lead) needs the customer's own agreement.
-  if (!block && category === "transactional" && settings.orderUpdates === "checkout_notice" && !contact.optedIn && contact.marketing !== "opted_in" && !contact.shopifyCustomerId && !contact.ordersCount) {
+  if (!block && category === "transactional" && settings.orderUpdates === "checkout_notice" && !toBe.optedIn && toBe.marketing !== "opted_in" && !toBe.shopifyCustomerId && !toBe.ordersCount) {
     block = "no_consent";
   }
   if (block) {
@@ -160,6 +187,21 @@ export async function zapierSendWhatsapp(deps: Pick<WaDeps, "queues" | "coord">,
             ? " Switch marketing on in bizinsights' WhatsApp Settings, or use an order-update template."
             : "";
     throw new ZapierError(`This message can't go to that number: ${waSkipLabel(block)}.${hint}`, 409, "not_allowed");
+  }
+
+  // It will go: the contact is kept (made, or its first name filled in) and the Zap's consent recorded.
+  const contact = await upsertContact(store, phone, { firstName: d.first_name ?? null });
+  let consentRecorded = false;
+  if (d.customer_agreed) {
+    await recordConsent(contact, {
+      scope,
+      status: "opted_in",
+      source: "zapier",
+      actorUserId: grant.userId,
+      note: `A Zap said the customer agreed${d.consent_note ? `: ${d.consent_note}` : "."}`,
+      at: now,
+    });
+    consentRecorded = true;
   }
 
   const { message, created } = await queueMessage(deps, {

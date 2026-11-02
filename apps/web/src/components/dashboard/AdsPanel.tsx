@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { groupSeries, type AdSeriesDay, type AdTotals } from "@app/shared/ads";
+import { claimsAddUp, groupSeries, type AdSeriesDay, type AdTotals } from "@app/shared/ads";
 import { periodsOf, type PeriodGranularity } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
@@ -33,13 +33,15 @@ import { MetaReportPanel } from "./MetaReport";
 import { B, comparedOnWholeDays } from "./Narrative";
 import { ChartChoice, Delta, NeutralDelta, Panel, Stat } from "./Primitives";
 import { ColumnsWithTotal } from "./ColumnsWithTotal";
-import type { AdsModule, Overview } from "./types";
+import type { AdsModule, AdsProviderFigures, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
 // The Ads details (the Advertising area's Meta Ads and Google Ads pages): what connected Meta and
 // Google ad accounts spent, and what they say it brought.
 // Figures exist only for days every counted account has stored; a gap is "Unavailable" with its
-// reason, never 0. Purchases are purchases only: Google's other conversions are named as such.
+// reason, never 0. Purchases are purchases only: Google's other conversions are named as such. With
+// more than one platform counted, purchases, their value, ROAS and cost per purchase are each
+// platform's own, never their claims added up (`claimsAddUp`: both can credit one order).
 // ---------------------------------------------------------------------------
 
 const PLATFORM: Record<"meta" | "google", { name: string; Icon: (p: { size?: number }) => ReactNode }> = {
@@ -50,9 +52,21 @@ const PLATFORM: Record<"meta" | "google", { name: string; Icon: (p: { size?: num
 /** A figure some days don't have yet (older days being read again from the platform). */
 const known = (v: number | null, show: (n: number) => string) => (v === null ? BEING_READ : show(v));
 
+/** More than one platform counted: their purchase totals add up claims that can overlap, so each platform's own is shown. */
+const claimsApart = (a: AdsModule) => !claimsAddUp(a.byProvider.map((p) => p.provider));
+
 function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const columns = dailyMoneyColumns(a.series, (d) => d.spend, ov.today, a.currency);
+  // Each platform's own purchases on the day, when they can't be added up.
+  const own = claimsApart(a) ? a.seriesByProvider.map((s) => ({ name: PLATFORM[s.provider].name, byDay: new Map(s.series.map((d) => [d.day, d.purchases])) })) : null;
+  const claims = (day: string) =>
+    own!
+      .map((o) => {
+        const n = o.byDay.get(day);
+        return `${o.name} ${n === null || n === undefined ? "being re-read" : fmtNum(n)}`;
+      })
+      .join(", ");
   return (
     <ColumnsWithTotal
       columns={columns}
@@ -73,7 +87,11 @@ function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
                 <div className="text-muted">
                   {d.linkClicks === null ? "link clicks being re-read" : plural(d.linkClicks, "link click")} · {plural(d.impressions ?? 0, "impression")}
                 </div>
-                {(d.purchases ?? 0) > 0 && <div className="text-muted">{fmtNum(d.purchases)} purchases (platforms&apos; count)</div>}
+                {own ? (
+                  <div className="text-muted">Purchases, each platform&apos;s own count: {claims(d.day)}</div>
+                ) : (
+                  (d.purchases ?? 0) > 0 && <div className="text-muted">{fmtNum(d.purchases)} purchases (platforms&apos; count)</div>
+                )}
               </>
             )}
           </>
@@ -82,7 +100,8 @@ function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
       describe={(i) => {
         const d = a.series[i]!;
         if (d.spend === null) return `${fmtLongDay(d.day)}: no figures for this day yet.`;
-        return `${fmtLongDay(d.day)}: ${money(d.spend)} spent, ${d.linkClicks === null ? "link clicks being re-read" : `${fmtNum(d.linkClicks)} link clicks`}, ${d.purchases === null ? "purchases being re-read" : `${fmtNum(d.purchases)} purchases`}.`;
+        const purchases = own ? `purchases by each platform's own count: ${claims(d.day)}` : d.purchases === null ? "purchases being re-read" : `${fmtNum(d.purchases)} purchases`;
+        return `${fmtLongDay(d.day)}: ${money(d.spend)} spent, ${d.linkClicks === null ? "link clicks being re-read" : `${fmtNum(d.linkClicks)} link clicks`}, ${purchases}.`;
       }}
       missingLabel="No data"
     />
@@ -91,7 +110,8 @@ function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
 
 /**
  * The figures at a glance: for the whole range (or the days so far), or, when that's unavailable,
- * for the days every account has (`partial`: no changes then).
+ * for the days every account has (`partial`: no changes then). With more than one platform counted,
+ * each platform's own purchases (`PlatformClaim`) in place of the four figures added up.
  */
 function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview; partial: boolean }) {
   const money = (n: number) => fmtMoney(n, a.currency);
@@ -101,10 +121,16 @@ function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <Stat label="Ad spend" value={money(t.spend)} note={change(a.deltas.spend, true)} />
       <Stat label="Link clicks" value={known(t.linkClicks, fmtNum)} note={change(a.deltas.linkClicks)} />
-      <Stat label="Purchases (platforms' count)" value={known(t.purchases, fmtNum)} note={change(a.deltas.purchases)} />
-      <Stat label="Return on ad spend (platforms' own)" value={t.purchases === null ? BEING_READ : fmtTimes(t.roas)} note={change(a.deltas.roas)} />
-      <Stat label="Purchase value (platforms' count)" value={known(t.purchaseValue, money)} />
-      <Stat label="Cost per purchase" value={t.purchases === null ? BEING_READ : t.costPerPurchase !== null ? money(t.costPerPurchase) : "—"} />
+      {claimsApart(a) ? (
+        a.byProvider.map((p) => <PlatformClaim key={p.provider} a={a} p={p} ov={ov} />)
+      ) : (
+        <>
+          <Stat label="Purchases (platforms' count)" value={known(t.purchases, fmtNum)} note={change(a.deltas.purchases)} />
+          <Stat label="Return on ad spend (platforms' own)" value={t.purchases === null ? BEING_READ : fmtTimes(t.roas)} note={change(a.deltas.roas)} />
+          <Stat label="Purchase value (platforms' count)" value={known(t.purchaseValue, money)} />
+          <Stat label="Cost per purchase" value={t.purchases === null ? BEING_READ : t.costPerPurchase !== null ? money(t.costPerPurchase) : "—"} />
+        </>
+      )}
       <Stat label="Cost per click" value={t.linkClicks === null ? BEING_READ : t.cpc !== null ? money(t.cpc) : "—"} note="Spend ÷ link clicks" />
       <Stat label="Click-through rate" value={t.linkClicks === null ? BEING_READ : fmtPct(t.ctr)} note={`${fmtNum(t.impressions)} impressions`} />
       <Stat label="Cost per 1,000 impressions" value={t.cpm !== null ? money(t.cpm) : "—"} />
@@ -112,6 +138,31 @@ function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview
       {a.current && a.shareOfSales !== null && <Stat label="Ads as share of sales" value={fmtPct(a.shareOfSales)} note="Ad spend ÷ your net sales" />}
       {t.leads > 0 && <Stat label="Leads" value={fmtNum(t.leads)} />}
     </div>
+  );
+}
+
+/**
+ * One platform's own purchases, with their value, its ROAS and its cost per purchase: its claim, named
+ * as its own, from its own figures (the whole range or its days so far), never added to another's.
+ */
+function PlatformClaim({ a, p, ov }: { a: AdsModule; p: AdsProviderFigures; ov: Overview }) {
+  const money = (n: number) => fmtMoney(n, a.currency);
+  const { totals: t, through } = shownFigures(p);
+  return (
+    <Stat
+      className="col-span-2"
+      label={`${PLATFORM[p.provider].name} purchases (its own count)`}
+      value={!t ? UNAVAILABLE : known(t.purchases, fmtNum)}
+      note={
+        t && t.purchases !== null ? (
+          <span data-testid={`ads-glance-claim-${p.provider}`}>
+            {known(t.purchaseValue, money)} worth · ROAS {fmtTimes(t.roas)}
+            {t.costPerPurchase !== null ? ` · ${money(t.costPerPurchase)} a purchase` : ""}
+            {through ? ` · ${upToWords(through)}` : ""} · <ChangeNote fig={p} value={p.deltas.purchases} ov={ov} />
+          </span>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -343,6 +394,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
             ? `, the same as ${on}${through === "vs before" ? "" : ` (${through})`}`
             : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on ${on}${through === "vs before" ? "" : ` (${through}: whole days only)`}`;
   const shown = c ?? a.partial?.totals ?? null;
+  const apart = claimsApart(a);
   const reports = a.campaigns !== undefined;
   const readable = a.accounts.filter((acc) => acc.status !== "reconnect" && acc.status !== "permission");
 
@@ -401,7 +453,30 @@ export function AdsDetail({ ov }: { ov: Overview }) {
                     {c.cpc !== null ? <>, about {money(c.cpc)} each</> : null}
                   </>
                 )}
-                {c.purchases === null ? (
+                {apart ? (
+                  <>
+                    , and by each platform&apos;s own count{" "}
+                    {a.byProvider.map((p, i) => {
+                      const t = shownFigures(p).totals;
+                      return (
+                        <span key={p.provider}>
+                          {i > 0 ? " and " : ""}
+                          {PLATFORM[p.provider].name}{" "}
+                          {!t ? (
+                            "has no complete figures yet"
+                          ) : t.purchases === null ? (
+                            "has purchases still being read"
+                          ) : (
+                            <>
+                              <B>{plural(t.purchases, "purchase")}</B> worth {t.purchaseValue === null ? "an amount still being read" : money(t.purchaseValue)} ({fmtTimes(t.roas)} its spend)
+                            </>
+                          )}
+                        </span>
+                      );
+                    })}
+                    : both can claim the same order, so these are never added up.
+                  </>
+                ) : c.purchases === null ? (
                   <>; their purchases for some of these days are still being read again, so none are counted yet.</>
                 ) : c.purchases > 0 ? (
                   <>

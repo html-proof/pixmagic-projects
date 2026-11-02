@@ -12,6 +12,7 @@ import {
   campaignStatusGroup,
   campaignTotals,
   canCompareFrom,
+  claimsAddUp,
   commonCoverage,
   coverageAfter,
   coveredPart,
@@ -362,7 +363,8 @@ export async function sourcedOrders(tx: Tx, { ws, storeId }: Scope, r: DateRange
  * What the store's ad accounts (Meta Ads, Google Ads) report for these dates, from their stored
  * days: the counted accounts together, then each platform on its own (`byProvider`, its totals
  * flat on the entry as well, null when that platform's accounts don't cover the range), so one
- * platform's gap never hides another's figures.
+ * platform's gap never hides another's figures. Spend adds up across platforms; their purchases
+ * only when one platform is counted (`claimsAddUp`).
  */
 export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionId: string }>, ask: AdsAsk) {
   if (!conns.length) return null;
@@ -389,7 +391,19 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
   return {
     currency,
     accounts,
+    /**
+     * Accounts not added up, in another currency than `currency` (the demo aside, its spend being
+     * simulated): none of their spend is in any figure here, so a cost worked out from it is short.
+     */
+    leftOut: accounts.filter((a) => !a.counted && !a.demo).map((a) => ({ id: a.id, provider: a.provider as AdSpendProvider, accountId: a.accountId, name: a.name, currency: a.currency })),
     ...all,
+    /**
+     * The purchases, purchase value, ROAS and cost per purchase of the totals are one platform's
+     * (claimsAddUp in @app/shared/ads). False with Meta and Google both counted: the totals then add up
+     * claims that can overlap (both may credit one order), so a page shows each platform's own
+     * (`byProvider`) and, across them, the store's own sales (`sales`).
+     */
+    claimsAddUp: claimsAddUp(providers),
     /** Every day of the range, null on a day a counted account has no figures for. */
     series: adSeries(inRange, ask.range, all.coverage),
     /** Each platform's own days, missing where that platform's accounts have none. */

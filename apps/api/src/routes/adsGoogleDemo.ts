@@ -11,6 +11,8 @@ import {
   disconnectGoogleAdsDemo,
   enqueueAdCatchUp,
   findGoogleAdsDemo,
+  googleAdsBudget,
+  googleAdsBudgetAllows,
   googleAdsConnectionStatus,
   googleAdsDemoEnabled,
   googleProductionMissing,
@@ -43,7 +45,8 @@ import { datesQuery, resolveQueryDates } from "./dashboard.js";
  *
  * The analytics endpoints answer for any of the store's Google Ads connections (`connection`), the demo
  * by default, from the stored campaign-days; a real account's device and country splits come from
- * Google's live report (counted against the daily allowance like any report), a demo's from its generator.
+ * Google's live report (cached and counted against the daily allowance like any report, and only once
+ * the account has synced), a demo's from its generator.
  */
 
 const base = "/workspaces/:ws/stores/:storeId/ads/google";
@@ -230,22 +233,57 @@ export function adsGoogleDemoRoutes(app: App, deps: Deps) {
 
   /**
    * A real account's device and country splits, from Google's live report (a demo's are generated with
-   * the rest). Best effort: a report that can't be read leaves the splits null and says so.
+   * the rest), read as the live Google Ads report reads them (routes/ads.ts): from the answer it cached
+   * for the same account and dates (the same key, kept as long: 10 minutes while the dates take in today,
+   * an hour once they're over), else from Google, cached the same way. So the page, its sections, its
+   * downloads and that report ask Google once for the same dates. Google isn't asked before the account's
+   * first sync has landed, while its syncs fail, or once bizinsights has used the keyword reports' share
+   * of the day's allowance (GOOGLE_ADS_DETAIL_SHARE), so the splits never hold back the syncs. Best
+   * effort: splits not read are left null, and the note says why.
    */
   async function liveSplits(c: Ctx, a: Asked): Promise<void> {
     if (a.analytics.account.demo) return;
+    if (a.conn.status !== "active") {
+      a.analytics.audience.note = "Google's device and country splits aren't read while this account's syncs fail: Settings → Advertising says why. The rest of the page is from the stored figures.";
+      return;
+    }
+    if (!a.conn.lastSyncedAt) {
+      a.analytics.audience.note = "Google's device and country splits are read once this account's first sync has finished.";
+      return;
+    }
     const { storeId } = params(c);
+    const { from, to } = a.analytics.range;
+    const levels = ["device", "country"] as const;
+    const key = (level: (typeof levels)[number]) => `ads-greport:v4:${a.conn.id}:${level}:-:-:${from}:${to}`;
     try {
-      await limit(deps.coord, `rl:ads-report:${storeId}:${a.conn.id}`, LIMITS.adsReport);
+      const cached = await Promise.all(levels.map((level) => deps.coord.peek(key(level))));
+      if (cached.some((v) => !v)) {
+        // Before anything is counted: while the allowance is held back, Google isn't asked, so none of the account's reads is used.
+        const budget = await googleAdsBudget(deps.coord);
+        if (!googleAdsBudgetAllows(budget, "detail")) {
+          a.analytics.audience.note = budget.paused
+            ? "Google's device and country splits aren't read just now: bizinsights has used today's allowance of Google Ads requests. The rest of the page is from the stored figures."
+            : "Google's device and country splits are paused for a few hours so your Google Ads figures keep syncing: bizinsights has used most of today's Google Ads allowance. Splits already read stay available.";
+          return;
+        }
+        await limit(deps.coord, `rl:ads-report:${storeId}:${a.conn.id}`, LIMITS.adsReport);
+      }
       const deadline = Date.now() + AD_REPORT_BUDGET_MS;
-      const { from, to } = a.analytics.range;
-      const [devices, countries] = await Promise.all([
-        googleReportForConnection(a.conn, "device", from, to, deps.fetchImpl, { coord: deps.coord, deadline }),
-        googleReportForConnection(a.conn, "country", from, to, deps.fetchImpl, { coord: deps.coord, deadline }),
-      ]);
-      a.analytics.devices = splitRows(devices);
+      // Both read at once and each cached once read; the first failure is thrown once both have ended.
+      const results = await Promise.allSettled(
+        levels.map(async (level, i) => {
+          if (cached[i]) return JSON.parse(cached[i]!) as GoogleReport;
+          const report = await googleReportForConnection(a.conn, level, from, to, deps.fetchImpl, { coord: deps.coord, deadline });
+          await deps.coord.put(key(level), JSON.stringify(report), to >= a.analytics.today ? 600 : 3600);
+          return report;
+        }),
+      );
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) throw failed.reason;
+      const [devices, countries] = results.map((r) => (r as PromiseFulfilledResult<GoogleReport>).value);
+      a.analytics.devices = splitRows(devices!);
       a.analytics.audience.devices = a.analytics.devices;
-      a.analytics.audience.countries = splitRows(countries);
+      a.analytics.audience.countries = splitRows(countries!);
     } catch (err) {
       logger.info({ err, connectionId: a.conn.id }, "google ads analytics: live splits not read");
       a.analytics.audience.note = "Google's device and country splits couldn't be read just now; the rest of the page is from the stored figures. Try again in a minute.";

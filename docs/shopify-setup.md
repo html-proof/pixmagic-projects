@@ -97,7 +97,8 @@ token"**. The app used non-expiring tokens from 2026-10-04 to 2026-10-18; since 
   what broke the App Store reviewers' stores on the public app on 2026-10-17/18), and a trade
   whose answer was lost leaves the row on a token Shopify has retired (a plain 401). A store
   whose import had failed for lost access is re-synced once moved, instead of showing Reconnect
-  until someone opens its dashboard. This needs `AWS_SCHEDULES=on` (it is).
+  until someone opens its dashboard. This needs the schedules on, as production's
+  `schedulesEnabled` in `infra/cdk/lib/config.ts` keeps them (below, "Scheduled jobs").
 - **Rotation**: `getAccessToken` refreshes 5 minutes before expiry, and the sweep rotates every
   token with under 20 minutes left, so each store rotates about every 45 minutes and its refresh
   token never runs out while nobody opens the dashboard. Each refresh returns a new pair; the
@@ -151,8 +152,10 @@ What keeps a store complete, and its limits:
   requested in the Partner Dashboard (API access requests) and approved for each app before a
   store can grant it. Ranges reaching further back show those days as not imported, and the line
   under the dashboard's dates says from when the orders are in and why (below, "History import").
-- **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only with the GitHub
-  variable `AWS_SCHEDULES=on`; without it, missed webhooks are repaired only while a dashboard is
+- **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only while the
+  environment's schedules are on: `schedulesEnabled` in `infra/cdk/lib/config.ts`, on in production
+  and off in staging; the GitHub variable `AWS_SCHEDULES` (`on`, or `off`) overrides it for every
+  Deploy run while it is set. Without them, missed webhooks are repaired only while a dashboard is
   open, by "Sync now", or by the re-read above.
 - **Several of our apps on one shop.** Opening one of them doesn't move a store that works
   through another (`appToKeep` in apps/api/src/routes/shopify.ts): an unapproved app's token is

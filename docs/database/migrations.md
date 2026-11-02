@@ -31,7 +31,14 @@ committed with the code that needs it. Nobody edits a production schema by hand.
   that was live before the deploy must keep working on the new schema: the deploy migrates before
   the new code goes live, so the old code runs on the new schema for up to a minute of every
   deploy, and again whenever the code is rolled back (the migration stays).
-- **Removing or renaming** takes two releases: stop using it (deploy), then drop it (next migration).
+- **Removing or renaming** takes two releases: stop using it (deploy), then drop it (a migration in a later
+  release). Stopping means taking the column out of the Prisma client (`@ignore` in `schema.prisma`) with every read
+  and write of it: Prisma selects every column a model has, so a column no code names is still read while it is in
+  the client. Drop it only once the release that stopped is the one a deploy would roll back to: the migration runs
+  before the new code goes live, and the code it replaces must never meet a database without a column it selects.
+  The Firebase columns went this way: `@ignore` in 2b2fdd49 (PR #163, live as release 82), then the DROP in
+  e65a21a8 (PR #170, migration `20261020120000_drop_firebase_columns`). Three of the columns that named Nango
+  connections wait for the same two steps ([schema.md](schema.md), Advertising).
 - **Data changes** (backfills) go in the migration only when they are quick and idempotent;
   anything long is a maintenance task (`apps/worker/ops/`) run separately.
 - **Never reset or drop** production data to make a migration apply.

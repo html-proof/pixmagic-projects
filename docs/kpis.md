@@ -41,7 +41,7 @@ approval; until then the card says why it has no figure, never shows 0.
 | Abandoned checkouts, recovered, their value | Orders → Abandoned checkouts | Shopify's checkout list (Admin API, `read_orders`) | Exact counts; value up to 2,000 a window | Last 60 days only; section "Abandoned checkouts (Shopify)" |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
-| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own |
+| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own, never added across platforms |
 | Estimated earnings | AdSense | AdSense | Its estimate | Finalized by AdSense after the month ends; only the store's chosen sites |
 
 Currency is always the store's (shop money), days the store's time zone, as in Shopify's reports.
@@ -379,23 +379,26 @@ carries; nothing is estimated.
   abandonment" (`redactOverview`).
 - **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
-  in the store's currency and none is the Google Ads demo, as for MER.
+  in the store's currency and none is the Google Ads demo, as for MER. An account in another currency
+  isn't in it, and the panel says so ("Left out: EU shop (EUR), in another currency.").
 - **Business profit overview**: net sales less the costs bizinsights can see, the product costs
   (Shopify's cost of goods sold from its profit report, for the dates as a whole; while that report
-  gives none, the items sold at their cost per item: **Product costs** below), the ad spend for the whole range
-  (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
-  **net profit** only when every input is known and the owner has marked the costs list complete for
-  the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
-  no cost recorded in Shopify are named. Shopify counts a sale with no cost per item at no cost, so
-  when no sale of the dates had one, its cost of goods sold of 0 isn't a cost: product costs read "Not
-  recorded in Shopify" and aren't taken off. Its share is called a **margin** only when the cost of
-  every sale was taken off; with ad spend alone, or sales with no cost recorded, it is "of net sales",
-  since sales less ad spend is no margin. Team & Access: the Product costs line, here and in Expenses
-  breakdown, is only for a member shown Shopify's cost of goods sold ("View costs and stock value"
-  with the breakdown, `costsOn`); without it there is no net profit.
-- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
-  the owner's costs by category). The mock's shipping, software and other expenses come only from
-  the owner's costs: nothing else holds them.
+  gives none, the items sold at their cost per item: **Product costs** below), the ad spend for the
+  whole range (`ads.current`, null while a day is missing; with an account in another currency, only
+  the accounts in the store's currency, taken off as "ads in AUD", with a "Left out" line) and the
+  owner's own costs (Settings → Costs). It is **net profit** only when every input is known and the
+  owner has marked the costs list complete for the dates ("Costs and net profit" below); otherwise
+  it says "Not net profit" and why, and sales with no cost recorded in Shopify are named. Shopify
+  counts a sale with no cost per item at no cost, so when no sale of the dates had one, its cost of
+  goods sold of 0 isn't a cost: product costs read "Not recorded in Shopify" and aren't taken off.
+  Its share is called a **margin** only when the cost of every sale was taken off; with ad spend
+  alone, or sales with no cost recorded, it is "of net sales", since sales less ad spend is no
+  margin. Team & Access: the Product costs line, here and in Expenses breakdown, is only for a
+  member shown Shopify's cost of goods sold ("View costs and stock value" with the breakdown,
+  `costsOn`); without it there is no net profit.
+- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two, the
+  accounts left out in another currency named under it, the owner's costs by category). The mock's
+  shipping, software and other expenses come only from the owner's costs: nothing else holds them.
 - **Product costs** (both panels): Shopify's cost of goods sold while its profit report answers
   (`profit`, with `read_reports`) or is on its way ("Loading…"). Otherwise (the reports not granted,
   or Shopify refused or failed) the `product_costs` module (`productCosts` in
@@ -516,10 +519,10 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
 | Click-through rate (CTR) | link clicks ÷ impressions | |
 | Cost per click (CPC) | spend ÷ link clicks | |
 | Cost per 1,000 impressions (CPM) | spend × 1000 ÷ impressions | |
-| Purchases (platform's count) | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` of the conversion actions in the Purchase category (`segments.conversion_action_category = PURCHASE`, its own query) | The platform's own attribution, never the store's orders. `null` while any day added up has none read yet |
-| Purchase value | the matching `action_values` (Meta), `metrics.conversions_value` of those Purchase actions (Google) | As for purchases |
-| Return on ad spend (ROAS) | purchase value ÷ spend | Per platform it is that platform's own figure ("Google Ads-reported ROAS", "Meta-reported ROAS"); across platforms their claims added up, which can overlap |
-| Cost per purchase | spend ÷ purchases | |
+| Purchases (platform's count) | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` of the conversion actions in the Purchase category (`segments.conversion_action_category = PURCHASE`, its own query) | The platform's own attribution, never the store's orders. `null` while any day added up has none read yet. Never shown added across platforms (below) |
+| Purchase value (attributed revenue) | the matching `action_values` (Meta), `metrics.conversions_value` of those Purchase actions (Google) | As for purchases: what the platform credits to its ads, not the store's sales |
+| Return on ad spend (ROAS) | purchase value ÷ spend | Each platform's own figure ("Google Ads-reported ROAS", "Meta-reported ROAS"); never one ROAS across platforms (below) |
+| Cost per purchase | spend ÷ purchases | Per platform, as ROAS |
 | Conversions (all conversion actions) | Google: `metrics.conversions`, every action set to count in Conversions (leads, sign-ups, calls and purchases) | Shown on the Google Ads card and the Ads panel only, never called or added up as purchases. Meta's conversions are its purchases |
 | Cost per conversion | spend ÷ conversions | |
 | Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency and every day of the ad spend is known |
@@ -550,6 +553,33 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   least recently updated account last synced (`updatedAt`), shown as "updated 12 minutes ago".
 - **Total ad spend** is a card of its own only when two platforms or more are counted (they are then
   in one currency).
+- **Purchases are never added across platforms.** Meta and Google each credit purchases to their own
+  ads by their own rules (Meta's attribution windows, Google's conversion settings), and both can claim
+  the same order, so their purchases, purchase value, ROAS and cost per purchase added together can
+  count it twice. Spend, impressions and clicks are each platform's own and add up. With one platform
+  counted, the module's totals are its figures. With Meta and Google both counted, the module's
+  `claimsAddUp` is false (`claimsAddUp` in packages/shared/src/ads.ts): its purchase totals add the
+  claims up, so the pages show each platform's own from `byProvider` instead, named as its claim
+  ("Meta Ads attributed revenue", "Claimed by Google Ads"), and as the one figure across platforms the
+  store's own sales: Shopify's net sales and the sales per unit of ad spend (MER), which count every
+  order once. The Advertising overview has a tile per platform (its attributed revenue, purchases, ROAS
+  and cost per purchase) beside "Your store's net sales" in place of the Purchases, Ad revenue, ROAS
+  and Cost per purchase tiles; Profitability gives each platform's attributed revenue, ROAS and profit
+  before product costs under the spend added up, never an advertising profit worked out from their sum.
+  The overview's Performance overview chart draws the spend added up beside each platform's purchase
+  value, and a ROAS line per platform (its purchase value ÷ its own spend), from `seriesByProvider`.
+  Key insights (`advertisingInsights`) set the break-even ROAS against each platform's own ROAS, name
+  the one that falls short, say what each platform's ROAS means, and give the purchase value's change
+  and "spend up while purchases fell" per platform on its own comparison. The Meta Ads and Google Ads
+  pages' details (`AdsDetail`) give a figure per platform of its purchases (their value, its ROAS and
+  cost per purchase) in place of the four added up, in "In short" and on the daily spend chart's days
+  too, and "What you could do next" names each platform's ROAS beside MER. The Advertising summary CSV
+  (`ads_summary`) gives each platform's purchases, purchase value, ROAS and conversions as rows of
+  their own ("Meta Ads purchases (its own count)") under a "Purchases: Each platform's own" row, never
+  the totals' sum. On the dashboard, Business health's Ads line names each platform's purchase value
+  and ROAS ("Meta Ads credits … in purchases to its ads (2.4×) and Google Ads … (1.9×), each by its own
+  count"), and Overview's details have a "Return on ad spend (Meta Ads' own)" row per platform in place
+  of the platforms' one (`businessHealth`, `OverviewDetail`).
 - **Changes compare whole days only.** `compared` holds the days each side is worked out on and their
   totals: while the range reaches a day still running (the store's today, or a counted account's today
   in its own zone; `lastWholeAdDay`), both sides lose that many days at their end (`trimmed`), and the
@@ -564,7 +594,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
   either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
   and a store day the account hasn't reached yet is missing, not 0.
-- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in.
+- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in: `accounts` marks them `counted: false`, and `leftOut` lists them once (the Google Ads demo aside, its spend being simulated). Nothing is converted, so a cost worked out from the spend shown is short by theirs: wherever ad spend is shown as a cost (Sales vs ad spend, Business profit overview, Expenses breakdown, Profitability, the Profit sheet) it says "Left out: EU shop (EUR), in another currency.", and net profit isn't given ("Costs and net profit"). The Advertising summary CSV has a "Left out" row under the spend; the Advertising overview's "Left out of these figures" line lists the same accounts, never the demo.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
 - **Clicks, reach and visits are different counts, never added together.** Meta's reach is people Meta
   showed an ad to; impressions, clicks and Meta's landing page views are each platform's own count; Shopify's
@@ -790,6 +820,12 @@ store's **profit and loss** for a day and a month ("Profit and loss" below).
 | Meta / Google ad spend, Total ad spend | `ads.seriesByProvider` | In the ad accounts' currency |
 | Ads as share of sales (marketing expense ratio), its 3 days, Sales per unit of ad spend (MER), Ad spend per visit / per order, Net sales less ad spend | spend against net sales, visits, orders | Only when the ads report in the store's currency and none is the Google Ads demo (as "Ads as share of sales"). The 3-day share is for day columns: the day and the two before it, whatever the filter, blank on a day whose two before aren't in the dates |
 
+With an ad account left out in another currency (`ads.leftOut`), every row worked out from the spend
+(the spend rows, and those that set it against sales, visits and orders) is the spend shown only, never
+converted or guessed: its help ends with "Left out: EU shop (EUR), in another currency." and the row
+carries the sentence (`sheetRows`' `leftOut`, `SheetRow.leftOut`), as does the ads' share of sales in
+"Business events in these dates".
+
 A period one of whose days isn't known (visits before the pixel, a day an ad account has no figures
 for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit.
 
@@ -914,8 +950,11 @@ Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given onl
   Shopify's cost of goods sold (without "View costs and stock value": `seesModule(access, "profit")`
   is false) gets no net profit either, since it would give the cost away (`product_costs_hidden`);
 - the connected ad accounts' spend is known for every day, in the store's currency. With no ad
-  account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
-  ads gets no net profit, since it would give the spend away;
+  account connected it is 0: ads elsewhere are then among the owner's costs. An account in another
+  currency is left out of the spend (Ads, "Currency"), so with one connected the spend known is only
+  part of it (`costsOf`'s `adState` "partial", `adLeftOut`): the panels show that part with the "Left
+  out" line, and net profit has the `ad_spend` gap. A member not shown the ads gets no net profit,
+  since it would give the spend away;
 - the owner has said the costs list holds every cost from a day on (`store_expense_settings.complete_from`,
   "This list holds every cost from"), and the dates start on or after that day.
 
