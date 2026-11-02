@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { redactOverview, type MemberAccess } from "../src/access";
 import { adPlatformSources, type AdSourceFacts } from "../src/adsFromShopify";
-import { marketingFigures, marketingPlatform, marketingReports, shopifyMarketing, type MarketingRow, type MarketingSyncState } from "../src/shopifyMarketing";
+import { marketingFigures, marketingPlatform, marketingReports, marketingSpendPeriod, shopifyMarketing, type MarketingRow, type MarketingSyncState } from "../src/shopifyMarketing";
 
 const range = { from: "2026-10-01", to: "2026-10-03" };
 const compared = { from: "2026-09-28", to: "2026-09-30" };
@@ -167,6 +167,53 @@ describe("the Shopify marketing module", () => {
     // A failed refresh after figures were read: the figures stay, the error is said beside them.
     expect(ask({ sync: { ...sync, error: "failed" } }).status).toBe("ready");
     expect(ask({ rows: [], lastDays: [] }).reportedSpend).toBeNull();
+  });
+});
+
+describe("today's and this month's spend, whatever the dates", () => {
+  // The store's today is 3 October; read through it.
+  const month = [
+    ...rows.filter((r) => r.campaign === null),
+    row({ day: "2026-10-03", channel: "Google Ads", app: "Google & YouTube", spend: 7.25, clicks: 11 }),
+    row({ day: "2026-10-03", channel: "Pinterest", app: "Pinterest", spend: 3 }),
+  ];
+  const current = (over: Partial<Parameters<typeof marketingSpendPeriod>[0]> = {}) =>
+    marketingSpendPeriod({ rows: month, lastDays, period: { from: "2026-10-01", to: "2026-10-03" }, sync, ...over });
+
+  it("gives Meta's, Google's and every channel's reported spend together, the others named", () => {
+    expect(current()).toEqual({
+      from: "2026-10-01",
+      to: "2026-10-03",
+      through: "2026-10-03",
+      meta: { spend: 100, state: "reported" },
+      google: { spend: 7.25, state: "reported" },
+      others: [
+        { name: "TikTok", spend: 12.5 },
+        { name: "Pinterest", spend: 3 },
+      ],
+      total: 122.75,
+    });
+  });
+
+  it("never makes a 0 of a platform with no spend: no spend reported, not reported by Shopify, or not read yet", () => {
+    // Meta reported on the 1st and 2nd, nothing on the 3rd: no spend that day, not a 0.
+    const today = current({ period: { from: "2026-10-03", to: "2026-10-03" } });
+    expect(today.meta).toEqual({ spend: null, state: "no_spend" });
+    expect(today.total).toBe(22.75);
+    // Google's app never reported to Shopify at all.
+    const never = current({ rows: month.filter((r) => r.channel !== "Google Ads"), lastDays: lastDays.filter((l) => l.channel !== "Google Ads") });
+    expect(never.google).toEqual({ spend: null, state: "unavailable" });
+    // Today isn't read yet: nothing of it is known, the month up to yesterday is.
+    const late = { ...sync, syncedThrough: "2026-10-02" };
+    expect(current({ period: { from: "2026-10-03", to: "2026-10-03" }, sync: late })).toMatchObject({ through: null, meta: { state: "not_read" }, google: { state: "not_read" }, others: [], total: null });
+    expect(current({ sync: late })).toMatchObject({ through: "2026-10-02", meta: { spend: 100 }, google: { spend: null, state: "no_spend" }, total: 100 });
+  });
+
+  it("is worked out with the module from the store's today, beside whatever dates are picked", () => {
+    const m = ask({ range: { from: "2026-09-01", to: "2026-09-07" }, current: { today: "2026-10-03", rows: month } });
+    expect(m.current?.today).toMatchObject({ from: "2026-10-03", to: "2026-10-03", google: { spend: 7.25 }, total: 22.75 });
+    expect(m.current?.month).toMatchObject({ from: "2026-10-01", to: "2026-10-03", meta: { spend: 100 }, total: 122.75 });
+    expect(ask().current).toBeNull();
   });
 });
 
