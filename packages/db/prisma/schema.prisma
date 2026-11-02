@@ -1073,7 +1073,9 @@ model StoreExpense {
   workspaceId     String   @map("workspace_id")
   storeId         String   @map("store_id")
   name            String
-  /// shopify_plan | shopify_apps | software | staff | rent | shipping | payment_fees | marketing | other (EXPENSE_CATEGORIES)
+  /// EXPENSE_CATEGORIES in @app/shared/expenses: fixed (rent, staff, software, shopify_plan, shopify_apps, internet_phone,
+  /// insurance, maintenance, other), variable (shipping, packaging, payment_fees, commissions, marketing, other_variable) or
+  /// below operating profit (interest, income_tax, depreciation, other_non_operating): EXPENSE_CATEGORY_GROUP.
   category        String
   /// In the store's currency.
   amount          Decimal  @db.Decimal(18, 2)
@@ -1096,15 +1098,18 @@ model StoreExpense {
 }
 
 // Whether the store's costs list holds every cost, and from which day: net profit is given only for
-// dates from then on (expensesComplete in @app/shared/expenses). One row per store, once said.
+// dates from then on (expensesComplete in @app/shared/expenses). And the days the store is open, which
+// its recurring costs are spread over (expenseInRange). One row per store, once said.
 model StoreExpenseSettings {
-  storeId         String   @id @map("store_id")
-  workspaceId     String   @map("workspace_id")
+  storeId           String   @id @map("store_id")
+  workspaceId       String   @map("workspace_id")
   /// The first store-local day the list holds every cost from; null: not said, or taken back.
-  completeFrom    String?  @map("complete_from")
-  updatedByUserId String?  @map("updated_by_user_id")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  completeFrom      String?  @map("complete_from")
+  /// The weekdays the store is open, Monday = 0 … Sunday = 6; empty: every calendar day.
+  operatingWeekdays Int[]    @default([]) @map("operating_weekdays")
+  updatedByUserId   String?  @map("updated_by_user_id")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
   @@map("store_expense_settings")

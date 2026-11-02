@@ -84,7 +84,8 @@ export function funnelViewOf(q: FunnelQuery, access: MemberAccess): FunnelView {
  * `parts=funnel`: only what the Shopping Funnel page shows (the funnel in full, narrowed by
  * `funnelQuery`, and the orders, Shopify sessions and traffic sources beside it).
  * `parts=sheet`: only what the Profit sheet shows (/sheet): the sales day by day, the visits day by
- * day beside the funnel's summary, and the ad spend day by day.
+ * day beside the funnel's summary, the ad spend day by day, and for its profit rows the product costs
+ * day by day and the owner's costs with their terms.
  */
 const ADVERTISING_MODULES: ReadonlySet<string> = new Set([
   "ads",
@@ -104,7 +105,7 @@ const ADVERTISING_MODULES: ReadonlySet<string> = new Set([
   "expenses",
 ]);
 const FUNNEL_MODULES: ReadonlySet<string> = new Set(["funnel", "shopify_sessions", "sales_overview", "channels", "traffic"]);
-const SHEET_MODULES: ReadonlySet<string> = new Set(["sales_overview", "funnel", "ads", "ad_connections"]);
+const SHEET_MODULES: ReadonlySet<string> = new Set(["sales_overview", "funnel", "ads", "ad_connections", "product_costs", "expenses"]);
 const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery, parts: z.enum(["advertising", "funnel", "sheet"]).optional() });
 
 /**
@@ -226,7 +227,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       polled = store;
       const now = new Date();
       const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
-      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView, { visitsByDay: q.parts === "sheet" }), access);
+      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView, funnelView, { visitsByDay: q.parts === "sheet", profitByDay: q.parts === "sheet" }), access);
       reports = report.shopifyRefresh;
       // Granted Shopify's reports and never read its marketing report: read it now rather than at the next tick.
       marketingFirstRead = (report.modules.shopify_marketing as ShopifyMarketing | undefined)?.status === "syncing";

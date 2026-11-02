@@ -1,5 +1,5 @@
 import { Prisma, type Tx } from "@app/db";
-import { addDays, comparisonImported, daysBetweenInclusive, resolvePreset, type DateRange } from "@app/shared";
+import { addDays, comparisonImported, daysBetweenInclusive, eachDay, resolvePreset, type DateRange } from "@app/shared";
 import { importedData } from "./catalog.js";
 import { localMoment, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 import type { Store } from "@app/db";
@@ -208,4 +208,24 @@ export async function productCosts(tx: Tx, { ws, storeId }: Scope, range: DateRa
       AND s.local_day BETWEEN ${range.from} AND ${range.to}`;
   const money = (v: string | null | undefined) => r2(Number(v ?? 0));
   return { current: { costOfGoodsSold: money(r?.cost), netSalesWithCost: money(r?.with_cost), netSalesWithoutCost: money(r?.without_cost) } };
+}
+
+/**
+ * The same as `productCosts`, day by day (the store-local day of each sale): what the Profit sheet's
+ * gross and operating profit take off each day. Every day of `range`, 0 on a day with no product sold.
+ */
+export async function productCostsByDay(tx: Tx, { ws, storeId }: Scope, range: DateRange) {
+  const rows = await tx.$queryRaw<Array<{ day: string; cost: string | null; with_cost: string | null; without_cost: string | null }>>`
+    SELECT s.local_day AS day, SUM(${SALE_UNITS} * v.unit_cost)::text AS cost,
+      SUM(${SALE_VALUE}) FILTER (WHERE v.unit_cost IS NOT NULL)::text AS with_cost,
+      SUM(${SALE_VALUE}) FILTER (WHERE v.unit_cost IS NULL)::text AS without_cost
+    FROM order_sales s
+    LEFT JOIN order_line_items li ON li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.shopify_id = s.line_item_shopify_id
+    LEFT JOIN product_variants v ON v.workspace_id = ${ws} AND v.store_id = ${storeId} AND v.shopify_id = li.variant_shopify_id
+    WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
+      AND s.local_day BETWEEN ${range.from} AND ${range.to}
+    GROUP BY s.local_day`;
+  const money = (v: string | null | undefined) => r2(Number(v ?? 0));
+  const byDay = new Map(rows.map((r) => [r.day, { day: r.day, costOfGoodsSold: money(r.cost), netSalesWithCost: money(r.with_cost), netSalesWithoutCost: money(r.without_cost) }]));
+  return eachDay(range.from, range.to).map((day) => byDay.get(day) ?? { day, costOfGoodsSold: 0, netSalesWithCost: 0, netSalesWithoutCost: 0 });
 }

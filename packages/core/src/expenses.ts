@@ -41,10 +41,13 @@ export async function listExpenses(tx: Tx, scope: Scope): Promise<Expense[]> {
   return rows.map(fromRow).sort((a, b) => Number(a.endsOn !== null) - Number(b.endsOn !== null));
 }
 
-/** From which day the list holds every cost (null: the owner hasn't said), and when that was last changed. */
-export async function expenseSettings(tx: Tx, scope: Scope): Promise<{ completeFrom: string | null; updatedAt: string | null }> {
+/**
+ * From which day the list holds every cost (null: the owner hasn't said), the weekdays the store is
+ * open (empty: every day; its recurring costs are spread over those), and when that was last changed.
+ */
+export async function expenseSettings(tx: Tx, scope: Scope): Promise<{ completeFrom: string | null; operatingWeekdays: number[]; updatedAt: string | null }> {
   const row = await tx.storeExpenseSettings.findFirst({ where: { workspaceId: scope.ws, storeId: scope.storeId } });
-  return { completeFrom: row?.completeFrom ?? null, updatedAt: row?.updatedAt.toISOString() ?? null };
+  return { completeFrom: row?.completeFrom ?? null, operatingWeekdays: row?.operatingWeekdays ?? [], updatedAt: row?.updatedAt.toISOString() ?? null };
 }
 
 export async function createExpense(tx: Tx, scope: Scope, input: ExpenseInput, userId: string | null): Promise<Expense> {
@@ -70,14 +73,30 @@ export async function deleteExpense(tx: Tx, scope: Scope, id: string): Promise<E
   return fromRow(row);
 }
 
+/** Saves what `input` holds; what it leaves out stays as it was. */
 export async function saveExpenseSettings(tx: Tx, scope: Scope, input: ExpenseSettingsInput, userId: string | null) {
   const before = await expenseSettings(tx, scope);
+  const change = {
+    ...(input.completeFrom !== undefined ? { completeFrom: input.completeFrom } : {}),
+    ...(input.operatingWeekdays !== undefined ? { operatingWeekdays: input.operatingWeekdays } : {}),
+    updatedByUserId: userId,
+  };
   const row = await tx.storeExpenseSettings.upsert({
     where: { storeId: scope.storeId },
-    create: { storeId: scope.storeId, workspaceId: scope.ws, completeFrom: input.completeFrom, updatedByUserId: userId },
-    update: { completeFrom: input.completeFrom, updatedByUserId: userId },
+    create: { storeId: scope.storeId, workspaceId: scope.ws, ...change },
+    update: change,
   });
-  return { saved: { completeFrom: row.completeFrom, updatedAt: row.updatedAt.toISOString() }, before };
+  return { saved: { completeFrom: row.completeFrom, operatingWeekdays: row.operatingWeekdays, updatedAt: row.updatedAt.toISOString() }, before };
+}
+
+/** The store's costs as the profit figures read them (no names or notes), with its settings. */
+export async function expenseTerms(tx: Tx, scope: Scope) {
+  const [rows, settings] = await Promise.all([
+    tx.storeExpense.findMany({ where: { workspaceId: scope.ws, storeId: scope.storeId }, select: { category: true, amount: true, cadence: true, startsOn: true, endsOn: true } }),
+    expenseSettings(tx, scope),
+  ]);
+  const costs = rows.map((r) => ({ category: r.category as ExpenseCategory, amount: Number(r.amount), cadence: r.cadence as Expense["cadence"], startsOn: r.startsOn, endsOn: r.endsOn }));
+  return { costs, completeFrom: settings.completeFrom, operatingWeekdays: settings.operatingWeekdays };
 }
 
 /**
@@ -96,29 +115,30 @@ export async function expensesReady(tx: Tx): Promise<boolean> {
 }
 
 /**
- * The dashboard's costs module for the dates: the store's costs for them, by category, those of the
- * dates they're compared with, and whether the list holds every cost for them. Null while the
- * tables don't exist yet (expensesReady). In the store's currency: costs are entered in it.
+ * The dashboard's costs module for the dates: the store's costs for them, by category and group,
+ * those of the dates they're compared with, and whether the list holds every cost for them. Null
+ * while the tables don't exist yet (expensesReady). In the store's currency: costs are entered in it.
+ * `withTerms`: the Profit sheet's question, which adds every cost's terms (no names or notes) so the
+ * sheet spreads them over its own columns.
  */
-export async function expensesModule(tx: Tx, scope: Scope, currency: string, range: DateRange, previous: Comparison | null) {
+export async function expensesModule(tx: Tx, scope: Scope, currency: string, range: DateRange, previous: Comparison | null, opts: { withTerms?: boolean } = {}) {
   if (!(await expensesReady(tx))) return null;
-  const [rows, settings] = await Promise.all([
-    tx.storeExpense.findMany({ where: { workspaceId: scope.ws, storeId: scope.storeId }, select: { category: true, amount: true, cadence: true, startsOn: true, endsOn: true } }),
-    expenseSettings(tx, scope),
-  ]);
-  const list = rows.map((r) => ({ category: r.category as ExpenseCategory, amount: Number(r.amount), cadence: r.cadence as Expense["cadence"], startsOn: r.startsOn, endsOn: r.endsOn }));
-  const current = expenseTotals(list, range);
+  const { costs, completeFrom, operatingWeekdays } = await expenseTerms(tx, scope);
+  const current = expenseTotals(costs, range, operatingWeekdays);
   // Costs are counted by whole days, so a comparison cut at a time of day takes its days whole.
-  const before = previous ? expenseTotals(list, previous) : null;
+  const before = previous ? expenseTotals(costs, previous, operatingWeekdays) : null;
   return {
     currency,
     /** Every cost the store keeps, whether or not it falls in the dates. */
-    count: rows.length,
+    count: costs.length,
     current,
     previous: before ? { total: before.total } : null,
     delta: before ? delta(current.total, before.total) : null,
-    completeFrom: settings.completeFrom,
+    completeFrom,
     /** The list holds every cost for all of the dates (expensesComplete). */
-    complete: expensesComplete(settings.completeFrom, range),
+    complete: expensesComplete(completeFrom, range),
+    /** The weekdays the store is open (empty: every day): its recurring costs are spread over those. */
+    operatingWeekdays,
+    ...(opts.withTerms ? { terms: costs } : {}),
   };
 }

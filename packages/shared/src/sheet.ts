@@ -12,11 +12,16 @@
  *  - a figure that isn't known for one of a period's days (visits before the pixel counted them, a
  *    day an ad account has no figures for) is `null` for the period, shown blank, never as a part.
  * Money is added up in whole cents, so a total doesn't depend on the order of a floating-point sum.
+ *
+ * With the store's costs (`ProfitSetup`), each column also gets its profit and loss (./profit): the
+ * product costs, the owner's variable and fixed costs (a monthly cost spread over its month's days,
+ * never taken whole off one day), and gross, operating and net profit.
  */
 // Extensionless imports: the web app imports this file directly (@app/shared/sheet).
 import type { AdSpendProvider } from "./ads";
 import { byStart, eventCovers, eventOverlaps, isBusinessEventKind, type BusinessEvent, type BusinessEventKind } from "./businessEvents";
 import { addDays, daysBetweenInclusive } from "./dates";
+import { profitAndLoss, type ProfitDay, type ProfitLoss, type ProfitSetup } from "./profit";
 import { weekdayOf } from "./sales";
 
 /** One day of the store as the sheet reads it, from the dashboard's answer for the dates. */
@@ -37,6 +42,8 @@ export interface SheetDay {
   visits?: number | null;
   /** Ad spend per platform with accounts connected; null on a day its accounts have no figures for. */
   spend: Partial<Record<AdSpendProvider, number | null>>;
+  /** The day as its profit is worked out: absent for a member not shown the breakdown and the costs. */
+  profit?: ProfitDay;
 }
 
 /** A figure added up over some days: `undefined` not seen, `null` not known on every one of them. */
@@ -56,6 +63,8 @@ export interface SheetTotals {
   spend: Partial<Record<AdSpendProvider, number | null>>;
   /** Every platform's spend together: null when one of them lacks a day, undefined with no ad account. */
   adSpend: SheetFigure;
+  /** The days' profit and loss (./profit), when the store's costs were given and every day has its figures. */
+  profit?: ProfitLoss;
 }
 
 const cents = (n: number) => Math.round(n * 100);
@@ -78,8 +87,11 @@ function providersOf(days: readonly SheetDay[]): AdSpendProvider[] {
   return (["meta", "google"] as const).filter((p) => seen.has(p));
 }
 
-/** `days` added up. A figure missing on one day is missing for them all (see SheetFigure). */
-export function sheetTotals(days: readonly SheetDay[]): SheetTotals {
+/**
+ * `days` added up. A figure missing on one day is missing for them all (see SheetFigure). With
+ * `setup`, their profit and loss too.
+ */
+export function sheetTotals(days: readonly SheetDay[], setup?: ProfitSetup): SheetTotals {
   const spend: Partial<Record<AdSpendProvider, number | null>> = {};
   for (const p of providersOf(days)) spend[p] = sum(days, (d) => (p in d.spend ? d.spend[p] : null), true) ?? null;
   const platforms = Object.values(spend);
@@ -95,6 +107,7 @@ export function sheetTotals(days: readonly SheetDay[]): SheetTotals {
     visits: sum(days, (d) => d.visits, false),
     spend,
     adSpend: platforms.length === 0 ? undefined : platforms.some((v) => v === null) ? null : platforms.reduce<number>((a, v) => a + cents(v as number), 0) / 100,
+    ...(setup && days.length && days.every((d) => d.profit) ? { profit: profitAndLoss(days.map((d) => d.profit!), setup) } : {}),
   };
 }
 
@@ -105,9 +118,9 @@ const minus = (a: SheetFigure, b: SheetFigure): SheetFigure => (a === undefined 
 // The rows
 // ---------------------------------------------------------------------------
 
-export const SHEET_SECTIONS = ["revenue", "sales", "performance", "advertising"] as const;
+export const SHEET_SECTIONS = ["revenue", "sales", "performance", "advertising", "profit"] as const;
 export type SheetSection = (typeof SHEET_SECTIONS)[number];
-export const SHEET_SECTION_LABEL: Record<SheetSection, string> = { revenue: "Revenue", sales: "Sales stats", performance: "Store performance", advertising: "Advertising" };
+export const SHEET_SECTION_LABEL: Record<SheetSection, string> = { revenue: "Revenue", sales: "Sales stats", performance: "Store performance", advertising: "Advertising", profit: "Profit and loss" };
 
 /** How a row's figures read: money, a count, a share (0.25 is 25%), a plain number, or a multiple (2.5×). */
 export type SheetFormat = "money" | "count" | "percent" | "decimal" | "times";
@@ -121,6 +134,8 @@ export interface SheetRow {
   format: SheetFormat;
   /** A total line: drawn heavier. */
   strong?: boolean;
+  /** A profit: shown green above 0, red below. */
+  signed?: boolean;
   /** Money in the ad accounts' currency rather than the store's (it is the same when spend is set against sales). */
   adCurrency?: boolean;
   /** `rolling`: the 3 days ending on a day column's day (null on other columns, or when those days aren't all there). */
@@ -133,9 +148,10 @@ export const SPEND_LABEL: Record<AdSpendProvider, string> = { meta: "Meta ad spe
  * The sheet's rows, top to bottom. `comparable`: the ad spend is in the store's currency and none
  * of it is the Google Ads demo, the dashboard's condition for setting spend against sales (docs/kpis.md
  * "Ads as share of sales"); without it the ratios of spend to sales, visits and orders are left out.
- * `grain`: the 3-day row is for day columns only.
+ * `grain`: the 3-day row is for day columns only. `profit`: the profit and loss rows, with the
+ * product costs' rows only for a member shown them (`productCosts`).
  */
-export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; providers: readonly AdSpendProvider[] }): SheetRow[] {
+export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; providers: readonly AdSpendProvider[]; profit?: { productCosts: boolean } }): SheetRow[] {
   const { comparable, grain, providers } = opts;
   const when = (on: boolean, row: SheetRow): SheetRow[] => (on ? [row] : []);
   const vsSales = (row: SheetRow) => when(comparable, row);
@@ -244,6 +260,33 @@ export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; provid
       strong: true,
       value: (t) => minus(t.netSales, t.adSpend),
     }),
+    ...(opts.profit ? profitRows(opts.profit.productCosts) : []),
+  ];
+}
+
+/** A figure of the column's profit and loss: undefined (row left out) without one, null when it can't be given. */
+const pl = (pick: (p: ProfitLoss) => number | null | undefined) => (t: SheetTotals): SheetFigure => (t.profit ? pick(t.profit) : undefined);
+
+/** The profit and loss rows (docs/kpis.md "Profit and loss"), each column's own days. */
+function profitRows(productCosts: boolean): SheetRow[] {
+  const row = (r: Omit<SheetRow, "section">): SheetRow => ({ section: "profit", ...r });
+  return [
+    row({ id: "revenue", label: "Revenue", help: "Net sales plus the shipping and fees charged: total sales less tax and duties, what the store kept from its sales before any cost.", format: "money", strong: true, value: pl((p) => p.revenue) }),
+    ...(productCosts
+      ? [
+          row({ id: "product_costs", label: "Product costs", help: "The items sold, returns taken off, at each product's cost per item in Shopify. Blank when a product sold has no cost per item.", format: "money", value: pl((p) => (p.grossGaps.length ? null : p.productCosts)) }),
+          row({ id: "gross_profit", label: "Gross profit", help: "Net sales less product costs, as Shopify works out gross profit.", format: "money", strong: true, signed: true, value: pl((p) => p.grossProfit) }),
+          row({ id: "gross_margin", label: "Gross margin", help: "Gross profit ÷ net sales.", format: "percent", value: pl((p) => p.grossMargin) }),
+        ]
+      : []),
+    row({ id: "your_variable", label: "Your variable costs", help: "The costs in your list that go up and down with selling (shipping, packaging, payment fees, commissions, other marketing), on the days they cover.", format: "money", value: pl((p) => p.yours.byGroup.variable) }),
+    row({ id: "variable_costs", label: "Variable costs", help: "Product costs + ad spend + your variable costs.", format: "money", strong: true, value: pl((p) => p.variableCosts) }),
+    row({ id: "fixed_costs", label: "Fixed costs", help: "Your fixed costs' share of these days: a monthly cost ÷ its month's days (or the days you're open), so a day never carries the whole month.", format: "money", value: pl((p) => p.fixedCosts) }),
+    row({ id: "operating_profit", label: "Operating profit", help: "Revenue − variable costs − fixed costs. Blank when an input isn't known (the notes below say which).", format: "money", strong: true, signed: true, value: pl((p) => p.operatingProfit) }),
+    row({ id: "operating_margin", label: "Operating margin", help: "Operating profit ÷ revenue.", format: "percent", value: pl((p) => p.operatingMargin) }),
+    row({ id: "below_operating", label: "Interest, tax, depreciation", help: "The costs in your list below operating profit: loan interest, income tax, depreciation and the like.", format: "money", value: pl((p) => p.belowOperating) }),
+    row({ id: "net_profit", label: "Net profit", help: "Operating profit less interest, tax and depreciation: revenue less every cost, each counted once.", format: "money", strong: true, signed: true, value: pl((p) => p.netProfit) }),
+    row({ id: "net_margin", label: "Net margin", help: "Net profit ÷ revenue.", format: "percent", value: pl((p) => p.netMargin) }),
   ];
 }
 
@@ -331,9 +374,10 @@ export interface SheetColumn {
 
 /**
  * The sheet's columns, oldest first: one per day, week (Monday to Sunday) or calendar month that
- * has a day the filter shows. `days` is every day of the dates picked, in order.
+ * has a day the filter shows. `days` is every day of the dates picked, in order. With `setup`, each
+ * column's profit and loss.
  */
-export function sheetColumns(days: readonly SheetDay[], events: readonly BusinessEvent[], grain: SheetGrain, filter: SheetFilter): SheetColumn[] {
+export function sheetColumns(days: readonly SheetDay[], events: readonly BusinessEvent[], grain: SheetGrain, filter: SheetFilter, setup?: ProfitSetup): SheetColumn[] {
   if (!days.length) return [];
   const first = days[0]!.day;
   const last = days[days.length - 1]!.day;
@@ -358,7 +402,7 @@ export function sheetColumns(days: readonly SheetDay[], events: readonly Busines
       periodDays: daysBetweenInclusive(from, to),
       shownDays: shown.length,
       events: events.filter((e) => shown.some((d) => eventCovers(e, d.day))).sort(byStart),
-      totals: sheetTotals(shown),
+      totals: sheetTotals(shown, setup),
       rolling: trailing.length && trailing.every((d) => d !== undefined) ? sheetTotals(trailing as SheetDay[]) : null,
     };
   });

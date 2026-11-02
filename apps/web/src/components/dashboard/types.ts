@@ -4,6 +4,7 @@ import type { AdPlatformSource, AdsFromShopify } from "@app/shared/adsFromShopif
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
 import type { ExpenseTotals } from "@app/shared/expenses";
+import type { ProfitCost } from "@app/shared/profit";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { OrderOutcomes } from "@app/shared/orders";
@@ -114,6 +115,9 @@ export interface SalesOverview {
    */
   series: Array<
     Omit<SalesDay, "refunds" | "totalSales"> & {
+      /** Items at full price and their discounts: with refunds, net sales (the breakdown permission's, absent from older answers). */
+      grossSales?: number;
+      discounts?: number;
       refunds?: number;
       totalSales?: number;
       shipping?: number;
@@ -694,6 +698,10 @@ export interface ExpensesModule {
   completeFrom: string | null;
   /** The list holds every cost for all of the dates. */
   complete: boolean;
+  /** The weekdays the store is open, Monday = 0 (empty: every day): recurring costs are spread over those (absent from older answers). */
+  operatingWeekdays?: number[];
+  /** The Profit sheet's question only: every cost's terms (no names or notes), to spread over its own columns. */
+  terms?: ProfitCost[];
 }
 
 /** Customers who ordered in a range (the customers module): each once, however many orders. */
@@ -791,6 +799,8 @@ export interface ProfitModule extends ReportAnswer {
 /** The items sold in the dates at their cost per item in Shopify now, and the net sales of items with and without one. */
 export interface ProductCostsModule {
   current: { costOfGoodsSold: number; netSalesWithCost: number; netSalesWithoutCost: number };
+  /** The Profit sheet's question only: the same day by day, every day of the dates. */
+  byDay?: Array<{ day: string; costOfGoodsSold: number; netSalesWithCost: number; netSalesWithoutCost: number }>;
 }
 
 export interface ShopifyCheckModule extends ReportAnswer {

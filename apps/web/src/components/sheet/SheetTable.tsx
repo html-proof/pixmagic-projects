@@ -12,7 +12,7 @@ const CELL = "whitespace-nowrap px-3 py-2 text-right tabular-nums";
 
 /**
  * The sheet: a row per figure, grouped as the owner's own spreadsheet would be (revenue, sales,
- * store performance, advertising), the days shown added up first, then a column per day, week or
+ * store performance, advertising, profit and loss), the days shown added up first, then a column per day, week or
  * month. The figure names and the total stay in view while the columns scroll; the business events
  * sit under each column's dates, and the pencil on a column marks a new one there.
  */
@@ -145,11 +145,11 @@ export function SheetTable({
                       </span>
                     </th>
                     <td className={`sticky z-10 border-b border-r border-border bg-surface group-hover/row:bg-bg ${TOTAL_LEFT} ${CELL} ${r.strong ? "font-semibold" : "font-medium"}`} data-testid="sheet-total-cell">
-                      <Figure value={fmtFigure(r.value(total, null), r.format, r.adCurrency ? adCurrency : currency)} />
+                      <Figure value={fmtFigure(r.value(total, null), r.format, r.adCurrency ? adCurrency : currency)} sign={r.signed ? r.value(total, null) : undefined} />
                     </td>
                     {columns.map((c) => (
                       <td key={c.key} className={`border-b border-border group-hover/row:bg-bg ${CELL} ${r.strong ? "font-semibold" : ""} ${running(c) ? "bg-accent/5" : ""}`}>
-                        <Figure value={fmtFigure(r.value(c.totals, c.rolling), r.format, r.adCurrency ? adCurrency : currency)} />
+                        <Figure value={fmtFigure(r.value(c.totals, c.rolling), r.format, r.adCurrency ? adCurrency : currency)} sign={r.signed ? r.value(c.totals, c.rolling) : undefined} />
                       </td>
                     ))}
                   </tr>
@@ -163,6 +163,9 @@ export function SheetTable({
   );
 }
 
-function Figure({ value }: { value: string }) {
-  return value === "—" ? <span className="text-muted/60">—</span> : <>{value}</>;
+/** A figure, or a quiet dash; a profit (`sign`) in green above 0 and red below. */
+function Figure({ value, sign }: { value: string; sign?: number | null }) {
+  if (value === "—") return <span className="text-muted/60">—</span>;
+  const c = typeof sign === "number" ? Math.round(sign * 100) : 0;
+  return c > 0 ? <span className="text-good">{value}</span> : c < 0 ? <span className="text-danger">{value}</span> : <>{value}</>;
 }

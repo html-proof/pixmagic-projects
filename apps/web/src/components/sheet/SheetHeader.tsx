@@ -18,30 +18,11 @@ function weekdayChoice(days: readonly number[]): "all" | "weekdays" | "weekends"
 }
 
 /**
- * The sheet's title and its question: the store and the dates; the columns (days, weeks or months);
- * which days it shows (weekdays, and the business events on them); how current it is; refresh,
- * download and print, and adding a business event.
+ * The sheet's title and what can be done with it: refresh, download and print, and adding a
+ * business event. Its question (the dates, columns and days shown) is SheetControls', above the table.
  */
 export function SheetHeader({ s, onAddEvent, onDownload }: { s: SheetState; onAddEvent: () => void; onDownload: (() => void) | null }) {
-  const { stores, store, setStoreId } = useApp();
-  const [now, setNow] = useState(() => Date.now());
-  const [picking, setPicking] = useState(false);
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(t);
-  }, []);
-  const ordersAsOf = fmtRelative(s.ov?.freshness?.asOf, now);
-  const grain = s.sheet?.grain ?? s.by ?? "day";
-  const choice = picking && weekdayChoice(s.weekdays) === "all" ? "pick" : weekdayChoice(s.weekdays);
-  const names = weekdayNames("short");
-  const longNames = weekdayNames("long");
-  const eventsInRange = s.events;
-
-  const toggleDay = (d: number) => {
-    const next = s.weekdays.includes(d) ? s.weekdays.filter((x) => x !== d) : [...s.weekdays, d].sort();
-    s.setWeekdays(next);
-  };
-
+  const { store } = useApp();
   return (
     <header className="card animate-rise">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
@@ -52,7 +33,10 @@ export function SheetHeader({ s, onAddEvent, onDownload }: { s: SheetState; onAd
             </span>
             Profit sheet
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">Every figure for your store, a column per day, week or month. Mark your business events on their days, then show only those days or set them against the rest.</p>
+          <p className="mt-1 max-w-2xl text-sm text-muted">
+            Whether your store is making money, day by day and month by month, and every figure for it in a column per day, week or month. Mark
+            your business events on their days, then show only those days or set them against the rest.
+          </p>
           {s.shown && (
             <p className="mt-1 hidden text-sm print:block">
               {store?.name ?? store?.shopDomain} · {fmtRange(s.shown.range.from, s.shown.range.to)}
@@ -82,8 +66,41 @@ export function SheetHeader({ s, onAddEvent, onDownload }: { s: SheetState; onAd
           </button>
         </div>
       </div>
+    </header>
+  );
+}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2" data-print-hide>
+/**
+ * The sheet's question: the store and the dates; the columns (days, weeks or months); which days it
+ * shows (weekdays, and the business events on them); how current it is.
+ */
+export function SheetControls({ s }: { s: SheetState }) {
+  const { stores, store, setStoreId } = useApp();
+  const [now, setNow] = useState(() => Date.now());
+  const [picking, setPicking] = useState(false);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+  const ordersAsOf = fmtRelative(s.ov?.freshness?.asOf, now);
+  const grain = s.sheet?.grain ?? s.by ?? "day";
+  const choice = picking && weekdayChoice(s.weekdays) === "all" ? "pick" : weekdayChoice(s.weekdays);
+  const names = weekdayNames("short");
+  const longNames = weekdayNames("long");
+  const eventsInRange = s.events;
+
+  const toggleDay = (d: number) => {
+    const next = s.weekdays.includes(d) ? s.weekdays.filter((x) => x !== d) : [...s.weekdays, d].sort();
+    s.setWeekdays(next);
+  };
+
+  return (
+    <section className="card animate-rise" aria-labelledby="sheet-controls-h">
+      <h2 id="sheet-controls-h" className="font-semibold">
+        The sheet
+      </h2>
+      <p className="mt-0.5 text-xs text-muted">Every figure for the dates you pick, a column per day, week or month.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2" data-print-hide>
         {stores.length > 1 && (
           <label className="flex items-center gap-2 text-xs text-muted">
             Store
@@ -200,6 +217,6 @@ export function SheetHeader({ s, onAddEvent, onDownload }: { s: SheetState; onAd
         <span>Days in the store&apos;s time zone ({store?.timezone ?? "UTC"})</span>
         <span>Weeks run Monday to Sunday</span>
       </p>
-    </header>
+    </section>
   );
 }

@@ -30,7 +30,7 @@ import type { Scope } from "./common.js";
 import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderOutcomes, orderTiming, recentOrders, traffic } from "./orders.js";
 import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
-import { productCosts, productPerformance } from "./products.js";
+import { productCosts, productCostsByDay, productPerformance } from "./products.js";
 import { shopifyModules } from "./shopify.js";
 
 /**
@@ -81,8 +81,10 @@ export interface AdsView {
  *
  * `adsView` narrows the ad modules for the Advertising pages (AdsView). `funnelView`: the Shopping
  * Funnel page's question (its filter), which makes the funnel module the page's full report
- * (`funnelDetail`) instead of the dashboard's summary. `sheet.visitsByDay`: the Profit sheet's
- * question, which adds the visits day by day to the funnel module.
+ * (`funnelDetail`) instead of the dashboard's summary. `sheet`: the Profit sheet's question:
+ * `visitsByDay` adds the visits day by day to the funnel module; `profitByDay` the product costs day
+ * by day to the product_costs module (`byDay`) and every cost's terms to the expenses module, so the
+ * sheet works out each column's profit (@app/shared/profit).
  *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
@@ -94,7 +96,7 @@ export async function storeOverview(
   sees: (module: string) => boolean = () => true,
   adsView: AdsView = {},
   funnelView?: FunnelView,
-  sheet: { visitsByDay?: boolean } = {},
+  sheet: { visitsByDay?: boolean; profitByDay?: boolean } = {},
 ) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
@@ -204,7 +206,7 @@ export async function storeOverview(
 
   // The owner's own costs (Settings → Costs), set against the sales above: only beside them.
   if (modules.sales_overview && sees("expenses")) {
-    const expenses = await expensesModule(tx, scope, store.currency, range, previous);
+    const expenses = await expensesModule(tx, scope, store.currency, range, previous, { withTerms: sheet.profitByDay });
     if (expenses) modules.expenses = expenses;
   }
 
@@ -333,6 +335,11 @@ export async function storeOverview(
   const report = shopify.modules.profit as { status: string } | undefined;
   if (on("top_products") && sees("product_costs") && (!report || (report.status !== "ready" && report.status !== "loading"))) {
     modules.product_costs = await productCosts(tx, scope, range);
+  }
+  // The Profit sheet's product costs day by day: always each product's cost per item, the only
+  // source there is by day (Shopify's profit report gives the dates whole).
+  if (sheet.profitByDay && on("top_products") && sees("product_costs")) {
+    modules.product_costs = { ...((modules.product_costs as object | undefined) ?? (await productCosts(tx, scope, range))), byDay: await productCostsByDay(tx, scope, range) };
   }
   const failed =
     store.status === "error"
