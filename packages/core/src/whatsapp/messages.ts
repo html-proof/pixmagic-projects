@@ -335,8 +335,8 @@ export async function applyMessageStatus(conn: Pick<WappConnection, "id" | "stor
   if (m.source === "test" && (next === "sent" || next === "delivered" || next === "read")) {
     await systemDb.wappSettings.updateMany({ where: { storeId: m.storeId, testPassedAt: null, testVerifiedAt: { not: null } }, data: { testPassedAt: report.at } });
   }
-  // Zapier's "WhatsApp message failed" trigger (docs/zapier.md): the number masked. Never throws.
-  if (next === "failed") await zapierWhatsappFailed(m, report.at);
+  // Zapier's "WhatsApp message failed" trigger (docs/zapier.md): the number masked, the reason the row now has. Never throws.
+  if (next === "failed") await zapierWhatsappFailed({ ...m, reason: "provider_rejected", errorCode: "whatsapp_error" }, report.at);
   return next;
 }
 

@@ -31,14 +31,14 @@ Principles:
 | Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
 | Background jobs (sync, webhooks, aggregate, email, whatsapp), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
 | `*/15 * * * *`: token refresh, stale jobs, ads sync, WhatsApp, open shifts, email sweeps; `15 3 * * *`: nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron, UTC. |
-| Connection pooling to Postgres (two logins: the system role and the tenant role, both bound by RLS) | Capped Lambda concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
+| Connection pooling to Postgres (two logins: the system role and the tenant role, both bound by RLS) | Small pools per function instance and the queues' capped concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
 | All data | **RDS for PostgreSQL 17** (encrypted, automated backups, point-in-time restore) | No single machine to keep running (the old deployment's database on the owner's PC went down when Docker Desktop stopped). |
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
 | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
 | WhatsApp Automation's gateway (Evolution API, a container) | **ECS Fargate** (one task, private subnets, no public address, no load balancer), found by the functions through **Cloud Map**; its own database on the same RDS instance | WhatsApp sessions are long-lived connections a Lambda can't hold ([whatsapp.md](whatsapp.md)). |
 | Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
 | Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication, of which nothing is left in the app ([cognito-setup.md](cognito-setup.md), section 4). |
-| Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; rotation for database passwords. |
+| Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; no rotation (section 4). |
 | Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
 | Backups | RDS automated backups (14 days) + **AWS Backup** monthly copy | Point-in-time restore to any second. |
 | Live dashboards (push updates; on an unmerged branch) | **AppSync Events** (managed WebSocket pub/sub), or keep polling | Decide when that branch lands; polling works meanwhile. |
@@ -147,11 +147,18 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
   automated backups with point-in-time restore, Performance Insights (free tier), Enhanced
   Monitoring every 60 seconds (OS metrics in CloudWatch Logs, `RDSOSMetrics`), parameter group
   with `rds.force_ssl=1`. Single-AZ (lean) or Multi-AZ (high availability, automatic failover).
-- **Connections**: two logins in Secrets Manager, `app` (owner: migrations, system paths, jobs) and
-  `app_rls` (tenant reads under RLS); passwords rotate through Secrets Manager. Each function
-  instance keeps one small pool per role, and Lambda
-  concurrency is capped per function (reserved concurrency) so the total stays under the database's
-  connection limit (about 80 on db.t4g.micro, 200 on db.t4g.small).
+- **Connections**: three logins, each password in Secrets Manager: the tables' owner `app`
+  (`insights/<env>/db-owner`: migrations and maintenance, for the cron function and the admin host
+  only), the system role `app_system` (`insights/<env>/db-system`: every function's system paths,
+  bound by RLS, [system-database-role.md](system-database-role.md)) and the tenant role `app_rls`
+  (tenant reads under RLS; `APP_RLS_PASSWORD` in `insights/<env>/app`). No password rotates:
+  CloudFormation generated the first two once and `put-secrets.mjs` the third, and the migrate action
+  sets the two roles' passwords from them. Each function instance keeps one pool of three
+  connections per role (`packages/db`). Lambda concurrency is not capped per function (no reserved
+  concurrency): the jobs function runs at most 2 or 3 at a time per queue (the event sources' maximum
+  concurrency, `sources` in `infra/cdk/lib/app-stack.ts`), while `api` and `cron` scale within the
+  account's 1,000. Production's database is a db.t4g.micro (about 80 connections; 200 on a
+  db.t4g.small), and the `db-connections` alarm at 60 (75%) says when the total nears that limit.
 - **RDS Proxy**, added when concurrency outgrows those caps: tenant queries run
   `set_config('app.workspace_id', …, true)` inside each transaction, and RDS Proxy *pins* a connection
   on `set_config`, which would undo its pooling. The setting is transaction-local, the case AWS
@@ -196,7 +203,7 @@ The app's address is `https://bizinsights.io` since 2026-10-16 (pages asked for 
 | --- | --- | --- |
 | Shopify (the main app and each other app: pixmagic, public, appstore) | `application_url`, `redirect_urls`, webhook `uri` → `https://bizinsights.io/api/...` (in every toml) | `shopify-app/shopify.app*.toml`, then `shopify app deploy` |
 | Shopify web pixel extension | Posts to the `API_URL` it was given when it was made (the `after-move` action re-points older pixels) | `shopify-app/extensions/insights-pixel` |
-| Meta (Ads login, WhatsApp) | Redirect URI `https://bizinsights.io/api/ads/meta/callback` ([ads-setup.md](ads-setup.md#how-connecting-works); Nango's old `…/api/ads/nango/oauth-callback`, which bizinsights no longer answers, stays registered until [Leaving Nango](ads-setup.md#leaving-nango)'s step (d)); WhatsApp webhook callback `https://bizinsights.io/api/webhooks/whatsapp` and its verify token | Meta app dashboards |
+| Meta (Ads login, WhatsApp) | Redirect URI `https://bizinsights.io/api/ads/meta/callback` ([ads-setup.md](ads-setup.md#how-connecting-works); Nango's old `…/api/ads/nango/oauth-callback`, which bizinsights no longer answers, can come off now that the release without Nango's code is live, release 131 since 2026-10-30: [Leaving Nango](ads-setup.md#leaving-nango)'s step (d)); WhatsApp webhook callback `https://bizinsights.io/api/webhooks/whatsapp` and its verify token | Meta app dashboards |
 | Google (Ads, AdSense) | Redirect URIs `https://bizinsights.io/api/ads/google/callback` and `…/api/ads/adsense/callback` (Nango's old callback likewise); domain verification for the consent screen (fixes "unverified app"): a Search Console **Domain** property for bizinsights.io, whose TXT record goes in Cloudflare DNS | Google Cloud console, Search Console |
 | Google sign-in (Cognito) | Redirect URI `<the user pool's domain>/oauth2/idpresponse` | Google Cloud OAuth client ([cognito-setup.md](cognito-setup.md)) |
 | Microsoft and Gmail (email integrations) | Redirect URIs `https://bizinsights.io/api/email/oauth/microsoft/callback` and `.../google/callback` | Microsoft Entra app registration, Google Cloud OAuth client |

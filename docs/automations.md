@@ -17,8 +17,15 @@ a card pointing there and doesn't read or change its tables. It may join later a
 ([WhatsApp](#whatsapp)).
 
 Zapier is not a channel of the hub: bizinsights' Zapier app ([zapier.md](zapier.md), Settings →
-Integrations) sends a store's alerts, advertising thresholds and summaries, and failed WhatsApp
-messages *to* the merchant's own Zaps, and sends nothing to customers.
+Integrations) sends a store's alerts, advertising thresholds and summaries, ad account syncs,
+integrations connected or disconnected, paid orders and failed WhatsApp messages *to* the merchant's
+own Zaps. Its one action, **Send WhatsApp Template Message**, sends a customer a WhatsApp message on
+WhatsApp's own queue, not the hub's
+([zapier.md](zapier.md#the-action-send-whatsapp-template-message)): only for a connection an owner or
+admin allowed to send, only one of the store's templates (on Meta's Business Platform, one Meta
+approved), only with the customer's consent (a lead's own, which the Zap passes on), never to a number
+that replied STOP, and within the store's limits, sending hours and Pause all automation. Its
+messages are on the WhatsApp page (source Zapier), not in the hub's history.
 
 ## Contents
 
@@ -453,8 +460,9 @@ service window.
 ## Limits and what isn't done
 
 - WhatsApp isn't built in the hub yet (above).
-- No Zapier action sends a message yet ([zapier.md](zapier.md#not-built-and-why)): a WhatsApp template
-  action waits for the Cloud API rewrite.
+- Zapier's one action sends WhatsApp templates only, through WhatsApp's queue rather than the hub
+  (above, and [zapier.md](zapier.md#the-action-send-whatsapp-template-message)): no Zapier action
+  sends SMS or email, nor WhatsApp free text.
 - Inbound messages can't start an automation on SMS or email (one-way senders, send-only mailboxes).
 - Email: no delivery reports or late bounces (send-only access), no customer-signup or refund
   triggers, delays are absolute (no "9 am the customer's time"), conditions are edited on Settings

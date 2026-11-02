@@ -16,10 +16,12 @@ import { TopCampaigns } from "@/components/advertising/TopCampaigns";
 import { useAdvertising } from "@/components/advertising/useAdvertising";
 import { AdStatusNotes, AD_DEFINITIONS, Definitions } from "@/components/dashboard/AdsCommon";
 import { plural } from "@/components/dashboard/format";
+import { leftOutOf } from "@/components/dashboard/profitFigures";
 
 /**
  * Advertising Performance: every ad platform together, the owner's design. Spend, clicks, impressions,
- * the purchases and purchase value the platforms credit to their ads and ROAS at the top; then spend
+ * the purchases and purchase value the platforms credit to their ads and ROAS at the top (each
+ * platform's own with Meta and Google both counted: their claims can overlap); then spend
  * against that value over the dates, how the spend splits, and the funnel from an ad shown to a purchase
  * in the store; Meta Ads and Google Ads a card each (from their own API, or the store's Shopify orders
  * while one isn't connected or its access ended, `ad_sources`); what stands out; the campaigns that spent
@@ -66,7 +68,8 @@ export default function AdvertisingOverviewPage() {
             );
           }
           const accounts = [...(a?.accounts ?? []), ...(ov.modules.adsense?.accounts ?? [])];
-          const left = accounts.filter((acc) => !acc.counted);
+          // In another currency, so in none of the figures (`leftOut`). Never the Google Ads demo: its figures are simulated, not spend left out.
+          const left = [...(a ? leftOutOf(a) : []), ...(ov.modules.adsense?.accounts ?? []).filter((acc) => !acc.counted && !acc.demo)];
           return (
             <div className="@container space-y-4">
               <AdStatusNotes accounts={accounts} manage={manage} />

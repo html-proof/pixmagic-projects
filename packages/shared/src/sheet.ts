@@ -123,6 +123,11 @@ export interface SheetRow {
   strong?: boolean;
   /** Money in the ad accounts' currency rather than the store's (it is the same when spend is set against sales). */
   adCurrency?: boolean;
+  /**
+   * Worked out from a spend that leaves ad accounts out (another currency): the sentence naming them,
+   * also at the end of `help`. The figure is only part of the spend, or set against only part of it.
+   */
+  leftOut?: string;
   /** `rolling`: the 3 days ending on a day column's day (null on other columns, or when those days aren't all there). */
   value: (t: SheetTotals, rolling: SheetTotals | null) => SheetFigure;
 }
@@ -133,12 +138,16 @@ export const SPEND_LABEL: Record<AdSpendProvider, string> = { meta: "Meta ad spe
  * The sheet's rows, top to bottom. `comparable`: the ad spend is in the store's currency and none
  * of it is the Google Ads demo, the dashboard's condition for setting spend against sales (docs/kpis.md
  * "Ads as share of sales"); without it the ratios of spend to sales, visits and orders are left out.
- * `grain`: the 3-day row is for day columns only.
+ * `grain`: the 3-day row is for day columns only. `leftOut`: the ad accounts the ads module left out of
+ * the spend, in another currency than its own, as the dashboard names them ("Left out: EU shop (EUR),
+ * in another currency.", leftOutWords in the web app): nothing is converted, so every row worked out
+ * from the spend (the spend itself, MER, net sales less ad spend...) is short by theirs and says so.
  */
-export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; providers: readonly AdSpendProvider[] }): SheetRow[] {
-  const { comparable, grain, providers } = opts;
+export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; providers: readonly AdSpendProvider[]; leftOut?: string | null }): SheetRow[] {
+  const { comparable, grain, providers, leftOut } = opts;
   const when = (on: boolean, row: SheetRow): SheetRow[] => (on ? [row] : []);
-  const vsSales = (row: SheetRow) => when(comparable, row);
+  const fromSpend = (row: SheetRow): SheetRow => (leftOut ? { ...row, help: `${row.help} ${leftOut}`, leftOut } : row);
+  const vsSales = (row: SheetRow) => when(comparable, fromSpend(row));
   return [
     {
       id: "total_sales",
@@ -200,17 +209,18 @@ export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; provid
       value: (t) => ratio(t.adSpend, t.orders),
     }),
     ...providers.map(
-      (p): SheetRow => ({
-        id: `spend_${p}`,
-        section: "advertising",
-        label: SPEND_LABEL[p],
-        help: "What the platform charged for the ads of the connected accounts that day, as it reports it.",
-        format: "money",
-        adCurrency: true,
-        value: (t) => (p in t.spend ? t.spend[p] : undefined),
-      }),
+      (p): SheetRow =>
+        fromSpend({
+          id: `spend_${p}`,
+          section: "advertising",
+          label: SPEND_LABEL[p],
+          help: "What the platform charged for the ads of the connected accounts that day, as it reports it.",
+          format: "money",
+          adCurrency: true,
+          value: (t) => (p in t.spend ? t.spend[p] : undefined),
+        }),
     ),
-    ...when(providers.length > 1, { id: "ad_spend", section: "advertising", label: "Total ad spend", help: "Every connected platform's spend together.", format: "money", strong: true, adCurrency: true, value: (t) => t.adSpend }),
+    ...when(providers.length > 1, fromSpend({ id: "ad_spend", section: "advertising", label: "Total ad spend", help: "Every connected platform's spend together.", format: "money", strong: true, adCurrency: true, value: (t) => t.adSpend })),
     ...vsSales({
       id: "ads_share",
       section: "advertising",
@@ -219,14 +229,17 @@ export function sheetRows(opts: { comparable: boolean; grain: SheetGrain; provid
       format: "percent",
       value: (t) => ratio(t.adSpend, t.netSales),
     }),
-    ...when(comparable && grain === "day", {
-      id: "ads_share_3d",
-      section: "advertising",
-      label: "Ads as share of sales, 3 days",
-      help: "The same over the day and the two before it, which evens out a day whose sales or spend came late or early.",
-      format: "percent",
-      value: (_t, r) => (r ? ratio(r.adSpend, r.netSales) : null),
-    }),
+    ...when(
+      comparable && grain === "day",
+      fromSpend({
+        id: "ads_share_3d",
+        section: "advertising",
+        label: "Ads as share of sales, 3 days",
+        help: "The same over the day and the two before it, which evens out a day whose sales or spend came late or early.",
+        format: "percent",
+        value: (_t, r) => (r ? ratio(r.adSpend, r.netSales) : null),
+      }),
+    ),
     ...vsSales({
       id: "mer",
       section: "advertising",

@@ -111,8 +111,9 @@ which `apps/web/src/lib/adConnections.ts` re-exports) are pure functions in
 `@app/shared/integrations`; core's `integrations/status.ts` composes what each module already says
 about itself (the store's status and `syncProblem`, the ad rows and waiting sign-ins,
 `waConnectionView`, the Automations hub's SMS and email cards) and decides nothing again. A new
-provider adds its mapping in shared and its module in core, and no page needs logic of its own; the
-Zapier app (PR #275) adds its module once it merges. Every caller is told the same statuses; a
+provider adds its mapping in shared and its module in core, and no page needs logic of its own.
+Zapier isn't one of its modules: its Settings card reads `GET …/zapier`
+([zapier.md](zapier.md#settings--integrations)). Every caller is told the same statuses; a
 channel's accounts and reasons stay with whoever may open its own page (the SMS sender with View
 campaigns, and neither SMS's nor email's with an API key). The answer's shape, the mappings and who
 is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).

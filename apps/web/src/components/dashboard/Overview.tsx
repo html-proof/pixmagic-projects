@@ -1,9 +1,10 @@
 "use client";
 import type { ReactNode } from "react";
+import { claimsAddUp } from "@app/shared/ads";
 import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
-import { throughLabel } from "./AdsCommon";
+import { PLATFORM_NAME, throughLabel } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
 import { comparisonHelp, noEarlierData } from "./DateRange";
 import { Icon } from "./Icons";
@@ -103,9 +104,15 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   } else if (ads && adsShown?.totals && adsShown.totals.spend > 0) {
     const c = adsShown.totals;
     const clicks = c.linkClicks === null ? "" : ` for ${plural(c.linkClicks, "link click")}`;
-    const back =
-      c.roas !== null && c.purchaseValue !== null
-        ? `; the platforms credit ${fmtMoney(c.purchaseValue, ads.currency)} in purchases to them (${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(c.roas)}×)`
+    const times = (n: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n);
+    // With Meta and Google both counted, each one's own claim: added up they could count an order twice (claimsAddUp).
+    const own = ads.byProvider.map((p) => ({ name: PLATFORM_NAME[p.provider], t: shownFigures(p).totals }));
+    const back = claimsAddUp(ads.byProvider.map((p) => p.provider))
+      ? c.roas !== null && c.purchaseValue !== null
+        ? `; the platforms credit ${fmtMoney(c.purchaseValue, ads.currency)} in purchases to them (${times(c.roas)}×)`
+        : ""
+      : own.every((p) => p.t?.roas != null && p.t.purchaseValue !== null)
+        ? `; ${own.map(({ name, t }, i) => `${name}${i ? "" : " credits"} ${fmtMoney(t!.purchaseValue!, ads.currency)}${i ? "" : " in purchases to its ads"} (${times(t!.roas!)}×)`).join(" and ")}, each by its own count`
         : "";
     out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(c.spend, ads.currency)} spent on ads${upTo(adsShown.through)}${clicks}${back}.` });
   }
@@ -202,6 +209,19 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const adsNowOf = m.ads ? nowOf(m.ads) : null;
   const adsNow = adsNowOf?.totals ?? null;
   const adsLabel = (what: string) => (adsNowOf?.label ? `${what}, ${adsNowOf.label}` : what);
+  // The platforms' ROAS, or with Meta and Google both counted a row each: their claims added up could
+  // count an order twice (claimsAddUp).
+  const roasOf = (what: string, at: { totals: { purchases: number | null; roas: number | null } | null; label: string | null }, before: number | null, change: number | null) => ({
+    label: at.label ? `Return on ad spend (${what}), ${at.label}` : `Return on ad spend (${what})`,
+    now: !at.totals ? "Unavailable" : at.totals.purchases === null ? "Being re-read" : at.totals.roas !== null ? `${at.totals.roas.toFixed(2)}×` : "—",
+    before: before !== null ? `${before.toFixed(2)}×` : null,
+    change,
+  });
+  const roasRows = !m.ads
+    ? []
+    : claimsAddUp(m.ads.byProvider.map((p) => p.provider))
+      ? [roasOf("platforms' own", nowOf(m.ads), m.ads.previous.roas, m.ads.deltas.roas)]
+      : m.ads.byProvider.map((p) => roasOf(`${PLATFORM_NAME[p.provider]}' own`, nowOf(p), p.previous.roas, p.deltas.roas));
   const senseNowOf = m.adsense ? nowOf(m.adsense) : null;
   const senseNow = senseNowOf?.totals ?? null;
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
@@ -337,14 +357,9 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                     change={<Change value={m.ads.deltas.spend} invert />}
                   />
                 )}
-                {m.ads && (
-                  <Row
-                    label={adsLabel("Return on ad spend (platforms' own)")}
-                    now={!adsNow ? "Unavailable" : adsNow.purchases === null ? "Being re-read" : adsNow.roas !== null ? `${adsNow.roas.toFixed(2)}×` : "—"}
-                    before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null}
-                    change={<Change value={m.ads.deltas.roas} />}
-                  />
-                )}
+                {roasRows.map((r) => (
+                  <Row key={r.label} label={r.label} now={r.now} before={r.before} change={<Change value={r.change} />} />
+                ))}
                 {m.adsense && (
                   <Row
                     label={senseNowOf?.label ? `Estimated AdSense earnings (${m.adsense.currency}), ${senseNowOf.label}` : `Estimated AdSense earnings (${m.adsense.currency})`}

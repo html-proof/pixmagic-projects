@@ -28,6 +28,9 @@ const { viewerRequestCode } = await import("../lib/viewer-request.js");
 const { MIGRATE_BEFORE_LIVE_CODE, MIGRATE_BEFORE_LIVE_FAILED } = await import("../lib/migrate-before-live.js");
 const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 
+/** Production's Google sign-in client (config.ts). */
+const GOOGLE_CLIENT_ID = "567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com";
+
 function synth(context: Record<string, string> = {}) {
   const app = new App({ context });
   const cfg = envConfig((k) => app.node.tryGetContext(k));
@@ -35,7 +38,8 @@ function synth(context: Record<string, string> = {}) {
   const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
   const data = new DataStack(app, "D", cfg, { env });
   const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
-  const auth = new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam });
+  // As bin/insights.ts gives it.
+  const auth = new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam, googleClientId: cfg.googleClientId || undefined });
   const ci = new CiStack(app, "C", cfg, { env });
   const audit = new AuditStack(app, "T", cfg, { env, accessLogsBucketName: data.accessLogs.bucketName });
   return { edge: Template.fromStack(edge), data: Template.fromStack(data), app: Template.fromStack(appStack), auth: Template.fromStack(auth), ci: Template.fromStack(ci), audit: Template.fromStack(audit) };
@@ -217,14 +221,38 @@ describe("the data stack", () => {
   });
 });
 
+describe("each environment's own settings (config.ts)", () => {
+  const config = (context: Record<string, string>) => envConfig((k) => context[k]);
+
+  it("keeps production's schedules, alarm email and Google sign-in in a deploy that gives no flags (by hand, an infrastructure rollback)", () => {
+    expect(config({})).toMatchObject({ name: "production", schedulesEnabled: true, alertEmail: "bizinsightsaus@yahoo.com", googleClientId: GOOGLE_CLIENT_ID });
+    // What the deploy workflow passes from its GitHub variables changes nothing, and neither does a flag it passes empty.
+    expect(config({ env: "production", schedules: "on", alertEmail: "bizinsightsaus@yahoo.com", googleClientId: GOOGLE_CLIENT_ID, migrate: "on" })).toEqual(config({}));
+    expect(config({ env: "production", schedules: "", alertEmail: "", googleClientId: "", migrate: "" })).toEqual(config({}));
+  });
+
+  it("still lets one deploy switch the schedules off, or name another alarm address or Google client", () => {
+    expect(config({ schedules: "off" }).schedulesEnabled).toBe(false);
+    expect(config({ alertEmail: "someone@example.com" }).alertEmail).toBe("someone@example.com");
+    expect(config({ googleClientId: "0-other.apps.googleusercontent.com" }).googleClientId).toBe("0-other.apps.googleusercontent.com");
+  });
+
+  it("gives staging its own: no schedules, alarm email or Google sign-in unless asked", () => {
+    expect(config({ env: "staging" })).toMatchObject({ schedulesEnabled: false, alertEmail: "", googleClientId: "" });
+    expect(config({ env: "staging", schedules: "" }).schedulesEnabled).toBe(false);
+    expect(config({ env: "staging", schedules: "on" }).schedulesEnabled).toBe(true);
+  });
+});
+
 describe("the app stack", () => {
-  it("leaves the schedules off unless asked (no double syncs while the old deployment still runs)", () => {
+  it("runs the schedules in production, and in staging only when asked (a copy of production's data mustn't sync stores twice)", () => {
     const states = (tpl: Template) =>
       Object.values(tpl.findResources("AWS::Scheduler::Schedule"))
         .filter((s) => "cron" in JSON.parse(s.Properties.Target.Input))
         .map((s) => s.Properties.State);
-    expect(states(t.app)).toEqual(["DISABLED", "DISABLED"]);
-    expect(states(synth({ schedules: "on" }).app)).toEqual(["ENABLED", "ENABLED"]);
+    expect(states(t.app)).toEqual(["ENABLED", "ENABLED"]);
+    expect(states(synth({ schedules: "off" }).app)).toEqual(["DISABLED", "DISABLED"]);
+    expect(states(synth({ env: "staging" }).app)).toEqual(["DISABLED", "DISABLED"]);
   });
 
   it("emails the owner the day's AWS cost every morning, letting only the cron function read Cost Explorer", () => {
@@ -363,14 +391,19 @@ describe("the app stack", () => {
     });
   });
 
+  it("emails the alarms to the owner in production, and to nobody in staging", () => {
+    // The stack's other subscription is SMS events → their queue.
+    const emails = (tpl: Template) => Object.values(tpl.findResources("AWS::SNS::Subscription")).filter((s) => s.Properties.Protocol === "email").map((s) => s.Properties);
+    expect(emails(t.app)).toEqual([{ Protocol: "email", Endpoint: "bizinsightsaus@yahoo.com", TopicArn: { Ref: expect.stringMatching(/^Alarms/) } }]);
+    expect(emails(synth({ env: "staging" }).app)).toEqual([]);
+  });
+
   it("emails the owner as the month's spend passes 50/75/90/100% of US$80, and on a forecast above it", () => {
     const [budget] = Object.values(t.app.findResources("AWS::Budgets::Budget"));
     expect(budget!.Properties.Budget).toMatchObject({ BudgetType: "COST", TimeUnit: "MONTHLY", BudgetLimit: { Amount: 80, Unit: "USD" } });
     const alerts = budget!.Properties.NotificationsWithSubscribers as Array<{ Notification: Record<string, unknown>; Subscribers: unknown[] }>;
     expect(alerts.map((a) => [a.Notification.NotificationType, a.Notification.Threshold])).toEqual([["ACTUAL", 50], ["ACTUAL", 75], ["ACTUAL", 90], ["ACTUAL", 100], ["FORECASTED", 100]]);
     for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "bizinsightsaus@yahoo.com" }]);
-    // The alarms stay off email unless alertEmail is given (the one subscription is SMS events → their queue).
-    expect(Object.values(t.app.findResources("AWS::SNS::Subscription")).filter((s) => s.Properties.Protocol === "email")).toHaveLength(0);
     // A change to the alerts replaces the budget, so it gets a name of its own.
     const name = budget!.Properties.Budget.BudgetName as string;
     expect(name).toMatch(/^insights-production-monthly-[0-9a-f]{8}$/);
@@ -937,7 +970,7 @@ describe("Cognito sign-in", () => {
     const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
     const data = new DataStack(app, "D", cfg, { env });
     const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
-    return Template.fromStack(new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam }));
+    return Template.fromStack(new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam, googleClientId: cfg.googleClientId || undefined }));
   }
   const resource = (tpl: Template, id: string) => tpl.toJSON().Resources[id] as Resource;
   const ownDomain = { name: "auth.bizinsights.io", certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/0a1b2c3d-1234-5678-9abc-def012345678", inUse: false };
@@ -1020,6 +1053,21 @@ describe("Cognito sign-in", () => {
     expect(runtime.DependsOn).toContain("CustomUserPoolDomain");
     // Both domains stay: a sign-in that started on the prefix domain still finishes there.
     expect(resource(tpl, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
+  });
+
+  it("production: Continue with Google through the client in config.ts, its secret only by reference; staging: none", () => {
+    const json = t.auth.toJSON();
+    expect(json.Conditions.HasGoogle).toEqual({ "Fn::Not": [{ "Fn::Equals": [GOOGLE_CLIENT_ID, ""] }] });
+    expect(resource(t.auth, "GoogleProvider").Properties.ProviderDetails).toMatchObject({
+      client_id: GOOGLE_CLIENT_ID,
+      // Resolved by CloudFormation at deploy time: the template never holds the secret.
+      client_secret: "{{resolve:secretsmanager:insights/production/app:SecretString:GOOGLE_SIGNIN_CLIENT_SECRET}}",
+    });
+    expect(JSON.stringify(json)).toContain('\\"COGNITO_IDENTITY_PROVIDERS\\":\\"Google\\"');
+    const staging = synth({ env: "staging" }).auth.toJSON();
+    expect(staging.Conditions.HasGoogle).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "GoogleClientId" }, ""] }] });
+    expect(staging.Parameters.GoogleClientId).toMatchObject({ Type: "String", Default: "" });
+    expect(JSON.stringify(staging)).toContain('\\"COGNITO_IDENTITY_PROVIDERS\\":\\"\\"');
   });
 
   it("refuses an own domain whose certificate isn't in us-east-1", () => {

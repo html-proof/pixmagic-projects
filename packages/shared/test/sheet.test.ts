@@ -122,6 +122,26 @@ describe("sheetRows", () => {
     expect(sheetRows({ comparable: true, grain: "day", providers: ["meta", "google"] }).map((r) => r.id)).toContain("ad_spend");
   });
 
+  it("says on every row worked out from the spend which accounts it leaves out, in another currency, and on no other", () => {
+    const leftOut = "Left out: EU shop (EUR), in another currency.";
+    const rows = sheetRows({ comparable: true, grain: "day", providers: ["meta", "google"], leftOut });
+    const fromSpend = ["spend_per_visit", "spend_per_order", "spend_meta", "spend_google", "ad_spend", "ads_share", "ads_share_3d", "mer", "after_ads"];
+    expect(rows.filter((r) => r.leftOut).map((r) => r.id)).toEqual(fromSpend);
+    for (const r of rows) {
+      if (fromSpend.includes(r.id)) {
+        expect(r.leftOut).toBe(leftOut);
+        expect(r.help.endsWith(` ${leftOut}`)).toBe(true);
+      } else expect(r.help).not.toContain("Left out");
+    }
+    // The figures are the same: the spend shown, never a guess at the rest.
+    const t = sheetTotals([day("2026-09-01")]);
+    const plain = sheetRows({ comparable: true, grain: "day", providers: ["meta", "google"] });
+    expect(rows.map((r) => r.value(t, null))).toEqual(plain.map((r) => r.value(t, null)));
+    // Nothing left out: nothing said.
+    expect(plain.some((r) => r.leftOut || r.help.includes("Left out"))).toBe(false);
+    expect(sheetRows({ comparable: true, grain: "day", providers: ["meta"], leftOut: null }).some((r) => r.leftOut)).toBe(false);
+  });
+
   it("has the 3-day row on day columns only", () => {
     expect(sheetRows({ comparable: true, grain: "week", providers: ["meta"] }).map((r) => r.id)).not.toContain("ads_share_3d");
   });

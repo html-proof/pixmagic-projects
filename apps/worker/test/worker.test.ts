@@ -2697,6 +2697,66 @@ describe("bulk order backfill", () => {
     expect(queues.sent.sync.at(-1)!.bulk).toMatchObject({ phase: "poll", id: BULK_ID });
   });
 
+  /**
+   * The shop's current export is whichever import ran last, not necessarily this job's. The full
+   * import a read_customers grant queues used to read the one the import before it left behind,
+   * made without the customer, and then call every customer known.
+   */
+  const EARLIER_ID = "gid://shopify/BulkOperation/0";
+  /** An orders job queued half an hour ago, with the shop's current export created `offset` ms from then. */
+  async function queuedWith(store: { id: string; workspaceId: string }, current: { id: string; status: "RUNNING" | "COMPLETED"; offset: number }) {
+    const queuedAt = Date.now() - 30 * 60_000;
+    const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "orders", createdAt: new Date(queuedAt) } });
+    const calls = shopify({
+      current: {
+        id: current.id,
+        status: current.status,
+        objectCount: "2",
+        url: current.status === "COMPLETED" ? "https://files.example/result.jsonl" : null,
+        createdAt: new Date(queuedAt + current.offset).toISOString(),
+      },
+    });
+    return { calls, start: { storeId: store.id, kind: "orders" as const, syncJobId: job.id } };
+  }
+
+  it("doesn't read a finished export that started before its job was queued, and submits its own with the customer", async () => {
+    const store = await makeStore(["read_orders", "read_customers"]);
+    // Ten minutes before the job: well inside the 2 hours a finished export is otherwise read for.
+    const { calls, start } = await queuedWith(store, { id: EARLIER_ID, status: "COMPLETED", offset: -10 * 60_000 });
+    const exports: string[] = [];
+    const shop = fetchImpl;
+    fetchImpl = async (url, init) => {
+      const sent = init?.body ? gqlBody(init) : null;
+      if (sent?.query.includes("bulkOperationRunQuery")) exports.push(String(sent.variables.query));
+      return shop(url, init);
+    };
+    await runSync(start, deps);
+    expect(calls).toEqual(["current", "run"]);
+    expect(exports[0]).toContain("customer {");
+    expect(queues.sent.sync).toEqual([{ ...start, bulk: { phase: "poll", id: BULK_ID, polls: 0 } }]);
+  });
+
+  it("cancels a running export that started before its job was queued, rather than adopting it, and submits its own", async () => {
+    const store = await makeStore(["read_orders", "read_customers"]);
+    const { calls, start } = await queuedWith(store, { id: EARLIER_ID, status: "RUNNING", offset: -10 * 60_000 });
+    await runSync(start, deps);
+    expect(calls).toEqual(["current", "cancel", "run"]);
+    expect(queues.sent.sync).toEqual([{ ...start, bulk: { phase: "poll", id: BULK_ID, polls: 0 } }]);
+  });
+
+  it("reads at once a finished export that started since its job was queued, a few seconds of clock apart included", async () => {
+    const store = await makeStore(["read_orders", "read_customers"]);
+    // A minute after the job; and stamped by Shopify's clock a little before it.
+    for (const offset of [60_000, -5_000]) {
+      queues.clear();
+      coord.clear();
+      const { calls, start } = await queuedWith(store, { id: BULK_ID, status: "COMPLETED", offset });
+      await runSync(start, deps);
+      expect(calls).toEqual(["current"]);
+      expect(queues.sent.sync).toEqual([{ ...start, bulk: { phase: "ingest", id: BULK_ID, byteOffset: 0 } }]);
+    }
+  });
+
   it("frees the export lock when starting fails, so the retry adopts the export instead of bowing out", async () => {
     const store = await makeStore(["read_orders"]);
     const job = await makeJob(store, "orders");

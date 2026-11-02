@@ -939,11 +939,15 @@ describe("account security", () => {
     // The password no longer deletes it: the emailed code does, and none was asked for yet.
     expect((await del({ confirm: "DELETE", password })).statusCode).toBe(400);
     expect((await del({ confirm: "DELETE", code: "123456" })).json().error).toBe("code_required");
-    // The only owner hears why before any code is emailed.
+    // The only owner hears why, and what they can do instead, before any code is emailed.
     const sent = ctx.mailer.sent.length;
     const blocked = await askForCode();
     expect(blocked.statusCode).toBe(409);
-    expect(blocked.json()).toMatchObject({ error: "sole_owner", workspaces: ["Solo Shop"] });
+    expect(blocked.json()).toMatchObject({
+      error: "sole_owner",
+      message: "You're the only owner of Solo Shop. Make someone else an owner first, or email support@bizinsights.io to have that workspace and its data deleted.",
+      workspaces: ["Solo Shop"],
+    });
     expect(ctx.mailer.sent.length).toBe(sent);
 
     // A second owner takes over; the code goes to the account's address, from the support sender.
@@ -970,6 +974,26 @@ describe("account security", () => {
     // The workspace and the other owner are untouched; the event keeps no link to the person.
     expect((await systemDb.membership.findMany({ where: { workspaceId: ws } })).map((m) => m.userId)).toEqual([partner.user.id]);
     expect(await systemDb.authEvent.findFirst({ where: { type: "account_deleted" } })).toMatchObject({ userId: null });
+  });
+
+  it("never tells a sole owner to delete a workspace themselves: nothing in the app does, support does", async () => {
+    const owner = await signIn(ctx, "u1", "a@x.com");
+    await createWorkspace(ctx, owner.headers, "Solo Shop");
+    await createWorkspace(ctx, owner.headers, "Second Shop");
+    const askForCode = () => post("/auth/account/delete/code", {}, owner.headers);
+    const both = await askForCode();
+    expect(both.statusCode).toBe(409);
+    expect(both.json()).toMatchObject({ error: "sole_owner", workspaces: expect.arrayContaining(["Solo Shop", "Second Shop"]) });
+    expect(both.json().message).toMatch(
+      /^You're the only owner of (Solo Shop, Second Shop|Second Shop, Solo Shop)\. Make someone else an owner first, or email support@bizinsights\.io to have those workspaces and their data deleted\.$/,
+    );
+    // Without a support address set, it still says who deletes them.
+    const restore = withEnv({ SUPPORT_EMAIL: "" });
+    try {
+      expect((await askForCode()).json().message).toMatch(/\. Make someone else an owner first, or email support to have those workspaces and their data deleted\.$/);
+    } finally {
+      restore();
+    }
   });
 });
 

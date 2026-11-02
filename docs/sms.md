@@ -174,6 +174,9 @@ delivery events and the audit trail are append-only for tenant requests (migrati
 
 - Numbers are AES-256-GCM encrypted (AAD `sms:<storeId>:<kind>`), found by a keyed hash
   (`HMAC(CUSTOMER_HASH_KEY, "sms:<store>:<e164>")`), shown masked. Logs never carry a number or a text.
+- Key rotation covers every value kept encrypted (contacts' numbers and first names, checkouts'
+  recovery links, texts' values and bodies, test numbers): `ops:reencrypt` seals them again with the
+  active key, under the same AAD (`sms/keys.ts`; docs/RUNBOOK.md, "Rotate the token encryption key").
 - A message's values are cleared once it is sent; its text 30 days after its outcome.
 - Delivery events 180 days; checkouts 90 (links dropped at 30); message history and costs 400 days.
 - `customers/redact` deletes the customer's contacts, consent history, orders seen, checkouts and

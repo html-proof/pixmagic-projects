@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/AppUi";
 import { Alert } from "@/components/ui";
 import { clock, OtpInput, useCountdown } from "@/components/auth/CodeStep";
 import { authErrorMessage, challengeFromError, deleteAccount, errorCode, sendDeletionCode, type CodeChallenge } from "@/lib/auth";
+import { CONTACT } from "@/lib/contact";
 import { ToneIcon, tone } from "./ui";
 
 const CODE_LENGTH = 6;
@@ -92,7 +93,11 @@ export function DeleteCard() {
             Delete account
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            Permanently deletes your sign-in and your personal account. This can&apos;t be undone. Workspaces you own with no other owner must be deleted or handed over first; workspaces others own keep running without you.
+            Permanently deletes your sign-in and your personal account. This can&apos;t be undone. Workspaces with another owner keep running without you. If you&apos;re the only owner of a workspace, make someone else an owner first, or email{" "}
+            <a href={`mailto:${CONTACT.supportEmail}?subject=${encodeURIComponent("Delete my workspace")}`} className="underline">
+              {CONTACT.supportEmail}
+            </a>{" "}
+            to have that workspace and its data deleted.
           </p>
           <button type="button" className="btn-danger mt-4 min-h-11" onClick={() => setOpen(true)}>
             Delete my account

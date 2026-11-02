@@ -110,6 +110,7 @@ function SheetView() {
               comparison={comparison}
               currency={ov.store.currency}
               comparable={sheet.comparable}
+              leftOut={sheet.leftOut}
               visitsTracked={sheet.visitsTracked}
               canEdit={s.canEdit}
               filterEvent={s.eventFilter.startsWith("event:") ? s.eventFilter.slice(6) : null}
