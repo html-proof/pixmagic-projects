@@ -57,7 +57,9 @@ Done:
   sign-ins went through Nango; since 2026-10-28 bizinsights signs in with Meta and Google itself again, and Facebook
   sends the browser back to `https://bizinsights.io/api/ads/meta/callback` (listed next to Nango's callback on
   2026-10-22; a Meta connect came back to it on 2026-10-28: [ads-setup.md](ads-setup.md#leaving-nango), step (e)).
-  Nango's `https://bizinsights.io/api/ads/nango/oauth-callback` was removed on 2026-11-02 (step (d) there).
+  Nango's `https://bizinsights.io/api/ads/nango/oauth-callback` was removed from Valid OAuth Redirect URIs on
+  2026-11-02 (left: `/api/ads/meta/callback` and `https://bizinsights.io/`), and from Google's "Insights web" the same
+  day (step (d) there). For where Meta stands today, start at "Readiness on 2026-11-02" in the Meta pack below.
 
 Still open (details in each pack; checked 2026-10-20). Each of these needs the owner's login, certificate or payment
 method; Claude has nothing left to do alone until one of them moves.
@@ -353,7 +355,80 @@ Privacy policy and Limited Use disclosure: https://bizinsights.io/privacy. Suppo
 
 ## Meta: Meta App Review pack for bizinsights (App ID 971575545351940): Advanced Access to ads_read and public_profile, with Business Verification, Access Verification and the Marketing API Access Tier (checked against developers.facebook.com and the code on 2026-10-11; URLs updated to bizinsights.io 2026-10-19)
 
-### Remaining gaps (fix before submitting; checked 2026-10-20)
+### Readiness on 2026-11-02 (start here)
+
+Checked against production (release 153), the code on `main` (aeb1877a) and Meta's pages on 2026-11-02. The Meta
+dashboard rows are from the owner's Chrome on 2026-11-02 (read only) unless marked otherwise. Where this list and the
+older notes below differ, this list is current.
+
+| Item | State | Who |
+| --- | --- | --- |
+| Business Verification | Verified: portfolio bizinsights.io (1415197520268134), since 2026-10-26 | done |
+| Access Verification (Tech Provider) | Submitted 2026-10-26; "In review" on 2026-11-02; Meta's deadline 1/1/2027 | Meta |
+| App icon | Uploaded 2026-10-11 from the 1200×1200 listing icon. Meta asks for 1024×1024: in Settings → Basic, check that it shows sharp, and upload a 1024×1024 copy of `shopify-app/listing/app-icon-1200.png` if not | owner |
+| Privacy policy URL | https://bizinsights.io/privacy: 200, also to Meta's crawlers (`facebookexternalhit`, `meta-externalagent`). Names ads_read and what it reads, AWS, Cloudflare, Resend and Zapier | done |
+| Terms of Service URL | https://bizinsights.io/terms: 200. Missing a Tech Provider clause (below) | owner decision |
+| Data deletion | Callback `https://bizinsights.io/api/webhooks/meta/data-deletion` registered; instructions at https://bizinsights.io/data-deletion (200) | done |
+| Deauthorize callback | `https://bizinsights.io/api/webhooks/meta/deauthorize` registered | done |
+| Category / App purpose | Business and pages / Clients (set 2026-10-19; purpose not re-read since) | check |
+| Display name | bizinsights (since 2026-10-26) | done |
+| Live mode | The app has been Published (Live) since 2026-10-11. In Live mode, a Facebook login with no role on the app only gets permissions that have Advanced Access, which is what App Review grants. Nothing to switch | done |
+| Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/meta/callback` and `https://bizinsights.io/` (Nango's removed 2026-11-02) | done |
+| Require App Secret | On | done |
+| A successful ads_read call within 30 days | 67 calls counted on 2026-10-26, and a kept connection syncs hourly. On the day you submit, check that the dialog's "API test calls" says Completed | owner |
+| An ad account with delivery | act_2033403030827115 had never delivered an ad (2026-10-26). Without spend, every figure in the recording is 0 | owner |
+| Reviewer account | Not created; `AUTH_LOGIN_CODE_EXEMPT` is empty, so a reviewer would be asked for an emailed code | owner, then Claude ships the address |
+| ads_read text in draft 980737984435696 | Still the 2026-10-26 text that names Nango: paste the 2026-11-02 text below over it | owner |
+| Screencast | Not recorded (script below, updated 2026-11-02 for the current screens) | owner |
+| Data handling questions | Not answered (drafts below, updated 2026-11-02: Resend added, Zapier explained) | owner |
+| `META_ADS_ADVANCED_ACCESS` | "" in `apps/aws/src/settings.ts`; set to "1" once ads_read Advanced Access is granted | Claude, after approval |
+
+**Tech Provider clause for /terms (owner decision, with your adviser).** As a Tech Provider, bizinsights processes
+each merchant's Meta data on its behalf. Meta's Platform Terms 5.b.ii.4 allow a Tech Provider to share Platform Data
+with its Client "so long as you first contractually prohibit such Client from Processing Platform Data" in breach of
+those terms, and with the Client's own service provider (that is what Zapier is, when a merchant connects it). /terms
+section 7 ("Shopify, Google and Meta") has no such promise from the merchant. A draft to add there, which changes the
+terms, so section 12 says workspace owners get an email first:
+
+> Meta data. bizinsights reads your Meta ad accounts on your behalf and at your direction, and keeps each store's data
+> apart. You agree not to use the Meta data that bizinsights shows you, or sends to your own tools such as Zapier, in
+> a way that breaks Meta's Platform Terms (https://developers.facebook.com/terms), and not to sell or license it.
+
+### Code check for reviewers (2026-11-02)
+
+The sign-in and token code was read against what Meta's review, the data handling questions and Access Verification
+ask. Nothing in it needs changing before submitting. What the answers can rely on:
+
+- **Sign-in** (`packages/core/src/adConnections/signIn.ts`, route `GET /api/ads/:provider/callback` in
+  `apps/api/src/routes/ads.ts`): Facebook Login for Business with configuration 1521935306664882 (`META_CONFIG_ID`),
+  user access token, ads_read only. The state is a random nonce, single-use, kept server-side for 10 minutes, matched
+  in constant time against a cookie in the same browser, and bound to the bizinsights user who started it (another
+  signed-in user gets `session_mismatch`). Starting a connect needs a verified email and the Owner or Admin role, and is
+  rate-limited per user. The code is exchanged on the server with the app secret, then swapped for the ~60-day token.
+  `GET /me/permissions` must list ads_read as granted, or nothing is kept and the grant is handed back.
+- **Tokens** (`credentials.ts`): AES-256-GCM, with the store, platform and token kind as associated data, so a
+  ciphertext can't be moved to another store's row; versioned keys with rotation. Never sent to the browser. Every
+  Graph call carries `appsecret_proof`. The logger redacts Meta tokens (`EA…`), `access_token`, `client_secret`, `code`
+  and `fb_exchange_token` wherever they appear.
+- **While the merchant picks accounts** (up to 15 minutes), the token sits in the coordinator table (DynamoDB,
+  encrypted at rest with an AWS-managed key, with point-in-time backups kept 35 days), not sealed by bizinsights' own
+  key as the database rows are. "Encrypted at rest" stays true. Sealing it with the keyring too would keep it out of
+  those backups in readable form: optional hardening, which no reviewer sees.
+- **Expiry and removal**: an expired token is never used, and an alert asks for a reconnect 7 days before it ends.
+  Disconnect deletes the row, its daily figures and its token in one transaction, then withdraws ads_read
+  (`DELETE /me/permissions/ads_read`, or with the app token once the person's token no longer works) unless another
+  connection relies on the same grant. The deauthorize and data deletion callbacks check the `signed_request`
+  (HMAC-SHA256 with the app secret, constant time, `issued_at` within 24 hours), act once per request, and the data
+  deletion one returns a status URL and confirmation code.
+- **Where Meta data goes (this changed the form texts).** Besides AWS and Cloudflare: alert emails to the
+  workspace's admins go through Resend and name the ad account (no figures); and the Zapier app (live since release
+  134) sends spend, impressions, clicks, conversions and purchase value to a merchant's own Zapier account when that
+  merchant connects Zapier and turns on an advertising trigger. The texts written before 2026-11-02 said Meta data
+  went to no other third party; the usage description, data handling answers and reviewer instructions below now
+  say this. bizinsights writes nothing to Shopify: it only reads what other apps report there. No AI or LLM service
+  is in the code.
+
+### Gaps as found 2026-10-20 to 10-28 (the readiness list above is current)
 
 No longer gaps: contact.ts is filled in (legalName Zodiix Pty Ltd, ACN 613 577 834 since PR #152; supportEmail bizinsightsaus@yahoo.com since 2026-10-22), /privacy and /data-deletion show no "[not set" marker, /terms exists, and all of /, /privacy, /terms, /data-deletion and /support return 200 on bizinsights.io. The app's settings and its only Valid OAuth Redirect URI are on bizinsights.io (2026-10-19 and 2026-10-20), the deauthorize and data deletion callbacks are registered, and Require App Secret is on.
 
@@ -395,7 +470,7 @@ Read this first. Four rules from Meta's docs set the order. (1) Since February 1
 14. [OWNER ONLY] Answer the data handling questions. They appear once Business Verification is approved, and Meta scores them within about 30 seconds. The drafts are in formAnswers; only you can confirm them. Meta advises checking with legal, policy and privacy advisers. Nango is not a processor any more: don't list it (Remaining gaps, the [OWNER] item on the ads_read text).
 15. [OWNER] Replace ads_read's usage description: the text pasted on 2026-10-26 names Nango. Paste the new text from the form answers below over all of it, Save, and reload to check; public_profile asks for none. Upload the recording in ads_read's dialog, tick both agreements, fill in App Verification with reviewerTestInstructions, click Submit for Review and accept the Platform Onboarding Terms. Meta aims to decide within a week.
 16. [SUBMITTED 2026-10-26, in review] Complete Access Verification (Tech Provider) under App Dashboard > Basics > Verifications > Access verification. It needs Business Verification and a business account with no restrictions, and can run while App Review is in progress. Meta decides in about 5 days. If it is denied, calls that need ads_read fail for anyone without a role on the app, even after App Review passes.
-17. [OWNER] After approval: complete the Data Use Checkup, which a Development-mode app must finish before switching to Live. Then switch the app to Live; only approved permissions work in Live mode. After that, watch Required Actions in the App Dashboard for Ongoing Review, the yearly Data Use Checkup, or Data Access Renewal, which Meta is rolling out in phases to merge these checks.
+17. [OWNER] After approval: complete the Data Use Checkup if Meta asks for it. The app is already Live (Published since 2026-10-11), so there is nothing to switch; in Live mode only approved permissions work for people without a role on the app. Tell Claude, who sets `META_ADS_ADVANCED_ACCESS` to "1". After that, watch Required Actions in the App Dashboard for Ongoing Review, the yearly Data Use Checkup, or Data Access Renewal, which Meta is rolling out in phases to merge these checks.
 18. [OWNER, as soon as eligible] Upgrade the Marketing API Access Tier from Limited to Full with the Upgrade button on that feature. You need 500 or more Marketing API calls in the last 15 days and errors under 15% in the last 500. No screen recording is needed. Limited's Ads Insights quota per ad account per hour is 600, plus 400 for each active ad. Full's base is 190,000.
 
 ### Form answers (paste as written)
@@ -476,19 +551,19 @@ Read this first. Four rules from Meta's docs set the order. (1) Since February 1
 
 **Requested Permissions and Features > ads_read > usage description (in the form: Allowed usage → "How will this app use ads_read?" → Get started)**
 
-The dialog "Tell us why you're requesting ads_read" has tick boxes, then this text box (no length limit), the screencast upload, the API test calls (ads_read: Completed, 2026-10-26) and the agreement. Tick "Provide API access to your ad performance data for use in custom dashboards and data analytics." A text describing Nango was **pasted 2026-10-26** in the draft (submission 980737984435696) and saved. **[OWNER] It must be replaced with the text below before submitting** (rewritten 2026-10-28 for bizinsights' own Facebook Login; Meta's box has no length limit, and this one is about as long as the old one). Still open in that dialog: the new text, the screencast and the agreement (owner).
+The dialog "Tell us why you're requesting ads_read" has tick boxes, then this text box (no length limit), the screencast upload, the API test calls (ads_read: Completed, 2026-10-26) and the agreement. Tick "Provide API access to your ad performance data for use in custom dashboards and data analytics." A text describing Nango was **pasted 2026-10-26** in the draft (submission 980737984435696) and saved. **[OWNER] It must be replaced with the text below before submitting** (rewritten 2026-10-28 for bizinsights' own Facebook Login; updated 2026-11-02 for the current Advertising screens and for where Meta data goes: alert emails and the merchant's own Zapier. Meta's box has no length limit). Still open in that dialog: the new text, the screencast and the agreement (owner).
 
 > bizinsights (https://bizinsights.io) is a web analytics dashboard for Shopify merchants. Each merchant is a separate business. It signs in to bizinsights with its own bizinsights account and connects its own Meta ad accounts, so it can see what its Facebook and Instagram ads cost and returned next to its store's sales. ads_read is the only Marketing API permission bizinsights asks people to grant. We don't request ads_management, and bizinsights has no feature that creates, edits, pauses or deletes campaigns, ad sets, ads, audiences, budgets, billing or users.
 >
 > How a business grants it: in bizinsights, Settings > Advertising > "Continue with Meta Ads" takes the browser to Facebook Login for Business for our app. Our configuration uses a user access token and asks for ads_read only. The person grants ads_read and chooses the ad accounts to share, and Facebook sends the browser back to our own callback on bizinsights.io. The sign-in's state is single-use and bound to that browser and to the bizinsights user who started it. Our server exchanges the code with our app secret, swaps the token for a long-lived one, checks with GET /me/permissions that ads_read was granted, and calls GET /me/adaccounts (id, name, currency, timezone_name, account_status, disable_reason). If the login can see several ad accounts, the merchant ticks the ones that belong to this store. The token is encrypted with AES-256-GCM in our own database, never sent to the browser and never logged; no third party holds it. Every call is signed with appsecret_proof, and Require App Secret is on. When the token ends, after about 60 days, the merchant is asked to connect again.
 >
 > How we use the data:
-> 1) Daily performance. GET /act_{id}/insights at campaign level with time_increment=1 (spend, impressions, clicks, inline_link_clicks, actions, action_values; use_unified_attribution_setting=true). We fetch the last 90 days when an account is connected and older days back to 25 months in the background, refresh recent days every hour, and re-read the last 30 days once a day, because Meta keeps crediting purchases for days after a click. When Meta asks for a smaller request on a large account, this sync runs the same query as an asynchronous Insights report (POST /act_{id}/insights, then read the report_run_id). That call only produces a report. The dashboard's Advertising section shows spend, impressions, clicks, CTR, CPC, CPM, conversions, conversion value and ROAS per day, next to the store's Shopify revenue and its Google Ads results.
-> 2) On-demand report. When the merchant opens the Meta Ads report, we call GET /act_{id}/insights for the dates they pick, at campaign, ad set or ad level (spend, impressions, reach, frequency, link clicks, purchases, purchase value). We also read account-level splits by placement, device and country, and each campaign's, ad set's and ad's effective_status, so the table can say Active, Paused, In review or Rejected. Answers are cached for 10 to 60 minutes and rate-limited per user, to stay inside Meta's limits.
+> 1) Daily performance. GET /act_{id}/insights at campaign level with time_increment=1 (spend, impressions, clicks, inline_link_clicks, actions, action_values; use_unified_attribution_setting=true). We fetch the last 90 days when an account is connected and older days back to 25 months in the background, refresh recent days every hour, and re-read the last 30 days once a day, because Meta keeps crediting purchases for days after a click. When Meta asks for a smaller request on a large account, this sync runs the same query as an asynchronous Insights report (POST /act_{id}/insights, then read the report_run_id). That call only produces a report. bizinsights' Advertising area (the Advertising Performance page and the Meta Ads page) shows spend, impressions, link clicks, CTR, CPC, CPM, purchases, purchase value and ROAS per day, next to the store's Shopify sales and its Google Ads results, and the Profit sheet counts the ad spend among the store's costs.
+> 2) On-demand report. When the merchant opens the Meta Ads report, we call GET /act_{id}/insights for the dates they pick, at campaign, ad set or ad level (spend, impressions, reach, frequency, link clicks, purchases, purchase value). We also read account-level splits by placement, device, country, age and gender, and each campaign's, ad set's and ad's effective_status, so the table can say Active, Paused, In review or Rejected. Answers are cached for 10 to 60 minutes and rate-limited per user, to stay inside Meta's limits.
 >
 > Examples: a fashion store sees which campaign brings back the most purchase value per dollar spent, then moves budget itself in Ads Manager. A merchant compares Meta and Google spend on the same daily chart against store revenue. A merchant sees frequency rising on an ad set and treats it as a sign of ad fatigue.
 >
-> Without ads_read, bizinsights could not show any Meta ad results, and merchants would have to export reports from Ads Manager by hand and match them to their sales. The data is shown only to members of the merchant's own bizinsights workspace. It is never sold, never shared with other businesses or advertisers, and never used for advertising or to train models. Disconnecting deletes the token and every number we fetched for that account. Once no other connection relies on the same person's grant, bizinsights withdraws ads_read from Meta (DELETE /me/permissions/ads_read). Removing bizinsights in Facebook settings reaches our deauthorize callback, which stops using that person's connections at once; a data deletion request through Facebook deletes them and their figures and returns a status link.
+> Without ads_read, bizinsights could not show any Meta ad results, and merchants would have to export reports from Ads Manager by hand and match them to their sales. The data is shown only in the merchant's own bizinsights workspace: to its members, and to people the merchant invites to view it. It leaves bizinsights only where the merchant sends it: a CSV the merchant downloads, and, if the merchant connects its own Zapier account and turns on a Zap with one of our advertising triggers, the figures that Zap asks for (spend, impressions, clicks, conversions and purchase value per ad account) go to that merchant's Zapier account. When a connection needs attention (its access is ending, or Meta disabled the account), the workspace's admins get an email that names the ad account, with no figures. The data is never sold, never shared with other businesses or advertisers, and never used for advertising or to train models. Disconnecting deletes the token and every number we fetched for that account. Once no other connection relies on the same person's grant, bizinsights withdraws ads_read from Meta (DELETE /me/permissions/ads_read). Removing bizinsights in Facebook settings reaches our deauthorize callback, which stops using that person's connections at once; a data deletion request through Facebook deletes them and their figures and returns a status link.
 
 **Requested Permissions and Features > public_profile > usage description (requested because Facebook Login for Business needs Advanced Access to public_profile before going live)**
 
@@ -506,21 +581,23 @@ Seen 2026-10-26: Meta's form asks **no description and no recording** for public
 
 **Data handling Q1: data processors or service providers (including your own companies) with access to Platform Data from Meta (OWNER must confirm)**
 
-> Draft: Yes. Amazon Web Services hosts the application, background jobs, report cache and the Postgres database (CloudFront, Lambda, SQS, DynamoDB, RDS, S3; region ap-southeast-2, Sydney). Cloudflare runs the DNS for bizinsights.io and proxies it: every page and API response, including the Meta figures shown to the merchant, passes through Cloudflare's network on its way between the browser and AWS (API responses are not cached). Meta access tokens are kept, encrypted, in that database: no third party holds them. The code sends Meta data to no other third party; Amazon Cognito (part of AWS) handles bizinsights sign-in only and never receives Meta data, and Resend sends bizinsights' own emails, which carry no Meta data. [OWNER: while the old Cloudflare deployment (Cloudflare Workers, with its database on your PC) still holds Meta connections, it processes Meta data too; retire it before answering, or include it.]
+> Draft: Yes. Amazon Web Services hosts the application, background jobs, report cache and the Postgres database (CloudFront, Lambda, SQS, DynamoDB, RDS, S3; region ap-southeast-2, Sydney). Cloudflare runs the DNS for bizinsights.io and proxies it: every page and API response, including the Meta figures shown to the merchant, passes through Cloudflare's network on its way between the browser and AWS (API responses are not cached). Meta access tokens are kept, encrypted, in that database: no third party holds them. Resend delivers bizinsights' own emails; the alert emails to a workspace's admins about an ad connection (access ending, account disabled, syncs failing) name the ad account, with no figures. Amazon Cognito (part of AWS) handles bizinsights sign-in only and never receives Meta data. Not our processor: when a merchant connects its own Zapier account and turns on a Zap with an advertising trigger, that Zap receives the ad figures it asks for, at the merchant's direction and under the merchant's own Zapier account (Platform Terms 5.b.ii.4, a Client's service provider); if Meta's form asks about it, say so. (Updated 2026-11-02: earlier drafts said Meta data went to no other third party.) [OWNER: while the old Cloudflare deployment (Cloudflare Workers, with its database on your PC) still holds Meta connections, it processes Meta data too; retire it before answering, or include it.]
 
 **Data handling Q2: list all processors and service providers**
 
 > Amazon Web Services [OWNER: the AWS entity your account contracts with, as named in your AWS agreement (unverified)]
 > Cloudflare [OWNER: the Cloudflare entity in your Cloudflare terms (unverified)]
+> Resend [OWNER: the Resend entity in your Resend terms (unverified)]
 
 **Data handling Q3: service category for each processor**
 
 > Amazon Web Services: IT solutions and services, including cloud storage and processing
 > Cloudflare: IT solutions and services (DNS, content delivery and network security; option name unverified)
+> Resend: IT solutions and services (email delivery; option name unverified)
 
 **Data handling Q4: countries where each processor processes Platform Data**
 
-> [OWNER: the functions and the database run in Australia (AWS ap-southeast-2, Sydney); CloudFront and Cloudflare carry pages and API responses through edge locations worldwide (unverified how Meta expects a CDN or proxy to be listed).]
+> [OWNER: the functions and the database run in Australia (AWS ap-southeast-2, Sydney); CloudFront and Cloudflare carry pages and API responses through edge locations worldwide (unverified how Meta expects a CDN or proxy to be listed); Resend: the country in your Resend account's sending region (unverified).]
 
 **Data handling Q5: responsible entity**
 
@@ -544,14 +621,21 @@ Seen 2026-10-26: Meta's form asks **no description and no recording** for public
 
 ### Screen recording script
 
-Rewritten 2026-10-26 against the app's current screens (Settings → Advertising cards, the emailed sign-in code) and Meta's screen-recording guide; updated 2026-10-28 for bizinsights' own Facebook Login (no Nango window: the tab goes to Facebook and comes back). One recording covers both permissions: ads_read in steps 10-17, public_profile in the Facebook Login of step 12. Upload it in ads_read's dialog; public_profile's dialog asks for no recording. Meta's guide: show every requested permission, the whole path from logged out to logged in, the person granting it, and the data in use; English UI, 1080p or better, screen width 1440 or less, enlarged cursor, mouse rather than keyboard, no audio, captions and zooms added in an editor. It sets no length, format or size limit.
+Rewritten 2026-10-26 against the app's current screens (Settings → Advertising cards, the emailed sign-in code) and Meta's screen-recording guide; updated 2026-10-28 for bizinsights' own Facebook Login (no Nango window: the tab goes to Facebook and comes back); steps 13-16 updated 2026-11-02 for the rebuilt Advertising area (Advertising Performance, the Meta Ads page, "Reconnect account"). One recording covers both permissions: ads_read in steps 10-17, public_profile in the Facebook Login of step 12. Upload it in ads_read's dialog; public_profile's dialog asks for no recording. Meta's guide (re-read 2026-11-02): show every requested permission, the whole path from logged out to logged in, the business login button, the person granting each permission (including choosing the ad accounts), and the data in use; English UI, 1080p or better, screen width 1440 or less, enlarged cursor, mouse rather than keyboard, no audio, captions and zooms added in an editor. It sets no length, format or size limit. The ads_read page asks to see impressions, conversions, spend, clicks and reach in the app.
+
+**Recording tips**
+
+- Tools: Snipping Tool and Clipchamp (both in Windows 11) as below. OBS Studio works the same way (Display Capture, 1920×1080, MP4). Loom also works if you download the MP4 and edit it, since Meta's dialog takes an uploaded file and the cuts and captions are still needed.
+- Length: Meta sets none. Aim for 2 to 4 minutes after editing. This script comes to about 3 minutes once the waits are cut.
+- No hidden steps: cut only waiting (the first fetch, page loads). Never cut inside Facebook's screens, the sign-in, or the Disconnect.
+- No made-up data: record on https://bizinsights.io (not a local or staging address), with a real ad account that spent money in the dates shown. The reviewer workspace must not have the Google Ads demo connected: its figures are labelled "Simulated figures", and a reviewer seeing them could reasonably take the whole video for mocked data.
 
 **No ads_management recording (checked 2026-10-26).** Meta's ads_management page asks for the same screencast as this one (the Facebook Login, then impressions, conversions, spend, clicks and reach shown in the app), which makes it look as if this video could serve ads_management too. It can't, and ads_management stays out of the submission. Three reasons: (1) the Login configuration "Insights ads reporting" (1521935306664882) asks for ads_read only, so no recording can show anyone granting ads_management; (2) Meta allows ads_management "to programmatically create campaigns, manage ads", and its review form asks why the app "requires managing ads on behalf of other businesses", but bizinsights only reads (its only Meta writes are the asynchronous Insights report and withdrawing its own ads_read grant, packages/core/src/ads/meta.ts); (3) the ads_read text already in the draft says "We don't request ads_management", and Meta names unneeded permissions as a common rejection reason. ads_management becomes worth requesting only if bizinsights gains a feature that changes ads (pausing a campaign, changing a budget); that feature then needs its own Login configuration and its own recording.
 
 **Before you record (none of this is in the video)**
 
 1. Ad figures to show. The ad account you connect must have delivered ads in the last few weeks, or every figure is 0 and the video shows no data (a named rejection reason). act_2033403030827115 had never delivered as of 2026-10-26: run a small ad on it for a few days first.
-2. The reviewer account in production (prerequisite 8): email verified, Owner or Admin of its workspace, a Shopify development store connected, its address on `AUTH_LOGIN_CODE_EXEMPT` (deployed), and Meta Ads not connected there (Settings → Advertising shows "Continue with Meta Ads" on the Meta Ads card).
+2. The reviewer account in production (prerequisite 8): email verified, Owner or Admin of its workspace, a Shopify development store connected, its address on `AUTH_LOGIN_CODE_EXEMPT` (deployed), Meta Ads not connected there (Settings → Advertising shows "Continue with Meta Ads" on the Meta Ads card), and the Google Ads demo not connected there (its "Simulated figures" must not appear in the video).
 3. Facebook: Settings & privacy → Settings → Business integrations → remove bizinsights, so Facebook shows its full consent screen again. This ends the token behind your kept Meta connection; reconnect it afterwards (step 21).
 4. Chrome, in English: sign out of bizinsights and Facebook, and close the other tabs. Facebook Login opens in the same tab, so no pop-up needs allowing. Turn on Windows' Do not disturb so no notification lands in the video.
 5. Screen: on a 1920×1080 display, Windows Settings → System → Display → Scale 150% (the screen then works at 1280 wide, under Meta's 1440, and stays readable at 1080p). Settings → Accessibility → Mouse pointer and touch → Size 3 for a bigger pointer.
@@ -565,10 +649,10 @@ Rewritten 2026-10-26 against the app's current screens (Settings → Advertising
 10. Settings → Advertising. On the Meta Ads card, show "Facebook and Instagram ads: spend, reach, clicks and the purchases Meta reports", what it reads (Campaigns, Ad sets, Ads, Audience, Spend & ROAS), "What you'll get", and zoom on the line under it: "Sign in with Facebook and authorize bizinsights to read the ad accounts you choose, including their Facebook and Instagram campaigns. You need access to those ad accounts; connecting a Facebook profile alone does not grant access to every business account. No app download is needed. bizinsights reads reports without changing campaigns or spending money." Caption: "bizinsights asks Meta for ads_read only: read-only ad reporting".
 11. Click "Continue with Meta Ads" at the card's top right. It reads "Opening Meta…" and the tab goes to Facebook Login for Business (the address bar shows facebook.com). Caption: "bizinsights sends the merchant to Facebook Login for Business for the bizinsights app".
 12. On Facebook's page, log in as yourself (the app Admin). On Facebook's screens, show the name "bizinsights" and what it asks for, choose this store's ad account(s), and confirm. Annotation: "ads_read is granted here. public_profile comes with Facebook Login: bizinsights reads only the app-scoped user ID".
-13. Facebook sends the browser back to bizinsights.io (show the address bar). If the login can see several ad accounts, Settings → Advertising lists them: tick this store's and confirm (caption: "The merchant chooses which ad accounts belong to this store"). With one account this step is skipped. The dashboard says "Meta Ads connected: 1 ad account. We're fetching the last 90 days; the Advertising numbers below fill in within a few minutes." Keep recording until figures appear, then cut the wait in the edit and caption "(a few minutes later)".
-14. Show the figures: on the dashboard, the "Advertising performance" card; then Advertising in the sidebar, with Total ad spend, "Ad spend per day", "Impressions per day", "Link clicks per day" and "By platform". Annotation: "Spend, impressions, clicks and purchases, read with ads_read".
-15. Meta Ads in the sidebar (/advertising/meta). Show the date range, then the report's Campaigns, Ad sets and Ads tabs with their status, and zoom on Spent, Impressions, Reach, Frequency, Link clicks, Purchases, Purchase value and Purchase ROAS. Then the Placements, Devices, Countries, Age and Gender tabs. Annotate "Reach" and "Purchases (conversions)". Optional: Ads Manager in a second tab, same dates, to show spend and impressions match.
-16. Settings → Advertising. On the connected account show Account details (Account name, Account ID, Time zone, Currency), Data status (Last synced, Freshness, Sync frequency), the "Integration active" panel and Show on dashboard. Caption: "Read-only: nothing here creates, edits, pauses or deletes ads".
+13. Facebook sends the browser back to bizinsights.io (show the address bar). If the login can see several ad accounts, Settings → Advertising lists them: tick this store's and confirm (caption: "The merchant chooses which ad accounts belong to this store"). With one account this step is skipped and you land on the Dashboard, which says "Meta Ads connected: 1 ad account. We're fetching the last 90 days; the Advertising numbers below fill in within a few minutes." Caption: "Back on bizinsights.io: the ad account is connected". Keep recording until the Dashboard's "Advertising performance" card shows figures, then cut the wait in the edit and caption "(a few minutes later)".
+14. Advertising in the sidebar opens "Advertising Performance". Zoom on the tiles Total ad spend, Link clicks, Impressions, Purchases, "Ad revenue (purchase value)" and ROAS, then the "Performance overview" chart and the Meta Ads card. Caption: "Spend, impressions, clicks and purchases from Meta's Marketing API, read with ads_read".
+15. Meta Ads in the Advertising menu (/advertising/meta). Show the date range at the top, "At a glance", then the daily chart under "Over the days" (caption: "Daily ad spend from Meta"). Scroll to "Meta Ads report": its Campaigns, Ad sets and Ads tabs with each one's status, and zoom on Spent, Impressions, Reach, Frequency, Link clicks, "Purchases (Meta's count)", "Purchase value (Meta's count)" and Purchase ROAS. Then the Placements, Devices, Countries, Age and Gender tabs. Annotate "Reach" and "Purchases = conversions". Optional: Ads Manager in a second tab, same dates, to show spend and impressions match.
+16. Settings → Advertising. On the Meta Ads card show "Integration active", then "View data details": Account name, Account ID, Time zone, Currency, Last synced, Freshness and Sync frequency, and Show on dashboard. Caption: "Read-only: nothing here creates, edits, pauses or deletes ads".
 17. Click Disconnect at the card's top right. Show the dialog "Disconnect <account>?" ("bizinsights deletes its access to this Meta Ads account and every figure it fetched for it, and stops reading it. It then hands its access back to Meta once no other account here was connected with the same login. Your ads keep running."), press Disconnect, and show the card back on "Continue with Meta Ads". Caption: "Token and fetched data deleted; ads_read withdrawn from Meta (DELETE /me/permissions/ads_read) once no other connection relies on this grant".
 18. Stop recording with Snipping Tool's stop button. It saves an MP4 under Videos → Screen Recordings.
 
@@ -585,11 +669,12 @@ bizinsights is a web app for Shopify merchants at https://bizinsights.io. Mercha
 1. Open https://bizinsights.io/login and sign in with this bizinsights-only test account. It is not a Meta account. Its email is verified, it is the workspace Owner, and its workspace has a Shopify development store connected.
    Email: [OWNER: reviewer email]
    Password: [OWNER: reviewer password]
-2. Open Settings > Advertising. On the "Meta Ads" card, click "Continue with Meta Ads". [OWNER: if you pre-connected an ad account (prerequisite 12), replace this with: the button reads "Reconnect or add accounts" because a Meta ad account is already connected so you can see real data; it runs the same Facebook Login.]
+2. Open Settings > Advertising. On the "Meta Ads" card, click "Continue with Meta Ads". [OWNER: if you pre-connected an ad account (prerequisite 12), replace this with: a Meta ad account is already connected so you can see real data, and the card shows it as "Integration active". "Reconnect account" on that card runs the same Facebook Login.]
 3. The browser goes to Facebook Login for Business on facebook.com. Log in to Facebook as your test user, approve bizinsights' request to read ads reporting (ads_read), and choose an ad account. Facebook then sends you back to bizinsights.io.
 4. Back in bizinsights: if your Facebook account can see several ad accounts, tick the ones to connect and confirm. If it can see none, the Meta Ads card stays connected and shows "Signed in as" with your Facebook name, "Your Facebook login is connected. It doesn't reach an ad account yet, so there are no figures to show." and a "Check for ad accounts" button; bizinsights looks again every hour. (If no ad account was ticked on Facebook's screen, it says so and offers "Choose ad accounts".) The attached recording shows the same flow with a real ad account.
-5. On the Dashboard, the Advertising section shows ad spend, impressions, clicks, CTR, CPC, CPM, conversions, conversion value and ROAS, with daily charts. A newly connected account's first fetch takes a few minutes, and the page updates by itself. Click "See details" on the Ad spend card to open the Meta Ads report: campaigns, ad sets and ads with reach, frequency, link clicks, purchases and purchase value, plus splits by placement, device and country.
+5. A newly connected account's first fetch takes a few minutes, and the pages update by themselves. Click Advertising in the sidebar: "Advertising Performance" shows total ad spend, link clicks, impressions, purchases, purchase value and ROAS, with a chart over the dates. In the Advertising menu, "Meta Ads" shows Meta's figures day by day and the "Meta Ads report": campaigns, ad sets and ads with spend, impressions, reach, frequency, link clicks, purchases and purchase value, plus splits by placement, device, country, age and gender.
 6. bizinsights is read-only. Nothing in it can create, edit, pause or delete campaigns, ads, budgets or billing, and ads_management is never requested. Settings > Advertising > Disconnect deletes the token and every number fetched for that account. Once no other connection relies on the same person's grant, bizinsights withdraws ads_read from Meta (DELETE /me/permissions/ads_read).
+7. Optional, not needed to test ads_read: if a merchant connects its own Zapier account (Settings > Integrations), a Zap with one of bizinsights' advertising triggers receives that store's ad figures in the merchant's own Zapier account. Nothing is sent to Zapier unless the merchant sets this up.
 
 Privacy policy: https://bizinsights.io/privacy
 Data deletion instructions: https://bizinsights.io/data-deletion
@@ -609,6 +694,9 @@ Support: https://bizinsights.io/support
 - No successful API call for a requested permission in the 30 days before submitting.
 - An unverified business portfolio. Advanced Access isn't granted, and other businesses can't grant permissions.
 - Access Verification (Tech Provider) denied or not done. ads_read calls then fail for anyone without a role on the app, even after App Review passes.
+- Data that looks made up: the Google Ads demo's "Simulated figures" in the frame, a local or staging address, or an ad account that never delivered, so every figure is 0.
+- Texts that contradict what the reviewer sees or the privacy policy: for example "never shared" while the app offers Zapier triggers with ad figures. The 2026-11-02 texts say where Meta data goes; keep the form, the policy and the app saying the same thing.
+- A reviewer account that asks for an emailed code (its address isn't on `AUTH_LOGIN_CODE_EXEMPT` in production).
 - Changing basic or advanced app settings after submitting, which may need a new review.
 - Switching to Live before approval, or before completing the Data Use Checkup.
 
@@ -635,3 +723,4 @@ Support: https://bizinsights.io/support
 - https://developers.facebook.com/docs/resp-plat-initiatives/individual-processes/data-use-checkup
 - https://developers.facebook.com/documentation/development/build-and-test/app-modes.md
 - https://developers.facebook.com/documentation/development/build-and-test/test-users.md
+- https://developers.facebook.com/terms/ (Platform Terms: 3.c and 5.b.ii.4 on sharing Platform Data, read 2026-11-02)
