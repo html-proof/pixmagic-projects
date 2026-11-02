@@ -13,6 +13,7 @@
 import { adsFromShopifyWithoutAttribution, adsFromShopifyWithoutVisits, type AdsFromShopify } from "./adsFromShopify";
 import { can as roleCan, type Permission, type Role } from "./roles";
 import { MONTH_LINES } from "./sales";
+import { shopifyMarketingWithoutCampaigns, type ShopifyMarketing } from "./shopifyMarketing";
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -549,6 +550,9 @@ export const OVERVIEW_MODULE_ACCESS = {
   ad_configured: ["marketing.ads"],
   // Where Meta's and Google's figures come from (adPlatformSources): the platform's own, or the store's orders.
   ad_sources: ["marketing.ads"],
+  // The ad spend, impressions and clicks the store's marketing apps report to Shopify (shopifyMarketing.ts):
+  // ad figures like the ads module's, their campaigns with the campaigns permission (redactFields).
+  shopify_marketing: ["marketing.ads"],
   // Shopify's own figures (packages/core/src/reports/shopify.ts): its sessions with the funnel, its
   // gross profit and the check of the sales figures against its sales report with the breakdown
   // (gross profit with the costs permission too, OVERVIEW_MODULE_ALSO_NEEDS).
@@ -685,6 +689,9 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   }
   const ads = out.ads;
   if (isObj(ads) && !g.has("marketing.campaigns")) out.ads = omit(ads, ["campaigns"]);
+  // The campaigns the marketing apps report to Shopify, as the ad accounts' campaigns.
+  const marketing = out.shopify_marketing;
+  if (isObj(marketing) && !g.has("marketing.campaigns")) out.shopify_marketing = shopifyMarketingWithoutCampaigns(marketing as unknown as ShopifyMarketing) as unknown as Obj;
   // Orders Shopify's visit record credits to each platform's ads: attribution, like the traffic module's paid figures.
   if (isObj(out.ads) && !g.has("marketing.attribution")) out.ads = omit(out.ads, ["sourced"]);
   // The same from the store's orders alone, for a platform not connected: its tagged-ad figures and campaigns.

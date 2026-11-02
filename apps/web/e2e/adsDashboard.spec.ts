@@ -5,9 +5,10 @@ import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail }
 
 /**
  * The Advertising area with a Meta ad account whose days are stored: the dashboard's old ads panel
- * address opens it with its dates; the overview sets the store's own sales against the spend (sales
- * per unit of spend, cost per order, with the change on whole dates) and compares the spend with the
- * week before; the Meta Ads page draws one figure over the days and credits orders by Shopify's
+ * address opens it with its dates; the overview (Advertising Performance) compares the spend with the
+ * week before and shows Meta's card, its campaign and what its purchases leave after the spend; Shopify
+ * attribution sets the store's own sales against the spend (sales per unit of spend, cost per order, with
+ * the change on whole dates); the Meta Ads page draws one figure over the days and credits orders by Shopify's
  * visit record beside Meta's own purchases; the campaign comparison and the reports show the same
  * campaign. Meta itself can't run in e2e: the live report says so and nothing else waits on it.
  */
@@ -85,19 +86,37 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByTestId("kpi-purchases")).toContainText("Platforms' own count");
   await expect(page.getByTestId("kpi-purchases")).toContainText("■ 0%");
 
-  // $160 of sales for $70 of ads: 2.29 per unit of spend; $35 of ads per order. Before: $50 for $35, $35 per order.
+  await expect(page.getByTestId("kpi-mer")).toContainText("2.29×");
+  // Advertising Performance: Meta's card from its own API, its campaign among the top ones, and what's left of the
+  // $280 of purchases Meta credits to $70 of ads before product costs (no Shopify cost report here, so no estimate after them).
+  const card = page.getByTestId("ads-card-meta");
+  await expect(card.getByTestId("ads-card-state")).toHaveText("Connected");
+  await expect(card.getByTestId("ads-card-meta-value")).toContainText("$280.00");
+  await expect(card.getByTestId("ads-card-meta-roas")).toContainText("4×");
+  await expect(page.getByTestId("ads-card-google").getByTestId("ads-card-state")).toHaveText("Not connected");
+  await expect(page.getByTestId("top-campaign-row").filter({ hasText: "Spring" })).toContainText("$70.00");
+  await expect(page.getByTestId("ads-funnel-impressions")).toContainText("7,000");
+  await expect(page.getByTestId("ads-insight-roas_meaning")).toContainText("isn't profit");
+  await expect(page.getByTestId("profit-after-spend")).toContainText("$210.00");
+  await expect(page.getByTestId("profit-after-products")).toHaveCount(0);
+
+  // Shopify attribution: $160 of sales for $70 of ads: 2.29 per unit of spend; $35 of ads per order. Before: $50 for $35, $35 per order.
+  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Shopify attribution" }).click();
+  await expect(page).toHaveURL(/\/advertising\/attribution\?preset=custom/);
   const vs = page.getByTestId("ads-vs-sales");
   await expect(vs).toBeVisible();
   await expect(vs).toContainText("$160.00");
   await expect(vs).toContainText("2.29×");
   await expect(vs).toContainText("$35.00");
   await expect(vs).toContainText("before: 1.43×");
-  await expect(page.getByTestId("kpi-mer")).toContainText("2.29×");
   // Shopify credits the order from the Facebook ad to Meta: 1 order, $100, 1.43 per unit of Meta's spend; Meta's own count says 7 purchases worth $280.
   const meta = page.getByTestId("ads-attribution-meta");
   await expect(meta).toContainText("$100.00");
   await expect(meta).toContainText("1.43×");
   await expect(meta).toContainText("$280.00");
+  // The store's own record: $100 from Facebook, the tagged-ad order costing the whole $70 of spend.
+  await expect(page.getByTestId("attr-sales-value")).toHaveText("$100.00");
+  await expect(page.getByTestId("attr-cost-per-order-value")).toHaveText("$70.00");
 
   // Meta Ads, from the area's menu: one figure over the days, by platform, picked from the list.
   await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Meta Ads" }).click();
@@ -221,14 +240,15 @@ test("trend charts group by week and month, the week presets run Monday to Sunda
   // The Advertising overview's charts: per day, then added up per week (Monday to Sunday) and per month.
   await page.goto(`/advertising?${dates}`);
   const money = page.getByTestId("ads-money-chart");
-  await expect(money).toContainText("Ad spend per day");
+  await expect(money).toContainText("Ad spend and purchase value per day");
   const group = page.getByRole("combobox", { name: "Ad charts group" });
   await group.selectOption("week");
-  await expect(money).toContainText("Ad spend per week");
+  await expect(money).toContainText("Ad spend and purchase value per week");
   await expect(money).toContainText("Weeks run Monday to Sunday");
-  await expect(money.locator("[aria-label*='Ad spend per week']")).toBeVisible();
+  await expect(money.locator("[aria-label*='Ad spend and purchase value per week']")).toBeVisible();
+  await expect(money.locator("[aria-label*='ROAS per week']")).toBeVisible();
   await group.selectOption("month");
-  await expect(money).toContainText("Ad spend per month");
+  await expect(money).toContainText("Ad spend and purchase value per month");
   // Clicks, reach and store visits are said to be different counts, never added together; the page prints.
   await expect(page.getByTestId("measures-differ")).toContainText("never added together");
   await expect(page.getByTestId("ad-print")).toBeVisible();

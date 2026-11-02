@@ -344,6 +344,8 @@ model Store {
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   billedSubscriptions   Subscription[]
   shopifyReports        ShopifyReport[]
+  shopifyMarketingDays  ShopifyMarketingDay[]
+  shopifyMarketingSync  ShopifyMarketingSync?
   reconciliations       Reconciliation[]
   inventoryLocations    InventoryLocation[]
   inventoryLevels       InventoryLevel[]
@@ -861,6 +863,58 @@ model ShopifyReport {
   @@index([workspaceId])
   @@index([fetchedAt])
   @@map("shopify_reports")
+}
+
+// Ad spend, impressions and clicks as the store's marketing apps (Facebook & Instagram, Google &
+// YouTube, ...) report them to Shopify: ShopifyQL's marketing_engagements, read with read_reports
+// (packages/core/src/shopifyMarketing.ts). One row per store-local day, channel (marketing_channel),
+// app (marketing_app_name) and campaign (marketing_campaign); campaign "" is the channel's whole day,
+// what totals add up, the named ones only its breakdown. Each read replaces its window's rows, so a
+// day Shopify revised (late spend, a campaign renamed) never keeps its old figures beside the new.
+// A figure the channel didn't report is null, never 0.
+model ShopifyMarketingDay {
+  workspaceId  String   @map("workspace_id")
+  storeId      String   @map("store_id")
+  day          String
+  channel      String
+  app          String   @default("")
+  campaign     String   @default("")
+  /// In the store's currency (`currency`), as Shopify reports every channel's money.
+  spend        Decimal? @db.Decimal(18, 2)
+  impressions  Int?
+  clicks       Int?
+  /// The channel's own count of orders from its marketing (its attribution, not the store's orders), their sales, and its first-time customers.
+  orders       Float?
+  sales        Decimal? @db.Decimal(18, 2)
+  newCustomers Float?   @map("new_customers")
+  currency     String
+  fetchedAt    DateTime @map("fetched_at")
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@id([storeId, day, channel, app, campaign])
+  @@index([workspaceId])
+  @@map("shopify_marketing_days")
+}
+
+// Where a store's reading of Shopify's marketing report stands: the days read (covered_from back to
+// synced_through), whether every day back to the store's first is in (backfilled), and the last read's
+// outcome. One row per store, written by the worker only.
+model ShopifyMarketingSync {
+  storeId             String    @id @map("store_id")
+  workspaceId         String    @map("workspace_id")
+  coveredFrom         String?   @map("covered_from")
+  syncedThrough       String?   @map("synced_through")
+  backfilled          Boolean   @default(false)
+  lastSyncedAt        DateTime? @map("last_synced_at")
+  lastAttemptAt       DateTime? @map("last_attempt_at")
+  /// "access_denied", "unsupported" or "failed" (ReportError): why the last read got nothing; null after a good one.
+  lastError           String?   @map("last_error")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  store               Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("shopify_marketing_syncs")
 }
 
 // One check of a store's figures against Shopify for a window of store-local days

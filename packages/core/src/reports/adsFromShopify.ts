@@ -67,8 +67,9 @@ async function byDay(tx: Tx, { ws, storeId }: Scope, r: DateRange, sources: read
 
 /**
  * The storefront pixel's visits over the dates from the platforms' sources (funnel_visits, one per
- * visitor and day, as the Shopping Funnel counts them), from the first day it recorded where visits
- * came from: the days before have no source, so they are left out rather than counted as none.
+ * visitor and day, as the Shopping Funnel counts them), by how far each went (its furthest step), from
+ * the first day it recorded where visits came from: the days before have no source, so they are left
+ * out rather than counted as none.
  */
 async function visitsBySource(tx: Tx, { ws, storeId }: Scope, r: DateRange, sources: readonly string[]): Promise<SourcedVisits> {
   const [first] = await tx.$queryRaw<Array<{ day: string }>>`
@@ -76,11 +77,11 @@ async function visitsBySource(tx: Tx, { ws, storeId }: Scope, r: DateRange, sour
   const from = first?.day ?? null;
   const counted = visitsCounted(from, r);
   if (!counted) return { from, rows: [] };
-  const rows = await tx.$queryRaw<Array<{ source: string; visits: number }>>`
-    SELECT source, COUNT(*)::int AS visits FROM funnel_visits
+  const rows = await tx.$queryRaw<Array<{ source: string; furthest_step: number; visits: number }>>`
+    SELECT source, furthest_step, COUNT(*)::int AS visits FROM funnel_visits
     WHERE workspace_id = ${ws} AND store_id = ${storeId} AND day BETWEEN ${counted} AND ${r.to} AND source = ANY(${sources}::text[])
-    GROUP BY 1`;
-  return { from, rows: rows.map((x) => ({ source: x.source, visits: num(x.visits) })) };
+    GROUP BY 1, 2`;
+  return { from, rows: rows.map((x) => ({ source: x.source, visits: num(x.visits), furthestStep: num(x.furthest_step) })) };
 }
 
 /**

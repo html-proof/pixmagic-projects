@@ -20,6 +20,7 @@ import {
   sweepWhatsapp,
   sweepEmail,
   type EmailJob,
+  type ShopifyMarketingJob,
   type ShopifyReportsJob,
   type SyncJobData,
   type VerifyJob,
@@ -58,6 +59,7 @@ import {
 } from "./handlers.js";
 import type { ZapierJob } from "@app/core/zapier";
 import { runShopifyReports } from "./shopifyReports.js";
+import { runShopifyMarketing, scheduleShopifyMarketing } from "./shopifyMarketing.js";
 
 import { inJobScope } from "./rowScope.js";
 import { failVerify, runVerify } from "./verify.js";
@@ -66,6 +68,7 @@ export * from "./handlers.js";
 export { inJobScope, jobWorkspace } from "./rowScope.js";
 export { runVerify, startChecks } from "./verify.js";
 export { runShopifyReports } from "./shopifyReports.js";
+export { runShopifyMarketing, scheduleShopifyMarketing } from "./shopifyMarketing.js";
 
 /** A queue message as the consumer sees it: SQS's (apps/aws/src/consumer.ts), the local queues', or a test's. */
 export interface QueueMessage<T = unknown> {
@@ -157,6 +160,8 @@ async function consumeInScope(queue: QueueName, msg: QueueMessage, deps: Consume
     else if (queue === "sync" && kind === "verify") await runVerify(job as VerifyJob, deps);
     // Shopify's report figures for the dashboard ride the sync queue too; the kept rows carry their state.
     else if (queue === "sync" && kind === "shopify_reports") await runShopifyReports(job as ShopifyReportsJob, deps);
+    // What the store's marketing apps report to Shopify rides the sync queue too; its sync row carries its state.
+    else if (queue === "sync" && kind === "shopify_marketing") await runShopifyMarketing(job as ShopifyMarketingJob, deps);
     // Zapier deliveries (docs/zapier.md) ride the sync queue too; the delivery rows carry their own retries.
     else if (queue === "sync" && kind === "zapier") await runZapierJob(job as ZapierJob, deps);
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
@@ -296,6 +301,10 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
   }
   if (queue === "sync" && kind === "shopify_reports") {
     // Nothing to mark: the dashboard asks again for whatever is still missing or stale.
+    return;
+  }
+  if (queue === "sync" && kind === "shopify_marketing") {
+    // The store's sync row already says the read failed (and how many times in a row); the schedule reads again.
     return;
   }
   if (queue === "sync" && kind === "zapier") {
@@ -532,6 +541,11 @@ async function runSweeps(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "pruning old checks against Shopify failed; the next tick tries again");
       return null;
     });
+    // What the stores' marketing apps report to Shopify (their ad spend): on its own leases.
+    const shopifyMarketing = await scheduleShopifyMarketing(deps).catch((err: unknown) => {
+      logger.error({ err }, "shopify marketing scheduling failed; the next tick tries again");
+      return null;
+    });
     const shopifyReportsPruned = await pruneShopifyReports().catch((err: unknown) => {
       logger.error({ err }, "shopify reports prune failed; the next tick tries again");
       return null;
@@ -554,7 +568,7 @@ async function runSweeps(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "zapier sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyMarketing, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

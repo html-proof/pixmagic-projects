@@ -8,7 +8,8 @@ import { PLATFORM } from "./AdvertisingUi";
 // ---------------------------------------------------------------------------
 // Where Meta's and Google's figures come from (the API's `ad_sources`, adPlatformSources in
 // packages/shared/src/adsFromShopify.ts), and the badge that says so beside them: the platform's own
-// API, or the store's Shopify orders. Platform figures and Shopify-attributed sales never share a badge.
+// API, what its app reports to Shopify (`marketing`), or the store's Shopify orders. Platform figures,
+// reported figures and Shopify-attributed sales never share a badge.
 // ---------------------------------------------------------------------------
 
 /**
@@ -27,18 +28,22 @@ export function adSourcesOf(ov: Overview, only?: AdSpendProvider): AdPlatformSou
 /** The spend platforms whose figures come from the store's orders. */
 export const fromShopifyOf = (ov: Overview, only?: AdSpendProvider): AdSpendProvider[] => adSourcesOf(ov, only).filter((s) => s.source === "shopify").map((s) => s.provider);
 
-/** The badge's words: the platform's API, or Shopify's attribution of orders to it. */
-export const SOURCE_LABEL: Record<Exclude<AdDataSource, "none">, (p: AdSpendProvider) => string> = {
+/** What a badge can name: the platform's API, what its app reports to Shopify, or Shopify's attribution of orders to it. */
+export type BadgeSource = Exclude<AdDataSource, "none"> | "marketing";
+
+/** The badge's words. */
+export const SOURCE_LABEL: Record<BadgeSource, (p: AdSpendProvider) => string> = {
   platform: (p) => `${PLATFORM[p].name} API`,
+  marketing: () => "Reported to Shopify",
   shopify: () => "Shopify attribution",
 };
 
 /** A small badge naming where the figures beside it come from. */
-export function SourceBadge({ provider, source }: { provider: AdSpendProvider; source: Exclude<AdDataSource, "none"> }) {
+export function SourceBadge({ provider, source }: { provider: AdSpendProvider; source: BadgeSource }) {
   const P = PLATFORM[provider];
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-border/60 px-2 py-0.5 text-[11px] font-medium text-muted" data-testid="ad-source-badge" data-source={source}>
-      {source === "shopify" ? <ShopifyIcon size={12} /> : <P.Icon size={12} />}
+      {source === "platform" ? <P.Icon size={12} /> : <ShopifyIcon size={12} />}
       {SOURCE_LABEL[source](provider)}
     </span>
   );

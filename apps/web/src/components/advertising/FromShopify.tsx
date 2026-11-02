@@ -44,6 +44,8 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
   const tagged = p.paidSales !== undefined;
   const none = p.orders === 0 && p.sales === 0;
   const known = p.daily.filter((d) => d.sales !== null);
+  // The platform's own figures show too (Shopify attribution page): nothing to connect.
+  const own = adSourcesOf(ov, p.provider)[0]?.source === "platform";
   return (
     <section className="card space-y-4" aria-labelledby={`shopify-${p.provider}-h`} data-testid={`shopify-ads-${p.provider}`}>
       <div className="flex flex-wrap items-start gap-3">
@@ -57,8 +59,14 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-muted">
             Orders whose visit came from {SITES[p.provider]}, as Shopify recorded it, and their sales.{" "}
-            {adSourcesOf(ov, p.provider)[0]?.state === "access_lost" ? `bizinsights' access to ${P.name} has ended: reconnect it to bring back` : `Connect ${P.name} to add`} what you spent, the
-            impressions and clicks, and what {p.provider === "meta" ? "Meta" : "Google"} credits to its ads.
+            {own ? (
+              <>What {P.name} itself reports (spend, impressions, clicks and what it credits to its ads) is on its own page, never added to these.</>
+            ) : (
+              <>
+                {adSourcesOf(ov, p.provider)[0]?.state === "access_lost" ? `bizinsights' access to ${P.name} has ended: reconnect it to bring back` : `Connect ${P.name} to add`} what you spent, the
+                impressions and clicks, and what {p.provider === "meta" ? "Meta" : "Google"} credits to its ads.
+              </>
+            )}
           </p>
         </div>
       </div>

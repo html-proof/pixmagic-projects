@@ -9,6 +9,7 @@ import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { OrderOutcomes } from "@app/shared/orders";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
+import type { ShopifyMarketing } from "@app/shared/shopifyMarketing";
 import type { TrafficSplit } from "@app/shared/traffic";
 
 /**
@@ -661,6 +662,12 @@ export interface Overview {
      * figures and campaigns, "View conversion attribution"; its storefront visits, "View conversion rates".
      */
     ads_from_shopify?: AdsFromShopify;
+    /**
+     * The ad spend, impressions and clicks the store's marketing apps (Facebook & Instagram, Google &
+     * YouTube, others) report to Shopify (core shopifyMarketing.ts), with its reports granted: Meta's and
+     * Google's where `ad_sources` says `marketing`. Its campaigns need "View campaigns".
+     */
+    shopify_marketing?: ShopifyMarketing;
     /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
     shopify_sessions?: ShopifySessionsModule;
     profit?: ProfitModule;

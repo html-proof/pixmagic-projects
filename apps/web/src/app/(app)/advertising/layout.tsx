@@ -10,6 +10,8 @@ const ITEMS = [
   ["", "Overview"],
   ["meta", "Meta Ads"],
   ["google", "Google Ads"],
+  ["attribution", "Shopify attribution"],
+  ["profitability", "Profitability"],
   ["adsense", "AdSense"],
   ["campaigns", "Campaign comparison"],
   ["reports", "Reports"],

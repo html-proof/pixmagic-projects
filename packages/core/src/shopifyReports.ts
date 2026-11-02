@@ -200,18 +200,23 @@ export async function fetchShopifyReport(store: ReportStore, { dataset, window }
     }
     return { values: parseReport(dataset, data.shopifyqlQuery) };
   } catch (err) {
-    if ((err instanceof ShopifyHttpError && (err.status === 401 || err.status === 403)) || (err instanceof ShopifyGraphqlError && err.codes.includes("ACCESS_DENIED"))) {
-      return { error: "access_denied" };
-    }
-    // Shopify refusing the query itself (a field this API version lacks, say) won't change by asking
-    // again in 10 minutes; its own failures and throttling might.
-    if (err instanceof ShopifyGraphqlError && err.codes.some((c) => c && !TRANSIENT_CODES.has(c))) {
-      logger.warn({ shop: store.shopDomain, dataset, codes: err.codes }, "shopify report query refused");
-      return { error: "unsupported" };
-    }
-    logger.warn({ err, shop: store.shopDomain, dataset }, "shopify report query failed");
-    return { error: "failed" };
+    return { error: reportErrorOf(err, store.shopDomain, dataset) };
   }
+}
+
+/** Why a ShopifyQL call (or the token for it) failed, in a word kept with the answer; logged once here. */
+export function reportErrorOf(err: unknown, shop: string, dataset: string): ReportError {
+  if ((err instanceof ShopifyHttpError && (err.status === 401 || err.status === 403)) || (err instanceof ShopifyGraphqlError && err.codes.includes("ACCESS_DENIED"))) {
+    return "access_denied";
+  }
+  // Shopify refusing the query itself (a field this API version lacks, say) won't change by asking
+  // again in 10 minutes; its own failures and throttling might.
+  if (err instanceof ShopifyGraphqlError && err.codes.some((c) => c && !TRANSIENT_CODES.has(c))) {
+    logger.warn({ shop, dataset, codes: err.codes }, "shopify report query refused");
+    return "unsupported";
+  }
+  logger.warn({ err, shop, dataset }, "shopify report query failed");
+  return "failed";
 }
 
 /** Keep one answer (values or the error), replacing the window's earlier one. */

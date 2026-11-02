@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { redactOverview, type MemberAccess } from "../src/access";
-import { adPlatformSources, adsFromShopify, adsFromShopifyWithoutAttribution, visitsCounted, type AdSourceFacts, type SourcedDay, type SourcedSales } from "../src/adsFromShopify";
+import { adJourney, adPlatformSources, adsFromShopify, adsFromShopifyWithoutAttribution, visitsCounted, type AdSourceFacts, type SourcedDay, type SourcedSales } from "../src/adsFromShopify";
 
 const range = { from: "2026-10-01", to: "2026-10-03" };
 const compared = { from: "2026-09-28", to: "2026-09-30" };
@@ -136,10 +136,33 @@ describe("the storefront's visits from each platform's sites", () => {
     expect(m.platforms.map((p) => p.visits)).toEqual([null, null]);
   });
 
+  it("follows each platform's visits through the store: each counted once, at every step up to the furthest it reached", () => {
+    const m = ask({
+      visits: {
+        from: "2026-09-15",
+        rows: [
+          { source: "facebook", visits: 30, furthestStep: 0 },
+          { source: "facebook", visits: 10, furthestStep: 2 },
+          { source: "instagram", visits: 6, furthestStep: 3 },
+          { source: "instagram", visits: 4, furthestStep: 4 },
+          { source: "google", visits: 7, furthestStep: 1 },
+          { source: "direct", visits: 99, furthestStep: 4 },
+        ],
+      },
+    });
+    expect(m.platforms[0]!.journey).toEqual({ visits: 50, viewedProduct: 20, addedToCart: 20, startedCheckout: 10, purchased: 4 });
+    expect(m.platforms[0]!.visits).toBe(50);
+    expect(m.platforms[1]!.journey).toEqual({ visits: 7, viewedProduct: 7, addedToCart: 0, startedCheckout: 0, purchased: 0 });
+    // Visits read without their steps count as visits only; none of the dates' days counted: none at all, never 0.
+    expect(adJourney([{ visits: 5 }])).toEqual({ visits: 5, viewedProduct: 0, addedToCart: 0, startedCheckout: 0, purchased: 0 });
+    expect(ask({ visits: { from: null, rows: [] } }).platforms[0]!.journey).toBeNull();
+  });
+
   it("says nothing of visits without the pixel", () => {
     const m = ask();
     expect(m).not.toHaveProperty("visitsFrom");
     expect(m.platforms[0]).not.toHaveProperty("visits");
+    expect(m.platforms[0]).not.toHaveProperty("journey");
   });
 
   it("goes only to whoever sees the Shopping Funnel's visits as well (View conversion rates)", () => {
@@ -148,6 +171,7 @@ describe("the storefront's visits from each platform's sites", () => {
     const without = redactOverview(report(), member(["analytics.traffic"])).modules.ads_from_shopify as ReturnType<typeof ask>;
     expect(without).not.toHaveProperty("visitsFrom");
     expect(without.platforms[0]).not.toHaveProperty("visits");
+    expect(without.platforms[0]).not.toHaveProperty("journey");
     expect(without.platforms[0]).toMatchObject({ orders: 4, sales: 200 });
     const seen = redactOverview(report(), member(["analytics.traffic", "analytics.conversion"])).modules.ads_from_shopify as ReturnType<typeof ask>;
     expect(seen.platforms[0]!.visits).toBe(50);

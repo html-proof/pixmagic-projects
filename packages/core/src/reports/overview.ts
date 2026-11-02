@@ -2,6 +2,7 @@ import type { Store, Tx } from "@app/db";
 import {
   adPlatformSources,
   comparisonImported,
+  marketingReports,
   delta,
   localDay,
   pastYearBreakdown,
@@ -14,12 +15,14 @@ import {
   type Comparison,
   type DailyMetricsRow,
   type DateRange,
+  type ShopifyMarketing,
 } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { expensesModule } from "../expenses.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
 import { declaredScopes, optionalScopesFor } from "../scopes.js";
+import { shopifyMarketingModule } from "../shopifyMarketing.js";
 import { adsenseModule, adsModule, type AdsFigures } from "./ads.js";
 import { adSourceFacts, adsFromShopifyModule } from "./adsFromShopify.js";
 import { catalog, importedData, inventory } from "./catalog.js";
@@ -265,9 +268,18 @@ export async function storeOverview(
   // capability, and the member sees them). Worked out on every read, so connecting, losing access and
   // reconnecting switch it with nothing to set. Never for one account, or AdSense alone.
   const fromOrders = enabled.has("channels") && sees("ads_from_shopify");
+  // The ad spend the store's marketing apps report to Shopify (packages/core/src/shopifyMarketing.ts),
+  // once its reports are granted: Meta's and Google's where their own API's figures aren't shown, and
+  // the other channels'. Read from what the worker keeps; never for one account, or AdSense alone.
+  if (enabled.has("shopify_marketing") && !account && platform !== "adsense") {
+    const marketing = await shopifyMarketingModule(tx, scope, store, dates, today);
+    if (marketing) modules.shopify_marketing = marketing;
+  }
+  const reported = modules.shopify_marketing as ShopifyMarketing | undefined;
   let sources: AdPlatformSource[] | null = null;
   if (sees("ad_sources") && !account && platform !== "adsense") {
-    sources = adPlatformSources(await adSourceFacts(tx, scope, modules.ads as AdsFigures | undefined), fromOrders).filter((s) => !platform || s.provider === platform);
+    const marketing = { meta: marketingReports(reported, "meta"), google: marketingReports(reported, "google") };
+    sources = adPlatformSources(await adSourceFacts(tx, scope, modules.ads as AdsFigures | undefined), fromOrders, marketing).filter((s) => !platform || s.provider === platform);
     modules.ad_sources = sources;
   }
   // Meta and Google as the store's orders record them: the Advertising pages' for a platform with no ad
