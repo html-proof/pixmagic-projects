@@ -315,7 +315,11 @@ const NOT_COMPARED: Record<string, string> = {
  * over yet, both sides stop at the last whole day, so the figure for the days compared is a column of
  * its own beside the whole dates'), or the reason there is none. Spend
  * and the platforms' own counts first, then the store's own sales set against the spend (Shopify's,
- * never the platforms'), then AdSense's estimated earnings, money in, never added to the spend.
+ * never the platforms'), then AdSense's estimated earnings, money in, never added to the spend. With
+ * Meta and Google both counted (`claimsAddUp` false), their purchases, purchase value, ROAS and
+ * conversions are each platform's own rows (from `byProvider`), never the totals' sum of claims that
+ * can overlap; spend, impressions and link clicks add up. Accounts left out in another currency
+ * (`leftOut`) are named under the spend.
  */
 function summaryTable(ads: Obj | null, adsense: Obj | null) {
   const rows: Cell[][] = [];
@@ -344,11 +348,35 @@ function summaryTable(ads: Obj | null, adsense: Obj | null) {
       ["Ad spend", "spend", true],
       ["Impressions", "impressions", false],
       ["Link clicks", "linkClicks", true],
-      ["Purchases (platforms' count)", "purchases", true],
-      ["Purchase value (platforms' count)", "purchaseValue", true],
-      ["Return on ad spend (platforms' own)", "roas", true],
-      ["Conversions (all conversion actions)", "conversions", true],
     ]);
+    // Accounts in another currency: their spend is in none of the figures, nothing being converted.
+    const leftOut = list(ads.leftOut);
+    if (leftOut.length) {
+      rows.push(["Left out", leftOut.map((acc) => `${String(acc.name ?? acc.accountId)} (${String(acc.currency ?? "currency not known yet")})`).join("; "), null, null, null, "In another currency: their spend and purchases are in none of these figures."]);
+    }
+    const platforms = list(ads.byProvider);
+    // An answer without `claimsAddUp` (older): one platform's claims add up, more than one's don't.
+    const apart = ads.claimsAddUp === false || (ads.claimsAddUp === undefined && new Set(platforms.map((p) => p.provider)).size > 1);
+    if (!apart) {
+      add(ads, [
+        ["Purchases (platforms' count)", "purchases", true],
+        ["Purchase value (platforms' count)", "purchaseValue", true],
+        ["Return on ad spend (platforms' own)", "roas", true],
+        ["Conversions (all conversion actions)", "conversions", true],
+      ]);
+    } else {
+      const names = platforms.map((p) => platformName(p.provider)).join(" and ");
+      rows.push(["Purchases", "Each platform's own", null, null, null, `${names} can both claim the same order, so their purchases, purchase value, ROAS and conversions are given per platform, never added up.`]);
+      for (const p of platforms) {
+        const name = platformName(p.provider, p.demo === true);
+        add(p, [
+          [`${name} purchases (its own count)`, "purchases", true],
+          [`${name} purchase value (its own count)`, "purchaseValue", true],
+          [`${name} return on ad spend (its own)`, "roas", true],
+          [`${name} conversions (all conversion actions)`, "conversions", true],
+        ]);
+      }
+    }
     const s = isObj(ads.sales) ? ads.sales : null;
     if (s) {
       const before = isObj(s.previous) ? s.previous : null;

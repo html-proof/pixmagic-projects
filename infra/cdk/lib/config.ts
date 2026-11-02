@@ -48,10 +48,11 @@ export interface EnvConfig {
    */
   whatsapp: { cpu: 256 | 512 | 1024 | 2048; memoryMiB: number; tasks: 0 | 1; spot: boolean };
   /**
-   * The EventBridge schedules (token refresh, reconcile, ad syncs, email and WhatsApp sweeps).
-   * OFF until this environment takes over from the old deployment (docs/aws-deployment.md,
-   * Cutover): with production's data copied in and both sides running them, merchants' stores
-   * would be synced twice and their customers emailed twice. Turn on at cutover: `-c schedules=on`.
+   * The EventBridge schedules (token refresh, reconcile, ad syncs, email and WhatsApp sweeps). On in
+   * production since 2026-10-16 (docs/aws-deployment.md, Cutover, step 3). Off in staging: on a copy
+   * of production's data it would sync merchants' stores a second time and email their customers
+   * twice. `-c schedules=off` (or `on`) overrides it for one deploy (the deploy workflow: GitHub
+   * variable AWS_SCHEDULES).
    */
   schedulesEnabled: boolean;
   /**
@@ -93,7 +94,19 @@ export interface EnvConfig {
    * `-c cognitoEmail=off` (or `on`) overrides it for one deploy, e.g. while the provider is down.
    */
   cognitoCustomEmail: boolean;
-  /** Where alarm emails go (empty: the topic exists without subscribers). */
+  /**
+   * Continue with Google: the client id of Google sign-in's OAuth client (docs/cognito-setup.md,
+   * section 2), which lists this pool's redirect URI. Not a secret: every Google sign-in page's
+   * address carries it. Its secret, GOOGLE_SIGNIN_CLIENT_SECRET in insights/<env>/app, is resolved
+   * by CloudFormation at deploy time (auth-stack.ts). Empty: no Google sign-in.
+   * `-c googleClientId=...` overrides it for one deploy (the deploy workflow: GitHub variable
+   * GOOGLE_SIGNIN_CLIENT_ID).
+   */
+  googleClientId: string;
+  /**
+   * Where alarm emails go (empty: the topic exists without subscribers). `-c alertEmail=...`
+   * overrides it for one deploy (the deploy workflow: GitHub variable AWS_ALERT_EMAIL).
+   */
   alertEmail: string;
   /**
    * Where the budget's emails go (spend at 50/75/90/100% of monthlyBudgetUsd, and a forecast above
@@ -132,7 +145,7 @@ export interface EnvConfig {
 const ACCOUNT = "605411278365";
 const REGION = "ap-southeast-2";
 
-const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled" | "migrateBeforeLive" | "alertEmail">> = {
+const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive">> = {
   production: {
     name: "production",
     account: ACCOUNT,
@@ -147,6 +160,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     logRetentionDays: 90,
     // US$17.29/month on demand in Sydney (0.5 vCPU + 1 GB on Graviton; AWS price list 2026-10-25): docs/whatsapp.md, "Cost".
     whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: false },
+    schedulesEnabled: true,
     domain: {
       name: "bizinsights.io",
       redirects: ["www.bizinsights.io"],
@@ -162,6 +176,10 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       inUse: true,
     },
     cognitoCustomEmail: true,
+    // Google sign-in's OAuth client, in a Google Cloud project of its own (docs/cognito-setup.md, section 2).
+    googleClientId: "567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com",
+    // The owner's address for the alarms (an SNS email subscription: AWS's first email asks to confirm it).
+    alertEmail: "bizinsightsaus@yahoo.com",
     // The owner's address for AWS costs: the budget, the daily cost email and Cost Anomaly Detection's daily alerts.
     budgetEmail: "bizinsightsaus@yahoo.com",
     // The owner's ceiling, US$50-80 a month (2026-10-18; docs/aws-deployment.md, Cost).
@@ -185,9 +203,13 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     natInstanceType: "t4g.nano",
     logRetentionDays: 30,
     whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: true },
+    schedulesEnabled: false,
     cognitoDomainPrefix: "insights-staging-605411278365",
     // A few test emails a day fit Cognito's own sender, without a second KMS key.
     cognitoCustomEmail: false,
+    // Production's Google client lists only production's redirect URIs.
+    googleClientId: "",
+    alertEmail: "",
     budgetEmail: "",
     monthlyBudgetUsd: 40,
     // The account's bill is the same in both environments: production's email covers it.
@@ -203,18 +225,26 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
   const name = String(context("env") ?? "production") as EnvConfig["name"];
   const base = ENVIRONMENTS[name];
   if (!base) throw new Error(`Unknown environment "${name}" (production or staging)`);
-  const cognitoEmail = context("cognitoEmail");
-  const budgetEmail = context("budgetEmail");
-  const costReport = context("costReport");
+  // A flag left out or given empty keeps this environment's own value: the deploy workflow passes
+  // its flags every time, empty when the GitHub variable behind one isn't set.
+  const given = (key: string) => {
+    const value = context(key);
+    return value === undefined || value === "" ? undefined : String(value);
+  };
+  const onOff = (key: string, own: boolean) => {
+    const value = given(key);
+    return value === undefined ? own : value === "on";
+  };
   return {
     ...base,
-    schedulesEnabled: String(context("schedules") ?? "off") === "on",
+    schedulesEnabled: onOff("schedules", base.schedulesEnabled),
     // Only "off" turns it off: unset, empty or a typo keeps the safe default.
     migrateBeforeLive: String(context("migrate") ?? "on") !== "off",
-    alertEmail: String(context("alertEmail") ?? ""),
-    cognitoCustomEmail: cognitoEmail === undefined || cognitoEmail === "" ? base.cognitoCustomEmail : String(cognitoEmail) === "on",
-    budgetEmail: budgetEmail === undefined || budgetEmail === "" ? base.budgetEmail : String(budgetEmail),
-    costReport: costReport === undefined || costReport === "" ? base.costReport : String(costReport) === "on",
+    googleClientId: given("googleClientId") ?? base.googleClientId,
+    alertEmail: given("alertEmail") ?? base.alertEmail,
+    cognitoCustomEmail: onOff("cognitoEmail", base.cognitoCustomEmail),
+    budgetEmail: given("budgetEmail") ?? base.budgetEmail,
+    costReport: onOff("costReport", base.costReport),
   };
 }
 

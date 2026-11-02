@@ -336,31 +336,31 @@ one saw a consent screen again, and ids, settings, stored days and who granted t
 nothing to do. The 17:00Z tick logged `ad connections moved off Nango` with `moved: 4, failed: 0, waiting: 0, ended: 0,
 left: 0`: since then no row or waiting login reads through Nango.
 
-**After the move.** Step (a) below takes the move and every Nango branch out of the code. The columns that named Nango
-connections stay, unused, until a later migration drops them ([database/schema.md](database/schema.md)), so the
-release a failed deploy rolls back to still reads every row (its move finds nothing left). A row whose `source` isn't
-`direct` can't be made any more; were one there, it would never be read: it waits for a reconnect (`auth_expired`),
-which makes it bizinsights' own (`holdsOwnSignIn`, `packages/core/src/adConnections/credentials.ts`). Nango's old
-addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404.
+**After the move.** Step (a) below took the move and every Nango branch out of the code (release 131, 2026-10-30).
+The columns that named Nango connections are still in the schema ("Database" below): `ad_connections.source` is
+still used, and the other three are read by nothing and go in two releases. A row whose `source` isn't `direct`
+can't be made any more; were one there, it would never be read: it waits for a reconnect (`auth_expired`), which
+makes it bizinsights' own (`holdsOwnSignIn`, `packages/core/src/adConnections/credentials.ts`). Nango's old
+addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404 (checked 2026-11-02, release 151).
 
 ### Owner's steps
 
-(e) is for now. `left: 0` came on 2026-10-28 at 17:00Z; (a) to (d) follow it, in that order.
+(a), (d) and (e) are done. (b) and (c) are for now, in that order: (a) is live since release 131 (2026-10-30), so neither
+production nor the release a failed deploy rolls back to signs in through Nango or reads its key.
 
-- [ ] **(a) Remove the move code**: the pull request that follows #274 and removes Nango's code. It takes out
-  `leaveNango.ts` and its cron step, what was left of the Nango client (`packages/core/src/ads/nango.ts`) and every
-  Nango branch (`adConnections/config.ts`, `credentials.ts`, `connect.ts`, `logins.ts`, `metaCallbacks.ts`,
-  `health.ts`, `apps/api/src/routes/ads.ts`, `ops:ad-health`), the settings `NANGO_SECRET_KEY` and `NANGO_API_URL`
-  (`packages/core/src/env.ts`, `put-secrets.mjs`, `apps/aws/src/secrets.ts`), the old redirect
-  `GET /api/ads/nango/oauth-callback`, and the retired WhatsApp module's `deleteRetiredNangoToken`
-  (`packages/core/src/whatsapp/purge.ts`), which read the same key for a design no store connected through
-  (docs/whatsapp.md). The columns that name Nango connections are dropped later, by a migration of their own. Merge
-  it and confirm its Deploy to AWS run.
+- [x] **(a) Remove the move code: live as release 131 (2026-10-30).** Pull request #279 (a5e1785f), merged through #290
+  (691eceb7), took out `leaveNango.ts` and its cron step, what was left of the Nango client
+  (`packages/core/src/ads/nango.ts`) and every Nango branch (`adConnections/config.ts`, `credentials.ts`,
+  `connect.ts`, `logins.ts`, `metaCallbacks.ts`, `health.ts`, `apps/api/src/routes/ads.ts`, `ops:ad-health`), the
+  settings `NANGO_SECRET_KEY` and `NANGO_API_URL` (`packages/core/src/env.ts`, `put-secrets.mjs`,
+  `apps/aws/src/secrets.ts`), the old redirect `GET /api/ads/nango/oauth-callback`, and the retired WhatsApp module's
+  `deleteRetiredNangoToken` (`packages/core/src/whatsapp/purge.ts`), which read the same key for a design no store
+  connected through (docs/whatsapp.md). The columns that named Nango connections stayed ("Database" below).
 - [ ] **(b) Delete the secrets** `NANGO_SECRET_KEY` and `NANGO_WEBHOOK_SECRET` from Secrets Manager
   `insights/production/app` (ap-southeast-2). `put-secrets.mjs` can't do it: it only sets or replaces keys and keeps
   every key it isn't given. In the AWS console: Secrets Manager → `insights/production/app` → **Retrieve secret
   value** → **Edit** → remove the two rows → **Save**. Then `node infra/cdk/scripts/put-secrets.mjs --dry-run` lists
-  the keys without them. Once (a) is live nothing reads `NANGO_SECRET_KEY`, and nothing has read
+  the keys without them. Since (a) went live nothing reads `NANGO_SECRET_KEY`, and nothing has read
   `NANGO_WEBHOOK_SECRET` since bizinsights left Nango: its webhook route is gone.
 - [ ] **(c) Nango** (https://app.nango.dev, environment **prod**):
   1. **Connections**: none is left for `bizinsights-meta-ads`, `bizinsights-google-ads` or
@@ -373,12 +373,14 @@ addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404
   3. **Integrations**: delete `bizinsights-meta-ads`, `bizinsights-google-ads`, `bizinsights-google-adsense` and
      `whatsapp-business`. They hold copies of bizinsights' Meta app secret and Google client secret.
   4. **The account** (Aby Thomas, tangoenery2004@gmail.com): delete it once nothing else uses it.
-- [ ] **(d) The old redirect URI**, only after (a) is live, so that the release a failed deploy rolls back to never
-  signs in through Nango: remove `https://bizinsights.io/api/ads/nango/oauth-callback` from Meta app 971575545351940 →
-  Facebook Login for Business → Settings → **Valid OAuth Redirect URIs** (then **Save Changes** at the bottom of the
-  page, and reload to check), and from Google Cloud insights-511119 → Google Auth Platform → Clients → "Insights web" →
-  **Authorized redirect URIs** (Save). Keep `https://bizinsights.io/api/ads/meta/callback`,
-  `https://bizinsights.io/api/ads/google/callback` and `https://bizinsights.io/api/ads/adsense/callback`.
+- [x] **(d) The old redirect URI: removed 2026-11-02.** On the owner's word, Claude removed
+  `https://bizinsights.io/api/ads/nango/oauth-callback` from Meta app 971575545351940 → Facebook Login for Business →
+  Settings → **Valid OAuth Redirect URIs** (its ×, then **Save Changes** at the bottom of the page) and from Google Cloud
+  insights-511119 → Google Auth Platform → Clients → "Insights web" → **Authorized redirect URIs** (its bin, then
+  **Save**). Each was checked on a fresh load: Meta lists `https://bizinsights.io/api/ads/meta/callback` and
+  `https://bizinsights.io/`; Google lists `https://bizinsights.io/api/ads/google/callback`,
+  `https://bizinsights.io/api/ads/adsense/callback` and the old Cloudflare Worker's two workers.dev callbacks (they go
+  when the old Worker is retired). Google says a change can take 5 minutes to a few hours to apply.
 - [x] **(e) Meta's redirect URI: confirmed working 2026-10-28.** `https://bizinsights.io/api/ads/meta/callback` was in
   Valid OAuth Redirect URIs next to the Nango callback on 2026-10-22
   ([integrations-readiness.md](integrations-readiness.md)), and Continue with Meta Ads needs it again. On 2026-10-28
@@ -402,7 +404,7 @@ addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404
 | `GOOGLE_ADS_CLIENT_ID` | `settings.ts`: the "Insights web" client (Google Ads **and** AdSense) | no |
 | `GOOGLE_ADS_CLIENT_SECRET` | `node infra/cdk/scripts/put-secrets.mjs --set GOOGLE_ADS_CLIENT_SECRET` | **yes** |
 | `GOOGLE_ADS_ENABLED` | `settings.ts`: `"1"` (Explorer access, since 2026-10-11) | no |
-| `GOOGLE_ADS_OAUTH_VERIFIED` | `settings.ts`: `"1"` once Google verifies the `adwords` scope (removes the unverified-app note) | no |
+| `GOOGLE_ADS_OAUTH_VERIFIED` | `settings.ts`: `"1"` once Google verifies the `adwords` scope. It only changes what the API reports (`restricted.google`, `adsRestricted()`); merchants see no note either way | no |
 | `GOOGLE_ADS_DAILY_OPERATIONS` | `settings.ts`: empty = Explorer's 2,880; set when Google grants Basic or Standard | no |
 | `GOOGLE_ADS_API_VERSION` | `settings.ts`: `v25` | no |
 
@@ -431,8 +433,7 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 
 The old `d2mr8m2p1qkh58.cloudfront.net` and Cloudflare Worker (workers.dev) callbacks are never sent; remove them
 (Google's branding verification accepts only verified domains). Nango's old callback,
-`https://bizinsights.io/api/ads/nango/oauth-callback`, is still registered at both; bizinsights no longer answers it
-(404), and it goes from both once that release is live ("Leaving Nango", step (d)).
+`https://bizinsights.io/api/ads/nango/oauth-callback`, was removed from both on 2026-11-02 ("Leaving Nango", step (d)).
 
 In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields are token lists: type the value, then
 **click the suggestion that appears under the field**, then Save Changes. Pressing Enter shows a chip and a "Changes
@@ -739,6 +740,11 @@ Migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily`, `202610
 health, sites, coverage), `20261020150000_ad_connection_demo`, `20261022120000_ad_connection_source_sync_runs`
 (`source`, `source_login_id`, `last_sync_attempt_at`, `ad_sync_runs`), `20261024120000_ad_campaigns`,
 `20261026150000_ad_logins` and `20261028100000_ad_logins_own_tokens` (a waiting login holds its own sealed token,
-`access_token_enc` and `token_key_version`). The columns that named Nango connections (`ad_connections.source` and
-`source_login_id`, `ad_logins.source_login_id` and `nango_integration_key`) are no longer used and are dropped by a
-later migration ([database/schema.md](database/schema.md)). The Deploy to AWS workflow applies them.
+`access_token_enc` and `token_key_version`). The Deploy to AWS workflow applies them, before the new code goes live.
+
+Of the columns that named Nango connections, `ad_connections.source` is still used: every connect writes `direct`,
+every sync records it (`ad_sync_runs.source`), and a row with anything else is never read (`holdsOwnSignIn`).
+`ad_connections.source_login_id`, `ad_logins.source_login_id` and `ad_logins.nango_integration_key` are read by
+nothing (a connect writes null to the first), but they are still in the Prisma client, so every read of those rows
+selects them. Dropping them takes two releases: `@ignore` first, the DROP migration in a later release
+([database/migrations.md](database/migrations.md), "Rules for a migration production can take").

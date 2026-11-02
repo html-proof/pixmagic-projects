@@ -34,12 +34,15 @@ function Change({ now, before }: { now: SheetFigure; before: SheetFigure }) {
  * The business events of the dates on screen and what their days did: a day with an event against
  * a day without one (net sales, orders, conversion, ads' share of sales), then each event's own days.
  * Only the store's own figures, added up over those days (@app/shared/sheet eventComparison): no
- * estimate of what the event caused, which the days alone can't tell.
+ * estimate of what the event caused, which the days alone can't tell. `leftOut`: ad accounts whose
+ * spend isn't in the ads' share, in another currency ("Left out: EU shop (EUR), in another
+ * currency.", as the sheet's rows say it), named wherever that share shows.
  */
 export function EventsPanel({
   comparison,
   currency,
   comparable,
+  leftOut = null,
   visitsTracked,
   canEdit,
   filterEvent,
@@ -50,6 +53,7 @@ export function EventsPanel({
   comparison: EventComparison;
   currency: string;
   comparable: boolean;
+  leftOut?: string | null;
   visitsTracked: boolean;
   canEdit: boolean;
   filterEvent: string | null;
@@ -93,6 +97,7 @@ export function EventsPanel({
               {on.adsShare !== undefined && <Stat label="Ads as share of sales" on={fmtPct(on.adsShare)} off={fmtPct(off.adsShare ?? null)} />}
               <p className="text-xs text-muted sm:col-span-2 lg:col-span-4">
                 {plural(withEvents.days, "day")} with an event, {plural(withoutEvents.days, "day")} without. A day with an event can differ for other reasons too (a weekend, a month&apos;s end), so read it beside the sheet.
+                {on.adsShare !== undefined && leftOut ? <span data-testid="sheet-events-left-out"> The ads&apos; share is of the spend shown. {leftOut}</span> : null}
               </p>
             </div>
           )}
@@ -132,7 +137,7 @@ export function EventsPanel({
                       </div>
                     )}
                     {m.adsShare !== undefined && (
-                      <div>
+                      <div title={leftOut ?? undefined}>
                         <dt className="text-xs text-muted">Ads share</dt>
                         <dd className="font-semibold tabular-nums">{fmtPct(m.adsShare)}</dd>
                       </div>

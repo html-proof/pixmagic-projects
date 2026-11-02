@@ -1,5 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
+import { claimsAddUp } from "@app/shared/ads";
 import { gradeRefundRate, shippingIsLate } from "@app/shared/health";
 import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { dailyBreakdown } from "@app/shared/sales";
@@ -190,10 +191,19 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase or other conversion counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
       if (a.shareOfSales !== null) out.push(<>Ads cost {fmtPct(a.shareOfSales)} of your net sales. Compare that with your profit margin: if ads cost more than you make on a sale, they lose money even when they bring sales.</>);
       // Every sale the store made against everything spent on ads (MER): the store's own measure, beside the platforms' claims.
-      if (a.sales?.salesPerSpend != null && a.current.roas !== null) {
+      // With more than one platform counted, each one's own ROAS: their claims added up could count an order twice.
+      const own = a.byProvider.map((p) => ({ name: p.provider === "meta" ? "Meta" : "Google Ads", roas: p.current?.roas ?? null }));
+      const claims = claimsAddUp(a.byProvider.map((p) => p.provider))
+        ? a.current.roas !== null
+          ? `the platforms credit themselves with ${fmtTimes(a.current.roas)} by their own counts`
+          : null
+        : own.every((p) => p.roas !== null)
+          ? `${own.map((p, i) => (i ? `${p.name} with ${fmtTimes(p.roas)}` : `${p.name} credits itself with ${fmtTimes(p.roas)}`)).join(" and ")}, each by its own count, and both can claim the same order`
+          : null;
+      if (a.sales?.salesPerSpend != null && claims) {
         out.push(
           <>
-            Counting every sale, your store made {fmtTimes(a.sales.salesPerSpend)} what you spent on ads; the platforms credit themselves with {fmtTimes(a.current.roas)} by their own counts. The gap is
+            Counting every sale, your store made {fmtTimes(a.sales.salesPerSpend)} what you spent on ads; {claims}. The gap is
             sales from everything else you do (repeat customers, search, word of mouth) and sales the platforms claim that would have happened anyway.
           </>,
         );

@@ -224,7 +224,7 @@ jobs:
         env:
           AWS_MAX_ATTEMPTS: "10"
           NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000 --require ${{ github.workspace }}/infra/cdk/scripts/stall-guard.cjs"
-          SCHEDULES: "${{ vars.AWS_SCHEDULES || 'off' }}"
+          SCHEDULES: "${{ vars.AWS_SCHEDULES }}"
           ALERT_EMAIL: "${{ vars.AWS_ALERT_EMAIL }}"
           GOOGLE_CLIENT_ID: "${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}"
           MIGRATE: "${{ vars.AWS_MIGRATE_BEFORE_LIVE || 'on' }}"

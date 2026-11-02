@@ -918,7 +918,12 @@ export async function settleReturningCustomers(storeId: string, customerKeys?: s
   return new Set(rows.map((r) => r.day));
 }
 
-/** shop/redact & uninstall cleanup: remove all synced commerce data for a store. */
+/**
+ * shop/redact & uninstall cleanup: remove all synced commerce data for a store. What the merchant
+ * entered for it (costs, business events) stays with the store row: a move to another workspace
+ * removes it too (connectStore.ts). packages/core/test/storeTables.test.ts checks that every store
+ * table is removed here, on a move, or kept for a reason it names.
+ */
 export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   // Read first: the ad platforms' grants are revoked once the rows are gone (so the store's own
   // connections no longer count as "still using" the grant). Best effort, never blocks the purge.
@@ -947,6 +952,10 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     // Its checks against Shopify describe data that is gone.
     systemDb.reconciliation.deleteMany({ where: { storeId } }),
     systemDb.shopifyReport.deleteMany({ where: { storeId } }),
+    // Shopify's marketing figures and how far they were read, always together: a sync row left
+    // behind would tell the next connect's backfill that the history is read already.
+    systemDb.shopifyMarketingDay.deleteMany({ where: { storeId } }),
+    systemDb.shopifyMarketingSync.deleteMany({ where: { storeId } }),
     systemDb.funnelDaily.deleteMany({ where: { storeId } }),
     systemDb.funnelVisit.deleteMany({ where: { storeId } }),
     systemDb.funnelProductVisit.deleteMany({ where: { storeId } }),

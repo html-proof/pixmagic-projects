@@ -50,6 +50,12 @@ const WRITE_BATCH = 400;
 const MAX_POLLS = 150;
 /** A RUNNING operation older than this is assumed dead and cancelled. */
 const STALE_OPERATION_MS = 2 * 60 * 60 * 1000;
+/**
+ * How much earlier than its sync job an export may say it was created and still be the job's own:
+ * Shopify's clock is not ours, and it gives `createdAt` to the second. Short, so the export of an
+ * import just before a scope grant is not taken for the one the grant queued.
+ */
+const CLOCK_SKEW_MS = 30_000;
 /** How long `start` holds the store's export lock unless something releases it first. */
 const LOCK_TTL_MS = 10 * 60_000;
 /** While another job holds the lock, `start` re-sends itself this far apart... */
@@ -71,6 +77,8 @@ export interface BulkApi {
   gql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
   /** The backfill window, from the same `ordersSearch` the paged path uses (a history year's search). */
   ordersSearch: () => string | null;
+  /** When the sync job was created: only an export Shopify started since then can be this job's own. */
+  jobCreatedAt: Date;
   /**
    * Reading one year of a full history (orderHistory in core): which export is this year's, and
    * where to record the one submitted or adopted for it. A finished export lingers as the shop's
@@ -209,7 +217,8 @@ async function startBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api:
     // Someone else's export: wait for it rather than bow out. Returning here used to end this
     // job's chain with its row left "running", for the watchdog to fail - and flip the store to
     // error - half an hour later, however well the other import went. Once the lock is free this
-    // job adopts or reads the same export (the adopt branches below) and finishes its own row.
+    // job adopts or reads that export if it started since this job was queued (the adopt branches
+    // below), else submits its own, and finishes its own row.
     // Not a throw: the six queue attempts are spent in under three minutes, far inside the TTL.
     const waits = data.bulk?.lockWaits ?? 0;
     if (waits >= MAX_LOCK_WAITS) return fallbackToPaged(data, deps, `export lock still held after ${waits} waits`, false);
@@ -232,17 +241,24 @@ async function startBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api:
 async function adoptOrSubmit(data: SyncJobData, store: Store, deps: WorkerDeps, api: BulkApi): Promise<BulkResult> {
   const current = (await api.gql<{ currentBulkOperation: BulkOperationStatus | null }>(CURRENT_BULK_OPERATION)).currentBulkOperation;
   const age = current?.createdAt ? Date.now() - Date.parse(current.createdAt) : Number.POSITIVE_INFINITY;
+  // Scoped to app + shop, the current export is ours but not necessarily this job's: it can be the
+  // last import's, made with other fields. The full import a read_customers grant queues would read
+  // that one without the customer, and then call every customer known.
+  const sinceJob = current?.createdAt ? Date.parse(current.createdAt) >= api.jobCreatedAt.getTime() - CLOCK_SKEW_MS : false;
   if (current && (current.status === "RUNNING" || current.status === "CREATED")) {
-    if (age < STALE_OPERATION_MS) {
-      // It is scoped to app + shop, so it is ours - almost always an earlier attempt of this
-      // same job. Adopt it; starting a second one would be refused anyway.
+    if (age < STALE_OPERATION_MS && sinceJob) {
+      // Almost always an earlier attempt of this same job. Adopt it; starting a second one would
+      // be refused anyway.
       logger.info({ storeId: store.id, bulkId: current.id }, "adopting the bulk operation already running for this shop");
       await api.historyYear?.exportStarted(current.id);
       await nextBulk(data, deps, { phase: "poll", id: current.id, polls: 0 }, pollDelayS(0));
       return { done: false };
     }
+    // Dead, or an earlier import's: cancelled so this job can start its own. An import still
+    // polling it takes the paged path instead, rather than writing over this job's orders from an
+    // export without the fields this one reads.
     await api.gql(BULK_OPERATION_CANCEL, { id: current.id }).catch(() => undefined);
-  } else if (current?.status === "COMPLETED" && current.url && age < STALE_OPERATION_MS && (api.historyYear?.ownsExport(current.id) ?? true)) {
+  } else if (current?.status === "COMPLETED" && current.url && age < STALE_OPERATION_MS && sinceJob && (api.historyYear?.ownsExport(current.id) ?? true)) {
     // A redelivered `start` after the export already finished: skip straight to reading it.
     logger.info({ storeId: store.id, bulkId: current.id }, "a completed bulk export is already waiting; ingesting it");
     await nextBulk(data, deps, { phase: "ingest", id: current.id, byteOffset: 0 });

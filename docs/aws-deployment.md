@@ -17,7 +17,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Page while the server is down | A page request the function can't answer (connection failure, timeout, 429/5xx) fails over to the site's own "Service temporarily unavailable" page as a 503: a second distribution (stack output `FallbackDomain`) serves `_fallback/unavailable.html` from the same bucket for any path. The API's paths never fail over, so its own 502/503 messages reach the app. The smoke test fetches the page from the fallback. | `infra/cdk/lib/app-stack.ts`, `apps/web/src/app/unavailable`, `apps/aws/src/paths.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
-| Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: GitHub variable `AWS_SCHEDULES=on`) | `runScheduled()` in `apps/worker` |
+| Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: `schedulesEnabled` in `infra/cdk/lib/config.ts`) | `runScheduled()` in `apps/worker` |
 | Migrations before the switch | Lambda `insights-production-migrate-before-live` (App stack, runs only during deploys, through the custom resource `MigrateBeforeLive`) runs a release's migrations on its new cron version before the `live` aliases move ("Migrations before the switch" below) | `infra/cdk/lib/migrate-before-live.ts`, `apps/aws/src/migrate.ts` |
 | Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
@@ -51,6 +51,11 @@ pnpm --filter @app/aws build
 cd infra/cdk
 npx cdk deploy --all --require-approval never
 ```
+
+Production's own settings are in `infra/cdk/lib/config.ts`, the schedules (`schedulesEnabled`), the
+alarm email (`alertEmail`) and Google sign-in (`googleClientId`) among them, so this deploys the
+same stacks as Deploy to AWS. A `-c` flag changes one for that deploy only: `-c schedules=off`,
+`-c alertEmail=...`, `-c googleClientId=...` (an empty one keeps config.ts's).
 
 The App stack runs the release's migrations on its new cron version before it moves `live`
 ("Migrations before the switch" below), so a hand deploy needs no migrate step of its own. Run the
@@ -184,8 +189,12 @@ developer's machine), only for the packages `pnpm.onlyBuiltDependencies` in the 
 `package.json` names (esbuild, prisma, @prisma/engines). A new dependency that needs its install
 script is added there on purpose, after a look at what the script does.
 One-time setup in the repository's Settings → Environments → `production`: variable
-`AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output), optional `AWS_ALERT_EMAIL`,
-`GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` since 2026-10-16). Required reviewers and branch
+`AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output). The workflow also passes
+`AWS_SCHEDULES` (`on` since 2026-10-16), `AWS_ALERT_EMAIL` and `GOOGLE_SIGNIN_CLIENT_ID` to
+`cdk deploy`. They hold the same values as production's in config.ts, so they change nothing; a different
+value overrides config.ts's for that deploy. Unset, each reaches the deploy empty, which keeps
+config.ts's (production's schedules stay on); `AWS_SCHEDULES=off` still switches the schedules off
+for every Deploy run while it is set. Required reviewers and branch
 rules for an environment need a paid plan for a private repository; the role's trust does that job.
 
 The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
@@ -790,7 +799,16 @@ Migrations are not undone, and neither a CloudFormation rollback nor rollback.mj
 Infrastructure: `cdk deploy --all -c migrate=off` of the previous commit. Without `-c migrate=off`
 the gate runs that commit's migrate on its newly published cron version, and its older init.sql's
 blanket GRANT gives app_rls back any table a newer init.sql revokes, until the next forward deploy;
-don't run the migrate command after it either. Data: point-in-time restore. Cognito's email
+don't run the migrate command after it either. A commit from before production's schedules, alarm
+email and Google sign-in were put in config.ts (its `infra/cdk/lib/config.ts` has no `googleClientId`)
+had them from the workflow's GitHub variables only: give them on the command line, or that deploy
+switches the schedules, the alarm emails and Continue with Google off:
+
+```powershell
+npx cdk deploy --all --require-approval never -c migrate=off -c schedules=on -c alertEmail=bizinsightsaus@yahoo.com -c googleClientId=567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com
+```
+
+Data: point-in-time restore. Cognito's email
 function has no alias (rollback.mjs leaves it): to have Cognito send its own emails again, deploy
 the Auth stack with `-c cognitoEmail=off` ("Sign-in emails" below).
 
@@ -817,8 +835,8 @@ AWS** (Actions → Run workflow) after setting one. The Cloudflare commands belo
    deploy <that version>@100% -y`. Pages say "moving", the API answers 503 + Retry-After, so Shopify
    holds webhooks. From here the PC database no longer changes.
 2. **Final copy:** `node infra/cdk/scripts/migrate-data.mjs --replace` (wipes the AWS copy first).
-3. **Schedules on:** done. The GitHub variable `AWS_SCHEDULES` is `on` since 2026-10-16, so every
-   Deploy to AWS keeps the schedules on.
+3. **Schedules on:** done 2026-10-16 (then by the GitHub variable `AWS_SCHEDULES=on`). Production's
+   `schedulesEnabled` in config.ts keeps them on in every deploy, by hand too.
 4. **Shopify:** done. Both apps are live on `https://bizinsights.io`: the main app since version
    `insights-13` (now `insights-14`), the PixMagic app since version `pixmagic-7` (2026-10-16, webhooks
    API 2026-10).
@@ -1020,8 +1038,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   can hold up to eight, so a second one kept elsewhere means a lost key doesn't lock the account.
   It needs the owner's own device, so no deploy can do it. `aws login` keeps working (the browser
   sign-in asks for the key).
-- **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
-  budget already emails `budgetEmail` (config.ts) and needs no confirmation.
+- **Alerts**: the alarms email `alertEmail` (config.ts: bizinsightsaus@yahoo.com), an SNS
+  subscription that works only once confirmed from AWS's first email to that address. The budget
+  already emails `budgetEmail` (config.ts) and needs no confirmation.
 - **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
   the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
   (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
@@ -1033,9 +1052,11 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   client in a Google Cloud project of its own (only `openid`, `email`, `profile`; not
   `insights-511119`) with the redirect URI
   `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`, its secret
-  through `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`, the GitHub `production` environment
-  variable `GOOGLE_SIGNIN_CLIENT_ID`, then a Deploy to AWS run (no hand deploy), which restarts the
-  functions when the runtime settings change. A run that can't read the settings (every run before
+  through `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`, its client id as production's
+  `googleClientId` in config.ts (the GitHub `production` environment variable
+  `GOOGLE_SIGNIN_CLIENT_ID` holds the same id and overrides it when different), then a Deploy to AWS
+  run (no hand deploy), which restarts the functions when the runtime settings change. A run that
+  can't read the settings (every run before
   2026-11-01, through Git Bash's path rewriting) only warns: if such a run switched Google on, restart
   them by hand once ("Restarting the functions", above).
   Sign-in codes already go out through Resend
@@ -1054,8 +1075,8 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://bizinsights.io/api/ads/adsense/callback` on the Google client "Insights web", and
   `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app 971575545351940
   (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works); steps in
-  [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` is removed at both once
-  the release without Nango's code is live ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
+  [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` was removed from both on
+  2026-11-02 ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
   and, once their clients
   exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an

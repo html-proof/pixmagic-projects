@@ -90,6 +90,39 @@ function unsealToken(inv: Pick<Invitation, "id" | "tokenSealed">): string | null
   }
 }
 
+/**
+ * Key rotation (keyRotation.ts): every kept link sealed again with the active key, for the same
+ * invitation. Picked by the ciphertext (one not on the active key), 500 at a time by id, and written
+ * only over what was read: a link replaced meanwhile is sealed with the active key already. Returns
+ * the invitations rewritten; a link that can't be decrypted (logged) fails the run at the end.
+ */
+export async function reencryptInvitationLinks(): Promise<number> {
+  const current = `v${keyring().active}.`;
+  let rewritten = 0;
+  let failed = 0;
+  let last: string | undefined;
+  for (;;) {
+    const rows: Array<{ id: string; tokenSealed: string | null }> = await systemDb.invitation.findMany({
+      where: { ...(last ? { id: { gt: last } } : {}), tokenSealed: { not: null }, NOT: { tokenSealed: { startsWith: current } } },
+      orderBy: { id: "asc" },
+      take: 500,
+      select: { id: true, tokenSealed: true },
+    });
+    if (!rows.length) break;
+    for (const inv of rows) {
+      const token = unsealToken(inv);
+      if (token === null) {
+        failed++;
+        continue;
+      }
+      rewritten += (await systemDb.invitation.updateMany({ where: { id: inv.id, tokenSealed: inv.tokenSealed }, data: { tokenSealed: sealToken(inv.id, token) } })).count;
+    }
+    last = rows.at(-1)!.id;
+  }
+  if (failed) throw new Error(`${failed} invitation link(s) could not be re-encrypted; ${rewritten} were`);
+  return rewritten;
+}
+
 /** Someone already in the workspace (or revoked from it) is never invited again: their access is changed, renewed or restored instead. */
 async function assertNotMember(tx: Tx, workspaceId: string, email: string) {
   const member = await tx.membership.findFirst({ where: { workspaceId, user: { email: { equals: email, mode: "insensitive" } } }, select: { revokedAt: true, accessExpiresAt: true } });

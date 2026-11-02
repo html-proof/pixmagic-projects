@@ -18,7 +18,9 @@ import { WhatsappStack } from "../lib/whatsapp-stack.js";
  *   InsightsWhatsapp-<env> ap-southeast-2 WhatsApp's Evolution API service (ECS Fargate, Cloud Map), after App (its cron makes the service's database)
  *   InsightsCi-<env>    ap-southeast-2   GitHub OIDC deploy role
  *   InsightsAudit-production  ap-southeast-2   CloudTrail (all Regions), IAM Access Analyzer in every Region, access logs of CDK's bucket (account-wide, production only)
- * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...,
+ * Context: -c env=production|staging. Each environment's own settings are in lib/config.ts (production's schedules, alarm
+ *   email and Google sign-in included), so a plain deploy keeps them; these override one for one deploy (empty: config.ts's):
+ *   -c schedules=on|off, -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...,
  *   -c migrate=off (`live` moves before the release's migrations: only to get past a broken gate; run the migrate command right after)
  * docs/aws-deployment.md is the runbook.
  */
@@ -36,7 +38,7 @@ new AuthStack(app, name("Auth"), cfg, {
   appUrl: appStack.appUrl,
   apiRole: appStack.apiRole,
   runtimeParam: appStack.runtimeParam,
-  googleClientId: String(app.node.tryGetContext("googleClientId") ?? "") || undefined,
+  googleClientId: cfg.googleClientId || undefined,
 });
 const whatsapp = new WhatsappStack(app, name("Whatsapp"), cfg, data, { env, description: "Insights: WhatsApp Automation's Evolution API service" });
 // Its database is made by the App stack's cron function (invoked by name, so no export ties them).

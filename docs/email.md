@@ -164,7 +164,9 @@ CHECK constraints.
 Retention (sweep, daily): event data cleared after 35 days (the longest delay is 30), events and
 executions deleted after 90 days, messages and their events after 180 days. Suppressions are kept
 (they are what stops future email). GDPR `customers/redact` deletes the customer's events and
-messages for that store; `shop/redact` deletes the store's.
+messages for that store; `shop/redact` deletes the store's, and so does the store moving to another
+workspace (`attachStore`: its customers' hashes are keyed to the old one). Either way its rules stay,
+switched off (`purgeEmailStoreData`).
 
 ## 4. API
 

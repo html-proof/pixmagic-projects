@@ -1296,12 +1296,14 @@ model AdConnection {
   isDemo               Boolean   @default(false) @map("is_demo")
   demoSeed             Int?      @map("demo_seed")
   /**
-   * No longer used, dropped by a later migration (kept so a rollback still reads them): every row is
-   * bizinsights' own sign-in ("direct", sourceLoginId null) since the connections made through Nango
-   * (2026-10-22 to 2026-10-28) were moved off it (docs/ads-setup.md, "Leaving Nango"). Until then a
-   * connect writes "direct", syncs record it (ad_sync_runs.source), and a row with anything else is
+   * Who holds the sign-in: "direct" (bizinsights' own) on every row since the connections made through
+   * Nango (2026-10-22 to 2026-10-28) were moved off it (docs/ads-setup.md, "Leaving Nango"). Still used:
+   * a connect writes "direct", syncs record it (ad_sync_runs.source), and a row with anything else is
    * never read: it waits for a reconnect (adConnections/credentials.ts holdsOwnSignIn).
-   * Added by migration 20261022120000 (the same rules as every other column).
+   * sourceLoginId named the row's Nango connection: read by nothing (a connect writes null), but still
+   * selected with every row, so dropping it takes two releases: @ignore first, the DROP migration in a
+   * later one (docs/database/migrations.md). Added by migration 20261022120000 (the same rules as every
+   * other column).
    */
   source               String    @default("direct")
   sourceLoginId        String?   @map("source_login_id")
@@ -1335,8 +1337,9 @@ model AdLogin {
   accessTokenEnc       String    @default("") @map("access_token_enc")
   tokenKeyVersion      Int?      @map("token_key_version")
   /**
-   * No longer used, dropped by a later migration (kept so a rollback still reads them): the Nango
-   * connection of a login made through Nango (2026-10-26 to 2026-10-28), emptied when it was moved off it.
+   * Read by nothing: the Nango connection of a login made through Nango (2026-10-26 to 2026-10-28),
+   * emptied when it was moved off it. Still selected with every login, so dropping them takes two
+   * releases: @ignore first, the DROP migration in a later one (docs/database/migrations.md).
    */
   sourceLoginId        String?   @map("source_login_id")
   nangoIntegrationKey  String?   @map("nango_integration_key")

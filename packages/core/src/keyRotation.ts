@@ -1,14 +1,17 @@
 import { reencryptAdLoginTokens, reencryptAdTokens } from "./adConnections.js";
 import { reencryptEmailCredentials } from "./email/tokens.js";
 import { logger } from "./logger.js";
+import { reencryptSmsData } from "./sms/keys.js";
+import { reencryptInvitationLinks } from "./team/invitations.js";
 import { reencryptStoreTokens } from "./tokens.js";
 import { reencryptWhatsappData } from "./whatsapp/privacy.js";
 import { reencryptInventorySettings } from "./inventory/settings.js";
 
 /**
  * Re-encrypt everything stored under the keyrings with their active key (run after adding a new
- * key, and before removing the old one; docs/RUNBOOK.md): store tokens, ad tokens (waiting logins too) and WhatsApp
- * Automation's data under TOKEN_ENCRYPTION_KEYS (and the inventory alerts' WhatsApp numbers; the
+ * key, and before removing the old one; docs/RUNBOOK.md): store tokens, ad tokens (waiting logins too),
+ * WhatsApp Automation's data, Customer Messaging's numbers, links and texts, and the team invitations'
+ * kept links under TOKEN_ENCRYPTION_KEYS (and the inventory alerts' WhatsApp numbers; the
  * earlier WhatsApp feature's tables, read by nothing, are left as they are), and the email
  * credentials' data keys, which are re-wrapped under
  * EMAIL_CREDENTIAL_KEYS (TOKEN_ENCRYPTION_KEYS when that is empty). Returns the number of rows
@@ -27,6 +30,8 @@ export async function reencryptAllTokens(): Promise<number> {
     ["WhatsApp data", reencryptWhatsappData],
     ["email credentials", reencryptEmailCredentials],
     ["inventory settings", reencryptInventorySettings],
+    ["Customer Messaging data", reencryptSmsData],
+    ["invitation links", reencryptInvitationLinks],
   ];
   let rewritten = 0;
   const failed: Array<{ part: string; err: unknown }> = [];

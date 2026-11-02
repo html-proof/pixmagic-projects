@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { audit, logger, raiseAlert } from "@app/core";
+import { audit, logger, notifyStockAlerts, raiseAlert, STOCK_ALERT_CODE } from "@app/core";
 import { systemDb } from "@app/db";
 import { sha256Hex } from "@app/shared";
 import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -441,6 +441,28 @@ describe("Zapier's triggers (REST hooks)", () => {
     expect(JSON.stringify(payload)).not.toContain("secret db detail");
     expect(await systemDb.zapierDelivery.count({ where: { status: "pending" } })).toBe(2);
     expect(ctx.deps.queues.sent.sync.filter((j) => (j as unknown as { kind: string }).kind === "zapier")).toHaveLength(2);
+  });
+
+  it("the bell's stock alert is a New alert too: one event while it stays open, queued at once", async () => {
+    const { owner, ws, store } = await business("owner-st", "owner@stock.test", "Stock", "stock.myshopify.com");
+    const t = await connect(owner.headers, ws, store.id);
+    await zpost(t.access_token, "/zapier/hooks", { event: "alert_raised", targetUrl: HOOK });
+    await systemDb.inventoryAlert.create({ data: { workspaceId: ws, storeId: store.id, variantShopifyId: "11", kind: "out_of_stock", available: 0, threshold: 2, openedAt: new Date() } });
+    ctx.deps.queues.clear();
+    const deps = { mailer: ctx.mailer, queues: ctx.deps.queues };
+    expect(await notifyStockAlerts(deps, store)).toBe(1);
+    // Still out of stock on the next pass: the same bell alert, no second event.
+    expect(await notifyStockAlerts(deps, store)).toBe(0);
+    const bell = await systemDb.alert.findFirstOrThrow({ where: { storeId: store.id, code: STOCK_ALERT_CODE, resolvedAt: null } });
+    const events = await systemDb.zapierEvent.findMany();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({
+      id: `alert_raised:${bell.id}:${store.id}`,
+      event: "alert_raised",
+      store: { id: store.id },
+      data: { alert_id: bell.id, severity: "warning", area: "inventory", title: "Stock is running low", body: "1 item is out of stock. Open Inventory to see which ones and restock them.", fix_url: expect.stringMatching(/\/inventory\/low-stock$/) },
+    });
+    expect(ctx.deps.queues.sent.sync.filter((j) => (j as unknown as { kind: string }).kind === "zapier")).toHaveLength(1);
   });
 
   it("a store with no trigger writes nothing for its alerts", async () => {

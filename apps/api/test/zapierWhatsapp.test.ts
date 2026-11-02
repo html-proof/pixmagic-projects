@@ -22,6 +22,7 @@ const REDIRECT = "https://zapier.com/dashboard/auth/oauth/return/App4242CLIAPI/"
 const ZAPIER_ENV = { ZAPIER_CLIENT_ID: CLIENT_ID, ZAPIER_CLIENT_SECRET: CLIENT_SECRET, ZAPIER_REDIRECT_URI: REDIRECT, ZAPIER_INVITE_URL: "https://zapier.com/developer/public-invite/1/abc/" };
 const WEBHOOK_BASE = "https://bizinsights.test/api";
 const LEAD = "+61412345678";
+const HOOK = "https://hooks.zapier.com/hooks/standard/123/abcdef/";
 
 beforeAll(async () => {
   ctx = await setup();
@@ -196,6 +197,9 @@ describe("Send WhatsApp Template Message", () => {
     expect(missing.statusCode).toBe(400);
     expect(missing.json()).toMatchObject({ error: "missing_values" });
     expect(missing.json().message).toContain("{{order_number}}");
+    // Refused either way: nothing is recorded, neither the lead's number and name nor their consent.
+    expect(await systemDb.wappContact.count({ where: { storeId: o.store.id } })).toBe(0);
+    expect(await systemDb.wappConsentEvent.count({ where: { storeId: o.store.id } })).toBe(0);
 
     const sent = await zsend(t, { template_id: tmpl.id, phone: "0412 345 678", country: "AU", values: { order_number: " Q-77\n" }, first_name: "Sam", customer_agreed: "yes", consent_note: "Meta lead form: WhatsApp box", unique_key: "lead-1", zap_id: 4242 });
     const queued = ok(sent, 201);
@@ -293,12 +297,15 @@ describe("Send WhatsApp Template Message", () => {
     expect((await systemDb.wappContact.findFirstOrThrow({ where: { storeId: o.store.id } })).marketing).toBe("opted_in");
     expect(promoSent.consent_recorded).toBe(true);
 
-    // The customer replies STOP: the Zap can't opt them back in.
+    // The customer replies STOP: the Zap can't opt them back in, nor change what bizinsights has for them.
     ok(await deliver(inbound(name, LEAD, "STOP")));
     await drain();
-    const stopped = await zsend(t, { template_id: update.id, phone: LEAD, customer_agreed: true });
+    const consents = await systemDb.wappConsentEvent.count({ where: { storeId: o.store.id } });
+    const stopped = await zsend(t, { template_id: update.id, phone: LEAD, first_name: "Someone else", customer_agreed: true });
     expect(stopped.statusCode).toBe(409);
     expect(stopped.json().error).toBe("opted_out");
+    expect(await systemDb.wappContact.findFirstOrThrow({ where: { storeId: o.store.id } })).toMatchObject({ optedOut: true, firstNameEnc: null });
+    expect(await systemDb.wappConsentEvent.count({ where: { storeId: o.store.id } })).toBe(consents);
 
     // Pause all automation holds a Zap's messages too.
     ok(await o.call("POST", "/settings/pause", { paused: true }));
@@ -324,6 +331,24 @@ describe("Send WhatsApp Template Message", () => {
     const demoted = await zsend(ta, { template_id: update.id, phone: "+61412000333", customer_agreed: true });
     expect(demoted.statusCode).toBe(403);
     expect(demoted.json().error).toBe("no_permission");
+  });
+
+  it("a message that couldn't be sent fires WhatsApp Message Failed with its own reason, not that WhatsApp refused it", async () => {
+    const o = await owner();
+    await whatsapp(o);
+    const thanks = await template(o, { name: "Thanks", category: "transactional", body: "Thanks for your enquiry, {{store_name}} will be in touch." });
+    const t = await zapier(o.headers, o.ws, o.store.id);
+    ok(await ctx.app.inject({ method: "POST", url: "/zapier/hooks", headers: { authorization: `Bearer ${t}` }, payload: { event: "whatsapp_message_failed", targetUrl: HOOK } }), 201);
+
+    // WhatsApp's service didn't confirm the send: it may have gone, so it is never sent again by itself.
+    evo.sendFails = "timeout";
+    const queued = ok(await zsend(t, { template_id: thanks.id, phone: LEAD, customer_agreed: true }), 201);
+    expect(await drain()).toEqual(["failed"]);
+    expect(await systemDb.wappMessage.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: "failed", reason: "gave_up", errorCode: "uncertain" });
+    const events = await systemDb.zapierEvent.findMany({ where: { event: "whatsapp_message_failed" } });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.payload as { data: Record<string, unknown> }).data).toMatchObject({ message_id: queued.id, source: "zapier", reason: "gave_up", reason_text: "Couldn't be sent after several tries" });
+    expect(await systemDb.zapierDelivery.count({ where: { eventId: events[0]!.id, status: "pending" } })).toBe(1);
   });
 
   it("says WhatsApp isn't connected, and refuses a number that isn't one", async () => {
