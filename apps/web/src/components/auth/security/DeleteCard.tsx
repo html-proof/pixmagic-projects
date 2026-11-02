@@ -104,7 +104,8 @@ export function DeleteCard() {
         danger
         busy={busy}
         confirmDisabled={!ready}
-        onCancel={cancel}
+        // Not while it runs: its answer (or why it failed) belongs in the dialog.
+        onCancel={() => !busy && cancel()}
         onConfirm={() => void remove()}
       >
         <div className="space-y-4">
@@ -131,6 +132,9 @@ export function DeleteCard() {
                   <input type="checkbox" className="mt-1 size-4 shrink-0" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
                   <span>Also delete {owned!.length > 1 ? "these workspaces" : owned![0]!.name} and all of {owned!.length > 1 ? "their" : "its"} data</span>
                 </label>
+              )}
+              {owned!.some((w) => w.pendingPlan && !w.paidPlan) && (
+                <p className="text-xs">A change to a paid plan is waiting for your approval in Shopify: don&apos;t approve it afterwards, as Shopify would start charging for it. Removing bizinsights in Shopify cancels it.</p>
               )}
               <p className="text-xs">To keep a workspace, make someone else its owner first, in Team &amp; Access.</p>
             </div>

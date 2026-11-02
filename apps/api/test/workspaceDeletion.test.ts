@@ -24,7 +24,8 @@ beforeEach(async () => {
   await clean(ctx);
   evo = evolutionFake();
   revoked = { meta: [], google: [], other: [] };
-  ctx.setEnv({ ...EVOLUTION_ENV, EMAIL_GOOGLE_CLIENT_ID: "g-email", EMAIL_GOOGLE_CLIENT_SECRET: "g-secret" });
+  // Each provider set up, so its grant is taken back (Meta's revoke needs the app's keys, adConnections/config.ts).
+  ctx.setEnv({ ...EVOLUTION_ENV, EMAIL_GOOGLE_CLIENT_ID: "g-email", EMAIL_GOOGLE_CLIENT_SECRET: "g-secret", META_APP_ID: "meta_app", META_APP_SECRET: "meta_secret" });
   ctx.setFetch((async (input: Parameters<FetchLike>[0], init?: RequestInit) => {
     const u = new URL(String(input instanceof Request ? input.url : input));
     if (u.host === new URL(EVOLUTION_ENV.EVOLUTION_API_URL).host) return evo.fetch(input as string, init);
@@ -128,6 +129,17 @@ async function business(tag: string) {
   const refresh = seal(`GMAIL_${tag}`, AAD.oauthRefresh(account.id));
   await systemDb.emailOAuthCredential.create({ data: { workspaceId: ws, emailAccountId: account.id, refreshTokenEnc: refresh, encryptionKeyVersion: sealedKeyVersion(refresh) } });
   await systemDb.department.create({ data: { workspaceId: ws, name: "Warehouse" } });
+  // A finalized payroll and a paid shift: the staff freeze triggers refuse deleting their items and
+  // breaks one by one, so the workspace's deletion has to take them in the right order.
+  const employee = await systemDb.employee.create({
+    data: { workspaceId: ws, employeeNumber: "E1", fullName: "Sam", email: `sam@${tag}.test`, jobTitle: "Picker", employmentType: "full_time", joinedOn: "2026-01-01", currency: "USD", timezone: "UTC" },
+  });
+  const period = await systemDb.payrollPeriod.create({ data: { workspaceId: ws, startDate: "2026-10-01", endDate: "2026-10-14", payCycle: "fortnightly", timezone: "UTC" } });
+  await systemDb.payrollItem.create({ data: { workspaceId: ws, periodId: period.id, employeeId: employee.id, currency: "USD" } });
+  const shift = await systemDb.attendanceSession.create({ data: { workspaceId: ws, employeeId: employee.id, clockInAt: new Date("2026-10-02T09:00:00Z"), clockInSource: "portal", timezone: "UTC" } });
+  await systemDb.breakSession.create({ data: { workspaceId: ws, sessionId: shift.id, employeeId: employee.id, startAt: new Date("2026-10-02T12:00:00Z"), kind: "meal", paid: false } });
+  await systemDb.attendanceSession.update({ where: { id: shift.id }, data: { lockedAt: new Date() } });
+  await systemDb.payrollPeriod.update({ where: { id: period.id }, data: { lockedAt: new Date() } });
   // Zapier, and the workspace's own API key and email-event key.
   const grant = await systemDb.zapierGrant.create({ data: { workspaceId: ws, storeId: store.id, userId: o.user.id, clientId: "zapier" } });
   await systemDb.zapierToken.create({ data: { workspaceId: ws, grantId: grant.id, kind: "access", tokenHash: sha256Hex(`zat-${tag}`), expiresAt: new Date(Date.now() + 3_600_000) } });
@@ -145,7 +157,7 @@ describe("deleting a workspace", () => {
     const b = await business("other");
     const before = await rowsOf(a.ws, a.storeIds);
     // The seed reaches the corners this test is about.
-    for (const t of ["stores", "orders", "products", "store_expenses", "business_events", "ad_connections", "wapp_connections", "email_accounts", "email_oauth_credentials", "zapier_grants", "zapier_tokens", "zapier_hooks", "api_keys", "email_ingest_keys", "memberships", "invitations", "notification_preferences", "sync_jobs", "webhook_events", "alerts", "subscriptions", "departments", "audit_logs"]) {
+    for (const t of ["stores", "orders", "products", "store_expenses", "business_events", "ad_connections", "wapp_connections", "email_accounts", "email_oauth_credentials", "zapier_grants", "zapier_tokens", "zapier_hooks", "api_keys", "email_ingest_keys", "memberships", "invitations", "notification_preferences", "sync_jobs", "webhook_events", "alerts", "subscriptions", "departments", "employees", "payroll_periods", "payroll_items", "attendance_sessions", "break_sessions", "audit_logs"]) {
       expect(before[t], t).toBeGreaterThan(0);
     }
     const otherBefore = await rowsOf(b.ws, b.storeIds);
@@ -198,6 +210,7 @@ describe("deleting a workspace", () => {
         ],
         members: 2,
         paidPlan: null,
+        pendingPlan: null,
       },
     });
   });
@@ -218,8 +231,9 @@ describe("deleting a workspace", () => {
     expect((await call("POST", `/workspaces/${a.ws}/delete/code`, a.owner.headers)).json().error).toBe("resend_cooldown");
     expect((await del(a.ws, a.owner.headers, code, "delete")).statusCode).toBe(400);
     expect((await del(a.ws, a.owner.headers, wrong(code))).json().error).toBe("invalid_code");
-    // Another person's session can't use it: theirs is a code of their own.
-    expect((await del(a.ws, a.member.headers, code)).statusCode).toBe(403);
+    // Another owner can't use it: a code is its asker's, and they have none.
+    await systemDb.membership.updateMany({ where: { workspaceId: a.ws, userId: a.member.user.id }, data: { role: "owner" } });
+    expect((await del(a.ws, a.member.headers, code)).json().error).toBe("code_required");
     // The fifth wrong guess ends it.
     for (let i = 2; i < 5; i++) expect((await del(a.ws, a.owner.headers, wrong(code))).json().error).toBe("invalid_code");
     expect((await del(a.ws, a.owner.headers, wrong(code))).json().error).toBe("too_many_attempts");
@@ -255,6 +269,17 @@ describe("deleting a workspace", () => {
     expect((await call("GET", `/workspaces/${a.ws}/stores`, a.owner.headers)).statusCode).toBe(404);
   });
 
+  it("keeps the Google grant of a mailbox another workspace also sends from", async () => {
+    const a = await business("mailbox");
+    const b = await business("mailshare");
+    await systemDb.emailAccount.updateMany({ where: { workspaceId: b.ws }, data: { emailAddress: "Shop@Mailbox.test" } });
+    const code = await workspaceDeletionCode(ctx, a.owner.headers, a.ws, "owner@mailbox.test");
+    expect((await del(a.ws, a.owner.headers, code)).statusCode).toBe(200);
+    expect(revoked.google).toEqual([]);
+    expect(await systemDb.emailOAuthCredential.count({ where: { workspaceId: b.ws } })).toBe(1);
+    expect(revoked.meta).toEqual(["META_mailbox"]);
+  });
+
   it("waits while Shopify bills a paid plan for it, without spending the code", async () => {
     const a = await business("paid");
     await systemDb.subscription.update({ where: { workspaceId: a.ws }, data: { plan: "growth", shopifyChargeId: "gid://shopify/AppSubscription/1", billingStoreId: a.store.id } });
@@ -286,7 +311,7 @@ describe("deleting the account of a workspace's only owner", () => {
     await systemDb.membership.create({ data: { workspaceId: shared, userId: a.owner.user.id, role: "owner" } });
 
     const preview = await call("GET", "/auth/account/deletion", a.owner.headers);
-    expect(preview.json()).toEqual({ workspaces: [{ id: a.ws, name: "Shop solo", stores: ["Shop solo", "solo-old.myshopify.com"], members: 2, paidPlan: null }] });
+    expect(preview.json()).toEqual({ workspaces: [{ id: a.ws, name: "Shop solo", stores: ["Shop solo", "solo-old.myshopify.com"], members: 2, paidPlan: null, pendingPlan: null }] });
     // The code is sent to a sole owner now: the dialog has shown what goes.
     const code = await deletionCode(ctx, a.owner.headers, "owner@solo.test");
     const post = (payload: Record<string, unknown>) => call("POST", "/auth/account/delete", a.owner.headers, payload);

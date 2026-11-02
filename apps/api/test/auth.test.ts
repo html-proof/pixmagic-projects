@@ -930,7 +930,7 @@ describe("account security", () => {
     }
   });
 
-  it("deletes the account and its sign-in with a code emailed to its address, and a workspace it is the only owner of only once that is confirmed", async () => {
+  it("deletes the account and its sign-in with a code emailed to its address, and refuses while a workspace it is the only owner of isn't confirmed", async () => {
     const owner = await signIn(ctx, "u1", "a@x.com");
     const password = ctx.auth.users.get("u1")!.password!;
     const ws = await createWorkspace(ctx, owner.headers, "Solo Shop");

@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { Mail } from "lucide-react";
 import { Alert } from "@/components/ui";
 import { clock, OtpInput, useCountdown } from "@/components/auth/CodeStep";
+import { ApiError } from "@/lib/api";
 import { authErrorMessage, challengeFromError, errorCode, type CodeChallenge } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 
@@ -55,15 +56,18 @@ export function useDeletionCode(send: () => Promise<{ challenge: CodeChallenge }
 
   /** The deletion was refused: say why, and clear what the refusal ended (a spent or ended code is asked for again). */
   function refused(err: unknown) {
-    // A 503's own words never reach the page (lib/apiClient.ts): this one's are here.
-    setError(
-      errorCode(err) === "deletion_incomplete"
-        ? `We couldn't finish deleting everything. What was already removed stays removed. Try again in a few minutes; if it fails again, email ${CONTACT.supportEmail} and we'll finish it.`
-        : authErrorMessage(err),
-    );
     const why = errorCode(err);
-    if (why === "expired_code" || why === "too_many_attempts" || why === "code_required" || why === "deletion_incomplete") setCode("");
-    if (why === "too_many_attempts" || why === "code_required" || why === "deletion_incomplete") setChallenge(null);
+    // No answer at all (a dropped connection, or the API's own time limit): the code was spent, and
+    // the deletion may have finished or stopped part way.
+    const unanswered = err instanceof ApiError && [0, 408, 502, 504].includes(err.status);
+    // A 503's own words never reach the page (lib/apiClient.ts): this one's are here.
+    if (why === "deletion_incomplete") {
+      setError(`We couldn't finish deleting everything. What was already removed stays removed. Try again in a few minutes; if it fails again, email ${CONTACT.supportEmail} and we'll finish it.`);
+    } else if (unanswered) {
+      setError(`We didn't hear back in time, so it may still be deleting. Reload the page in a minute: if it's still there, ask for a new code and try again (what was removed stays removed), or email ${CONTACT.supportEmail}.`);
+    } else setError(authErrorMessage(err));
+    if (why === "expired_code" || why === "too_many_attempts" || why === "code_required" || why === "deletion_incomplete" || unanswered) setCode("");
+    if (why === "too_many_attempts" || why === "code_required" || why === "deletion_incomplete" || unanswered) setChallenge(null);
   }
 
   return { code, setCode, challenge, sending, error, setError, info, countdown, expired, ready: code.length === CODE_LENGTH && !!challenge && !expired, sendCode, refused, reset };

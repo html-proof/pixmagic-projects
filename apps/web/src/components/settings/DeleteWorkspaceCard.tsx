@@ -17,6 +17,7 @@ interface Deletion {
   stores: Array<{ shopDomain: string; name: string | null }>;
   members: number;
   paidPlan: string | null;
+  pendingPlan: string | null;
 }
 
 /**
@@ -115,7 +116,8 @@ export function DeleteWorkspaceCard() {
         danger
         busy={busy}
         confirmDisabled={!ready}
-        onCancel={cancel}
+        // Not while it runs: its answer (or why it failed) belongs in the dialog.
+        onCancel={() => !busy && cancel()}
         onConfirm={() => void remove()}
       >
         <div className="space-y-4">
@@ -139,6 +141,11 @@ export function DeleteWorkspaceCard() {
                 <p>
                   Deleting your account too? Delete it in <Link href="/settings/security" className="underline">Settings → Security</Link> instead: that deletes this workspace with it.
                 </p>
+              )}
+              {plan.pendingPlan && !plan.paidPlan && (
+                <Alert kind="info">
+                  A change to a paid plan is waiting for your approval in Shopify. Don&apos;t approve it after deleting the workspace: Shopify would start charging for it. Removing bizinsights in Shopify cancels it.
+                </Alert>
               )}
               {plan.paidPlan && (
                 <Alert>

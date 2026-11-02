@@ -371,6 +371,8 @@ export interface SoleWorkspace {
   members: number;
   /** A paid plan Shopify bills for it: it must be switched to Free first. */
   paidPlan: string | null;
+  /** A plan change still waiting for approval in Shopify: approving it after the deletion would start a charge. */
+  pendingPlan: string | null;
 }
 
 /** What deleting the account deletes with it: the workspaces it is the only owner of. */

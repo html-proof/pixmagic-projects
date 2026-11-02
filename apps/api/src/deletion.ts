@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { User } from "@app/db";
-import { AppError, deleteWorkspace, env, logger, type EmailPurpose } from "@app/core";
+import { deleteWorkspace, env, logger, WorkspaceDeletionError, type EmailPurpose } from "@app/core";
 import { EMAIL_CODE_RE, safeEqual } from "@app/shared";
 import { clientIp, HttpError, type Ctx, type Deps } from "./context.js";
 import { recordAuthEvent } from "./identity.js";
@@ -126,16 +126,20 @@ export async function spendDeletionCode(deps: Pick<Deps, "coord">, target: Delet
 }
 
 /**
- * Delete a workspace once its code is spent (core workspaceDeletion.ts). A rule it checks first
+ * Delete a workspace once its code is spent (core workspaceDeletion.ts). The rule it checks first
  * (paid_plan) is answered as is. Anything else stopped it part way: logged as deletion_incomplete
- * and recorded as the person's workspace_deletion_incomplete event (docs/RUNBOOK.md, "Deleting a
- * workspace"), and the person is told to try again, which finishes it.
+ * and recorded as the person's workspace_deletion_incomplete event, and the person is told to try
+ * again, which finishes it. A function stopped by its time limit says nothing: the
+ * workspace_deletion_started event recorded first, with the workspace still there, says it
+ * (docs/RUNBOOK.md, "Merchant asks for data deletion").
  */
 export async function runWorkspaceDeletion(c: Ctx, deps: Pick<Deps, "fetchImpl">, user: User, workspaceId: string, via: "workspace" | "account") {
+  logger.info({ workspaceId, userId: user.id, via }, "workspace deletion started");
+  await recordAuthEvent("workspace_deletion_started", user.id, clientIp(c), { workspaceId, via });
   try {
     return await deleteWorkspace(workspaceId, { userId: user.id, ip: clientIp(c), via }, deps);
   } catch (err) {
-    if (err instanceof AppError) throw err;
+    if (err instanceof WorkspaceDeletionError) throw err;
     logger.error({ err, workspaceId, userId: user.id, via, code: "deletion_incomplete" }, "workspace deletion incomplete: the code was spent but the workspace is still there; ask the owner to try again or finish it by hand (docs/RUNBOOK.md)");
     await recordAuthEvent("workspace_deletion_incomplete", user.id, clientIp(c), { workspaceId, via });
     const support = env().SUPPORT_EMAIL;

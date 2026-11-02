@@ -77,7 +77,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
   /** What deleting it takes with it, for the dialog that confirms it. */
   app.get("/workspaces/:ws/deletion", async (c) => {
     const { summary } = await deletingOwner(c, c.req.param("ws"));
-    return c.json({ workspace: { id: summary.id, name: summary.name, stores: summary.stores.map((s) => ({ shopDomain: s.shopDomain, name: s.name })), members: summary.members, paidPlan: summary.paidPlan } });
+    return c.json({ workspace: { id: summary.id, name: summary.name, stores: summary.stores.map((s) => ({ shopDomain: s.shopDomain, name: s.name })), members: summary.members, paidPlan: summary.paidPlan, pendingPlan: summary.pendingPlan } });
   });
 
   /** "Email me a code" in the Delete workspace dialog. None while the deletion would be refused anyway (paid_plan). */

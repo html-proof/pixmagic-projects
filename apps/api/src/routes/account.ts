@@ -541,7 +541,7 @@ export function accountRoutes(app: App, deps: Deps) {
   }
 
   /** A workspace that goes with the account, as the dialog shows it. */
-  const workspaceView = (w: WorkspaceDeletionSummary) => ({ id: w.id, name: w.name, stores: w.stores.map((s) => s.name ?? s.shopDomain), members: w.members, paidPlan: w.paidPlan });
+  const workspaceView = (w: WorkspaceDeletionSummary) => ({ id: w.id, name: w.name, stores: w.stores.map((s) => s.name ?? s.shopDomain), members: w.members, paidPlan: w.paidPlan, pendingPlan: w.pendingPlan });
 
   /** The workspaces going with the account weren't all confirmed: the dialog shows them again. */
   const soleOwnerRefusal = (c: Ctx, sole: WorkspaceDeletionSummary[]) =>
