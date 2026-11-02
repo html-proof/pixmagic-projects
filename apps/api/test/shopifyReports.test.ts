@@ -57,6 +57,8 @@ describe("Shopify's own figures on the dashboard", () => {
     expect(m.profit.current.marginOnCosted).toBeCloseTo(850 / 1500, 6);
     expect(m.shopify_check).toMatchObject({ status: "ready", matches: true, window: { from: "2026-09-21", to: "2026-09-21" } });
     expect(m.shopify_check.rows.find((r: { metric: string }) => r.metric === "discounts")).toMatchObject({ shopify: 54.53, ours: 54.53, state: "match" });
+    // Shopify gives the product costs: none are worked out from the cost per item.
+    expect(m.product_costs).toBeUndefined();
     // Everything was fresh: nothing to fetch again.
     expect(reportJobs()).toEqual([]);
   });
@@ -67,6 +69,8 @@ describe("Shopify's own figures on the dashboard", () => {
     expect(first.shopify_sessions).toMatchObject({ status: "loading", current: null });
     expect(first.profit).toMatchObject({ status: "loading", current: null });
     expect(first.shopify_check).toMatchObject({ status: "loading", rows: null, matches: null });
+    // Not while Shopify's answer is on its way either, so the product costs don't change source.
+    expect(first.product_costs).toBeUndefined();
     expect(reportJobs()).toHaveLength(1);
     expect(reportJobs()[0]!.requests.map((r) => r.dataset).sort()).toEqual(["profit", "profit", "sales", "sessions", "sessions"]);
     // Another poll (another tab) within the minute doesn't queue it twice.
@@ -82,6 +86,8 @@ describe("Shopify's own figures on the dashboard", () => {
     const m = (await overview(a.headers, ws, store.id)).json().modules;
     expect(m.shopify_sessions).toMatchObject({ status: "access_denied", current: null });
     expect(m.profit).toMatchObject({ status: "unsupported", current: null });
+    // The product costs come from each product's cost per item instead (no sales here).
+    expect(m.product_costs).toEqual({ current: { costOfGoodsSold: 0, netSalesWithCost: 0, netSalesWithoutCost: 0 } });
   });
 
   it("is locked without Shopify's reports granted, and asks Shopify nothing", async () => {
@@ -93,6 +99,8 @@ describe("Shopify's own figures on the dashboard", () => {
     const caps = body.capabilities.filter((c: { id: string }) => c.id === "shopify_sessions" || c.id === "profit");
     expect(caps).toHaveLength(2);
     for (const c of caps) expect(c).toMatchObject({ enabled: false, missingScopes: ["read_reports"] });
+    // The product costs still come, from each product's cost per item.
+    expect(body.modules.product_costs).toEqual({ current: { costOfGoodsSold: 0, netSalesWithCost: 0, netSalesWithoutCost: 0 } });
     expect(reportJobs()).toEqual([]);
   });
 

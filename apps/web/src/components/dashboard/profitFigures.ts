@@ -1,6 +1,6 @@
 import type { AdSpendProvider } from "@app/shared/ads";
 import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
-import type { AdsModule, Overview, ProfitModule } from "./types";
+import type { AdsModule, Overview, ProductCostsModule, ProfitModule } from "./types";
 
 // ---------------------------------------------------------------------------
 // The costs bizinsights can see for the dates, and net profit when every one is known: worked out
@@ -14,9 +14,15 @@ export type CostState = "known" | "loading" | "missing" | "unavailable";
 export type ProductCostState = CostState | "not_recorded";
 
 export interface Costs {
-  /** Shopify's cost of goods sold for the dates (its profit report), from the cost per item recorded with each sale. */
+  /**
+   * The cost of the items sold in the dates: Shopify's cost of goods sold (its profit report, from the
+   * cost per item recorded with each sale), or, while that report gives none, the items sold at each
+   * product's cost per item in Shopify now (`productSource`).
+   */
   productCosts: number | null;
   productState: ProductCostState;
+  /** "report": Shopify's profit report; "cost_per_item": each product's cost per item now; null: neither. */
+  productSource: "report" | "cost_per_item" | null;
   /** Sales with no cost recorded in Shopify: their cost isn't in `productCosts`. */
   uncosted: number | null;
   /** Ad spend for the whole range, in the store's currency; null while any account lacks a day of it. */
@@ -43,17 +49,23 @@ export function comparableAds(ov: Overview, currency: string): AdsModule | null 
  * of goods sold of 0 (or none at all) for sales that did cost something. That isn't a cost: it is
  * "not recorded".
  */
-function noCostRecorded(c: NonNullable<ProfitModule["current"]>): boolean {
+function noCostRecorded(c: Pick<NonNullable<ProfitModule["current"]>, "costOfGoodsSold" | "netSalesWithCost" | "netSalesWithoutCost">): boolean {
   return (c.costOfGoodsSold === 0 || c.costOfGoodsSold === null) && !c.netSalesWithCost && c.netSalesWithoutCost !== null && c.netSalesWithoutCost > 0;
 }
 
-/** Shopify's cost of goods sold as the dates' product costs, or why there is none. */
-function productCostsOf(p: ProfitModule | undefined): Pick<Costs, "productCosts" | "productState" | "uncosted"> {
+/**
+ * The dates' product costs, or why there are none: Shopify's cost of goods sold while its profit
+ * report answers (or is on its way), otherwise the items sold at each product's cost per item
+ * (`own`, sent only then).
+ */
+function productCostsOf(p: ProfitModule | undefined, own: ProductCostsModule | undefined): Pick<Costs, "productCosts" | "productState" | "productSource" | "uncosted"> {
   const c = p?.status === "ready" ? p.current : null;
-  const uncosted = c?.netSalesWithoutCost ?? null;
-  if (c && noCostRecorded(c)) return { productCosts: null, productState: "not_recorded", uncosted };
-  if (c && c.costOfGoodsSold !== null) return { productCosts: c.costOfGoodsSold, productState: "known", uncosted };
-  return { productCosts: null, productState: p?.status === "loading" ? "loading" : p ? "unavailable" : "missing", uncosted };
+  if (c && noCostRecorded(c)) return { productCosts: null, productState: "not_recorded", productSource: "report", uncosted: c.netSalesWithoutCost };
+  if (c && c.costOfGoodsSold !== null) return { productCosts: c.costOfGoodsSold, productState: "known", productSource: "report", uncosted: c.netSalesWithoutCost };
+  const o = own && p?.status !== "loading" ? own.current : null;
+  if (o && noCostRecorded(o)) return { productCosts: null, productState: "not_recorded", productSource: "cost_per_item", uncosted: o.netSalesWithoutCost };
+  if (o) return { productCosts: o.costOfGoodsSold, productState: "known", productSource: "cost_per_item", uncosted: o.netSalesWithoutCost };
+  return { productCosts: null, productState: p?.status === "loading" ? "loading" : p ? "unavailable" : "missing", productSource: null, uncosted: c?.netSalesWithoutCost ?? null };
 }
 
 /** The costs of the dates; `adsOn`: advertising is offered and this member is shown it. */
@@ -62,7 +74,7 @@ export function costsOf(ov: Overview, currency: string, adsOn: boolean): Costs {
   const adSpend = ads?.current ? ads.current.spend : null;
   const adState: CostState = !adsOn ? "missing" : !ads ? (ov.modules.ads ? "unavailable" : "missing") : adSpend !== null ? "known" : "unavailable";
   return {
-    ...productCostsOf(ov.modules.profit),
+    ...productCostsOf(ov.modules.profit, ov.modules.product_costs),
     adSpend,
     adState,
     byProvider: ads && adSpend !== null ? ads.byProvider.filter((b) => b.current).map((b) => ({ provider: b.provider, spend: b.current!.spend })) : [],

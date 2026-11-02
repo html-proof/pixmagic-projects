@@ -123,7 +123,7 @@ describe("capability-driven dashboard", () => {
     const mb = resB.json();
     expect(Object.keys(mb.modules).sort()).toEqual([
       "ad_sources", "ads_from_shopify", "catalog", "channels", "customers", "discount_codes", "expenses", "fulfillment", "inventory",
-      "order_outcomes", "order_timing", "recent_orders", "refunds", "sales_overview", "top_products", "traffic",
+      "order_outcomes", "order_timing", "product_costs", "recent_orders", "refunds", "sales_overview", "top_products", "traffic",
     ]);
     expect(mb.hasData).toBe(false);
     expect(mb.modules.sales_overview.current.averageOrderValue).toBeNull();

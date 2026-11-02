@@ -340,7 +340,10 @@ affect:
   costs a minute; a push to `main` on the commits it was made from and the head of the pull request
   it merged. That holds for `main` when its code hasn't moved since the pull request's last run: of
   several pull requests merged back to back, only the first saves anything. Records made before
-  2026-10-29 name the exact tree ("tree <tree>") and still count.
+  2026-10-29 name the exact tree ("tree <tree>") and still count. If that job fails (the PC can't
+  reach GitHub, say), everything runs and the run's result is the other jobs' own: its red mark
+  alone no longer stops Deploy to AWS. Until 2026-11-01 it failed the whole run, so `main` for #317
+  could not deploy whatever its tests said.
 - The integration tests (`pnpm test:integration` and the migrations check, ~4 of the checks job's
   ~7.5 minutes) run only when something they read changed since a run where they passed. The checks
   job hashes the git ids of `apps/api`, `apps/worker`, `packages/`, `test-support/`,

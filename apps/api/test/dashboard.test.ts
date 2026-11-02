@@ -180,6 +180,25 @@ describe("order modules (store time zone, DST weekend)", () => {
     await recomputeDays(store, ["2026-03-06", "2026-03-07", "2026-03-08", "2026-03-09"]);
   }
 
+  it("works out product costs from each item's cost per item in Shopify while Shopify's profit report gives none", async () => {
+    const { a, ws, store } = await owner();
+    await seedVariant(store, "p1", "v1", { qty: 10, price: 50, cost: 20 });
+    await seedVariant(store, "p2", "v2", { qty: 10, price: 30, cost: 7 });
+    await seedWeekend(store);
+    const m = (await overview(a.headers, ws, store.id, RANGE)).json().modules;
+    // B: v1 × 1 and v2 × 2, C: v1 × 1 → 2 × 20 + 2 × 7. D and E sold items with no variant, so no
+    // cost per item (30 + 20 of net sales); F's 5 came back with its cancellation, at no cost either way.
+    expect(m.product_costs).toEqual({ current: { costOfGoodsSold: 54, netSalesWithCost: 150, netSalesWithoutCost: 50 } });
+    expect(m.product_costs.current.netSalesWithCost + m.product_costs.current.netSalesWithoutCost).toBe(m.sales_overview.current.netSales);
+
+    // A member not shown costs ("View costs and stock value") gets none, as with Shopify's report.
+    const v = await signIn(ctx, "uv", "v@x.com");
+    const membership = await systemDb.membership.create({ data: { workspaceId: ws, userId: v.user.id, role: "custom", permissions: ["analytics.sales", "finance.breakdown"] } });
+    expect((await overview(v.headers, ws, store.id, RANGE)).json().modules.product_costs).toBeUndefined();
+    await systemDb.membership.update({ where: { id: membership.id }, data: { permissions: ["analytics.sales", "finance.breakdown", "inventory.view", "inventory.costs"] } });
+    expect((await overview(v.headers, ws, store.id, RANGE)).json().modules.product_costs).toEqual(m.product_costs);
+  });
+
   it("computes channels, timing, fulfillment, discount codes, tax/shipping and vendors for the range", async () => {
     const { a, ws, store } = await owner();
     await seedWeekend(store);
