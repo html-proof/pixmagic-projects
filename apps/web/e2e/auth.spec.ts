@@ -271,7 +271,11 @@ test("Settings → Security: deleting the account takes DELETE and a code emaile
   await signUp(page, email);
   await createWorkspace(page, "Delete Me Co");
   await page.goto("/settings/security");
-  await section(page, "Delete account").getByRole("button", { name: "Delete my account" }).click();
+  const card = section(page, "Delete account");
+  // Nothing in the app deletes a workspace: its only owner hands it over or emails support.
+  await expect(card).toContainText("If you're the only owner of a workspace, make someone else an owner first, or email");
+  await expect(card.getByRole("link", { name: /@/ })).toHaveAttribute("href", /^mailto:[^?]+@[^?]+\?subject=Delete%20my%20workspace$/);
+  await card.getByRole("button", { name: "Delete my account" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete your account?" });
   // No password box: beside one, the browser's password manager filled the address into the DELETE box.
   await expect(dialog.locator('input[type="password"]')).toHaveCount(0);
@@ -282,9 +286,11 @@ test("Settings → Security: deleting the account takes DELETE and a code emaile
   await expect(send).toBeDisabled();
   await typed.fill("DELETE");
 
-  // The workspace's only owner hears why before any code is emailed.
+  // The workspace's only owner hears why, and what they can do instead, before any code is emailed.
   await send.click();
-  await expect(dialog.getByRole("alert")).toContainText("You're the only owner of Delete Me Co");
+  await expect(dialog.getByRole("alert")).toContainText(
+    "You're the only owner of Delete Me Co. Make someone else an owner first, or email support@bizinsights.io to have that workspace and its data deleted.",
+  );
   await db.query("UPDATE memberships SET role = 'admin' WHERE user_id = (SELECT id FROM users WHERE email = $1)", [email]);
 
   const before = await newestMailId(email, /Confirm deleting/);

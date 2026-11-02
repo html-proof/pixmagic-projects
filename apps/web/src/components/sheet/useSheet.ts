@@ -8,6 +8,7 @@ import { seesModule } from "@app/shared/access";
 import { useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
 import { useDateRange, type Shown } from "@/components/dashboard/DateRange";
+import { leftOutOf, leftOutWords } from "@/components/dashboard/profitFigures";
 import type { AdsModule, FunnelModule, Overview } from "@/components/dashboard/types";
 import { useApi, useLiveApi } from "@/lib/api";
 
@@ -97,6 +98,8 @@ export function useSheet() {
     // Spend is set against sales only as the dashboard does: in the store's currency, with no demo among the accounts.
     const comparable = !!ads && ads.currency === ov.store.currency && !ads.demo;
     const demo = new Set<string>(ads?.byProvider.filter((p) => p.demo).map((p) => p.provider) ?? []);
+    // Accounts in another currency than the spend's: nothing is converted, so the rows from the spend say whose isn't in it.
+    const leftOut = ads ? leftOutWords(leftOutOf(ads)) : null;
     const grain = by ?? autoGrain(ov.range.from, ov.range.to);
     const filter = { weekdays, events: eventFilter };
     const profit = setup && days.every((d) => d.profit) ? setup : undefined;
@@ -106,7 +109,7 @@ export function useSheet() {
       grain,
       columns,
       // The Google Ads demo's simulated spend is named as such, as on its card.
-      rows: sheetRows({ comparable, grain, providers, ...(profit ? { profit: { productCosts: profit.productCosts !== "hidden" } } : {}) }).map((r) =>
+      rows: sheetRows({ comparable, grain, providers, leftOut, ...(profit ? { profit: { productCosts: profit.productCosts !== "hidden" } } : {}) }).map((r) =>
         r.id.startsWith("spend_") && demo.has(r.id.slice(6)) ? { ...r, label: `${r.label} (demo)` } : r,
       ),
       /** Every day the filter shows, added up: the sheet's first column. */
@@ -118,6 +121,8 @@ export function useSheet() {
       profit: profit ?? null,
       ads: ads ?? null,
       comparable,
+      /** "Left out: EU shop (EUR), in another currency.": ad accounts whose spend isn't in the sheet; null with none. */
+      leftOut,
       visitsTracked: !!visits,
     };
   }, [ov, list, by, weekdays, eventFilter, allowed, access]);

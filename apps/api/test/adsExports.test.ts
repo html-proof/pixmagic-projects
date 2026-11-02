@@ -505,10 +505,12 @@ describe("a real Google Ads account's analytics downloads: its device and countr
     if (query.includes("FROM geo_target_constant")) return json([{ results: [{ geoTargetConstant: { id: "2036", countryCode: "AU" } }] }]);
     return json([{ results: [{ metrics: metrics(40) }] }]);
   };
+  /** The account once its first sync has landed: Google isn't asked for its splits before (adsGoogleAnalytics.test.ts). */
+  const synced = async () => systemDb.adConnection.update({ where: { id: (await googleConnection()).id }, data: { lastSyncedAt: new Date() } });
 
   it("read: each device's share of the spend and Google's figures, by the connection asked for, in the audit log", async () => {
     ctx.setEnv({ ...ENV, GOOGLE_ADS_CLIENT_ID: "g_client", GOOGLE_ADS_CLIENT_SECRET: "g_secret", GOOGLE_ADS_ENABLED: "1" });
-    const conn = await googleConnection();
+    const conn = await synced();
     const queries: string[] = [];
     ctx.setFetch(google(queries));
     const res = await get(`${base()}?part=devices&preset=7d&connection=${conn.id}`);
@@ -538,7 +540,7 @@ describe("a real Google Ads account's analytics downloads: its device and countr
   });
 
   it("not read (Google not set up here, or not answering): the file says why, in place of figures", async () => {
-    const conn = await googleConnection();
+    const conn = await synced();
     const res = await get(`${base()}?part=devices&preset=7d&connection=${conn.id}`);
     expect(res.statusCode, res.body).toBe(200);
     const [header, why, ...rest] = rowsOf(res.body);

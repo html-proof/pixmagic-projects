@@ -1,6 +1,6 @@
 import type { AdSpendProvider } from "@app/shared/ads";
 import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
-import type { AdsModule, Overview, ProductCostsModule, ProfitModule } from "./types";
+import type { AdAccount, AdsModule, Overview, ProductCostsModule, ProfitModule } from "./types";
 
 // ---------------------------------------------------------------------------
 // The costs bizinsights can see for the dates, and net profit when every one is known: worked out
@@ -12,6 +12,14 @@ import type { AdsModule, Overview, ProductCostsModule, ProfitModule } from "./ty
 export type CostState = "known" | "loading" | "missing" | "unavailable";
 /** Product costs can also be "not_recorded": Shopify's report answered, but no sale had a cost per item. */
 export type ProductCostState = CostState | "not_recorded";
+/**
+ * Ad spend can also be "partial": known for every day in the store's currency, but some accounts
+ * report in another currency (`adLeftOut`), so it isn't the whole spend.
+ */
+export type AdCostState = CostState | "partial";
+
+/** An ad account whose spend isn't in the figures: it reports in another currency. */
+export type LeftOutAccount = Pick<AdAccount, "id" | "provider" | "accountId" | "name" | "currency">;
 
 export interface Costs {
   /**
@@ -25,9 +33,14 @@ export interface Costs {
   productSource: "report" | "cost_per_item" | null;
   /** Sales with no cost recorded in Shopify: their cost isn't in `productCosts`. */
   uncosted: number | null;
-  /** Ad spend for the whole range, in the store's currency; null while any account lacks a day of it. */
+  /**
+   * Ad spend for the whole range, in the store's currency; null while any account lacks a day of it.
+   * With `adState` "partial", the accounts in `adLeftOut` aren't in it.
+   */
   adSpend: number | null;
-  adState: CostState;
+  adState: AdCostState;
+  /** Ad accounts whose spend isn't in `adSpend` because they report in another currency than the store's. */
+  adLeftOut: LeftOutAccount[];
   byProvider: Array<{ provider: AdSpendProvider; spend: number }>;
   /** The owner's own costs for the dates (Settings → Costs); null when this member isn't shown them. */
   yourCosts: number | null;
@@ -42,6 +55,33 @@ export interface Costs {
 export function comparableAds(ov: Overview, currency: string): AdsModule | null {
   const ads = ov.modules.ads;
   return ads && ads.accounts.length > 0 && ads.currency === currency && !ads.demo ? ads : null;
+}
+
+/**
+ * The accounts the ads module left out of its figures, in another currency than its own (`leftOut`,
+ * adsFigures in the API; worked out from `accounts` in answers that predate it). Never the demo: its
+ * spend is simulated.
+ */
+export function leftOutOf(ads: AdsModule): LeftOutAccount[] {
+  return ads.leftOut ?? ads.accounts.filter((acc) => !acc.counted && !acc.demo);
+}
+
+/**
+ * The ad accounts whose spend can't be set against the store's sales because it is in another
+ * currency than the store's: those the ads module left out, or every one (the demo aside) when the
+ * module itself is in another currency.
+ */
+export function adsLeftOut(ov: Overview, currency: string): LeftOutAccount[] {
+  const ads = ov.modules.ads;
+  if (!ads) return [];
+  return ads.currency === currency ? leftOutOf(ads) : ads.accounts.filter((acc) => !acc.demo);
+}
+
+/** "Left out: EU shop (EUR), in another currency.", under an ad spend these accounts aren't in; null with none. */
+export function leftOutWords(accounts: readonly LeftOutAccount[]): string | null {
+  if (!accounts.length) return null;
+  const names = accounts.map((acc) => `${acc.name ?? acc.accountId} (${acc.currency ?? "currency not known yet"})`);
+  return `Left out: ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(names)}, in another currency.`;
 }
 
 /**
@@ -68,15 +108,21 @@ function productCostsOf(p: ProfitModule | undefined, own: ProductCostsModule | u
   return { productCosts: null, productState: p?.status === "loading" ? "loading" : p ? "unavailable" : "missing", productSource: null, uncosted: c?.netSalesWithoutCost ?? null };
 }
 
-/** The costs of the dates; `adsOn`: advertising is offered and this member is shown it. */
+/**
+ * The costs of the dates; `adsOn`: advertising is offered and this member is shown it. The ad spend
+ * is the accounts in the store's currency; with another account left out it is "partial", never the
+ * whole spend.
+ */
 export function costsOf(ov: Overview, currency: string, adsOn: boolean): Costs {
   const ads = adsOn ? comparableAds(ov, currency) : null;
   const adSpend = ads?.current ? ads.current.spend : null;
-  const adState: CostState = !adsOn ? "missing" : !ads ? (ov.modules.ads ? "unavailable" : "missing") : adSpend !== null ? "known" : "unavailable";
+  const adLeftOut = adsOn ? adsLeftOut(ov, currency) : [];
+  const adState: AdCostState = !adsOn ? "missing" : !ads ? (ov.modules.ads ? "unavailable" : "missing") : adSpend === null ? "unavailable" : adLeftOut.length ? "partial" : "known";
   return {
     ...productCostsOf(ov.modules.profit, ov.modules.product_costs),
     adSpend,
     adState,
+    adLeftOut,
     byProvider: ads && adSpend !== null ? ads.byProvider.filter((b) => b.current).map((b) => ({ provider: b.provider, spend: b.current!.spend })) : [],
     yourCosts: ov.modules.expenses?.current.total ?? null,
     yourByCategory: ov.modules.expenses?.current.byCategory.map((c) => ({ label: EXPENSE_CATEGORY_LABEL[c.category], amount: c.amount })) ?? [],
@@ -99,17 +145,18 @@ export interface NetProfit {
 /**
  * Net profit for the dates (`netProfit` in @app/shared/expenses), or why not. Revenue is total sales
  * less taxes and duties: net sales, shipping and additional fees, the lines a member who may see the
- * owner's costs is shown too. Ad spend: none connected is 0 (other ads are the owner's costs). A
- * member not shown the ads, or Shopify's product costs (`costsOn`: Team & Access, `seesModule(access,
- * "profit")`), gets no net profit, which would give them away. Null for a member not shown the
- * owner's costs or those lines.
+ * owner's costs is shown too. Ad spend: none connected is 0 (other ads are the owner's costs); with an
+ * account left out (another currency) it isn't known in full, so there is no net profit. A member not
+ * shown the ads, or Shopify's product costs (`costsOn`: Team & Access, `seesModule(access, "profit")`),
+ * gets no net profit, which would give them away. Null for a member not shown the owner's costs or
+ * those lines.
  */
 export function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown: boolean }, costsOn: boolean): NetProfit | null {
   const e = ov.modules.expenses;
   const c = ov.modules.sales_overview?.current;
   if (!e || !c || c.shipping === undefined || c.additionalFees === undefined) return null;
   const revenue = Math.round((c.netSales + c.shipping + c.additionalFees) * 100) / 100;
-  const adSpend = !ads.offered ? 0 : !ads.shown ? "hidden" : k.adState === "missing" ? 0 : k.adSpend;
+  const adSpend = !ads.offered ? 0 : !ads.shown ? "hidden" : k.adState === "missing" ? 0 : k.adState === "partial" ? null : k.adSpend;
   const productCosts = !costsOn ? "hidden" : k.productState === "not_recorded" ? "not_recorded" : k.productCosts;
   return { ...netProfit({ revenue, productCosts, uncosted: k.uncosted, adSpend, yourCosts: e.current.total, complete: e.complete }), revenue };
 }

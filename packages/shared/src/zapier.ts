@@ -71,7 +71,7 @@ export interface ZapierEventInfo {
 export const ZAPIER_EVENT_INFO: Record<ZapierEvent, ZapierEventInfo> = {
   alert_raised: {
     label: "New alert",
-    description: "A problem bizinsights raises for the store: a sync or sign-in that stopped working (Shopify, ad accounts, WhatsApp, email), as worded in the bell.",
+    description: "A problem bizinsights raises for the store, as worded in the bell: for example a sync or sign-in that stopped working (Shopify, ad accounts, WhatsApp, email), or stock running low or sold out.",
     needs: null,
   },
   ad_spend_threshold: {

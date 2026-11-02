@@ -46,7 +46,11 @@ export const metadata: Metadata = {
  *   - bizinsights' own email (sign-in codes through Cognito's custom email sender, invitations, alerts) goes
  *     through Resend (apps/aws/src/mailers.ts, cognitoEmail.ts);
  *   - Cloudflare proxies bizinsights.io in front of CloudFront (infra/cdk/lib/cloudflare.ts) and still runs the
- *     old Worker until the cutover.
+ *     old Worker until the cutover;
+ *   - Zapier, only once a team connects it, receives the events in packages/core/src/zapier/events.ts (alerts, ad
+ *     figures and syncs, integrations, paid orders, failed WhatsApp messages; never a customer's name, email,
+ *     address or full phone number), and its Send WhatsApp Template action's number, first name and consent are
+ *     kept as a WhatsApp contact only once the message is queued (packages/core/src/zapier/whatsapp.ts).
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
 const UPDATED = "2026-10-28";
@@ -121,7 +125,7 @@ const PROVIDERS = [
   {
     name: "Zapier",
     purpose:
-      "Only for stores whose team connects bizinsights to their own Zapier account: receives the events and figures that team's Zaps ask for (alerts, advertising results, failed WhatsApp messages with the number masked), never customers' names, emails or full phone numbers. What Zapier does with them is under that team's own Zapier account and Zapier's terms.",
+      "Only for stores whose team connects bizinsights to their own Zapier account: receives the events and figures that team's Zaps ask for (alerts, advertising results, advertising accounts synced, integrations connected or disconnected, paid orders with their number, amounts and items, failed WhatsApp messages with the number masked), never customers' names, emails or full phone numbers. If an owner or admin also lets Zapier send WhatsApp template messages, a Zap can hand bizinsights a customer's WhatsApp number, first name and whether they agreed to your messages; we keep them as that customer's WhatsApp contact and consent record (see WhatsApp messaging above) only when we accept the message for sending, and a request we refuse keeps nothing. What Zapier does with what it receives is under that team's own Zapier account and Zapier's terms.",
   },
 ] as const;
 

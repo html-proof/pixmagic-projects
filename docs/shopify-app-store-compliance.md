@@ -34,7 +34,7 @@ whole tab (docs/shopify-setup.md, "refused to connect" inside the admin).
 | Req | What it asks | Status | Evidence | Action |
 | --- | --- | --- | --- | --- |
 | 2.1.1-2.1.3 | No critical or minor errors, operable UI | REVIEW | Unit, integration and e2e suites in CI; live walk-through needed after each deploy | Walk the reviewer path on a dev store before submitting |
-| 2.1.4 | Synced data is accurate | REVIEW | Webhooks (orders, refunds, products) keep data current, idempotent and order-safe (`apps/worker/src/handlers/webhooks.ts`); a daily reconcile re-pulls recent orders. **On AWS the schedules are off** (`AWS_SCHEDULES` GitHub variable unset), so the daily reconcile and the stuck-import reaper don't run | OWNER: turn schedules on (the cutover plan) |
+| 2.1.4 | Synced data is accurate | REVIEW | Webhooks (orders, refunds, products) keep data current, idempotent and order-safe (`apps/worker/src/handlers/webhooks.ts`); the reconcile re-pulls each store's recent orders about once a day (docs/webhooks.md, "Retries & failure"). The AWS schedules are on since 2026-10-16 (GitHub variable `AWS_SCHEDULES=on`), so the reconcile and the stuck-import reaper run. The App Store app gets no order or refund webhooks until protected customer data access is approved (docs/webhooks.md): until then its stores' orders come from the import, the reconcile and the dashboard's Sync | |
 | 2.2.1 | Uses Shopify APIs | PASS | Admin GraphQL API for every read | |
 | 2.2.2, 2.2.3 | Consistent embedded experience, latest App Bridge | N/A | Non-embedded (see top) | |
 | 2.2.4 | GraphQL Admin API only (new public apps since 2025-04-01) | PASS | One Admin API endpoint in the codebase: `https://${shop}/admin/api/${version}/graphql.json` (`packages/core/src/shopify.ts`). Other Shopify URLs are OAuth (`/admin/oauth/authorize`, `/admin/oauth/access_token`) and install links. All 25 GraphQL documents validate against the 2026-10 schema (script below) | |
@@ -84,7 +84,7 @@ invalid HMAC with 401 and a valid request with 2xx, and act within 30 days.
 
 | Check | Status | Evidence |
 | --- | --- | --- |
-| Subscribed | PASS | `compliance_topics` in both tomls, `uri = https://bizinsights.io/api/webhooks/shopify` |
+| Subscribed | PASS | `compliance_topics` in all four app tomls (`shopify-app/shopify.app*.toml`), `uri = https://bizinsights.io/api/webhooks/shopify` |
 | HMAC verified, 401 when invalid | PASS | `apps/api/src/routes/webhooks.ts` (timing-safe, raw body); tests `shopify.test.ts` "rejects missing or forged signatures", `security.test.ts`, `hardening.test.ts` (a signed body can't be replayed as another topic or shop) |
 | 200 on success, idempotent | PASS | Unique webhook id; redelivery answered 200 `duplicate` (`shopify.test.ts`) |
 | `customers/data_request` | FIXED | Before: only an audit entry; nothing reached the store owner. Now recorded once per Shopify request (keyed hashes only, `data_requests` table with RLS), owners and admins are alerted (email + in-app alert), and they download the customer's data from Settings → Privacy requests (`packages/core/src/privacy.ts`; `apps/worker/test/worker.test.ts`, `apps/api/test/privacy.test.ts`) |

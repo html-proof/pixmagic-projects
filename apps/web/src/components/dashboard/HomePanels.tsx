@@ -19,7 +19,7 @@ import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
 import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
-import { comparableAds, costsOf, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
+import { adsLeftOut, comparableAds, costsOf, leftOutWords, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
 import type { Topic } from "./topics";
 import type { Overview, RecentOrder } from "./types";
 
@@ -122,6 +122,11 @@ const PRODUCT_WORDS: Record<Exclude<ProductCostState, "known">, string> = { load
 const AD_WORDS: Record<Exclude<CostState, "known">, string> = { loading: "Loading…", missing: "Not connected", unavailable: "Unavailable" };
 /** Where product costs come from when it isn't Shopify's profit report (`productSource`). */
 const PER_ITEM_WORDS = "Product costs are the items sold at their cost per item in Shopify.";
+
+/** Under an ad spend: the accounts not in it, as they report in another currency (`leftOutWords`). */
+function LeftOutRow({ words }: { words: string | null }) {
+  return words ? <li className="pl-4 text-xs text-muted" data-testid="ads-left-out">{words}</li> : null;
+}
 
 // ---- Orders at a glance -------------------------------------------------------------------------
 
@@ -278,6 +283,7 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
   ];
   const money = (n: number) => fmtMoney(n, currency);
   const other = adsOn ? ov.modules.ads : undefined;
+  const leftOut = ads ? leftOutWords(adsLeftOut(ov, currency)) : null;
   return (
     <HomeCard
       id="sales-vs-ads"
@@ -300,6 +306,11 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
         format={money}
         fmtAxis={(v) => fmtMoneyCompact(v, currency)}
       />
+      {leftOut && (
+        <p className="mt-3 text-xs text-muted" data-testid="ads-left-out">
+          {leftOut}
+        </p>
+      )}
       {!ads && adsOn && (
         <p className="mt-3 text-xs text-muted">
           {other?.demo
@@ -334,7 +345,8 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manag
   const share = (n: number) => (base > 0 ? fmtPct(n / base) : null);
   const taken = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
   const left = isNet ? profit!.value! : net - taken;
-  const after = [k.productCosts !== null ? "product costs" : null, k.adSpend !== null ? "ads" : null, k.yourCosts ? "your costs" : null].filter((x): x is string => x !== null);
+  // With an account left out (another currency), only the ads in the store's currency were taken off.
+  const after = [k.productCosts !== null ? "product costs" : null, k.adSpend !== null ? (k.adState === "partial" ? `ads in ${currency}` : "ads") : null, k.yourCosts ? "your costs" : null].filter((x): x is string => x !== null);
   const what = isNet ? "Net profit" : after.length ? `After ${listOf(after)}` : "Net sales";
   const slices: DonutSlice[] = [
     { key: "left", label: isNet ? "Net profit" : "Left after these costs", value: left, color: SALES },
@@ -368,7 +380,12 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manag
               <LegendRow label="Net sales" value={money(net)} share={net > 0 ? fmtPct(1) : null} />
             )}
             {costsOn && <LegendRow color={PRODUCT_COSTS} label="Product costs" value={k.productCosts !== null ? money(k.productCosts) : PRODUCT_WORDS[k.productState as Exclude<ProductCostState, "known">]} share={k.productCosts !== null ? share(k.productCosts) : null} />}
-            {adsOn && <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />}
+            {adsOn && (
+              <>
+                <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />
+                <LeftOutRow words={leftOutWords(k.adLeftOut)} />
+              </>
+            )}
             {k.yourCosts !== null && <LegendRow color={YOUR_COSTS} label="Your costs" value={money(k.yourCosts)} share={share(k.yourCosts)} />}
             <LegendRow color={SALES} label={isNet ? "Net profit" : "Left after these costs"} value={money(left)} share={share(left)} />
           </ul>
@@ -940,6 +957,7 @@ export function ExpensesBreakdown({ ov, currency, adsOn, costsOn, manage, manage
               <>
                 <LegendRow color={AD_SPEND} label="Ad spend" value={k.adSpend !== null ? money(k.adSpend) : AD_WORDS[k.adState as Exclude<CostState, "known">]} share={k.adSpend !== null ? share(k.adSpend) : null} />
                 {k.byProvider.length > 1 && k.byProvider.map((b) => <LegendRow key={b.provider} sub label={PROVIDER[b.provider].name} value={money(b.spend)} share={share(b.spend)} />)}
+                <LeftOutRow words={leftOutWords(k.adLeftOut)} />
               </>
             )}
             {k.yourCosts !== null && (

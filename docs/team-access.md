@@ -78,7 +78,10 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - A random 256-bit token (CSPRNG). It is looked up by its SHA-256; the token itself is kept only
   encrypted with the app's keyring (AES-256-GCM, bound to the invitation's id), so an owner can copy
   the same link again ("Copy link") without breaking the one already sent, and a copy of the
-  database alone opens nothing. The link is `/invite#token=…`: the fragment never reaches a server,
+  database alone opens nothing. Key rotation seals it again with the active key (`ops:reencrypt`,
+  docs/RUNBOOK.md), so Copy link and Resend still give the same link once the old key goes (one
+  they couldn't read would make Resend send a new link, and the one already sent stop working).
+  The link is `/invite#token=…`: the fragment never reaches a server,
   so the token stays out of CloudFront and API logs, and the invite page moves it out of the
   address bar (into the tab's sessionStorage) before any other script runs, so analytics and the
   browser history never see it. The page sends no Referer. Links sent before (`?token=`) still work.

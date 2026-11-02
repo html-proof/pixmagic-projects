@@ -13,6 +13,7 @@ import type { Mailer } from "../notify.js";
 import type { Queues } from "../queues.js";
 import { escapeHtml } from "@app/shared/email";
 import { queueTeamAlert } from "../whatsapp/teamAlerts.js";
+import { zapierAlertRaised } from "../zapier/events.js";
 import { inventorySettings } from "./settings.js";
 import { salesDays, soldCte, STATUS, stockScope, variantStockCte } from "./stock.js";
 
@@ -142,7 +143,7 @@ export interface NotifyDeps {
 export async function notifyStockAlerts(deps: NotifyDeps, store: Pick<Store, "id" | "workspaceId" | "name" | "shopDomain">, now = new Date()): Promise<number> {
   const settings = await inventorySettings(store.id);
   const open = await systemDb.inventoryAlert.findMany({ where: { storeId: store.id, resolvedAt: null } });
-  await syncBellAlert(store, open, settings.dashboardAlerts);
+  await syncBellAlert(store, open, settings.dashboardAlerts, deps.queues);
   const due = open.filter((a) => !a.notifiedAt || (a.notifiedAt < a.openedAt && now.getTime() - a.notifiedAt.getTime() >= RENOTIFY_AFTER_MS));
   if (!due.length) return 0;
 
@@ -170,8 +171,11 @@ export async function notifyStockAlerts(deps: NotifyDeps, store: Pick<Store, "id
   return due.length;
 }
 
-/** The bell: one open alert per store while any out- or low-stock alert is open (when turned on). */
-async function syncBellAlert(store: Pick<Store, "id" | "workspaceId" | "name" | "shopDomain">, open: ReadonlyArray<{ kind: string }>, on: boolean) {
+/**
+ * The bell: one open alert per store while any out- or low-stock alert is open (when turned on). A new
+ * one is also Zapier's "New alert" (raiseAlert isn't used: stock alerts send their own email).
+ */
+async function syncBellAlert(store: Pick<Store, "id" | "workspaceId" | "name" | "shopDomain">, open: ReadonlyArray<{ kind: string }>, on: boolean, queues: Pick<Queues, "sync">) {
   const out = open.filter((a) => a.kind === "out_of_stock").length;
   const low = open.filter((a) => a.kind === "low_stock").length;
   const current = await systemDb.alert.findFirst({ where: { storeId: store.id, code: STOCK_ALERT_CODE, resolvedAt: null } });
@@ -185,7 +189,9 @@ async function syncBellAlert(store: Pick<Store, "id" | "workspaceId" | "name" | 
     if (current.message !== message) await systemDb.alert.update({ where: { id: current.id }, data: { message, severity: out ? "warning" : "info" } });
     return;
   }
-  await systemDb.alert.create({ data: { workspaceId: store.workspaceId, storeId: store.id, code: STOCK_ALERT_CODE, severity: out ? "warning" : "info", message } });
+  const created = await systemDb.alert.create({ data: { workspaceId: store.workspaceId, storeId: store.id, code: STOCK_ALERT_CODE, severity: out ? "warning" : "info", message } });
+  // Worded as the bell words it; one event per alert. Never throws.
+  await zapierAlertRaised(created, queues);
 }
 
 /** Who gets the email: members who may see the stock, signed up for stock alerts, not revoked or expired. */

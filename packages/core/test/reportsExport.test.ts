@@ -92,6 +92,51 @@ describe("the Advertising area's reports", () => {
     expect(t.rows.map((r) => r[0])).toEqual(expect.arrayContaining(["Net sales (Shopify)", "Orders (Shopify)", "Purchase value (platforms' count)"]));
   });
 
+  it("the summary with Meta and Google both counted: spend added up, each platform's own purchases, never their claims added up", () => {
+    const meta = { provider: "meta", current: { ...totals, spend: 30, purchases: 3, purchaseValue: 120, roas: 4, conversions: 3 }, compared: null, notCompared: "no_history", previous: {}, deltas: {} };
+    const google = { provider: "google", current: { ...totals, spend: 10, purchases: 2, purchaseValue: 60, roas: 6, conversions: 5 }, compared: null, notCompared: "no_history", previous: {}, deltas: {} };
+    // The totals add the two claims up (5 purchases worth $180): for a single order both credit, that's twice.
+    const ads = { current: { ...totals, purchases: 5, purchaseValue: 180, roas: 4.5 }, compared: null, notCompared: "no_history", previous: {}, deltas: {}, claimsAddUp: false, byProvider: [meta, google] };
+    const t = exportTable("ads_summary", { ads });
+    const label = t.rows.map((r) => r[0]);
+    expect(t.rows).toContainEqual(["Ad spend", 40, null, null, null, "Not compared: no earlier data."]);
+    expect(label).not.toContain("Purchases (platforms' count)");
+    expect(label).not.toContain("Return on ad spend (platforms' own)");
+    expect(t.rows).toContainEqual(["Purchases", "Each platform's own", null, null, null, "Meta Ads and Google Ads can both claim the same order, so their purchases, purchase value, ROAS and conversions are given per platform, never added up."]);
+    expect(t.rows).toContainEqual(["Meta Ads purchases (its own count)", 3, null, null, null, "Not compared: no earlier data."]);
+    expect(t.rows).toContainEqual(["Meta Ads return on ad spend (its own)", 4, null, null, null, "Not compared: no earlier data."]);
+    expect(t.rows).toContainEqual(["Google Ads purchase value (its own count)", 60, null, null, null, "Not compared: no earlier data."]);
+    expect(t.rows).toContainEqual(["Google Ads conversions (all conversion actions)", 5, null, null, null, "Not compared: no earlier data."]);
+    // No figure anywhere is the sum of the two claims.
+    expect(t.rows.some((r) => r[1] === 180 || r[1] === 4.5)).toBe(false);
+
+    // An answer from before `claimsAddUp`: two platforms are worked out from `byProvider`; one platform's are its own totals.
+    const older = { ...ads, claimsAddUp: undefined };
+    expect(exportTable("ads_summary", { ads: older }).rows).toEqual(t.rows);
+    const one = exportTable("ads_summary", { ads: { ...older, byProvider: [meta] } });
+    expect(one.rows).toContainEqual(["Purchases (platforms' count)", 5, null, null, null, "Not compared: no earlier data."]);
+  });
+
+  it("the summary names the accounts left out in another currency under the spend", () => {
+    const t = exportTable("ads_summary", {
+      ads: {
+        current: totals,
+        compared: null,
+        notCompared: "no_history",
+        previous: {},
+        deltas: {},
+        leftOut: [
+          { id: "x", provider: "meta", accountId: "act_x", name: "EU shop", currency: "EUR" },
+          { id: "y", provider: "google", accountId: "456", name: null, currency: null },
+        ],
+      },
+    });
+    const at = t.rows.findIndex((r) => r[0] === "Left out");
+    expect(t.rows[at]).toEqual(["Left out", "EU shop (EUR); 456 (currency not known yet)", null, null, null, "In another currency: their spend and purchases are in none of these figures."]);
+    expect(t.rows[at - 1]![0]).toBe("Link clicks");
+    expect(exportTable("ads_summary", { ads: { current: totals, compared: null, notCompared: "no_history", previous: {}, deltas: {}, leftOut: [] } }).rows.some((r) => r[0] === "Left out")).toBe(false);
+  });
+
   it("the summary without a change says why, and with the days so far says up to when", () => {
     const t = exportTable("ads_summary", { ads: { current: null, soFar: { from: "2026-10-13", to: "2026-10-18", totals }, compared: null, notCompared: "no_history", previous: {}, deltas: {} } });
     expect(t.rows[0]).toEqual(["Ad spend", 40, null, null, null, "Up to 2026-10-18: the days after it aren't over yet. Not compared: no earlier data."]);

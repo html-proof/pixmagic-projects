@@ -25,8 +25,8 @@ export function encryptAdTokens(storeId: string, provider: AdProvider, t: TokenS
  * Whether the row holds bizinsights' own sign-in with the platform (`source` "direct"), as every row
  * has since 2026-10-28, when the last connections signed in through a broker were moved onto
  * bizinsights' own tokens. One that didn't would hold no token of bizinsights': it is never read, and
- * waits for a reconnect, which makes it one (saveAdConnections). The column goes with a later
- * migration (docs/database/schema.md).
+ * waits for a reconnect, which makes it one (saveAdConnections). The column stays: every connect
+ * writes it and every sync records it (ad_sync_runs.source; docs/database/schema.md).
  */
 export const holdsOwnSignIn = (conn: Pick<AdConnection, "source">): boolean => conn.source === "direct";
 

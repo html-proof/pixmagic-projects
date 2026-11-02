@@ -155,12 +155,15 @@ export function whatsappFailedData(m: Pick<WappMessage, "id" | "source" | "type"
   };
 }
 
-/** Called once a WhatsApp message to a customer has failed: a send Meta refused or that gave up, or Meta reporting it failed (whatsapp/messages.ts). */
-export async function zapierWhatsappFailed(m: Pick<WappMessage, "id" | "workspaceId" | "storeId" | "direction" | "source" | "type" | "category" | "phoneMasked" | "campaignId" | "automationId">, at: Date, queues?: Pick<Queues, "sync">): Promise<void> {
+/**
+ * Called once a WhatsApp message to a customer has failed: a send Meta refused or that gave up, or Meta
+ * reporting it failed (whatsapp/messages.ts). Worded from the message's own reason, as its samples are.
+ */
+export async function zapierWhatsappFailed(m: Pick<WappMessage, "id" | "workspaceId" | "storeId" | "direction" | "source" | "type" | "category" | "phoneMasked" | "reason" | "errorCode" | "campaignId" | "automationId">, at: Date, queues?: Pick<Queues, "sync">): Promise<void> {
   // The team's own messages (tests, codes, alerts to the team) aren't about a customer.
   if (m.direction !== "out" || ["test", "verification", "team_alert"].includes(m.source)) return;
   await recordZapierEvent(
-    { workspaceId: m.workspaceId, storeId: m.storeId, event: "whatsapp_message_failed", dedupeKey: `whatsapp_message_failed:${m.id}`, data: whatsappFailedData({ ...m, reason: "provider_rejected", errorCode: "whatsapp_error" }, at), occurredAt: at },
+    { workspaceId: m.workspaceId, storeId: m.storeId, event: "whatsapp_message_failed", dedupeKey: `whatsapp_message_failed:${m.id}`, data: whatsappFailedData(m, at), occurredAt: at },
     queues,
   );
 }
