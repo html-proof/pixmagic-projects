@@ -25,25 +25,32 @@ beforeEach(async () => {
 
 const gql = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
 
-/** Shopify, as far as billing goes: the charges it holds (id → status) and every Admin API call made. */
+/**
+ * Shopify, as far as billing goes: the charges it holds (id → status) and every Admin API call made.
+ * A shop in `revoked` has uninstalled the app: Shopify refuses its token, and any trade of it.
+ */
 function fakeShopify() {
   const calls: Array<{ shop: string; op: string; query: string; variables: Record<string, unknown> }> = [];
   const charges = new Map<string, string>();
-  const state = { partnerDevelopment: false, cancelErrors: [] as string[], next: 1 };
+  const state = { partnerDevelopment: false, cancelErrors: [] as string[], next: 1, revoked: new Set<string>(), onCreate: null as null | (() => Promise<unknown>) };
   const fetchImpl: FetchLike = async (input, init) => {
     const url = new URL(String(input));
+    const revoked = state.revoked.has(url.hostname);
     if (url.pathname === "/admin/oauth/access_token") {
+      if (revoked) return new Response(JSON.stringify({ error: "invalid_subject_token" }), { status: 400, headers: { "content-type": "application/json" } });
       return new Response(JSON.stringify({ access_token: "shpat_reinstalled", scope: "read_orders,read_products" }), { status: 200, headers: { "content-type": "application/json" } });
     }
     const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
     const op = /(?:query|mutation)\s+(\w+)/.exec(body.query)![1]!;
     calls.push({ shop: url.hostname, op, query: body.query, variables: body.variables });
+    if (revoked) return new Response(JSON.stringify({ errors: "[API] Invalid API key or access token (unrecognized login or wrong password)" }), { status: 401 });
     switch (op) {
       case "ShopPartnerDevelopment":
         return gql({ shop: { plan: { partnerDevelopment: state.partnerDevelopment } } });
       case "AppSubscriptionCreate": {
         const id = `gid://shopify/AppSubscription/${state.next++}`;
         charges.set(id, "PENDING");
+        await state.onCreate?.();
         return gql({ appSubscriptionCreate: { confirmationUrl: "https://admin.shopify.com/charges/confirm", userErrors: [], appSubscription: { id, status: "PENDING" } } });
       }
       case "AppSubscriptionCancel": {
@@ -100,6 +107,9 @@ async function installFromShopify(browser: ReturnType<typeof testBrowser>, shop:
 
 const sub = (ws: string) => systemDb.subscription.findUniqueOrThrow({ where: { workspaceId: ws } });
 const post = (url: string, headers: Record<string, string>, payload: unknown = {}) => ctx.app.inject({ method: "POST", url, headers, payload });
+/** Settings → Stores → Disconnect. */
+const disconnect = (ws: string, storeId: string, headers: Record<string, string>) => ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}`, headers });
+const storeRow = (id: string) => systemDb.store.findUniqueOrThrow({ where: { id } });
 
 /** Shopify approving a charge: it becomes active, and replaces (cancels) the one in force. */
 async function approve(ws: string, chargeId: string) {
@@ -199,6 +209,18 @@ describe("starting a paid plan", () => {
     expect(shopify.calls).toEqual([]);
   });
 
+  it("records no charge on a store disconnected while Shopify was asked for it", async () => {
+    const { ws, store, headers } = await owner();
+    // The disconnect lands between Shopify making the charge and the API recording it.
+    shopify.state.onCreate = () => systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", disconnectedAt: new Date(), accessTokenEnc: null } });
+    const res = await post(`/workspaces/${ws}/billing/subscribe`, headers, { plan: "growth", storeId: store.id });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("store_disconnected");
+    // No approval page: the charge Shopify made lapses unapproved, and none is recorded.
+    expect(res.json().confirmationUrl).toBeUndefined();
+    expect(await sub(ws)).toMatchObject({ plan: "free", pendingChargeId: null, billingStoreId: null });
+  });
+
   it("leaves the plan to the workspace's owners", async () => {
     const { ws, store } = await owner();
     const admin = await signIn(ctx, "admin", "admin@x.com");
@@ -256,13 +278,59 @@ describe("switching to Free", () => {
     expect(shopify.ops()).toEqual(["AppSubscriptionCancel", "AppSubscriptionStatuses"]);
   });
 
-  it("drops to Free without asking Shopify when the store that paid is no longer connected", async () => {
+  it("drops to Free without asking Shopify when Shopify uninstalled the app from the store that paid", async () => {
     const { ws, store, headers } = await owner();
     await paying(ws, store.id);
+    // Uninstalled in Shopify (no disconnectedAt), which cancelled the charge; its webhook not processed yet.
     await systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", accessTokenEnc: null } });
     const res = await post(`/workspaces/${ws}/billing/cancel`, headers);
     expect(res.json()).toEqual({ plan: "free" });
     expect(shopify.calls).toEqual([]);
+  });
+
+  it("keeps the plan billed through a store only disconnected here, and says to uninstall the app there", async () => {
+    const { ws, store, headers } = await owner();
+    const charge = await paying(ws, store.id);
+    // Disconnected before Disconnect refused a store that pays: the app, and the charge, are still in Shopify.
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", disconnectedAt: new Date(), accessTokenEnc: null } });
+    const res = await post(`/workspaces/${ws}/billing/cancel`, headers);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "billed_store_disconnected", detail: { shop: "paying.myshopify.com" } });
+    expect(res.json().message).toContain("Uninstall bizinsights from paying.myshopify.com in your Shopify admin");
+    expect(res.json().message).not.toMatch(/reconnect/i);
+    expect(await sub(ws)).toMatchObject({ plan: "growth", shopifyChargeId: charge });
+    expect(shopify.calls).toEqual([]);
+  });
+
+  it("a charge from before the billed store was recorded stays while any store disconnected here could carry it", async () => {
+    const { ws, store, headers } = await owner();
+    const charge = await paying(ws, store.id);
+    await systemDb.subscription.update({ where: { workspaceId: ws }, data: { billingStoreId: null } });
+    // Another store, uninstalled in Shopify, holds nothing up; the one disconnected here might.
+    await connectedStore(ws, "other.myshopify.com", { status: "uninstalled" });
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", disconnectedAt: new Date(), accessTokenEnc: null } });
+    const kept = await post(`/workspaces/${ws}/billing/cancel`, headers);
+    expect(kept.statusCode).toBe(409);
+    expect(kept.json().detail).toEqual({ shop: "paying.myshopify.com" });
+    expect(await sub(ws)).toMatchObject({ plan: "growth", shopifyChargeId: charge });
+
+    // Uninstalled in Shopify since (app/uninstalled clears disconnectedAt): nothing can carry it any more.
+    await systemDb.store.update({ where: { id: store.id }, data: { disconnectedAt: null } });
+    expect((await post(`/workspaces/${ws}/billing/cancel`, headers)).json()).toEqual({ plan: "free" });
+    expect(shopify.calls).toEqual([]);
+  });
+
+  it("a store Shopify no longer serves (the app uninstalled, its webhook not processed) ends the plan instead of failing", async () => {
+    const { ws, store, headers } = await owner();
+    await paying(ws, store.id, "scale");
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    shopify.state.revoked.add("paying.myshopify.com");
+    const res = await post(`/workspaces/${ws}/billing/cancel`, headers);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ plan: "free" });
+    expect(shopify.ops()).toEqual(["AppSubscriptionCancel"]);
+    expect(await sub(ws)).toMatchObject({ plan: "free", shopifyChargeId: null, billingStoreId: null });
+    expect(await systemDb.auditLog.findFirstOrThrow({ where: { action: "billing.subscription_ended" } })).toMatchObject({ workspaceId: ws, metadata: { plan: "scale", reason: "uninstalled" } });
   });
 
   it("reports Shopify refusing it, and the plan stays as it is", async () => {
@@ -273,6 +341,98 @@ describe("switching to Free", () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ error: "billing_error", message: "Shopify is having a bad day" });
     expect(await sub(ws)).toMatchObject({ plan: "growth" });
+  });
+});
+
+describe("disconnecting a store in bizinsights (Settings → Stores)", () => {
+  // The app stays installed in Shopify, and so do the charges on the store's bill, while the token
+  // that could cancel them is wiped: a store that carries the plan stays until they end.
+  it("refuses the store that pays for the plan, which stays connected with its token", async () => {
+    const { ws, store, headers } = await owner();
+    const charge = await paying(ws, store.id);
+    const res = await disconnect(ws, store.id, headers);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "store_billed" });
+    expect(res.json().message).toContain("Switch to Free in Settings → Billing first, or uninstall bizinsights from the store in Shopify");
+    // Shopify was asked first: the charge still stands.
+    expect(shopify.ops()).toEqual(["AppSubscriptionStatuses"]);
+    expect(await storeRow(store.id)).toMatchObject({ status: "active", disconnectedAt: null, accessTokenEnc: expect.any(String) });
+    expect(await sub(ws)).toMatchObject({ plan: "growth", shopifyChargeId: charge, billingStoreId: store.id });
+
+    // Back on Free, it disconnects.
+    expect((await post(`/workspaces/${ws}/billing/cancel`, headers)).json()).toEqual({ plan: "free" });
+    expect((await disconnect(ws, store.id, headers)).statusCode).toBe(200);
+    expect(await storeRow(store.id)).toMatchObject({ status: "uninstalled", disconnectedAt: expect.any(Date), accessTokenEnc: null });
+  });
+
+  it("refuses the store a change awaiting approval would be billed to", async () => {
+    const { ws, store, headers } = await owner();
+    await post(`/workspaces/${ws}/billing/subscribe`, headers, { plan: "growth", storeId: store.id });
+    const res = await disconnect(ws, store.id, headers);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "store_billed_pending" });
+    expect(res.json().message).toMatch(/^A change to Growth waiting for approval in Shopify/);
+    expect((await storeRow(store.id)).status).toBe("active");
+  });
+
+  it("disconnects once Shopify says the charges ended, though their webhooks never came", async () => {
+    const { ws, store, headers } = await owner();
+    const charge = await paying(ws, store.id);
+    await systemDb.subscription.update({ where: { workspaceId: ws }, data: { pendingPlan: "scale", pendingChargeId: "gid://shopify/AppSubscription/300" } });
+    shopify.charges.set(charge, "CANCELLED");
+    shopify.charges.set("gid://shopify/AppSubscription/300", "EXPIRED");
+    expect((await disconnect(ws, store.id, headers)).statusCode).toBe(200);
+    expect(await sub(ws)).toMatchObject({ plan: "free", shopifyChargeId: null, pendingChargeId: null });
+    expect(await storeRow(store.id)).toMatchObject({ status: "uninstalled", disconnectedAt: expect.any(Date) });
+  });
+
+  it("disconnects a store Shopify no longer serves: the app is gone from it, and the plan billed there with it", async () => {
+    const { ws, store, headers } = await owner();
+    await paying(ws, store.id);
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    shopify.state.revoked.add("paying.myshopify.com");
+    expect((await disconnect(ws, store.id, headers)).statusCode).toBe(200);
+    expect(await sub(ws)).toMatchObject({ plan: "free", shopifyChargeId: null, billingStoreId: null });
+    expect((await storeRow(store.id)).status).toBe("uninstalled");
+  });
+
+  it("keeps the store when Shopify can't say (a frozen shop): decided on the charges recorded", async () => {
+    const { ws, store, headers } = await owner();
+    await paying(ws, store.id);
+    ctx.setFetch(async () => new Response(JSON.stringify({ errors: "Unavailable Shop" }), { status: 402 }));
+    const res = await disconnect(ws, store.id, headers);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("store_billed");
+    expect(await sub(ws)).toMatchObject({ plan: "growth" });
+  });
+
+  it("a charge from before the billed store was recorded holds every store, since any might carry it", async () => {
+    const { ws, store, headers } = await owner();
+    await paying(ws, store.id);
+    await systemDb.subscription.update({ where: { workspaceId: ws }, data: { billingStoreId: null } });
+    const other = await connectedStore(ws, "other.myshopify.com");
+    for (const id of [store.id, other.id]) {
+      const res = await disconnect(ws, id, headers);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("plan_billed");
+    }
+  });
+
+  it("disconnects any other store as before, without asking Shopify, marked as disconnected here", async () => {
+    const { ws, store, headers } = await owner();
+    await paying(ws, store.id);
+    const other = await connectedStore(ws, "other.myshopify.com");
+    expect((await disconnect(ws, other.id, headers)).statusCode).toBe(200);
+    expect(shopify.calls).toEqual([]);
+    expect(await storeRow(other.id)).toMatchObject({ status: "uninstalled", disconnectedAt: expect.any(Date), accessTokenEnc: null, grantedScopes: [] });
+    expect(await sub(ws)).toMatchObject({ plan: "growth", billingStoreId: store.id });
+  });
+
+  it("a store Shopify already uninstalled the app from isn't marked disconnected here", async () => {
+    const { ws, store, headers } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", accessTokenEnc: null } });
+    expect((await disconnect(ws, store.id, headers)).statusCode).toBe(200);
+    expect(await storeRow(store.id)).toMatchObject({ status: "uninstalled", disconnectedAt: null });
   });
 });
 
@@ -314,6 +474,22 @@ describe("uninstalling and reinstalling", () => {
     await installFromShopify(browser, "relaunch.myshopify.com");
     expect(shopify.ops()).toEqual(["AppSubscriptionStatuses"]);
     expect(await sub(ws)).toMatchObject({ plan: "free", shopifyChargeId: null });
+  });
+
+  it("a store disconnected here and connected again asks Shopify, and keeps a plan it still bills", async () => {
+    const { browser, ws } = await ownerBrowser();
+    // The app stayed installed in Shopify, and so did the charge; only bizinsights dropped the store.
+    const store = await connectedStore(ws, "kept.myshopify.com");
+    const charge = await paying(ws, store.id, "growth");
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", uninstalledAt: new Date(), disconnectedAt: new Date(), accessTokenEnc: null } });
+
+    await installFromShopify(browser, "kept.myshopify.com");
+    expect(shopify.ops()).toEqual(["AppSubscriptionStatuses"]);
+    expect(await sub(ws)).toMatchObject({ plan: "growth", shopifyChargeId: charge, billingStoreId: store.id });
+    expect(await storeRow(store.id)).toMatchObject({ status: "syncing", disconnectedAt: null });
+    // Connected again, Switch to Free reaches the charge.
+    expect((await browser.post(`/workspaces/${ws}/billing/cancel`, {})).json()).toEqual({ plan: "free" });
+    expect(shopify.charges.get(charge)).toBe("CANCELLED");
   });
 
   it("keeps the plan when Shopify says its charge still stands", async () => {

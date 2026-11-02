@@ -31,6 +31,17 @@ function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { t
   }
 }
 
+/**
+ * Why a store isn't disconnected (409 from DELETE …/stores/:id): it carries the plan's charges,
+ * which Shopify goes on billing while the app stays installed there, and which nothing here could
+ * cancel once the store's access is gone.
+ */
+const billedRefusals = (domain: string): Record<string, string> => ({
+  store_billed: `${domain} pays for this workspace's plan through its Shopify bill. Switch to Free in Settings → Billing first, or uninstall bizinsights from ${domain} in your Shopify admin (Settings → Apps and sales channels), which ends the charge.`,
+  store_billed_pending: `A plan change waiting for approval in Shopify is billed through ${domain}. Approve or decline it in Shopify first (Settings → Billing reopens it), then disconnect the store.`,
+  plan_billed: "This workspace's plan is billed through one of its stores in Shopify. Switch to Free in Settings → Billing before disconnecting a store.",
+});
+
 export default function StoresPage() {
   const { workspace, stores, storesStatus, reloadStores, setStoreId } = useApp();
   const manage = canManage(workspace.role);
@@ -71,7 +82,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
     try {
       await api(`/workspaces/${workspace.id}/stores/${id}`, { method: "DELETE" });
     } catch (e) {
-      setError(actionError(e, `disconnect ${domain}`));
+      setError(actionError(e, `disconnect ${domain}`, billedRefusals(domain)));
     }
     // Either way: a failure can come after the store was already marked disconnected (the data
     // purge runs last), so the card should show what is true now. Disconnecting again is safe.

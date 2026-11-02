@@ -102,7 +102,8 @@ in `apps/worker/src/handlers/webhooks.ts`; how it works: [shopify-setup.md](shop
 | --- | --- |
 | Approval for every charge; the plan changes only when Shopify reports the charge active | `apps/api/test/billing.test.ts` "asks Shopify for a charge…" |
 | Upgrade or downgrade between paid plans replaces the charge in force (`replacementBehavior: APPLY_IMMEDIATELY`), on the same store's bill | "upgrades and downgrades between paid plans…" (one active charge at the end) |
-| Downgrade to Free: "Switch to Free" for owners, `appSubscriptionCancel(prorate: true)`, plan ends at once | "switching to Free" (6 cases), e2e `apps/web/e2e/settings.spec.ts` |
+| Downgrade to Free: "Switch to Free" for owners, `appSubscriptionCancel(prorate: true)`, plan ends at once; a plan still billed through a store only disconnected in bizinsights is kept, with "uninstall bizinsights from that store in Shopify" | "switching to Free" (9 cases), e2e `apps/web/e2e/settings.spec.ts` |
+| Disconnecting a store in bizinsights never leaves a charge running unseen: the store that pays is refused until the plan is Free or the app is uninstalled in Shopify | `billing.test.ts` "disconnecting a store in bizinsights" (8 cases), e2e "the store that pays for the plan isn't disconnected…" |
 | Uninstall ends the plan billed on that store; a reinstall starts on Free and asks for approval again | `apps/worker/test/billing.test.ts`, `billing.test.ts` "uninstalling and reinstalling" |
 | Test charges on development stores, also in production (Shopify's reviewers use one) | `shop.plan.partnerDevelopment` in the subscribe route |
 | Plan features are true: the one difference between plans, the store limit (Free 1, Growth 3, Scale any), is enforced; claims with nothing behind them ("30 days of history", "Email alerts", "API access", "Priority support", "Audit log export") were removed from `PLANS` | `billing.test.ts` "store limits" |

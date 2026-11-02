@@ -114,7 +114,7 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
         if (now.status !== "uninstalled" && !(await unclaimed(now.workspaceId, tx))) throw storeTaken();
         return tx.store.update({
           where: { id: existing.id },
-          data: { workspaceId, shopifyAppKey: input.appKey, status: "syncing", installedAt: new Date(), uninstalledAt: null, lastSyncedAt: null, pixelInstalled: false },
+          data: { workspaceId, shopifyAppKey: input.appKey, status: "syncing", installedAt: new Date(), uninstalledAt: null, disconnectedAt: null, lastSyncedAt: null, pixelInstalled: false },
         });
       });
       // Its old rows carry the old workspace_id (and RLS hides them from the new one), so start
@@ -127,7 +127,7 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
     } else if (existing) {
       store = await systemDb.store.update({
         where: { id: existing.id },
-        data: { shopifyAppKey: input.appKey, status: "syncing", installedAt: new Date(), uninstalledAt: null },
+        data: { shopifyAppKey: input.appKey, status: "syncing", installedAt: new Date(), uninstalledAt: null, disconnectedAt: null },
       });
     } else {
       store = await systemDb.store.create({
@@ -147,10 +147,14 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
     data: { ...encryptTokenFields(store.id, token), ...customersFromChange(before, token.scopes, new Date()), pixelIngestKey: store.pixelIngestKey ?? randomToken(18) },
   });
   // Shopify cancels an app's charges when it is uninstalled, so a store back after an uninstall
-  // (a store only moves workspace after one) brings no plan with it: Free until approved again.
-  // A store authorized again while we took it to be installed may or may not have been
-  // uninstalled meanwhile: Shopify says which of its charges still stand.
-  if (existing && (moving || existing.status === "uninstalled")) {
+  // (a store only moves workspace after one, or after a disconnect, below) brings no plan with
+  // it: Free until approved again. A store disconnected in bizinsights kept the app installed in
+  // Shopify, and any charge on its bill with it; one authorized again while we took it to be
+  // installed may or may not have been uninstalled meanwhile: for both, Shopify says which of its
+  // charges still stand. (Disconnect refuses a store that carries one, so a store disconnected
+  // here and now moving brings none along to end.)
+  const uninstalledInShopify = existing?.status === "uninstalled" && !existing.disconnectedAt;
+  if (existing && (moving || uninstalledInShopify)) {
     await endBillingForStore(existing.id, moving ? "store_moved" : "uninstalled");
   } else if (existing) {
     await syncBillingFromShopify(store, token.accessToken, deps.fetchImpl).catch((err) =>

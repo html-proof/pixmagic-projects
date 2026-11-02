@@ -6,10 +6,12 @@ import {
   audit,
   billingEnabled,
   createTeamInvitation,
+  endBillingForStore,
   env,
   getAccessToken,
   loadMember,
   loadTeam,
+  logger,
   planById,
   PLANS,
   PRORATE_ON_CANCEL,
@@ -18,12 +20,16 @@ import {
   seedResync,
   SHOP_PARTNER_DEVELOPMENT,
   shopifyGraphql,
+  ShopifyHttpError,
+  StoreDisconnectedError,
   syncBillingFromShopify,
   updateMemberAccess,
+  withAccessToken,
 } from "@app/core";
 import { describeAlert, hasFullAccess, LEGACY_GRANTS, mayFixAlert, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
 import { STAFF_ROLES } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
+import { lockWorkspace } from "../connectStore.js";
 import { inviteLimits, removeMemberReleasingAds, teamActor } from "./team.js";
 import type { App } from "../app.js";
 import { AUTO_REFRESH } from "../sync.js";
@@ -134,9 +140,26 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "stores:manage");
     const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
     if (!store) throw new HttpError(404, "Not found", "not_found");
-    await systemDb.store.update({
-      where: { id: store.id },
-      data: { status: "uninstalled", uninstalledAt: new Date(), accessTokenEnc: null, refreshTokenEnc: null, grantedScopes: [] },
+    // Disconnecting is ours alone: the app stays installed in Shopify, and so does any charge on
+    // the store's bill, while the token that could cancel it is wiped here. So a store carrying
+    // the plan's charges stays until they end (Switch to Free, or uninstalling the app in Shopify).
+    // Shopify's word on them first: a charge that ended without its webhook reaching us holds
+    // nothing up, nor does a store whose token Shopify refuses (the app is gone from it).
+    const sub = await withTenant(ws, (tx) => tx.subscription.findUnique({ where: { workspaceId: ws } }));
+    if (store.status !== "uninstalled" && sub && billedThrough(sub, store.id)) await settleWithShopify(store, deps);
+    await systemDb.$transaction(async (tx) => {
+      // billing/subscribe records a charge under the same lock: none lands on the store between
+      // this check and the write.
+      await lockWorkspace(tx, ws);
+      const live = (await tx.store.count({ where: { id: store.id, status: { not: "uninstalled" } } })) > 0;
+      const now = await tx.subscription.findUnique({ where: { workspaceId: ws } });
+      if (live && now && billedThrough(now, store.id)) throw billedStoreRefusal(now);
+      // A store Shopify uninstalled the app from already stays one (no `disconnectedAt`).
+      const at = new Date();
+      await tx.store.update({
+        where: { id: store.id },
+        data: { status: "uninstalled", uninstalledAt: at, ...(live ? { disconnectedAt: at } : {}), accessTokenEnc: null, refreshTokenEnc: null, grantedScopes: [] },
+      });
     });
     await purgeStoreData(store.id, deps.fetchImpl);
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "store.disconnected", targetId: storeId, ip: clientIp(c) });
@@ -254,7 +277,15 @@ export function workspaceRoutes(app: App, deps: Deps) {
     // (app_subscriptions/update). Writing it to `plan` here made an abandoned or declined approval
     // look like a plan the merchant had, and hid the button to try again.
     const pending = { pendingPlan: input.plan, pendingChargeId: r.appSubscription?.id ?? null, billingStoreId: store.id };
-    await systemDb.subscription.upsert({ where: { workspaceId: ws }, create: { workspaceId: ws, plan: "free", status: "active", ...pending }, update: pending });
+    await systemDb.$transaction(async (tx) => {
+      // Under the lock Disconnect takes: a store disconnected while Shopify was asked gets no
+      // charge recorded on it (the one just made lapses unapproved, its approval page never shown).
+      await lockWorkspace(tx, ws);
+      if (!(await tx.store.count({ where: { id: store.id, status: { not: "uninstalled" } } }))) {
+        throw new HttpError(409, "This store was disconnected meanwhile. Choose the plan again with a connected store open.", "store_disconnected");
+      }
+      await tx.subscription.upsert({ where: { workspaceId: ws }, create: { workspaceId: ws, plan: "free", status: "active", ...pending }, update: pending });
+    });
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "billing.subscribe_started", metadata: { plan: input.plan, shop: store.shopDomain }, ip: clientIp(c) });
     return c.json({ confirmationUrl: r.confirmationUrl });
   });
@@ -263,7 +294,9 @@ export function workspaceRoutes(app: App, deps: Deps) {
    * Back to Free, from the app and with nobody's help (requirement 1.2.3): the charge in force is
    * cancelled in Shopify, crediting the unused days (PRORATE_ON_CANCEL), and the plan ends now.
    * Works whether or not paid plans are on sale. A change still awaiting approval stays: approving
-   * it in Shopify is the merchant choosing that plan, and they then get it.
+   * it in Shopify is the merchant choosing that plan, and they then get it. With no installation
+   * left to ask, the plan ends only when Shopify uninstalled the app from the store that paid; a
+   * store merely disconnected here still carries the charge (409 `billed_store_disconnected`).
    */
   app.post("/workspaces/:ws/billing/cancel", async (c) => {
     const { ws } = c.req.param();
@@ -272,21 +305,31 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const chargeId = sub?.shopifyChargeId;
     if (!sub || !chargeId) return c.json({ plan: "free" });
     const stores = await billedStores(ws, sub);
-    // No store left to ask: uninstalling the one that paid cancelled the charge.
-    let ended = stores.length === 0;
+    let ended = false;
     let refused: string | null = null;
+    /** Live stores whose token Shopify refuses: the app was uninstalled there, cancelling the charges on its bill. */
+    let gone = 0;
     for (const store of stores) {
-      const token = await getAccessToken(store, deps.coord, deps.fetchImpl);
-      const { appSubscriptionCancel: r } = await shopifyGraphql<{
-        appSubscriptionCancel: { userErrors: Array<{ message: string }>; appSubscription: { id: string; status: string } | null };
-      }>({
-        shop: store.shopDomain,
-        accessToken: token,
-        apiVersion: env().SHOPIFY_API_VERSION,
-        query: APP_SUBSCRIPTION_CANCEL,
-        variables: { id: chargeId, prorate: PRORATE_ON_CANCEL },
-        fetchImpl: deps.fetchImpl,
-      });
+      let r: { userErrors: Array<{ message: string }>; appSubscription: { id: string; status: string } | null };
+      try {
+        ({ appSubscriptionCancel: r } = await withAccessToken(store, deps.coord, deps.fetchImpl, (accessToken) =>
+          shopifyGraphql<{ appSubscriptionCancel: typeof r }>({
+            shop: store.shopDomain,
+            accessToken,
+            apiVersion: env().SHOPIFY_API_VERSION,
+            query: APP_SUBSCRIPTION_CANCEL,
+            variables: { id: chargeId, prorate: PRORATE_ON_CANCEL },
+            fetchImpl: deps.fetchImpl,
+          }),
+        ));
+      } catch (err) {
+        // A store Shopify no longer serves (its app/uninstalled not processed yet) can't cancel
+        // anything, and has nothing left to cancel: the plan billed on it ends here.
+        if (!store.accessTokenEnc || !installationGone(err)) throw err;
+        gone++;
+        if (store.id === sub.billingStoreId) await endBillingForStore(store.id, "uninstalled");
+        continue;
+      }
       if (!r.userErrors.length) {
         // Anything but CANCELLED (Shopify only stopping the renewal) ends with its own webhook.
         ended = r.appSubscription?.status === "CANCELLED";
@@ -296,10 +339,27 @@ export function workspaceRoutes(app: App, deps: Deps) {
       refused = r.userErrors.map((e) => e.message).join("; ");
       // Over already (an uninstall, or a cancellation we haven't heard of yet)? Shopify says.
       if (store.id === sub.billingStoreId) {
-        await syncBillingFromShopify(store, token, deps.fetchImpl);
+        await syncBillingFromShopify(store, await getAccessToken(store, deps.coord, deps.fetchImpl), deps.fetchImpl);
         const now = await systemDb.subscription.findUnique({ where: { workspaceId: ws } });
         if (now?.shopifyChargeId !== chargeId) return c.json({ plan: now?.plan ?? "free" });
       }
+    }
+    if (gone === stores.length) {
+      // No installation left to ask (no live store, or Shopify refused each one's token). Shopify
+      // cancels an app's charges when it is uninstalled, so the plan is over, unless the store
+      // that pays was only disconnected here: the app, and the charge, are still installed there,
+      // with no token left to cancel it. Uninstalling it in Shopify ends it (app/uninstalled).
+      const kept = await disconnectedBillingStore(ws, sub);
+      if (kept) {
+        throw new HttpError(
+          409,
+          `Your plan is billed through ${kept.shopDomain}, which was disconnected from bizinsights but still has the app installed in Shopify. Uninstall bizinsights from ${kept.shopDomain} in your Shopify admin (Settings → Apps and sales channels): that ends the charge, and the plan moves to Free.`,
+          "billed_store_disconnected",
+          undefined,
+          { shop: kept.shopDomain },
+        );
+      }
+      ended = true;
     }
     if (refused) throw new HttpError(400, refused, "billing_error");
     if (ended) {
@@ -375,4 +435,67 @@ async function billedStores(ws: string, sub: Pick<Subscription, "billingStoreId"
       orderBy: { createdAt: "asc" },
     }),
   );
+}
+
+/**
+ * A store disconnected here (`disconnectedAt`: the app still installed in Shopify) whose bill may
+ * carry the workspace's charge in force: the store recorded as billed, or for a charge from before
+ * that was recorded, any of the workspace's stores disconnected here.
+ */
+async function disconnectedBillingStore(ws: string, sub: Pick<Subscription, "billingStoreId">): Promise<Store | null> {
+  return withTenant(ws, (tx) =>
+    tx.store.findFirst({
+      where: { workspaceId: ws, status: "uninstalled", disconnectedAt: { not: null }, ...(sub.billingStoreId ? { id: sub.billingStoreId } : {}) },
+      orderBy: { disconnectedAt: "desc" },
+    }),
+  );
+}
+
+/**
+ * Whether the plan's charges may sit on `storeId`'s Shopify bill: it is the store recorded as
+ * billed while a charge is in force or awaiting approval, or the charge in force is from before
+ * that was recorded (any of the workspace's stores might carry it then).
+ */
+function billedThrough(sub: Subscription, storeId: string): boolean {
+  if (!sub.billingStoreId) return !!sub.shopifyChargeId;
+  return sub.billingStoreId === storeId && !!(sub.shopifyChargeId || sub.pendingChargeId);
+}
+
+/** Why a store carrying the plan's charges isn't disconnected; Settings → Stores words each code for the store. */
+function billedStoreRefusal(sub: Subscription): HttpError {
+  if (!sub.billingStoreId) {
+    return new HttpError(409, "This workspace's plan is billed through one of its stores in Shopify. Switch to Free in Settings → Billing before disconnecting a store.", "plan_billed");
+  }
+  if (!sub.shopifyChargeId) {
+    const plan = planById(sub.pendingPlan ?? sub.plan).name;
+    return new HttpError(409, `A change to ${plan} waiting for approval in Shopify is billed through this store. Approve or decline it in Shopify first (Settings → Billing reopens it), then disconnect the store.`, "store_billed_pending");
+  }
+  return new HttpError(
+    409,
+    `This store pays for the ${planById(sub.plan).name} plan through its Shopify bill. Switch to Free in Settings → Billing first, or uninstall bizinsights from the store in Shopify, which ends the charge.`,
+    "store_billed",
+  );
+}
+
+/**
+ * Shopify refused the store's token (401/403, or a refresh it refused): it revokes an app's tokens
+ * when the app is uninstalled, so that installation is gone, and every charge on its bill with it.
+ * The rule app/uninstalled follows in the worker (installationState).
+ */
+const installationGone = (err: unknown) => err instanceof StoreDisconnectedError || (err instanceof ShopifyHttpError && (err.status === 401 || err.status === 403));
+
+/**
+ * Bring the charges billed to `store` in line with Shopify before deciding on them: one that ended
+ * (declined, expired, cancelled there) without its webhook reaching us must not hold anything up,
+ * nor may a store Shopify no longer serves. When Shopify can't be asked, nothing changes and the
+ * caller decides on the charges recorded.
+ */
+async function settleWithShopify(store: Store, deps: Deps) {
+  if (!store.accessTokenEnc) return;
+  try {
+    await withAccessToken(store, deps.coord, deps.fetchImpl, (accessToken) => syncBillingFromShopify(store, accessToken, deps.fetchImpl));
+  } catch (err) {
+    if (installationGone(err)) await endBillingForStore(store.id, "uninstalled");
+    else logger.warn({ err, storeId: store.id }, "billing not re-checked with Shopify; deciding on the charges recorded");
+  }
 }
