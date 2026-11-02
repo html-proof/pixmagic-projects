@@ -41,10 +41,24 @@ test("with no ad account connected, Meta's spend comes from what its app reports
   await report(ws, storeId, day(-3), "", 40, 200, 320);
   await report(ws, storeId, day(-2), "", 60, 300, 480);
   await report(ws, storeId, day(-2), "Spring sale", 60, 300, 480);
+  await report(ws, storeId, day(0), "", 25, 100, 0);
   const dates = `preset=custom&from=${day(-7)}&to=${day(-1)}`;
 
   await page.goto(`/advertising?${dates}`);
   const card = page.getByTestId("shopify-marketing");
+  // Today's and this month's spend, whatever the dates: Meta's from the report, Google's not reported, never $0.
+  const tiles = card.getByTestId("marketing-spend-tiles");
+  await expect(tiles.getByTestId("marketing-spend-today-meta")).toHaveAttribute("data-state", "reported");
+  await expect(tiles.getByTestId("marketing-spend-today-meta")).toContainText("$25.00");
+  await expect(tiles.getByTestId("marketing-spend-today-google")).toHaveAttribute("data-state", "unavailable");
+  await expect(tiles.getByTestId("marketing-spend-today-google")).toContainText("Not reported by Shopify");
+  await expect(tiles.getByTestId("marketing-spend-today-total")).toContainText("$25.00");
+  const thisMonth = day(0).slice(0, 7);
+  const monthSpend = 25 + (day(-3).startsWith(thisMonth) ? 40 : 0) + (day(-2).startsWith(thisMonth) ? 60 : 0);
+  await expect(tiles.getByTestId("marketing-spend-month-total")).toContainText(`$${monthSpend}.00`);
+  await expect(tiles.getByTestId("marketing-spend-month-google")).toContainText("Not reported by Shopify");
+  await expect(tiles.getByTestId("marketing-spend-about")).toContainText("time zone (UTC)");
+  await expect(card.getByTestId("marketing-spend-chart")).toBeVisible();
   await expect(card.getByTestId("marketing-total-value")).toHaveText("$100.00");
   await expect(card.getByTestId("marketing-total-meta")).toHaveAttribute("data-from", "marketing");
   await expect(card.getByTestId("marketing-meta")).toHaveAttribute("data-availability", "reported");
