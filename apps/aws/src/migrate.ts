@@ -66,7 +66,7 @@ export async function migrate(input: { databaseUrl: string; migrationsDir: strin
       } catch (err) {
         await client.query("ROLLBACK");
         await client.query(`UPDATE "_prisma_migrations" SET logs = $2 WHERE id = $1`, [id, String((err as Error).message).slice(0, 2000)]);
-        throw new Error(`Migration ${name} failed: ${(err as Error).message}`);
+        throw new Error(`Migration ${name} failed: ${(err as Error).message}`, { cause: err });
       }
       applied.push(name);
     }

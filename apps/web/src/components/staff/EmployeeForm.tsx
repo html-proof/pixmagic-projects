@@ -550,7 +550,7 @@ let zoneCache: string[] | null = null;
 /** IANA zones this browser knows ("UTC" included: browsers' lists leave it out). */
 export function timeZones(): string[] {
   if (zoneCache) return zoneCache;
-  let known: string[] = [];
+  let known: string[];
   try {
     known = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
   } catch {
@@ -581,7 +581,7 @@ export function TimeZoneInput({ id, value, onChange, invalid = false, disabled =
 let currencyCache: Array<{ code: string; name: string }> | null = null;
 function currencies(): Array<{ code: string; name: string }> {
   if (currencyCache) return currencyCache;
-  let codes: string[] = [];
+  let codes: string[];
   try {
     codes = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("currency") : [];
   } catch {

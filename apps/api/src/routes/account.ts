@@ -395,11 +395,10 @@ export function accountRoutes(app: App, deps: Deps) {
       if (isCognito(err, "NotAuthorizedException")) throw new HttpError(400, "Your current password isn't right.", "wrong_password");
       throw cognitoFailure(err, "turn off two-step verification");
     });
-    let accessToken: string;
     let refreshToken: string | undefined;
     if ("tokens" in first) {
       // No code asked for: it is off already.
-      ({ accessToken, refreshToken } = first.tokens);
+      ({ refreshToken } = first.tokens);
     } else {
       if (first.challenge !== "SOFTWARE_TOKEN_MFA") throw new HttpError(403, "Your account needs a sign-in step this app doesn't support yet. Please contact support.", "challenge_unsupported");
       const done = await deps.auth.answerTotpChallenge(first.username ?? user.email, first.session, input.code).catch((err: unknown) => {
@@ -407,7 +406,8 @@ export function accountRoutes(app: App, deps: Deps) {
         throw cognitoFailure(err, "turn off two-step verification");
       });
       if (!("tokens" in done)) throw new HttpError(403, "Your account needs a sign-in step this app doesn't support yet. Please contact support.", "challenge_unsupported");
-      ({ accessToken, refreshToken } = done.tokens);
+      const { accessToken } = done.tokens;
+      ({ refreshToken } = done.tokens);
       await deps.auth.setTotpEnabled(accessToken, false).catch((err: unknown) => {
         throw accountFailure(err, "turn off two-step verification");
       });
@@ -652,7 +652,7 @@ export function accountRoutes(app: App, deps: Deps) {
         throw cognitoFailure(err, "delete Cognito user");
       });
     }
-    let released: Awaited<ReturnType<typeof detachUserAdGrants>> | null = null;
+    let released: Awaited<ReturnType<typeof detachUserAdGrants>> | null;
     try {
       // Ad connections their login powers stop using it (they wait for someone else to reconnect them,
       // keeping their days): a database step that never stops the account from being deleted.

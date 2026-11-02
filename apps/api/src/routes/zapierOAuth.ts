@@ -76,7 +76,7 @@ function clientCredentials(c: Ctx, input: Record<string, string>): { id: string;
   const inBody = input.client_secret !== undefined;
   if (auth?.toLowerCase().startsWith("basic ")) {
     if (inBody) throw new ZapierOAuthError("invalid_request", "Send the client's credentials one way only.");
-    let decoded = "";
+    let decoded: string;
     try {
       decoded = Buffer.from(auth.slice(6).trim(), "base64").toString("utf8");
     } catch {

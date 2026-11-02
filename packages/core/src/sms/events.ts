@@ -267,9 +267,9 @@ async function onCustomer(store: Store, c: CustomerConsentPayload, evidence: Rec
   const signal = shopifySmsConsent(c.sms_marketing_consent, null, "shopify_customer", evidence);
   const customerId = String(c.id);
   const phone = normalizePhone(c.phone ?? null, c.default_address?.country_code ?? null);
-  let contacts: SmsContact[] = [];
-  if (phone) contacts = [await upsertSmsContact(store, { phone, firstName: c.first_name ?? null, shopifyCustomerId: customerId })];
-  else contacts = await systemDb.smsContact.findMany({ where: { storeId: store.id, shopifyCustomerId: customerId } });
+  const contacts: SmsContact[] = phone
+    ? [await upsertSmsContact(store, { phone, firstName: c.first_name ?? null, shopifyCustomerId: customerId })]
+    : await systemDb.smsContact.findMany({ where: { storeId: store.id, shopifyCustomerId: customerId } });
   if (!signal) return contacts;
   for (const contact of contacts) {
     const before = contact.consentState;

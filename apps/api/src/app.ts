@@ -134,7 +134,7 @@ export function buildApp(deps: Deps): App {
     }
     const origin = c.req.header("origin") ?? c.req.header("referer");
     const appOrigin = new URL(env().APP_URL).origin;
-    let ok = false;
+    let ok: boolean;
     try {
       ok = !!origin && new URL(origin).origin === appOrigin;
     } catch {
