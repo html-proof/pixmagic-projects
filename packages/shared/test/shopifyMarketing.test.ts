@@ -91,6 +91,13 @@ describe("the figures a channel reported, and the rates from them", () => {
     expect(f.ctr).toBeCloseTo(30 / 900);
     expect(marketingFigures([])).toMatchObject({ spend: null, impressions: null, clicks: null, orders: null, sales: null });
   });
+
+  it("takes Shopify's 0 for a figure the channel never sent as not reported: no $0 sales, no 0× ROAS", () => {
+    // As Shopify answered on a dev store for an activity that sent spend, impressions and clicks only.
+    const f = marketingFigures([row({ spend: 12.34, impressions: 1000, clicks: 40, orders: 0, sales: 0, newCustomers: 0 }), row({ day: "2026-10-02", spend: 20.5, impressions: 1500, clicks: 55, orders: 0, sales: 0, newCustomers: 0 })]);
+    expect(f).toMatchObject({ spend: 32.84, impressions: 2500, clicks: 95, orders: null, sales: null, newCustomers: null, roas: null, costPerOrder: null, costPerNewCustomer: null });
+    expect(f.cpc).toBeCloseTo(32.84 / 95);
+  });
 });
 
 describe("the Shopify marketing module", () => {

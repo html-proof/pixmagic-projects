@@ -355,6 +355,17 @@ this report are the channel's own claim (its attribution), not the store's order
   `MarketingActivity.adSpend` reaches only that app's own activities (Shopify's wording; not tried here, the
   dev store's token has no `read_marketing_events`). `MarketingEvent` has no spend field at all.
   `marketingEngagementCreate` is the write the channel apps use to send figures, not a read.
+- **A real engagement, end to end (2026-11-02).** On the dev store, the Shopify CLI app (granted
+  `write_marketing_events` by the owner) created the activity "bizinsights test spend (safe to delete)"
+  (`marketingActivityUpsertExternal`, remote id `bizinsights-test-2026-11-02`) and reported three days of
+  spend with `marketingEngagementCreate` (A$12.34, A$20.50, A$7.25, impressions and clicks; no sales).
+  `marketing_engagements` gave them back at once: `marketing_channel` and `marketing_app_name` were both the
+  app's name ("Shopify CLI Connector App"), `marketing_campaign` the activity's title, money as strings
+  ("20.5"), and **0, not empty, for every figure the channel never sent** (orders "0.0", sales "0"). So
+  `marketingFigures` takes a total of 0 as not reported (no A$0 sales, no 0× ROAS), as it already did spend.
+  bizinsights' own `syncShopifyMarketing`, run locally against the store, kept exactly those 6 rows (3 whole
+  days, 3 campaign rows); two more reads left them at 6; the overview showed today A$7.25, this month
+  A$27.75, Google and Meta "Not reported by Shopify".
 - **Which channels report spend is up to each channel's app.** Shopify's changelog (2024-07-02, "cost and
   impression metrics are now available for paid ads in marketing reports") names Google, Pinterest,
   Snapchat and TikTok. Meta isn't named, and Shopify's Facebook & Instagram help points merchants to

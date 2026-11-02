@@ -226,14 +226,22 @@ function sums(rows: readonly MarketingRow[]): Record<Measure, number | null> {
 }
 
 /**
+ * A total of 0 as not reported: Shopify's report gives 0, not empty, for a figure the channel never
+ * sent (seen on a dev store, 2026-11-02: spend and clicks sent, orders "0.0" and sales "0" back).
+ */
+const told = (v: number | null) => (v === 0 ? null : v);
+
+/**
  * The rows' figures and rates. Spend counts only when it is more than 0: a channel reporting 0 spend
  * beside its clicks hasn't told Shopify what it spent (free posts, an app without spend reporting).
- * The rates set against spend are worked out from the rows that reported some, their clicks,
- * impressions, orders and sales with it: another activity's sales or clicks, with no spend told,
- * would make the spend look better than it did.
+ * Every other figure adding up to 0 is taken as not reported too (`told`): Shopify can't tell a 0 the
+ * channel sent from one it never sent. The rates set against spend are worked out from the rows that
+ * reported some, their clicks, impressions, orders and sales with it: another activity's sales or
+ * clicks, with no spend told, would make the spend look better than it did.
  */
 export function marketingFigures(rows: readonly MarketingRow[]): MarketingFigures {
-  const s = sums(rows);
+  const all = sums(rows);
+  const s = { ...all, impressions: told(all.impressions), clicks: told(all.clicks), orders: told(all.orders), sales: told(all.sales), newCustomers: told(all.newCustomers) };
   const paid = sums(rows.filter((r) => r.spend !== null && r.spend > 0));
   const spend = paid.spend;
   return {
@@ -242,7 +250,7 @@ export function marketingFigures(rows: readonly MarketingRow[]): MarketingFigure
     ctr: ratio(s.clicks, s.impressions),
     cpc: ratio(spend, paid.clicks),
     cpm: ratio(spend, paid.impressions, 1000),
-    roas: spend !== null && paid.sales !== null ? paid.sales / spend : null,
+    roas: spend !== null && told(paid.sales) !== null ? paid.sales! / spend : null,
     costPerOrder: ratio(spend, paid.orders),
     costPerNewCustomer: ratio(spend, paid.newCustomers),
   };
