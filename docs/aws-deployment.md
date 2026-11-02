@@ -1075,8 +1075,8 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://bizinsights.io/api/ads/adsense/callback` on the Google client "Insights web", and
   `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app 971575545351940
   (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works); steps in
-  [ads-review-packs.md](ads-review-packs.md)). The release without Nango's code is live (release 131, 2026-10-30),
-  so Nango's old `…/api/ads/nango/oauth-callback` can now come off both ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
+  [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` was removed from both on
+  2026-11-02 ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
   and, once their clients
   exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an

@@ -345,7 +345,7 @@ addresses, `/api/ads/nango/oauth-callback` and `/api/webhooks/nango`, answer 404
 
 ### Owner's steps
 
-(a) and (e) are done. (b) to (d) are for now, in that order: (a) is live since release 131 (2026-10-30), so neither
+(a), (d) and (e) are done. (b) and (c) are for now, in that order: (a) is live since release 131 (2026-10-30), so neither
 production nor the release a failed deploy rolls back to signs in through Nango or reads its key.
 
 - [x] **(a) Remove the move code: live as release 131 (2026-10-30).** Pull request #279 (a5e1785f), merged through #290
@@ -373,14 +373,14 @@ production nor the release a failed deploy rolls back to signs in through Nango 
   3. **Integrations**: delete `bizinsights-meta-ads`, `bizinsights-google-ads`, `bizinsights-google-adsense` and
      `whatsapp-business`. They hold copies of bizinsights' Meta app secret and Google client secret.
   4. **The account** (Aby Thomas, tangoenery2004@gmail.com): delete it once nothing else uses it.
-- [ ] **(d) The old redirect URI**, now that (a) is live: remove `https://bizinsights.io/api/ads/nango/oauth-callback`
-  from Meta app 971575545351940 → Facebook Login for Business → Settings → **Valid OAuth Redirect URIs** (then **Save
-  Changes** at the bottom of the page, and reload to check), and from Google Cloud insights-511119 → Google Auth
-  Platform → Clients → "Insights web" → **Authorized redirect URIs** (Save). Keep
-  `https://bizinsights.io/api/ads/meta/callback`, `https://bizinsights.io/api/ads/google/callback` and
-  `https://bizinsights.io/api/ads/adsense/callback`. On 2026-11-02 Meta's list still held it, next to
-  `https://bizinsights.io/api/ads/meta/callback` and `https://bizinsights.io/`; Claude's attempt to remove it was
-  refused by Claude's own safety check, so this one is yours.
+- [x] **(d) The old redirect URI: removed 2026-11-02.** On the owner's word, Claude removed
+  `https://bizinsights.io/api/ads/nango/oauth-callback` from Meta app 971575545351940 → Facebook Login for Business →
+  Settings → **Valid OAuth Redirect URIs** (its ×, then **Save Changes** at the bottom of the page) and from Google Cloud
+  insights-511119 → Google Auth Platform → Clients → "Insights web" → **Authorized redirect URIs** (its bin, then
+  **Save**). Each was checked on a fresh load: Meta lists `https://bizinsights.io/api/ads/meta/callback` and
+  `https://bizinsights.io/`; Google lists `https://bizinsights.io/api/ads/google/callback`,
+  `https://bizinsights.io/api/ads/adsense/callback` and the old Cloudflare Worker's two workers.dev callbacks (they go
+  when the old Worker is retired). Google says a change can take 5 minutes to a few hours to apply.
 - [x] **(e) Meta's redirect URI: confirmed working 2026-10-28.** `https://bizinsights.io/api/ads/meta/callback` was in
   Valid OAuth Redirect URIs next to the Nango callback on 2026-10-22
   ([integrations-readiness.md](integrations-readiness.md)), and Continue with Meta Ads needs it again. On 2026-10-28
@@ -433,8 +433,7 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 
 The old `d2mr8m2p1qkh58.cloudfront.net` and Cloudflare Worker (workers.dev) callbacks are never sent; remove them
 (Google's branding verification accepts only verified domains). Nango's old callback,
-`https://bizinsights.io/api/ads/nango/oauth-callback`, is still registered at both (at Meta, seen 2026-11-02);
-bizinsights no longer answers it (404), and it can go from both now ("Leaving Nango", step (d)).
+`https://bizinsights.io/api/ads/nango/oauth-callback`, was removed from both on 2026-11-02 ("Leaving Nango", step (d)).
 
 In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields are token lists: type the value, then
 **click the suggestion that appears under the field**, then Save Changes. Pressing Enter shows a chip and a "Changes
