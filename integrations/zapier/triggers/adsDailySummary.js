@@ -17,6 +17,7 @@ module.exports = hookTrigger({
         {
           platform: "meta",
           name: "Meta Ads",
+          source: "platform_api",
           spend: 40,
           currency: "AUD",
           mixed_currencies: null,
@@ -35,6 +36,7 @@ module.exports = hookTrigger({
   },
   outputFields: [
     { key: "data__day", label: "Day" },
+    { key: "data__platforms[]source", label: "Where each platform's figures come from (platform_api or shopify_marketing)" },
     { key: "data__shopify__net_sales", label: "Shopify net sales", type: "number" },
     { key: "data__shopify__orders", label: "Shopify orders", type: "integer" },
     { key: "data__attribution_note", label: "About attributed value" },

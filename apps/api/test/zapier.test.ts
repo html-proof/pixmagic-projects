@@ -563,6 +563,60 @@ describe("Zapier's searches", () => {
     expect((await zget(t.access_token, "/zapier/search/ad-performance?since=2026-10-20&until=2026-10-01")).statusCode).toBe(400);
     expect((await zget(t.access_token, "/zapier/search/adsense-earnings?since=2026-10-01&until=2026-10-20")).json()).toEqual([]);
   });
+
+  it("gives each platform's own purchase value and ROAS: the summed ones stay for older Zaps, flagged as not adding up", async () => {
+    const { owner, ws, store } = await business("owner-pp", "owner@platforms.test", "Platforms", "platforms.myshopify.com");
+    const t = await connect(owner.headers, ws, store.id);
+    await day(await adAccount(ws, store.id, "meta", "act_1", "AUD"), "2026-10-10", 100, 400);
+    await day(await adAccount(ws, store.id, "google", "123", "AUD"), "2026-10-10", 50, 100);
+    const [both] = (await zget(t.access_token, "/zapier/search/ad-performance?since=2026-10-01&until=2026-10-20")).json();
+    // Deprecated: Meta's claim added to Google's, as before, for the Zaps that map them.
+    expect(both).toMatchObject({ spend: 150, platform_attributed_purchase_value: 500, platform_attributed_roas: 3.33, claims_add_up: false });
+    expect(both.platforms).toEqual([
+      expect.objectContaining({ platform: "meta", name: "Meta Ads", source: "platform_api", spend: 100, currency: "AUD", platform_attributed_purchase_value: 400, platform_attributed_roas: 4 }),
+      expect.objectContaining({ platform: "google", name: "Google Ads", source: "platform_api", spend: 50, currency: "AUD", platform_attributed_purchase_value: 100, platform_attributed_roas: 2 }),
+    ]);
+    expect(both.platforms[0].accounts.map((a: { account_id: string }) => a.account_id)).toEqual(["act_1"]);
+    expect(both.attribution_note).toMatch(/use each platform's own/);
+    expect(both.shopify_marketing_note).toBeUndefined();
+    // One platform asked: its claim is the total's.
+    const [meta] = (await zget(t.access_token, "/zapier/search/ad-performance?platform=meta&since=2026-10-01&until=2026-10-20")).json();
+    expect(meta).toMatchObject({ platform_attributed_purchase_value: 400, platform_attributed_roas: 4, claims_add_up: true, platforms: [{ platform: "meta" }] });
+  });
+
+  it("finds the spend a platform's app reported to Shopify when it has no ad account here, never beside its own", async () => {
+    const { owner, ws, store } = await business("owner-sm", "owner@reported.test", "Reported", "reported.myshopify.com");
+    const t = await connect(owner.headers, ws, store.id);
+    const row = (d: string, app: string, spend: number | null, campaign = "", sales: number | null = null) =>
+      systemDb.shopifyMarketingDay.create({ data: { workspaceId: ws, storeId: store.id, day: d, channel: app, app, campaign, spend, impressions: 1000, clicks: 40, orders: 2, sales, currency: "AUD", fetchedAt: new Date() } });
+    await row("2026-10-10", "Google & YouTube", 30, "", 120);
+    await row("2026-10-10", "Google & YouTube", 30, "Summer sale", 120);
+    await row("2026-10-11", "Google & YouTube", 20);
+    await row("2026-10-10", "Facebook & Instagram", 70, "", 210);
+    // Read up to the 10th: the 11th isn't known yet.
+    await systemDb.shopifyMarketingSync.create({ data: { storeId: store.id, workspaceId: ws, coveredFrom: "2026-08-01", syncedThrough: "2026-10-10", lastSyncedAt: new Date("2026-10-11T06:00:00Z") } });
+    // The reports aren't granted: "Ad spend reported to Shopify" is off, so nothing to find.
+    const url = "/zapier/search/ad-performance?since=2026-10-01&until=2026-10-20";
+    expect((await zget(t.access_token, url)).json()).toEqual([]);
+    // Shopify reports every channel's money in the store's currency.
+    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: ["read_orders", "read_reports"], currency: "AUD" } });
+    const [r] = (await zget(t.access_token, url)).json();
+    expect(r).toMatchObject({ spend: 100, currency: "AUD", accounts: [], claims_add_up: false, last_successful_sync_at: "2026-10-11T06:00:00.000Z", data_through: "2026-10-10" });
+    expect(r.platforms).toEqual([
+      expect.objectContaining({ platform: "meta", source: "shopify_marketing", spend: 70, conversions: 2, platform_attributed_purchase_value: 210, platform_attributed_roas: 3, accounts: [], reported_by: ["Facebook & Instagram"] }),
+      expect.objectContaining({ platform: "google", source: "shopify_marketing", spend: 30, impressions: 1000, clicks: 40, platform_attributed_purchase_value: 120, platform_attributed_roas: 4, accounts: [] }),
+    ]);
+    expect(r.shopify_marketing_note).toMatch(/reported to Shopify/);
+    // Meta connected and synced: its own figures, and Shopify's Meta spend is left out.
+    const meta = await adAccount(ws, store.id, "meta", "act_1", "AUD");
+    await day(meta, "2026-10-10", 80, 300);
+    const [mixed] = (await zget(t.access_token, url)).json();
+    expect(mixed).toMatchObject({ spend: 110, accounts: [{ platform: "meta", account_id: "act_1" }] });
+    expect(mixed.platforms.map((p: { platform: string; source: string; spend: number }) => [p.platform, p.source, p.spend])).toEqual([
+      ["meta", "platform_api", 80],
+      ["google", "shopify_marketing", 30],
+    ]);
+  });
 });
 
 describe("Settings → Integrations' Zapier card", () => {

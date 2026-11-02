@@ -163,6 +163,21 @@ describe("reading what the store's marketing apps report to Shopify", () => {
     expect(res).toMatchObject({ status: "done", rows: 1001 });
   });
 
+  it("checks the store's Zapier ad spend triggers after a read: a store with no ad account has no ad sync to do it", async () => {
+    const store = await makeStore();
+    const user = await systemDb.user.create({ data: { email: "owner@marketing.test" } });
+    await systemDb.membership.create({ data: { workspaceId: store.workspaceId, userId: user.id, role: "owner", permissions: [] } });
+    const grant = await systemDb.zapierGrant.create({ data: { workspaceId: store.workspaceId, storeId: store.id, userId: user.id, clientId: "zap-test" } });
+    const hook = await systemDb.zapierHook.create({
+      data: { workspaceId: store.workspaceId, storeId: store.id, grantId: grant.id, event: "ad_spend_threshold", targetUrl: "https://hooks.zapier.com/hooks/standard/1/abc/", inputs: { platform: "google", period: "day", amount: 20 } },
+    });
+    answer = (q) => (q.includes("marketing_campaign") ? table([]) : table([channelRow(today, "Google & YouTube", "Google & YouTube", "25.00", 40)]));
+    await runShopifyMarketing({ kind: "shopify_marketing", storeId: store.id, mode: "recent" }, deps);
+    const events = await systemDb.zapierEvent.findMany();
+    expect(events.map((e) => e.dedupeKey)).toEqual([`ad_spend_threshold:${hook.id}:${today}`]);
+    expect((events[0]!.payload as { data: Record<string, unknown> }).data).toMatchObject({ spend: 25, platforms: [{ platform: "google", source: "shopify_marketing", spend: 25 }] });
+  });
+
   it("reads nothing for a store that hasn't granted its reports, or is gone", async () => {
     const store = await makeStore(["read_orders"]);
     answer = () => table([]);

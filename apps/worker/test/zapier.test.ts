@@ -11,6 +11,7 @@ import {
   sweepZapier,
   unsubscribeZapierHook,
   zapierAfterAdSync,
+  zapierAfterMarketingRead,
   type ZapierJob,
 } from "@app/core/zapier";
 import { ZAPIER_MAX_ATTEMPTS } from "@app/shared/zapier";
@@ -337,6 +338,135 @@ describe("the advertising triggers", () => {
       shopify: { net_sales: 450, total_sales: 520, orders: 7, currency: "AUD" },
       accounts_without_the_day: [],
     });
+  });
+});
+
+describe("ad spend reported to Shopify, for a platform without an ad account here", () => {
+  const NOW = new Date("2026-10-28T09:00:00Z");
+  /** A row of shopify_marketing_days: a channel's whole day, or (`campaign`) its part of it. */
+  async function reported(w: { ws: { id: string }; store: { id: string } }, day: string, app: string, spend: number | null, extra: { campaign?: string; impressions?: number; clicks?: number; orders?: number; sales?: number } = {}) {
+    const { campaign = "", impressions = null, clicks = null, orders = null, sales = null } = extra;
+    await systemDb.shopifyMarketingDay.create({ data: { workspaceId: w.ws.id, storeId: w.store.id, day, channel: app, app, campaign, spend, impressions, clicks, orders, sales, currency: "AUD", fetchedAt: NOW } });
+  }
+  /** The store granted its reports, and Shopify's marketing report is read from August up to `through`. */
+  async function readThrough(w: { ws: { id: string }; store: { id: string } }, through: string, opts: { lastError?: string; lastSyncedAt?: Date | null } = {}) {
+    await systemDb.store.update({ where: { id: w.store.id }, data: { grantedScopes: ["read_orders", "read_reports"] } });
+    const row = { coveredFrom: "2026-08-01", syncedThrough: through, lastSyncedAt: opts.lastSyncedAt === undefined ? new Date("2026-10-28T06:00:00Z") : opts.lastSyncedAt, lastError: opts.lastError ?? null };
+    await systemDb.shopifyMarketingSync.upsert({ where: { storeId: w.store.id }, create: { storeId: w.store.id, workspaceId: w.ws.id, ...row }, update: row });
+  }
+  async function account(w: { ws: { id: string }; store: { id: string } }, provider: string, accountId: string, extra: Record<string, unknown> = {}) {
+    return systemDb.adConnection.create({ data: { workspaceId: w.ws.id, storeId: w.store.id, provider, accountId, currency: "AUD", accessTokenEnc: "x", tokenKeyVersion: 1, lastSyncedAt: new Date(), ...extra } });
+  }
+  const eventData = async () => ((await systemDb.zapierEvent.findFirstOrThrow()).payload as { data: Record<string, unknown> }).data;
+
+  it("a threshold with no ad account counts what Google's app reported to Shopify: whole days read only, once the reports are granted", async () => {
+    const w = await world("ad_spend_threshold", { platform: "any", period: "month", amount: 100 });
+    await reported(w, "2026-10-26", "Google & YouTube", 60, { clicks: 30, sales: 200 });
+    await reported(w, "2026-10-27", "Google & YouTube", 50);
+    // A campaign's row is part of its channel's day: never counted again.
+    await reported(w, "2026-10-27", "Google & YouTube", 50, { campaign: "Summer sale" });
+    // A channel that reported clicks but no spend has no spend, never a 0.
+    await reported(w, "2026-10-27", "Facebook & Instagram", null, { clicks: 9 });
+    // The store hasn't granted its reports: nothing of Shopify's counts.
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+    // Read only up to the 26th: the 27th isn't known yet, so 60 so far.
+    await readThrough(w, "2026-10-26");
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+    expect(await systemDb.zapierEvent.count()).toBe(0);
+    // The next read reaches today: checked after it, as the worker does after each read.
+    await readThrough(w, "2026-10-28");
+    await zapierAfterMarketingRead(w.store.id, { queues }, NOW);
+    expect(await systemDb.zapierEvent.count()).toBe(1);
+    const data = await eventData();
+    expect(data).toMatchObject({
+      period: "2026-10",
+      spend: 110,
+      currency: "AUD",
+      accounts: [],
+      platforms: [{ platform: "google", name: "Google Ads", source: "shopify_marketing", spend: 110, currency: "AUD", reported_by: ["Google & YouTube"], data_through: "2026-10-28", last_synced_at: "2026-10-28T06:00:00.000Z" }],
+      last_successful_sync_at: "2026-10-28T06:00:00.000Z",
+    });
+    expect(String(data.shopify_marketing_note)).toMatch(/reported to Shopify/);
+    // Once per trigger and period, wherever the spend came from.
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(0);
+  });
+
+  it("never counts a platform's spend twice: its own API's while its account syncs, Shopify's only without one", async () => {
+    const w = await world("ad_spend_threshold", { platform: "any", period: "day", amount: 50 });
+    const meta = await account(w, "meta", "act_1", { syncedThrough: "2026-10-28" });
+    await systemDb.adCampaignDaily.create({ data: { workspaceId: w.ws.id, storeId: w.store.id, connectionId: meta.id, provider: "meta", accountId: "act_1", campaignId: "c1", campaignName: "C", day: "2026-10-28", spend: 40, currency: "AUD" } });
+    // What Meta's app told Shopify about the same ads: not added to Meta's own figures.
+    await reported(w, "2026-10-28", "Facebook & Instagram", 35);
+    await reported(w, "2026-10-28", "Google & YouTube", 20);
+    await readThrough(w, "2026-10-28");
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(1);
+    const data = await eventData();
+    expect(data).toMatchObject({ spend: 60, accounts: [{ platform: "meta", account_id: "act_1", spend: 40 }] });
+    expect(data.platforms).toEqual([
+      expect.objectContaining({ platform: "meta", source: "platform_api", spend: 40 }),
+      expect.objectContaining({ platform: "google", source: "shopify_marketing", spend: 20 }),
+    ]);
+    // Only Meta asked: Shopify's Meta spend still isn't counted next to its own account's.
+    const metaOnly = await world("ad_spend_threshold", { platform: "meta", period: "day", amount: 41 });
+    const own = await account(metaOnly, "meta", "act_2", { syncedThrough: "2026-10-28" });
+    await systemDb.adCampaignDaily.create({ data: { workspaceId: metaOnly.ws.id, storeId: metaOnly.store.id, connectionId: own.id, provider: "meta", accountId: "act_2", campaignId: "c1", campaignName: "C", day: "2026-10-28", spend: 40, currency: "AUD" } });
+    await reported(metaOnly, "2026-10-28", "Facebook & Instagram", 35);
+    await readThrough(metaOnly, "2026-10-28");
+    expect(await checkZapierThresholds(metaOnly.store.id, queues, NOW)).toBe(0);
+  });
+
+  it("an account whose access ended before the dates gives way to what its app reported to Shopify", async () => {
+    const w = await world("ad_spend_threshold", { platform: "meta", period: "day", amount: 30 });
+    await account(w, "meta", "act_9", { status: "reconnect", syncedThrough: "2026-09-30" });
+    await reported(w, "2026-10-28", "Facebook & Instagram", 35);
+    await readThrough(w, "2026-10-28");
+    expect(await checkZapierThresholds(w.store.id, queues, NOW)).toBe(1);
+    expect(await eventData()).toMatchObject({ spend: 35, accounts: [], platforms: [{ platform: "meta", source: "shopify_marketing", spend: 35 }] });
+  });
+
+  it("the daily summary of a store with no ad account goes once Shopify's report is read through yesterday", async () => {
+    const w = await world("ads_daily_summary");
+    await reported(w, "2026-10-27", "Google & YouTube", 25, { impressions: 800, clicks: 40, orders: 2, sales: 90 });
+    // Reports not granted: nothing to send, nor to wait for.
+    expect(await maybeSendAdsDailySummary(w.store.id, queues, NOW)).toBe(false);
+    // Read up to the 26th, at 09:00 at the store: wait for the next read.
+    await readThrough(w, "2026-10-26");
+    expect(await maybeSendAdsDailySummary(w.store.id, queues, NOW)).toBe(false);
+    await readThrough(w, "2026-10-28");
+    expect(await maybeSendAdsDailySummary(w.store.id, queues, NOW)).toBe(true);
+    expect(await maybeSendAdsDailySummary(w.store.id, queues, NOW)).toBe(false);
+    const data = await eventData();
+    expect(data).toMatchObject({
+      day: "2026-10-27",
+      platforms: [
+        {
+          platform: "google",
+          name: "Google Ads",
+          source: "shopify_marketing",
+          spend: 25,
+          currency: "AUD",
+          impressions: 800,
+          clicks: 40,
+          conversions: 2,
+          platform_attributed_purchase_value: 90,
+          platform_attributed_roas: 3.6,
+          accounts: [],
+          reported_by: ["Google & YouTube"],
+        },
+      ],
+      accounts_without_the_day: [],
+    });
+    expect(String(data.shopify_marketing_note)).toMatch(/reported to Shopify/);
+  });
+
+  it("isn't held for Shopify's report while its reads are refused", async () => {
+    const w = await world("ads_daily_summary");
+    const meta = await account(w, "meta", "act_1", { syncedThrough: "2026-10-27" });
+    await systemDb.adCampaignDaily.create({ data: { workspaceId: w.ws.id, storeId: w.store.id, connectionId: meta.id, provider: "meta", accountId: "act_1", campaignId: "c1", campaignName: "C", day: "2026-10-27", spend: 40, currency: "AUD" } });
+    // Shopify refused its marketing report from the start: Google has nothing to come from there.
+    await readThrough(w, "2026-10-20", { lastError: "access_denied", lastSyncedAt: null });
+    expect(await maybeSendAdsDailySummary(w.store.id, queues, NOW)).toBe(true);
+    expect(await eventData()).toMatchObject({ platforms: [{ platform: "meta", source: "platform_api", spend: 40 }] });
   });
 });
 

@@ -5,7 +5,6 @@ import { periodsOf, type PeriodGranularity } from "@app/shared/dates";
 import type { MarketingFigures, MarketingGroup, MarketingSpendFigure, MarketingSpendPeriod, ShopifyMarketing } from "@app/shared/shopifyMarketing";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { shownFigures } from "@/components/dashboard/adFigures";
 import { fmtDateTime, fmtDay, fmtMoneyCompact, fmtPeriod, fmtRelative, fmtSpan, fmtTimes, periodChoices } from "@/components/dashboard/format";
 import { ChangeText } from "@/components/dashboard/HomeCards";
 import { LineChart, type LineSeries } from "@/components/dashboard/LineChart";
@@ -13,6 +12,7 @@ import { ChartChoice } from "@/components/dashboard/Primitives";
 import type { Overview } from "@/components/dashboard/types";
 import { AdCard, EmptyNote, MiniFigure } from "./AdCard";
 import { PLATFORM, PLATFORM_COLOR } from "./AdvertisingUi";
+import { totalLeftOutWords, totalSpend } from "./marketingTotal";
 import { adSourcesOf, SourceBadge } from "./sources";
 
 // ---------------------------------------------------------------------------
@@ -140,34 +140,6 @@ export function MarketingPlatformCard({ ov, provider }: { ov: Overview; provider
       <MarketingPlatformFigures ov={ov} provider={provider} />
     </AdCard>
   );
-}
-
-type SpendPart = { key: string; name: string; spend: number; from: "platform" | "marketing"; through: string | null };
-
-/**
- * Every channel's spend for the dates, each from where it is shown: a platform's own API, or what its
- * app reported to Shopify; `through`: a part that covers the dates only up to that day so far.
- */
-function totalSpend(ov: Overview, m: ShopifyMarketing): { total: number | null; parts: SpendPart[]; mixed: boolean } {
-  const parts: SpendPart[] = [];
-  const reportedThrough = m.through && m.through < ov.range.to ? m.through : null;
-  const a = ov.modules.ads;
-  let mixed = false;
-  for (const s of adSourcesOf(ov)) {
-    if (s.source === "platform") {
-      const own = a?.byProvider.find((p) => p.provider === s.provider);
-      const shown = own ? shownFigures(own) : null;
-      if (!shown?.totals || own?.demo) continue;
-      if (a!.currency !== m.currency) mixed = true;
-      else parts.push({ key: s.provider, name: PLATFORM[s.provider].name, spend: shown.totals.spend, from: "platform", through: shown.through });
-    } else if (s.marketing) {
-      const spend = m.platforms.find((g) => g.platform === s.provider)?.totals?.spend;
-      if (spend !== null && spend !== undefined) parts.push({ key: s.provider, name: PLATFORM[s.provider].name, spend, from: "marketing", through: reportedThrough });
-    }
-  }
-  for (const g of m.others) if (g.totals?.spend) parts.push({ key: `other:${g.name}`, name: g.name, spend: g.totals.spend, from: "marketing", through: reportedThrough });
-  const total = parts.length ? Math.round(parts.reduce((n, p) => n + p.spend, 0) * 100) / 100 : null;
-  return { total, parts, mixed };
 }
 
 function StatusNote({ m }: { m: ShopifyMarketing }) {
@@ -325,8 +297,9 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
   }
   const money = (n: number) => fmtMoney(n, m.currency);
   const sources = adSourcesOf(ov);
-  const spend = totalSpend(ov, m);
-  const shown = [...m.platforms.filter((g) => sources.find((s) => s.provider === g.platform)?.source !== "platform"), ...m.others];
+  const spend = totalSpend(ov, m, sources);
+  const leftOut = totalLeftOutWords(spend);
+  const shown =[...m.platforms.filter((g) => sources.find((s) => s.provider === g.platform)?.source !== "platform"), ...m.others];
   const campaigns = shown
     .flatMap((g) => g.campaigns.map((c) => ({ ...c, channel: g.name })))
     .sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0) || (b.sales ?? 0) - (a.sales ?? 0))
@@ -348,8 +321,11 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
         <div className="space-y-5">
           <SpendTiles m={m} ov={ov} />
           <SpendByDay m={m} ov={ov} />
-          <div className="border-t border-border pt-4" data-testid="marketing-total">
-            <p className="text-xs text-muted">Total advertising expenses · {fmtSpan(ov.range.from, ov.range.to)}</p>
+          <div className="border-t border-border pt-4" data-testid="marketing-total" data-partial={spend.partial ? "true" : undefined}>
+            <p className="text-xs text-muted">
+              Total advertising expenses · {fmtSpan(ov.range.from, ov.range.to)}
+              {spend.partial ? " · partial" : ""}
+            </p>
             <p className="text-2xl font-bold tabular-nums tracking-tight" data-testid="marketing-total-value">
               {spend.total === null ? DATA_UNAVAILABLE : money(spend.total)}
             </p>
@@ -366,7 +342,12 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
                 ))}
               </ul>
             )}
-            {spend.mixed && <p className="mt-1 text-xs text-muted">Ad accounts in another currency than your store&apos;s aren&apos;t added in: amounts in different currencies are never added together.</p>}
+            {/* Never silently short: a platform still being read, or accounts in another currency (never added together), are named. */}
+            {leftOut.map((words) => (
+              <p key={words} className="mt-1 text-xs text-muted" data-testid="marketing-total-left-out">
+                {words}
+              </p>
+            ))}
           </div>
 
           {m.platforms.map((g) => {
