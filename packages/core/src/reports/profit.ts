@@ -6,6 +6,7 @@ import {
   localDay,
   monthDays,
   operatingDaysBetween,
+  profitAds,
   profitAndLoss,
   resolveCapabilities,
   type ProfitDay,
@@ -41,8 +42,9 @@ export interface ProfitSees {
  *    history marked as such rather than counted as no sales;
  *  - the items sold at each product's cost per item in Shopify (productCostsByDay), when the store
  *    shares its products;
- *  - the connected ad accounts' spend day by day (the ads module's own series: only accounts in the
- *    store's currency, never the Google Ads demo);
+ *  - the connected ad accounts' spend day by day (the ads module's own series), only when it is the
+ *    whole spend in the store's currency: never with an account left out in another currency, nor
+ *    the Google Ads demo's (profitAds);
  *  - the owner's costs (Settings → Costs), spread over the days they cover, or the days the store is
  *    open when the owner said which.
  * `tx` is a tenant transaction; the caller checked the store is the workspace's and the month isn't
@@ -66,9 +68,9 @@ export async function profitReport(tx: Tx, store: Store, month: string, now: Dat
     sees.ads ? adsModule(tx, scope, span, { from: addDays(span.from, -1), to: addDays(span.from, -1) }, store.currency, null, { timeZone: store.timezone, now }) : null,
   ]);
 
-  // Ad spend is set against the store's sales only as the dashboard does: in its currency, every
-  // account counted, none of it the demo's simulated spend.
-  const adsState: ProfitSetup["ads"] = !sees.ads ? "hidden" : !ads ? "none" : ads.demo || ads.currency !== store.currency || ads.accounts.some((a) => !a.counted) ? "unusable" : "known";
+  // Ad spend is set against the store's sales only as the dashboard does: in its currency, no account
+  // left out of it, none of it the demo's simulated spend.
+  const adsState = profitAds(sees.ads, ads, store.currency);
   const spend = new Map(ads?.series.map((d) => [d.day, d.spend]) ?? []);
   const setup: ProfitSetup = {
     productCosts: !sees.productCosts ? "hidden" : productsShared ? "known" : "unavailable",
@@ -116,8 +118,13 @@ export async function profitReport(tx: Tx, store: Store, month: string, now: Dat
     setup: {
       productCosts: setup.productCosts,
       ads: setup.ads,
-      /** The ad accounts' currency, when it isn't the store's (or the demo's), for the page to say so. */
-      adsCurrency: ads?.currency ?? null,
+      /** The ad spend's currency when it isn't the store's, for the page to say so; null when it is. */
+      adsCurrency: ads && ads.currency !== store.currency ? ads.currency : null,
+      /**
+       * The accounts left out of the spend, in yet another currency (the ads module's `leftOut`): with
+       * the spend in the store's currency, the page names them, as the dashboard does.
+       */
+      adsLeftOut: ads?.leftOut ?? [],
       adsDemo: !!ads?.demo,
       operatingWeekdays: setup.operatingWeekdays,
       completeFrom: setup.completeFrom,

@@ -5,6 +5,7 @@ import { isMonth, type ProfitLoss, type ProfitSetup } from "@app/shared/profit";
 import { isDay } from "@app/shared/dates";
 import { canManage, useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
+import type { LeftOutAccount } from "@/components/dashboard/profitFigures";
 import { useApi, useLiveApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +26,10 @@ export interface ProfitAnswer {
   setup: {
     productCosts: ProfitSetup["productCosts"];
     ads: ProfitSetup["ads"];
+    /** The ad spend's currency when it isn't the store's (answers before `adsLeftOut` gave it either way). */
     adsCurrency: string | null;
+    /** The accounts left out of the spend, in another currency (adsNotUsableWords names them). Absent from older answers. */
+    adsLeftOut?: LeftOutAccount[];
     adsDemo: boolean;
     operatingWeekdays: number[];
     completeFrom: string | null;

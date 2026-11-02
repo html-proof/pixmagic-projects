@@ -146,6 +146,40 @@ describe("the profit and loss of a month", () => {
     expect((await call("GET", url(ws, store.id, `/profit?month=${MONTH}`), other.a.headers)).statusCode).toBe(404);
   });
 
+  it("takes no ad spend off that leaves an account out in another currency, and names it", async () => {
+    const { a, ws, store } = await brief();
+    ok(await call("PUT", url(ws, store.id, "/expenses/settings"), a.headers, { completeFrom: "2025-01-01" }));
+    const account = (provider: string, accountId: string, accountName: string, currency: string) =>
+      systemDb.adConnection.create({
+        data: { workspaceId: ws, storeId: store.id, provider, accountId, accountName, currency, timezone: "UTC", accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom: "2020-01-01", syncedThrough: "2026-10-31", lastSyncedAt: new Date() },
+      });
+    const spent = (c: { id: string; provider: string; accountId: string }, spend: number) =>
+      systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId: store.id, connectionId: c.id, provider: c.provider, accountId: c.accountId, campaignId: "1", campaignName: "Spring", day: GOOD_DAY, spend } });
+    // Meta in the store's rupees, Google in euros: the spend is Meta's ₹500 alone, so not the whole spend.
+    const meta = await account("meta", "act_in", "India shop", "INR");
+    const google = await account("google", "1234567890", "EU shop", "EUR");
+    await spent(meta, 500);
+    await spent(google, 40);
+    const get = async () => ok(await call("GET", url(ws, store.id, `/profit?month=${MONTH}`), a.headers));
+    let pl = await get();
+    // The spend is in rupees: no "in INR, not INR", and the euro account is named.
+    expect(pl.setup).toMatchObject({ ads: "unusable", adsCurrency: null, adsDemo: false });
+    expect(pl.setup.adsLeftOut).toEqual([{ id: google.id, provider: "google", accountId: "1234567890", name: "EU shop", currency: "EUR" }]);
+    expect(pl.days.find((d: { from: string }) => d.from === GOOD_DAY)).toMatchObject({ revenue: 10_000, adSpend: null, operatingProfit: null, gaps: ["ad_spend"] });
+
+    // Without the euro account the rupees are the whole spend: ₹10,000 − ₹3,000 − ₹500 − ₹1,000 − ₹1,666.67.
+    await systemDb.adConnection.update({ where: { id: google.id }, data: { enabled: false } });
+    pl = await get();
+    expect(pl.setup).toMatchObject({ ads: "known", adsCurrency: null, adsLeftOut: [] });
+    expect(pl.days.find((d: { from: string }) => d.from === GOOD_DAY)).toMatchObject({ adSpend: 500, variableCosts: 4_500, operatingProfit: 3833.33, gaps: [] });
+
+    // The euro account alone: the spend itself is in another currency, which the page says.
+    await systemDb.adConnection.update({ where: { id: google.id }, data: { enabled: true } });
+    await systemDb.adConnection.update({ where: { id: meta.id }, data: { enabled: false } });
+    pl = await get();
+    expect(pl.setup).toMatchObject({ ads: "unusable", adsCurrency: "EUR", adsLeftOut: [] });
+  });
+
   it("gives the sheet each day's product costs and the costs' terms to work out its own columns", async () => {
     const { a, ws, store } = await brief();
     const ov = ok(await call("GET", url(ws, store.id, `/overview?preset=custom&from=2026-09-01&to=2026-09-30&parts=sheet`), a.headers));

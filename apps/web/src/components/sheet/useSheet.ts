@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import type { BusinessEvent } from "@app/shared/businessEvents";
 import { daysBetweenInclusive } from "@app/shared/dates";
 import { dayShown, isSheetGrain, parseEventFilter, parseWeekdays, sheetColumns, sheetRows, sheetTotals, weekdaysParam, type EventFilter, type SheetDay, type SheetGrain } from "@app/shared/sheet";
-import type { ProfitSetup } from "@app/shared/profit";
+import { profitAds, type ProfitSetup } from "@app/shared/profit";
 import { seesModule } from "@app/shared/access";
 import { useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
@@ -165,8 +165,8 @@ export type SheetState = ReturnType<typeof useSheet>;
 /**
  * What the sheet's profit rows need beside each day's figures (@app/shared/profit): the owner's costs
  * with their terms (the expenses module, with the breakdown permission), whether product costs are
- * known day by day, and the ad spend as the dashboard sets it against sales (the store's currency,
- * every account counted, no demo). Null without the costs.
+ * known day by day, and the ad spend as the dashboard sets it against sales (profitAds: the store's
+ * currency, no account left out, no demo). Null without the costs.
  */
 export function profitSetupOf(ov: Overview, seesAds: boolean, seesProductCosts: boolean): ProfitSetup | null {
   const e = ov.modules.expenses;
@@ -174,7 +174,7 @@ export function profitSetupOf(ov: Overview, seesAds: boolean, seesProductCosts: 
   const ads = ov.modules.ads as AdsModule | undefined;
   return {
     productCosts: !seesProductCosts ? "hidden" : ov.modules.product_costs?.byDay ? "known" : "unavailable",
-    ads: !seesAds ? "hidden" : !ads ? "none" : ads.demo || ads.currency !== ov.store.currency || ads.accounts.some((a) => !a.counted) ? "unusable" : "known",
+    ads: profitAds(seesAds, ads && { demo: !!ads.demo, currency: ads.currency, leftOut: leftOutOf(ads) }, ov.store.currency),
     costs: e.terms,
     operatingWeekdays: e.operatingWeekdays ?? [],
     completeFrom: e.completeFrom,

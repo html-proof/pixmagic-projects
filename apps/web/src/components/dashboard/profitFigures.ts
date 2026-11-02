@@ -85,6 +85,23 @@ export function leftOutWords(accounts: readonly LeftOutAccount[]): string | null
 }
 
 /**
+ * Why the Profit sheet's profit and loss takes no ad spend off (ProfitSetup.ads "unusable"): the
+ * Google Ads demo's is simulated; the spend is in another currency than the store's (`currency`, null
+ * when it is the store's), the accounts left out of it in yet others; or it is in the store's currency
+ * but leaves accounts out (`leftOut`), so it isn't the whole spend.
+ */
+export function adsNotUsableWords(ads: { demo: boolean; currency: string | null; leftOut: readonly LeftOutAccount[] }, storeCurrency: string): string {
+  if (ads.demo) return "The Google Ads demo's spend is simulated.";
+  if (ads.currency && ads.currency !== storeCurrency) {
+    const currencies = [...new Set([ads.currency, ...ads.leftOut.flatMap((acc) => (acc.currency ? [acc.currency] : []))])];
+    return `Your ad accounts report in ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(currencies)}, not ${storeCurrency}.`;
+  }
+  const left = leftOutWords(ads.leftOut);
+  // An answer from before `adsLeftOut` doesn't say which.
+  return left ? `${left} Profit needs every account's spend.` : `An ad account reports in another currency than ${storeCurrency}.`;
+}
+
+/**
  * Shopify counts a sale with no cost per item at no cost, so a store that records none gets a cost
  * of goods sold of 0 (or none at all) for sales that did cost something. That isn't a cost: it is
  * "not recorded".
