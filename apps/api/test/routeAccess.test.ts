@@ -316,6 +316,19 @@ describe("every route of the API, deny by default", () => {
     for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(customers)).toBe(false);
   });
 
+  it("places deleting a workspace: its owners' alone (workspace:delete, a session of their own), in no list above (every rule below holds for it), never public", () => {
+    // workspaceDeletion.test.ts: an admin, a member given everything and an API key are refused too.
+    const all = new Set(ctx.routes.map(key));
+    for (const route of ["GET /workspaces/:ws/deletion", "POST /workspaces/:ws/delete/code", "DELETE /workspaces/:ws"]) {
+      expect(all.has(route), route).toBe(true);
+      expect(isWorkspaceRoute(route), route).toBe(true);
+      for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(route), route).toBe(false);
+    }
+    // What an account's deletion takes with it: the account's own, behind a sign-in like the rest of /auth/account.
+    expect(all.has("GET /auth/account/deletion")).toBe(true);
+    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST]) expect(list.has("GET /auth/account/deletion")).toBe(false);
+  });
+
   it("nobody signed in: 401 from every route behind a sign-in", async () => {
     const wrong: string[] = [];
     for (const r of ctx.routes.filter((r) => !PUBLIC.has(key(r)) && !CONFIG_FIRST.has(key(r)))) {

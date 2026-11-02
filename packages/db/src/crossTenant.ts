@@ -15,6 +15,8 @@ export const CROSS_TENANT_REASONS = {
   // --- Inside a workspace's own scope.
   already_connected:
     "Whether a WhatsApp number is connected to a store of another workspace (a number is unique across bizinsights): only yes or no comes back.",
+  workspace_deleted:
+    "The record of a workspace's deletion (packages/core/src/workspaceDeletion.ts), written with no workspace once the workspace is gone so it outlives it: one insert into audit_logs, nothing read.",
   ad_grants:
     "A person's own Google or Meta grant, which may power connections in several workspaces: whether it still powers one before bizinsights takes it back at the platform (taking it back ends every connection on it), who granted the connections that never learned it, the refresh token they gave before, reused on their next sign-in (adConnections/connect.ts), and their own Meta sign-in for another of their stores, used for a new store without Meta's screen (adConnections/reuse.ts).",
 

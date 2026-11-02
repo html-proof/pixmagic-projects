@@ -3,6 +3,7 @@ import { systemDb, withTenant, type Store, type Subscription } from "@app/db";
 import {
   APP_SUBSCRIPTION_CANCEL,
   APP_SUBSCRIPTION_CREATE,
+  assertDeletable,
   audit,
   billingEnabled,
   createTeamInvitation,
@@ -20,10 +21,13 @@ import {
   shopifyGraphql,
   syncBillingFromShopify,
   updateMemberAccess,
+  workspaceDeletionEmail,
+  workspaceDeletionSummary,
 } from "@app/core";
 import { describeAlert, hasFullAccess, LEGACY_GRANTS, mayFixAlert, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
 import { STAFF_ROLES } from "@app/shared/staff";
-import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
+import { checkDeletionCode, deletionConfirmation, runWorkspaceDeletion, sendDeletionCode, spendDeletionCode, workspaceDeletion } from "../deletion.js";
 import { inviteLimits, removeMemberReleasingAds, teamActor } from "./team.js";
 import type { App } from "../app.js";
 import { AUTO_REFRESH } from "../sync.js";
@@ -56,6 +60,56 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const { name } = z.object({ name: z.string().trim().min(1).max(80) }).parse(await body(c));
     await withTenant(ws, (tx) => tx.workspace.update({ where: { id: ws }, data: { name } }));
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "workspace.renamed", metadata: { name }, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  // ---------------- Deleting the workspace (core workspaceDeletion.ts; its code: deletion.ts) ----------------
+
+  /** An owner (workspace:delete) asking as themselves: never an API key or a shared link's session. */
+  async function deletingOwner(c: Ctx, ws: string) {
+    const a = await requireWorkspace(c, deps, ws, "workspace:delete");
+    if (!a.user || a.link) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+    const summary = await workspaceDeletionSummary(ws);
+    if (!summary) throw new HttpError(404, "Not found", "not_found");
+    return { user: a.user, summary };
+  }
+
+  /** What deleting it takes with it, for the dialog that confirms it. */
+  app.get("/workspaces/:ws/deletion", async (c) => {
+    const { summary } = await deletingOwner(c, c.req.param("ws"));
+    return c.json({ workspace: { id: summary.id, name: summary.name, stores: summary.stores.map((s) => ({ shopDomain: s.shopDomain, name: s.name })), members: summary.members, paidPlan: summary.paidPlan } });
+  });
+
+  /** "Email me a code" in the Delete workspace dialog. None while the deletion would be refused anyway (paid_plan). */
+  app.post("/workspaces/:ws/delete/code", async (c) => {
+    const { ws } = c.req.param();
+    const { user, summary } = await deletingOwner(c, ws);
+    assertDeletable(summary);
+    const challenge = await sendDeletionCode(c, deps, user, workspaceDeletion(user.id, ws), (code) =>
+      workspaceDeletionEmail({ code, name: user.displayName, email: user.email, appUrl: env().APP_URL, senders: env(), workspace: summary.name }),
+    );
+    return c.json({ ok: true, challenge });
+  });
+
+  /**
+   * Delete the workspace: its stores' data, everything its team set up, and the access it was given
+   * (core workspaceDeletion.ts says what, and in which order). Any of its owners may, confirmed with
+   * DELETE and a code emailed to their own address for this workspace; the people it had lose
+   * access with it. The accounts stay: an only owner deleting the account too does it from
+   * Settings → Security, which deletes the workspace with it (routes/account.ts).
+   */
+  app.delete("/workspaces/:ws", async (c) => {
+    const { ws } = c.req.param();
+    const { user, summary } = await deletingOwner(c, ws);
+    const input = deletionConfirmation.parse(await body(c));
+    await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
+    await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    const target = workspaceDeletion(user.id, ws);
+    await checkDeletionCode(deps, target, input.code);
+    // Before the code is spent, so the refusal leaves it standing.
+    assertDeletable(summary);
+    await spendDeletionCode(deps, target);
+    await runWorkspaceDeletion(c, deps, user, ws, "workspace");
     return c.json({ ok: true });
   });
 

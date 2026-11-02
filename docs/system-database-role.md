@@ -141,7 +141,9 @@ until migrate finished. So there are three PRs:
      uses `shopify_install`. A WhatsApp number already connected to another store uses
      `already_connected`. Whether a person's Google or Meta grant still powers a connection in
      another workspace, before it is taken back, and the refresh token they gave before, use
-     `ad_grants`.
+     `ad_grants`. Deleting a workspace (packages/core/src/workspaceDeletion.ts) writes the record of
+     it with no workspace once the workspace is gone, which the workspace's own scope refuses:
+     `workspace_deleted`, for that one insert.
    - Rollback: Deploy's automatic rollback, or revert the PR.
 3. **Fail closed** after seven days with no "system query in no row scope" warning in CloudWatch Logs
    (each warning is fixed by scoping its entry point).

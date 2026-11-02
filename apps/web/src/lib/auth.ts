@@ -361,11 +361,37 @@ export const sendVerificationCode = () => api<{ ok: true; alreadyVerified?: bool
 
 export const verifyEmailCode = (code: string) => api<{ user: SignedInUser }>("/auth/account/verify-email", { method: "POST", body: { code } });
 
+/** A workspace that goes with the account: the account is its only owner (GET /auth/account/deletion). */
+export interface SoleWorkspace {
+  id: string;
+  name: string;
+  /** Its stores' names. */
+  stores: string[];
+  /** Everyone who loses access with it, the account included. */
+  members: number;
+  /** A paid plan Shopify bills for it: it must be switched to Free first. */
+  paidPlan: string | null;
+}
+
+/** What deleting the account deletes with it: the workspaces it is the only owner of. */
+export const accountDeletionPreview = () => api<{ workspaces: SoleWorkspace[] }>("/auth/account/deletion");
+
 /** Deleting the account, step 1: a 6-digit code emailed to the account's address (its countdowns, the server's clock). */
 export const sendDeletionCode = () => api<{ ok: true; challenge: CodeChallenge }>("/auth/account/delete/code", { method: "POST" });
 
-/** Step 2: the code deletes the account. */
-export const deleteAccount = (code: string) => api<{ ok: true }>("/auth/account/delete", { method: "POST", body: { confirm: "DELETE", code } });
+/**
+ * Step 2: the code deletes the account, and with it `workspaces` (the ids of every workspace it is
+ * the only owner of, as shown: one more or one less is refused, sole_owner, with the list as it is
+ * now in `owned`). Deleting workspaces takes a while: up to the minute the API itself has.
+ */
+export const deleteAccount = (code: string, workspaces: string[] = []) =>
+  api<{ ok: true }>("/auth/account/delete", { method: "POST", body: { confirm: "DELETE", code, workspaces }, timeoutMs: 60_000 });
+
+/** The workspaces a sole_owner refusal lists as they are now, or null for any other error. */
+export function soleOwnedFromError(e: unknown): SoleWorkspace[] | null {
+  if (!(e instanceof ApiError) || e.code !== "sole_owner" || !Array.isArray(e.data.owned)) return null;
+  return e.data.owned as SoleWorkspace[];
+}
 
 /**
  * Where a finished sign-in or sign-up goes: back to the page that asked for it (a deep link opened

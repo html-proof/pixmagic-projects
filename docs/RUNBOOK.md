@@ -152,6 +152,7 @@ half hour, or Settings → Shopify → Reconnect).
 | `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp Automation's connections (instance token, webhook key, linked number), test number, contacts (number, first name), messages (number, send details, text) and webhook bodies waiting to be applied (the older `whatsapp_*` and `wa_*` tables, read by nothing, are left as they are; docs/whatsapp.md), and the inventory alerts' WhatsApp numbers. Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). Ad connections are picked by both ciphertexts (access and refresh token), not by `token_key_version`, and each sign-in's rows are rewritten together, only over what was read. |
 | `ops:ad-persons` | Fills in who granted access (`ad_connections.external_user_id`: Google's account id, Meta's app-scoped user id) for ad connections that don't know it, one look-up per sign-in (Google: a token refresh first). Until a connection knows, a Disconnect looks the unknown ones up itself (10 sign-ins at most) and keeps the grant at Google or Meta for any it can't place, so run this once after this version is deployed, and again while it prints connections still without a person. A token that no longer works marks its connections "reconnect"; ones the platform wouldn't place stay unknown (their next sync tries again). Safe to repeat (`OPS_LIMIT` caps the sign-ins per run, default 200). |
 | `ops:ad-health` | Reads only: how the ad connections stand (packages/core/src/adConnections/health.ts). Connections per platform and status; error codes; how many wait for a reconnect; the shown, active ones without a successful sync for a day (or never, an hour after connecting) and the ones failing 3+ syncs in a row, by connection id, platform account id, workspace and store; the last 24 hours of syncs by outcome and platform with the commonest failure codes; and which platforms this server offers Connect for. Ids and counts only: no token, ciphertext, email or account name, so its output can go into a ticket. Uses the same env file as the other tasks; it decrypts nothing. |
+| `ops:delete-workspace` | Deletes the workspace `OPS_WORKSPACE` as its owner `OPS_ACTOR` (a user id; refused unless they are an owner) would from Settings → Workspace (packages/core/src/workspaceDeletion.ts), recorded with `via: support`. Prints what would go and stops, unless `OPS_CONFIRM` is the workspace's name exactly as printed. Refused while Shopify bills a paid plan for it. Safe to repeat: it finishes one that stopped part way. Its env file also needs the Evolution API and Google email settings of the app secret, or the WhatsApp instance and Gmail grants are left at the provider (logged). See "Merchant asks for data deletion". |
 
 ## Routine operations
 
@@ -220,7 +221,34 @@ Zapier's calls to the token endpoint do.
 Rotating `CUSTOMER_HASH_KEY` itself has the consequences above; don't, unless it leaked.
 
 ### Merchant asks for data deletion
-Disconnecting in Settings → Stores deletes synced data immediately. Shopify's `shop/redact` (48 h after uninstall) does the same automatically.
+Merchants do it themselves, and an emailed request is answered by pointing them there first:
+- **One store's synced data**: Settings → Shopify → Disconnect deletes it at once (what they entered for it, costs and business events, stays with the store). Uninstalling the app does the same 48 hours later through Shopify's `shop/redact`, which also erases the store row.
+- **A whole workspace**: Settings → Workspace → Delete workspace (owners only; `DELETE /workspaces/:ws`, `packages/core/src/workspaceDeletion.ts`), confirmed with DELETE and a code emailed to the owner's own address. Refused (`paid_plan`) while Shopify bills a paid plan for the workspace: Settings → Billing → Switch to Free first, which cancels the charge.
+- **Their account**: Settings → Security → Delete account. A workspace they are the only owner of is listed in that dialog and deleted with the account once they tick it.
+
+What deleting a workspace removes, in this order (each step is safe to repeat, so running it again finishes one that stopped):
+1. Access: its API keys and email-event keys are revoked, its Zapier connections too, and every store is disconnected (Shopify tokens deleted).
+2. Each store, as `shop/redact` erases one: the WhatsApp instance at Evolution API, the synced data with the ad connections (grants taken back at Google and Meta unless another connection still uses them), the customers' email records.
+3. The email accounts' grants (Google's; Microsoft has no endpoint for one app's grant, the person removes it at myaccount.microsoft.com).
+4. One transaction: costs, business events, import jobs and notification settings, then the workspace row, which takes members, invitations, stores, alerts, staff records, email and every other workspace table with it. Shopify's deliveries (`webhook_events`, which hold no payload) stay, unlinked from the store, so a redelivery is still recognised.
+5. The record, which outlives it: an `audit_logs` row with `workspace_id` null and `action = 'workspace.deleted'`, `target_id` the workspace, `actor_user_id` who asked, and in `metadata` the shops, the store ids and `via` (`workspace`, `account` or `support`). The api function logs `workspace deleted` with the same.
+
+bizinsights stays installed in the shop until the merchant removes it in Shopify; opening it again starts from nothing (a new workspace to claim).
+
+**An emailed request** (the privacy policy and /data-deletion invite them at the support address):
+1. Reply asking them to sign in and do it themselves (above). Doing it signed in, with the code emailed to the account, is what proves the request is the owner's.
+2. Only if they can't (locked out, the code never arrives): check the sender is the account's own address and an owner of the workspace, with the owner-role connection (RUNBOOK top: the admin host). Never on the word of any other address.
+   ```sql
+   SELECT w.id AS workspace_id, w.name, u.id AS user_id, m.role
+   FROM stores s JOIN workspaces w ON w.id = s.workspace_id JOIN memberships m ON m.workspace_id = w.id JOIN users u ON u.id = m.user_id
+   WHERE s.shop_domain = '<shop>.myshopify.com' AND u.email = '<sender's address>';
+   ```
+3. With `role = 'owner'`: `OPS_WORKSPACE=<workspace_id> OPS_ACTOR=<user_id> pnpm --filter @app/worker ops:delete-workspace` prints what would go; add `OPS_CONFIRM=<the name, exactly as printed>` to delete it (Maintenance tasks above: the production env file). A paid plan refuses it as the app does: cancel the charge first (Settings → Billing as that owner, or in the Shopify Partner dashboard).
+4. Their account too, if asked: delete the Cognito users (`SELECT username FROM auth_identities WHERE user_id = '<user_id>'`, then `aws cognito-idp admin-delete-user --user-pool-id <pool> --username <username>`), then `DELETE FROM users WHERE id = '<user_id>';`. Reply within 30 days, saying what was deleted.
+
+**`deletion_incomplete`** (a 503 to the merchant): the code was spent but the deletion stopped part way.
+- A workspace: logged by the api function as `workspace deletion incomplete` with `workspaceId`, `userId`, `via` and the error, and recorded as the person's `workspace_deletion_incomplete` auth event (`SELECT user_id, metadata, created_at FROM auth_events WHERE type = 'workspace_deletion_incomplete' ORDER BY created_at DESC;`). What went stays gone and the rest is still there, the account included. The merchant was told to try again, which finishes it; if they wrote in, or it keeps failing, fix the cause from the error and finish it with `ops:delete-workspace` (step 3 above, with that `workspaceId` and `userId`). Done when `SELECT count(*) FROM workspaces WHERE id = '<workspaceId>'` is 0 and the `workspace.deleted` record is there.
+- An account: logged as `account deletion: Cognito users deleted but the user row was not`, auth event `account_deletion_incomplete`. Its sign-in is already gone (and any workspace it was the only owner of, deleted first). Finish with `UPDATE zapier_grants SET revoked_at = now(), revoked_reason = 'account_deleted' WHERE user_id = '<userId>' AND revoked_at IS NULL;` and `DELETE FROM users WHERE id = '<userId>';` (memberships go with it).
 
 ### Back up and restore the database
 RDS backs up `insights-production` by itself: automated backups kept 14 days, restorable to any second in that window, and a final snapshot if the instance is ever deleted. Nothing to schedule.

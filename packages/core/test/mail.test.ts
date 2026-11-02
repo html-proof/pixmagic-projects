@@ -97,6 +97,7 @@ describe("who each email comes from", () => {
       password_reset_code: "BizInsights Support <support@bizinsights.io>",
       temporary_password: "BizInsights Support <support@bizinsights.io>",
       account_deletion_code: "BizInsights Support <support@bizinsights.io>",
+      workspace_deletion_code: "BizInsights Support <support@bizinsights.io>",
       team_invitation: "BizInsights <link@bizinsights.io>",
       staff_invitation: "BizInsights <staff@bizinsights.io>",
       notice: "bizinsights <no-reply@bizinsights.io>",

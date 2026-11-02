@@ -930,7 +930,7 @@ describe("account security", () => {
     }
   });
 
-  it("deletes the account and its sign-in with a code emailed to its address, but not while it is a workspace's only owner", async () => {
+  it("deletes the account and its sign-in with a code emailed to its address, and a workspace it is the only owner of only once that is confirmed", async () => {
     const owner = await signIn(ctx, "u1", "a@x.com");
     const password = ctx.auth.users.get("u1")!.password!;
     const ws = await createWorkspace(ctx, owner.headers, "Solo Shop");
@@ -939,12 +939,8 @@ describe("account security", () => {
     // The password no longer deletes it: the emailed code does, and none was asked for yet.
     expect((await del({ confirm: "DELETE", password })).statusCode).toBe(400);
     expect((await del({ confirm: "DELETE", code: "123456" })).json().error).toBe("code_required");
-    // The only owner hears why before any code is emailed.
-    const sent = ctx.mailer.sent.length;
-    const blocked = await askForCode();
-    expect(blocked.statusCode).toBe(409);
-    expect(blocked.json()).toMatchObject({ error: "sole_owner", workspaces: ["Solo Shop"] });
-    expect(ctx.mailer.sent.length).toBe(sent);
+    // The only owner is shown the workspace that would go with it (workspaceDeletion.test.ts deletes one).
+    expect((await get("/auth/account/deletion", owner.headers)).json()).toMatchObject({ workspaces: [{ id: ws, name: "Solo Shop", paidPlan: null }] });
 
     // A second owner takes over; the code goes to the account's address, from the support sender.
     const partner = await signIn(ctx, "u2", "b@x.com");
@@ -957,9 +953,9 @@ describe("account security", () => {
     expect((await askForCode()).json().error).toBe("resend_cooldown");
     expect((await del({ confirm: "DELETE", code: String((Number(code) + 1) % 1_000_000).padStart(6, "0") })).json().error).toBe("invalid_code");
     expect((await del({ confirm: "delete", code })).statusCode).toBe(400);
-    // Left the only owner after the code was sent: refused, and the code isn't spent by the refusal.
+    // Left the only owner after the code was sent: refused until that workspace is confirmed too, and the code isn't spent by the refusal.
     await systemDb.membership.delete({ where: { id: second.id } });
-    expect((await del({ confirm: "DELETE", code })).statusCode).toBe(409);
+    expect((await del({ confirm: "DELETE", code })).json()).toMatchObject({ error: "sole_owner", workspaces: ["Solo Shop"], owned: [{ id: ws }] });
     await systemDb.membership.create({ data: { workspaceId: ws, userId: partner.user.id, role: "owner" } });
     const res = await del({ confirm: "DELETE", code });
     expect(res.statusCode).toBe(200);
