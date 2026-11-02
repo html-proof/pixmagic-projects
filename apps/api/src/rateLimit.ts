@@ -96,6 +96,8 @@ export const LIMITS = {
    * Ads operations are shared by every merchant). The callback needs a fresh one, so this bounds it too.
    */
   adsConnect: { max: 10, windowSec: 600 },
+  /** A connect link's page (opening it, starting a sign-in, choosing), per IP (a token is 256 bits; this only slows scanning). */
+  adsLinkIp: { max: 60, windowSec: 600 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
   adsSync: { max: 6, windowSec: 600 },
   /** The Google Ads demo connected, reset or disconnected, per user: each writes rows and queues a 90-day sync. */

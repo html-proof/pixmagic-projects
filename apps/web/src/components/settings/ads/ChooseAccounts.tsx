@@ -47,23 +47,10 @@ export function ChooseAccounts({
 }) {
   const path = `${base}/ads/pending/${encodeURIComponent(pick)}`;
   const { data, error } = useApi<PendingAccounts>(path);
-  const [chosen, setChosen] = useState<Set<string> | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const findId = useId();
 
   useEffect(() => {
-    if (!data || chosen) return;
-    setChosen(firstChoice(data.accounts));
-    onLoaded(data.provider);
-  }, [data, chosen, onLoaded]);
-
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!data || !q) return data?.accounts ?? [];
-    return data.accounts.filter((a) => a.accountId.toLowerCase().includes(q) || (a.name ?? "").toLowerCase().includes(q));
-  }, [data, query]);
+    if (data) onLoaded(data.provider);
+  }, [data, onLoaded]);
 
   if (error) {
     return (
@@ -75,7 +62,58 @@ export function ChooseAccounts({
       </Alert>
     );
   }
-  if (!data || !chosen) return <div className="card skeleton h-40" aria-busy="true" aria-label="Loading the accounts to choose from" />;
+  if (!data) return <div className="card skeleton h-40" aria-busy="true" aria-label="Loading the accounts to choose from" />;
+  return (
+    <AccountPicker
+      data={data}
+      storeName={storeName}
+      onConfirm={async (accountIds) => {
+        const r = await api<{ provider: AdProvider; connected: number }>(path, { method: "POST", body: { accountIds } });
+        // The numbers live on the dashboard: go and watch them arrive.
+        window.location.assign(`/dashboard?${new URLSearchParams({ adsConnected: r.provider, accounts: String(r.connected), store: storeId })}`);
+      }}
+      onCancel={async () => {
+        await api(path, { method: "DELETE" }).catch(() => undefined);
+        onDone();
+      }}
+    />
+  );
+}
+
+/**
+ * The list of a sign-in's accounts with a tick each, and Connect / Cancel: on Settings → Advertising
+ * (ChooseAccounts) and on a connect link's page (app/connect/meta). `onConfirm` throws to say it
+ * didn't work (shown above the buttons); it leaves the page or closes the list when it did.
+ */
+export function AccountPicker({
+  data,
+  storeName,
+  intro,
+  messages,
+  onConfirm,
+  onCancel,
+}: {
+  data: PendingAccounts;
+  storeName: string;
+  /** What ticking does, when not the settings page's (where unticking hides an account). */
+  intro?: string;
+  /** The page's own words for the API's codes, when a confirm fails (actionError). */
+  messages?: Readonly<Record<string, string>>;
+  onConfirm: (accountIds: string[]) => Promise<void>;
+  onCancel: () => Promise<void>;
+}) {
+  const [chosen, setChosen] = useState<Set<string>>(() => firstChoice(data.accounts));
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const findId = useId();
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return data.accounts;
+    return data.accounts.filter((a) => a.accountId.toLowerCase().includes(q) || (a.name ?? "").toLowerCase().includes(q));
+  }, [data, query]);
+
   const P = AD_PLATFORMS[data.provider];
   const many = data.accounts.length > MANY;
   const filtered = shown.length !== data.accounts.length;
@@ -101,18 +139,15 @@ export function ChooseAccounts({
     setBusy(true);
     setFailed(null);
     try {
-      const r = await api<{ provider: AdProvider; connected: number }>(path, { method: "POST", body: { accountIds: [...chosen] } });
-      // The numbers live on the dashboard: go and watch them arrive.
-      window.location.assign(`/dashboard?${new URLSearchParams({ adsConnected: r.provider, accounts: String(r.connected), store: storeId })}`);
+      await onConfirm([...chosen]);
     } catch (e) {
-      setFailed(actionError(e, "connect those accounts"));
+      setFailed(actionError(e, "connect those accounts", messages));
       setBusy(false);
     }
   };
   const cancel = async () => {
     setBusy(true);
-    await api(path, { method: "DELETE" }).catch(() => undefined);
-    onDone();
+    await onCancel();
   };
 
   return (
@@ -126,8 +161,8 @@ export function ChooseAccounts({
             Choose {P.name} accounts for {storeName}
           </h2>
           <p className="text-xs text-muted">
-            Your login can see {data.accounts.length} account{data.accounts.length === 1 ? "" : "s"}. Tick the ones whose numbers belong on this store&apos;s dashboard; an
-            account you untick is hidden from it. You can change this later.
+            Your login can see {data.accounts.length} account{data.accounts.length === 1 ? "" : "s"}.{" "}
+            {intro ?? "Tick the ones whose numbers belong on this store's dashboard; an account you untick is hidden from it. You can change this later."}
           </p>
         </div>
       </div>
