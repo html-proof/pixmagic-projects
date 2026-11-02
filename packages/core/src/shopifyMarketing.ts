@@ -384,10 +384,12 @@ export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeI
   const covered = (r: DateRange) => !!sync?.coveredFrom && !!sync.syncedThrough && (sync.backfilled || r.from >= sync.coveredFrom) && r.to <= sync.syncedThrough;
   const compare = range.to < today && covered(previous);
   const read = (r: DateRange) => tx.shopifyMarketingDay.findMany({ where: { workspaceId: ws, storeId, day: { gte: r.from, lte: r.to } } });
-  const [rows, previousRows, last] = await Promise.all([
+  const [rows, previousRows, last, month] = await Promise.all([
     read(range),
     compare ? read(previous) : null,
     tx.shopifyMarketingDay.groupBy({ by: ["channel", "app"], where: { workspaceId: ws, storeId, campaign: "" }, _max: { day: true } }),
+    // Today's and this month's spend, whatever the dates: the month's whole days so far.
+    tx.shopifyMarketingDay.findMany({ where: { workspaceId: ws, storeId, campaign: "", day: { gte: `${today.slice(0, 7)}-01`, lte: today } } }),
   ]);
   const ours = (r: Awaited<ReturnType<typeof read>>[number]): MarketingRow => ({
     day: r.day,
@@ -417,5 +419,6 @@ export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeI
     compared: compare ? { from: previous.from, to: previous.to } : null,
     currency: store.currency,
     sync: state,
+    current: { today, rows: month.map(ours) },
   });
 }

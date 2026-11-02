@@ -21,6 +21,7 @@
     "./customers": "./src/customers.ts",
     "./dates": "./src/dates.ts",
     "./expenses": "./src/expenses.ts",
+    "./profit": "./src/profit.ts",
     "./device": "./src/device.ts",
     "./health": "./src/health.ts",
     "./integrations": "./src/integrations.ts",

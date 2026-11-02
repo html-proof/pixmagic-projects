@@ -18,6 +18,8 @@ export interface LineSeries {
   color: string;
   /** One per day; null where the day has no figure (not read yet): a gap in the line, never a 0. */
   values: Array<number | null>;
+  /** Columns below zero in this colour instead (a loss in red), with `bars`. */
+  negativeColor?: string;
 }
 
 /** The runs of days a series has figures for, as [first, last] index pairs: each is drawn on its own. */
@@ -187,7 +189,7 @@ export function LineChart({
                     // A day with very little still shows a sliver, so it never reads as nothing.
                     const yTop = Math.abs(y(v) - y(0)) < 2 ? y(0) - Math.sign(v) * 2 : y(v);
                     const dim = (at !== null && at !== i ? 0.45 : 1) * (days[i] === today ? 0.45 : 1);
-                    return <path key={i} d={columnPath(x(i) - barW / 2 + j * w, w, y(0), yTop)} opacity={dim} style={{ transition: "opacity 120ms" }} />;
+                    return <path key={i} d={columnPath(x(i) - barW / 2 + j * w, w, y(0), yTop)} fill={v < 0 ? s.negativeColor : undefined} opacity={dim} style={{ transition: "opacity 120ms" }} />;
                   })}
                 </g>
               ))}

@@ -56,7 +56,7 @@ describe("the store's own costs", () => {
     const list = ok(await call("GET", url(ws, store.id), a.headers));
     expect(list.currency).toBe("AUD");
     expect(list.expenses.map((e: { name: string }) => e.name).sort()).toEqual(["Label printer", "Shopify Basic"]);
-    expect(list.settings).toEqual({ completeFrom: null, updatedAt: null });
+    expect(list.settings).toEqual({ completeFrom: null, operatingWeekdays: [], updatedAt: null });
 
     // The dashboard: last month holds the whole plan and the one-off labels; not complete yet.
     const dates = `preset=custom&from=${LAST_MONTH.from}&to=${LAST_MONTH.to}`;

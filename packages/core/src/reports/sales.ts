@@ -119,10 +119,13 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
   const byDay = new Map(rows.map((x) => [x.day, x]));
   return eachDay(r.from, r.to).map((day) => {
     const x = byDay.get(day);
-    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, units: 0, refunds: 0, averageOrderValue: null, orderValue: 0, newCustomerOrders: 0 };
+    if (!x) return { day, grossSales: 0, discounts: 0, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, units: 0, refunds: 0, averageOrderValue: null, orderValue: 0, newCustomerOrders: 0 };
     const beforeRefunds = r2(x.grossSales - x.discounts);
     return {
       day,
+      // Gross sales less discounts and returns is net sales (the Profit sheet's profit and loss shows each).
+      grossSales: r2(x.grossSales),
+      discounts: r2(x.discounts),
       netSales: r2(beforeRefunds - x.refunds),
       totalSales: r2(x.totalSales),
       shipping: r2(x.shipping),

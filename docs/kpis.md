@@ -773,8 +773,10 @@ Every figure bizinsights has for the store laid out like the owner's own spreads
 figure, the days shown added up first, then a column per day, week (Monday to Sunday) or calendar
 month (`?by=`; without it days up to 45 days, weeks up to 190, then months). Its data is the
 dashboard's own answer narrowed to it (`GET …/overview?parts=sheet`: `sales_overview`, `funnel` with
-`visitsByDay`, `ads`, `ad_connections`); `@app/shared/sheet` adds the days up. Nothing is estimated.
-Page access: "View sales and revenue" (`analytics.sales`); each row needs what its figure needs.
+`visitsByDay`, `ads`, `ad_connections`, `product_costs` with `byDay`, `expenses` with `terms`);
+`@app/shared/sheet` adds the days up. Nothing is estimated. Page access: "View sales and revenue"
+(`analytics.sales`); each row needs what its figure needs. Above the table the page opens on the
+store's **profit and loss** for a day and a month ("Profit and loss" below).
 
 | Row | Day by day from | Notes |
 | --- | --- | --- |
@@ -789,11 +791,19 @@ Page access: "View sales and revenue" (`analytics.sales`); each row needs what i
 | Ads as share of sales (marketing expense ratio), its 3 days, Sales per unit of ad spend (MER), Ad spend per visit / per order, Net sales less ad spend | spend against net sales, visits, orders | Only when the ads report in the store's currency and none is the Google Ads demo (as "Ads as share of sales"). The 3-day share is for day columns: the day and the two before it, whatever the filter, blank on a day whose two before aren't in the dates |
 
 A period one of whose days isn't known (visits before the pixel, a day an ad account has no figures
-for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit: product
-costs, shipping, fees and the owner's other costs aren't taken off day by day (Shopify gives product
-costs only for the dates as a whole; Business profit overview takes off the costs bizinsights knows),
-and the page says so, naming only the costs the member is shown: Shopify's product costs with "View
-costs and stock value" and the breakdown, the owner's costs with the breakdown.
+for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit.
+
+**Profit and loss rows** (for a member with the breakdown, who is shown the owner's costs): Revenue,
+Product costs, Gross profit, Gross margin, Your variable costs, Variable costs, Fixed costs, Operating
+profit, Operating margin, Interest/tax/depreciation, Net profit, Net margin, each column worked out by
+`profitAndLoss` (@app/shared/profit) from its own days as in "Profit and loss" below. A column's
+fixed costs are its days' share (a day column ₹50,000 ÷ 30, a month column the whole ₹50,000); with a
+filter, each run of consecutive days shown is counted on its own. The product cost rows need "View
+costs and stock value" too. A profit that can't be given is blank, and the notes under the table say
+why. Product costs day by day are the items sold at each product's cost per item in Shopify now
+(`productCostsByDay`); Business profit overview takes Shopify's profit report when it has one, so the
+two can differ where a cost per item changed. Without the breakdown the sheet stops at net sales less
+ad spend and says so.
 
 **Days shown** (`?days=`): every day, weekdays, weekends or any weekdays picked (`0,2,4`, Monday = 0).
 **Business events** (`?events=`): every day, the days with an event, those without, those with an
@@ -814,22 +824,84 @@ share), then each event's own days, with "Only its days" to narrow the sheet to 
 **Download CSV** ("Export approved reports" permission): the sheet as on screen, built in the browser (the
 same figures the page shows), plain numbers, the events as a row. **Print** prints the page.
 
+## Profit and loss (Profit sheet)
+
+Reference implementation: `packages/shared/src/profit.ts` (`profitAndLoss`, `costsOver`, `outcomeOf`),
+`packages/core/src/reports/profit.ts` (`profitReport`), `GET /workspaces/:ws/stores/:storeId/profit?month=YYYY-MM`
+(`apps/api/src/routes/profit.ts`) and the sheet's "Profit and loss" (`components/sheet/ProfitPanel.tsx`).
+
+Whether the store made money on a day and in a month. The page picks a month (this month by default,
+any month back to the store's first) and a day in it (today by default): `?month=` and `?day=`. The
+API answers the month's days, the month (so far, while it runs) and the 12 months ending with it, all
+worked out on the server from the store's own records; the page lays them out as Daily performance,
+Monthly performance, Expense breakdown and Profit analysis (daily profit or loss, monthly profit or
+loss, sales vs expenses, fixed vs variable costs, profit margin trend). Days are store-local.
+
+| Figure | Formula | From |
+| --- | --- | --- |
+| Net sales | gross sales − discounts − returns | `daily_store_metrics` (Shopify's sales records) |
+| Revenue ("Sales") | net sales + shipping + additional fees: total sales less taxes and duties | the same |
+| Product costs | items sold (returns off) × each variant's cost per item in Shopify now | `productCostsByDay` |
+| Gross profit, gross margin | net sales − product costs; ÷ net sales | Shopify's own definition |
+| Variable costs | product costs + the connected ad accounts' spend + your variable costs | ads module `series`; costs below |
+| Fixed costs (allocated) | your fixed costs' share of the days: a monthly cost ÷ its month's days (28, 29, 30 or 31), or ÷ its open days | `expenseInRange` |
+| Operating profit, operating margin | revenue − variable costs − fixed costs; ÷ revenue | |
+| Net profit, net margin | operating profit − interest, income tax, depreciation and other costs below operating profit; ÷ revenue | the dashboard's net profit, worked out day by day |
+
+The brief's example: rent ₹15,000 + salaries ₹30,000 + software ₹3,000 + other ₹2,000 = ₹50,000 a
+month; in a 30-day month a day carries ₹1,666.67, never the whole ₹50,000; a ₹10,000 day with ₹4,000
+of variable costs makes ₹4,333.33 of operating profit (`packages/shared/test/profit.test.ts`,
+`apps/api/test/profit.test.ts`). A whole month carries its whole fixed costs whatever its length.
+
+- **Nothing is counted twice**: product costs and ad spend are variable costs; each of the owner's
+  costs is in exactly one group by its category (fixed, variable, below operating profit), so net
+  profit is revenue less every cost once, as the dashboard's.
+- **Missing data, never 0** (`ProfitLossGap`): days before the store's imported orders
+  (`sales_not_imported`); product costs not shared, not shown to the member, none recorded, or some
+  sold products without a cost per item (gross, operating and net profit all wait); an ad account's
+  spend not known for a day, in another currency or the demo's; the costs list not marked complete
+  for the days. Each figure that can't be given says "Missing data" with its reason, and "Left after
+  the costs bizinsights knows" (never called profit). With no ad account connected the spend is 0
+  (ads paid elsewhere are the owner's costs).
+- **Outcome**: profit above 0, loss below, break-even at exactly 0 to the cent, missing data.
+- **Cash flow** is shown as "Not connected": bizinsights doesn't read payouts or bank accounts, and
+  cash flow isn't profit.
+- **Access**: `finance.breakdown` with `analytics.sales` (revenue takes shipping and fees; the costs
+  list goes with the breakdown); product costs also need "View costs and stock value", the ad spend
+  "View advertising analytics", otherwise they are "hidden" and the profit they'd give away isn't given. A
+  shared link and API keys may read it. The month must not be in the future (400 `invalid_month`).
+
 ## Costs and net profit
 
 Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
-`netProfit`), `packages/core/src/expenses.ts` and Settings → Costs (`/settings/costs`).
+`netProfit`), `packages/core/src/expenses.ts`, Settings → Costs (`/settings/costs`) and the Profit
+sheet's Expense breakdown, which lists the month's costs and adds, changes and removes them too.
 
-What Shopify, its profit report and the ad platforms can't tell bizinsights (the Shopify plan and
-apps, staff, rent, shipping labels, payment fees, ads on platforms that aren't connected) comes only
-from the store's owner, as **costs** kept per store in the store's currency (`store_expenses`). Owners
-and admins add, change and remove them; members with "View gross sales, discounts, tax, shipping and
-total sales" (`finance.breakdown`) see them, on the page and as the dashboard's `expenses` module. Each
-change is in the audit log (`expense.added`, `expense.changed`, `expense.removed`; the note, free
-text, is never copied into it).
+What Shopify, its profit report and the ad platforms can't tell bizinsights (rent, salaries, software,
+the Shopify plan and apps, shipping labels, packaging, payment fees, commissions, ads on platforms that
+aren't connected, loan interest, income tax) comes only from the store's owner, as **costs** kept per
+store in the store's currency (`store_expenses`). Owners and admins add, change and remove them;
+members with "View gross sales, discounts, tax, shipping and total sales" (`finance.breakdown`) see
+them, on the page and as the dashboard's `expenses` module. Each change is in the audit log
+(`expense.added`, `expense.changed`, `expense.removed`; the note, free text, is never copied into it).
+
+Each category is in one group (`EXPENSE_CATEGORY_GROUP`):
+
+| Group | Categories |
+| --- | --- |
+| Fixed | rent and utilities, salaries and staff, software subscriptions, Shopify plan, Shopify apps, internet and phone, insurance, maintenance contracts, other fixed costs |
+| Variable | shipping and delivery, packaging, payment and transaction fees, sales commissions, other marketing, other variable costs |
+| Below operating profit | loan interest, income tax, depreciation, other costs below operating profit |
+
+**Open days** (`store_expense_settings.operating_weekdays`, Monday = 0; empty: every day): the owner
+may say which weekdays the store is open. Recurring costs are then spread over those days only (a
+month's cost ÷ the month's open days; a closed day carries none; a whole month is still the whole
+amount). Saved with `PUT …/expenses/settings` `{ operatingWeekdays }` (audited as
+`expenses.operating_days_changed`), from the Profit sheet.
 
 | Figure | Formula | Notes |
 | --- | --- | --- |
-| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year) | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost |
+| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year). With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost and run of consecutive days |
 | Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
 | Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
 | **Net profit** | revenue − product costs (Shopify's cost of goods sold, or the items sold at their cost per item) − the connected ad accounts' spend − your costs | Given only when every input is known (below) |

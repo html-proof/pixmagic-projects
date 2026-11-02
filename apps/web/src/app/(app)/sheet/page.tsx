@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { byStart, type BusinessEvent } from "@app/shared/businessEvents";
 import { seesModule } from "@app/shared/access";
+import { PROFIT_LOSS_GAP_WORDS, type ProfitLossGap } from "@app/shared/profit";
 import { eventComparison } from "@app/shared/sheet";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { Skeleton } from "@/components/AppUi";
@@ -10,7 +11,8 @@ import { fmtRange, fmtSpan, plural } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { EventDialog, type EventDraft } from "@/components/sheet/EventDialog";
 import { EventsPanel } from "@/components/sheet/EventsPanel";
-import { SheetHeader } from "@/components/sheet/SheetHeader";
+import { ProfitPanel } from "@/components/sheet/ProfitPanel";
+import { SheetControls, SheetHeader } from "@/components/sheet/SheetHeader";
 import { SheetTable } from "@/components/sheet/SheetTable";
 import { columnDates, csvField, csvFigure } from "@/components/sheet/sheetUi";
 import { useSheet, type SheetState } from "@/components/sheet/useSheet";
@@ -18,10 +20,13 @@ import { Alert, EmptyState } from "@/components/ui";
 import { friendlyError, isTransient } from "@/lib/api";
 
 /**
- * The Profit sheet: every figure bizinsights has for the store, a column per day, week or month,
- * with the team's business events on their days, and the days narrowed to some weekdays or to those
- * events (components/sheet/, docs/kpis.md "Profit sheet"). Every figure comes from the dashboard's
- * own answer (GET …/overview?parts=sheet), added up by @app/shared/sheet; nothing is estimated.
+ * The Profit sheet: whether the store is making money, a day and a month at a time (its profit and
+ * loss: GET …/profit, worked out by @app/shared/profit), then every figure bizinsights has for the
+ * store, a column per day, week or month, with the team's business events on their days, and the
+ * days narrowed to some weekdays or to those events (components/sheet/, docs/kpis.md "Profit sheet"
+ * and "Profit and loss"). The table's figures come from the dashboard's own answer (GET
+ * …/overview?parts=sheet), added up by @app/shared/sheet, its profit rows by the same profit
+ * engine; nothing is estimated.
  */
 export default function SheetPage() {
   const { storesStatus, stores, store, workspace } = useApp();
@@ -59,6 +64,8 @@ function SheetView() {
   return (
     <div className="space-y-5" data-print-root>
       <SheetHeader s={s} onAddEvent={() => ov && setDraft({ from: ov.range.to, to: ov.range.to })} onDownload={download} />
+      <ProfitPanel />
+      <SheetControls s={s} />
 
       {s.error && !ov && <LoadError what="your profit sheet" error={s.error} onRetry={s.refresh} busy={s.loading} />}
       {s.error && ov && s.older && (
@@ -137,14 +144,20 @@ function Notes({ s }: { s: SheetState }) {
   if (!sheet.visitsTracked) notes.push("Store visits, and the rates worked out on them, need the bizinsights storefront pixel (Shopping Funnel), which this store doesn't share with you yet.");
   if (!sheet.ads && allowed("marketing.ads")) notes.push("Connect Meta Ads or Google Ads in Settings → Integrations to see your ad spend day by day beside your sales.");
   else if (sheet.ads && !sheet.comparable) notes.push(sheet.ads.demo ? "The Google Ads demo's figures are simulated, so they aren't set against your sales." : `Your ad accounts report in ${sheet.ads.currency}, not the store's ${s.ov!.store.currency}, so the spend isn't set against your sales.`);
-  // Shopify's cost of goods sold comes for the dates whole, never by day; the owner's costs (Settings →
-  // Costs) are taken off on the dashboard, not here. Each is named only to a member the dashboard shows
-  // it to (Team & Access), so no one is sent to a panel for costs it won't take off for them.
-  const productCosts = seesModule(access, "profit");
-  const ownCosts = seesModule(access, "expenses");
-  const why = [productCosts && "Shopify gives product costs only for the dates as a whole, not day by day", ownCosts && "your costs aren't taken off here"].filter(Boolean);
-  const taken = [productCosts && "Shopify's product costs", ownCosts && "your costs"].filter(Boolean);
-  notes.push(`The sheet stops at net sales less ad spend and never calls that profit${why.length ? `: ${why.join(", and ")}` : ""}.${taken.length ? ` Business profit overview on the dashboard takes off ${taken.join(" and ")}.` : ""}`);
+  if (sheet.profit) {
+    // Each blank profit cell's reasons, once: those of the days shown as a whole.
+    const gaps = new Set<ProfitLossGap>([...(sheet.total.profit?.gaps ?? []), ...sheet.columns.flatMap((c) => c.totals.profit?.gaps ?? [])]);
+    if (gaps.size) notes.push(`Profit is blank where an input isn't known: ${[...gaps].map((g) => PROFIT_LOSS_GAP_WORDS[g].replace(/\.$/, "")).join("; ")}.`);
+    notes.push("Product costs here are the items sold at each product's cost per item in Shopify, day by day; Business profit overview on the dashboard takes Shopify's profit report, the cost recorded with each sale, when it has one, so the two can differ where a cost per item changed.");
+  } else {
+    // Without the breakdown and the costs (Team & Access), the sheet stops before profit. Each cost is
+    // named only to a member the dashboard shows it to, so no one is sent to a panel for costs it won't
+    // take off for them.
+    const productCosts = seesModule(access, "profit");
+    const ownCosts = seesModule(access, "expenses");
+    const taken = [productCosts && "Shopify's product costs", ownCosts && "your costs"].filter(Boolean);
+    notes.push(`The sheet stops at net sales less ad spend and never calls that profit.${taken.length ? ` Business profit overview on the dashboard takes off ${taken.join(" and ")}.` : ""}`);
+  }
   return (
     <ul className="space-y-1 px-1 text-xs text-muted" data-testid="sheet-notes">
       {notes.map((n) => (
