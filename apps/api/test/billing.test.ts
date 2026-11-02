@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { applySubscriptionUpdate, encryptTokenFields, type FetchLike } from "@app/core";
-import { systemDb } from "@app/db";
+import { forTenant, systemDb } from "@app/db";
 import { signShopifyQuery } from "@app/shared";
+import { lockWorkspace } from "../src/connectStore.js";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
 
 /**
@@ -426,6 +427,12 @@ describe("disconnecting a store in bizinsights (Settings → Stores)", () => {
     expect(shopify.calls).toEqual([]);
     expect(await storeRow(other.id)).toMatchObject({ status: "uninstalled", disconnectedAt: expect.any(Date), accessTokenEnc: null, grantedScopes: [] });
     expect(await sub(ws)).toMatchObject({ plan: "growth", billingStoreId: store.id });
+  });
+
+  it("the lock Disconnect and billing/subscribe take in turn holds the workspace's row from the request's own scope", async () => {
+    // Row-level security applies to systemDb: a lock that matched no row would take none, silently.
+    const { ws } = await owner();
+    expect(await forTenant(ws, () => systemDb.$transaction((tx) => lockWorkspace(tx, ws)))).toHaveLength(1);
   });
 
   it("a store Shopify already uninstalled the app from isn't marked disconnected here", async () => {
