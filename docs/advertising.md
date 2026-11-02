@@ -339,6 +339,42 @@ this report are the channel's own claim (its attribution), not the store's order
   campaigns; Shopify's own sessions, visitors and conversion rate), the platform cards and the dashboard's
   Advertising performance tab of a platform whose figures come from it. Each figure says its source, dates,
   currency (the store's: Shopify reports every channel in it) and when it was last read.
+- **Today and this month:** at the top of that card, whatever dates are picked: Google's, Meta's and every
+  channel's spend together for the store's today and its month so far (the module's `current`, worked out by
+  `marketingSpendPeriod` from the month's stored days). A platform without spend says why instead of a 0:
+  "No spend reported" (`no_spend`), "Not reported by Shopify" (`unavailable`) or "Not read yet" (`not_read`,
+  today before its first read); a month read only up to yesterday says so. Below them, spend by day (or week,
+  month) for the picked dates, Meta, Google and the other channels side by side, a day not read yet left blank.
+  The store's time zone and the last read are named under the tiles.
+
+### What Shopify exposes, and what it doesn't (checked 2026-11-02)
+
+- **`marketing_engagements` through `shopifyqlQuery` is the only way an app reads another app's ad spend.**
+  It needs `read_reports` and protected customer data Level 2. The query above parses on the 2026-10 API: it
+  was run against the dev store `bizinsights-sync-check` on 2026-11-02 (empty answer: no marketing app reports
+  there), and a wrong column name comes back as a parse error, so an empty answer means no rows, not a bad
+  query. The 2026-07 schema page doesn't list `marketing_channel` or `marketing_campaign`; 2026-10 does.
+- **`marketingActivities` / `marketingEvents` (`read_marketing_events`) don't help.** Shopify describes both
+  as the activities and events "associated with the marketing app", the app that asks: so
+  `MarketingActivity.adSpend` reaches only that app's own activities (Shopify's wording; not tried here, the
+  dev store's token has no `read_marketing_events`). `MarketingEvent` has no spend field at all.
+  `marketingEngagementCreate` is the write the channel apps use to send figures, not a read.
+- **A real engagement, end to end (2026-11-02).** On the dev store, the Shopify CLI app (granted
+  `write_marketing_events` by the owner) created the activity "bizinsights test spend (safe to delete)"
+  (`marketingActivityUpsertExternal`, remote id `bizinsights-test-2026-11-02`) and reported three days of
+  spend with `marketingEngagementCreate` (A$12.34, A$20.50, A$7.25, impressions and clicks; no sales).
+  `marketing_engagements` gave them back at once: `marketing_channel` and `marketing_app_name` were both the
+  app's name ("Shopify CLI Connector App"), `marketing_campaign` the activity's title, money as strings
+  ("20.5"), and **0, not empty, for every figure the channel never sent** (orders "0.0", sales "0"). So
+  `marketingFigures` takes a total of 0 as not reported (no A$0 sales, no 0× ROAS), as it already did spend.
+  bizinsights' own `syncShopifyMarketing`, run locally against the store, kept exactly those 6 rows (3 whole
+  days, 3 campaign rows); two more reads left them at 6; the overview showed today A$7.25, this month
+  A$27.75, Google and Meta "Not reported by Shopify".
+- **Which channels report spend is up to each channel's app.** Shopify's changelog (2024-07-02, "cost and
+  impression metrics are now available for paid ads in marketing reports") names Google, Pinterest,
+  Snapchat and TikTok. Meta isn't named, and Shopify's Facebook & Instagram help points merchants to
+  Meta's Ads Manager for performance. So Google's spend can arrive with nothing to connect, while Meta's is
+  usually "Not reported by Shopify" and needs the store's own Meta Ads connection.
 
 ## The Shopify orders stand in
 

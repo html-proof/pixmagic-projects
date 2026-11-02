@@ -1,14 +1,18 @@
 "use client";
-import type { AdSpendProvider } from "@app/shared/ads";
-import type { MarketingFigures, MarketingGroup, ShopifyMarketing } from "@app/shared/shopifyMarketing";
+import { useState } from "react";
+import { groupSeries, type AdSpendProvider } from "@app/shared/ads";
+import { periodsOf, type PeriodGranularity } from "@app/shared/dates";
+import type { MarketingFigures, MarketingGroup, MarketingSpendFigure, MarketingSpendPeriod, ShopifyMarketing } from "@app/shared/shopifyMarketing";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { shownFigures } from "@/components/dashboard/adFigures";
-import { fmtDay, fmtRelative, fmtSpan, fmtTimes } from "@/components/dashboard/format";
+import { fmtDateTime, fmtDay, fmtMoneyCompact, fmtPeriod, fmtRelative, fmtSpan, fmtTimes, periodChoices } from "@/components/dashboard/format";
 import { ChangeText } from "@/components/dashboard/HomeCards";
+import { LineChart, type LineSeries } from "@/components/dashboard/LineChart";
+import { ChartChoice } from "@/components/dashboard/Primitives";
 import type { Overview } from "@/components/dashboard/types";
 import { AdCard, EmptyNote, MiniFigure } from "./AdCard";
-import { PLATFORM } from "./AdvertisingUi";
+import { PLATFORM, PLATFORM_COLOR } from "./AdvertisingUi";
 import { adSourcesOf, SourceBadge } from "./sources";
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,120 @@ function StatusNote({ m }: { m: ShopifyMarketing }) {
   return <EmptyNote testid="marketing-status">{words}</EmptyNote>;
 }
 
+/** A platform's spend for a stretch of days, or why there is none: never a 0 standing in for it. */
+function spendValue(f: MarketingSpendFigure, money: (n: number) => string): string {
+  if (f.state === "reported") return money(f.spend!);
+  return f.state === "no_spend" ? "No spend reported" : f.state === "not_read" ? "Not read yet" : "Not reported by Shopify";
+}
+
+/** Why a stretch's figures stop before its last day, when they do. */
+function readWords(p: MarketingSpendPeriod, today: string): string | null {
+  if (!p.through) return p.from === today ? "Today isn't read from Shopify yet: it's read every 6 hours." : "None of these days is read from Shopify yet.";
+  if (p.through < p.to) return `Read up to ${fmtDay(p.through, { year: false })}: later days aren't read from Shopify yet.`;
+  return null;
+}
+
+/**
+ * Today's and this month's spend, whatever the dates picked: Google's, Meta's and every channel's
+ * together, as reported to Shopify, each saying so when it isn't there. The days are the store's
+ * (its time zone); the latest are always provisional (channels report late and revise).
+ */
+function SpendTiles({ m, ov }: { m: ShopifyMarketing; ov: Overview }) {
+  const c = m.current;
+  if (!c) return null;
+  const money = (n: number) => fmtMoney(n, m.currency);
+  const own = adSourcesOf(ov).filter((s) => s.source === "platform").map((s) => PLATFORM[s.provider].name);
+  const periods: Array<[string, string, MarketingSpendPeriod]> = [
+    ["today", `Today · ${fmtDay(c.today.from, { year: false })}`, c.today],
+    ["month", `This month · ${fmtSpan(c.month.from, c.month.to)}`, c.month],
+  ];
+  return (
+    <div data-testid="marketing-spend-tiles">
+      <div className="grid gap-3 @2xl:grid-cols-2">
+        {periods.map(([key, title, p]) => {
+          const note = readWords(p, ov.today);
+          return (
+            <div key={key} className="rounded-xl border border-border p-3" data-testid={`marketing-spend-${key}`} data-through={p.through ?? undefined}>
+              <p className="text-xs font-medium text-muted">{title}</p>
+              <dl className="mt-2 grid grid-cols-3 gap-3">
+                {(["google", "meta"] as const).map((provider) => (
+                  <div key={provider} className="min-w-0" data-testid={`marketing-spend-${key}-${provider}`} data-state={p[provider].state}>
+                    <dt className="truncate text-xs text-muted">{PLATFORM[provider].name}</dt>
+                    <dd className={p[provider].state === "reported" ? "text-lg font-semibold tabular-nums tracking-tight" : "text-sm text-muted"}>{spendValue(p[provider], money)}</dd>
+                  </div>
+                ))}
+                <div className="min-w-0" data-testid={`marketing-spend-${key}-total`}>
+                  <dt className="truncate text-xs text-muted">Total</dt>
+                  <dd className={p.total === null ? "text-sm text-muted" : "text-lg font-semibold tabular-nums tracking-tight"}>{p.total === null ? DATA_UNAVAILABLE : money(p.total)}</dd>
+                </div>
+              </dl>
+              {p.others.length > 0 && <p className="mt-2 text-xs text-muted">Total includes {p.others.map((o) => `${o.name} ${money(o.spend)}`).join(", ")}.</p>}
+              {note && <p className="mt-2 text-xs text-muted">{note}</p>}
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-xs text-muted" data-testid="marketing-spend-about">
+        Days in your store&apos;s time zone ({ov.store.timezone}) · {m.currency} · {m.sync.lastSyncedAt ? `last read from Shopify ${fmtDateTime(m.sync.lastSyncedAt, ov.store.timezone)}` : "not read from Shopify yet"}. Each figure is the
+        spend the channel itself reported to Shopify: never a budget, an estimate or your sales. The latest days can reach Shopify up to 24 hours late and be revised for a few days.
+        {own.length > 0 && ` ${own.join(" and ")} ${own.length > 1 ? "are" : "is"} connected directly: ${own.length > 1 ? "their cards show their" : "its card shows its"} own API's figures, never added to these.`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Every channel's spend for the dates by day (or week, month), as reported to Shopify: Meta, Google and
+ * the other channels side by side. A day not read yet is a gap, never a 0; a week or month with any such
+ * day too. Nothing drawn when no channel reported spend.
+ */
+function SpendByDay({ m, ov }: { m: ShopifyMarketing; ov: Overview }) {
+  const [pickedBy, setBy] = useState<PeriodGranularity>("day");
+  const reported = m.platforms.filter((g) => g.availability === "reported");
+  if (!reported.length && !m.others.length) return null;
+  const choices = periodChoices(ov.range);
+  const by = choices.some(([g]) => g === pickedBy) ? pickedBy : "day";
+  const days = m.platforms[0]!.daily.map((d) => d.day);
+  const otherSpend = days.map((_, i) =>
+    m.others.reduce<number | null>((n, g) => {
+      const v = g.daily[i]?.spend ?? null;
+      return n === null || v === null ? null : n + v;
+    }, 0),
+  );
+  const lines: Array<{ key: string; label: string; color: string; values: Array<number | null> }> = [
+    ...reported.map((g) => ({ key: g.platform, label: g.name, color: PLATFORM_COLOR[g.platform as AdSpendProvider], values: g.daily.map((d) => d.spend) })),
+    ...(m.others.length ? [{ key: "other", label: m.others.length === 1 ? m.others[0]!.name : "Other channels", color: "var(--viz-cat-3)", values: otherSpend }] : []),
+  ];
+  const grouped = (values: Array<number | null>) => groupSeries(days.map((day, i) => ({ day, spend: values[i] ?? null })), ov.range, by);
+  const series: LineSeries[] = lines.map((l) => ({ ...l, values: by === "day" ? l.values : grouped(l.values).map((p) => p.spend) }));
+  const points = by === "day" ? days : grouped(lines[0]!.values).map((p) => p.day);
+  const periods = by === "day" ? undefined : periodsOf(ov.range, by).map((p) => ({ tick: fmtPeriod(p, by, "tick"), long: fmtPeriod(p, by, "long") }));
+  return (
+    <div className="border-t border-border pt-4" data-testid="marketing-spend-chart" data-by={by}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Spend by {by}, as reported to Shopify</h3>
+        {choices.length > 1 && <ChartChoice<PeriodGranularity> label="Spend chart groups" value={by} onChange={setBy} options={choices} />}
+      </div>
+      <div className="mt-2">
+        <LineChart
+          days={points}
+          series={series}
+          bars
+          today={by === "day" ? ov.today : undefined}
+          periods={periods}
+          height={190}
+          label={`Ad spend per ${by} by channel, as reported to Shopify, ${fmtSpan(ov.range.from, ov.range.to)}`}
+          format={(v) => fmtMoney(v, m.currency)}
+          fmtAxis={(v, step) => (step < 1 ? fmtMoney(v, m.currency) : fmtMoneyCompact(v, m.currency))}
+        />
+      </div>
+      <p className="mt-1 text-xs text-muted">
+        {by === "day" ? "Days" : `A ${by} with any day`} not read from Shopify yet {by === "day" ? "are" : "is"} left blank, not drawn as 0. Pick other dates at the top of the page for earlier history.
+      </p>
+    </div>
+  );
+}
+
 /**
  * The Advertising overview's card of what the store's marketing apps report to Shopify: every channel's
  * spend together, Meta's and Google's (or a note that their own API's figures are shown instead), the
@@ -228,7 +346,9 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
       <StatusNote m={m} />
       {m.status === "ready" && (
         <div className="space-y-5">
-          <div data-testid="marketing-total">
+          <SpendTiles m={m} ov={ov} />
+          <SpendByDay m={m} ov={ov} />
+          <div className="border-t border-border pt-4" data-testid="marketing-total">
             <p className="text-xs text-muted">Total advertising expenses · {fmtSpan(ov.range.from, ov.range.to)}</p>
             <p className="text-2xl font-bold tabular-nums tracking-tight" data-testid="marketing-total-value">
               {spend.total === null ? DATA_UNAVAILABLE : money(spend.total)}

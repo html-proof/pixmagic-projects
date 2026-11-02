@@ -29,3 +29,4 @@ export * from "./sheet.js";
 export * from "./partialUpdate.js";
 export * from "./orders.js";
 export * from "./expenses.js";
+export * from "./profit.js";

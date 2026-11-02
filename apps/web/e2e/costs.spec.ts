@@ -65,7 +65,7 @@ test("the owner keeps the store's costs, and the dashboard counts them without c
   await form.getByRole("button", { name: "Add" }).click();
   const row = page.getByTestId("cost-row").filter({ hasText: "Label printer" });
   await expect(row).toContainText("$120.00 once");
-  await expect(row).toContainText("Shipping and packaging");
+  await expect(row).toContainText("Shipping and delivery");
   await expect(page.getByTestId("costs-this-month")).toContainText("$120.00");
 
   // The list holds every cost from the first of this month.

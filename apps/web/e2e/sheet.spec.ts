@@ -78,6 +78,15 @@ test("lays the store out day by day, and marks, filters and compares business ev
   await expect(totalOf(page, "after_ads")).toHaveText("$1,800.00");
   await expect(page.getByTestId("sheet-no-events")).toBeVisible();
 
+  // Profit and loss: revenue on the sheet's own rows; no costs list marked complete yet, so no
+  // operating profit, and the section above says what is missing rather than show a figure.
+  await expect(totalOf(page, "revenue")).toHaveText("$2,100.00");
+  await expect(totalOf(page, "operating_profit")).toHaveText("—");
+  await expect(page.getByTestId("profit-daily")).toBeVisible();
+  await expect(page.getByTestId("profit-day-operating")).toContainText("Missing data");
+  await expect(page.getByTestId("profit-missing")).toContainText("Your costs list isn't marked complete");
+  await expect(page.getByTestId("profit-cash-flow")).toContainText("Not connected");
+
   // A sale over the last two days, marked with the pencil on the first of them.
   await page.locator(`[data-testid="sheet-col"][data-key="${day(-2)}"]`).getByTestId("sheet-add-event").click();
   const form = page.getByTestId("event-form");

@@ -20,6 +20,7 @@ import { pixelRoutes } from "./routes/pixel.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { businessEventRoutes } from "./routes/businessEvents.js";
 import { expenseRoutes } from "./routes/expenses.js";
+import { profitRoutes } from "./routes/profit.js";
 import { workspaceRoutes } from "./routes/workspaces.js";
 import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
@@ -237,6 +238,7 @@ export function buildApp(deps: Deps): App {
   dashboardRoutes(app, deps);
   businessEventRoutes(app, deps);
   expenseRoutes(app, deps);
+  profitRoutes(app, deps);
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
