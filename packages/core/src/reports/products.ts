@@ -186,3 +186,26 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   return { ...result, items: complete ? result.items.map(p => ({ ...p, variants: products.get(p.key)!.variants })) : [], total: complete ? result.total : 0,
     ...coverage, previous, historyFrom: data.historyFrom, lastSyncedAt: store.lastSyncedAt, weights: TREND_WEIGHTS, minimumTrendUnits: MIN_TREND_UNITS };
 }
+
+/**
+ * The dates' product costs from the store's own records, for when Shopify's profit report doesn't
+ * give them (./shopify.ts `profit`: the store hasn't granted its reports, or Shopify refused or
+ * failed): the items sold, returns taken off (SALE_UNITS), at the cost per item each variant has in
+ * Shopify now (product_variants.unit_cost). Shopify's report takes the cost recorded with each sale
+ * instead, so the two differ only where a cost per item changed since. The net sales of items with no
+ * cost per item (none entered, a custom item, a variant since deleted) are added up apart, as
+ * Shopify's report does, so the dashboard can say their cost is missing.
+ */
+export async function productCosts(tx: Tx, { ws, storeId }: Scope, range: DateRange) {
+  const [r] = await tx.$queryRaw<Array<{ cost: string | null; with_cost: string | null; without_cost: string | null }>>`
+    SELECT SUM(${SALE_UNITS} * v.unit_cost)::text AS cost,
+      SUM(${SALE_VALUE}) FILTER (WHERE v.unit_cost IS NOT NULL)::text AS with_cost,
+      SUM(${SALE_VALUE}) FILTER (WHERE v.unit_cost IS NULL)::text AS without_cost
+    FROM order_sales s
+    LEFT JOIN order_line_items li ON li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.shopify_id = s.line_item_shopify_id
+    LEFT JOIN product_variants v ON v.workspace_id = ${ws} AND v.store_id = ${storeId} AND v.shopify_id = li.variant_shopify_id
+    WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
+      AND s.local_day BETWEEN ${range.from} AND ${range.to}`;
+  const money = (v: string | null | undefined) => r2(Number(v ?? 0));
+  return { current: { costOfGoodsSold: money(r?.cost), netSalesWithCost: money(r?.with_cost), netSalesWithoutCost: money(r?.without_cost) } };
+}

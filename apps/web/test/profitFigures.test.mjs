@@ -110,3 +110,37 @@ test("a member not shown Shopify's product costs gets no net profit, and isn't t
   const uncosted = overview({ grossProfit: 2000, costOfGoodsSold: 0, netSalesWithCost: 0, netSalesWithoutCost: 2000, profitOnCosted: 0, marginOnCosted: null });
   assert.deepEqual(profitOf(uncosted, costsOf(uncosted, "AUD", false), noAds, false).gaps, ["product_costs_hidden"]);
 });
+
+test("without Shopify's profit report, the product costs are the items sold at their cost per item", () => {
+  const own = (current) => ({ current });
+  // Not granted (no profit module), or Shopify refused: the cost per item stands in, with the same rules.
+  for (const report of [undefined, { status: "access_denied", asOf: null, until: null, current: null, previous: null, deltas: { grossProfit: null } }]) {
+    const ov = overview(null);
+    ov.modules.profit = report;
+    ov.modules.product_costs = own({ costOfGoodsSold: 700, netSalesWithCost: 2000, netSalesWithoutCost: 0 });
+    const k = costsOf(ov, "AUD", false);
+    assert.equal(k.productCosts, 700);
+    assert.equal(k.productState, "known");
+    assert.equal(k.productSource, "cost_per_item");
+    assert.equal(marginKnown(k), true);
+    // Revenue 2,050 − 700 − 300 of the owner's costs, no ads offered.
+    assert.equal(profitOf(ov, k, noAds, true).value, 1050);
+  }
+  // Sales of items with no cost per item are named, and keep it from net profit.
+  const some = overview(null);
+  some.modules.product_costs = own({ costOfGoodsSold: 400, netSalesWithCost: 1500, netSalesWithoutCost: 500 });
+  const ks = costsOf(some, "AUD", false);
+  assert.equal(ks.uncosted, 500);
+  assert.deepEqual(profitOf(some, ks, noAds, true).gaps, ["uncosted_sales"]);
+  // No item sold has one: not recorded, never $0.
+  const none = overview(null);
+  none.modules.product_costs = own({ costOfGoodsSold: 0, netSalesWithCost: 0, netSalesWithoutCost: 2000 });
+  assert.equal(costsOf(none, "AUD", false).productState, "not_recorded");
+  // Shopify's report, when it answers, is the one used.
+  const both = overview({ grossProfit: 1350, costOfGoodsSold: 650, netSalesWithCost: 2000, netSalesWithoutCost: 0, profitOnCosted: 1350, marginOnCosted: 0.675 });
+  both.modules.product_costs = own({ costOfGoodsSold: 700, netSalesWithCost: 2000, netSalesWithoutCost: 0 });
+  assert.deepEqual([costsOf(both, "AUD", false).productCosts, costsOf(both, "AUD", false).productSource], [650, "report"]);
+  // While it is on its way, it is waited for.
+  both.modules.profit = { ...both.modules.profit, status: "loading", current: null };
+  assert.deepEqual([costsOf(both, "AUD", false).productState, costsOf(both, "AUD", false).productSource], ["loading", null]);
+});

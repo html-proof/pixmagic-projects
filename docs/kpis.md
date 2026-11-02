@@ -380,8 +380,9 @@ carries; nothing is estimated.
 - **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
   in the store's currency and none is the Google Ads demo, as for MER.
-- **Business profit overview**: net sales less the costs bizinsights can see, Shopify's cost of
-  goods sold (its profit report, for the dates as a whole), the ad spend for the whole range
+- **Business profit overview**: net sales less the costs bizinsights can see, the product costs
+  (Shopify's cost of goods sold from its profit report, for the dates as a whole; while that report
+  gives none, the items sold at their cost per item: **Product costs** below), the ad spend for the whole range
   (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
   **net profit** only when every input is known and the owner has marked the costs list complete for
   the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
@@ -395,6 +396,16 @@ carries; nothing is estimated.
 - **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
   the owner's costs by category). The mock's shipping, software and other expenses come only from
   the owner's costs: nothing else holds them.
+- **Product costs** (both panels): Shopify's cost of goods sold while its profit report answers
+  (`profit`, with `read_reports`) or is on its way ("Loading…"). Otherwise (the reports not granted,
+  or Shopify refused or failed) the `product_costs` module (`productCosts` in
+  packages/core/src/reports/products.ts, with `read_orders` and `read_products`): the items sold
+  (returns taken off, as Top products counts them) × each variant's cost per item in Shopify now
+  (`product_variants.unit_cost`), with the net sales of product lines with and without a cost per
+  item, so the same rules apply: none with one is "Not recorded in Shopify", some without is named and
+  keeps it from net profit. Shopify's report takes the cost recorded with each sale, so the two differ
+  only where a cost per item changed since; the panels say when the costs are the items at their cost
+  per item. Same permissions as Shopify's (`product_costs`: the breakdown and "View costs and stock value").
 - **Top products**: the top five of `top_products` by net revenue, each with its share of net sales;
   withheld while the period's sales aren't all imported (`complete` false), as the full list is.
 - **Recent orders**: the five latest, with one status word (cancelled, fulfilled, then payment).
@@ -821,12 +832,13 @@ text, is never copied into it).
 | A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year) | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost |
 | Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
 | Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
-| **Net profit** | revenue − Shopify's cost of goods sold − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
+| **Net profit** | revenue − product costs (Shopify's cost of goods sold, or the items sold at their cost per item) − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
 
 Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given only when:
 
-- Shopify's cost of goods sold is known for the dates (its profit report: `read_reports`) and every
-  sale has a cost recorded in Shopify (`net_sales_without_cost_recorded` is 0). A member not shown
+- the product costs are known for the dates (Shopify's profit report, `read_reports`, or else each
+  product's cost per item, `product_costs`) and every sale has a cost recorded in Shopify
+  (`net_sales_without_cost_recorded`, or `netSalesWithoutCost`, is 0). A member not shown
   Shopify's cost of goods sold (without "View costs and stock value": `seesModule(access, "profit")`
   is false) gets no net profit either, since it would give the cost away (`product_costs_hidden`);
 - the connected ad accounts' spend is known for every day, in the store's currency. With no ad

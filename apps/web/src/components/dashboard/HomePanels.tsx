@@ -120,6 +120,8 @@ const listOf = (items: string[]) => new Intl.ListFormat("en", { style: "long", t
  */
 const PRODUCT_WORDS: Record<Exclude<ProductCostState, "known">, string> = { loading: "Loading…", missing: "Not available", unavailable: "Not available", not_recorded: "Not recorded in Shopify" };
 const AD_WORDS: Record<Exclude<CostState, "known">, string> = { loading: "Loading…", missing: "Not connected", unavailable: "Unavailable" };
+/** Where product costs come from when it isn't Shopify's profit report (`productSource`). */
+const PER_ITEM_WORDS = "Product costs are the items sold at their cost per item in Shopify.";
 
 // ---- Orders at a glance -------------------------------------------------------------------------
 
@@ -374,7 +376,7 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manag
       </div>
       <p className="mt-4 text-xs text-muted" data-testid="profit-note">
         {isNet ? (
-          <>Revenue less Shopify&apos;s product costs, your ad spend and your costs (Settings → Costs), which you&apos;ve marked complete for these dates.</>
+          <>Revenue less {k.productSource === "cost_per_item" ? "product costs" : "Shopify's product costs"}, your ad spend and your costs (Settings → Costs), which you&apos;ve marked complete for these dates.</>
         ) : (
           <>
             Not net profit
@@ -382,6 +384,7 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manag
             {k.productState === "known" && k.uncosted !== null && k.uncosted > 0 && <> {money(k.uncosted)} of sales had no cost recorded in Shopify, so their cost isn&apos;t included.</>}
           </>
         )}
+        {costsOn && k.productState === "known" && k.productSource === "cost_per_item" && <> {PER_ITEM_WORDS}</>}
         {profit && manageCosts && (ov.modules.expenses!.count === 0 || gaps.includes("costs_not_complete")) && (
           <>
             {" "}
@@ -891,7 +894,8 @@ export function ExpensesBreakdown({ ov, currency, adsOn, costsOn, manage, manage
           </ul>
         </div>
       </div>
-      <p className="mt-4 text-xs text-muted">
+      <p className="mt-4 text-xs text-muted" data-testid="expenses-note">
+        {costsOn && k.productState === "known" && k.productSource === "cost_per_item" && <>{PER_ITEM_WORDS} </>}
         {k.yourCosts === null ? (
           <>Shipping costs, fees, apps and staff aren&apos;t included: bizinsights can&apos;t see them.</>
         ) : (
@@ -900,7 +904,7 @@ export function ExpensesBreakdown({ ov, currency, adsOn, costsOn, manage, manage
             {manageCosts && (
               <>
                 {" "}
-                <Link href="/settings/costs" className="font-medium text-accent hover:underline">{ov.modules.expenses!.count === 0 ? "Add your costs" : "Manage your costs"}</Link>
+                <Link href="/settings/costs" className="font-medium text-accent hover:underline">{ov.modules.expenses!.count === 0 ? "Add your costs" : "Manage your costs"}</Link>.
               </>
             )}
           </>
