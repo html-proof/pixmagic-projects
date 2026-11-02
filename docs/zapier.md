@@ -436,7 +436,7 @@ side it calls is live, through a staging version the owner tries first:
 | The WhatsApp action: "WhatsApp isn't connected" | The store has no WhatsApp connected: link a phone by QR code, or connect Meta's Business Platform (until Meta approves bizinsights as a Tech Provider, only businesses with a role on the Meta app can). |
 | The action ran, but the message hasn't gone | Sending hours (it waits until they open), Pause all automation, the daily limits: WhatsApp page → Messages, source Zapier, says why it waits. |
 | Events don't arrive | Settings → Integrations → Recent events: Failed with a reason, Retrying, or Not sent (the Zap was turned off: Zapier answered 410). Alerts raised outside a job reach Zapier within one cron tick (15 minutes). |
-| A threshold never fires | "Not checked: … report in AUD and USD": accounts in two currencies. Or no sync has run since the spend crossed it (thresholds are checked after syncs). |
+| A threshold never fires | "Not checked: … report in AUD and USD": accounts in two currencies. Or no sync has run since the spend crossed it (thresholds are checked after syncs, and after reads of Shopify's marketing report). Without an ad account, spend counts only from Shopify's report: "Ad spend reported to Shopify" must be on, and its card on Advertising shows what Shopify has. |
 | An AdSense "below" trigger doesn't fire for a day that was low | Only the day (or month) just finished is checked, and only once every AdSense account has it stored (`synced_through` on or after its last day). A day that ended exactly at the amount isn't below it. A day finished before the trigger was made is skipped. |
 | "Some events didn't reach Zapier" in the bell | Settings → Integrations → Zapier → Recent events: the failed one says why. Fix that in Zapier (the Zap turned back on, the step that refused it), then Retry. The alert resolves once none is left failed. |
 | Logs: "zapier client used the previous secret" | A secret rotation isn't finished: a version of the Zapier app still has the old `CLIENT_SECRET` (`env:get` each version in use, without printing it: RUNBOOK). |
@@ -451,7 +451,9 @@ side it calls is live, through a staging version the owner tries first:
   store deleted, cookies / links / `sk_` keys refused, cross-tenant 404s, SSRF on subscribe, data
   permissions (the new triggers' too), AdSense's direction, trigger audit rows, the new triggers'
   samples, alerts into the outbox (the bell's stock alert too, once while open), searches with mixed
-  currencies, the Settings card, Disconnect and Retry.
+  currencies, each platform's own purchase value and ROAS beside the deprecated sums (`claims_add_up`),
+  spend reported to Shopify in the search (only once the reports are granted, the days read, whole
+  days, never beside a synced account's), the Settings card, Disconnect and Retry.
 - `apps/api/test/zapierWhatsapp.test.ts`: the scope on the consent page (owners and admins only,
   unticked by default, unknown scopes refused), the template list, a lead who agreed sent a template
   with the Zap's values through the store's linked phone, consent recorded with its note, once per key
@@ -465,7 +467,12 @@ side it calls is live, through a staging version the owner tries first:
   and redirects, lost access, the per-store cap, the sweep, redaction, thresholds (once per period,
   mixed currencies, demo excluded, AdSense, falls below), the daily summary, WhatsApp failures,
   `schema_version` on old events, the failed-delivery alert and Retry, ad accounts synced, integrations
-  from audit rows, orders paid through the real `orders/paid` webhook (no customer details).
+  from audit rows, orders paid through the real `orders/paid` webhook (no customer details); spend
+  reported to Shopify (a threshold with no ad account, campaign rows and unread days not counted, never
+  both sources for one platform, an account whose access ended giving way, the daily summary waiting for
+  the report's read, and not held for a refused one).
+- `apps/worker/test/shopifyMarketing.test.ts`: a read of Shopify's marketing report checks the store's
+  ad spend triggers (`zapierAfterMarketingRead`).
 - `packages/shared/test/zapier.test.ts`: periods, currency totals, thresholds (below too), hook URLs,
   backoff, wording, permissions, `mayFixAlert`, the failed-delivery alert's wording.
 - `infra/cdk/test/put-secrets.test.ts`: the previous secret's shape, what `--set` keeps and `--unset` may remove.

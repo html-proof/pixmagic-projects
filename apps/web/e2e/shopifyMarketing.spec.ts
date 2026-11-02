@@ -61,6 +61,9 @@ test("with no ad account connected, Meta's spend comes from what its app reports
   await expect(card.getByTestId("marketing-spend-chart")).toBeVisible();
   await expect(card.getByTestId("marketing-total-value")).toHaveText("$100.00");
   await expect(card.getByTestId("marketing-total-meta")).toHaveAttribute("data-from", "marketing");
+  // No platform shown from its own API here: nothing left out, the total is whole.
+  await expect(card.getByTestId("marketing-total")).not.toHaveAttribute("data-partial");
+  await expect(card.getByTestId("marketing-total-left-out")).toHaveCount(0);
   await expect(card.getByTestId("marketing-meta")).toHaveAttribute("data-availability", "reported");
   await expect(card.getByTestId("marketing-meta-spend")).toContainText("$100.00");
   await expect(card.getByTestId("marketing-meta-clicks")).toContainText("500");

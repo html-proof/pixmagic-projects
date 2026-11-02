@@ -339,6 +339,12 @@ this report are the channel's own claim (its attribution), not the store's order
   campaigns; Shopify's own sessions, visitors and conversion rate), the platform cards and the dashboard's
   Advertising performance tab of a platform whose figures come from it. Each figure says its source, dates,
   currency (the store's: Shopify reports every channel in it) and when it was last read.
+- **Total advertising expenses never leaves a platform out silently** (`totalSpend` in
+  `apps/web/src/components/advertising/marketingTotal.ts`): a platform shown from its own API whose
+  figures don't cover the dates yet (its first sync, or syncs that stopped short) is named ("Left out:
+  Meta Ads, its figures for these dates still being read."), and ad accounts in another currency than the
+  store's with the ads module's `leftOut` words ("Left out: EU shop (EUR), in another currency."). Either
+  marks the total "partial" (`data-partial`). The Google Ads demo is neither: its spend is simulated.
 - **Today and this month:** at the top of that card, whatever dates are picked: Google's, Meta's and every
   channel's spend together for the store's today and its month so far (the module's `current`, worked out by
   `marketingSpendPeriod` from the month's stored days). A platform without spend says why instead of a 0:

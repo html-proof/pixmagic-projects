@@ -23,6 +23,7 @@ import {
   addDays,
   adPlatformSources,
   adsenseSiteChosen,
+  claimsAddUp,
   localDay,
   localTime,
   marketingFigures,
@@ -347,10 +348,10 @@ function platformsOf(accounts: AccountSpend[], reported: ReportedSpend[]): Platf
  * The platforms together. Spend, impressions, clicks and conversions add up (money in one currency
  * only). Purchase value and ROAS are one platform's claim: with Meta and Google both in, they are
  * added across them only for Zaps made before `platforms` existed (deprecated: both platforms can
- * credit the same order, docs/kpis.md), and `claims_add_up` is false.
+ * credit the same order, docs/kpis.md), and `claims_add_up` is false (claimsAddUp in @app/shared/ads).
  */
 function acrossPlatforms(platforms: PlatformSpend[]) {
-  const claims_add_up = platforms.length <= 1;
+  const claims_add_up = claimsAddUp(platforms.map((p) => p.platform));
   if (platforms.length === 1) {
     const { spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas } = platforms[0]!;
     return { spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, claims_add_up };
