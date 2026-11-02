@@ -28,14 +28,14 @@ within minutes.
 | Kind | Key | What a Zap gets |
 | --- | --- | --- |
 | Trigger | `alert_raised` | Every bizinsights alert for the store, worded as the bell words it (`describeAlert`): a Shopify sync or webhook problem, an ad account that needs reconnecting, WhatsApp disconnected, an email account to reconnect... |
-| Trigger | `ad_spend_threshold` | Once per day or month (the trigger's choice) when the store's stored Meta, Google or combined ad spend reaches an amount |
+| Trigger | `ad_spend_threshold` | Once per day or month (the trigger's choice) when the store's stored Meta, Google or combined ad spend reaches an amount (for a platform without an ad account here, the spend its app reported to Shopify: [below](#ad-spend-reported-to-shopify)) |
 | Trigger | `adsense_earnings_threshold` | The same on AdSense's estimated earnings; or, with "When" set to below, once a finished day or month ended under the amount |
 | Trigger | `ads_daily_summary` | Once a day: yesterday's spend, impressions, clicks, conversions and platform-attributed purchase value / ROAS per platform, AdSense's estimates, and Shopify's own sales for the day |
 | Trigger | `whatsapp_message_failed` | A WhatsApp message to a customer failed (number masked) |
 | Trigger | `integration_connected` / `integration_disconnected` | Meta Ads, Google Ads, AdSense, WhatsApp or Zapier connected to, or disconnected from, the store |
 | Trigger | `sync_completed` | An ad account's figures were read (at most once an hour per account), with the last day stored |
 | Trigger | `order_paid` | A Shopify order was paid: number, amounts, items; never who bought it |
-| Search | `find_ad_performance` | Meta / Google Ads totals for dates, from stored data, with the last sync's time |
+| Search | `find_ad_performance` | Meta / Google Ads figures for dates, each platform's own and together, from stored data (or reported to Shopify), with the last sync's time |
 | Search | `find_adsense_earnings` | AdSense estimated earnings for dates |
 | Action | `send_whatsapp_template` | Send WhatsApp Template Message: one customer, one of the store's WhatsApp templates, the values the Zap maps in. Only for a connection allowed to send ([below](#the-action-send-whatsapp-template-message)) |
 | Trigger (hidden) | `whatsapp_templates` | The action's template dropdown: the store's templates that can send now |
@@ -142,7 +142,7 @@ minutes. Exempt from the app-wide per-IP limit (Zapier calls for every merchant 
 | `POST /zapier/hooks` | Subscribe: `{ event, targetUrl, zapId?, platform?, period?, amount?, direction? }` → `{ id, event }` (`direction`: AdSense's threshold only, `above` by default or `below`). `targetUrl` must be `https://hooks.zapier.com/hooks/…` (no other host, port, credentials or IP). At most 50 per connection. A trigger the member may not have: 403 `no_permission` |
 | `DELETE /zapier/hooks/:id` | Unsubscribe (this connection's triggers only; another's is a 404) |
 | `GET /zapier/samples/:event` | The store's last 3 real events of the kind as this member would receive them; with none sent yet, its latest alerts, failed WhatsApp messages, yesterday's stored advertising, integrations connected or disconnected (its audit log), ad accounts' last syncs or paid orders; thresholds: `[]` until one fires. Never made-up data |
-| `GET /zapier/search/ad-performance?platform&since&until` | Totals from stored data; `[]` without an ad account. Dates `YYYY-MM-DD`, default the 7 days to yesterday, at most 400 days |
+| `GET /zapier/search/ad-performance?platform&since&until` | Each platform's figures (`platforms`) and their totals, from stored data; `[]` with neither an ad account nor spend reported to Shopify. Dates `YYYY-MM-DD`, default the 7 days to yesterday, at most 400 days ([below](#find-ad-performance-each-platforms-own)) |
 | `GET /zapier/search/adsense-earnings?since&until` | The same for AdSense |
 | `GET /zapier/whatsapp/templates` | The store's templates that can send now (switched on; on Meta's Business Platform, approved by Meta too): `id, name, category, language, body, variables` (what the Zap fills in), `automatic` (`store_name`). Scope `whatsapp_send` |
 | `POST /zapier/whatsapp/messages` | Send WhatsApp Template Message ([below](#the-action-send-whatsapp-template-message)): 201 queued, 200 for a key already sent. Scope `whatsapp_send` |
@@ -166,16 +166,17 @@ or discount code.
 | Event | `data` | Written by | Once per |
 | --- | --- | --- | --- |
 | `alert_raised` | `alert_id, severity, area, title, body, fix_url, raised_at`: `describeAlert`'s wording, never the internal message | `raiseAlert` (an alert about no store goes to every store's triggers in the workspace) | alert and store |
-| `ad_spend_threshold` | `trigger {platform, period, amount, direction}, period, period_start, period_end, period_complete, spend, currency, accounts[], last_successful_sync_at, freshness_note` | `zapierAfterAdSync` (worker, after a successful ad sync), for that trigger only | trigger and period |
+| `ad_spend_threshold` | `trigger {platform, period, amount, direction}, period, period_start, period_end, period_complete, spend, currency, platforms[{platform, name, source, spend, currency, last_synced_at}], accounts[], last_successful_sync_at, freshness_note`; `shopify_marketing_note` when a platform's spend is from Shopify | `zapierAfterAdSync` (worker, after a successful ad sync), and `zapierAfterMarketingRead` (after a read of Shopify's marketing report), for that trigger only | trigger and period |
 | `adsense_earnings_threshold` | the same with `earnings_estimated`, each account's `data_through`, and `estimates_note` (Google's estimates, adjusted after the month); `trigger.direction` says whether it was reached or ended below | the same | trigger and period |
-| `ads_daily_summary` | `day, platforms[{platform, spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, accounts}], adsense, shopify {net_sales, total_sales, orders, currency}, accounts_without_the_day, freshness_note, attribution_note` | after an ad sync, and the cron sweep | store and day |
+| `ads_daily_summary` | `day, platforms[{platform, name, source, spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, accounts}], adsense, shopify {net_sales, total_sales, orders, currency}, accounts_without_the_day, freshness_note, attribution_note`; `shopify_marketing_note` when a platform's figures are from Shopify | after an ad sync or a read of Shopify's marketing report, and the cron sweep | store and day |
 | `whatsapp_message_failed` | `message_id, source, type, category, phone_masked, reason, reason_text, automation_id, campaign_id, failed_at, view_url` | `applyMessageStatus` when a customer's message becomes failed (not tests, codes or team alerts) | message |
 | `integration_connected` | `integration` (`meta_ads`, `google_ads`, `adsense`, `whatsapp`, `zapier`), `integration_name, accounts` (ad accounts connected, else null), `connected_at, settings_url`. Never who did it | `audit()` (core notify.ts), from the rows `ads.connected`, `whatsapp.connected`, `zapier.connected` (not the Google Ads demo, nor a sign-in still waiting for an ad account) | audit row |
 | `integration_disconnected` | the same with `disconnected_at`, from `ads.disconnected`, `whatsapp.disconnected`, `zapier.disconnected` | the same | audit row |
 | `sync_completed` | `integration, integration_name, connection_id, account_id, account_name, synced_at, data_through`. No figures: those are the advertising triggers' and searches' | `zapierAfterAdSync` after each successful sync of a real ad account | account and hour (UTC) |
 | `order_paid` | `order_id, order_name, currency, total_price, subtotal, total_discounts, total_tax, total_shipping, financial_status, items, line_items[{product_id, variant_id, sku, title, quantity, price}]` (first 100), `sales_channel, processed_at` | the worker's `orders/paid` webhook (not test orders) | order |
 
-- **Thresholds** are checked after each ad sync, for the store's current period and the one before
+- **Thresholds** are checked after each ad sync and each read of Shopify's marketing report (not its
+  walk back through history), for the store's current period and the one before
   (platforms report late) when that one ended after the trigger was made. Periods are the store's
   calendar; each platform's rows are its account's own days. The Google Ads demo is left out (its
   figures are generated). Amounts in **different currencies are never added up**: such a trigger is
@@ -194,9 +195,57 @@ or discount code.
   UTC hour (the first sync of the hour). A use: refresh a sheet with Find Ad Performance.
 - **Order paid**: from Shopify's `orders/paid` webhook, queued at once (the worker has its queue).
   Shopify sends webhooks more than once: the order's key makes one event.
-- **Daily summary**: once every connected account has yesterday stored (`synced_through`), or from
-  noon at the store with what there is (`accounts_without_the_day` lists the rest). Purchase value and
-  ROAS are each platform's own attribution, never store revenue; Shopify's sales are beside them.
+- **Daily summary**: once every connected account has yesterday stored (`synced_through`) and, where
+  Meta or Google has no ad account here, Shopify's marketing report is read through yesterday (only
+  while its reads work: a refused or failing one isn't waited for), or from noon at the store with what
+  there is (`accounts_without_the_day` lists the accounts without it). Purchase value and ROAS are each
+  platform's own attribution, never store revenue; Shopify's sales are beside them.
+
+### Ad spend reported to Shopify
+
+A merchant whose Meta or Google Ads account isn't connected (until Meta's App Review, only people with
+a role on bizinsights' Meta app can connect Meta) often has one ad figure only: the spend the
+platform's app (Facebook & Instagram, Google & YouTube) reports to Shopify, which the dashboard shows
+from `shopify_marketing_days` ([advertising.md](advertising.md), "Shopify marketing"). The ad spend
+threshold, the daily summary and Find Ad Performance count it too (`reportedSpendByPlatform` in
+`packages/core/src/zapier/ads.ts`):
+
+- **Only for a store that reads it**: the capability "Ad spend reported to Shopify" (`shopify_marketing`,
+  scope `read_reports`) is on, and its tables exist.
+- **Never beside the platform's own figures**: per platform, as the dashboard picks it
+  (`adPlatformSources`, without the store's orders): its ad accounts while they sync, or while their
+  stored days reach into the dates; otherwise Shopify's, when Shopify has its spend for them. A
+  platform from Shopify leaves its accounts out (their access ended before the dates), so no spend is
+  counted from both. The Google Ads demo isn't an account here, as everywhere in Zapier.
+- **As the dashboard counts it**: the channel's whole days only (`campaign = ''`, never its campaign
+  rows, which are parts of those days); only the days read from Shopify with none missing
+  (`covered_from` to `synced_through`); only spend above 0. A platform that reported no spend has no
+  entry, never a 0. Its money is the store's currency.
+- **Tagged**: such a platform is `source: "shopify_marketing"` in `platforms[]` (the others are
+  `"platform_api"`), with `accounts: []`, `reported_by` (the apps, as Shopify names them),
+  `last_synced_at` (Shopify's report last read) and `data_through`; its `conversions` and
+  `platform_attributed_purchase_value` are the channel's own count of orders and their sales, and its
+  ROAS is worked out from the days it reported spend, as the dashboard does. The payload's
+  `shopify_marketing_note` says where the spend comes from and that it can reach Shopify a day late.
+- **When**: a store with no ad account has no ad sync, so thresholds and the summary are also checked
+  after each read of the report (`zapierAfterMarketingRead`, from the worker's `runShopifyMarketing`),
+  every 6 hours and once a day for the last week; the cron sweep sends the summary as before.
+
+### Find Ad Performance: each platform's own
+
+`platforms[]` holds each platform's figures for the dates, the same entries as the daily summary's:
+`platform, name, source, spend, currency, mixed_currencies, impressions, clicks, conversions,
+platform_attributed_purchase_value, platform_attributed_roas, accounts`. A Zap that needs Meta's and
+Google's purchase value or ROAS reads them there (or searches one platform).
+
+**Deprecated**: with platform "Meta and Google Ads" and both in, the top-level
+`platform_attributed_purchase_value` and `platform_attributed_roas` add Meta's claim to Google's.
+Each platform credits purchases to its own ads by its own rules and both can claim the same order, so
+that sum can count an order twice ([kpis.md](kpis.md): purchase claims are never added across
+platforms). Those two fields stay, with the same values as before, for the Zaps that already map them;
+`claims_add_up` is `false` when they add up two platforms' claims (`true` with one). New Zaps use
+`platforms[]`. They will be removed only with a `schema_version` raise. Spend, impressions, clicks and
+conversions at the top still add up across platforms.
 - **Per person**: an alert goes only to triggers whose member could see it in the bell (`mayFixAlert`:
   ads → Manage integrations, WhatsApp → View campaigns, email → View integration status, staff →
   attendance, privacy → audit log, Shopify, Zapier's undelivered events and general → owners and

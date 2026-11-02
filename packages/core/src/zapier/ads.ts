@@ -13,9 +13,24 @@
  *   account (or at noon with what there is, saying which accounts it lacks).
  * - Periods and "yesterday" are the store's calendar days; each platform's rows are its account's
  *   own days. Demo connections (the Google Ads demo) are left out: their figures are generated.
+ * - Meta or Google with no API figures shown (no ad account, or its access ended before the dates)
+ *   counts the spend its app reported to Shopify instead (shopify_marketing_days), as the dashboard
+ *   does, tagged `source: "shopify_marketing"`; never both for one platform. Checked after each read
+ *   of Shopify's marketing report too (zapierAfterMarketingRead), since such a store has no ad sync.
  */
 import { systemDb, toNumber } from "@app/db";
-import { addDays, adsenseSiteChosen, localDay, localTime } from "@app/shared";
+import {
+  addDays,
+  adPlatformSources,
+  adsenseSiteChosen,
+  localDay,
+  localTime,
+  marketingFigures,
+  marketingPlatform,
+  resolveCapabilities,
+  type AdSourceFacts,
+  type MarketingRow,
+} from "@app/shared";
 import {
   integrationOfProvider,
   periodKey,
@@ -29,6 +44,7 @@ import {
 } from "@app/shared/zapier";
 import { logger } from "../logger.js";
 import type { Queues } from "../queues.js";
+import { marketingReady } from "../shopifyMarketing.js";
 import type { AuthorizerAccess } from "./access.js";
 import { recordZapierEvent } from "./events.js";
 
@@ -39,8 +55,11 @@ const providersOf = (p: ZapierSpendPlatform): SpendProvider[] => (p === "any" ? 
 
 const FRESHNESS =
   "Figures as stored in bizinsights at its last sync with each platform. Today's figures change during the day, and platforms credit conversions days later.";
-const ATTRIBUTION = "Purchase value and ROAS are what each ad platform credits to its own ads (its attribution), not the store's revenue.";
+const ATTRIBUTION =
+  "Purchase value and ROAS are what each ad platform credits to its own ads (its attribution), not the store's revenue. Two platforms can credit the same order: use each platform's own (platforms).";
 const ADSENSE_ESTIMATES = "AdSense earnings are Google's estimates: Google can adjust them, and finalizes a month's earnings after it ends.";
+const REPORTED_TO_SHOPIFY =
+  "A platform with source shopify_marketing has no ad account figures in bizinsights: its spend is what its app (Facebook & Instagram, Google & YouTube) reported to Shopify, read every 6 hours. It can reach Shopify up to a day late and be revised for a few days.";
 
 // ---------------------------------------------------------------------------
 // Reading the stored figures
@@ -163,48 +182,210 @@ export async function adsenseByAccount(storeId: string, since: string, until: st
   return out;
 }
 
+/**
+ * A platform's spend for the days as its app (Facebook & Instagram, Google & YouTube) reported it to
+ * Shopify, in the store's currency (packages/core/src/shopifyMarketing.ts keeps it). As the dashboard
+ * counts it (marketingFigures in @app/shared/shopifyMarketing): the channel's whole days only, never
+ * its campaign rows (parts of those days); only the days read from Shopify with none missing; only
+ * spend above 0. Its orders and sales are the channel's own claim, like a platform's purchases.
+ */
+export interface ReportedSpend {
+  platform: SpendProvider;
+  source: "shopify_marketing";
+  /** The apps that reported it, as Shopify names them ("Google & YouTube"). */
+  reported_by: string[];
+  currency: string;
+  spend: number;
+  /** Null where the channel reported none. */
+  impressions: number | null;
+  clicks: number | null;
+  /** The channel's own count of orders from its ads. */
+  conversions: number | null;
+  /** Those orders' sales, as the channel credits them to its ads. */
+  platform_attributed_purchase_value: number | null;
+  /** Sales ÷ spend over the days it reported spend, as the dashboard works it out. */
+  platform_attributed_roas: number | null;
+  /** When Shopify's marketing report was last read. */
+  last_synced_at: string | null;
+  /** The last day read from Shopify with none missing before it. */
+  data_through: string | null;
+}
+
+const marketingOn = (grantedScopes: string[]) => resolveCapabilities(grantedScopes).some((c) => c.id === "shopify_marketing" && c.enabled);
+
+/** How far Shopify's marketing report is read for the store, while "Ad spend reported to Shopify" is on for it; null otherwise. */
+async function marketingRead(storeId: string) {
+  const store = await systemDb.store.findUnique({ where: { id: storeId }, select: { grantedScopes: true, currency: true } });
+  if (!store || !marketingOn(store.grantedScopes) || !(await marketingReady(systemDb))) return null;
+  const sync = await systemDb.shopifyMarketingSync.findUnique({ where: { storeId }, select: { coveredFrom: true, syncedThrough: true, lastSyncedAt: true, lastError: true } });
+  return sync ? { currency: store.currency, sync } : null;
+}
+
+/** Meta's and Google's spend for the days as their apps reported it to Shopify: a platform that reported none has no entry, never a 0. */
+export async function reportedSpendByPlatform(storeId: string, providers: SpendProvider[], since: string, until: string): Promise<ReportedSpend[]> {
+  const read = await marketingRead(storeId);
+  const { coveredFrom, syncedThrough, lastSyncedAt } = read?.sync ?? {};
+  if (!read || !coveredFrom || !syncedThrough) return [];
+  // Only the days read: a day after a gap, or not read yet, isn't known.
+  const from = coveredFrom > since ? coveredFrom : since;
+  const to = syncedThrough < until ? syncedThrough : until;
+  if (from > to) return [];
+  const rows = await systemDb.shopifyMarketingDay.findMany({
+    where: { storeId, campaign: "", day: { gte: from, lte: to } },
+    select: { day: true, channel: true, app: true, spend: true, impressions: true, clicks: true, orders: true, sales: true, newCustomers: true },
+  });
+  const num = (v: { toString(): string } | null) => (v === null ? null : Number(v));
+  const ours = rows.map(
+    (r): MarketingRow => ({ day: r.day, channel: r.channel, app: r.app || null, campaign: null, spend: num(r.spend), impressions: r.impressions, clicks: r.clicks, orders: r.orders, sales: num(r.sales), newCustomers: r.newCustomers }),
+  );
+  return providers.flatMap((platform): ReportedSpend[] => {
+    const mine = ours.filter((r) => marketingPlatform(r.channel, r.app) === platform);
+    const f = marketingFigures(mine);
+    if (f.spend === null) return [];
+    return [
+      {
+        platform,
+        source: "shopify_marketing",
+        reported_by: [...new Set(mine.filter((r) => r.spend !== null && r.spend > 0).map((r) => r.app ?? r.channel))].sort(),
+        currency: read.currency,
+        spend: f.spend,
+        impressions: f.impressions,
+        clicks: f.clicks,
+        conversions: f.orders,
+        platform_attributed_purchase_value: f.sales,
+        platform_attributed_roas: f.roas === null ? null : r2(f.roas),
+        last_synced_at: lastSyncedAt?.toISOString() ?? null,
+        data_through: syncedThrough,
+      },
+    ];
+  });
+}
+
+/**
+ * Meta's and Google's figures for the days, each from one place, as the dashboard picks it
+ * (adPlatformSources in @app/shared/adsFromShopify, without the store's orders, which no Zapier figure
+ * is): its own API's accounts while they sync, or while their stored days reach into the dates;
+ * otherwise what its app reported to Shopify, when Shopify has its spend for them. A platform taken
+ * from Shopify leaves its accounts out (their access ended before the dates: nothing of them is
+ * stored), so no spend is counted from both.
+ */
+async function spendSources(storeId: string, providers: SpendProvider[], since: string, until: string): Promise<{ accounts: AccountSpend[]; reported: ReportedSpend[] }> {
+  const [accounts, reported] = await Promise.all([adSpendByAccount(storeId, providers, since, until), reportedSpendByPlatform(storeId, providers, since, until)]);
+  if (!reported.length) return { accounts, reported };
+  const conns = await systemDb.adConnection.findMany({
+    where: { storeId, provider: { in: providers }, enabled: true, isDemo: false },
+    select: { provider: true, status: true, errorCode: true, accountStatus: true },
+  });
+  const facts = (p: SpendProvider): AdSourceFacts => ({
+    accounts: conns.filter((c) => c.provider === p),
+    figures: accounts.some((a) => a.platform === p && !!a.data_through && a.data_through >= since),
+    hidden: 0,
+    waiting: false,
+  });
+  const has = (p: SpendProvider) => reported.some((r) => r.platform === p);
+  const sources = adPlatformSources({ meta: facts("meta"), google: facts("google") }, false, { meta: has("meta"), google: has("google") });
+  const fromShopify = new Set<string>(sources.filter((s) => s.marketing).map((s) => s.provider));
+  return { accounts: accounts.filter((a) => !fromShopify.has(a.platform)), reported: reported.filter((r) => fromShopify.has(r.platform)) };
+}
+
 const latest = (xs: Array<string | null>) => xs.filter((x): x is string => !!x).sort().at(-1) ?? null;
+/** A count added up, or null when any part of it isn't known: never a short count. */
+const known = (xs: Array<number | null>) => (xs.some((x) => x === null) ? null : xs.reduce<number>((s, x) => s + x!, 0));
+
+type SpendRow = Pick<AccountSpend, "currency" | "spend" | "platform_attributed_purchase_value"> & { impressions: number | null; clicks: number | null; conversions: number | null };
 
 /** Totals over several accounts: money only when they share a currency (`mixed_currencies` lists them otherwise). */
-function spendTotals(accounts: AccountSpend[]) {
+function spendTotals(accounts: SpendRow[]) {
   const spend = singleCurrencyTotal(accounts.map((a) => ({ currency: a.currency, amount: a.spend })));
   const valued = accounts.filter((a) => a.platform_attributed_purchase_value !== null);
   const value = valued.length ? singleCurrencyTotal(valued.map((a) => ({ currency: a.currency, amount: a.platform_attributed_purchase_value! }))) : null;
   const mixed = "mixed" in spend ? spend.mixed : null;
   const total = "total" in spend ? spend.total : null;
   const purchaseValue = value && "total" in value ? value.total : null;
+  const conversions = known(accounts.map((a) => a.conversions));
   return {
     spend: total,
     currency: "total" in spend ? spend.currency : null,
     mixed_currencies: mixed,
-    impressions: accounts.reduce((s, a) => s + a.impressions, 0),
-    clicks: accounts.reduce((s, a) => s + a.clicks, 0),
-    conversions: r2(accounts.reduce((s, a) => s + a.conversions, 0)),
+    impressions: known(accounts.map((a) => a.impressions)),
+    clicks: known(accounts.map((a) => a.clicks)),
+    conversions: conversions === null ? null : r2(conversions),
     platform_attributed_purchase_value: purchaseValue,
     platform_attributed_roas: purchaseValue !== null && total ? r2(purchaseValue / total) : null,
   };
+}
+
+/** One platform's figures for the days, saying where they come from. */
+export type PlatformSpend = ReturnType<typeof spendTotals> & {
+  platform: SpendProvider;
+  name: string;
+  /** "platform_api": its ad accounts' own figures, as synced; "shopify_marketing": what its app reported to Shopify. */
+  source: "platform_api" | "shopify_marketing";
+  /** Its ad accounts; none from Shopify. */
+  accounts: AccountSpend[];
+  /** From Shopify only (ReportedSpend). */
+  reported_by?: string[];
+  last_synced_at?: string | null;
+  data_through?: string | null;
+};
+
+/** Meta's, then Google's, figures: from its accounts when it has some here, else from Shopify (spendSources picked which). */
+function platformsOf(accounts: AccountSpend[], reported: ReportedSpend[]): PlatformSpend[] {
+  return (["meta", "google"] as const).flatMap((p): PlatformSpend[] => {
+    const own = accounts.filter((a) => a.platform === p);
+    if (own.length) return [{ platform: p, name: PLATFORM_NAME[p]!, source: "platform_api", ...spendTotals(own), accounts: own }];
+    const r = reported.find((x) => x.platform === p);
+    if (!r) return [];
+    const { spend, currency, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, reported_by, last_synced_at, data_through } = r;
+    return [
+      { platform: p, name: PLATFORM_NAME[p]!, source: r.source, spend, currency, mixed_currencies: null, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, accounts: [], reported_by, last_synced_at, data_through },
+    ];
+  });
+}
+
+/**
+ * The platforms together. Spend, impressions, clicks and conversions add up (money in one currency
+ * only). Purchase value and ROAS are one platform's claim: with Meta and Google both in, they are
+ * added across them only for Zaps made before `platforms` existed (deprecated: both platforms can
+ * credit the same order, docs/kpis.md), and `claims_add_up` is false.
+ */
+function acrossPlatforms(platforms: PlatformSpend[]) {
+  const claims_add_up = platforms.length <= 1;
+  if (platforms.length === 1) {
+    const { spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas } = platforms[0]!;
+    return { spend, currency, mixed_currencies, impressions, clicks, conversions, platform_attributed_purchase_value, platform_attributed_roas, claims_add_up };
+  }
+  return { ...spendTotals(platforms.flatMap((p): SpendRow[] => (p.accounts.length ? p.accounts : [{ ...p, spend: p.spend ?? 0 }]))), claims_add_up };
 }
 
 // ---------------------------------------------------------------------------
 // Searches
 // ---------------------------------------------------------------------------
 
-/** "Find ad performance": the store's stored Meta and Google Ads figures for the days. Empty with no ad account connected. */
+/**
+ * "Find ad performance": the store's stored Meta and Google Ads figures for the days, each platform's
+ * own in `platforms` (from Shopify for one without ad account figures), the platforms together beside
+ * them. Empty with neither an ad account connected nor spend reported to Shopify.
+ */
 export async function findAdPerformance(storeId: string, platform: ZapierSpendPlatform, since: string, until: string) {
-  const accounts = await adSpendByAccount(storeId, providersOf(platform), since, until);
-  if (!accounts.length) return [];
+  const { accounts, reported } = await spendSources(storeId, providersOf(platform), since, until);
+  if (!accounts.length && !reported.length) return [];
+  const platforms = platformsOf(accounts, reported);
+  const all = [...accounts, ...reported];
   return [
     {
       id: `ad_performance:${storeId}:${platform}:${since}:${until}`,
       platform,
       since,
       until,
-      ...spendTotals(accounts),
+      ...acrossPlatforms(platforms),
+      platforms,
       accounts,
-      last_successful_sync_at: latest(accounts.map((a) => a.last_synced_at)),
-      data_through: latest(accounts.map((a) => a.data_through)),
+      last_successful_sync_at: latest(all.map((a) => a.last_synced_at)),
+      data_through: latest(all.map((a) => a.data_through)),
       freshness_note: FRESHNESS,
       attribution_note: ATTRIBUTION,
+      ...(reported.length ? { shopify_marketing_note: REPORTED_TO_SHOPIFY } : {}),
     },
   ];
 }
@@ -300,9 +481,11 @@ export async function checkZapierThresholds(storeId: string, queues?: Pick<Queue
         period_complete: range.until < today,
         ...(hook.event === "ad_spend_threshold" ? { spend: check.total } : { earnings_estimated: check.total }),
         currency: check.currency,
+        ...(check.platforms ? { platforms: check.platforms } : {}),
         accounts: check.accounts,
-        last_successful_sync_at: latest(check.accounts.map((a) => a.last_synced_at)),
+        last_successful_sync_at: latest([...check.accounts, ...(check.platforms ?? [])].map((a) => a.last_synced_at)),
         freshness_note: FRESHNESS,
+        ...(check.platforms?.some((p) => p.source === "shopify_marketing") ? { shopify_marketing_note: REPORTED_TO_SHOPIFY } : {}),
         ...(hook.event === "adsense_earnings_threshold" ? { estimates_note: ADSENSE_ESTIMATES } : {}),
       };
       fired += await recordZapierEvent({ workspaceId: store.workspaceId, storeId, event: hook.event as "ad_spend_threshold", dedupeKey: `${hook.event}:${hook.id}:${key}`, hookId: hook.id, data }, queues, now);
@@ -312,13 +495,31 @@ export async function checkZapierThresholds(storeId: string, queues?: Pick<Queue
   return fired;
 }
 
-type Check = { total: number; currency: string | null; accounts: Array<{ last_synced_at: string | null; data_through?: string | null }> } | { mixed: string[] } | null;
+type ThresholdPlatform = Pick<PlatformSpend, "platform" | "name" | "source" | "spend" | "currency" | "reported_by" | "data_through"> & { last_synced_at: string | null };
+type Check =
+  | { total: number; currency: string | null; accounts: Array<{ last_synced_at: string | null; data_through?: string | null }>; platforms?: ThresholdPlatform[] }
+  | { mixed: string[] }
+  | null;
 
 async function spendCheck(storeId: string, platform: ZapierSpendPlatform, since: string, until: string): Promise<Check> {
-  const accounts = await adSpendByAccount(storeId, providersOf(platform), since, until);
-  if (!accounts.length) return null;
-  const t = singleCurrencyTotal(accounts.map((a) => ({ currency: a.currency, amount: a.spend })));
-  return "mixed" in t ? t : { ...t, accounts: accounts.map((a) => ({ platform: a.platform, account_id: a.account_id, account_name: a.account_name, spend: a.spend, currency: a.currency, last_synced_at: a.last_synced_at })) };
+  const { accounts, reported } = await spendSources(storeId, providersOf(platform), since, until);
+  if (!accounts.length && !reported.length) return null;
+  const t = singleCurrencyTotal([...accounts, ...reported].map((a) => ({ currency: a.currency, amount: a.spend })));
+  if ("mixed" in t) return t;
+  return {
+    ...t,
+    // Each platform's spend and where it comes from; its accounts' own below.
+    platforms: platformsOf(accounts, reported).map((p) => ({
+      platform: p.platform,
+      name: p.name,
+      source: p.source,
+      spend: p.spend,
+      currency: p.currency,
+      last_synced_at: p.source === "shopify_marketing" ? (p.last_synced_at ?? null) : latest(p.accounts.map((a) => a.last_synced_at)),
+      ...(p.source === "shopify_marketing" ? { reported_by: p.reported_by, data_through: p.data_through } : {}),
+    })),
+    accounts: accounts.map((a) => ({ platform: a.platform, account_id: a.account_id, account_name: a.account_name, spend: a.spend, currency: a.currency, last_synced_at: a.last_synced_at })),
+  };
 }
 
 async function earningsCheck(storeId: string, since: string, until: string): Promise<Check> {
@@ -337,19 +538,19 @@ async function earningsCheck(storeId: string, since: string, until: string): Pro
 /** From this store-local hour the summary goes with whatever is in, rather than waiting for every account. */
 const SUMMARY_LATEST_HOUR = 12;
 
-/** One day's advertising for the store, per platform, with Shopify's own sales for the day beside it (redacted per person at delivery). */
+/**
+ * One day's advertising for the store, per platform (from Shopify for one without ad account figures),
+ * with Shopify's own sales for the day beside it (redacted per person at delivery).
+ */
 export async function adsDailySummaryData(storeId: string, day: string): Promise<Record<string, unknown> | null> {
-  const [spend, adsense, metrics] = await Promise.all([
-    adSpendByAccount(storeId, ["meta", "google"], day, day),
+  const [{ accounts: spend, reported }, adsense, metrics] = await Promise.all([
+    spendSources(storeId, ["meta", "google"], day, day),
     adsenseByAccount(storeId, day, day),
     systemDb.dailyStoreMetrics.findUnique({ where: { storeId_day: { storeId, day } } }),
   ]);
-  if (!spend.length && !adsense.length) return null;
+  if (!spend.length && !reported.length && !adsense.length) return null;
   const store = await systemDb.store.findUnique({ where: { id: storeId }, select: { currency: true } });
-  const platforms = (["meta", "google"] as const)
-    .map((p) => ({ p, accounts: spend.filter((a) => a.platform === p) }))
-    .filter((x) => x.accounts.length)
-    .map(({ p, accounts }) => ({ platform: p, name: PLATFORM_NAME[p], ...spendTotals(accounts), accounts }));
+  const platforms = platformsOf(spend, reported);
   const earnings = adsense.length ? singleCurrencyTotal(adsense.map((a) => ({ currency: a.currency, amount: a.earnings_estimated }))) : null;
   const missing = [...spend, ...adsense].filter((a) => !a.data_through || a.data_through < day).map((a) => a.account_id);
   const net = metrics ? r2(toNumber(metrics.grossSales) - toNumber(metrics.discounts) - toNumber(metrics.refunds)) : null;
@@ -372,12 +573,15 @@ export async function adsDailySummaryData(storeId: string, day: string): Promise
     accounts_without_the_day: missing,
     freshness_note: FRESHNESS,
     attribution_note: ATTRIBUTION,
+    ...(reported.length ? { shopify_marketing_note: REPORTED_TO_SHOPIFY } : {}),
   };
 }
 
 /**
  * Send yesterday's summary to the store's "Daily advertising summary" triggers once it is in: every
- * account has the day stored, or it is past noon at the store. Once per store and day.
+ * account has the day stored, and Shopify's marketing report is read through it where it may stand in
+ * for Meta or Google (a platform without an ad account here); or it is past noon at the store. Once
+ * per store and day.
  */
 export async function maybeSendAdsDailySummary(storeId: string, queues?: Pick<Queues, "sync">, now = new Date()): Promise<boolean> {
   const hooks = await systemDb.zapierHook.count({ where: { storeId, event: "ads_daily_summary", grant: { revokedAt: null } } });
@@ -387,9 +591,13 @@ export async function maybeSendAdsDailySummary(storeId: string, queues?: Pick<Qu
   const day = addDays(localDay(now, store.timezone), -1);
   const dedupeKey = `ads_daily_summary:${storeId}:${day}`;
   if (await systemDb.zapierEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return false;
-  const conns = await systemDb.adConnection.findMany({ where: { storeId, enabled: true, isDemo: false }, select: { syncedThrough: true } });
-  if (!conns.length) return false;
-  const allIn = conns.every((c) => !!c.syncedThrough && c.syncedThrough >= day);
+  const conns = await systemDb.adConnection.findMany({ where: { storeId, enabled: true, isDemo: false }, select: { provider: true, syncedThrough: true } });
+  const shopify = (["meta", "google"] as const).some((p) => !conns.some((c) => c.provider === p)) ? (await marketingRead(storeId))?.sync : null;
+  // Never read from Shopify (or refused from the start): nothing of it to send or wait for.
+  if (!conns.length && !shopify?.lastSyncedAt) return false;
+  // Waited for only while its reads work: a refused or failing one would hold the summary to noon every day.
+  const shopifyIn = !shopify?.lastSyncedAt || !!shopify.lastError || (!!shopify.syncedThrough && shopify.syncedThrough >= day);
+  const allIn = shopifyIn && conns.every((c) => !!c.syncedThrough && c.syncedThrough >= day);
   const hour = Number(localTime(now, store.timezone).slice(0, 2));
   if (!allIn && hour < SUMMARY_LATEST_HOUR) return false;
   const data = await adsDailySummaryData(storeId, day);
@@ -451,6 +659,20 @@ export async function zapierAfterAdSync(connectionId: string, deps: { queues: Pi
     }
   } catch (err) {
     logger.error({ err, connectionId }, "zapier checks after an ad sync failed");
+  }
+}
+
+/**
+ * After a read of the store's Shopify marketing report stored its days (the worker's
+ * runShopifyMarketing): its thresholds and daily summary, which for a store with no ad account have
+ * no ad sync to come after. Never throws, like zapierAfterAdSync.
+ */
+export async function zapierAfterMarketingRead(storeId: string, deps: { queues: Pick<Queues, "sync"> }, now = new Date()): Promise<void> {
+  try {
+    await checkZapierThresholds(storeId, deps.queues, now);
+    await maybeSendAdsDailySummary(storeId, deps.queues, now);
+  } catch (err) {
+    logger.error({ err, storeId }, "zapier checks after a Shopify marketing read failed");
   }
 }
 

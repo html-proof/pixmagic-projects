@@ -1,4 +1,5 @@
 import { logger, marketingReady, requestShopifyMarketing, shopifyMarketingQueue, syncShopifyMarketing, type ShopifyMarketingJob } from "@app/core";
+import { zapierAfterMarketingRead } from "@app/core/zapier";
 import { systemDb } from "@app/db";
 import { expandScopes } from "@app/shared";
 import type { WorkerDeps } from "./handlers.js";
@@ -27,6 +28,9 @@ export async function runShopifyMarketing(job: ShopifyMarketingJob, deps: Worker
   if (!(await marketingReady(systemDb))) return { skipped: true };
   const res = await syncShopifyMarketing(store, job.mode, deps);
   if (res.status === "error" && res.error === "failed") throw new MarketingReadFailedError(store.id);
+  // Zapier's thresholds and daily summary on the days just read (docs/zapier.md): a walk back
+  // through history reads none of the periods they watch. Never throws.
+  if (res.status === "done" && job.mode !== "backfill") await zapierAfterMarketingRead(store.id, deps);
   // A recent read catching up a gap reads on, window after window, until it reaches today.
   if (res.status === "done" && res.behind) await shopifyMarketingQueue(deps.queues).send({ kind: "shopify_marketing", storeId: store.id, mode: "recent" }, { delaySeconds: BACKFILL_STEP_S });
   if (res.status === "done" && res.more) {
