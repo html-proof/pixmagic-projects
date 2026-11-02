@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Store } from "@app/db";
+import { addDays, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -24,9 +25,9 @@ async function owner(scopes = SCOPES) {
 
 type Day = { day: string; channel: string; app?: string; campaign?: string; spend?: number | null; impressions?: number | null; clicks?: number | null; orders?: number | null; sales?: number | null };
 
-async function keep(store: Store, days: Day[], sync: { coveredFrom?: string; backfilled?: boolean } = {}) {
+async function keep(store: Store, days: Day[], sync: { coveredFrom?: string; syncedThrough?: string; backfilled?: boolean } = {}) {
   await systemDb.shopifyMarketingSync.create({
-    data: { storeId: store.id, workspaceId: store.workspaceId, coveredFrom: sync.coveredFrom ?? "2026-06-01", syncedThrough: "2026-09-30", backfilled: sync.backfilled ?? false, lastSyncedAt: new Date(), lastAttemptAt: new Date() },
+    data: { storeId: store.id, workspaceId: store.workspaceId, coveredFrom: sync.coveredFrom ?? "2026-06-01", syncedThrough: sync.syncedThrough ?? "2026-09-30", backfilled: sync.backfilled ?? false, lastSyncedAt: new Date(), lastAttemptAt: new Date() },
   });
   await systemDb.shopifyMarketingDay.createMany({
     data: days.map((d) => ({
@@ -79,11 +80,35 @@ describe("ad spend reported to Shopify on the dashboard", () => {
     expect(marketingJobs()).toEqual([]);
   });
 
+  it("gives today's and this month's spend whatever the dates picked, never last month's", async () => {
+    const { a, ws, store } = await owner();
+    const today = localDay(new Date(), store.timezone);
+    const first = `${today.slice(0, 7)}-01`;
+    await keep(
+      store,
+      [
+        { ...META, day: today, spend: 25, clicks: 90 },
+        { channel: "Google Ads", app: "Google & YouTube", day: first, spend: 10 },
+        { ...META, day: addDays(first, -1), spend: 999 },
+      ],
+      { coveredFrom: addDays(first, -40), syncedThrough: today },
+    );
+    const current = (await overview(a.headers, ws, store.id)).json().modules.shopify_marketing.current;
+    expect(current.month).toMatchObject({ from: first, to: today, through: today, meta: { spend: 25, state: "reported" }, google: { spend: 10, state: "reported" }, others: [], total: 35 });
+    // On the 1st, today is the whole month so far.
+    expect(current.today).toMatchObject(
+      today === first
+        ? { from: today, through: today, meta: { spend: 25 }, google: { spend: 10 }, total: 35 }
+        : { from: today, through: today, meta: { spend: 25 }, google: { spend: null, state: "no_spend" }, total: 25 },
+    );
+  });
+
   it("says when it hasn't been read yet, and asks the worker for the first read once", async () => {
     const { a, ws, store } = await owner();
     const first = (await overview(a.headers, ws, store.id)).json().modules;
     expect(first.shopify_marketing).toMatchObject({ status: "syncing", reportedSpend: null, from: null, through: null });
     expect(first.shopify_marketing.platforms.map((g: { availability: string }) => g.availability)).toEqual(["unavailable", "unavailable"]);
+    expect(first.shopify_marketing.current.today).toMatchObject({ through: null, meta: { spend: null, state: "not_read" }, google: { state: "not_read" }, total: null });
     expect(marketingJobs()).toEqual([{ kind: "shopify_marketing", storeId: store.id, mode: "recent" }]);
     await overview(a.headers, ws, store.id);
     expect(marketingJobs()).toHaveLength(1);

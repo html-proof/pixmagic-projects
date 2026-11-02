@@ -143,6 +143,34 @@ export interface MarketingSyncState {
   lastAttemptAt: string | null;
 }
 
+/**
+ * How a platform's spend for a stretch of days stands. "reported": its channel told Shopify some spend
+ * on the days read. "no_spend": it reported to Shopify (other figures, or on other days) but no spend
+ * on these. "unavailable": it has never reported anything bizinsights has read (not reported by
+ * Shopify). "not_read": none of these days has been read from Shopify yet.
+ */
+export type MarketingSpendState = "reported" | "no_spend" | "unavailable" | "not_read";
+
+export interface MarketingSpendFigure {
+  /** Null unless "reported". */
+  spend: number | null;
+  state: MarketingSpendState;
+}
+
+/** Every channel's spend reported to Shopify for one stretch of days (today, this month so far). */
+export interface MarketingSpendPeriod {
+  from: string;
+  to: string;
+  /** The figures are of `from` to `through`, the days of it read so far; null: none of them yet. */
+  through: string | null;
+  meta: MarketingSpendFigure;
+  google: MarketingSpendFigure;
+  /** The other channels that reported spend in it (TikTok, Pinterest...), the biggest first. */
+  others: Array<{ name: string; spend: number }>;
+  /** Meta's, Google's and the others' reported spend added up; null when none reported any. */
+  total: number | null;
+}
+
 export interface ShopifyMarketing {
   /** Where every figure here comes from, for the badge and the export. */
   source: "shopify_marketing";
@@ -169,9 +197,14 @@ export interface ShopifyMarketing {
    */
   from: string | null;
   through: string | null;
+  /**
+   * Today and this calendar month so far (store-local days), whatever the dates: the spend tiles.
+   * Null when the module was worked out without them.
+   */
+  current: { today: MarketingSpendPeriod; month: MarketingSpendPeriod } | null;
 }
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
+const r2 =(n: number) => Math.round(n * 100) / 100;
 const ratio = (a: number | null, b: number | null, per = 1) => (a !== null && b !== null && b > 0 ? (a / b) * per : null);
 
 type Measure = "spend" | "impressions" | "clicks" | "orders" | "sales" | "newCustomers";
@@ -193,14 +226,22 @@ function sums(rows: readonly MarketingRow[]): Record<Measure, number | null> {
 }
 
 /**
+ * A total of 0 as not reported: Shopify's report gives 0, not empty, for a figure the channel never
+ * sent (seen on a dev store, 2026-11-02: spend and clicks sent, orders "0.0" and sales "0" back).
+ */
+const told = (v: number | null) => (v === 0 ? null : v);
+
+/**
  * The rows' figures and rates. Spend counts only when it is more than 0: a channel reporting 0 spend
  * beside its clicks hasn't told Shopify what it spent (free posts, an app without spend reporting).
- * The rates set against spend are worked out from the rows that reported some, their clicks,
- * impressions, orders and sales with it: another activity's sales or clicks, with no spend told,
- * would make the spend look better than it did.
+ * Every other figure adding up to 0 is taken as not reported too (`told`): Shopify can't tell a 0 the
+ * channel sent from one it never sent. The rates set against spend are worked out from the rows that
+ * reported some, their clicks, impressions, orders and sales with it: another activity's sales or
+ * clicks, with no spend told, would make the spend look better than it did.
  */
 export function marketingFigures(rows: readonly MarketingRow[]): MarketingFigures {
-  const s = sums(rows);
+  const all = sums(rows);
+  const s = { ...all, impressions: told(all.impressions), clicks: told(all.clicks), orders: told(all.orders), sales: told(all.sales), newCustomers: told(all.newCustomers) };
   const paid = sums(rows.filter((r) => r.spend !== null && r.spend > 0));
   const spend = paid.spend;
   return {
@@ -209,7 +250,7 @@ export function marketingFigures(rows: readonly MarketingRow[]): MarketingFigure
     ctr: ratio(s.clicks, s.impressions),
     cpc: ratio(spend, paid.clicks),
     cpm: ratio(spend, paid.impressions, 1000),
-    roas: spend !== null && paid.sales !== null ? paid.sales / spend : null,
+    roas: spend !== null && told(paid.sales) !== null ? paid.sales! / spend : null,
     costPerOrder: ratio(spend, paid.orders),
     costPerNewCustomer: ratio(spend, paid.newCustomers),
   };
@@ -274,31 +315,69 @@ function group(input: {
   };
 }
 
+type LastDays = ReadonlyArray<{ channel: string; app: string | null; day: string }>;
+
+/** The days of `range` read from Shopify with none missing (`sync`), as [from, through]; nulls: none of them. */
+function readSpan(range: DateRange, sync: MarketingSyncState): [string, string] | [null, null] {
+  const start = sync.coveredFrom && sync.coveredFrom <= range.to ? (sync.coveredFrom > range.from ? sync.coveredFrom : range.from) : null;
+  const end = sync.syncedThrough && sync.syncedThrough >= range.from ? (sync.syncedThrough < range.to ? sync.syncedThrough : range.to) : null;
+  return start && end && start <= end ? [start, end] : [null, null];
+}
+
+const platformOf = (r: { channel: string; app: string | null }) => marketingPlatform(r.channel, r.app);
+
+/** The last day any of the channels `pick` keeps reported anything, of every day read. */
+const lastOfDays = (lastDays: LastDays, pick: (x: { channel: string; app: string | null }) => boolean) =>
+  lastDays.filter(pick).reduce<string | null>((last, x) => (last === null || x.day > last ? x.day : last), null);
+
+/**
+ * Every channel's spend reported to Shopify for one stretch of days (`period`): Meta's and Google's
+ * each with how it stands, the other channels', and all of it together. Only the days read count
+ * (`through`), and only spend above 0, as everywhere here; a platform with none is never a 0.
+ */
+export function marketingSpendPeriod(input: { rows: readonly MarketingRow[]; lastDays: LastDays; period: DateRange; sync: MarketingSyncState }): MarketingSpendPeriod {
+  const { period } = input;
+  const [from, through] = readSpan(period, input.sync);
+  const rows = from && through ? input.rows.filter((r) => r.campaign === null && r.day >= from && r.day <= through && r.spend !== null && r.spend > 0) : [];
+  const spendOf = (rs: readonly MarketingRow[]) => r2(rs.reduce((n, r) => n + r.spend!, 0));
+  const figure = (p: AdSpendProvider): MarketingSpendFigure => {
+    const mine = rows.filter((r) => platformOf(r) === p);
+    if (mine.length) return { spend: spendOf(mine), state: "reported" };
+    if (!through) return { spend: null, state: "not_read" };
+    return { spend: null, state: lastOfDays(input.lastDays, (x) => platformOf(x) === p) ? "no_spend" : "unavailable" };
+  };
+  const meta = figure("meta");
+  const google = figure("google");
+  const others = uniq(rows.filter((r) => platformOf(r) === "other").map((r) => r.channel))
+    .map((name) => ({ name, spend: spendOf(rows.filter((r) => platformOf(r) === "other" && r.channel === name)) }))
+    .sort((a, b) => b.spend - a.spend || a.name.localeCompare(b.name));
+  const spends = [meta.spend, google.spend, ...others.map((o) => o.spend)].filter((s): s is number => s !== null);
+  return { from: period.from, to: period.to, through, meta, google, others, total: spends.length ? r2(spends.reduce((a, b) => a + b, 0)) : null };
+}
+
 /**
  * The Shopify marketing module for the dates: Meta's and Google's figures as their apps report them
  * to Shopify, the other channels that reported spend, and where the reading stands. `rows`: the
  * stored rows of the dates; `previousRows`: those of the dates compared with, or null when they aren't
  * (the dates still running, or not read back that far); `lastDays`: the last day each channel
- * reported anything, of every day read (a channel quiet in these dates isn't "unavailable").
+ * reported anything, of every day read (a channel quiet in these dates isn't "unavailable");
+ * `current`: the store's today and the rows of its month so far, for today's and this month's spend.
  */
 export function shopifyMarketing(input: {
   rows: readonly MarketingRow[];
   previousRows: readonly MarketingRow[] | null;
-  lastDays: ReadonlyArray<{ channel: string; app: string | null; day: string }>;
+  lastDays: LastDays;
   range: DateRange;
   compared: DateRange | null;
   currency: string;
   sync: MarketingSyncState;
+  current?: { today: string; rows: readonly MarketingRow[] };
 }): ShopifyMarketing {
-  const { previousRows, range, sync } = input;
-  const start = sync.coveredFrom && sync.coveredFrom <= range.to ? (sync.coveredFrom > range.from ? sync.coveredFrom : range.from) : null;
-  const end = sync.syncedThrough && sync.syncedThrough >= range.from ? (sync.syncedThrough < range.to ? sync.syncedThrough : range.to) : null;
-  const [from, through] = start && end && start <= end ? [start, end] : [null, null];
+  const { previousRows, range, sync, current } = input;
+  const [from, through] = readSpan(range, sync);
   // Only the days read: a day after a gap, read on its own, waits for the days before it.
   const rows = from && through ? input.rows.filter((r) => r.day >= from && r.day <= through) : [];
-  const platformOf = (r: { channel: string; app: string | null }) => marketingPlatform(r.channel, r.app);
-  const lastOf = (pick: (x: { channel: string; app: string | null }) => boolean) =>
-    input.lastDays.filter(pick).reduce<string | null>((last, x) => (last === null || x.day > last ? x.day : last), null);
+  const lastOf = (pick: (x: { channel: string; app: string | null }) => boolean) => lastOfDays(input.lastDays, pick);
   const platforms = (["meta", "google"] as const).map((p) =>
     group({
       platform: p,
@@ -341,6 +420,12 @@ export function shopifyMarketing(input: {
     compared: previousRows ? input.compared : null,
     from,
     through,
+    current: current
+      ? {
+          today: marketingSpendPeriod({ rows: current.rows, lastDays: input.lastDays, period: { from: current.today, to: current.today }, sync }),
+          month: marketingSpendPeriod({ rows: current.rows, lastDays: input.lastDays, period: { from: `${current.today.slice(0, 7)}-01`, to: current.today }, sync }),
+        }
+      : null,
   };
 }
 
