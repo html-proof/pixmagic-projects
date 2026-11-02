@@ -53,13 +53,19 @@ export function MarketingFiguresGrid({ t, currency, testid }: { t: MarketingFigu
 /** Where a group's figures come from: the channel and app, through Shopify, its dates, currency and last read. */
 export function MarketingSource({ m, g, ov }: { m: ShopifyMarketing; g: MarketingGroup; ov: Overview }) {
   const updated = fmtRelative(m.sync.lastSyncedAt);
-  const from = m.from ?? ov.range.from;
   return (
     <p className="text-xs text-muted" data-testid={`marketing-source-${g.platform === "other" ? g.name : g.platform}`}>
-      Source: {g.apps.length ? g.apps.join(", ") : g.channels.join(", ") || g.name}, reported to Shopify · {fmtSpan(from, ov.range.to)} · {m.currency} · {updated ? `updated ${updated}` : "not read yet"}
+      Source: {g.apps.length ? g.apps.join(", ") : g.channels.join(", ") || g.name}, reported to Shopify · {readDays(m, ov)} · {m.currency} · {updated ? `updated ${updated}` : "not read yet"}
       {g.availability === "reported" ? "" : ` · ${availabilityWords(g)}`}
     </p>
   );
+}
+
+/** The days the reported figures are of: the dates, or the part of them read so far, said so. */
+function readDays(m: ShopifyMarketing, ov: Overview): string {
+  if (!m.from || !m.through) return "none of these dates read yet";
+  const span = fmtSpan(m.from, m.through);
+  return m.from > ov.range.from || m.through < ov.range.to ? `${span} (the days read so far of ${fmtSpan(ov.range.from, ov.range.to)})` : span;
 }
 
 function availabilityWords(g: MarketingGroup): string {
@@ -132,31 +138,37 @@ export function MarketingPlatformCard({ ov, provider }: { ov: Overview; provider
   );
 }
 
-/** Every channel's spend for the dates, each from where it is shown: a platform's own API, or what its app reported to Shopify. */
-function totalSpend(ov: Overview, m: ShopifyMarketing): { total: number | null; parts: Array<{ key: string; name: string; spend: number; from: "platform" | "marketing" }>; mixed: boolean } {
-  const parts: Array<{ key: string; name: string; spend: number; from: "platform" | "marketing" }> = [];
+type SpendPart = { key: string; name: string; spend: number; from: "platform" | "marketing"; through: string | null };
+
+/**
+ * Every channel's spend for the dates, each from where it is shown: a platform's own API, or what its
+ * app reported to Shopify; `through`: a part that covers the dates only up to that day so far.
+ */
+function totalSpend(ov: Overview, m: ShopifyMarketing): { total: number | null; parts: SpendPart[]; mixed: boolean } {
+  const parts: SpendPart[] = [];
+  const reportedThrough = m.through && m.through < ov.range.to ? m.through : null;
   const a = ov.modules.ads;
   let mixed = false;
   for (const s of adSourcesOf(ov)) {
     if (s.source === "platform") {
       const own = a?.byProvider.find((p) => p.provider === s.provider);
-      const t = own ? shownFigures(own).totals : null;
-      if (!t || own?.demo) continue;
+      const shown = own ? shownFigures(own) : null;
+      if (!shown?.totals || own?.demo) continue;
       if (a!.currency !== m.currency) mixed = true;
-      else parts.push({ key: s.provider, name: PLATFORM[s.provider].name, spend: t.spend, from: "platform" });
+      else parts.push({ key: s.provider, name: PLATFORM[s.provider].name, spend: shown.totals.spend, from: "platform", through: shown.through });
     } else if (s.marketing) {
       const spend = m.platforms.find((g) => g.platform === s.provider)?.totals?.spend;
-      if (spend !== null && spend !== undefined) parts.push({ key: s.provider, name: PLATFORM[s.provider].name, spend, from: "marketing" });
+      if (spend !== null && spend !== undefined) parts.push({ key: s.provider, name: PLATFORM[s.provider].name, spend, from: "marketing", through: reportedThrough });
     }
   }
-  for (const g of m.others) if (g.totals?.spend) parts.push({ key: `other:${g.name}`, name: g.name, spend: g.totals.spend, from: "marketing" });
+  for (const g of m.others) if (g.totals?.spend) parts.push({ key: `other:${g.name}`, name: g.name, spend: g.totals.spend, from: "marketing", through: reportedThrough });
   const total = parts.length ? Math.round(parts.reduce((n, p) => n + p.spend, 0) * 100) / 100 : null;
   return { total, parts, mixed };
 }
 
 function StatusNote({ m }: { m: ShopifyMarketing }) {
   if (m.status === "ready") {
-    if (m.sync.error === "failed") return <p className="text-xs text-warn">The last read of Shopify&apos;s marketing report didn&apos;t get through: these are the figures read before, and bizinsights tries again.</p>;
+    if (m.sync.error === "failed") return <p className="text-xs text-warn">The last read of Shopify&apos;s marketing report didn&apos;t get through: these are the figures read before, and bizinsights tries again within a few hours.</p>;
     return null;
   }
   const words =
@@ -166,7 +178,7 @@ function StatusNote({ m }: { m: ShopifyMarketing }) {
         ? "Shopify didn't share its marketing report with bizinsights: it needs your Shopify reports and Shopify's approval of protected customer data. bizinsights asks again every few hours."
         : m.status === "unsupported"
           ? "Shopify doesn't run its marketing report for this store (its plan or region)."
-          : "Shopify's marketing report couldn't be read just now; bizinsights tries again within minutes.";
+          : "Shopify's marketing report couldn't be read just now; bizinsights tries again every few hours.";
   return <EmptyNote testid="marketing-status">{words}</EmptyNote>;
 }
 
@@ -203,7 +215,6 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
     .slice(0, 10);
   const sessions = ov.modules.shopify_sessions;
   const s = sessions?.status === "ready" ? sessions.current : null;
-  const range = m.from && m.from > ov.range.from ? `${fmtSpan(m.from, ov.range.to)} (read back to ${fmtDay(m.from, { year: true })} so far)` : fmtSpan(ov.range.from, ov.range.to);
   return (
     <AdCard
       id="shopify-marketing"
@@ -218,7 +229,7 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
       {m.status === "ready" && (
         <div className="space-y-5">
           <div data-testid="marketing-total">
-            <p className="text-xs text-muted">Total advertising expenses · {range}</p>
+            <p className="text-xs text-muted">Total advertising expenses · {fmtSpan(ov.range.from, ov.range.to)}</p>
             <p className="text-2xl font-bold tabular-nums tracking-tight" data-testid="marketing-total-value">
               {spend.total === null ? DATA_UNAVAILABLE : money(spend.total)}
             </p>
@@ -226,7 +237,11 @@ export function ShopifyMarketingCard({ ov }: { ov: Overview }) {
               <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
                 {spend.parts.map((p) => (
                   <li key={p.key} data-testid={`marketing-total-${p.key}`} data-from={p.from}>
-                    {p.name} {money(p.spend)} <span className="opacity-80">({p.from === "platform" ? "its own API" : "reported to Shopify"})</span>
+                    {p.name} {money(p.spend)}{" "}
+                    <span className="opacity-80">
+                      ({p.from === "platform" ? "its own API" : "reported to Shopify"}
+                      {p.through ? `, up to ${fmtDay(p.through, { year: false })}` : ""})
+                    </span>
                   </li>
                 ))}
               </ul>

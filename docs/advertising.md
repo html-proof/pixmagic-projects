@@ -305,23 +305,29 @@ this report are the channel's own claim (its attribution), not the store's order
 
 - **Reading:** packages/core/src/shopifyMarketing.ts, run by the worker (apps/worker/src/shopifyMarketing.ts)
   as the sync-queue job `shopify_marketing`. The 15-minute tick queues, on per-store leases: the last 3 days
-  every 6 hours (`recent`; after a gap, from the day before the last day read), the last 7 days once a day
+  every 6 hours (`recent`; after a gap, on from the day before the last day read with none missing, 90 days
+  at a time until it reaches today), the last 7 days once a day
   (`reconcile`, for Shopify's up-to-24-hour delay and channels revising their spend), and the history back to
   the store's first day 90 days at a time (`backfill`, one walk at a time; each window queues the next). A
   store read for the first time gets its last 90 days first, also asked for by the dashboard's first visit.
-  Each read asks both levels (channel and campaign), paging by 1,000 rows, and replaces the stored rows of
-  its days in one transaction: a row's key is store, day, channel, app and campaign, so reading a day again
-  never counts it twice. Shopify refusing (no access, a report it won't run) is kept on the store's sync row
+  Each read asks both levels (channel and campaign), paging by 1,000 rows (a window cut at 20 pages keeps
+  only the days before the last one it reached), and replaces the stored rows of its days in one
+  transaction holding the store's lock: a row's key is store, day, channel, app and campaign, so reading a
+  day again never counts it twice, and two reads of the same days never keep both. Shopify refusing (no access, a report it won't run) is kept on the store's sync row
   (`last_error`, `consecutive_failures`) for the next schedule; a failed call is retried by the queue's
   backoff (Shopify's throttling is waited out in `shopifyGraphqlWithCost`).
 - **Tables:** `shopify_marketing_days` (campaign `''` = the channel's whole day, what totals add up; the
-  named campaigns only its breakdown) and `shopify_marketing_syncs` (`covered_from`, `synced_through`,
-  `backfilled`, the last read's outcome). Both under row-level security; deleted with the store.
+  named campaigns only its breakdown) and `shopify_marketing_syncs` (`covered_from` to `synced_through`:
+  the days read with none missing, widened only from where they end; `backfilled`; the last read's outcome). Both under row-level security; deleted with the store.
 - **API:** the module `shopify_marketing` of `…/overview` (dashboard and `parts=advertising`):
   Meta and Google always (each `reported`, `no_spend` or `unavailable`, with totals, CTR, CPC, CPM, ROAS,
   cost per order, cost per new customer, day by day, the 10 campaigns that spent most and the last day
-  reported), the other channels that reported spend, every reported spend together, the sync state and the
-  first day read. Compared with the dates before only once the dates are over and read back that far.
+  reported), the other channels that reported spend, what every channel reported as spend together
+  (`reportedSpend`: a platform whose own API is connected is in it, so it is never added to that API's
+  spend), the sync state and the days of the dates read (`from`..`through`: every figure is of those days
+  only, a day not read yet is unknown, never 0). Compared with the dates before only once the dates are over
+  and those are read whole. Rates set against spend (CPC, CPM, ROAS, cost per order and per new customer)
+  use only the rows that reported spend.
   Built by `@app/shared/shopifyMarketing`. Team & Access: "View advertising analytics"; its campaigns also
   "View campaigns".
 - **Where:** the overview's "Ad spend reported to Shopify" card (total advertising expenses, each part named

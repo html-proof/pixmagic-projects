@@ -70,11 +70,12 @@ describe("the days each read covers", () => {
     expect(marketingWindow("recent", null, today, "2026-10-20")).toEqual({ from: "2026-10-20", to: today });
   });
 
-  it("reads the last 3 days every 6 hours, from the day before the last read after a gap, and the last week daily", () => {
+  it("reads the last 3 days every 6 hours, a gap on from the day before it 90 days at a time, and the last week daily", () => {
     const state = { coveredFrom: "2026-08-05", syncedThrough: today, backfilled: false };
     expect(marketingWindow("recent", state, today, first)).toEqual({ from: "2026-10-31", to: today });
     expect(marketingWindow("recent", { ...state, syncedThrough: "2026-10-20" }, today, first)).toEqual({ from: "2026-10-19", to: today });
-    expect(marketingWindow("recent", { ...state, syncedThrough: "2026-01-01" }, today, first)).toEqual({ from: "2026-08-05", to: today });
+    // A long gap (the reports permission given up for months): read on from where the days stop, never skipped.
+    expect(marketingWindow("recent", { ...state, coveredFrom: "2025-06-01", syncedThrough: "2026-01-01" }, today, first)).toEqual({ from: "2025-12-31", to: "2026-03-30" });
     expect(marketingWindow("reconcile", state, today, first)).toEqual({ from: "2026-10-26", to: today });
   });
 

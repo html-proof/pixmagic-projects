@@ -126,6 +126,32 @@ describe("reading what the store's marketing apps report to Shopify", () => {
     expect(await systemDb.shopifyMarketingDay.count()).toBe(0);
   });
 
+  it("reads a gap on from where the days read stop, and a read past it never says the gap was read", async () => {
+    const store = await makeStore();
+    answer = () => table([]);
+    // Read up to 100 days ago, then nothing (reads failing, the permission given up).
+    await systemDb.shopifyMarketingSync.create({ data: { storeId: store.id, workspaceId: store.workspaceId, coveredFrom: day(-300), syncedThrough: day(-100), lastSyncedAt: new Date() } });
+    // The daily read of the last week: kept, but the days read with none missing still stop 100 days ago.
+    expect(await runShopifyMarketing({ kind: "shopify_marketing", storeId: store.id, mode: "reconcile" }, deps)).toMatchObject({ status: "done", from: day(-7), behind: false });
+    expect(await systemDb.shopifyMarketingSync.findUniqueOrThrow({ where: { storeId: store.id } })).toMatchObject({ coveredFrom: day(-300), syncedThrough: day(-100) });
+    // The recent read takes the gap 90 days at a time, and reads on.
+    expect(await runShopifyMarketing({ kind: "shopify_marketing", storeId: store.id, mode: "recent" }, deps)).toMatchObject({ status: "done", from: day(-101), to: day(-12), behind: true });
+    expect(queues.sent.sync.at(-1)).toEqual({ kind: "shopify_marketing", storeId: store.id, mode: "recent" });
+    expect(await runShopifyMarketing({ kind: "shopify_marketing", storeId: store.id, mode: "recent" }, deps)).toMatchObject({ status: "done", from: day(-13), to: today, behind: false });
+    expect(await systemDb.shopifyMarketingSync.findUniqueOrThrow({ where: { storeId: store.id } })).toMatchObject({ coveredFrom: day(-300), syncedThrough: today });
+  });
+
+  it("keeps a window cut at the page limit only up to the day before the last it reached", async () => {
+    const store = await makeStore();
+    // Every page full: the days come oldest first, so the newest are the ones cut off.
+    const full = Array.from({ length: 1000 }, (_, i) => channelRow(day(-89 + Math.floor(i / 20)), `Channel ${i % 20}`, "App", "1.00", 1));
+    answer = (q) => (q.includes("marketing_campaign") ? table([]) : table(full));
+    const res = await runShopifyMarketing({ kind: "shopify_marketing", storeId: store.id, mode: "recent" }, deps);
+    expect(res).toMatchObject({ status: "done", from: day(-89), to: day(-41) });
+    expect(await systemDb.shopifyMarketingDay.count({ where: { storeId: store.id, day: { gt: day(-41) } } })).toBe(0);
+    expect(await systemDb.shopifyMarketingSync.findUniqueOrThrow({ where: { storeId: store.id } })).toMatchObject({ syncedThrough: day(-41) });
+  });
+
   it("pages through a long answer", async () => {
     const store = await makeStore();
     const many = Array.from({ length: 1000 }, (_, i) => ({ ...channelRow(day(-(i % 90)), `Channel ${Math.floor(i / 90)}`, "App", "1.00", 1) }));

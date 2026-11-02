@@ -134,6 +134,8 @@ export interface MarketingSyncState {
   lastSyncedAt: string | null;
   /** The earliest day read so far; null: nothing read yet. */
   coveredFrom: string | null;
+  /** The last day read with no day missing since `coveredFrom`: later days aren't known yet. */
+  syncedThrough: string | null;
   /** Every day back to the store's first has been read. */
   backfilled: boolean;
   /** Why the last read failed, when it did: no access to Shopify's reports, a report Shopify won't run for the store, or a failed call (tried again). */
@@ -153,12 +155,20 @@ export interface ShopifyMarketing {
   platforms: MarketingGroup[];
   /** Other channels that reported ad spend for the dates, the biggest first. */
   others: MarketingGroup[];
-  /** Every channel's reported spend together, Meta's, Google's and the others'; null when none reported spend. */
-  totalSpend: number | null;
+  /**
+   * What every channel reported to Shopify as spend, together (Meta's, Google's, the others'); null
+   * when none did. A platform whose own API is connected is in it too: never add it to that API's spend.
+   */
+  reportedSpend: number | null;
   /** The dates compared with; null: not compared (still running, or not read back that far). */
   compared: DateRange | null;
-  /** The first day of the dates whose figures are read: the dates' first, or the later `sync.coveredFrom`; null: none of them. */
+  /**
+   * The days of the dates whose figures are read, `from` to `through`: the dates' own, or less while
+   * earlier days are still being read (`sync.coveredFrom`) or the latest aren't read yet
+   * (`sync.syncedThrough`). Every figure is of these days only; null both: none of them.
+   */
   from: string | null;
+  through: string | null;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -184,21 +194,24 @@ function sums(rows: readonly MarketingRow[]): Record<Measure, number | null> {
 
 /**
  * The rows' figures and rates. Spend counts only when it is more than 0: a channel reporting 0 spend
- * beside its clicks hasn't told Shopify what it spent (free posts, an app without spend reporting),
- * and no rate is worked out from it.
+ * beside its clicks hasn't told Shopify what it spent (free posts, an app without spend reporting).
+ * The rates set against spend are worked out from the rows that reported some, their clicks,
+ * impressions, orders and sales with it: another activity's sales or clicks, with no spend told,
+ * would make the spend look better than it did.
  */
 export function marketingFigures(rows: readonly MarketingRow[]): MarketingFigures {
   const s = sums(rows);
-  const spend = s.spend !== null && s.spend > 0 ? s.spend : null;
+  const paid = sums(rows.filter((r) => r.spend !== null && r.spend > 0));
+  const spend = paid.spend;
   return {
     ...s,
     spend,
     ctr: ratio(s.clicks, s.impressions),
-    cpc: ratio(spend, s.clicks),
-    cpm: ratio(spend, s.impressions, 1000),
-    roas: spend !== null && s.sales !== null ? s.sales / spend : null,
-    costPerOrder: ratio(spend, s.orders),
-    costPerNewCustomer: ratio(spend, s.newCustomers),
+    cpc: ratio(spend, paid.clicks),
+    cpm: ratio(spend, paid.impressions, 1000),
+    roas: spend !== null && paid.sales !== null ? paid.sales / spend : null,
+    costPerOrder: ratio(spend, paid.orders),
+    costPerNewCustomer: ratio(spend, paid.newCustomers),
   };
 }
 
@@ -215,8 +228,9 @@ function group(input: {
   lastDay: string | null;
   range: DateRange;
   from: string | null;
+  through: string | null;
 }): MarketingGroup {
-  const { rows, previousRows, range, from } = input;
+  const { rows, previousRows, range, from, through } = input;
   const day = rows.filter((r) => r.campaign === null);
   const availability: MarketingAvailability = spent(day) ? "reported" : input.lastDay ? "no_spend" : "unavailable";
   const totals = availability === "unavailable" ? null : marketingFigures(day);
@@ -241,12 +255,13 @@ function group(input: {
       roas: previous ? delta(totals?.roas ?? null, previous.roas) : null,
     },
     daily: eachDay(range.from, range.to).map((d) => {
-      // A day not read yet, or a platform that reports nothing: unknown. A read day it reported nothing on: 0.
-      if (availability === "unavailable" || !from || d < from) return { day: d, spend: null, impressions: null, clicks: null, orders: null, sales: null };
+      // A day not read yet, or a platform that reports nothing: unknown. A read day it reported nothing
+      // on: 0. A figure it left empty that day stays unknown.
+      if (availability === "unavailable" || !from || !through || d < from || d > through) return { day: d, spend: null, impressions: null, clicks: null, orders: null, sales: null };
       const s = sums(byDay.get(d) ?? []);
       const quiet = !byDay.has(d);
       const of = (m: Measure) => (quiet ? 0 : s[m]);
-      return { day: d, spend: availability === "reported" ? (quiet ? 0 : (s.spend ?? 0)) : null, impressions: of("impressions"), clicks: of("clicks"), orders: of("orders"), sales: of("sales") };
+      return { day: d, spend: availability === "reported" ? of("spend") : null, impressions: of("impressions"), clicks: of("clicks"), orders: of("orders"), sales: of("sales") };
     }),
     campaigns: [...campaigns.entries()]
       .map(([campaign, rs]) => {
@@ -275,8 +290,12 @@ export function shopifyMarketing(input: {
   currency: string;
   sync: MarketingSyncState;
 }): ShopifyMarketing {
-  const { rows, previousRows, range, sync } = input;
-  const from = sync.coveredFrom && sync.coveredFrom <= range.to ? (sync.coveredFrom > range.from ? sync.coveredFrom : range.from) : null;
+  const { previousRows, range, sync } = input;
+  const start = sync.coveredFrom && sync.coveredFrom <= range.to ? (sync.coveredFrom > range.from ? sync.coveredFrom : range.from) : null;
+  const end = sync.syncedThrough && sync.syncedThrough >= range.from ? (sync.syncedThrough < range.to ? sync.syncedThrough : range.to) : null;
+  const [from, through] = start && end && start <= end ? [start, end] : [null, null];
+  // Only the days read: a day after a gap, read on its own, waits for the days before it.
+  const rows = from && through ? input.rows.filter((r) => r.day >= from && r.day <= through) : [];
   const platformOf = (r: { channel: string; app: string | null }) => marketingPlatform(r.channel, r.app);
   const lastOf = (pick: (x: { channel: string; app: string | null }) => boolean) =>
     input.lastDays.filter(pick).reduce<string | null>((last, x) => (last === null || x.day > last ? x.day : last), null);
@@ -289,6 +308,7 @@ export function shopifyMarketing(input: {
       lastDay: lastOf((x) => platformOf(x) === p),
       range,
       from,
+      through,
     }),
   );
   // Other channels, each on its own, only when they reported spend in these dates: an email app's
@@ -304,6 +324,7 @@ export function shopifyMarketing(input: {
         lastDay: lastOf((x) => platformOf(x) === "other" && x.channel === channel),
         range,
         from,
+        through,
       }),
     )
     .sort((a, b) => (b.totals?.spend ?? 0) - (a.totals?.spend ?? 0) || a.name.localeCompare(b.name));
@@ -316,9 +337,10 @@ export function shopifyMarketing(input: {
     sync,
     platforms,
     others,
-    totalSpend: spends.length ? r2(spends.reduce((a, b) => a + b, 0)) : null,
+    reportedSpend: spends.length ? r2(spends.reduce((a, b) => a + b, 0)) : null,
     compared: previousRows ? input.compared : null,
     from,
+    through,
   };
 }
 

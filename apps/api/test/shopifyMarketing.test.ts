@@ -65,7 +65,7 @@ describe("ad spend reported to Shopify on the dashboard", () => {
     const res = await overview(a.headers, ws, store.id, `${RANGE}&parts=advertising`);
     expect(res.statusCode).toBe(200);
     const m = res.json().modules;
-    expect(m.shopify_marketing).toMatchObject({ status: "ready", currency: "USD", totalSpend: 100, compared: { from: "2026-08-29", to: "2026-08-31" }, from: "2026-09-01" });
+    expect(m.shopify_marketing).toMatchObject({ status: "ready", currency: "USD", reportedSpend: 100, compared: { from: "2026-08-29", to: "2026-08-31" }, from: "2026-09-01", through: "2026-09-03" });
     const [meta, google] = m.shopify_marketing.platforms;
     expect(meta).toMatchObject({ availability: "reported", totals: { spend: 100, clicks: 500, sales: 800, roas: 8 }, previous: { spend: 50 }, deltas: { spend: 1 } });
     expect(meta.campaigns).toEqual([{ campaign: "Back to school", spend: 60, impressions: null, clicks: 300, orders: null, sales: 480, roas: 8 }]);
@@ -82,7 +82,7 @@ describe("ad spend reported to Shopify on the dashboard", () => {
   it("says when it hasn't been read yet, and asks the worker for the first read once", async () => {
     const { a, ws, store } = await owner();
     const first = (await overview(a.headers, ws, store.id)).json().modules;
-    expect(first.shopify_marketing).toMatchObject({ status: "syncing", totalSpend: null, from: null });
+    expect(first.shopify_marketing).toMatchObject({ status: "syncing", reportedSpend: null, from: null, through: null });
     expect(first.shopify_marketing.platforms.map((g: { availability: string }) => g.availability)).toEqual(["unavailable", "unavailable"]);
     expect(marketingJobs()).toEqual([{ kind: "shopify_marketing", storeId: store.id, mode: "recent" }]);
     await overview(a.headers, ws, store.id);
@@ -116,7 +116,7 @@ describe("ad spend reported to Shopify on the dashboard", () => {
     await keep(other, [{ ...META, day: "2026-09-01", spend: 500 }]);
     const mine = (await overview(a.headers, ws, store.id)).json().modules.shopify_marketing;
     expect(mine.status).toBe("syncing");
-    expect(mine.totalSpend).toBeNull();
+    expect(mine.reportedSpend).toBeNull();
     expect((await overview(a.headers, ws, other.id)).statusCode).toBe(404);
   });
 });

@@ -125,12 +125,17 @@ export interface MarketingFetchDeps {
 
 type MarketingStore = Pick<Store, "id" | "shopDomain" | "status">;
 
-/** Read one window, both levels, every page. Never throws for Shopify's answers: they come back as an error. */
-export async function fetchShopifyMarketing(store: MarketingStore, w: DateRange, deps: MarketingFetchDeps): Promise<{ rows: MarketingRow[] } | { error: ReportError }> {
+/**
+ * Read one window, both levels, every page. Never throws for Shopify's answers: they come back as an
+ * error. A level cut at the page limit (rows come oldest day first) ends the window the day before the
+ * last day it reached (`to`), so no day is kept with only some of its rows.
+ */
+export async function fetchShopifyMarketing(store: MarketingStore, w: DateRange, deps: MarketingFetchDeps): Promise<{ rows: MarketingRow[]; to: string } | { error: ReportError }> {
   try {
     const accessToken = await getAccessToken(store, deps.coord, deps.fetchImpl);
     const call = { shop: store.shopDomain, accessToken, apiVersion: env().SHOPIFY_API_VERSION, fetchImpl: deps.fetchImpl };
     const rows: MarketingRow[] = [];
+    let to = w.to;
     for (const level of ["channel", "campaign"] as const) {
       for (let page = 0; page < MARKETING_MAX_PAGES; page++) {
         const { data } = await shopifyGraphqlWithCost<ShopifyqlTable>({ ...call, query: SHOPIFYQL_QUERY, variables: { query: marketingQuery(level, w, page * MARKETING_PAGE) } });
@@ -143,12 +148,20 @@ export async function fetchShopifyMarketing(store: MarketingStore, w: DateRange,
           return { error: "unsupported" };
         }
         const got = tableRows(data.shopifyqlQuery).length;
-        rows.push(...parseMarketingRows(level, data.shopifyqlQuery));
+        const parsed = parseMarketingRows(level, data.shopifyqlQuery);
+        rows.push(...parsed);
         if (got < MARKETING_PAGE) break;
-        if (page === MARKETING_MAX_PAGES - 1) logger.warn({ shop: store.shopDomain, level, from: w.from, to: w.to }, "shopify marketing window cut at the page limit");
+        if (page === MARKETING_MAX_PAGES - 1) {
+          const last = parsed.reduce((d, r) => (r.day > d ? r.day : d), w.from);
+          const cut = addDays(last, -1);
+          if (cut < to) to = cut;
+          logger.warn({ shop: store.shopDomain, level, from: w.from, to: w.to, keptTo: to }, "shopify marketing window cut at the page limit");
+        }
       }
     }
-    return { rows };
+    // Not even its first day fits: a store this busy needs smaller windows than bizinsights reads.
+    if (to < w.from) return { error: "unsupported" };
+    return { rows: rows.filter((r) => r.day <= to), to };
   } catch (err) {
     return { error: reportErrorOf(err, store.shopDomain, "marketing_engagements") };
   }
@@ -159,32 +172,31 @@ const stored = (r: MarketingRow) => ({ app: r.app ?? "", campaign: r.campaign ??
 
 /**
  * Keep a window's rows, replacing whatever was kept for its days (a day Shopify revised keeps no old
- * figure, a campaign renamed no old row). One transaction: a reader never sees the days half replaced.
+ * figure, a campaign renamed no old row). Inside the caller's transaction, which holds the store's lock.
  */
-export async function saveShopifyMarketing(store: Pick<Store, "id" | "workspaceId" | "currency">, w: DateRange, rows: MarketingRow[], at = new Date()) {
+async function saveDays(tx: Tx, store: Pick<Store, "id" | "workspaceId" | "currency">, w: DateRange, rows: MarketingRow[], at: Date) {
   const inWindow = rows.filter((r) => r.day >= w.from && r.day <= w.to);
-  await systemDb.$transaction([
-    systemDb.shopifyMarketingDay.deleteMany({ where: { workspaceId: store.workspaceId, storeId: store.id, day: { gte: w.from, lte: w.to } } }),
-    systemDb.shopifyMarketingDay.createMany({
-      data: inWindow.map((r) => ({
-        workspaceId: store.workspaceId,
-        storeId: store.id,
-        day: r.day,
-        channel: r.channel,
-        ...stored(r),
-        spend: r.spend,
-        // Counts kept whole: Shopify's are integers already.
-        impressions: r.impressions === null ? null : Math.round(r.impressions),
-        clicks: r.clicks === null ? null : Math.round(r.clicks),
-        orders: r.orders,
-        sales: r.sales,
-        newCustomers: r.newCustomers,
-        currency: store.currency,
-        fetchedAt: at,
-      })),
-      skipDuplicates: true,
-    }),
-  ]);
+  await tx.shopifyMarketingDay.deleteMany({ where: { workspaceId: store.workspaceId, storeId: store.id, day: { gte: w.from, lte: w.to } } });
+  await tx.shopifyMarketingDay.createMany({
+    data: inWindow.map((r) => ({
+      workspaceId: store.workspaceId,
+      storeId: store.id,
+      day: r.day,
+      channel: r.channel,
+      ...stored(r),
+      spend: r.spend,
+      // Counts kept whole: Shopify's are integers already.
+      impressions: r.impressions === null ? null : Math.round(r.impressions),
+      clicks: r.clicks === null ? null : Math.round(r.clicks),
+      orders: r.orders,
+      sales: r.sales,
+      newCustomers: r.newCustomers,
+      currency: store.currency,
+      fetchedAt: at,
+    })),
+    // A row Shopify repeats on the next page (its order not quite stable) is kept once.
+    skipDuplicates: true,
+  });
   return inWindow.length;
 }
 
@@ -211,17 +223,20 @@ export function marketingFirstDay(store: Pick<Store, "shopCreatedAt" | "timezone
 /**
  * The days one read covers, or null when there is nothing left (a backfill that reached the first day).
  * A store read for the first time gets its last 90 days, whatever the mode. A recent read after a gap
- * (reads that failed for a while) starts the day before the last day read, up to 90 days back.
+ * (reads that failed for a while, the reports permission given up and granted again) starts the day
+ * before the last day read with none missing, and reads 90 days on from there: the caller reads on
+ * until it reaches today.
  */
 export function marketingWindow(mode: MarketingSyncMode, state: SyncRow | null, today: string, firstDay: string): DateRange | null {
   const clamp = (from: string) => (from < firstDay ? firstDay : from);
   if (!state?.coveredFrom) return { from: clamp(addDays(today, -(MARKETING_CHUNK_DAYS - 1))), to: today };
   if (mode === "reconcile") return { from: clamp(addDays(today, -MARKETING_RECONCILE_DAYS)), to: today };
   if (mode === "recent") {
-    let from = addDays(today, -(MARKETING_RECENT_DAYS - 1));
-    if (state.syncedThrough && state.syncedThrough < from) from = addDays(state.syncedThrough, -1);
-    const oldest = addDays(today, -(MARKETING_CHUNK_DAYS - 1));
-    return { from: clamp(from < oldest ? oldest : from), to: today };
+    const recent = addDays(today, -(MARKETING_RECENT_DAYS - 1));
+    if (!state.syncedThrough || state.syncedThrough >= recent) return { from: clamp(recent), to: today };
+    const from = clamp(addDays(state.syncedThrough, -1));
+    const to = addDays(from, MARKETING_CHUNK_DAYS - 1);
+    return { from, to: to < today ? to : today };
   }
   if (state.backfilled || state.coveredFrom <= firstDay) return null;
   const to = addDays(state.coveredFrom, -1);
@@ -230,14 +245,15 @@ export function marketingWindow(mode: MarketingSyncMode, state: SyncRow | null, 
 }
 
 export type MarketingSyncResult =
-  | { status: "done"; from: string; to: string; rows: number; more: boolean }
+  | { status: "done"; from: string; to: string; rows: number; more: boolean; behind: boolean }
   | { status: "nothing_left" }
   | { status: "error"; error: ReportError };
 
 /**
  * One read for the store (`mode`), its rows kept and its state moved on. A read Shopify refused or that
  * failed keeps the rows read before and says why (`lastError`); the caller decides whether to try again.
- * `more`: history is left to read (the caller queues the next backfill).
+ * `more`: history is left to read (the caller queues the next backfill); `behind`: a recent read that
+ * caught up only part of a gap (the caller reads on).
  */
 export async function syncShopifyMarketing(store: SyncStore, mode: MarketingSyncMode, deps: MarketingFetchDeps, now = new Date()): Promise<MarketingSyncResult> {
   const today = localDay(now, store.timezone);
@@ -258,21 +274,41 @@ export async function syncShopifyMarketing(store: SyncStore, mode: MarketingSync
     });
     return { status: "error", error: answer.error };
   }
-  const rows = await saveShopifyMarketing(store, w, answer.rows, now);
-  // The days read only ever widen, in the database itself: a recent read and a walk back through
-  // history finishing together each keep the other's days.
-  const [after] = await systemDb.$queryRaw<Array<{ backfilled: boolean }>>`
-    INSERT INTO shopify_marketing_syncs (store_id, workspace_id, covered_from, synced_through, backfilled, last_synced_at, last_attempt_at, last_error, consecutive_failures, updated_at)
-    VALUES (${store.id}, ${store.workspaceId}, ${w.from}, ${w.to}, ${w.from <= firstDay}, ${now}, ${now}, NULL, 0, ${now})
-    ON CONFLICT (store_id) DO UPDATE SET
-      covered_from = LEAST(COALESCE(shopify_marketing_syncs.covered_from, EXCLUDED.covered_from), EXCLUDED.covered_from),
-      synced_through = GREATEST(COALESCE(shopify_marketing_syncs.synced_through, EXCLUDED.synced_through), EXCLUDED.synced_through),
-      backfilled = shopify_marketing_syncs.backfilled OR LEAST(COALESCE(shopify_marketing_syncs.covered_from, EXCLUDED.covered_from), EXCLUDED.covered_from) <= ${firstDay},
-      last_synced_at = EXCLUDED.last_synced_at, last_attempt_at = EXCLUDED.last_attempt_at,
-      last_error = NULL, consecutive_failures = 0, updated_at = EXCLUDED.updated_at
-    RETURNING backfilled`;
-  logger.info({ storeId: store.id, mode, from: w.from, to: w.to, rows }, "shopify marketing read");
-  return { status: "done", from: w.from, to: w.to, rows, more: !after?.backfilled };
+  const read = { from: w.from, to: answer.to };
+  // One store's reads one at a time (the store's lock, for the transaction): a recent read and the
+  // daily one writing the same days would otherwise each keep rows the other replaced.
+  const { rows, after } = await systemDb.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`shopify-marketing:${store.id}`}))`;
+      const rows = await saveDays(tx, store, read, answer.rows, now);
+      // The days read with none missing only ever widen, and only from where they end: a read after a
+      // gap keeps its days without saying the gap was read (synced_through), and a walk back through
+      // history extends them back (covered_from) only from the day before them.
+      const [after] = await tx.$queryRaw<Array<{ backfilled: boolean; synced_through: string | null }>>`
+        INSERT INTO shopify_marketing_syncs AS s (store_id, workspace_id, covered_from, synced_through, backfilled, last_synced_at, last_attempt_at, last_error, consecutive_failures, updated_at)
+        VALUES (${store.id}, ${store.workspaceId}, ${read.from}, ${read.to}, ${read.from <= firstDay}, ${now}, ${now}, NULL, 0, ${now})
+        ON CONFLICT (store_id) DO UPDATE SET
+          covered_from = CASE
+            WHEN s.covered_from IS NULL OR s.synced_through IS NULL THEN EXCLUDED.covered_from
+            WHEN EXCLUDED.synced_through >= to_char(s.covered_from::date - 1, 'YYYY-MM-DD') THEN LEAST(s.covered_from, EXCLUDED.covered_from)
+            ELSE s.covered_from END,
+          synced_through = CASE
+            WHEN s.covered_from IS NULL OR s.synced_through IS NULL THEN EXCLUDED.synced_through
+            WHEN EXCLUDED.covered_from <= to_char(s.synced_through::date + 1, 'YYYY-MM-DD') THEN GREATEST(s.synced_through, EXCLUDED.synced_through)
+            ELSE s.synced_through END,
+          backfilled = s.backfilled OR (CASE
+            WHEN s.covered_from IS NULL OR s.synced_through IS NULL THEN EXCLUDED.covered_from
+            WHEN EXCLUDED.synced_through >= to_char(s.covered_from::date - 1, 'YYYY-MM-DD') THEN LEAST(s.covered_from, EXCLUDED.covered_from)
+            ELSE s.covered_from END) <= ${firstDay},
+          last_synced_at = EXCLUDED.last_synced_at, last_attempt_at = EXCLUDED.last_attempt_at,
+          last_error = NULL, consecutive_failures = 0, updated_at = EXCLUDED.updated_at
+        RETURNING backfilled, synced_through`;
+      return { rows, after };
+    },
+    { timeout: 60_000 },
+  );
+  logger.info({ storeId: store.id, mode, from: read.from, to: read.to, rows }, "shopify marketing read");
+  return { status: "done", from: read.from, to: read.to, rows, more: !after?.backfilled, behind: mode === "recent" && (after?.synced_through ?? read.to) < today };
 }
 
 /** The worker job that reads a store's marketing report; it rides the sync queue, told apart by its kind. */
@@ -337,7 +373,8 @@ export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeI
   const { ws, storeId } = scope;
   const { range, previous } = dates;
   const sync = await tx.shopifyMarketingSync.findFirst({ where: { workspaceId: ws, storeId } });
-  const covered = (r: DateRange) => !!sync?.coveredFrom && (sync.backfilled || r.from >= sync.coveredFrom);
+  // Read with no day missing over the whole of them: from the first day read (or the history all in) to `synced_through`.
+  const covered = (r: DateRange) => !!sync?.coveredFrom && !!sync.syncedThrough && (sync.backfilled || r.from >= sync.coveredFrom) && r.to <= sync.syncedThrough;
   const compare = range.to < today && covered(previous);
   const read = (r: DateRange) => tx.shopifyMarketingDay.findMany({ where: { workspaceId: ws, storeId, day: { gte: r.from, lte: r.to } } });
   const [rows, previousRows, last] = await Promise.all([
@@ -360,6 +397,7 @@ export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeI
   const state: MarketingSyncState = {
     lastSyncedAt: sync?.lastSyncedAt?.toISOString() ?? null,
     coveredFrom: sync?.coveredFrom ?? null,
+    syncedThrough: sync?.syncedThrough ?? null,
     backfilled: sync?.backfilled ?? false,
     error: (sync?.lastError as MarketingSyncState["error"]) ?? null,
     lastAttemptAt: sync?.lastAttemptAt?.toISOString() ?? null,

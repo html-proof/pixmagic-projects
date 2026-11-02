@@ -5,7 +5,7 @@ import { marketingFigures, marketingPlatform, marketingReports, shopifyMarketing
 
 const range = { from: "2026-10-01", to: "2026-10-03" };
 const compared = { from: "2026-09-28", to: "2026-09-30" };
-const sync: MarketingSyncState = { lastSyncedAt: "2026-10-04T01:00:00.000Z", coveredFrom: "2026-07-06", backfilled: false, error: null, lastAttemptAt: "2026-10-04T01:00:00.000Z" };
+const sync: MarketingSyncState = { lastSyncedAt: "2026-10-04T01:00:00.000Z", coveredFrom: "2026-07-06", syncedThrough: "2026-10-04", backfilled: false, error: null, lastAttemptAt: "2026-10-04T01:00:00.000Z" };
 
 const row = (over: Partial<MarketingRow>): MarketingRow => ({
   day: "2026-10-01",
@@ -72,6 +72,15 @@ describe("the figures a channel reported, and the rates from them", () => {
     expect(f.costPerNewCustomer).toBeCloseTo(20);
   });
 
+  it("sets spend only against the clicks and sales of the rows that reported it", () => {
+    // Another activity of the platform reported sales and clicks but no spend: not counted against the spend.
+    const f = marketingFigures([row({ spend: 50, clicks: 100, impressions: 5000, sales: 200 }), row({ channel: "Facebook", clicks: 900, sales: 1800 })]);
+    expect(f).toMatchObject({ spend: 50, clicks: 1000, sales: 2000 });
+    expect(f.roas).toBeCloseTo(4);
+    expect(f.cpc).toBeCloseTo(0.5);
+    expect(f.cpm).toBeCloseTo(10);
+  });
+
   it("never turns a figure the channel didn't report into 0, nor a 0 spend into a rate", () => {
     const f = marketingFigures([row({ spend: 0, clicks: 30, impressions: 900 })]);
     expect(f.spend).toBeNull();
@@ -106,7 +115,7 @@ describe("the Shopify marketing module", () => {
     const m = ask();
     expect(m.others.map((g) => g.name)).toEqual(["TikTok"]);
     expect(m.others[0]!.totals).toMatchObject({ spend: 12.5, clicks: 40, sales: 50 });
-    expect(m.totalSpend).toBe(112.5);
+    expect(m.reportedSpend).toBe(112.5);
   });
 
   it("says a platform that never reported to Shopify is unavailable, with no figure at all", () => {
@@ -127,6 +136,20 @@ describe("the Shopify marketing module", () => {
     expect(ask().platforms[1]!.daily.map((d) => d.spend)).toEqual([null, null, null]);
   });
 
+  it("counts only the days read with none missing: a day not read yet is unknown, not 0", () => {
+    // Read up to 2 October: the 3rd is unknown, and nothing of it is counted.
+    const m = ask({ sync: { ...sync, syncedThrough: "2026-10-02" } });
+    expect(m.through).toBe("2026-10-02");
+    expect(m.platforms[0]!.daily.map((d) => d.spend)).toEqual([40, 60, null]);
+    expect(m.others).toEqual([]);
+    expect(m.reportedSpend).toBe(100);
+    // A day it reported clicks without spend: that day's spend unknown.
+    const g = ask({ rows: [row({ day: "2026-10-01", spend: 10 }), row({ day: "2026-10-02", clicks: 5 })], lastDays }).platforms[0]!;
+    expect(g.daily.map((d) => d.spend)).toEqual([10, null, 0]);
+    // Nothing read yet in the dates.
+    expect(ask({ sync: { ...sync, syncedThrough: "2026-09-30" } })).toMatchObject({ from: null, through: null, reportedSpend: null });
+  });
+
   it("compares with the dates before when given them", () => {
     const before = [row({ day: "2026-09-29", spend: 50, clicks: 250, sales: 400 })];
     const m = ask({ previousRows: before });
@@ -143,7 +166,7 @@ describe("the Shopify marketing module", () => {
     expect(ask({ rows: [], lastDays: [], sync: { ...sync, lastSyncedAt: null, coveredFrom: null, error: "access_denied" } }).status).toBe("access_denied");
     // A failed refresh after figures were read: the figures stay, the error is said beside them.
     expect(ask({ sync: { ...sync, error: "failed" } }).status).toBe("ready");
-    expect(ask({ rows: [], lastDays: [] }).totalSpend).toBeNull();
+    expect(ask({ rows: [], lastDays: [] }).reportedSpend).toBeNull();
   });
 });
 
