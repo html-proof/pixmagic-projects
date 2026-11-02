@@ -55,8 +55,9 @@ export interface ProfitSetup {
   productCosts: "known" | "hidden" | "unavailable";
   /**
    * "none": no ad account is connected (ads bought elsewhere are among the owner's costs); "known":
-   * day by day in `adSpend`; "hidden": this member isn't shown the ads; "unusable": the accounts
-   * report in another currency than the store's, or one is the Google Ads demo (simulated).
+   * day by day in `adSpend`; "hidden": this member isn't shown the ads; "unusable": the spend is in
+   * another currency than the store's, leaves out an account in another currency, or is the Google
+   * Ads demo's (simulated).
    */
   ads: "none" | "known" | "hidden" | "unusable";
   /** The owner's costs (Settings → Costs). */
@@ -65,6 +66,18 @@ export interface ProfitSetup {
   operatingWeekdays: readonly number[];
   /** From which day the owner says the costs list holds every cost (null: not said). */
   completeFrom: string | null;
+}
+
+/**
+ * How the ad spend goes into profit (`ProfitSetup.ads`), as the dashboard sets spend against sales:
+ * in the store's currency, with no account left out of it in another currency (`leftOut`, the ads
+ * module's), and none of it the Google Ads demo's. `ads`: the ads module, null with no ad account
+ * connected; `shown`: this member is shown the ads.
+ */
+export function profitAds(shown: boolean, ads: { demo: boolean; currency: string; leftOut: readonly unknown[] } | null | undefined, storeCurrency: string): ProfitSetup["ads"] {
+  if (!shown) return "hidden";
+  if (!ads) return "none";
+  return ads.demo || ads.currency !== storeCurrency || ads.leftOut.length ? "unusable" : "known";
 }
 
 /** Why a profit figure can't be given, each in a word the page explains (PROFIT_LOSS_GAP_WORDS). */

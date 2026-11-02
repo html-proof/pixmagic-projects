@@ -6,6 +6,7 @@ import { outcomeOf, PROFIT_LOSS_GAP_WORDS, PROFIT_OUTCOME_LABEL, type ProfitLoss
 import { weekdayOf } from "@app/shared/sales";
 import { Skeleton } from "@/components/AppUi";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
+import { adsNotUsableWords } from "@/components/dashboard/profitFigures";
 import { fmtLongDay, fmtMonth, fmtSpan, fmtWeekday } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
@@ -268,7 +269,7 @@ function Breakdown({ pl, data, fixedNote, testid }: { pl: ProfitLoss; data: Prof
       : setup.ads === "hidden"
         ? ["Not shown to you", undefined]
         : setup.ads === "unusable"
-          ? ["Not usable", setup.adsDemo ? "The Google Ads demo's spend is simulated." : `Your ad accounts report in ${setup.adsCurrency ?? "another currency"}, not ${data.currency}.`]
+          ? ["Not usable", adsNotUsableWords({ demo: setup.adsDemo, currency: setup.adsCurrency, leftOut: setup.adsLeftOut ?? [] }, data.currency)]
           : pl.adSpend === null
             ? [null, "An ad account has no figures for some of these days yet."]
             : [money(pl.adSpend), "What the connected ad accounts spent."];

@@ -148,7 +148,9 @@ function Notes({ s }: { s: SheetState }) {
   if (sheet.profit) {
     // Each blank profit cell's reasons, once: those of the days shown as a whole.
     const gaps = new Set<ProfitLossGap>([...(sheet.total.profit?.gaps ?? []), ...sheet.columns.flatMap((c) => c.totals.profit?.gaps ?? [])]);
-    if (gaps.size) notes.push(`Profit is blank where an input isn't known: ${[...gaps].map((g) => PROFIT_LOSS_GAP_WORDS[g].replace(/\.$/, "")).join("; ")}.`);
+    // A spend in the store's currency that leaves accounts out: the profit says whose spend it lacks.
+    const leftOut = gaps.has("ad_spend") && sheet.comparable && sheet.leftOut ? ` ${sheet.leftOut}` : "";
+    if (gaps.size) notes.push(`Profit is blank where an input isn't known: ${[...gaps].map((g) => PROFIT_LOSS_GAP_WORDS[g].replace(/\.$/, "")).join("; ")}.${leftOut}`);
     notes.push("Product costs here are the items sold at each product's cost per item in Shopify, day by day; Business profit overview on the dashboard takes Shopify's profit report, the cost recorded with each sale, when it has one, so the two can differ where a cost per item changed.");
   } else {
     // Without the breakdown and the costs (Team & Access), the sheet stops before profit. Each cost is

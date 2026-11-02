@@ -594,7 +594,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
   either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
   and a store day the account hasn't reached yet is missing, not 0.
-- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in: `accounts` marks them `counted: false`, and `leftOut` lists them once (the Google Ads demo aside, its spend being simulated). Nothing is converted, so a cost worked out from the spend shown is short by theirs: wherever ad spend is shown as a cost (Sales vs ad spend, Business profit overview, Expenses breakdown, Profitability, the Profit sheet) it says "Left out: EU shop (EUR), in another currency.", and net profit isn't given ("Costs and net profit"). The Advertising summary CSV has a "Left out" row under the spend; the Advertising overview's "Left out of these figures" line lists the same accounts, never the demo.
+- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in: `accounts` marks them `counted: false`, and `leftOut` lists them once (the Google Ads demo aside, its spend being simulated). Nothing is converted, so a cost worked out from the spend shown is short by theirs: wherever ad spend is shown as a cost (Sales vs ad spend, Business profit overview, Expenses breakdown, Profitability, the Profit sheet's spend rows) it says "Left out: EU shop (EUR), in another currency.", and net profit isn't given ("Costs and net profit"). The Profit sheet's profit and loss takes none of that spend off: its ad spend is "Not usable" with the same sentence, and its profit is missing data ("Profit and loss (Profit sheet)"). The Advertising summary CSV has a "Left out" row under the spend; the Advertising overview's "Left out of these figures" line lists the same accounts, never the demo.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
 - **Clicks, reach and visits are different counts, never added together.** Meta's reach is people Meta
   showed an ad to; impressions, clicks and Meta's landing page views are each platform's own count; Shopify's
@@ -895,7 +895,9 @@ of variable costs makes ₹4,333.33 of operating profit (`packages/shared/test/p
 - **Missing data, never 0** (`ProfitLossGap`): days before the store's imported orders
   (`sales_not_imported`); product costs not shared, not shown to the member, none recorded, or some
   sold products without a cost per item (gross, operating and net profit all wait); an ad account's
-  spend not known for a day, in another currency or the demo's; the costs list not marked complete
+  spend not known for a day; the spend in another currency than the store's, leaving out an account
+  in another currency (named: "Left out: EU shop (EUR), in another currency."), or the demo's
+  (`profitAds`); the costs list not marked complete
   for the days. Each figure that can't be given says "Missing data" with its reason, and "Left after
   the costs bizinsights knows" (never called profit). With no ad account connected the spend is 0
   (ads paid elsewhere are the owner's costs).

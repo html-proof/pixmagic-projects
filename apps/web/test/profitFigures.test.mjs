@@ -22,7 +22,7 @@ const load = async (path, deps = {}) => {
 const sharedRequire = createRequire(new URL("../../../packages/shared/package.json", import.meta.url));
 const dates = await load("../../../packages/shared/src/dates.ts");
 const expenses = await load("../../../packages/shared/src/expenses.ts", { "./dates": dates, "./zod": { z: sharedRequire("zod").z } });
-const { adsLeftOut, costsOf, leftOutOf, leftOutWords, marginKnown, profitOf, profitCardFigures } = await load("../src/components/dashboard/profitFigures.ts", { "@app/shared/expenses": expenses });
+const { adsLeftOut, adsNotUsableWords, costsOf, leftOutOf, leftOutWords, marginKnown, profitOf, profitCardFigures } = await load("../src/components/dashboard/profitFigures.ts", { "@app/shared/expenses": expenses });
 
 /** A dashboard answer for one store in AUD: $2,000 of net sales, Shopify's profit report as given. */
 function overview(profit, { expenses: costs = { total: 300, complete: true } } = {}) {
@@ -207,4 +207,17 @@ test("ad spend with a day missing stays unavailable, whatever is left out", () =
   const k = costsOf(ov, "AUD", true);
   assert.deepEqual([k.adSpend, k.adState, k.adLeftOut.length], [null, "unavailable", 1]);
   assert.deepEqual(profitOf(ov, k, adsShown, true).gaps, ["ad_spend"]);
+});
+
+test("the Profit sheet's profit and loss names the account left out of a spend in the store's currency, and says another currency only when the spend is in one", () => {
+  // An AUD store, Meta in AUD, Google in EUR: the spend is in AUD (adsCurrency null) and the EUR account is left out.
+  const google = { id: "g", provider: "google", accountId: "123-456-7890", name: "EU shop", currency: "EUR" };
+  assert.equal(adsNotUsableWords({ demo: false, currency: null, leftOut: [google] }, "AUD"), "Left out: EU shop (EUR), in another currency. Profit needs every account's spend.");
+  // Never "in AUD, not AUD", even from an answer that gave the spend's currency either way and named no account.
+  assert.equal(adsNotUsableWords({ demo: false, currency: "AUD", leftOut: [google] }, "AUD"), "Left out: EU shop (EUR), in another currency. Profit needs every account's spend.");
+  assert.equal(adsNotUsableWords({ demo: false, currency: "AUD", leftOut: [] }, "AUD"), "An ad account reports in another currency than AUD.");
+  // The spend itself in another currency: every currency the accounts report in, once.
+  assert.equal(adsNotUsableWords({ demo: false, currency: "EUR", leftOut: [] }, "AUD"), "Your ad accounts report in EUR, not AUD.");
+  assert.equal(adsNotUsableWords({ demo: false, currency: "EUR", leftOut: [{ ...google, id: "uk", currency: "GBP" }, { ...google, id: "eu2" }] }, "AUD"), "Your ad accounts report in EUR and GBP, not AUD.");
+  assert.equal(adsNotUsableWords({ demo: true, currency: null, leftOut: [] }, "AUD"), "The Google Ads demo's spend is simulated.");
 });
