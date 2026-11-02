@@ -49,7 +49,7 @@ describe("a cost over the dates", () => {
       ],
       { from: "2026-10-01", to: "2026-10-31" },
     );
-    expect(totals).toEqual({ total: 59, byCategory: [{ category: "shopify_plan", amount: 39 }, { category: "shopify_apps", amount: 20 }], counted: 3 });
+    expect(totals).toEqual({ total: 59, byCategory: [{ category: "shopify_plan", amount: 39 }, { category: "shopify_apps", amount: 20 }], byGroup: { fixed: 59, variable: 0, non_operating: 0 }, counted: 3 });
   });
 });
 

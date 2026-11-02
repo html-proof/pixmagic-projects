@@ -248,3 +248,53 @@ describe("business events", () => {
     expect(eventsOn(list, "2026-09-03").map((e) => e.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("the sheet's profit and loss rows", () => {
+  // ₹10,000 of sales a day at ₹3,000 of product costs and ₹700 of ads; ₹50,000 of fixed costs a month.
+  const withProfit = (d: string): Partial<SheetDay> => ({
+    profit: { day: d, imported: true, grossSales: 10_000, discounts: 0, returns: 0, netSales: 10_000, shipping: 0, additionalFees: 0, orders: 5, products: { cost: 3_000, withCost: 10_000, withoutCost: 0 }, adSpend: 700 },
+  });
+  const setup = {
+    productCosts: "known" as const,
+    ads: "known" as const,
+    costs: [{ category: "rent" as const, amount: 50_000, cadence: "monthly" as const, startsOn: "2026-01-01", endsOn: null }],
+    operatingWeekdays: [],
+    completeFrom: "2026-01-01",
+  };
+  const rows = sheetRows({ comparable: true, grain: "day", providers: ["meta"], profit: { productCosts: true } });
+  const value = (id: string, t: SheetTotals) => rows.find((r) => r.id === id)!.value(t, null);
+
+  it("gives each day its share of the month's fixed costs, and a month column the month's whole", () => {
+    const sept = days("2026-09-01", "2026-09-30", withProfit);
+    const byDay = sheetColumns(sept, [], "day", { weekdays: [], events: "all" }, setup);
+    expect(value("fixed_costs", byDay[0]!.totals)).toBe(1666.67);
+    expect(value("operating_profit", byDay[0]!.totals)).toBe(10_000 - 3_700 - 1666.67);
+    const byMonth = sheetColumns(sept, [], "month", { weekdays: [], events: "all" }, setup);
+    expect(value("fixed_costs", byMonth[0]!.totals)).toBe(50_000);
+    expect(value("net_profit", byMonth[0]!.totals)).toBe(300_000 - 111_000 - 50_000);
+    // Weekends only: each weekend day its own share, never the whole month.
+    const weekends = sheetColumns(sept, [], "month", { weekdays: [5, 6], events: "all" }, setup);
+    expect(value("fixed_costs", weekends[0]!.totals)).toBeCloseTo(8 * 1666.67, 1);
+    expect(rows.filter((r) => r.section === "profit").map((r) => r.id)).toEqual([
+      "revenue",
+      "product_costs",
+      "gross_profit",
+      "gross_margin",
+      "your_variable",
+      "variable_costs",
+      "fixed_costs",
+      "operating_profit",
+      "operating_margin",
+      "below_operating",
+      "net_profit",
+      "net_margin",
+    ]);
+  });
+
+  it("leaves the rows out without the costs, and the product costs' rows for a member not shown them", () => {
+    const sept = days("2026-09-01", "2026-09-02");
+    expect(value("operating_profit", sheetTotals(sept))).toBeUndefined();
+    expect(sheetRows({ comparable: true, grain: "day", providers: [], profit: { productCosts: false } }).some((r) => r.id === "gross_profit")).toBe(false);
+    expect(sheetRows({ comparable: true, grain: "day", providers: [] }).some((r) => r.section === "profit")).toBe(false);
+  });
+});
