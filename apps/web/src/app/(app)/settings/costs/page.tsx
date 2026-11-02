@@ -1,18 +1,9 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
-import {
-  EXPENSE_CADENCE_LABEL,
-  EXPENSE_CADENCES,
-  EXPENSE_CATEGORIES,
-  EXPENSE_CATEGORY_LABEL,
-  type Expense,
-  type ExpenseCadence,
-  type ExpenseCategory,
-  type ExpenseInput,
-  type ExpenseTotals,
-} from "@app/shared/expenses";
+import { EXPENSE_CATEGORY_LABEL, type Expense, type ExpenseTotals } from "@app/shared/expenses";
 import { canManage, useApp } from "@/components/AppContext";
 import { ConfirmDialog, Skeleton, useAction } from "@/components/AppUi";
+import { blankCost, CostFields, draftOf, inputOf, termsOf, whenOf, type CostDraft } from "@/components/costs/CostForm";
 import { fmtDay } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
@@ -30,32 +21,11 @@ interface Answer {
   currency: string;
   today: string;
   expenses: Expense[];
-  settings: { completeFrom: string | null; updatedAt: string | null };
+  settings: { completeFrom: string | null; operatingWeekdays: number[]; updatedAt: string | null };
   thisMonth: ExpenseTotals & { from: string; to: string };
 }
 
-type Draft = { name: string; category: ExpenseCategory; amount: string; cadence: ExpenseCadence; startsOn: string; endsOn: string; note: string };
-
-const blank = (today: string): Draft => ({ name: "", category: "shopify_apps", amount: "", cadence: "monthly", startsOn: `${today.slice(0, 8)}01`, endsOn: "", note: "" });
-const draftOf = (e: Expense): Draft => ({ name: e.name, category: e.category, amount: String(e.amount), cadence: e.cadence, startsOn: e.startsOn, endsOn: e.endsOn ?? "", note: e.note ?? "" });
-const inputOf = (d: Draft): ExpenseInput => ({
-  name: d.name,
-  category: d.category,
-  amount: Number(d.amount),
-  cadence: d.cadence,
-  startsOn: d.startsOn,
-  endsOn: d.cadence === "once" || !d.endsOn ? null : d.endsOn,
-  note: d.note.trim() ? d.note : null,
-});
-
-/** "A$39.00 every month", "A$250.00 once". */
-const termsOf = (e: Pick<Expense, "amount" | "cadence">, currency: string) => `${fmtMoney(e.amount, currency)} ${EXPENSE_CADENCE_LABEL[e.cadence].toLowerCase()}`;
-
-/** "From 1 Oct 2026", "1 Oct – 31 Dec 2026", "On 5 Oct 2026". */
-function whenOf(e: Pick<Expense, "cadence" | "startsOn" | "endsOn">) {
-  if (e.cadence === "once") return `On ${fmtDay(e.startsOn)}`;
-  return e.endsOn ? `${fmtDay(e.startsOn)} – ${fmtDay(e.endsOn)}` : `From ${fmtDay(e.startsOn)}`;
-}
+type Draft = CostDraft;
 
 export default function CostsPage() {
   const { workspace, store } = useApp();
@@ -130,13 +100,15 @@ export default function CostsPage() {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Costs</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted">
-              The costs bizinsights can&apos;t read from Shopify or your ad accounts: your Shopify plan and apps, staff, rent, shipping labels,
-              payment fees, ads on platforms you haven&apos;t connected. Each is spread over the days it covers (a monthly cost counts in full for a
-              whole month), in {data.currency}, and shown on the dashboard as your costs. They are your own figures: bizinsights doesn&apos;t check them.
+              The costs bizinsights can&apos;t read from Shopify or your ad accounts: rent, salaries, software, your Shopify plan and apps,
+              shipping labels, packaging, payment fees, ads on platforms you haven&apos;t connected, and loan interest or income tax. Each is
+              spread over the days it covers (a monthly cost counts in full for a whole month), in {data.currency}, and shown on the dashboard
+              and in the Profit sheet&apos;s profit and loss as fixed, variable or below operating profit. They are your own figures: bizinsights
+              doesn&apos;t check them.
             </p>
           </div>
           {editable && !editing && (
-            <button type="button" className="btn-primary" onClick={() => setEditing({ id: null, draft: blank(data.today) })} data-testid="cost-add">
+            <button type="button" className="btn-primary" onClick={() => setEditing({ id: null, draft: blankCost(data.today) })} data-testid="cost-add">
               Add a cost
             </button>
           )}
@@ -154,44 +126,7 @@ export default function CostsPage() {
         <section className="card">
           <h2 className="font-semibold">{editing.id ? "Change the cost" : "Add a cost"}</h2>
           <form onSubmit={save} className="mt-3 grid gap-3 sm:grid-cols-2" data-testid="cost-form">
-            <label className="space-y-1 sm:col-span-2">
-              <span className="label">Name</span>
-              <input className="input" required maxLength={80} placeholder="e.g. Klaviyo, Shopify Basic, packing tape" value={editing.draft.name} onChange={(e) => set({ name: e.target.value })} />
-            </label>
-            <label className="space-y-1">
-              <span className="label">What it is for</span>
-              <select className="input" value={editing.draft.category} onChange={(e) => set({ category: e.target.value as ExpenseCategory })}>
-                {EXPENSE_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{EXPENSE_CATEGORY_LABEL[c]}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1">
-              <span className="label">Amount ({data.currency})</span>
-              <input className="input" required type="number" inputMode="decimal" min={0} step="0.01" value={editing.draft.amount} onChange={(e) => set({ amount: e.target.value })} />
-            </label>
-            <label className="space-y-1">
-              <span className="label">How often</span>
-              <select className="input" value={editing.draft.cadence} onChange={(e) => set({ cadence: e.target.value as ExpenseCadence })}>
-                {EXPENSE_CADENCES.map((c) => (
-                  <option key={c} value={c}>{EXPENSE_CADENCE_LABEL[c]}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1">
-              <span className="label">{editing.draft.cadence === "once" ? "Paid on" : "Starts on"}</span>
-              <input className="input" required type="date" value={editing.draft.startsOn} onChange={(e) => set({ startsOn: e.target.value })} />
-            </label>
-            {editing.draft.cadence !== "once" && (
-              <label className="space-y-1">
-                <span className="label">Ends on (optional)</span>
-                <input className="input" type="date" min={editing.draft.startsOn} value={editing.draft.endsOn} onChange={(e) => set({ endsOn: e.target.value })} />
-              </label>
-            )}
-            <label className="space-y-1 sm:col-span-2">
-              <span className="label">Note (optional)</span>
-              <input className="input" maxLength={500} value={editing.draft.note} onChange={(e) => set({ note: e.target.value })} />
-            </label>
+            <CostFields draft={editing.draft} currency={data.currency} set={set} />
             <div className="flex gap-2 sm:col-span-2">
               <button className="btn-primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : editing.id ? "Save" : "Add"}</button>
               <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>Cancel</button>

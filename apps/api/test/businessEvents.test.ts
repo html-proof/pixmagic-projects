@@ -149,11 +149,14 @@ describe("the dashboard's answer for the sheet", () => {
     }
   }
 
-  it("carries the sales, visits and ad spend day by day, and none of the dashboard's other modules", async () => {
+  it("carries the sales, visits, ad spend, product costs and costs day by day, and none of the dashboard's other modules", async () => {
     const { a, ws, store } = await owner();
     await seed(store);
     const ov = ok(await call("GET", `/workspaces/${ws}/stores/${store.id}/overview?preset=custom&from=${d(-3)}&to=${d(-1)}&parts=sheet`, a.headers));
-    expect(Object.keys(ov.modules).sort()).toEqual(["ad_connections", "ads", "funnel", "sales_overview"]);
+    // The profit rows' inputs too: each day's product costs, and the owner's costs with their terms.
+    expect(Object.keys(ov.modules).sort()).toEqual(["ad_connections", "ads", "expenses", "funnel", "product_costs", "sales_overview"]);
+    expect(ov.modules.product_costs.byDay.map((x: { day: string }) => x.day)).toEqual([d(-3), d(-2), d(-1)]);
+    expect(ov.modules.expenses.terms).toEqual([]);
     expect(ov.modules.sales_overview.series.map((x: Record<string, unknown>) => [x.day, x.totalSales, x.tax, x.orders, x.orderValue, x.units, x.newCustomerOrders])).toEqual(
       [-3, -2, -1].map((n) => [d(n), 110, 10, 3, 95, 5, 1]),
     );

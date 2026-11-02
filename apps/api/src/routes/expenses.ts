@@ -45,7 +45,7 @@ export function expenseRoutes(app: App, deps: Deps) {
     const [expenses, settings] = await withTenant(ws, (tx) => Promise.all([listExpenses(tx, scope), expenseSettings(tx, scope)]));
     const today = localDay(new Date(), store.timezone);
     const thisMonth: DateRange = { from: `${today.slice(0, 8)}01`, to: today };
-    return c.json({ currency: store.currency, today, expenses, settings, thisMonth: { ...thisMonth, ...expenseTotals(expenses, thisMonth) } });
+    return c.json({ currency: store.currency, today, expenses, settings, thisMonth: { ...thisMonth, ...expenseTotals(expenses, thisMonth, settings.operatingWeekdays) } });
   });
 
   app.post("/workspaces/:ws/stores/:storeId/expenses", async (c) => {
@@ -58,22 +58,21 @@ export function expenseRoutes(app: App, deps: Deps) {
     return c.json({ expense: saved }, 201);
   });
 
-  /** From which day the list holds every cost (null: take it back). Before /:id, so "settings" is never taken for an id. */
+  /**
+   * From which day the list holds every cost (null: take it back), and the days the store is open
+   * (its recurring costs are spread over those), either or both. Before /:id, so "settings" is never
+   * taken for an id.
+   */
   app.put("/workspaces/:ws/stores/:storeId/expenses/settings", async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "stores:manage");
     await storeOf(ws, storeId);
     const input = expenseSettingsInput.parse(await body(c));
     const { saved, before } = await withTenant(ws, (tx) => saveExpenseSettings(tx, { ws, storeId }, input, a.user?.id ?? null));
-    await audit({
-      workspaceId: ws,
-      actorUserId: a.user?.id ?? null,
-      action: "expenses.completeness_changed",
-      targetType: "store",
-      targetId: storeId,
-      metadata: { before: before.completeFrom, after: saved.completeFrom },
-      ip: clientIp(c),
-    }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
+    const log = (action: string, metadata: Record<string, unknown>) =>
+      audit({ workspaceId: ws, actorUserId: a.user?.id ?? null, action, targetType: "store", targetId: storeId, metadata, ip: clientIp(c) }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
+    if (input.completeFrom !== undefined) await log("expenses.completeness_changed", { before: before.completeFrom, after: saved.completeFrom });
+    if (input.operatingWeekdays !== undefined) await log("expenses.operating_days_changed", { before: before.operatingWeekdays, after: saved.operatingWeekdays });
     return c.json({ settings: saved });
   });
 
