@@ -16,6 +16,7 @@ import {
   metaCampaignFacts,
   campaignTotals,
   canCompareFrom,
+  claimsAddUp,
   commonCoverage,
   coverageAfter,
   coveredPart,
@@ -361,6 +362,16 @@ describe("ad totals", () => {
     // What every platform reports on every day still adds up.
     expect(t.conversions).toBe(8);
     expect(t.cpm).toBe(14.13);
+  });
+
+  it("shows purchases as one figure for one platform only: Meta's and Google's claims can overlap", () => {
+    expect(claimsAddUp([])).toBe(true);
+    expect(claimsAddUp(["meta"])).toBe(true);
+    // Two Meta accounts are one platform's claims, each order credited once by Meta's own rules.
+    expect(claimsAddUp(["meta", "meta"])).toBe(true);
+    // Meta and Google can both credit the same order to their ads: added up it would count twice.
+    expect(claimsAddUp(["meta", "google"])).toBe(false);
+    expect(claimsAddUp(rows.map((r) => r.provider))).toBe(false);
   });
 
   it("charts every day of the range, with a day outside the stored days missing rather than 0", () => {

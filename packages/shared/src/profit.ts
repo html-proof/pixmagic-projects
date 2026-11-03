@@ -19,8 +19,8 @@
  * days (expenseInRange), so a month's column is its costs exactly, whatever its days add up to.
  */
 // Extensionless imports: the web app imports this file directly (@app/shared/profit).
-import { addDays } from "./dates";
-import { expenseInRange, expensesComplete, totalsOf, type ExpenseCategory, type ExpenseTerms, type ExpenseTotals } from "./expenses";
+import { addDays, periodsOf, type DateRange } from "./dates";
+import { addCents, expenseInRange, expensesComplete, totalsOf, type CostOfCategory, type DayFigures, type ExpenseSection, type ExpenseTotals } from "./expenses";
 
 /** One day of the store, as its profit is worked out. */
 export interface ProfitDay {
@@ -37,6 +37,10 @@ export interface ProfitDay {
   shipping: number;
   additionalFees: number;
   orders: number;
+  /** What customers paid, tax and duties included (Shopify's total sales); absent from older answers. */
+  totalSales?: number;
+  /** Items sold; absent from older answers. */
+  units?: number;
   /**
    * The items sold at each product's cost per item in Shopify, and the net sales of items with a
    * cost per item and without one (their cost isn't in `cost`); null when not known for the day.
@@ -44,10 +48,12 @@ export interface ProfitDay {
   products: { cost: number; withCost: number; withoutCost: number } | null;
   /** What the connected ad accounts spent, in the store's currency; null: an account has no figures for the day. */
   adSpend: number | null;
+  /** The same by platform (meta, google): each platform's own, null where its accounts have no figures for the day. */
+  adSpendBy?: Record<string, number | null>;
 }
 
-/** A cost of the owner's list, as the profit figures read it. */
-export type ProfitCost = ExpenseTerms & { category: ExpenseCategory };
+/** A cost of the owner's list, as the profit figures read it: its terms, category and the section it goes in. */
+export type ProfitCost = CostOfCategory;
 
 /** What holds for the store as a whole, whatever the days. */
 export interface ProfitSetup {
@@ -55,8 +61,9 @@ export interface ProfitSetup {
   productCosts: "known" | "hidden" | "unavailable";
   /**
    * "none": no ad account is connected (ads bought elsewhere are among the owner's costs); "known":
-   * day by day in `adSpend`; "hidden": this member isn't shown the ads; "unusable": the accounts
-   * report in another currency than the store's, or one is the Google Ads demo (simulated).
+   * day by day in `adSpend`; "hidden": this member isn't shown the ads; "unusable": the spend is in
+   * another currency than the store's, leaves out an account in another currency, or is the Google
+   * Ads demo's (simulated).
    */
   ads: "none" | "known" | "hidden" | "unusable";
   /** The owner's costs (Settings → Costs). */
@@ -65,6 +72,18 @@ export interface ProfitSetup {
   operatingWeekdays: readonly number[];
   /** From which day the owner says the costs list holds every cost (null: not said). */
   completeFrom: string | null;
+}
+
+/**
+ * How the ad spend goes into profit (`ProfitSetup.ads`), as the dashboard sets spend against sales:
+ * in the store's currency, with no account left out of it in another currency (`leftOut`, the ads
+ * module's), and none of it the Google Ads demo's. `ads`: the ads module, null with no ad account
+ * connected; `shown`: this member is shown the ads.
+ */
+export function profitAds(shown: boolean, ads: { demo: boolean; currency: string; leftOut: readonly unknown[] } | null | undefined, storeCurrency: string): ProfitSetup["ads"] {
+  if (!shown) return "hidden";
+  if (!ads) return "none";
+  return ads.demo || ads.currency !== storeCurrency || ads.leftOut.length ? "unusable" : "known";
 }
 
 /** Why a profit figure can't be given, each in a word the page explains (PROFIT_LOSS_GAP_WORDS). */
@@ -109,15 +128,27 @@ export interface ProfitLoss {
   returns: number | null | undefined;
   netSales: number | null;
   shippingAndFees: number | null;
-  /** Net sales + shipping and fees: what the store kept from its sales, before any cost. */
+  /** Net sales + shipping and fees: what the store kept from its sales, before any cost (revenue before tax). */
   revenue: number | null;
+  /** What customers paid, tax and duties included; null when a day's isn't known. */
+  totalSales: number | null;
+  /** Taxes and duties collected: total sales − revenue. Collected for governments, never the store's income. */
+  taxes: number | null;
   orders: number | null;
+  /** Items sold; null when a day's isn't known. */
+  units: number | null;
   /** The items sold at their cost per item; null when not known (see the gaps). */
   productCosts: number | null;
   /** Net sales of products with no cost per item in Shopify (their cost isn't in productCosts). */
   uncostedSales: number | null;
   /** The connected ad accounts' spend: 0 with none connected, null when not known. */
   adSpend: number | null;
+  /** The same by platform, when the spend is known (each null when that platform's isn't known for every day). */
+  adSpendBy: Record<string, number | null>;
+  /** Ad spend + your advertising costs (other paid channels, ad spend adjustments); null when the spend isn't known. */
+  advertising: number | null;
+  /** Product costs + your variable costs, advertising aside; null when the product costs aren't known whole. */
+  variableExAds: number | null;
   /** The owner's costs over the days, by category and by group (fixed, variable, below operating profit). */
   yours: ExpenseTotals;
   /** Product costs + ad spend + your variable costs; null when either of the first two isn't known whole. */
@@ -126,6 +157,8 @@ export interface ProfitLoss {
   fixedCosts: number;
   /** Interest, income tax, depreciation and the like: between operating and net profit. */
   belowOperating: number;
+  /** Every cost: variable (advertising included) + fixed + below operating; null when the variable costs aren't known. */
+  totalExpenses: number | null;
   grossProfit: number | null;
   /** Gross profit ÷ net sales. */
   grossMargin: number | null;
@@ -135,6 +168,14 @@ export interface ProfitLoss {
   netProfit: number | null;
   /** Net profit ÷ revenue. */
   netMargin: number | null;
+  /** Marketing expense ratio: advertising ÷ total sales (tax included), as the owner's workbook has it. */
+  mer: number | null;
+  /** Sitewide return on ad spend: total sales ÷ advertising. */
+  roas: number | null;
+  /** Variable cost ratio: variable costs (advertising aside) ÷ revenue. */
+  vcr: number | null;
+  /** Fixed cost ratio: fixed costs ÷ revenue. */
+  fcr: number | null;
   /** Revenue less every cost that is known, when profit can't be given: never called profit. */
   afterKnownCosts: number | null;
   /** Why gross profit can't be given (empty when it is). */
@@ -158,21 +199,30 @@ export function runsOf(days: readonly string[]): Array<{ from: string; to: strin
   return runs;
 }
 
-/** The owner's costs over some days (any days: each run of consecutive ones counted whole), spread over the store's open days. */
-export function costsOver(costs: readonly ProfitCost[], days: readonly string[], open: readonly number[] = []): ExpenseTotals {
-  const byCategory = new Map<ExpenseCategory, number>();
+/**
+ * The owner's costs over some days (any days: each run of consecutive ones counted whole), spread over
+ * the store's open days; those that follow the sales from each day's `figures`.
+ */
+export function costsOver(costs: readonly ProfitCost[], days: readonly string[], open: readonly number[] = [], figures?: (day: string) => DayFigures | undefined): ExpenseTotals {
+  const byCategory = new Map<string, { section: ExpenseSection; cents: number }>();
   const counted = new Set<number>();
   const runs = runsOf(days);
   costs.forEach((e, i) => {
     for (const r of runs) {
-      const c = cents(expenseInRange(e, r, open));
+      const c = cents(expenseInRange(e, r, open, figures));
       if (c === 0) continue;
       counted.add(i);
-      byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + c);
+      addCents(byCategory, e, c);
     }
   });
   return totalsOf(byCategory, counted.size);
 }
+
+/** A day's sales as the costs that follow them read them. */
+export const figuresOf = (d: ProfitDay): DayFigures => {
+  const revenue = (cents(d.netSales) + cents(d.shipping) + cents(d.additionalFees)) / 100;
+  return { totalSales: d.totalSales ?? revenue, revenue, netSales: d.netSales, orders: d.orders, units: d.units ?? 0 };
+};
 
 /**
  * The profit and loss of `days` (any days of the store, in any order; usually a day, a month, or the
@@ -190,7 +240,10 @@ export function profitAndLoss(days: readonly ProfitDay[], setup: ProfitSetup): P
   const netSales = sum((d) => d.netSales);
   const shippingAndFees = sum((d) => d.shipping + d.additionalFees);
   const revenue = netSales === null || shippingAndFees === null ? null : (cents(netSales) + cents(shippingAndFees)) / 100;
+  const totalSales = list.some((d) => d.totalSales === undefined) ? null : sum((d) => d.totalSales!);
+  const taxes = totalSales === null || revenue === null ? null : (cents(totalSales) - cents(revenue)) / 100;
   const orders = allImported ? list.reduce((a, d) => a + d.orders, 0) : null;
+  const units = allImported && list.every((d) => d.units !== undefined) ? list.reduce((a, d) => a + d.units!, 0) : null;
 
   // Product costs, and whether every product sold has its cost.
   const grossGaps: ProfitLossGap[] = [];
@@ -217,13 +270,27 @@ export function profitAndLoss(days: readonly ProfitDay[], setup: ProfitSetup): P
   else if (setup.ads === "hidden") gaps.push("ads_hidden");
   else if (setup.ads === "unusable" || list.some((d) => d.adSpend === null)) gaps.push("ad_spend");
   else adSpend = list.reduce((a, d) => a + cents(d.adSpend!), 0) / 100;
+  const adSpendBy: Record<string, number | null> = {};
+  if (adSpend !== null && setup.ads === "known") {
+    for (const p of new Set(list.flatMap((d) => Object.keys(d.adSpendBy ?? {})))) {
+      adSpendBy[p] = list.every((d) => typeof d.adSpendBy?.[p] === "number") ? list.reduce((a, d) => a + cents(d.adSpendBy![p]!), 0) / 100 : null;
+    }
+  }
 
   // The owner's costs, and whether the list holds every one of them for these days.
-  const yours = costsOver(setup.costs, list.map((d) => d.day), setup.operatingWeekdays);
+  const byDay = new Map(list.map((d) => [d.day, d]));
+  const figures = (day: string) => {
+    const d = byDay.get(day);
+    return d && d.imported ? figuresOf(d) : undefined;
+  };
+  const yours = costsOver(setup.costs, list.map((d) => d.day), setup.operatingWeekdays, figures);
   if (!list.length || !expensesComplete(setup.completeFrom, { from, to })) gaps.push("costs_not_complete");
   const fixedCosts = yours.byGroup.fixed;
   const belowOperating = yours.byGroup.non_operating;
   const variableCosts = productsWhole !== null && adSpend !== null ? (cents(productsWhole) + cents(adSpend) + cents(yours.byGroup.variable)) / 100 : null;
+  const advertising = adSpend === null ? null : (cents(adSpend) + cents(yours.bySection.advertising)) / 100;
+  const variableExAds = productsWhole === null ? null : (cents(productsWhole) + cents(yours.bySection.variable)) / 100;
+  const totalExpenses = variableCosts === null ? null : (cents(variableCosts) + cents(fixedCosts) + cents(belowOperating)) / 100;
 
   const known = gaps.length === 0 && revenue !== null && variableCosts !== null;
   const operatingProfit = known ? (cents(revenue) - cents(variableCosts) - cents(fixedCosts)) / 100 : null;
@@ -242,20 +309,31 @@ export function profitAndLoss(days: readonly ProfitDay[], setup: ProfitSetup): P
     netSales,
     shippingAndFees,
     revenue,
+    totalSales,
+    taxes,
     orders,
+    units,
     productCosts,
     uncostedSales,
     adSpend,
+    adSpendBy,
+    advertising,
+    variableExAds,
     yours,
     variableCosts,
     fixedCosts,
     belowOperating,
+    totalExpenses,
     grossProfit,
     grossMargin: ratio(grossProfit, netSales),
     operatingProfit,
     operatingMargin: ratio(operatingProfit, revenue),
     netProfit,
     netMargin: ratio(netProfit, revenue),
+    mer: ratio(advertising, totalSales),
+    roas: ratio(totalSales, advertising),
+    vcr: ratio(variableExAds, revenue),
+    fcr: ratio(fixedCosts, revenue),
     afterKnownCosts,
     grossGaps,
     gaps,
@@ -282,4 +360,30 @@ export function monthDays(month: string, today?: string): { from: string; to: st
   const last = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
   const end = `${month}-${String(last).padStart(2, "0")}`;
   return { from, to: today && today >= from && today < end ? today : end };
+}
+
+/** How a profit and loss statement lays out its columns: a day, a week (Monday to Sunday), a calendar month or a calendar year each. */
+export const STATEMENT_GRAINS = ["day", "week", "month", "year"] as const;
+export type StatementGrain = (typeof STATEMENT_GRAINS)[number];
+export const isStatementGrain = (s: string | null | undefined): s is StatementGrain => (STATEMENT_GRAINS as readonly string[]).includes(s ?? "");
+
+/** The most columns a statement lays out: a month of days, a year of weeks or months. */
+export const MAX_STATEMENT_COLUMNS = 62;
+
+/** Columns when none were picked: days for up to a month, then weeks for up to three, then months. */
+export function autoStatementGrain(range: DateRange): StatementGrain {
+  const n = Math.round((Date.parse(`${range.to}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000) + 1;
+  return n <= 31 ? "day" : n <= 92 ? "week" : "month";
+}
+
+/** The columns of `range` at `grain`, each with its own days inside the range (the first and last may be part of one). */
+export function statementPeriods(range: DateRange, grain: StatementGrain): Array<{ key: string; from: string; to: string }> {
+  if (grain !== "year") return periodsOf(range, grain);
+  const out: Array<{ key: string; from: string; to: string }> = [];
+  for (let y = Number(range.from.slice(0, 4)); y <= Number(range.to.slice(0, 4)); y++) {
+    const from = `${y}-01-01` < range.from ? range.from : `${y}-01-01`;
+    const to = `${y}-12-31` > range.to ? range.to : `${y}-12-31`;
+    out.push({ key: String(y), from, to });
+  }
+  return out;
 }

@@ -32,6 +32,7 @@ the security model: [docs/zapier.md](../../docs/zapier.md).
 | 1.0.0 | The first five triggers and two searches |
 | 1.1.0 | AdSense "falls below", `schema_version`, Integration Connected / Disconnected, Ad Account Synced, Order Paid |
 | 1.2.0 | The action Send WhatsApp Template Message (and its hidden template list) |
+| 1.3.0 | Find Ad Performance: each platform's own figures (`platforms`), `claims_add_up`, the summed purchase value and ROAS labelled deprecated; `source` on each platform (spend reported to Shopify, `shopify_marketing`) in the samples |
 
 This folder is **not** part of the pnpm workspace: it has its own `npm install`, its own
 `package-lock.json`, and CI neither installs nor type-checks it (`pnpm lint` does lint it).

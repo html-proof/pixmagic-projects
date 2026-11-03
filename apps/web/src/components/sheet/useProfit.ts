@@ -1,10 +1,11 @@
 "use client";
 import { useMemo } from "react";
-import type { Expense } from "@app/shared/expenses";
+import type { CustomCategory, Expense } from "@app/shared/expenses";
 import { isMonth, type ProfitLoss, type ProfitSetup } from "@app/shared/profit";
 import { isDay } from "@app/shared/dates";
-import { canManage, useApp } from "@/components/AppContext";
+import { useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
+import type { LeftOutAccount } from "@/components/dashboard/profitFigures";
 import { useApi, useLiveApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -25,12 +26,17 @@ export interface ProfitAnswer {
   setup: {
     productCosts: ProfitSetup["productCosts"];
     ads: ProfitSetup["ads"];
+    /** The ad spend's currency when it isn't the store's (answers before `adsLeftOut` gave it either way). */
     adsCurrency: string | null;
+    /** The accounts left out of the spend, in another currency (adsNotUsableWords names them). Absent from older answers. */
+    adsLeftOut?: LeftOutAccount[];
     adsDemo: boolean;
     operatingWeekdays: number[];
     completeFrom: string | null;
     costsCount: number;
   };
+  /** The store's own cost categories (absent from older answers). */
+  categories?: CustomCategory[];
   total: ProfitLoss;
   /** The whole calendar month's fixed costs and the days they're spread over. */
   allocation: { from: string; to: string; fixedCosts: number; days: number; calendarDays: number };
@@ -42,7 +48,9 @@ export interface ProfitAnswer {
 export interface CostsAnswer {
   currency: string;
   today: string;
-  expenses: Expense[];
+  expenses: Array<Expense & { nextDue?: string | null }>;
+  /** The store's own cost categories (absent from older answers). */
+  categories?: CustomCategory[];
   settings: { completeFrom: string | null; operatingWeekdays: number[]; updatedAt: string | null };
 }
 
@@ -88,8 +96,8 @@ export function useProfit() {
     costs: costs.data,
     costsError: costs.error,
     reloadCosts: costs.reload,
-    /** Adding, changing and removing costs: owners and admins, signed in to the account (the API's stores:manage). */
-    canManageCosts: canManage(workspace.role) && !me.shared,
+    /** Adding, changing and removing costs: "Manage costs" (owners, admins and whoever they gave it to), signed in to the account. */
+    canManageCosts: allowed("finance.costs") && !me.shared,
   };
 }
 

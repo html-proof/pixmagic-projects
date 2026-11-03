@@ -3,11 +3,12 @@ import { useMemo } from "react";
 import type { BusinessEvent } from "@app/shared/businessEvents";
 import { daysBetweenInclusive } from "@app/shared/dates";
 import { dayShown, isSheetGrain, parseEventFilter, parseWeekdays, sheetColumns, sheetRows, sheetTotals, weekdaysParam, type EventFilter, type SheetDay, type SheetGrain } from "@app/shared/sheet";
-import type { ProfitSetup } from "@app/shared/profit";
+import { profitAds, type ProfitSetup } from "@app/shared/profit";
 import { seesModule } from "@app/shared/access";
 import { useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
 import { useDateRange, type Shown } from "@/components/dashboard/DateRange";
+import { leftOutOf, leftOutWords } from "@/components/dashboard/profitFigures";
 import type { AdsModule, FunnelModule, Overview } from "@/components/dashboard/types";
 import { useApi, useLiveApi } from "@/lib/api";
 
@@ -88,6 +89,8 @@ export function useSheet() {
               shipping: d.shipping,
               additionalFees: d.additionalFees,
               orders: d.orders,
+              totalSales: d.totalSales,
+              units: d.units,
               products: costs.has(d.day) ? { cost: costs.get(d.day)!.costOfGoodsSold, withCost: costs.get(d.day)!.netSalesWithCost, withoutCost: costs.get(d.day)!.netSalesWithoutCost } : null,
               adSpend: setup.ads === "known" ? (adDay.get(d.day) ?? null) : null,
             },
@@ -97,6 +100,8 @@ export function useSheet() {
     // Spend is set against sales only as the dashboard does: in the store's currency, with no demo among the accounts.
     const comparable = !!ads && ads.currency === ov.store.currency && !ads.demo;
     const demo = new Set<string>(ads?.byProvider.filter((p) => p.demo).map((p) => p.provider) ?? []);
+    // Accounts in another currency than the spend's: nothing is converted, so the rows from the spend say whose isn't in it.
+    const leftOut = ads ? leftOutWords(leftOutOf(ads)) : null;
     const grain = by ?? autoGrain(ov.range.from, ov.range.to);
     const filter = { weekdays, events: eventFilter };
     const profit = setup && days.every((d) => d.profit) ? setup : undefined;
@@ -106,7 +111,7 @@ export function useSheet() {
       grain,
       columns,
       // The Google Ads demo's simulated spend is named as such, as on its card.
-      rows: sheetRows({ comparable, grain, providers, ...(profit ? { profit: { productCosts: profit.productCosts !== "hidden" } } : {}) }).map((r) =>
+      rows: sheetRows({ comparable, grain, providers, leftOut, ...(profit ? { profit: { productCosts: profit.productCosts !== "hidden" } } : {}) }).map((r) =>
         r.id.startsWith("spend_") && demo.has(r.id.slice(6)) ? { ...r, label: `${r.label} (demo)` } : r,
       ),
       /** Every day the filter shows, added up: the sheet's first column. */
@@ -118,6 +123,8 @@ export function useSheet() {
       profit: profit ?? null,
       ads: ads ?? null,
       comparable,
+      /** "Left out: EU shop (EUR), in another currency.": ad accounts whose spend isn't in the sheet; null with none. */
+      leftOut,
       visitsTracked: !!visits,
     };
   }, [ov, list, by, weekdays, eventFilter, allowed, access]);
@@ -160,8 +167,8 @@ export type SheetState = ReturnType<typeof useSheet>;
 /**
  * What the sheet's profit rows need beside each day's figures (@app/shared/profit): the owner's costs
  * with their terms (the expenses module, with the breakdown permission), whether product costs are
- * known day by day, and the ad spend as the dashboard sets it against sales (the store's currency,
- * every account counted, no demo). Null without the costs.
+ * known day by day, and the ad spend as the dashboard sets it against sales (profitAds: the store's
+ * currency, no account left out, no demo). Null without the costs.
  */
 export function profitSetupOf(ov: Overview, seesAds: boolean, seesProductCosts: boolean): ProfitSetup | null {
   const e = ov.modules.expenses;
@@ -169,7 +176,7 @@ export function profitSetupOf(ov: Overview, seesAds: boolean, seesProductCosts: 
   const ads = ov.modules.ads as AdsModule | undefined;
   return {
     productCosts: !seesProductCosts ? "hidden" : ov.modules.product_costs?.byDay ? "known" : "unavailable",
-    ads: !seesAds ? "hidden" : !ads ? "none" : ads.demo || ads.currency !== ov.store.currency || ads.accounts.some((a) => !a.counted) ? "unusable" : "known",
+    ads: profitAds(seesAds, ads && { demo: !!ads.demo, currency: ads.currency, leftOut: leftOutOf(ads) }, ov.store.currency),
     costs: e.terms,
     operatingWeekdays: e.operatingWeekdays ?? [],
     completeFrom: e.completeFrom,

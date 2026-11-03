@@ -1,5 +1,5 @@
 import { crossTenant, systemDb, type Store, type Tx } from "@app/db";
-import { audit, customersFromChange, encryptTokenFields, endBillingForStore, logger, purgeStoreData, seedInitialSync, syncBillingFromShopify, type TokenResponse } from "@app/core";
+import { audit, customersFromChange, encryptTokenFields, endBillingForStore, logger, purgeEmailStoreData, purgeStoreData, seedInitialSync, syncBillingFromShopify, type TokenResponse } from "@app/core";
 import { randomToken } from "@app/shared";
 import { HttpError, type Deps } from "./context.js";
 
@@ -118,11 +118,23 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
         });
       });
       // Its old rows carry the old workspace_id (and RLS hides them from the new one), so start
-      // from a clean slate. Customer data requests still to be answered follow the store; their
-      // email hash is keyed to the old workspace, and the new one holds no email data for it yet.
+      // from a clean slate: its synced data, its customers' email records, and what the merchant
+      // entered for it (costs and business events, which a Disconnect keeps). Customer data
+      // requests still to be answered follow the store, and so does the alert asking to answer
+      // them; their email hash is keyed to the old workspace, and the new one holds no email data
+      // for it yet. The old workspace's other alerts about the store go.
       await purgeStoreData(existing.id, deps.fetchImpl);
+      await purgeEmailStoreData(existing.id);
+      await systemDb.$transaction([
+        systemDb.storeExpense.deleteMany({ where: { storeId: existing.id } }),
+        systemDb.expenseCategory.deleteMany({ where: { storeId: existing.id } }),
+        systemDb.storeExpenseSettings.deleteMany({ where: { storeId: existing.id } }),
+        systemDb.businessEvent.deleteMany({ where: { storeId: existing.id } }),
+      ]);
       await systemDb.syncJob.deleteMany({ where: { storeId: existing.id } });
       await systemDb.dataRequest.updateMany({ where: { storeId: existing.id }, data: { workspaceId, emailHash: null } });
+      await systemDb.alert.updateMany({ where: { storeId: existing.id, code: "privacy_request", resolvedAt: null }, data: { workspaceId } });
+      await systemDb.alert.deleteMany({ where: { storeId: existing.id, workspaceId: { not: workspaceId } } });
       await dropEmptyShopWorkspace(existing.workspaceId);
     } else if (existing) {
       store = await systemDb.store.update({

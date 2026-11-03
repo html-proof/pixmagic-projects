@@ -109,7 +109,7 @@ describe("the store's own costs", () => {
     const { a, ws, store } = await owner();
     for (const bad of [
       { ...plan, amount: -5 },
-      { ...plan, cadence: "daily" },
+      { ...plan, cadence: "hourly" },
       { ...plan, category: "tips" },
       { ...plan, startsOn: "2026-02-30" },
       { ...plan, endsOn: "2024-12-31" },

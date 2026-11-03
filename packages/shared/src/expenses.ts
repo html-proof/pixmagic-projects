@@ -1,10 +1,16 @@
 /**
- * A store's own costs (Settings → Costs, docs/kpis.md "Costs and net profit"): what neither
- * Shopify, its profit report nor the ad platforms can tell bizinsights. Shopify's plan and app
+ * A store's own costs (Profit & Loss and Settings → Costs, docs/kpis.md "Costs and net profit"): what
+ * neither Shopify, its profit report nor the ad platforms can tell bizinsights. Shopify's plan and app
  * bills, staff, rent, shipping labels, payment fees, ads on platforms that aren't connected... The
- * owner enters each one with how often it is paid; bizinsights spreads it over the days it covers
- * and adds up the days of the dates on screen. Nothing here is estimated or read from an outside
- * service: every figure is the merchant's own, and the page says so.
+ * owner enters each one with how it is worked out and how often it is paid; bizinsights spreads it
+ * over the days it covers and adds up the days of the dates on screen. Nothing here is estimated or
+ * read from an outside service: every figure is the merchant's own, and the page says so.
+ *
+ * A cost is worked out one of four ways (`EXPENSE_METHODS`): a fixed amount, paid once or every day,
+ * week, fortnight, month, quarter, six months or year (each payment covers the days up to the next
+ * one, `occurrences`); a percentage of each day's sales; or an amount per order or per item sold.
+ * A recurring payment the owner changed one by one (or skipped) is kept as it was paid (`entries`),
+ * so changing the cost later never rewrites a month already reported.
  *
  * Net profit is shown only when every input is known (`netProfit`): Shopify's cost of goods sold,
  * the connected ad accounts' spend, and these costs for dates the owner has said the list is
@@ -19,8 +25,9 @@ import { addDays, daysBetweenInclusive, isDay, type DateRange } from "./dates";
 import { z } from "./zod";
 
 /**
- * What a cost is for, in the order Settings → Costs offers them: the fixed costs first, then the
- * variable ones, then those below operating profit (EXPENSE_CATEGORY_GROUP).
+ * What a cost is for, in the order the cost form offers them: the fixed costs first, then the
+ * variable ones, the advertising ones, then those below operating profit (EXPENSE_CATEGORY_SECTION).
+ * The workbook the owner kept before bizinsights (docs/kpis.md "Profit and loss") has a row for each.
  */
 export const EXPENSE_CATEGORIES = [
   "rent",
@@ -31,13 +38,19 @@ export const EXPENSE_CATEGORIES = [
   "internet_phone",
   "insurance",
   "maintenance",
+  "operating",
+  "fixed_ads",
   "other",
   "shipping",
+  "pick_pack",
   "packaging",
   "payment_fees",
+  "merchant_fees",
   "commissions",
-  "marketing",
+  "product_cost_adjustment",
   "other_variable",
+  "marketing",
+  "ad_spend_adjustment",
   "interest",
   "income_tax",
   "depreciation",
@@ -54,13 +67,19 @@ export const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
   internet_phone: "Internet and phone",
   insurance: "Insurance",
   maintenance: "Maintenance contracts",
+  operating: "Operating expenses",
+  fixed_ads: "Fixed advertising costs",
   other: "Other fixed costs",
   shipping: "Shipping and delivery",
+  pick_pack: "Pick, pack and 3PL",
   packaging: "Packaging",
   payment_fees: "Payment and transaction fees",
+  merchant_fees: "Merchant fees",
   commissions: "Sales commissions",
-  marketing: "Other marketing",
+  product_cost_adjustment: "Product cost adjustment",
   other_variable: "Other variable costs",
+  marketing: "Other paid channels",
+  ad_spend_adjustment: "Ad spend adjustment",
   interest: "Loan interest",
   income_tax: "Income tax",
   depreciation: "Depreciation",
@@ -68,22 +87,23 @@ export const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
 };
 
 /**
- * How a cost counts in the profit figures (docs/kpis.md "Profit and loss"):
+ * Where a cost sits in the profit and loss (docs/kpis.md "Profit and loss"):
+ *  - `advertising`: ads paid outside the connected ad accounts (other paid channels) and corrections
+ *    to the synced spend, counted with the ad spend;
+ *  - `variable`: what goes up and down with the selling (shipping, pick and pack, packaging, payment
+ *    and merchant fees, commissions), beside the product costs;
  *  - `fixed`: what the store pays whatever it sells (rent, salaries, software, insurance...), kept as
- *    a monthly (or weekly, yearly) cost and spread over the days it covers, never taken off whole
+ *    a monthly (or weekly, yearly...) cost and spread over the days it covers, never taken off whole
  *    from one day's sales;
- *  - `variable`: what goes up and down with the selling (shipping, packaging, payment fees,
- *    commissions, marketing), beside the product costs and the ad spend;
  *  - `non_operating`: what comes off operating profit to give net profit (loan interest, income tax,
  *    depreciation).
- * Every one of them is the owner's own figure; together they are "your costs".
  */
-export const EXPENSE_GROUPS = ["fixed", "variable", "non_operating"] as const;
-export type ExpenseGroup = (typeof EXPENSE_GROUPS)[number];
+export const EXPENSE_SECTIONS = ["advertising", "variable", "fixed", "non_operating"] as const;
+export type ExpenseSection = (typeof EXPENSE_SECTIONS)[number];
 
-export const EXPENSE_GROUP_LABEL: Record<ExpenseGroup, string> = { fixed: "Fixed costs", variable: "Variable costs", non_operating: "Below operating profit" };
+export const EXPENSE_SECTION_LABEL: Record<ExpenseSection, string> = { advertising: "Advertising", variable: "Variable costs", fixed: "Fixed costs", non_operating: "Below operating profit" };
 
-export const EXPENSE_CATEGORY_GROUP: Record<ExpenseCategory, ExpenseGroup> = {
+export const EXPENSE_CATEGORY_SECTION: Record<ExpenseCategory, ExpenseSection> = {
   rent: "fixed",
   staff: "fixed",
   software: "fixed",
@@ -92,27 +112,135 @@ export const EXPENSE_CATEGORY_GROUP: Record<ExpenseCategory, ExpenseGroup> = {
   internet_phone: "fixed",
   insurance: "fixed",
   maintenance: "fixed",
+  operating: "fixed",
+  fixed_ads: "fixed",
   other: "fixed",
   shipping: "variable",
+  pick_pack: "variable",
   packaging: "variable",
   payment_fees: "variable",
+  merchant_fees: "variable",
   commissions: "variable",
-  marketing: "variable",
+  product_cost_adjustment: "variable",
   other_variable: "variable",
+  marketing: "advertising",
+  ad_spend_adjustment: "advertising",
   interest: "non_operating",
   income_tax: "non_operating",
   depreciation: "non_operating",
   other_non_operating: "non_operating",
 };
 
+/**
+ * How a cost counts in operating and net profit: advertising is a variable cost (it goes with the
+ * selling), the other sections are their own group.
+ */
+export const EXPENSE_GROUPS = ["fixed", "variable", "non_operating"] as const;
+export type ExpenseGroup = (typeof EXPENSE_GROUPS)[number];
+
+export const EXPENSE_GROUP_LABEL: Record<ExpenseGroup, string> = { fixed: "Fixed costs", variable: "Variable costs", non_operating: "Below operating profit" };
+
+export const groupOfSection = (s: ExpenseSection): ExpenseGroup => (s === "advertising" ? "variable" : s);
+
+export const EXPENSE_CATEGORY_GROUP = Object.fromEntries(EXPENSE_CATEGORIES.map((c) => [c, groupOfSection(EXPENSE_CATEGORY_SECTION[c])])) as Record<ExpenseCategory, ExpenseGroup>;
+
 /** The categories of one group, in EXPENSE_CATEGORIES' order. */
 export const categoriesOf = (g: ExpenseGroup): ExpenseCategory[] => EXPENSE_CATEGORIES.filter((c) => EXPENSE_CATEGORY_GROUP[c] === g);
+/** The categories of one section, in EXPENSE_CATEGORIES' order. */
+export const categoriesIn = (s: ExpenseSection): ExpenseCategory[] => EXPENSE_CATEGORIES.filter((c) => EXPENSE_CATEGORY_SECTION[c] === s);
 
-/** How often a cost is paid: `once` on its day, the others every week, month or year from it. */
-export const EXPENSE_CADENCES = ["once", "weekly", "monthly", "yearly"] as const;
+export const isExpenseCategory = (s: string): s is ExpenseCategory => (EXPENSE_CATEGORIES as readonly string[]).includes(s);
+
+/**
+ * A category the owner made for their store (rent split out by site, warehouse, a Shopify app they
+ * want on a line of its own...), with the section its costs go in. A cost names it `custom:<id>`.
+ */
+export interface CustomCategory {
+  id: string;
+  name: string;
+  section: ExpenseSection;
+}
+
+/** The most categories one store makes: enough for any chart of accounts, few enough for one menu. */
+export const MAX_CUSTOM_CATEGORIES = 50;
+
+const CUSTOM_KEY = /^custom:[a-z0-9]{8,40}$/;
+export const customCategoryKey = (id: string) => `custom:${id}`;
+export const isCustomCategoryKey = (s: string) => CUSTOM_KEY.test(s);
+/** The id in `custom:<id>`; null for a built-in category. */
+export const customCategoryId = (key: string) => (isCustomCategoryKey(key) ? key.slice(7) : null);
+
+/** The section a category's costs go in; a custom category's own, or null when the store has no such category. */
+export function categorySection(key: string, customs: readonly CustomCategory[] = []): ExpenseSection | null {
+  if (isExpenseCategory(key)) return EXPENSE_CATEGORY_SECTION[key];
+  const id = customCategoryId(key);
+  return customs.find((c) => c.id === id)?.section ?? null;
+}
+
+/** A category's name as the pages show it. */
+export function categoryLabel(key: string, customs: readonly CustomCategory[] = []): string {
+  if (isExpenseCategory(key)) return EXPENSE_CATEGORY_LABEL[key];
+  const id = customCategoryId(key);
+  return customs.find((c) => c.id === id)?.name ?? "Category removed";
+}
+
+/** What POST and PUT …/expense-categories take: a name and the section its costs go in. */
+export const customCategoryInput = z
+  .object({
+    name: z.string().trim().min(1, "Give the category a name").max(60),
+    section: z.enum(EXPENSE_SECTIONS),
+  })
+  .strict();
+export type CustomCategoryInput = z.infer<typeof customCategoryInput>;
+
+/** How often a cost is paid: `once` on its day, the others every day, week... year from it. */
+export const EXPENSE_CADENCES = ["once", "daily", "weekly", "fortnightly", "monthly", "quarterly", "half_yearly", "yearly"] as const;
 export type ExpenseCadence = (typeof EXPENSE_CADENCES)[number];
+export type RecurringCadence = Exclude<ExpenseCadence, "once">;
 
-export const EXPENSE_CADENCE_LABEL: Record<ExpenseCadence, string> = { once: "Once", weekly: "Every week", monthly: "Every month", yearly: "Every year" };
+export const EXPENSE_CADENCE_LABEL: Record<ExpenseCadence, string> = {
+  once: "Once",
+  daily: "Every day",
+  weekly: "Every week",
+  fortnightly: "Every fortnight",
+  monthly: "Every month",
+  quarterly: "Every quarter",
+  half_yearly: "Every six months",
+  yearly: "Every year",
+};
+
+/** The days or months from one payment to the next: a month keeps the first payment's day of the month. */
+const CADENCE_STEP: Record<RecurringCadence, { days: number } | { months: number }> = {
+  daily: { days: 1 },
+  weekly: { days: 7 },
+  fortnightly: { days: 14 },
+  monthly: { months: 1 },
+  quarterly: { months: 3 },
+  half_yearly: { months: 6 },
+  yearly: { months: 12 },
+};
+
+/**
+ * How a cost's amount is worked out:
+ *  - `amount`: a sum of money, paid once or every period (`cadence`);
+ *  - `percent`: a share of each day's sales (`PERCENT_BASES`), as a payment provider's fee is;
+ *  - `per_order`, `per_item`: an amount for each order, or each item sold, that day (a shipping
+ *    label, a box).
+ * The last three follow the store's sales day by day, from `startsOn` to `endsOn`: they have no cadence.
+ */
+export const EXPENSE_METHODS = ["amount", "percent", "per_order", "per_item"] as const;
+export type ExpenseMethod = (typeof EXPENSE_METHODS)[number];
+
+export const EXPENSE_METHOD_LABEL: Record<ExpenseMethod, string> = { amount: "Fixed amount", percent: "Percentage of sales", per_order: "Amount per order", per_item: "Amount per item sold" };
+
+/**
+ * What a percentage is taken of, each day: total sales (what customers paid, tax included: Shopify's
+ * "Total sales"), revenue (net sales + shipping and fees charged, before tax) or net sales.
+ */
+export const PERCENT_BASES = ["total_sales", "revenue", "net_sales"] as const;
+export type PercentBase = (typeof PERCENT_BASES)[number];
+
+export const PERCENT_BASE_LABEL: Record<PercentBase, string> = { total_sales: "Total sales (tax included)", revenue: "Revenue (before tax)", net_sales: "Net sales" };
 
 /** The most costs one store keeps: enough for any shop's bills, few enough to add up on every dashboard answer. */
 export const MAX_EXPENSES = 200;
@@ -120,30 +248,66 @@ export const MAX_EXPENSES = 200;
 export const MAX_EXPENSE_AMOUNT = 100_000_000;
 
 const day = z.string().refine((s) => isDay(s), "Pick a real date (YYYY-MM-DD)");
+const cents = (n: number) => Math.abs(Math.round(n * 100) - n * 100) < 1e-6;
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .default(null)
+    .transform((s) => (s ? s : null));
 
-/** What POST .../expenses and PUT .../expenses/:id take: one cost, whole. */
+/**
+ * What POST .../expenses and PUT .../expenses/:id take: one cost, whole. The fields added with the
+ * Profit & Loss page (description, method, percentBase, currency, vendor, paymentMethod) may be left
+ * out, as the cost form before it sent none of them.
+ */
 export const expenseInput = z
   .object({
     name: z.string().trim().min(1, "Give the cost a name").max(80),
-    category: z.enum(EXPENSE_CATEGORIES),
-    /** In the store's currency, cents at most. */
+    description: optionalText(500),
+    /** A built-in category (EXPENSE_CATEGORIES) or one of the store's own (`custom:<id>`). */
+    category: z.string().refine((c) => isExpenseCategory(c) || isCustomCategoryKey(c), "Pick a category"),
+    method: z.enum(EXPENSE_METHODS).default("amount"),
+    /**
+     * In the store's currency, cents at most; for `percent`, the percentage (2.5 is 2.5%). Below 0
+     * only for an amount paid once: a refund, a credit, a correction.
+     */
     amount: z
       .number()
-      .min(0)
+      .min(-MAX_EXPENSE_AMOUNT)
       .max(MAX_EXPENSE_AMOUNT)
-      .refine((n) => Math.abs(Math.round(n * 100) - n * 100) < 1e-6, "Amounts go to the cent at most"),
+      .refine(cents, "Amounts go to the cent at most"),
+    /** What a percentage is of; null for every other method. */
+    percentBase: z.enum(PERCENT_BASES).nullable().default(null),
+    /** The currency it was entered in: the store's (null: the store's, as before the field). */
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/, "A currency code, like AUD")
+      .nullable()
+      .default(null),
+    /** How often an amount is paid. A percentage or an amount per order or item follows each day's sales: it is kept as `daily`. */
     cadence: z.enum(EXPENSE_CADENCES),
     /** The store-local day it starts (for `once`, the day it was paid). */
     startsOn: day,
     /** The last day it applies to; null while it goes on. A cost paid once has none. */
     endsOn: day.nullable(),
-    note: z.string().trim().max(500).nullable(),
+    vendor: optionalText(80),
+    paymentMethod: optionalText(40),
+    note: optionalText(500),
   })
   .strict()
+  .transform((x) => (x.method === "amount" ? x : { ...x, cadence: "daily" as const }))
   .refine((x) => x.endsOn === null || x.endsOn >= x.startsOn, { message: "It can't end before it starts", path: ["endsOn"] })
-  .refine((x) => x.cadence !== "once" || x.endsOn === null, { message: "A cost paid once has no end date", path: ["endsOn"] });
+  .refine((x) => x.cadence !== "once" || x.endsOn === null, { message: "A cost paid once has no end date", path: ["endsOn"] })
+  .refine((x) => x.amount >= 0 || (x.method === "amount" && x.cadence === "once"), { message: "Only an amount paid once can be below 0 (a refund or a credit)", path: ["amount"] })
+  .refine((x) => x.method !== "percent" || (x.amount > 0 && x.amount <= 100), { message: "A percentage is above 0 and at most 100", path: ["amount"] })
+  .refine((x) => (x.method === "percent") === (x.percentBase !== null), { message: "Say what the percentage is of", path: ["percentBase"] });
 
 export type ExpenseInput = z.infer<typeof expenseInput>;
+/** What a client sends: the fields added later may be left out. */
+export type ExpenseInputSent = z.input<typeof expenseInput>;
 
 /**
  * The days a store is open, Monday = 0 … Sunday = 6, as the costs are spread over them
@@ -169,19 +333,48 @@ export type ExpenseSettingsInput = z.infer<typeof expenseSettingsInput>;
 /** One cost as the API returns it. */
 export interface Expense extends ExpenseInput {
   id: string;
+  /** From which day its payments stopped while it is paused (null: not paused). Recurring amounts only. */
+  pausedFrom: string | null;
+  /** The cost this one took over from when its terms changed from a payment on (null: none). */
+  replacesId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+/** A payment of a recurring cost as it was recorded: changed one by one, or skipped (amount 0). */
+export interface ExpensePayment {
+  due: string;
+  amount: number;
+}
+
 /** The part of a cost this module works with. */
-export type ExpenseTerms = Pick<ExpenseInput, "amount" | "cadence" | "startsOn" | "endsOn">;
+export interface ExpenseTerms {
+  amount: number;
+  cadence: ExpenseCadence;
+  startsOn: string;
+  endsOn: string | null;
+  /** Absent: `amount` (costs saved before the other methods). */
+  method?: ExpenseMethod;
+  percentBase?: PercentBase | null;
+  /** While paused, no payment falls due from this day on. */
+  pausedFrom?: string | null;
+  /** Payments recorded with another amount than the cost's (or skipped): each replaces the one due that day. */
+  payments?: readonly ExpensePayment[];
+}
+
+/** A day's sales as the costs that follow them read them (`percent`, `per_order`, `per_item`). */
+export interface DayFigures {
+  /** What customers paid, tax and duties included. */
+  totalSales: number;
+  /** Net sales + shipping and fees charged, before tax. */
+  revenue: number;
+  netSales: number;
+  orders: number;
+  units: number;
+}
 
 /** The days of `d`'s calendar month: 28, 29, 30 or 31. */
 export const daysInMonth = (d: string) => new Date(Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)), 0)).getUTCDate();
-const monthStart = (d: string) => `${d.slice(0, 8)}01`;
-const monthEnd = (d: string) => `${d.slice(0, 8)}${String(daysInMonth(d)).padStart(2, "0")}`;
-const yearStart = (d: string) => `${d.slice(0, 4)}-01-01`;
-const yearEnd = (d: string) => `${d.slice(0, 4)}-12-31`;
 const later = (a: string, b: string) => (a > b ? a : b);
 const earlier = (a: string, b: string) => (a < b ? a : b);
 /** Monday = 0 … Sunday = 6, as the Profit sheet counts weekdays. */
@@ -202,72 +395,244 @@ export function operatingDaysBetween(from: string, to: string, open: readonly nu
   return count;
 }
 
+/** `months` calendar months after `start`, on its day of the month or the month's last day (31 Jan → 28 Feb). */
+function addMonthsKeepingDay(start: string, months: number): string {
+  const y = Number(start.slice(0, 4));
+  const m = Number(start.slice(5, 7)) - 1 + months;
+  const year = y + Math.floor(m / 12);
+  const month = ((m % 12) + 12) % 12;
+  const first = `${String(year).padStart(4, "0")}-${String(month + 1).padStart(2, "0")}-01`;
+  const dayOfMonth = Math.min(Number(start.slice(8, 10)), daysInMonth(first));
+  return `${first.slice(0, 8)}${String(dayOfMonth).padStart(2, "0")}`;
+}
+
+/** The day the k-th payment (0: the first) of a recurring cost falls due. */
+export function dueDate(startsOn: string, cadence: RecurringCadence, k: number): string {
+  const step = CADENCE_STEP[cadence];
+  return "days" in step ? addDays(startsOn, step.days * k) : addMonthsKeepingDay(startsOn, step.months * k);
+}
+
+/** A payment of a cost: the day it falls due and the days it pays for, up to the next one. */
+export interface Occurrence {
+  due: string;
+  /** The days it counts on: from its due day to the day before the next payment, or the cost's end when that comes first. */
+  from: string;
+  to: string;
+  /** The day before the next payment: the payment pays for every day from `due` to it. */
+  periodTo: string;
+  /** The payment's amount: the cost's, or a recorded one's (`payments`). */
+  amount: number;
+  /** True when it is a recorded payment's amount. */
+  recorded: boolean;
+}
+
+/** The first payment that may cover `from`: a few before it, worked out without walking from the start. */
+function firstIndexNear(startsOn: string, cadence: RecurringCadence, from: string): number {
+  if (from <= startsOn) return 0;
+  const step = CADENCE_STEP[cadence];
+  if ("days" in step) return Math.max(0, Math.floor((daysBetweenInclusive(startsOn, from) - 1) / step.days) - 1);
+  const months = (Number(from.slice(0, 4)) - Number(startsOn.slice(0, 4))) * 12 + Number(from.slice(5, 7)) - Number(startsOn.slice(5, 7));
+  return Math.max(0, Math.floor(months / step.months) - 1);
+}
+
+/**
+ * The payments of an amount (`method` amount) whose days overlap [from, to], in order: a cost paid
+ * once has one, on its day; a recurring one a payment every period from `startsOn` (a month keeps its
+ * day of the month), each covering the days to the next one. None falls due after `endsOn`, nor from
+ * `pausedFrom` on while it is paused; when the cost ends before the next payment, the last one counts
+ * on the days to its end only (16–20 Oct of a weekly cost due on 16 Oct: 5 of that payment's 7 days).
+ * A recorded payment (`payments`) keeps its own amount.
+ */
+export function occurrences(e: ExpenseTerms, from: string, to: string): Occurrence[] {
+  if ((e.method ?? "amount") !== "amount" || from > to) return [];
+  const recorded = new Map((e.payments ?? []).map((p) => [p.due, p.amount]));
+  const paid = (due: string, amount: number) => (recorded.has(due) ? { amount: recorded.get(due)!, recorded: true } : { amount, recorded: false });
+  if (e.cadence === "once") return e.startsOn >= from && e.startsOn <= to ? [{ due: e.startsOn, from: e.startsOn, to: e.startsOn, periodTo: e.startsOn, ...paid(e.startsOn, e.amount) }] : [];
+  const cadence = e.cadence;
+  const out: Occurrence[] = [];
+  for (let k = firstIndexNear(e.startsOn, cadence, from); ; k++) {
+    const due = dueDate(e.startsOn, cadence, k);
+    if (due > to || (e.endsOn && due > e.endsOn) || (e.pausedFrom && due >= e.pausedFrom)) break;
+    const last = addDays(dueDate(e.startsOn, cadence, k + 1), -1);
+    if (last < from) continue;
+    out.push({ due, from: due, to: e.endsOn && e.endsOn < last ? e.endsOn : last, periodTo: last, ...paid(due, e.amount) });
+  }
+  return out;
+}
+
+/** The payments of a recurring amount that have fallen due by `today` (the ones bizinsights records), from its first. */
+export function dueOccurrences(e: ExpenseTerms, today: string): Occurrence[] {
+  if ((e.method ?? "amount") !== "amount" || e.cadence === "once" || e.startsOn > today) return [];
+  return occurrences(e, e.startsOn, today).filter((o) => o.due <= today);
+}
+
+/** The next payment after `today` (null: none to come: it is paid once, has ended, or is paused). */
+export function nextDue(e: ExpenseTerms, today: string): string | null {
+  if ((e.method ?? "amount") !== "amount") return null;
+  if (e.cadence === "once") return e.startsOn > today ? e.startsOn : null;
+  if (e.pausedFrom) return null;
+  const cadence = e.cadence;
+  for (let k = firstIndexNear(e.startsOn, cadence, today); k < 100_000; k++) {
+    const due = dueDate(e.startsOn, cadence, k);
+    if (e.endsOn && due > e.endsOn) return null;
+    if (due > today) return due;
+  }
+  return null;
+}
+
+/**
+ * The share of `o` that falls in [from, to]: its amount spread over the days it pays for that the
+ * store is open (every day when it is open on none of them), counting only its days up to the cost's end.
+ */
+function occurrenceShare(o: Occurrence, from: string, to: string, open: readonly number[]): number {
+  const a = later(o.from, from);
+  const b = earlier(o.to, to);
+  if (a > b) return 0;
+  if (o.from === o.periodTo) return o.amount;
+  const openDays = operatingDaysBetween(o.from, o.periodTo, open);
+  const days = openDays > 0 ? openDays : daysBetweenInclusive(o.from, o.periodTo);
+  const inside = openDays > 0 ? operatingDaysBetween(a, b, open) : daysBetweenInclusive(a, b);
+  return (o.amount * inside) / days;
+}
+
+/** A day's amount of a cost that follows the sales: never below 0 on a day refunds outweigh sales. */
+function rateOn(e: ExpenseTerms, f: DayFigures): number {
+  switch (e.method) {
+    case "percent":
+      return (Math.max(0, f[e.percentBase === "total_sales" ? "totalSales" : e.percentBase === "net_sales" ? "netSales" : "revenue"]) * e.amount) / 100;
+    case "per_order":
+      return Math.max(0, f.orders) * e.amount;
+    case "per_item":
+      return Math.max(0, f.units) * e.amount;
+    default:
+      return 0;
+  }
+}
+
+/** The calendar months a payment of these cadences is spread over: a month, a quarter, a half year or a year (all from January). */
+const CALENDAR_MONTHS: Partial<Record<ExpenseCadence, number>> = { monthly: 1, quarterly: 3, half_yearly: 6, yearly: 12 };
+
+/** The calendar period of `months` months (aligned to January) that `d` is in. */
+function calendarBlock(d: string, months: number): { from: string; to: string } {
+  const y = d.slice(0, 4);
+  const first = Math.floor((Number(d.slice(5, 7)) - 1) / months) * months + 1;
+  const from = `${y}-${String(first).padStart(2, "0")}-01`;
+  const lastMonth = `${y}-${String(first + months - 1).padStart(2, "0")}-01`;
+  return { from, to: `${lastMonth.slice(0, 8)}${String(daysInMonth(lastMonth)).padStart(2, "0")}` };
+}
+
 /**
  * How much of a cost falls in `range`, to the cent:
- *  - `once`: all of it, when its day is in the range;
- *  - `weekly`: a seventh of it for each day it runs in the range;
- *  - `monthly`: for each calendar month, its share of that month's days (a whole month is the whole
- *    amount, whatever the month's length: 28, 29, 30 or 31 days; 10 days of a 30-day month a third);
- *  - `yearly`: the same by calendar year (a leap year has 366 days).
+ *  - an amount paid once: all of it, on its day;
+ *  - paid every month, quarter, six months or year: for each calendar month (quarter, half year,
+ *    year) its share of that period's days, so a whole month is the whole amount, whatever the
+ *    month's length (28, 29, 30 or 31 days; 10 days of a 30-day month a third). Each period counts
+ *    the payment that falls due in it: a recorded one's own amount (`payments`), none while paused;
+ *  - paid every day, week or fortnight: each payment over the days it covers (`occurrences`), a
+ *    seventh of a weekly one a day;
+ *  - a percentage, or an amount per order or item: each day's own, from the day's sales (`figures`;
+ *    a day with none counts nothing).
  * Days before it starts or after it ends count nothing.
  *
  * `open`: the weekdays the store is open (`operatingWeekdays`). A recurring cost is then spread over
  * the days it is open only: a month's cost over that month's open days, a week's over the open days
- * of a week, a year's over the year's; a closed day carries none of it. A whole month is still the
- * whole amount. Empty: every calendar day.
+ * of a week; a closed day carries none of it. A whole month is still the whole amount. Empty: every
+ * calendar day.
  */
-export function expenseInRange(e: ExpenseTerms, range: DateRange, open: readonly number[] = []): number {
-  if (e.cadence === "once") return e.startsOn >= range.from && e.startsOn <= range.to ? e.amount : 0;
-  const from = later(range.from, e.startsOn);
-  const to = e.endsOn ? earlier(range.to, e.endsOn) : range.to;
-  if (from > to) return 0;
-  const all = everyDay(open);
-  if (e.cadence === "weekly") return Math.round((e.amount * operatingDaysBetween(from, to, open) * 100) / (all ? 7 : new Set(open).size)) / 100;
-  let share = 0;
-  for (let start = from; start <= to; ) {
-    const monthly = e.cadence === "monthly";
-    const end = earlier(monthly ? monthEnd(start) : yearEnd(start), to);
-    const period = monthly ? [monthStart(start), monthEnd(start)] : [yearStart(start), yearEnd(start)];
-    share += operatingDaysBetween(start, end, open) / operatingDaysBetween(period[0]!, period[1]!, open);
-    start = addDays(end, 1);
+export function expenseInRange(e: ExpenseTerms, range: DateRange, open: readonly number[] = [], figures?: (day: string) => DayFigures | undefined): number {
+  if ((e.method ?? "amount") === "amount") {
+    const months = CALENDAR_MONTHS[e.cadence];
+    if (!months) {
+      const share = occurrences(e, range.from, range.to).reduce((a, o) => a + occurrenceShare(o, range.from, range.to, open), 0);
+      return Math.round(share * 100) / 100;
+    }
+    const from = later(range.from, e.startsOn);
+    const to = e.endsOn ? earlier(range.to, e.endsOn) : range.to;
+    const recorded = new Map((e.payments ?? []).map((p) => [p.due, p.amount]));
+    let share = 0;
+    for (let start = from; start <= to; ) {
+      const block = calendarBlock(start, months);
+      const end = earlier(block.to, to);
+      // The payment due in this period: exactly one for a cost paid every `months` months.
+      const due = occurrences(e.pausedFrom ? { ...e, pausedFrom: null } : e, block.from, block.to).find((o) => o.due >= block.from && o.due <= block.to)?.due;
+      const amount = due && e.pausedFrom && due >= e.pausedFrom ? 0 : due && recorded.has(due) ? recorded.get(due)! : e.amount;
+      const days = operatingDaysBetween(block.from, block.to, open);
+      share += days > 0 ? (amount * operatingDaysBetween(start, end, open)) / days : 0;
+      start = addDays(end, 1);
+    }
+    return Math.round(share * 100) / 100;
   }
-  return Math.round(e.amount * share * 100) / 100;
+  if (!figures) return 0;
+  const from = later(range.from, e.startsOn);
+  let to = e.endsOn ? earlier(range.to, e.endsOn) : range.to;
+  if (e.pausedFrom) to = earlier(to, addDays(e.pausedFrom, -1));
+  let total = 0;
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const f = figures(d);
+    if (f) total += Math.round(rateOn(e, f) * 100);
+  }
+  return total / 100;
 }
 
-/** The costs of a range added up: in all, by category (biggest first), by group, and how many costs count. */
+/** A cost as the totals read it: its terms, category, and the section that category goes in (absent: the built-in category's). */
+export type CostOfCategory = ExpenseTerms & { category: string; section?: ExpenseSection };
+
+/** The section a cost counts in: its own when given, else its built-in category's; a category no longer there is a fixed cost. */
+export const sectionOfCost = (e: { category: string; section?: ExpenseSection }): ExpenseSection => e.section ?? (isExpenseCategory(e.category) ? EXPENSE_CATEGORY_SECTION[e.category] : "fixed");
+
+/** The costs of a range added up: in all, by category (biggest first), by section and group, and how many costs count. */
 export interface ExpenseTotals {
   total: number;
-  byCategory: Array<{ category: ExpenseCategory; amount: number }>;
-  /** Fixed, variable and below-operating-profit costs (EXPENSE_CATEGORY_GROUP), each to the cent. */
+  /** A category is a built-in one (EXPENSE_CATEGORIES) or the store's own (`custom:<id>`). */
+  byCategory: Array<{ category: string; section: ExpenseSection; amount: number }>;
+  /** Fixed, variable and below-operating-profit costs (advertising among the variable ones), each to the cent. */
   byGroup: Record<ExpenseGroup, number>;
+  /** Advertising, variable, fixed and below-operating-profit costs, each to the cent. */
+  bySection: Record<ExpenseSection, number>;
   /** Costs with anything in the range. */
   counted: number;
 }
 
-export function expenseTotals(expenses: ReadonlyArray<ExpenseTerms & { category: ExpenseCategory }>, range: DateRange, open: readonly number[] = []): ExpenseTotals {
-  const cents = new Map<ExpenseCategory, number>();
+export function expenseTotals(expenses: readonly CostOfCategory[], range: DateRange, open: readonly number[] = [], figures?: (day: string) => DayFigures | undefined): ExpenseTotals {
+  const byCategory = new Map<string, { section: ExpenseSection; cents: number }>();
   let counted = 0;
   for (const e of expenses) {
-    const c = Math.round(expenseInRange(e, range, open) * 100);
+    const c = Math.round(expenseInRange(e, range, open, figures) * 100);
     if (c === 0) continue;
     counted += 1;
-    cents.set(e.category, (cents.get(e.category) ?? 0) + c);
+    addCents(byCategory, e, c);
   }
-  return totalsOf(cents, counted);
+  return totalsOf(byCategory, counted);
 }
 
-/** Category cents as totals: biggest first, ties in EXPENSE_CATEGORIES' order. */
-export function totalsOf(cents: ReadonlyMap<ExpenseCategory, number>, counted: number): ExpenseTotals {
+/** Adds `c` cents of `e` to its category's. */
+export function addCents(to: Map<string, { section: ExpenseSection; cents: number }>, e: { category: string; section?: ExpenseSection }, c: number) {
+  const was = to.get(e.category);
+  to.set(e.category, { section: was?.section ?? sectionOfCost(e), cents: (was?.cents ?? 0) + c });
+}
+
+const categoryOrder = (c: string) => {
+  const i = (EXPENSE_CATEGORIES as readonly string[]).indexOf(c);
+  return i < 0 ? EXPENSE_CATEGORIES.length : i;
+};
+
+/** Category cents as totals: biggest first, ties in EXPENSE_CATEGORIES' order (the store's own after them). */
+export function totalsOf(cents: ReadonlyMap<string, { section: ExpenseSection; cents: number }>, counted: number): ExpenseTotals {
   const byCategory = [...cents]
-    .filter(([, c]) => c !== 0)
-    .map(([category, c]) => ({ category, amount: c / 100 }))
-    .sort((a, b) => b.amount - a.amount || EXPENSE_CATEGORIES.indexOf(a.category) - EXPENSE_CATEGORIES.indexOf(b.category));
-  const group = { fixed: 0, variable: 0, non_operating: 0 };
-  for (const [category, c] of cents) group[EXPENSE_CATEGORY_GROUP[category] ?? "fixed"] += c;
+    .filter(([, c]) => c.cents !== 0)
+    .map(([category, c]) => ({ category, section: c.section, amount: c.cents / 100 }))
+    .sort((a, b) => b.amount - a.amount || categoryOrder(a.category) - categoryOrder(b.category) || (a.category < b.category ? -1 : 1));
+  const section: Record<ExpenseSection, number> = { advertising: 0, variable: 0, fixed: 0, non_operating: 0 };
+  let total = 0;
+  for (const c of cents.values()) {
+    section[c.section] += c.cents;
+    total += c.cents;
+  }
   return {
-    total: [...cents.values()].reduce((a, c) => a + c, 0) / 100,
+    total: total / 100,
     byCategory,
-    byGroup: { fixed: group.fixed / 100, variable: group.variable / 100, non_operating: group.non_operating / 100 },
+    byGroup: { fixed: section.fixed / 100, variable: (section.variable + section.advertising) / 100, non_operating: section.non_operating / 100 },
+    bySection: { advertising: section.advertising / 100, variable: section.variable / 100, fixed: section.fixed / 100, non_operating: section.non_operating / 100 },
     counted,
   };
 }

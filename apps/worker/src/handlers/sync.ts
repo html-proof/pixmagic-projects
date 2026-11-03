@@ -269,6 +269,7 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         const r = await runBulkOrders(data, store, deps, {
           gql: (query, variables) => gql(deps, store, pace, query, variables),
           ordersSearch: () => search,
+          jobCreatedAt: job.createdAt,
           ...(reading ? { historyYear: { ownsExport: (id: string) => reading.bulkOperationId === id, exportStarted: (id: string) => recordHistoryExport(reading.id, id) } } : {}),
         });
         if (!r.done || !(await finished())) return { ok: true, continued: true };

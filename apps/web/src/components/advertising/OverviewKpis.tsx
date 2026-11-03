@@ -2,16 +2,17 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { BadgeDollarSign, Eye, Footprints, MousePointerClick, Percent, Receipt, ShoppingCart, Store, Target, Trophy, Wallet, type LucideIcon } from "lucide-react";
-import type { AdsenseTotals, AdSeriesDay, AdTotals } from "@app/shared/ads";
+import { claimsAddUp, type AdsenseTotals, type AdSeriesDay, type AdTotals } from "@app/shared/ads";
 import { delta } from "@app/shared/kpi";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BEING_READ, ChangeNote, ComparedLine, SoFarNote, UNAVAILABLE, UnavailableNote } from "@/components/dashboard/AdsCommon";
 import { shownFigures } from "@/components/dashboard/adFigures";
 import { DemoChip } from "@/components/dashboard/Advertising";
-import { fmtDay, fmtMoneyWhole, fmtSpan, fmtTimes } from "@/components/dashboard/format";
+import { fmtDay, fmtMoneyWhole, fmtSpan, fmtTimes, plural } from "@/components/dashboard/format";
 import { Sparkline } from "@/components/dashboard/HomeCards";
 import { Delta } from "@/components/dashboard/Primitives";
-import type { AdAccount, AdFigures, AdsModule, Overview } from "@/components/dashboard/types";
+import type { AdAccount, AdFigures, AdsModule, AdsProviderFigures, Overview } from "@/components/dashboard/types";
+import { PLATFORM } from "./AdvertisingUi";
 
 // ---------------------------------------------------------------------------
 // The Advertising overview's headline figures (the owner's design: a tinted icon, the figure, its
@@ -19,7 +20,9 @@ import type { AdAccount, AdFigures, AdsModule, Overview } from "@/components/das
 // compared with and the change, on the days the API compared (an ad module's `compared`: whole days
 // only, never against days an account hasn't stored); with no comparison, why. The platforms' own counts
 // are named as theirs; the store's own sales per unit of spend (MER) and its visits are Shopify's and the
-// pixel's; AdSense's earnings are money in, on a tile of their own, never added to the spend.
+// pixel's; AdSense's earnings are money in, on a tile of their own, never added to the spend. With more
+// than one platform counted, their purchases are never added up (both can claim one order:
+// `claimsAddUp`): each platform's own attributed revenue has a tile, beside the store's net sales.
 // ---------------------------------------------------------------------------
 
 const TINT = {
@@ -90,6 +93,7 @@ function FigureTile<T>({
   delta: change,
   invert = false,
   neutral = false,
+  extra,
   ...tile
 }: Omit<Parameters<typeof Tile>[0], "value" | "children"> & {
   fig: AdFigures<T>;
@@ -101,6 +105,8 @@ function FigureTile<T>({
   delta: number | null;
   invert?: boolean;
   neutral?: boolean;
+  /** A line more under the change, from the same figures. */
+  extra?: (t: T) => ReactNode;
 }) {
   const { totals, through } = shownFigures(fig);
   if (!totals) {
@@ -126,6 +132,7 @@ function FigureTile<T>({
           )}
         </>
       )}
+      {extra?.(totals)}
     </Tile>
   );
 }
@@ -147,6 +154,8 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
   const series = a?.series ?? [];
   const spark = (pick: (d: AdSeriesDay) => number | null) => series.map(pick);
   const visits = visitsFromAds(ov);
+  // More than one platform counted: their purchases are each one's own claim, never added up.
+  const apart = !!a && !claimsAddUp(a.byProvider.map((p) => p.provider));
   return (
     <section aria-label="Advertising at a glance" className="space-y-3">
       {a?.demo && (
@@ -159,9 +168,20 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
           <FigureTile<AdTotals> label="Total ad spend" icon={Wallet} tint="blue" source={`All platforms · ${a.currency}`} fig={a} accounts={counted} ov={ov} pick={(t) => money(t.spend)} delta={a.deltas.spend} neutral spark={spark((d) => d.spend)} testid="kpi-spend" />
           <FigureTile<AdTotals> label="Link clicks" icon={MousePointerClick} tint="violet" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : fmtNum(t.linkClicks))} delta={a.deltas.linkClicks} spark={spark((d) => d.linkClicks)} testid="kpi-clicks" />
           <FigureTile<AdTotals> label="Impressions" icon={Eye} tint="green" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => fmtNum(t.impressions)} delta={changeOn(a, (t) => t.impressions)} spark={spark((d) => d.impressions)} testid="kpi-impressions" />
-          <FigureTile<AdTotals> label="Purchases" icon={ShoppingCart} tint="amber" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtNum(t.purchases))} delta={a.deltas.purchases} spark={spark((d) => d.purchases)} testid="kpi-purchases" />
-          <FigureTile<AdTotals> label="Ad revenue (purchase value)" icon={BadgeDollarSign} tint="teal" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchaseValue === null ? null : money(t.purchaseValue))} delta={a.deltas.purchaseValue} spark={spark((d) => d.purchaseValue)} testid="kpi-purchase-value" />
-          <FigureTile<AdTotals> label="ROAS" icon={Trophy} tint="violet" source="Purchase value ÷ spend · platforms' own" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtTimes(t.roas))} delta={a.deltas.roas} spark={spark(dailyRoas)} testid="kpi-roas" />
+          {apart ? (
+            <>
+              <NetSalesTile ov={ov} a={a} vs={vs} />
+              {a.byProvider.map((p) => (
+                <ClaimTile key={p.provider} a={a} p={p} ov={ov} />
+              ))}
+            </>
+          ) : (
+            <>
+              <FigureTile<AdTotals> label="Purchases" icon={ShoppingCart} tint="amber" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtNum(t.purchases))} delta={a.deltas.purchases} spark={spark((d) => d.purchases)} testid="kpi-purchases" />
+              <FigureTile<AdTotals> label="Ad revenue (purchase value)" icon={BadgeDollarSign} tint="teal" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchaseValue === null ? null : money(t.purchaseValue))} delta={a.deltas.purchaseValue} spark={spark((d) => d.purchaseValue)} testid="kpi-purchase-value" />
+              <FigureTile<AdTotals> label="ROAS" icon={Trophy} tint="violet" source="Purchase value ÷ spend · platforms' own" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtTimes(t.roas))} delta={a.deltas.roas} spark={spark(dailyRoas)} testid="kpi-roas" />
+            </>
+          )}
         </div>
       )}
       <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @6xl:grid-cols-6">
@@ -169,7 +189,8 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
           <>
             <FigureTile<AdTotals> small label="Average CPC" icon={Target} tint="blue" source="Spend ÷ link clicks" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.cpc === null ? "—" : money(t.cpc))} delta={changeOn(a, (t) => t.cpc)} invert testid="kpi-cpc" />
             <FigureTile<AdTotals> small label="CTR" icon={Percent} tint="violet" source="Link clicks ÷ impressions" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.ctr === null ? "—" : fmtPct(t.ctr))} delta={changeOn(a, (t) => t.ctr)} testid="kpi-ctr" />
-            <FigureTile<AdTotals> small label="Cost per purchase" icon={Receipt} tint="amber" source="Spend ÷ platforms' purchases" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : t.costPerPurchase === null ? "—" : money(t.costPerPurchase))} delta={changeOn(a, (t) => t.costPerPurchase)} invert testid="kpi-cost-per-purchase" />
+            {/* Each platform's cost per purchase is on its own tile above when there are several. */}
+            {!apart && <FigureTile<AdTotals> small label="Cost per purchase" icon={Receipt} tint="amber" source="Spend ÷ platforms' purchases" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : t.costPerPurchase === null ? "—" : money(t.costPerPurchase))} delta={changeOn(a, (t) => t.costPerPurchase)} invert testid="kpi-cost-per-purchase" />}
             <Tile small label={`Sales per ${fmtMoneyWhole(1, a.currency)} of ads (MER)`} icon={Store} tint="green" source="Shopify net sales ÷ ad spend" value={s ? fmtTimes(s.salesPerSpend) : UNAVAILABLE} testid="kpi-mer">
               {s ? (
                 vs ? (
@@ -211,12 +232,89 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
           />
         )}
       </div>
+      {a && apart && (
+        <p className="text-xs text-muted" data-testid="ads-claims-apart">
+          {a.byProvider.map((p) => PLATFORM[p.provider].name).join(" and ")} each credit purchases to their own ads, by their own rules, and can both claim the same order: these tiles
+          show each one&apos;s purchases, attributed revenue and ROAS on its own, never added up. Your store&apos;s net sales, and its sales per {fmtMoneyWhole(1, a.currency)} of ads (MER), count every order once.
+        </p>
+      )}
       {sense && (
         <p className="text-xs text-muted print:hidden">
           AdSense is what ads shown on your site earn you: <Link href="/advertising/adsense" className="font-medium text-accent hover:underline">see AdSense</Link>.
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * Across platforms, the store's own sales for the dates (Shopify's net sales, in the store's currency):
+ * every order once, whatever brought it, where the platforms' claims can count one twice. Its change
+ * only on the whole dates the ads compared, as MER's; never beside the demo's simulated figures.
+ */
+function NetSalesTile({ ov, a, vs }: { ov: Overview; a: AdsModule; vs: string | null }) {
+  const s = a.sales ?? null;
+  const net = a.demo ? null : (s?.netSales ?? ov.modules.sales_overview?.current.netSales ?? null);
+  const money = (n: number) => fmtMoney(n, ov.store.currency);
+  return (
+    <Tile
+      label="Your store's net sales"
+      icon={Store}
+      tint="amber"
+      source="Shopify · every order once"
+      value={net === null ? UNAVAILABLE : money(net)}
+      spark={net === null ? undefined : ov.modules.sales_overview?.series.map((d) => d.netSales)}
+      testid="kpi-net-sales"
+    >
+      {net === null ? (
+        <p>{a.demo ? "Not with the demo's simulated spend among the accounts." : "Needs permission to see your sales."}</p>
+      ) : (
+        <>
+          {s && vs && (
+            <>
+              <p>
+                <Delta value={s.deltas.netSales} label={vs} />
+              </p>
+              <p>Before: {money(s.previous!.netSales)}</p>
+            </>
+          )}
+          <p>Every order counted once, whatever brought it.</p>
+        </>
+      )}
+    </Tile>
+  );
+}
+
+/**
+ * One platform's own attributed revenue (the purchase value it credits to its ads) with its purchases,
+ * ROAS and cost per purchase: that platform's claim, named as its own, never added to another's.
+ */
+function ClaimTile({ a, p, ov }: { a: AdsModule; p: AdsProviderFigures; ov: Overview }) {
+  const name = PLATFORM[p.provider].name;
+  const money = (n: number) => fmtMoney(n, a.currency);
+  const days = a.seriesByProvider.find((x) => x.provider === p.provider)?.series ?? [];
+  return (
+    <FigureTile<AdTotals>
+      label={`${name} attributed revenue`}
+      icon={BadgeDollarSign}
+      tint={p.provider === "meta" ? "teal" : "violet"}
+      source={`Claimed by ${name}`}
+      fig={p}
+      accounts={a.accounts.filter((acc) => acc.counted && acc.provider === p.provider)}
+      ov={ov}
+      pick={(t) => (t.purchaseValue === null ? null : money(t.purchaseValue))}
+      delta={p.deltas.purchaseValue}
+      spark={days.map((d) => d.purchaseValue)}
+      extra={(t) =>
+        t.purchases !== null && (
+          <p className="truncate" data-testid={`kpi-claim-${p.provider}-figures`}>
+            {plural(t.purchases, "purchase")} · ROAS {fmtTimes(t.roas)}
+            {t.costPerPurchase !== null ? ` · ${money(t.costPerPurchase)} a purchase` : ""}
+          </p>
+        )
+      }
+      testid={`kpi-claim-${p.provider}`}
+    />
   );
 }
 

@@ -3,7 +3,7 @@ import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseRe
 import type { AdPlatformSource, AdsFromShopify } from "@app/shared/adsFromShopify";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
-import type { ExpenseTotals } from "@app/shared/expenses";
+import type { CustomCategory, ExpenseTotals } from "@app/shared/expenses";
 import type { ProfitCost } from "@app/shared/profit";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
@@ -259,6 +259,19 @@ export interface AdsModule extends AdFigures<AdTotals> {
   /** The one currency everything below is in. */
   currency: string;
   accounts: Array<AdAccount<AdSpendProvider>>;
+  /**
+   * The accounts not added up, in another currency than `currency` (the Google Ads demo aside, its
+   * spend being simulated): none of their spend is in any figure here, so a cost worked out from it
+   * is short ("Left out: …", leftOutWords in profitFigures.ts). Absent from older answers.
+   */
+  leftOut?: Array<Pick<AdAccount<AdSpendProvider>, "id" | "provider" | "accountId" | "name" | "currency">>;
+  /**
+   * Whether the purchases, purchase value, ROAS and cost per purchase of the totals and `series` are
+   * one platform's (claimsAddUp in @app/shared/ads). False with Meta and Google both counted: they then
+   * add up claims that can overlap (both may credit one order), so a page shows each platform's own
+   * (`byProvider`, `seriesByProvider`) instead. Absent from older answers.
+   */
+  claimsAddUp?: boolean;
   /** The figures compared with (from `compared.previous`): all null when nothing is compared. */
   previous: AdsComparison;
   deltas: AdsDeltas;
@@ -702,6 +715,8 @@ export interface ExpensesModule {
   operatingWeekdays?: number[];
   /** The Profit sheet's question only: every cost's terms (no names or notes), to spread over its own columns. */
   terms?: ProfitCost[];
+  /** The store's own cost categories, for their names (absent from older answers). */
+  categories?: CustomCategory[];
 }
 
 /** Customers who ordered in a range (the customers module): each once, however many orders. */

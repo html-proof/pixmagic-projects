@@ -26,6 +26,7 @@ import {
   type VerifyJob,
   type WebhookJobData,
   pruneReconciliations,
+  recordDuePaymentsEverywhere,
   failInventoryPass,
   failHistoryWindows,
   type WhatsappJob,
@@ -563,12 +564,17 @@ async function runSweeps(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync records prune failed; the next tick tries again");
       return null;
     });
+    // Profit & Loss: each recurring cost's payments that fell due, recorded once (a retry records none twice).
+    const expensePayments = await recordDuePaymentsEverywhere().catch((err: unknown) => {
+      logger.error({ err }, "recurring cost payments sweep failed; the next tick tries again");
+      return null;
+    });
     // Zapier last: the alerts the sweeps above raised (with no queue at hand) go out in this same tick.
     const zapier = await sweepZapierDeliveries(deps).catch((err: unknown) => {
       logger.error({ err }, "zapier sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyMarketing, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, zapier };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyMarketing, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, expensePayments, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

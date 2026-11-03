@@ -201,10 +201,14 @@ account passing hides that), and a logo plus brand verification are what make Go
    reads the clipboard, refuses anything that doesn't start with `GOCSPX-` and prints names only.
    CloudFormation reads it from `insights/production/app` at deploy time (it is never in the
    template); without it the Auth stack's update fails and the deploy rolls back.
-5. **The client id**: GitHub → the repository → Settings → Environments → `production` →
-   Environment variables → `GOOGLE_SIGNIN_CLIENT_ID` = the client id (`….apps.googleusercontent.com`).
-6. **Deploy**: Actions → Deploy to AWS → Run workflow, on `main` (a merge of only docs starts no
-   deploy). The workflow passes `-c googleClientId=…`; the Auth stack creates the Google identity
+5. **The client id** (`….apps.googleusercontent.com`; not a secret, every Google sign-in page's
+   address carries it): the environment's `googleClientId` in `infra/cdk/lib/config.ts`, merged to
+   `main` (production's is there). The GitHub variable `GOOGLE_SIGNIN_CLIENT_ID` (Settings →
+   Environments → `production` → Environment variables), when set, overrides it in every Deploy run;
+   it holds the same id.
+6. **Deploy**: the merge's own Deploy to AWS run, or Actions → Deploy to AWS → Run workflow, on
+   `main` (a merge of only docs starts no deploy). The workflow passes `-c googleClientId=…`, empty
+   without the GitHub variable, which keeps config.ts's; the Auth stack creates the Google identity
    provider, adds it to the app client and sets `COGNITO_IDENTITY_PROVIDERS` to `Google` in the
    runtime parameter. Its step "Restart the functions on changed runtime settings" then publishes the
    functions again (each restart writes the run's id into their description, so every change
@@ -226,7 +230,8 @@ nothing links), `name`, `given_name`, `family_name` and `picture` (the account's
 to the pool's attributes. Changing the mapping is an in-place update of the provider, made by the
 Deploy run like any other change; a user's attributes follow at their next Google sign-in.
 
-To switch it off again, delete the GitHub variable and run Deploy to AWS.
+To switch it off again, empty the environment's `googleClientId` in config.ts, delete the GitHub
+variable (it would put the id back) and ship the change through `main`.
 
 ## 3. The app
 
@@ -422,9 +427,10 @@ code emailed after the password) follows the same rules, enforced by the API on 
   works nowhere any more; signing up again with the same address links to its account (section 4).
 - **Google: `redirect_mismatch` / `invalid_request` at Cognito**: the app client's callback URL
   must be exactly `<APP_URL>/auth/callback`; Google's must be the stack's `ProviderRedirectUri`.
-- **`/api/auth/config` still says `"google": false` after section 2**: the GitHub variable is on
-  the `production` environment (not the repository), and the Deploy run's step "Restart the
-  functions on changed runtime settings" ran; otherwise restart them by hand
+- **`/api/auth/config` still says `"google": false` after section 2**: the client id is in
+  config.ts on `main` (or the GitHub variable is on the `production` environment, not the
+  repository), its Deploy run succeeded, and the run's step "Restart the functions on changed
+  runtime settings" ran; otherwise restart them by hand
   ([aws-deployment.md](aws-deployment.md), "Restarting the functions").
 - **Google: `redirect_uri_mismatch`**: the OAuth client's Authorized redirect URI must be exactly
   the stack's `ProviderRedirectUri` (section 2, step 3).

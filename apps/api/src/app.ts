@@ -28,6 +28,7 @@ import { checkoutRoutes } from "./routes/checkouts.js";
 import { collectionRoutes } from "./routes/collections.js";
 import { customerAnalyticsRoutes } from "./routes/customerAnalytics.js";
 import { adsRoutes } from "./routes/ads.js";
+import { adLinkRoutes } from "./routes/adLinks.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
 import { integrationsRoutes } from "./routes/integrations.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
@@ -246,6 +247,7 @@ export function buildApp(deps: Deps): App {
   collectionRoutes(app, deps);
   customerAnalyticsRoutes(app, deps);
   adsRoutes(app, deps);
+  adLinkRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
   integrationsRoutes(app, deps);
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.

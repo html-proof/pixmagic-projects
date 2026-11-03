@@ -174,7 +174,12 @@ export const BULK_OPERATION_RUN_QUERY = /* GraphQL */ `
   }
 `;
 
-/** The shop's current bulk operation for this app, whoever started it (i.e. an earlier attempt). */
+/**
+ * The shop's current bulk operation for this app, whoever started it: an earlier attempt of the same
+ * job, or another import's, maybe made with other fields. The worker adopts it only when Shopify
+ * created it since the sync job was, and otherwise cancels one still running (adoptOrSubmit in
+ * apps/worker/src/bulkOrders.ts).
+ */
 export const CURRENT_BULK_OPERATION = /* GraphQL */ `
   query CurrentBulk {
     currentBulkOperation(type: QUERY) {

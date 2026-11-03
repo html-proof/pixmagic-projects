@@ -83,6 +83,11 @@ const PUBLIC = new Set([
   "POST /staff/invitations/accept",
   "POST /invitations/preview",
   "POST /invitations/open",
+  // A connect link's page (routes/adLinks.ts): the link's own 256-bit token, in the body.
+  "POST /ads/links/open",
+  "POST /ads/links/start",
+  "POST /ads/links/choose",
+  "POST /ads/links/cancel",
   // Zapier's server exchanging a code or a refresh token: authenticated by bizinsights' client secret (zapierOAuth.ts).
   "POST /oauth/token",
 ]);

@@ -45,21 +45,32 @@ export default function GoogleAdsAnalyticsPage() {
   const choices = status.data ? [...(status.data.demo.connection ? [status.data.demo.connection] : []), ...status.data.production.connections] : [];
   const chosen = (picked && choices.find((c) => c.id === picked)?.id) || status.data?.demo.connection?.id || status.data?.production.connections[0]?.id || null;
   const dates = r.asking?.qs ?? null;
-  const path = base && dates && chosen ? `${base}/analytics?${dates}&connection=${encodeURIComponent(chosen)}` : null;
+  const query = base && dates && chosen ? `${dates}&connection=${encodeURIComponent(chosen)}` : null;
+  const path = query ? `${base}/analytics?${query}` : null;
   const analytics = useApi<GoogleAdsAnalytics>(path);
-  const { reload, setData } = analytics;
+  const { reload } = analytics;
   const a = analytics.data;
   const syncing = a?.account.status === "demo_syncing" || (!!a && !a.account.lastSyncedAt);
-  // A first sync on its way: the figures fill in by themselves.
+  // A first sync on its way: the figures fill in by themselves. The look every few seconds is at the
+  // overview, the stored figures only (the whole page's answer reads a real account's device and country
+  // splits from Google); the page is read again once, when the account says its figures are in.
+  const overviewPath = query ? `${base}/analytics/overview?${query}` : null;
   useEffect(() => {
-    if (!syncing || !path) return;
+    if (!syncing || !overviewPath) return;
+    // One look at a time: a slow answer isn't asked for again while it's on its way.
+    let looking = false;
     const t = window.setInterval(() => {
-      api<GoogleAdsAnalytics>(path)
-        .then((v) => setData(v))
-        .catch(() => undefined);
+      if (looking) return;
+      looking = true;
+      api<Pick<GoogleAdsAnalytics, "account">>(overviewPath)
+        .then((v) => (v.account.status !== "demo_syncing" && v.account.lastSyncedAt ? reload() : undefined))
+        .catch(() => undefined)
+        .finally(() => {
+          looking = false;
+        });
     }, SYNCING_EVERY_MS);
     return () => window.clearInterval(t);
-  }, [syncing, path, setData]);
+  }, [syncing, overviewPath, reload]);
 
   if (storesStatus !== "ready") return <StoresPending />;
   if (!store || !base) {

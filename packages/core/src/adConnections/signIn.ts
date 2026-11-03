@@ -56,6 +56,13 @@ export interface AdSignInState {
    * refresh token, holdsReusableRefreshToken). A sign-in that then brings none asks again with it.
    */
   consent?: boolean;
+  /**
+   * Started from a connect link (links.ts): the link's id, and its token for the way back to the link's
+   * page. `userId` is then the member who made the link, not the person signing in, who needs no
+   * bizinsights login: the callback checks the link instead of the session.
+   */
+  link?: string;
+  linkToken?: string;
 }
 
 const stateKey = (nonce: string) => `oauth:ads:${nonce}`;
@@ -69,7 +76,7 @@ const stateKey = (nonce: string) => `oauth:ads:${nonce}`;
 export async function startAdSignIn(
   coord: Coord,
   nonce: string,
-  input: Pick<AdSignInState, "userId" | "workspaceId" | "storeId" | "provider">,
+  input: Pick<AdSignInState, "userId" | "workspaceId" | "storeId" | "provider" | "link" | "linkToken">,
   opts: { consent?: boolean } = {},
 ): Promise<string | null> {
   const { provider } = input;

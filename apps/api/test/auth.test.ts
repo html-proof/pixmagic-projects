@@ -967,6 +967,29 @@ describe("account security", () => {
     expect((await systemDb.membership.findMany({ where: { workspaceId: ws } })).map((m) => m.userId)).toEqual([partner.user.id]);
     expect(await systemDb.authEvent.findFirst({ where: { type: "account_deleted" } })).toMatchObject({ userId: null });
   });
+
+  it("shows a sole owner every workspace that goes with the account, and deletes them only once all are confirmed", async () => {
+    const owner = await signIn(ctx, "u1", "a@x.com");
+    const solo = await createWorkspace(ctx, owner.headers, "Solo Shop");
+    const second = await createWorkspace(ctx, owner.headers, "Second Shop");
+    const listed = (await get("/auth/account/deletion", owner.headers)).json().workspaces as Array<{ id: string }>;
+    expect(listed.map((w) => w.id).sort()).toEqual([solo, second].sort());
+    // The code is sent: the dialog sends the confirmed list back with it.
+    expect((await post("/auth/account/delete/code", {}, owner.headers)).json()).toMatchObject({ ok: true });
+    const code = emailedDeletionCode(ctx, "a@x.com");
+    const del = (workspaces: string[]) => post("/auth/account/delete", { confirm: "DELETE", code, workspaces }, owner.headers);
+    // One of the two confirmed: refused with both named and what to do, and the code isn't spent.
+    const one = await del([solo]);
+    expect(one.statusCode).toBe(409);
+    expect(one.json()).toMatchObject({ error: "sole_owner", workspaces: expect.arrayContaining(["Solo Shop", "Second Shop"]), owned: expect.arrayContaining([expect.objectContaining({ id: second })]) });
+    expect(one.json().message).toMatch(
+      /^You're the only owner of (Solo Shop, Second Shop|Second Shop, Solo Shop)\. Deleting your account deletes those workspaces and their stores' data too: confirm that in the Delete account dialog, or make someone else an owner first\.$/,
+    );
+    expect(await systemDb.workspace.count({ where: { id: { in: [solo, second] } } })).toBe(2);
+    expect((await del([second, solo])).statusCode).toBe(200);
+    expect(await systemDb.workspace.count({ where: { id: { in: [solo, second] } } })).toBe(0);
+    expect(await systemDb.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
+  });
 });
 
 describe("signing in with an emailed code (Cognito EMAIL_OTP)", () => {

@@ -273,7 +273,10 @@ test("Settings → Security: deleting the account takes DELETE and a code emaile
   const { rows } = await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1", [email]);
   const ws = rows[0].workspace_id as string;
   await page.goto("/settings/security");
-  await section(page, "Delete account").getByRole("button", { name: "Delete my account" }).click();
+  const card = section(page, "Delete account");
+  // A workspace it alone owns goes with it; the card says so before the dialog opens.
+  await expect(card).toContainText("A workspace you're the only owner of is deleted with your account, with its stores' data.");
+  await card.getByRole("button", { name: "Delete my account" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete your account?" });
   // No password box: beside one, the browser's password manager filled the address into the DELETE box.
   await expect(dialog.locator('input[type="password"]')).toHaveCount(0);

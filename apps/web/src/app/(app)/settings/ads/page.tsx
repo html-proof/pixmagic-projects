@@ -12,6 +12,7 @@ import { AdPlatformPanel } from "@/components/settings/ads/AdPlatformPanel";
 import { AdsenseSites } from "@/components/settings/ads/AdsenseSites";
 import { AdvertisingHero } from "@/components/settings/ads/AdvertisingHero";
 import { ChooseAccounts } from "@/components/settings/ads/ChooseAccounts";
+import { ConnectLinkPanel } from "@/components/settings/ads/ConnectLinkPanel";
 import { callbackErrorMessage, isAdProvider, WRONG_LOGIN } from "@/components/settings/ads/callbackErrors";
 import { loginConnectedNote } from "@/components/settings/ads/LoginPanel";
 import { AD_STATE, type AdProvider } from "@/lib/adConnections";
@@ -158,6 +159,8 @@ export default function AdAccountsPage() {
           onCheckLogin={(l) => void ads.checkLogin(l)}
           onDisconnectLogin={(l) => void ads.disconnectLogin(l)}
           rowExtra={(c) => (c.provider === "adsense" ? <AdsenseSites c={c} base={base} manage={manage} onSaved={ads.reload} /> : null)}
+          // Whoever runs the store's Facebook ads connects them through a link, without a bizinsights login.
+          extra={p === "meta" && manage && data?.configured.meta ? <ConnectLinkPanel base={base} storeName={storeName} /> : undefined}
         />
       ))}
 

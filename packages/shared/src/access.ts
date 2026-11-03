@@ -57,6 +57,7 @@ export const ACCESS_KEYS = [
   "finance.breakdown",
   "finance.refunds",
   "finance.reports",
+  "finance.costs",
   "integrations.status",
   "integrations.manage",
   "staff.team",
@@ -153,6 +154,15 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax, shipping and total sales", reveals: "How total sales add up: gross sales, discounts and returns to net sales, plus shipping, duties, fees and tax, the store's Custom sales calculation, the check against Shopify's sales report, and the store's own costs (Settings → Costs). Without it, the headline shows net sales. Shopify's gross profit and cost of goods sold need \"View costs and stock value\" too." },
   { key: "finance.refunds", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View refunds", reveals: "Returns (money refunded, cancelled or edited out), the return rate and how many orders had one." },
   { key: "finance.reports", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View financial reports", reveals: "This year's sales month by month, compared with last year." },
+  {
+    key: "finance.costs",
+    module: "finance",
+    kind: "manage",
+    sensitive: true,
+    requires: ["finance.breakdown"],
+    label: "Manage costs",
+    reveals: "Add, change, pause and remove the store's own costs on Profit & Loss and in Settings → Costs: one-off and recurring costs, their payments, the store's own cost categories, and from which day the list is complete. Every change is in the audit log.",
+  },
   // ---- Integrations
   { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work, and the email setup: sending accounts, domains, templates, automations and sending totals. Never passwords, tokens or keys." },
   {
@@ -217,6 +227,7 @@ export const ACCESS_CAPABILITY: Partial<Record<AccessKey, string | readonly stri
   "finance.breakdown": "sales_overview",
   "finance.refunds": "refunds",
   "finance.reports": "sales_overview",
+  "finance.costs": "sales_overview",
 };
 
 /** Whether a permission shows anything, given the store data (capability ids) a connected store has granted. */

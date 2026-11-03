@@ -41,7 +41,7 @@ approval; until then the card says why it has no figure, never shows 0.
 | Abandoned checkouts, recovered, their value | Orders → Abandoned checkouts | Shopify's checkout list (Admin API, `read_orders`) | Exact counts; value up to 2,000 a window | Last 60 days only; section "Abandoned checkouts (Shopify)" |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
-| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own |
+| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own, never added across platforms |
 | Estimated earnings | AdSense | AdSense | Its estimate | Finalized by AdSense after the month ends; only the store's chosen sites |
 
 Currency is always the store's (shop money), days the store's time zone, as in Shopify's reports.
@@ -379,23 +379,26 @@ carries; nothing is estimated.
   abandonment" (`redactOverview`).
 - **Sales vs ad spend** (the mock's "Revenue vs Expenses"): net sales per day beside the ad spend
   per day. Ad spend is the only cost known day by day; it is drawn only when the ad accounts report
-  in the store's currency and none is the Google Ads demo, as for MER.
+  in the store's currency and none is the Google Ads demo, as for MER. An account in another currency
+  isn't in it, and the panel says so ("Left out: EU shop (EUR), in another currency.").
 - **Business profit overview**: net sales less the costs bizinsights can see, the product costs
   (Shopify's cost of goods sold from its profit report, for the dates as a whole; while that report
-  gives none, the items sold at their cost per item: **Product costs** below), the ad spend for the whole range
-  (`ads.current`, null while a day is missing) and the owner's own costs (Settings → Costs). It is
-  **net profit** only when every input is known and the owner has marked the costs list complete for
-  the dates ("Costs and net profit" below); otherwise it says "Not net profit" and why, and sales with
-  no cost recorded in Shopify are named. Shopify counts a sale with no cost per item at no cost, so
-  when no sale of the dates had one, its cost of goods sold of 0 isn't a cost: product costs read "Not
-  recorded in Shopify" and aren't taken off. Its share is called a **margin** only when the cost of
-  every sale was taken off; with ad spend alone, or sales with no cost recorded, it is "of net sales",
-  since sales less ad spend is no margin. Team & Access: the Product costs line, here and in Expenses
-  breakdown, is only for a member shown Shopify's cost of goods sold ("View costs and stock value"
-  with the breakdown, `costsOn`); without it there is no net profit.
-- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two,
-  the owner's costs by category). The mock's shipping, software and other expenses come only from
-  the owner's costs: nothing else holds them.
+  gives none, the items sold at their cost per item: **Product costs** below), the ad spend for the
+  whole range (`ads.current`, null while a day is missing; with an account in another currency, only
+  the accounts in the store's currency, taken off as "ads in AUD", with a "Left out" line) and the
+  owner's own costs (Settings → Costs). It is **net profit** only when every input is known and the
+  owner has marked the costs list complete for the dates ("Costs and net profit" below); otherwise
+  it says "Not net profit" and why, and sales with no cost recorded in Shopify are named. Shopify
+  counts a sale with no cost per item at no cost, so when no sale of the dates had one, its cost of
+  goods sold of 0 isn't a cost: product costs read "Not recorded in Shopify" and aren't taken off.
+  Its share is called a **margin** only when the cost of every sale was taken off; with ad spend
+  alone, or sales with no cost recorded, it is "of net sales", since sales less ad spend is no
+  margin. Team & Access: the Product costs line, here and in Expenses breakdown, is only for a
+  member shown Shopify's cost of goods sold ("View costs and stock value" with the breakdown,
+  `costsOn`); without it there is no net profit.
+- **Expenses breakdown**: the same costs as a ring (ad spend split by platform when there are two, the
+  accounts left out in another currency named under it, the owner's costs by category). The mock's
+  shipping, software and other expenses come only from the owner's costs: nothing else holds them.
 - **Product costs** (both panels): Shopify's cost of goods sold while its profit report answers
   (`profit`, with `read_reports`) or is on its way ("Loading…"). Otherwise (the reports not granted,
   or Shopify refused or failed) the `product_costs` module (`productCosts` in
@@ -516,10 +519,10 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
 | Click-through rate (CTR) | link clicks ÷ impressions | |
 | Cost per click (CPC) | spend ÷ link clicks | |
 | Cost per 1,000 impressions (CPM) | spend × 1000 ÷ impressions | |
-| Purchases (platform's count) | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` of the conversion actions in the Purchase category (`segments.conversion_action_category = PURCHASE`, its own query) | The platform's own attribution, never the store's orders. `null` while any day added up has none read yet |
-| Purchase value | the matching `action_values` (Meta), `metrics.conversions_value` of those Purchase actions (Google) | As for purchases |
-| Return on ad spend (ROAS) | purchase value ÷ spend | Per platform it is that platform's own figure ("Google Ads-reported ROAS", "Meta-reported ROAS"); across platforms their claims added up, which can overlap |
-| Cost per purchase | spend ÷ purchases | |
+| Purchases (platform's count) | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` of the conversion actions in the Purchase category (`segments.conversion_action_category = PURCHASE`, its own query) | The platform's own attribution, never the store's orders. `null` while any day added up has none read yet. Never shown added across platforms (below) |
+| Purchase value (attributed revenue) | the matching `action_values` (Meta), `metrics.conversions_value` of those Purchase actions (Google) | As for purchases: what the platform credits to its ads, not the store's sales |
+| Return on ad spend (ROAS) | purchase value ÷ spend | Each platform's own figure ("Google Ads-reported ROAS", "Meta-reported ROAS"); never one ROAS across platforms (below) |
+| Cost per purchase | spend ÷ purchases | Per platform, as ROAS |
 | Conversions (all conversion actions) | Google: `metrics.conversions`, every action set to count in Conversions (leads, sign-ups, calls and purchases) | Shown on the Google Ads card and the Ads panel only, never called or added up as purchases. Meta's conversions are its purchases |
 | Cost per conversion | spend ÷ conversions | |
 | Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency and every day of the ad spend is known |
@@ -550,6 +553,33 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   least recently updated account last synced (`updatedAt`), shown as "updated 12 minutes ago".
 - **Total ad spend** is a card of its own only when two platforms or more are counted (they are then
   in one currency).
+- **Purchases are never added across platforms.** Meta and Google each credit purchases to their own
+  ads by their own rules (Meta's attribution windows, Google's conversion settings), and both can claim
+  the same order, so their purchases, purchase value, ROAS and cost per purchase added together can
+  count it twice. Spend, impressions and clicks are each platform's own and add up. With one platform
+  counted, the module's totals are its figures. With Meta and Google both counted, the module's
+  `claimsAddUp` is false (`claimsAddUp` in packages/shared/src/ads.ts): its purchase totals add the
+  claims up, so the pages show each platform's own from `byProvider` instead, named as its claim
+  ("Meta Ads attributed revenue", "Claimed by Google Ads"), and as the one figure across platforms the
+  store's own sales: Shopify's net sales and the sales per unit of ad spend (MER), which count every
+  order once. The Advertising overview has a tile per platform (its attributed revenue, purchases, ROAS
+  and cost per purchase) beside "Your store's net sales" in place of the Purchases, Ad revenue, ROAS
+  and Cost per purchase tiles; Profitability gives each platform's attributed revenue, ROAS and profit
+  before product costs under the spend added up, never an advertising profit worked out from their sum.
+  The overview's Performance overview chart draws the spend added up beside each platform's purchase
+  value, and a ROAS line per platform (its purchase value ÷ its own spend), from `seriesByProvider`.
+  Key insights (`advertisingInsights`) set the break-even ROAS against each platform's own ROAS, name
+  the one that falls short, say what each platform's ROAS means, and give the purchase value's change
+  and "spend up while purchases fell" per platform on its own comparison. The Meta Ads and Google Ads
+  pages' details (`AdsDetail`) give a figure per platform of its purchases (their value, its ROAS and
+  cost per purchase) in place of the four added up, in "In short" and on the daily spend chart's days
+  too, and "What you could do next" names each platform's ROAS beside MER. The Advertising summary CSV
+  (`ads_summary`) gives each platform's purchases, purchase value, ROAS and conversions as rows of
+  their own ("Meta Ads purchases (its own count)") under a "Purchases: Each platform's own" row, never
+  the totals' sum. On the dashboard, Business health's Ads line names each platform's purchase value
+  and ROAS ("Meta Ads credits … in purchases to its ads (2.4×) and Google Ads … (1.9×), each by its own
+  count"), and Overview's details have a "Return on ad spend (Meta Ads' own)" row per platform in place
+  of the platforms' one (`businessHealth`, `OverviewDetail`).
 - **Changes compare whole days only.** `compared` holds the days each side is worked out on and their
   totals: while the range reaches a day still running (the store's today, or a counted account's today
   in its own zone; `lastWholeAdDay`), both sides lose that many days at their end (`trimmed`), and the
@@ -564,7 +594,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
   either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
   and a store day the account hasn't reached yet is missing, not 0.
-- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in.
+- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in: `accounts` marks them `counted: false`, and `leftOut` lists them once (the Google Ads demo aside, its spend being simulated). Nothing is converted, so a cost worked out from the spend shown is short by theirs: wherever ad spend is shown as a cost (Sales vs ad spend, Business profit overview, Expenses breakdown, Profitability, the Profit sheet's spend rows) it says "Left out: EU shop (EUR), in another currency.", and net profit isn't given ("Costs and net profit"). The Profit sheet's profit and loss takes none of that spend off: its ad spend is "Not usable" with the same sentence, and its profit is missing data ("Profit and loss (Profit sheet)"). The Advertising summary CSV has a "Left out" row under the spend; the Advertising overview's "Left out of these figures" line lists the same accounts, never the demo.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
 - **Clicks, reach and visits are different counts, never added together.** Meta's reach is people Meta
   showed an ad to; impressions, clicks and Meta's landing page views are each platform's own count; Shopify's
@@ -790,6 +820,12 @@ store's **profit and loss** for a day and a month ("Profit and loss" below).
 | Meta / Google ad spend, Total ad spend | `ads.seriesByProvider` | In the ad accounts' currency |
 | Ads as share of sales (marketing expense ratio), its 3 days, Sales per unit of ad spend (MER), Ad spend per visit / per order, Net sales less ad spend | spend against net sales, visits, orders | Only when the ads report in the store's currency and none is the Google Ads demo (as "Ads as share of sales"). The 3-day share is for day columns: the day and the two before it, whatever the filter, blank on a day whose two before aren't in the dates |
 
+With an ad account left out in another currency (`ads.leftOut`), every row worked out from the spend
+(the spend rows, and those that set it against sales, visits and orders) is the spend shown only, never
+converted or guessed: its help ends with "Left out: EU shop (EUR), in another currency." and the row
+carries the sentence (`sheetRows`' `leftOut`, `SheetRow.leftOut`), as does the ads' share of sales in
+"Business events in these dates".
+
 A period one of whose days isn't known (visits before the pixel, a day an ad account has no figures
 for) is blank for the whole period, never a part. "Net sales less ad spend" is not profit.
 
@@ -859,7 +895,9 @@ of variable costs makes ₹4,333.33 of operating profit (`packages/shared/test/p
 - **Missing data, never 0** (`ProfitLossGap`): days before the store's imported orders
   (`sales_not_imported`); product costs not shared, not shown to the member, none recorded, or some
   sold products without a cost per item (gross, operating and net profit all wait); an ad account's
-  spend not known for a day, in another currency or the demo's; the costs list not marked complete
+  spend not known for a day; the spend in another currency than the store's, leaving out an account
+  in another currency (named: "Left out: EU shop (EUR), in another currency."), or the demo's
+  (`profitAds`); the costs list not marked complete
   for the days. Each figure that can't be given says "Missing data" with its reason, and "Left after
   the costs bizinsights knows" (never called profit). With no ad account connected the spend is 0
   (ads paid elsewhere are the owner's costs).
@@ -871,27 +909,114 @@ of variable costs makes ₹4,333.33 of operating profit (`packages/shared/test/p
   "View advertising analytics", otherwise they are "hidden" and the profit they'd give away isn't given. A
   shared link and API keys may read it. The month must not be in the future (400 `invalid_month`).
 
+## Profit & Loss page (/profit)
+
+Reference implementation: `profitStatement` (`packages/core/src/reports/profit.ts`),
+`GET /workspaces/:ws/stores/:storeId/profit/statement` (the dashboard's date question, `preset`,
+`from`, `to`, `compare`, `cfrom`, `cto`, and `grain=day|week|month|year`), the page
+`apps/web/src/app/(app)/profit/page.tsx` and `components/profit/`.
+
+The owner's own profit and loss workbook (EEq.xlsx, a "Dashboard" sheet with a column a day and an
+"Add Cost" sheet) as a page: any dates and the dates they're compared with (the dashboard's pickers:
+today, yesterday, this week, this month, last month, this year, last year, custom; previous period,
+previous year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
+coarser when the dates need more), overview cards with the change from the comparison, charts
+(revenue, expenses and profit per column; daily profit or loss; the expense breakdown; advertising;
+fixed vs variable), the statement, the expenses table and the recurring expenses. Every figure is
+`profitAndLoss`'s (`packages/shared/src/profit.ts`), worked out on the server; the page formats it.
+
+| Row | Formula |
+| --- | --- |
+| Revenue (tax included) | Shopify's total sales: what customers paid, tax and duties included |
+| Revenue before tax | net sales + shipping + additional fees (the revenue profit is worked out from) |
+| Tax collected | revenue (tax included) − revenue before tax: never the store's income |
+| Orders, items sold | the sales records' |
+| Advertising | each connected platform's synced spend (Meta, Google) + your advertising costs (other paid channels, ad spend adjustments) |
+| Variable costs | product costs (each product's cost per item in Shopify) + your variable costs (shipping, pick and pack, packaging, transaction and merchant fees, commissions, product cost adjustments, your own variable categories) |
+| Fixed costs | your fixed costs' share of the dates (a monthly cost spread over its calendar month) |
+| Below operating profit | interest, income tax, depreciation (only when there are any) |
+| Total expenses | advertising + variable + fixed (+ below operating profit) |
+| Profit or loss | revenue before tax − total expenses (the dashboard's net profit) |
+| Profit margin | profit ÷ revenue before tax |
+| MER (marketing expense ratio) | advertising ÷ revenue tax included |
+| VCR, FCR | variable costs ÷ revenue before tax; fixed costs ÷ revenue before tax |
+| Sitewide ROAS | revenue tax included ÷ advertising |
+
+A ratio whose denominator is 0 or below (no sales, a day of refunds) is "—", never a figure.
+
+**Checked against the workbook** (`packages/shared/test/workbook.test.ts`): its October, day by day
+(sales with and without GST, orders, items, Meta spend, product costs, shipping $20, packaging $3 and
+transaction fees $0.30 an order, merchant fees 2% of sales with tax on days with sales, and five
+monthly fixed costs), gives its every cost total to the cent: advertising $11,950.77, variable
+$12,019.88, fixed $11,734.00, total $35,704.65, MER 35.43%, ROAS 2.82; 1 October's profit −$736.89.
+Two differences are deliberate and named in the test:
+- the workbook's month profit is −$5,039.65: it takes $33,731.50 ÷ 1.1 = $30,665.00 for the month,
+  where its own days before tax add up to $30,664.99 (as Shopify's do), giving −$5,039.66 here;
+- it divides profit %, VCR and FCR by revenue **with** tax (−14.94%, 35.63%, 34.79%); bizinsights
+  divides them by revenue before tax (−16.43%, 39.20%, 38.27%), since the tax collected is the
+  government's. MER and ROAS keep the workbook's base (revenue with tax).
+The workbook's merchant fee on the day of a refund (−$431) is 0: a percentage cost is never below 0
+on a day refunds outweigh sales.
+
 ## Costs and net profit
 
-Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
-`netProfit`), `packages/core/src/expenses.ts`, Settings → Costs (`/settings/costs`) and the Profit
-sheet's Expense breakdown, which lists the month's costs and adds, changes and removes them too.
+Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `occurrences`,
+`expenseTotals`, `netProfit`), `packages/core/src/expenses.ts`, Profit & Loss (`/profit`), Settings →
+Costs (`/settings/costs`) and the Profit sheet's Expense breakdown, which all edit costs with the one
+form (`components/costs/CostForm.tsx`).
 
 What Shopify, its profit report and the ad platforms can't tell bizinsights (rent, salaries, software,
 the Shopify plan and apps, shipping labels, packaging, payment fees, commissions, ads on platforms that
 aren't connected, loan interest, income tax) comes only from the store's owner, as **costs** kept per
-store in the store's currency (`store_expenses`). Owners and admins add, change and remove them;
-members with "View gross sales, discounts, tax, shipping and total sales" (`finance.breakdown`) see
-them, on the page and as the dashboard's `expenses` module. Each change is in the audit log
-(`expense.added`, `expense.changed`, `expense.removed`; the note, free text, is never copied into it).
+store in the store's currency (`store_expenses`; a cost in another currency is refused, 400
+`currency_mismatch`: nothing is converted). Members with "Manage costs" (`finance.costs`: owners and
+admins, and whoever they give it to; never a shared link or an API key) add, change, pause and remove
+them; members with "View gross sales, discounts, tax, shipping and total sales" (`finance.breakdown`)
+see them, on the pages and as the dashboard's `expenses` module. Each change is in the audit log with
+what it was before (`expense.added`, `expense.changed`, `expense.removed`, `expense.paused`,
+`expense.resumed`, `expense.ended`, `expense.payment_changed`, `expense_category.*`; the description and
+note, free text, are never copied into it), and each cost's page shows its history
+(`GET …/expenses/:id/history`).
 
-Each category is in one group (`EXPENSE_CATEGORY_GROUP`):
+A cost has a name, a description, a category, how it is worked out, an amount, the currency, how
+often it is paid, its start and end dates, a vendor, a payment method and notes:
 
-| Group | Categories |
+- **How it is worked out** (`EXPENSE_METHODS`): a fixed amount; a percentage of each day's total sales
+  (tax included), revenue before tax or net sales (`PERCENT_BASES`); an amount per order; an amount
+  per item sold. The last three follow each day's sales from the start date to the end date (kept as
+  `cadence` `daily`) and are never below 0 on a day refunds outweigh sales.
+- **How often** an amount is paid (`EXPENSE_CADENCES`): once, every day, week, fortnight, month,
+  quarter, six months or year. Only an amount paid once may be below 0 (a refund, a credit, a
+  correction).
+- **Categories**: the built-in ones, each in one section (`EXPENSE_CATEGORY_SECTION`), and up to 50 of
+  the store's own (`expense_categories`; a cost names one `custom:<id>`), each in the section the owner
+  picks. A category a cost is in can't be removed (409 `category_in_use`); renamed or moved, its costs
+  go with it.
+
+| Section | Built-in categories |
 | --- | --- |
-| Fixed | rent and utilities, salaries and staff, software subscriptions, Shopify plan, Shopify apps, internet and phone, insurance, maintenance contracts, other fixed costs |
-| Variable | shipping and delivery, packaging, payment and transaction fees, sales commissions, other marketing, other variable costs |
+| Advertising | other paid channels, ad spend adjustment |
+| Variable | shipping and delivery, pick pack and 3PL, packaging, payment and transaction fees, merchant fees, sales commissions, product cost adjustment, other variable costs |
+| Fixed | rent and utilities, salaries and staff, software subscriptions, Shopify plan, Shopify apps, internet and phone, insurance, maintenance contracts, operating expenses, fixed advertising costs, other fixed costs |
 | Below operating profit | loan interest, income tax, depreciation, other costs below operating profit |
+
+Advertising counts with the variable costs in operating profit (`groupOfSection`). Synced figures
+(Shopify's product costs, each ad platform's spend) are never changed: an **adjustment** is a cost of
+its own (product cost adjustment, ad spend adjustment) beside the synced figure, which stays as it was
+synced, so nothing is counted twice. The form says so where a cost could be: ads in a connected account
+are already counted.
+
+**Recurring payments** (`expense_entries`): each payment of a recurring amount is recorded once it falls
+due (the cron sweep every 15 minutes, `recordDuePaymentsEverywhere`, and whenever the cost is saved),
+one row per cost and due day (unique), so a retried sweep never records a second. A month keeps its
+first payment's day of the month (31 Jan → 28 Feb → 31 Mar). Each payment can be changed (its amount,
+a note) or skipped on its own, keeping what the cost said (`scheduled_amount`), and put back. A change
+to a recurring cost's amount, frequency or start applies **from its next payment** by default
+(`PUT …/expenses/:id?apply=next`): the cost ends the day before it and a new cost with the new terms
+takes over (`replaces_id`), so no month already reported changes; `apply=all` changes every payment,
+past ones too (a payment changed on its own keeps its amount). **Pause** stops payments from the next
+one (`paused_from`); **resume** records those that fell due while paused as skipped; **end** (cancel)
+sets the last day to the one before the next payment.
 
 **Open days** (`store_expense_settings.operating_weekdays`, Monday = 0; empty: every day): the owner
 may say which weekdays the store is open. Recurring costs are then spread over those days only (a
@@ -901,7 +1026,7 @@ amount). Saved with `PUT …/expenses/settings` `{ operatingWeekdays }` (audited
 
 | Figure | Formula | Notes |
 | --- | --- | --- |
-| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year). With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost and run of consecutive days |
+| A cost over the dates | once: the amount, on its day; daily, weekly, fortnightly: each payment spread over the days it pays for (a weekly one a seventh a day); monthly, quarterly, six-monthly, yearly: per calendar month (quarter, half year, year), the payment due in it × its days in the dates ÷ the period's days (366 days in a leap year); a percentage or an amount per order or item: each day's own, from its sales. With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length; a payment recorded with another amount counts in its own period, a skipped one (or one due while paused) counts nothing. Rounded to the cent once per cost and run of consecutive days |
 | Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
 | Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
 | **Net profit** | revenue − product costs (Shopify's cost of goods sold, or the items sold at their cost per item) − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
@@ -914,8 +1039,11 @@ Net profit is never a partial figure (`netProfit`, `ProfitGap`). It is given onl
   Shopify's cost of goods sold (without "View costs and stock value": `seesModule(access, "profit")`
   is false) gets no net profit either, since it would give the cost away (`product_costs_hidden`);
 - the connected ad accounts' spend is known for every day, in the store's currency. With no ad
-  account connected it is 0: ads elsewhere are then among the owner's costs. A member not shown the
-  ads gets no net profit, since it would give the spend away;
+  account connected it is 0: ads elsewhere are then among the owner's costs. An account in another
+  currency is left out of the spend (Ads, "Currency"), so with one connected the spend known is only
+  part of it (`costsOf`'s `adState` "partial", `adLeftOut`): the panels show that part with the "Left
+  out" line, and net profit has the `ad_spend` gap. A member not shown the ads gets no net profit,
+  since it would give the spend away;
 - the owner has said the costs list holds every cost from a day on (`store_expense_settings.complete_from`,
   "This list holds every cost from"), and the dates start on or after that day.
 

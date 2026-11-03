@@ -77,8 +77,9 @@ calls no provider: it composes what each module already says about itself.
 ```
 
 Modules, always all of them and in this order: `shopify`, `meta_ads`, `google_ads`, `adsense`,
-`whatsapp`, `sms`, `email`. The Zapier app (PR #275) adds its module once it merges. The answer
-doesn't leave out what an App Store workspace doesn't offer: the UI does (`lib/features.ts`).
+`whatsapp`, `sms`, `email`. Zapier isn't one: its Settings card reads `GET …/zapier`
+([../zapier.md](../zapier.md#settings--integrations)). The answer doesn't leave out what an App
+Store workspace doesn't offer: the UI does (`lib/features.ts`).
 
 | Status | Means |
 | --- | --- |
@@ -154,6 +155,13 @@ that sign-in, without Meta's screen: `{ connected }`, or `{ choose }` (a pending
 after a sign-in) when it reaches several ad accounts; 404 `reuse_unavailable`, 409 `reuse_ended` or
 `no_accounts`. [meta-discovery.md](../meta-discovery.md).
 
+Connect links (`routes/adLinks.ts`, [ads-setup.md](../ads-setup.md#connect-links)): `GET`, `POST` and `DELETE`
+`/workspaces/:ws/stores/:storeId/ads/meta/link` (Manage integrations) show, make (replacing) and turn off the
+store's link, `{ link: { url, createdAt, expiresAt, createdBy } | null }`. The link's page calls the public
+`/ads/links/*` routes with the token in the body: `open` (`{ token, pick? }` → the workspace's and store's names,
+`state` `open` | `used` | `ended`, and with `pick` the accounts to choose), `start` (`{ url }`, sets the sign-in's
+state cookie), `choose` and `cancel`; 404 `link_invalid`, 410 `link_used` or `link_ended`.
+
 ## Endpoints
 
 Generated from the route files (`apps/api/src/routes/*.ts`); "Access" is the permission each
@@ -164,6 +172,13 @@ route checks, or how a public route is protected.
 Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/ads` | dashboard:read | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/:provider/connect` | stores:manage | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/meta/reuse` | integrations.manage | ads.ts |
+| GET | `/workspaces/:ws/stores/:storeId/ads/meta/link` | integrations.manage | adLinks.ts |
+| POST | `/workspaces/:ws/stores/:storeId/ads/meta/link` | integrations.manage | adLinks.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/ads/meta/link` | integrations.manage | adLinks.ts |
+| POST | `/ads/links/open` | public (the link's token) | adLinks.ts |
+| POST | `/ads/links/start` | public (the link's token, origin-checked) | adLinks.ts |
+| POST | `/ads/links/choose` | public (the link's token, origin-checked) | adLinks.ts |
+| POST | `/ads/links/cancel` | public (the link's token, origin-checked) | adLinks.ts |
 | GET | `/ads/:provider/callback` | public (signed/origin-checked) | ads.ts |
 | GET | `/workspaces/:ws/stores/:storeId/ads/pending/:nonce` | stores:manage | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/pending/:nonce` | stores:manage | ads.ts |
@@ -188,6 +203,21 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores/:storeId/overview` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
+| GET | `/workspaces/:ws/stores/:storeId/expenses` | finance.breakdown | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expenses` | finance.costs | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expenses/bulk-delete` | finance.costs | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expenses/settings` | finance.costs | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expenses/:id` (`?apply=next\|all`) | finance.costs | expenses.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/expenses/:id` | finance.costs | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expenses/:id/pause\|resume\|end` | finance.costs | expenses.ts |
+| GET | `/workspaces/:ws/stores/:storeId/expenses/:id/payments` | finance.breakdown | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expenses/:id/payments/:due` | finance.costs | expenses.ts |
+| GET | `/workspaces/:ws/stores/:storeId/expenses/:id/history` | finance.breakdown | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expense-categories` | finance.costs | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expense-categories/:id` | finance.costs | expenses.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/expense-categories/:id` | finance.costs | expenses.ts |
+| GET | `/workspaces/:ws/stores/:storeId/profit` (`?month=`) | finance.breakdown + analytics.sales | profit.ts |
+| GET | `/workspaces/:ws/stores/:storeId/profit/statement` (dates, `grain`) | finance.breakdown + analytics.sales | profit.ts |
 | GET | `/workspaces/:ws/stores/:storeId/integrations` | integrations.status | integrations.ts |
 | GET | `/workspaces/:ws/stores/:storeId/meta/discovery` | integrations.status | integrations.ts |
 | POST | `/pixel/:key` | per-store ingest key, rate-limited | pixel.ts |

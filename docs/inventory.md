@@ -84,7 +84,10 @@ never claims "live": Shopify gives no freshness guarantee for webhooks.
   `fast_movement`), opened when it crosses in, resolved when it leaves. The 15-minute sweep tells
   people about new ones once (`notifyStockAlerts`): one email per store to members who can see
   inventory and kept "Stock alerts" on (Settings → Notifications), the bell (alert code
-  `inventory_stock`), and optionally WhatsApp. One that flaps is told again at most once a day.
+  `inventory_stock`, one per store while anything is out of stock or low and Stock settings keep
+  dashboard alerts on; when it opens it is also Zapier's New Alert trigger, docs/zapier.md), and
+  optionally WhatsApp. One that flaps is told again
+  at most once a day.
   Only for a store set up for inventory (stock levels granted, or Stock settings saved), so nobody
   gets alerts they never asked for when the module ships. Low = 1..threshold available counting every location; threshold = variant's, else product's, else
   the store's (default 10). Fast movement = at least 5 units today and 3× the 30-day daily rate.

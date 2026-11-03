@@ -1,14 +1,14 @@
 "use client";
 import { useState } from "react";
 import { BarChart3, PieChart } from "lucide-react";
-import { groupSeries, type AdSeriesDay } from "@app/shared/ads";
+import { claimsAddUp, groupSeries, type AdSeriesDay } from "@app/shared/ads";
 import { periodsOf, type PeriodGranularity } from "@app/shared/dates";
 import { fmtMoney, fmtPct } from "@/lib/api";
 import { UNAVAILABLE } from "@/components/dashboard/AdsCommon";
 import { shownFigures, upToWords } from "@/components/dashboard/adFigures";
 import { Donut } from "@/components/dashboard/Charts";
 import { fmtMoneyCompact, fmtMoneyWhole, fmtPeriod, fmtRange, periodChoices } from "@/components/dashboard/format";
-import { LineChart } from "@/components/dashboard/LineChart";
+import { LineChart, type LineSeries } from "@/components/dashboard/LineChart";
 import { ChartChoice } from "@/components/dashboard/Primitives";
 import type { AdsModule, Overview } from "@/components/dashboard/types";
 import { AdCard, EmptyNote } from "./AdCard";
@@ -18,39 +18,56 @@ import { PLATFORM, PLATFORM_COLOR } from "./AdvertisingUi";
 // The Advertising overview's charts: what was spent against the purchase value the platforms credit to
 // their ads, period by period, with ROAS on its own scale under them (never a second axis); and how the
 // spend splits between the platforms. Every figure is the ad module's; a day a platform has no figures
-// for is a gap, never a 0.
+// for is a gap, never a 0. With more than one platform counted, the purchase value and ROAS are each
+// platform's own (a column or line each), never their claims added up (`claimsAddUp`); the spend adds up.
 // ---------------------------------------------------------------------------
 
 const SPEND = "var(--viz-running)";
 const VALUE = "var(--viz-cat-3)";
 const ROAS = "var(--viz-day)";
 
+/** A period's ROAS from its sums: purchase value ÷ spend; null without either, or nothing spent. */
+const roasOf = (d: AdSeriesDay) => (d.spend && d.purchaseValue !== null ? d.purchaseValue / d.spend : null);
+
 /**
  * Spend and purchase value per day, week or month (`groupSeries`: a week or month missing any day's
- * figures is left blank), and ROAS worked out from each period's sums.
+ * figures is left blank), and ROAS worked out from each period's sums. With more than one platform
+ * counted, each platform's purchase value and ROAS from its own days (`seriesByProvider`), on its own
+ * spend: both can claim one order, so their sum would count it twice.
  */
 export function PerformanceOverview({ a, ov }: { a: AdsModule; ov: Overview }) {
   const [pickedBy, setBy] = useState<PeriodGranularity>("day");
   const choices = periodChoices(ov.range);
   const by = choices.some(([g]) => g === pickedBy) ? pickedBy : "day";
-  const points: AdSeriesDay[] = by === "day" ? a.series : groupSeries(a.series, ov.range, by);
+  const group = (s: AdSeriesDay[]) => (by === "day" ? s : groupSeries(s, ov.range, by));
+  const points: AdSeriesDay[] = group(a.series);
   const days = points.map((d) => d.day);
   const periods = by === "day" ? undefined : periodsOf(ov.range, by).map((p) => ({ tick: fmtPeriod(p, by, "tick"), long: fmtPeriod(p, by, "long") }));
   const money = (v: number) => fmtMoney(v, a.currency);
   const axis = (v: number, step: number) => (step < 1 ? fmtMoney(v, a.currency) : fmtMoneyCompact(v, a.currency));
   const spend = points.map((d) => d.spend);
-  const value = points.map((d) => d.purchaseValue);
-  const roas = points.map((d) => (d.spend && d.purchaseValue !== null ? d.purchaseValue / d.spend : null));
+  const apart = !claimsAddUp(a.byProvider.map((p) => p.provider));
+  // Each platform's own periods: the same days as the module's series, missing where its accounts have none.
+  const own = a.seriesByProvider.map((s) => ({ provider: s.provider, points: group(s.series) }));
+  const values: LineSeries[] = apart
+    ? own.map((s) => ({ key: `value-${s.provider}`, label: `${PLATFORM[s.provider].name} purchase value (its own)`, color: PLATFORM_COLOR[s.provider], values: s.points.map((d) => d.purchaseValue) }))
+    : [{ key: "value", label: "Purchase value (platforms')", color: VALUE, values: points.map((d) => d.purchaseValue) }];
+  const roas: LineSeries[] = apart
+    ? own.map((s) => ({ key: `roas-${s.provider}`, label: `${PLATFORM[s.provider].name} ROAS (its own)`, color: PLATFORM_COLOR[s.provider], values: s.points.map(roasOf) }))
+    : [{ key: "roas", label: "ROAS", color: ROAS, values: points.map(roasOf) }];
   const span = fmtRange(ov.range.from, ov.range.to);
   const title = `Ad spend and purchase value per ${by}`;
   const unread = spend.every((v) => v === null);
-  const quiet = !unread && spend.every((v) => v === null || v === 0) && value.every((v) => v === null || v === 0);
+  const quiet = !unread && spend.every((v) => v === null || v === 0) && values.every((s) => s.values.every((v) => v === null || v === 0));
   const gaps = spend.some((v) => v === null) ? (by === "day" ? " Days a platform has no figures for yet are left blank." : ` A ${by} missing any day's figures is left blank.`) : "";
+  const whose = apart
+    ? ` Purchase value is each platform's own claim, a column each: ${a.byProvider.map((p) => PLATFORM[p.provider].name).join(" and ")} can both claim the same order, so theirs are never added up.`
+    : " Purchase value is the platforms' own count.";
   return (
     <AdCard
       id="ads-money-chart"
       title="Performance overview"
-      sub={`${title}, ${span}, in ${a.currency}. Purchase value is the platforms' own count.${by === "week" ? " Weeks run Monday to Sunday." : ""}${gaps}`}
+      sub={`${title}, ${span}, in ${a.currency}.${whose}${by === "week" ? " Weeks run Monday to Sunday." : ""}${gaps}`}
       icon={BarChart3}
       action={choices.length > 1 ? <ChartChoice<PeriodGranularity> label="Ad charts group" value={by} onChange={setBy} options={choices} /> : undefined}
     >
@@ -62,10 +79,7 @@ export function PerformanceOverview({ a, ov }: { a: AdsModule; ov: Overview }) {
         <>
           <LineChart
             days={days}
-            series={[
-              { key: "spend", label: "Ad spend", color: SPEND, values: spend },
-              { key: "value", label: "Purchase value (platforms')", color: VALUE, values: value },
-            ]}
+            series={[{ key: "spend", label: apart ? "Ad spend (every platform)" : "Ad spend", color: SPEND, values: spend }, ...values]}
             bars
             format={money}
             fmtAxis={axis}
@@ -75,10 +89,10 @@ export function PerformanceOverview({ a, ov }: { a: AdsModule; ov: Overview }) {
             height={200}
           />
           <div className="mt-1" data-testid="ads-roas-chart">
-            <p className="text-xs text-muted">ROAS per {by}: purchase value ÷ spend</p>
+            <p className="text-xs text-muted">ROAS per {by}: {apart ? "each platform's purchase value ÷ its own spend" : "purchase value ÷ spend"}</p>
             <LineChart
               days={days}
-              series={[{ key: "roas", label: "ROAS", color: ROAS, values: roas }]}
+              series={roas}
               format={(v) => `${v.toFixed(2)}×`}
               fmtAxis={(v) => `${Number(v.toFixed(1))}×`}
               label={`ROAS per ${by}, ${span}`}
