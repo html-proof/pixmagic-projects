@@ -72,6 +72,12 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   and CSV without `inventory.costs`; changing stock needs `inventory.adjust`, which a shared link
   never has. Existing members get none of them until an owner or admin ticks them; the viewer,
   analyst and manager templates start with view and product information.
+- **Finance → Manage costs** (`finance.costs`, a management permission: Manager or Custom role only,
+  never on a shared link or an API key): add, change, pause, end and remove the store's own costs,
+  their payments and categories, on Profit & Loss and in Settings → Costs (docs/kpis.md "Costs and net
+  profit"). Seeing them is the sales breakdown's (`finance.breakdown`); downloading the statement and
+  the expenses is `reports.export`'s. Before it, only owners and admins changed costs, and they still
+  do (they hold every permission); nobody else gets it until an owner or admin ticks it.
 
 ## Invitations
 

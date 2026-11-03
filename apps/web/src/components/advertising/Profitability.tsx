@@ -6,7 +6,7 @@ import { seesModule } from "@app/shared/access";
 import { claimsAddUp, type AdTotals } from "@app/shared/ads";
 import type { ExpenseCategory } from "@app/shared/expenses";
 import { PROFIT_GAP_WORDS } from "@app/shared/expenses";
-import { canManage, useApp } from "@/components/AppContext";
+import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtPct } from "@/lib/api";
 import { BEING_READ, UNAVAILABLE } from "@/components/dashboard/AdsCommon";
 import { shownFigures } from "@/components/dashboard/adFigures";
@@ -30,7 +30,7 @@ import { shopifyMargin } from "./Insights";
 // ---------------------------------------------------------------------------
 
 /** The owner's costs that are Shopify's and payments' (Settings → Costs categories). */
-const FEES: ReadonlySet<ExpenseCategory> = new Set(["shopify_plan", "shopify_apps", "payment_fees"]);
+const FEES: ReadonlySet<string> = new Set<ExpenseCategory>(["shopify_plan", "shopify_apps", "payment_fees", "merchant_fees"]);
 const PRODUCT_WORDS: Record<Exclude<ProductCostState, "known">, string> = { loading: "Loading…", missing: "Not available", unavailable: "Not available", not_recorded: "Not recorded in Shopify" };
 const AD_WORDS: Record<Exclude<CostState, "known">, string> = { loading: "Loading…", missing: "Not connected", unavailable: UNAVAILABLE };
 
@@ -59,7 +59,7 @@ export function adReturn(a: AdFigures<AdTotals>, margin: number | null) {
 }
 
 export function ProfitSummary({ ov, full = false }: { ov: Overview; full?: boolean }) {
-  const { access, workspace } = useApp();
+  const { access, allowed, me } = useApp();
   const a = ov.modules.ads;
   const currency = ov.store.currency;
   const money = (n: number) => fmtMoney(n, currency);
@@ -75,7 +75,7 @@ export function ProfitSummary({ ov, full = false }: { ov: Overview; full?: boole
   const byCategory = ov.modules.expenses?.current.byCategory ?? [];
   const fees = byCategory.filter((c) => FEES.has(c.category)).reduce((n, c) => n + c.amount, 0);
   const other = byCategory.filter((c) => !FEES.has(c.category)).reduce((n, c) => n + c.amount, 0);
-  const manageCosts = canManage(workspace.role);
+  const manageCosts = allowed("finance.costs") && !me.shared;
   // No costs kept at all: say so rather than a 0 that reads as "none were spent".
   const none = ov.modules.expenses?.count === 0;
   return (

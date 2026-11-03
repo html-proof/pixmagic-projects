@@ -3,7 +3,7 @@ import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseRe
 import type { AdPlatformSource, AdsFromShopify } from "@app/shared/adsFromShopify";
 import type { HistoryAccess } from "@app/shared/capabilities";
 import type { CompareMode } from "@app/shared/dates";
-import type { ExpenseTotals } from "@app/shared/expenses";
+import type { CustomCategory, ExpenseTotals } from "@app/shared/expenses";
 import type { ProfitCost } from "@app/shared/profit";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
@@ -715,6 +715,8 @@ export interface ExpensesModule {
   operatingWeekdays?: number[];
   /** The Profit sheet's question only: every cost's terms (no names or notes), to spread over its own columns. */
   terms?: ProfitCost[];
+  /** The store's own cost categories, for their names (absent from older answers). */
+  categories?: CustomCategory[];
 }
 
 /** Customers who ordered in a range (the customers module): each once, however many orders. */

@@ -102,6 +102,9 @@ const KEPT_ON_DISCONNECT = [
   // events. They are there again when the store is connected again; a move removes them.
   "storeExpense",
   "storeExpenseSettings",
+  // Its own cost categories and its recurring costs' payments as they were paid.
+  "expenseCategory",
+  "expenseEntry",
   "businessEvent",
   // The store's import jobs. A move removes them, and so does shop/redact.
   "syncJob",
@@ -159,7 +162,7 @@ describe("a store's tables when its data goes but its row stays", () => {
     const disconnect = removedBy(purge);
     const move = removedBy(moving, true);
     for (const m of ["shopifyMarketingDay", "shopifyMarketingSync"]) expect(disconnect.has(m) && move.has(m), m).toBe(true);
-    for (const m of ["storeExpense", "storeExpenseSettings", "businessEvent", "emailBusinessEvent", "emailMessage", "alert"]) {
+    for (const m of ["storeExpense", "storeExpenseSettings", "expenseCategory", "businessEvent", "emailBusinessEvent", "emailMessage", "alert"]) {
       expect([m, disconnect.has(m), move.has(m)]).toEqual([m, false, true]);
     }
   });
