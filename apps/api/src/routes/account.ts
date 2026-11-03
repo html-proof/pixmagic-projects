@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { systemDb, type User } from "@app/db";
-import { accountDeletionEmail, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants } from "@app/core";
+import { accountDeletionEmail, assertDeletable, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants, workspaceDeletionSummary, type WorkspaceDeletionSummary } from "@app/core";
 import { revokeZapierGrants } from "@app/core/zapier";
-import { accountPasswordProblem, EMAIL_CODE_RE, safeEqual, SIGN_IN_FAILED_EVENT } from "@app/shared";
+import { accountPasswordProblem, EMAIL_CODE_RE, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
 import { cognitoUsernameKey, notifyEmailChanged, notifyMethodAdded, notifyMethodRemoved, notifyPasswordChanged, notifyTwoStepChanged, recordAuthEvent } from "../identity.js";
@@ -19,23 +19,7 @@ import {
   signedInRecently as recentSignIn,
 } from "../session.js";
 import type { App } from "../app.js";
-import {
-  challengeTiming,
-  CODE_TTL_S,
-  CODE_UNAVAILABLE,
-  codeExpired,
-  codeHash,
-  coordinatorDown,
-  countAttempt,
-  expiredCode,
-  incorrectCode,
-  limitCodeSends,
-  MAX_ATTEMPTS,
-  newCode,
-  RECORD_GRACE_S,
-  requireResendAllowed,
-  tooManyAttempts,
-} from "../emailCode.js";
+import { accountDeletion, checkDeletionCode, deletionConfirmation, runWorkspaceDeletion, sendDeletionCode, spendDeletionCode } from "../deletion.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cognitoFailure, enabledProviders, publicUser } from "./auth.js";
 
@@ -536,116 +520,81 @@ export function accountRoutes(app: App, deps: Deps) {
     return c.json({ user: publicUser(updated) });
   });
 
-  // ---------------- Deleting the account: a code emailed to the account's address ----------------
+  // ---------------- Deleting the account: a code emailed to the account's address (deletion.ts) ----------------
 
   /**
-   * What is kept of the code that confirms deleting the account, in the coordinator under
-   * deletionKey: its HMAC (emailCode.ts codeHash), never the code, and when it was issued. Every
-   * session confirms the deletion this way, whatever it signed in with: the code proves the
-   * account's own address, which a Google account linked under another address can't.
+   * The workspaces `userId` is the only owner of, as their deletion would find them. They go with
+   * the account (a workspace with another owner keeps running without them), once the person has
+   * been shown which: the Delete account dialog lists them (GET /auth/account/deletion) and sends
+   * their ids back with the code.
    */
-  interface DeletionCode {
-    v: 1;
-    codeHash: string;
-    issuedAt: number;
-  }
-  const deletionKey = (userId: string) => `auth:code:delete:${userId}`;
-  const deletionScope = (userId: string, issuedAt: number) => `delete:${userId}:${issuedAt}`;
-
-  async function deletionCode(userId: string): Promise<DeletionCode | null> {
-    const raw = await deps.coord.peek(deletionKey(userId)).catch((err: unknown) => {
-      logger.error({ err }, "could not read an account-deletion code");
-      throw coordinatorDown();
-    });
-    if (!raw) return null;
-    const rec = JSON.parse(raw) as DeletionCode;
-    return rec?.v === 1 && typeof rec.issuedAt === "number" ? rec : null;
-  }
-
-  /** The workspaces `userId` is the only owner of: deleting the account waits until none is left. */
-  async function soleOwnedWorkspaces(userId: string): Promise<string[]> {
-    const owned = await systemDb.membership.findMany({ where: { userId, role: "owner" }, include: { workspace: { select: { id: true, name: true } } } });
-    const names: string[] = [];
+  async function soleOwnedWorkspaces(userId: string): Promise<WorkspaceDeletionSummary[]> {
+    const owned = await systemDb.membership.findMany({ where: { userId, role: "owner" }, select: { workspaceId: true }, orderBy: { createdAt: "asc" } });
+    const sole: WorkspaceDeletionSummary[] = [];
     for (const m of owned) {
       const others = await systemDb.membership.count({ where: { workspaceId: m.workspaceId, role: "owner", userId: { not: userId } } });
-      if (!others) names.push(m.workspace.name);
+      if (others) continue;
+      const summary = await workspaceDeletionSummary(m.workspaceId);
+      if (summary) sole.push(summary);
     }
-    return names;
+    return sole;
   }
 
-  // Nothing in the app deletes a workspace: support does, on request (the privacy policy says so too).
-  const soleOwnerRefusal = (c: Ctx, names: string[]) =>
+  /** A workspace that goes with the account, as the dialog shows it. */
+  const workspaceView = (w: WorkspaceDeletionSummary) => ({ id: w.id, name: w.name, stores: w.stores.map((s) => s.name ?? s.shopDomain), members: w.members, paidPlan: w.paidPlan, pendingPlan: w.pendingPlan });
+
+  /** The workspaces going with the account weren't all confirmed: the dialog shows them again. */
+  const soleOwnerRefusal = (c: Ctx, sole: WorkspaceDeletionSummary[]) =>
     c.json(
       {
         error: "sole_owner",
-        message: `You're the only owner of ${names.join(", ")}. Make someone else an owner first, or email ${env().SUPPORT_EMAIL || "support"} to have ${names.length > 1 ? "those workspaces and their" : "that workspace and its"} data deleted.`,
-        workspaces: names,
+        message: `You're the only owner of ${sole.map((w) => w.name).join(", ")}. Deleting your account deletes ${sole.length > 1 ? "those workspaces and their" : "that workspace and its"} stores' data too: confirm that in the Delete account dialog, or make someone else an owner first.`,
+        workspaces: sole.map((w) => w.name),
+        owned: sole.map(workspaceView),
       },
       409,
     );
 
-  /**
-   * "Email me a code" in the Delete account dialog: a 6-digit code to the account's address, with
-   * the sign-in code's rules (emailCode.ts: a minute's life, five guesses, one a minute, the
-   * address's hourly and daily caps). None while the deletion would be refused anyway (sole owner).
-   */
-  app.post("/auth/account/delete/code", async (c) => {
+  /** What deleting the account takes with it: the workspaces it is the only owner of, before any code is sent. */
+  app.get("/auth/account/deletion", async (c) => {
     const user = await requireUser(c, deps);
-    const soleOwner = await soleOwnedWorkspaces(user.id);
-    if (soleOwner.length) return soleOwnerRefusal(c, soleOwner);
-    const standing = await deletionCode(user.id);
-    if (standing) requireResendAllowed(standing.issuedAt);
-    await limitCodeSends(deps.coord, user.email, clientIp(c));
-    const now = Date.now();
-    const code = newCode();
-    const mail = accountDeletionEmail({ code, name: user.displayName, email: user.email, appUrl: env().APP_URL, senders: env() });
-    // The email goes first: a code that couldn't be sent is never recorded as standing.
-    await deps.mailer.send(user.email, mail.subject, mail.text, mail.html, { purpose: mail.purpose }).catch((err: unknown) => {
-      logger.error({ err }, "could not email an account-deletion code");
-      throw new HttpError(503, CODE_UNAVAILABLE, "email_unavailable");
-    });
-    const rec: DeletionCode = { v: 1, codeHash: codeHash(deletionScope(user.id, now), code), issuedAt: now };
-    await deps.coord.put(deletionKey(user.id), JSON.stringify(rec), CODE_TTL_S + RECORD_GRACE_S).catch((err: unknown) => {
-      logger.error({ err }, "could not store an account-deletion code");
-      throw coordinatorDown();
-    });
-    return c.json({ ok: true, challenge: challengeTiming(now, now) });
+    return c.json({ workspaces: (await soleOwnedWorkspaces(user.id)).map(workspaceView) });
   });
 
   /**
-   * Delete the account: its sign-in identities in Cognito, then the user (memberships go with it;
-   * employee records an organization keeps lose their link to it). Confirmed with the code emailed
-   * to the account's address (above), whose minute and five guesses are checked before the code is
-   * looked at; the right one is spent with one atomic delete, so of two answers racing only one goes
-   * on. Refused while the person is the only owner of a workspace, whose stores and data would
-   * otherwise be left with nobody.
+   * "Email me a code" in the Delete account dialog. None while the deletion would be refused anyway:
+   * a workspace that would go with it is on a paid plan (paid_plan, core workspaceDeletion.ts).
+   */
+  app.post("/auth/account/delete/code", async (c) => {
+    const user = await requireUser(c, deps);
+    for (const w of await soleOwnedWorkspaces(user.id)) assertDeletable(w);
+    const challenge = await sendDeletionCode(c, deps, user, accountDeletion(user.id), (code) =>
+      accountDeletionEmail({ code, name: user.displayName, email: user.email, appUrl: env().APP_URL, senders: env() }),
+    );
+    return c.json({ ok: true, challenge });
+  });
+
+  /**
+   * Delete the account: first the workspaces it is the only owner of (`workspaces`, which must name
+   * each of them, and each deleted in full: core workspaceDeletion.ts), then its sign-in identities
+   * in Cognito, then the user (memberships go with it; employee records an organization keeps lose
+   * their link to it). Confirmed with the code emailed to the account's address (above).
    */
   app.post("/auth/account/delete", async (c) => {
     const user = await requireUser(c, deps);
-    const input = z.object({ confirm: z.literal("DELETE", { error: "Type DELETE to confirm." }), code: codeSchema }).parse(await body(c));
+    const input = deletionConfirmation.extend({ workspaces: z.array(z.string().max(64)).max(100).optional() }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
-    const pending = await deletionCode(user.id);
-    if (!pending) throw new HttpError(400, "Ask for a code first: we'll email it to your account's address.", "code_required");
-    if (codeExpired(pending.issuedAt)) throw expiredCode();
-    const scope = deletionScope(user.id, pending.issuedAt);
-    const attempt = await countAttempt(deps.coord, scope);
-    if (!safeEqual(pending.codeHash, codeHash(scope, input.code))) {
-      if (attempt >= MAX_ATTEMPTS) {
-        // The fifth wrong guess ends the code: a new one must be asked for.
-        await deps.coord.take(deletionKey(user.id)).catch((err: unknown) => logger.warn({ err }, "could not discard an account-deletion code"));
-        throw tooManyAttempts();
-      }
-      throw incorrectCode();
-    }
-    // Before the code is spent (the code's own route refuses a sole owner too: this is a race).
-    const soleOwner = await soleOwnedWorkspaces(user.id);
-    if (soleOwner.length) return soleOwnerRefusal(c, soleOwner);
-    const spent = await deps.coord.take(deletionKey(user.id)).catch((err: unknown) => {
-      logger.error({ err }, "could not spend an account-deletion code");
-      throw coordinatorDown();
-    });
-    if (!spent) throw expiredCode();
+    const target = accountDeletion(user.id);
+    await checkDeletionCode(deps, target, input.code);
+    // Before the code is spent: only workspaces the person was shown go, and none billed by Shopify.
+    const sole = await soleOwnedWorkspaces(user.id);
+    const confirmed = new Set(input.workspaces ?? []);
+    if (sole.some((w) => !confirmed.has(w.id))) return soleOwnerRefusal(c, sole);
+    for (const w of sole) assertDeletable(w);
+    await spendDeletionCode(deps, target);
+    // The workspaces first: one that can't be finished leaves the account and its sign-in in place to try again.
+    for (const w of sole) await runWorkspaceDeletion(c, deps, user, w.id, "account");
     const identities = await systemDb.authIdentity.findMany({ where: { userId: user.id } });
     // Sign-in first, so nobody can sign in to a half-deleted account.
     for (const id of identities) {
@@ -677,7 +626,7 @@ export function accountRoutes(app: App, deps: Deps) {
     }
     // A login of theirs still waiting for its ad accounts: its row (the platform profile's name) and its grant go too.
     await releaseAdLoginsWhere({ connectedByUserId: user.id }, deps.fetchImpl).catch((err: unknown) => logger.error({ err, userId: user.id }, "account deletion: waiting ad logins weren't released"));
-    await recordAuthEvent("account_deleted", null, clientIp(c), { userId: user.id, identities: identities.length });
+    await recordAuthEvent("account_deleted", null, clientIp(c), { userId: user.id, identities: identities.length, workspaces: sole.length });
     clearSessionCookies(c);
     return c.json({ ok: true });
   });

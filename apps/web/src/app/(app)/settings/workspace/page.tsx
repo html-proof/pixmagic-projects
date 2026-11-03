@@ -2,6 +2,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { canManage, useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
+import { DeleteWorkspaceCard } from "@/components/settings/DeleteWorkspaceCard";
 import { actionError, api } from "@/lib/api";
 
 export default function WorkspacePage() {
@@ -66,6 +67,7 @@ export default function WorkspacePage() {
           <button className="btn-secondary">Create</button>
         </form>
       </section>
+      <DeleteWorkspaceCard />
     </>
   );
 }

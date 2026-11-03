@@ -930,7 +930,7 @@ describe("account security", () => {
     }
   });
 
-  it("deletes the account and its sign-in with a code emailed to its address, but not while it is a workspace's only owner", async () => {
+  it("deletes the account and its sign-in with a code emailed to its address, and refuses while a workspace it is the only owner of isn't confirmed", async () => {
     const owner = await signIn(ctx, "u1", "a@x.com");
     const password = ctx.auth.users.get("u1")!.password!;
     const ws = await createWorkspace(ctx, owner.headers, "Solo Shop");
@@ -939,16 +939,8 @@ describe("account security", () => {
     // The password no longer deletes it: the emailed code does, and none was asked for yet.
     expect((await del({ confirm: "DELETE", password })).statusCode).toBe(400);
     expect((await del({ confirm: "DELETE", code: "123456" })).json().error).toBe("code_required");
-    // The only owner hears why, and what they can do instead, before any code is emailed.
-    const sent = ctx.mailer.sent.length;
-    const blocked = await askForCode();
-    expect(blocked.statusCode).toBe(409);
-    expect(blocked.json()).toMatchObject({
-      error: "sole_owner",
-      message: "You're the only owner of Solo Shop. Make someone else an owner first, or email support@bizinsights.io to have that workspace and its data deleted.",
-      workspaces: ["Solo Shop"],
-    });
-    expect(ctx.mailer.sent.length).toBe(sent);
+    // The only owner is shown the workspace that would go with it (workspaceDeletion.test.ts deletes one).
+    expect((await get("/auth/account/deletion", owner.headers)).json()).toMatchObject({ workspaces: [{ id: ws, name: "Solo Shop", paidPlan: null }] });
 
     // A second owner takes over; the code goes to the account's address, from the support sender.
     const partner = await signIn(ctx, "u2", "b@x.com");
@@ -961,9 +953,9 @@ describe("account security", () => {
     expect((await askForCode()).json().error).toBe("resend_cooldown");
     expect((await del({ confirm: "DELETE", code: String((Number(code) + 1) % 1_000_000).padStart(6, "0") })).json().error).toBe("invalid_code");
     expect((await del({ confirm: "delete", code })).statusCode).toBe(400);
-    // Left the only owner after the code was sent: refused, and the code isn't spent by the refusal.
+    // Left the only owner after the code was sent: refused until that workspace is confirmed too, and the code isn't spent by the refusal.
     await systemDb.membership.delete({ where: { id: second.id } });
-    expect((await del({ confirm: "DELETE", code })).statusCode).toBe(409);
+    expect((await del({ confirm: "DELETE", code })).json()).toMatchObject({ error: "sole_owner", workspaces: ["Solo Shop"], owned: [{ id: ws }] });
     await systemDb.membership.create({ data: { workspaceId: ws, userId: partner.user.id, role: "owner" } });
     const res = await del({ confirm: "DELETE", code });
     expect(res.statusCode).toBe(200);
@@ -976,24 +968,27 @@ describe("account security", () => {
     expect(await systemDb.authEvent.findFirst({ where: { type: "account_deleted" } })).toMatchObject({ userId: null });
   });
 
-  it("never tells a sole owner to delete a workspace themselves: nothing in the app does, support does", async () => {
+  it("shows a sole owner every workspace that goes with the account, and deletes them only once all are confirmed", async () => {
     const owner = await signIn(ctx, "u1", "a@x.com");
-    await createWorkspace(ctx, owner.headers, "Solo Shop");
-    await createWorkspace(ctx, owner.headers, "Second Shop");
-    const askForCode = () => post("/auth/account/delete/code", {}, owner.headers);
-    const both = await askForCode();
-    expect(both.statusCode).toBe(409);
-    expect(both.json()).toMatchObject({ error: "sole_owner", workspaces: expect.arrayContaining(["Solo Shop", "Second Shop"]) });
-    expect(both.json().message).toMatch(
-      /^You're the only owner of (Solo Shop, Second Shop|Second Shop, Solo Shop)\. Make someone else an owner first, or email support@bizinsights\.io to have those workspaces and their data deleted\.$/,
+    const solo = await createWorkspace(ctx, owner.headers, "Solo Shop");
+    const second = await createWorkspace(ctx, owner.headers, "Second Shop");
+    const listed = (await get("/auth/account/deletion", owner.headers)).json().workspaces as Array<{ id: string }>;
+    expect(listed.map((w) => w.id).sort()).toEqual([solo, second].sort());
+    // The code is sent: the dialog sends the confirmed list back with it.
+    expect((await post("/auth/account/delete/code", {}, owner.headers)).json()).toMatchObject({ ok: true });
+    const code = emailedDeletionCode(ctx, "a@x.com");
+    const del = (workspaces: string[]) => post("/auth/account/delete", { confirm: "DELETE", code, workspaces }, owner.headers);
+    // One of the two confirmed: refused with both named and what to do, and the code isn't spent.
+    const one = await del([solo]);
+    expect(one.statusCode).toBe(409);
+    expect(one.json()).toMatchObject({ error: "sole_owner", workspaces: expect.arrayContaining(["Solo Shop", "Second Shop"]), owned: expect.arrayContaining([expect.objectContaining({ id: second })]) });
+    expect(one.json().message).toMatch(
+      /^You're the only owner of (Solo Shop, Second Shop|Second Shop, Solo Shop)\. Deleting your account deletes those workspaces and their stores' data too: confirm that in the Delete account dialog, or make someone else an owner first\.$/,
     );
-    // Without a support address set, it still says who deletes them.
-    const restore = withEnv({ SUPPORT_EMAIL: "" });
-    try {
-      expect((await askForCode()).json().message).toMatch(/\. Make someone else an owner first, or email support to have those workspaces and their data deleted\.$/);
-    } finally {
-      restore();
-    }
+    expect(await systemDb.workspace.count({ where: { id: { in: [solo, second] } } })).toBe(2);
+    expect((await del([second, solo])).statusCode).toBe(200);
+    expect(await systemDb.workspace.count({ where: { id: { in: [solo, second] } } })).toBe(0);
+    expect(await systemDb.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
   });
 });
 

@@ -35,3 +35,4 @@ export * from "./salesCalculation.js";
 export * from "./businessEvents.js";
 export * from "./expenses.js";
 export * from "./orderHistory.js";
+export * from "./workspaceDeletion.js";

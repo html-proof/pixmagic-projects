@@ -111,9 +111,11 @@ export default function DataDeletionPage() {
 
       <LegalSection {...section("ask-us")}>
         <p>
-          Email <SupportEmail subject="Delete my data" /> from the address you sign in with, and tell us which workspace or store the
-          request concerns. We will delete your Google and Meta connections and the data fetched with them and, if you ask, your bizinsights
-          account and workspace, and confirm by email within 30 days.
+          You can delete everything yourself: an owner deletes a whole workspace, with its stores&apos; data and its Google and Meta
+          connections, under Settings → Workspace → Delete workspace, and you delete your account under Settings → Security → Delete
+          account. Or email <SupportEmail subject="Delete my data" /> from the address you sign in with, and tell us which workspace or
+          store the request concerns. We will delete your Google and Meta connections and the data fetched with them and, if you ask, your
+          bizinsights account and workspace, and confirm by email within 30 days.
         </p>
         <ContactCard title="Request deletion" subject="Delete my data">
           Send the request from the email address you sign in with.

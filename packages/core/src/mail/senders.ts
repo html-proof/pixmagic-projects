@@ -23,6 +23,7 @@ export const EMAIL_PURPOSES = {
   password_reset_code: "support",
   temporary_password: "support",
   account_deletion_code: "support",
+  workspace_deletion_code: "support",
   team_invitation: "link",
   staff_invitation: "staff",
   notice: "default",

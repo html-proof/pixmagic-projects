@@ -23,8 +23,8 @@ export const AUTH_EMAIL_KINDS = {
 } as const;
 export type AuthEmailTrigger = keyof typeof AUTH_EMAIL_KINDS;
 export type AuthEmailKind = (typeof AUTH_EMAIL_KINDS)[AuthEmailTrigger];
-/** Codes the API emails of its own accord, which no Cognito trigger names: deleting the account (accountDeletionEmail). */
-type CodeEmailKind = AuthEmailKind | "delete";
+/** Codes the API emails of its own accord, which no Cognito trigger names: deleting the account or a workspace (accountDeletionEmail, workspaceDeletionEmail). */
+type CodeEmailKind = AuthEmailKind | "delete" | "delete_workspace";
 
 /** What each one is for, which picks its sender: all of them the support sender. */
 const PURPOSE: Record<CodeEmailKind, EmailPurpose> = {
@@ -35,6 +35,7 @@ const PURPOSE: Record<CodeEmailKind, EmailPurpose> = {
   signin: "login_code",
   invite: "temporary_password",
   delete: "account_deletion_code",
+  delete_workspace: "workspace_deletion_code",
 };
 
 export const isAuthEmailTrigger = (trigger: string): trigger is AuthEmailTrigger => Object.hasOwn(AUTH_EMAIL_KINDS, trigger);
@@ -104,6 +105,15 @@ const COPY: Record<CodeEmailKind, { subject: string; heading: string; lead: stri
     ignore: "If you didn't ask to delete your account, someone may be signed in to it: don't share this code, choose Sign out everywhere in Settings → Security, and change your password.",
     preview: "Your code to confirm deleting your bizinsights account.",
   },
+  delete_workspace: {
+    subject: "Confirm deleting your bizinsights workspace",
+    heading: "Confirm deleting a workspace",
+    // Naming the workspace when the caller gives its name (codeEmail).
+    lead: "Use the code below to confirm that you want to permanently delete this bizinsights workspace, its stores' data and everything its team set up.",
+    expires: `This code expires in ${minute} and works once.`,
+    ignore: "If you didn't ask to delete this workspace, someone may be signed in to your account: don't share this code, choose Sign out everywhere in Settings → Security, and change your password.",
+    preview: "Your code to confirm deleting a bizinsights workspace.",
+  },
 };
 
 /**
@@ -114,11 +124,11 @@ const COPY: Record<CodeEmailKind, { subject: string; heading: string; lead: stri
  */
 const COPY_HINT = "To copy the code, double-click it, or press and hold it on a phone.";
 
-/** A person's own name for the greeting: one line, no control characters, not too long. */
-function greetingName(name: string | null | undefined): string | null {
+/** A name someone typed (theirs for the greeting, a workspace's): one line, no control characters, at most `max` long. */
+function oneLine(name: string | null | undefined, max = 60): string | null {
   // eslint-disable-next-line no-control-regex -- removing control characters is the point
   const clean = (name ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-  return clean ? clean.slice(0, 60) : null;
+  return clean ? clean.slice(0, max) : null;
 }
 
 /**
@@ -137,19 +147,27 @@ export function authEmail(input: { trigger: string } & CodeEmailInput): CodeEmai
 /** The code that confirms deleting the account (apps/api/src/routes/account.ts), built like the others. */
 export const accountDeletionEmail = (input: CodeEmailInput): CodeEmail => codeEmail("delete", input);
 
+/** The code that confirms deleting the workspace `workspace` names (apps/api/src/routes/workspaces.ts). */
+export const workspaceDeletionEmail = (input: CodeEmailInput & { workspace: string }): CodeEmail => codeEmail("delete_workspace", input);
+
 interface CodeEmailInput {
   code: string;
   name?: string | null;
   email: string;
   appUrl: string;
   senders?: SenderSettings;
+  /** The name of the workspace a workspace-deletion code is for. */
+  workspace?: string;
 }
 type CodeEmail = { subject: string; text: string; html: string; purpose: EmailPurpose };
 
 function codeEmail(kind: CodeEmailKind, input: CodeEmailInput): CodeEmail {
-  const copy = COPY[kind];
+  const workspace = kind === "delete_workspace" ? oneLine(input.workspace, 80) : null;
+  const copy = workspace
+    ? { ...COPY[kind], lead: `Use the code below to confirm that you want to permanently delete the workspace "${workspace}", its stores' data and everything its team set up in bizinsights.` }
+    : COPY[kind];
   const purpose = PURPOSE[kind];
-  const name = greetingName(input.name);
+  const name = oneLine(input.name);
   const hello = name ? `Hello ${name},` : "Hello,";
   const signIn = `${input.appUrl}/login`;
   const invite = kind === "invite";

@@ -1,85 +1,82 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
-import { Mail, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/AppUi";
 import { Alert } from "@/components/ui";
-import { clock, OtpInput, useCountdown } from "@/components/auth/CodeStep";
-import { authErrorMessage, challengeFromError, deleteAccount, errorCode, sendDeletionCode, type CodeChallenge } from "@/lib/auth";
-import { CONTACT } from "@/lib/contact";
+import { accountDeletionPreview, deleteAccount, sendDeletionCode, soleOwnedFromError, type SoleWorkspace } from "@/lib/auth";
+import { DeletionCodeField, TypeDelete, useDeletionCode } from "./DeletionCode";
 import { ToneIcon, tone } from "./ui";
 
-const CODE_LENGTH = 6;
+/** "2 stores: Acme, Acme EU" / "no store", for the list of workspaces that go with the account. */
+function storesOf(w: SoleWorkspace) {
+  if (!w.stores.length) return "no store";
+  return `${w.stores.length} ${w.stores.length === 1 ? "store" : "stores"}: ${w.stores.join(", ")}`;
+}
 
 /**
  * Deleting the account: typed DELETE, and a 6-digit code emailed to the account's address
  * (apps/api/src/routes/account.ts), whatever the session signed in with. No password field: beside
  * one, the browser's password manager took the DELETE box for the username and filled the account's
  * address into it. The address isn't shown in the dialog either.
+ *
+ * The workspaces the account is the only owner of go with it (core workspaceDeletion.ts): the
+ * dialog lists them, and asks for them to be ticked off, before any code is sent. One on a paid plan
+ * has to be switched to Free first.
  */
 export function DeleteCard() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
-  const [code, setCode] = useState("");
-  /** The emailed code's countdowns (the server's clock); null until one is sent. */
-  const [challenge, setChallenge] = useState<CodeChallenge | null>(null);
-  const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  const countdown = useCountdown(challenge);
-  const expired = !!countdown && countdown.expiresIn <= 0;
-  const canResend = !!countdown && countdown.resendIn <= 0 && !sending && !busy;
-  const ready = typed === "DELETE" && code.length === CODE_LENGTH && !!challenge && !expired;
+  /** The workspaces that go with the account; null while they load. */
+  const [owned, setOwned] = useState<SoleWorkspace[] | null>(null);
+  /** Their deletion ticked off. */
+  const [agreed, setAgreed] = useState(false);
+  const deletion = useDeletionCode(sendDeletionCode);
+  const { reset, setError } = deletion;
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setOwned(null);
+    accountDeletionPreview()
+      .then((r) => live && setOwned(r.workspaces))
+      // Unknown: the deletion itself refuses (sole_owner, with the list) if any would go unannounced.
+      .catch(() => live && setOwned([]));
+    return () => {
+      live = false;
+    };
+  }, [open]);
 
   const cancel = useCallback(() => {
     setOpen(false);
     setTyped("");
-    setCode("");
-    setChallenge(null);
-    setError(null);
-    setInfo(null);
-  }, []);
+    setAgreed(false);
+    reset();
+  }, [reset]);
 
-  async function sendCode() {
-    const again = !!challenge;
-    // The first code waits for DELETE; "Send a new code" doesn't.
-    if (sending || (!again && typed !== "DELETE")) return;
-    setSending(true);
-    setError(null);
-    setInfo(null);
-    try {
-      const r = await sendDeletionCode();
-      setChallenge(r.challenge);
-      setCode("");
-      if (again) setInfo("A new code has been sent.");
-    } catch (err) {
-      // Asked again too soon (the dialog reopened within the minute): the code already sent still counts.
-      const standing = challengeFromError(err);
-      if (standing) {
-        setChallenge(standing);
-        setInfo(`We already emailed you a code. Enter it below. ${authErrorMessage(err)}`);
-      } else setError(authErrorMessage(err));
-    } finally {
-      setSending(false);
-    }
-  }
+  const paid = owned?.filter((w) => w.paidPlan) ?? [];
+  const withWorkspaces = !!owned?.length;
+  const canSend = typed === "DELETE" && owned !== null && !paid.length && (!withWorkspaces || agreed);
+  const hint = typed !== "DELETE" ? "Type DELETE above first." : withWorkspaces && !agreed && !paid.length ? "Tick the box above first." : null;
+  const ready = canSend && deletion.ready;
 
   async function remove() {
     if (!ready || busy) return;
     setBusy(true);
     setError(null);
-    setInfo(null);
     try {
-      await deleteAccount(code);
+      await deleteAccount(deletion.code, (owned ?? []).map((w) => w.id));
       router.replace("/login?deleted=1");
     } catch (err) {
-      setError(authErrorMessage(err));
-      const why = errorCode(err);
-      // A spent or ended code: the boxes are cleared, and one that's gone for good is asked for again.
-      if (why === "expired_code" || why === "too_many_attempts" || why === "code_required") setCode("");
-      if (why === "too_many_attempts" || why === "code_required") setChallenge(null);
+      // The workspaces that would go changed since the dialog listed them: listed again, to be ticked again.
+      const now = soleOwnedFromError(err);
+      if (now) {
+        setOwned(now);
+        setAgreed(false);
+      }
+      deletion.refused(err);
       setBusy(false);
     }
   }
@@ -93,11 +90,7 @@ export function DeleteCard() {
             Delete account
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            Permanently deletes your sign-in and your personal account. This can&apos;t be undone. Workspaces with another owner keep running without you. If you&apos;re the only owner of a workspace, make someone else an owner first, or email{" "}
-            <a href={`mailto:${CONTACT.supportEmail}?subject=${encodeURIComponent("Delete my workspace")}`} className="underline">
-              {CONTACT.supportEmail}
-            </a>{" "}
-            to have that workspace and its data deleted.
+            Permanently deletes your sign-in and your personal account. This can&apos;t be undone. Workspaces with another owner keep running without you. A workspace you&apos;re the only owner of is deleted with your account, with its stores&apos; data.
           </p>
           <button type="button" className="btn-danger mt-4 min-h-11" onClick={() => setOpen(true)}>
             Delete my account
@@ -111,70 +104,43 @@ export function DeleteCard() {
         danger
         busy={busy}
         confirmDisabled={!ready}
-        onCancel={cancel}
+        // Not while it runs: its answer (or why it failed) belongs in the dialog.
+        onCancel={() => !busy && cancel()}
         onConfirm={() => void remove()}
       >
         <div className="space-y-4">
           <p>This can&apos;t be undone.</p>
-          <div>
-            <label className="label" htmlFor="type-delete">
-              Type DELETE to confirm
-            </label>
-            {/* Not a username: no password manager may fill or offer anything here. */}
-            <input
-              id="type-delete"
-              name="confirm-delete"
-              className="input"
-              autoComplete="off"
-              autoCapitalize="characters"
-              autoCorrect="off"
-              spellCheck={false}
-              data-1p-ignore
-              data-lpignore="true"
-              data-bwignore
-              data-form-type="other"
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-            />
-          </div>
-          {challenge ? (
-            <div className="space-y-2">
-              <p className="label">Code from the email</p>
-              <p>We emailed a 6-digit code to your account&apos;s email address. Enter it below to delete your account.</p>
-              <OtpInput value={code} onChange={setCode} disabled={busy || expired} invalid={!!error} label="Code from the email" autoFocus />
-              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1" data-testid="delete-code-timers">
-                {expired ? (
-                  <p role="status" className="font-medium text-danger">
-                    This code has expired. Request a new code.
-                  </p>
-                ) : (
-                  <p>
-                    Code expires in <span className="font-semibold tabular-nums text-text">{clock(countdown?.expiresIn ?? 0)}</span>
-                  </p>
-                )}
-                {countdown && countdown.resendIn > 0 ? (
-                  <p>
-                    Resend code in <span className="font-semibold tabular-nums text-text">{clock(countdown.resendIn)}</span>
-                  </p>
-                ) : (
-                  <button type="button" className="font-semibold text-accent underline underline-offset-2 disabled:no-underline disabled:opacity-60" onClick={() => void sendCode()} disabled={!canResend}>
-                    {sending ? "Sending…" : "Send a new code"}
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-border bg-bg/40 p-3.5">
-              <p>To confirm it&apos;s you, we&apos;ll email a 6-digit code to your account&apos;s email address.</p>
-              <button type="button" className="btn-secondary mt-3 min-h-10 px-4" onClick={() => void sendCode()} disabled={sending || typed !== "DELETE"}>
-                <Mail size={16} aria-hidden />
-                {sending ? "Sending…" : "Email me a code"}
-              </button>
-              {typed !== "DELETE" && <p className="mt-2 text-xs">Type DELETE above first.</p>}
+          {withWorkspaces && (
+            <div className="space-y-2 rounded-xl border border-border bg-bg/40 p-3.5" data-testid="delete-workspaces">
+              <p>
+                You&apos;re the only owner of {owned!.length > 1 ? "these workspaces" : "this workspace"}. Deleting your account deletes {owned!.length > 1 ? "them" : "it"} too: the stores&apos; data, everything set up there, and everyone&apos;s access to {owned!.length > 1 ? "them" : "it"}.
+              </p>
+              <ul className="list-disc space-y-1 pl-5">
+                {owned!.map((w) => (
+                  <li key={w.id}>
+                    <span className="font-medium text-text">{w.name}</span> ({storesOf(w)}
+                    {w.members > 1 ? `; ${w.members - 1} other ${w.members === 2 ? "person loses" : "people lose"} access` : ""})
+                  </li>
+                ))}
+              </ul>
+              {paid.length ? (
+                <Alert>
+                  {paid.map((w) => w.name).join(", ")} {paid.length > 1 ? "are on paid plans" : "is on a paid plan"} billed through Shopify. Switch {paid.length > 1 ? "them" : "it"} to Free in Settings → Billing first, so the charge ends.
+                </Alert>
+              ) : (
+                <label className="flex items-start gap-2.5">
+                  <input type="checkbox" className="mt-1 size-4 shrink-0" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+                  <span>Also delete {owned!.length > 1 ? "these workspaces" : owned![0]!.name} and all of {owned!.length > 1 ? "their" : "its"} data</span>
+                </label>
+              )}
+              {owned!.some((w) => w.pendingPlan && !w.paidPlan) && (
+                <p className="text-xs">A change to a paid plan is waiting for your approval in Shopify: don&apos;t approve it afterwards, as Shopify would start charging for it. Removing bizinsights in Shopify cancels it.</p>
+              )}
+              <p className="text-xs">To keep a workspace, make someone else its owner first, in Team &amp; Access.</p>
             </div>
           )}
-          {error && <Alert>{error}</Alert>}
-          {info && !error && <Alert kind="info">{info}</Alert>}
+          <TypeDelete id="type-delete" value={typed} onChange={setTyped} />
+          <DeletionCodeField state={deletion} busy={busy} canSend={canSend} hint={hint} purpose={withWorkspaces ? "delete your account and the workspaces above" : "delete your account"} />
         </div>
       </ConfirmDialog>
     </section>

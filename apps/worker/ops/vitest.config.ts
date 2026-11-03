@@ -9,6 +9,7 @@ import { defineConfig } from "vitest/config";
  *   pnpm --filter @app/worker ops:reencrypt
  *   pnpm --filter @app/worker ops:ad-persons    (OPS_LIMIT=<sign-ins> optional)
  *   pnpm --filter @app/worker ops:ad-health     (reads only)
+ *   pnpm --filter @app/worker ops:delete-workspace  (needs OPS_WORKSPACE, OPS_ACTOR; deletes only with OPS_CONFIRM)
  *
  * They run under Vitest, which loads the workspace's TypeScript as the tests do. Configuration
  * comes from OPS_ENV_FILE (default: the repo-root .env). It must hold the owner-role DATABASE_URL

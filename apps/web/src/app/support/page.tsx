@@ -67,8 +67,9 @@ export default function SupportPage() {
           <Faq q="How do I disconnect?">
             Uninstall bizinsights from your Shopify admin under Settings → Apps and sales channels. Your access tokens are destroyed as soon
             as Shopify notifies us, and the store&apos;s data is erased when Shopify asks us to, 48 hours later. To remove the imported
-            history straight away, disconnect the store in bizinsights under Settings → Shopify, or write to us and we will delete your whole
-            workspace and account.
+            history straight away, disconnect the store in bizinsights under Settings → Shopify. To delete everything, an owner can delete the
+            whole workspace under Settings → Workspace → Delete workspace, and you can delete your account under Settings → Security; or
+            write to us and we will.
           </Faq>
 
           <Faq q="Can I connect more than one store?">
