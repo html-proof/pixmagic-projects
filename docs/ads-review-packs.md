@@ -361,6 +361,11 @@ Checked against production (release 153), the code on `main` (aeb1877a) and Meta
 dashboard rows are from the owner's Chrome on 2026-11-02 (read only) unless marked otherwise. Where this list and the
 older notes below differ, this list is current.
 
+**Submission 980737984435696 on 2026-11-03.** Filled in the owner's Chrome on the owner's word ("just complete where
+it stop"). After a reload, Verification, App settings, Data handling and Reviewer instructions are green. **Allowed
+usage is the only open section: ads_read still needs its screencast.** Submit for review stays greyed until then.
+Before submitting, also replace the two placeholders in Reviewer instructions (rows below).
+
 | Item | State | Who |
 | --- | --- | --- |
 | Business Verification | Verified: portfolio bizinsights.io (1415197520268134), since 2026-10-26 | done |
@@ -375,12 +380,12 @@ older notes below differ, this list is current.
 | Live mode | The app has been Published (Live) since 2026-10-11. In Live mode, a Facebook login with no role on the app only gets permissions that have Advanced Access, which is what App Review grants. Nothing to switch | done |
 | Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/meta/callback` and `https://bizinsights.io/` (Nango's removed 2026-11-02) | done |
 | Require App Secret | On | done |
-| A successful ads_read call within 30 days | 67 calls counted on 2026-10-26, and a kept connection syncs hourly. On the day you submit, check that the dialog's "API test calls" says Completed | owner |
+| A successful ads_read call within 30 days | ads_read's dialog showed "API test calls: Completed" on 2026-11-03. On the day you submit, check it still does | owner |
 | An ad account with delivery | act_2033403030827115 had never delivered an ad (2026-10-26). Without spend, every figure in the recording is 0 | owner |
-| Reviewer account | Not created; `AUTH_LOGIN_CODE_EXEMPT` is empty, so a reviewer would be asked for an emailed code | owner, then Claude ships the address |
-| ads_read text in draft 980737984435696 | Still the 2026-10-26 text that names Nango: paste the 2026-11-02 text below over it | owner |
-| Screencast | Not recorded (script below, updated 2026-11-02 for the current screens) | owner |
-| Data handling questions | Not answered (drafts below, updated 2026-11-02: Resend added, Zapier explained) | owner |
+| Reviewer account | Not created; `AUTH_LOGIN_CODE_EXEMPT` is empty, so a reviewer would be asked for an emailed code. The submission's Reviewer instructions hold the text below with the literal placeholders `[REVIEWER EMAIL]` and `[REVIEWER PASSWORD]`: replace both before submitting (type the password yourself) | owner, then Claude ships the address |
+| ads_read text in draft 980737984435696 | Replaced 2026-11-03 with the 2026-11-02 text below (4,869 characters, no Nango); still there after a reload | done |
+| Screencast | Not recorded (script below, updated 2026-11-02 for the current screens). The only section of the submission left open. The MP4s on the owner's PC (10-18, 10-19) are Shopify recordings, not this flow | owner |
+| Data handling questions | Answered 2026-11-03 (Data handling Q1-Q8 below says what was entered) | done |
 | `META_ADS_ADVANCED_ACCESS` | "" in `apps/aws/src/settings.ts`; set to "1" once ads_read Advanced Access is granted | Claude, after approval |
 
 **Tech Provider clause for /terms (owner decision, with your adviser).** As a Tech Provider, bizinsights processes
@@ -467,8 +472,8 @@ Read this first. Four rules from Meta's docs set the order. (1) Since February 1
 11. [OWNER] Record and edit the screencast with screencastScript. Removing bizinsights under Facebook Business integrations for the recording ends the token behind the connection from step 9 and any other Meta connection you made. Reconnect them afterwards.
 12. [OWNER, optional, recommended] After recording, connect your own ad account again, this time in the reviewer workspace. Then reviewers see real numbers even if their Facebook test account owns no ad account. Meta has temporarily stopped new test-user creation, so this is likely. The card then shows 'Reconnect or add accounts', which runs the same Facebook Login. A login with no ad accounts leaves the existing data in place.
 13. [OWNER] In App Review > Permissions and Features, request Advanced Access for ads_read and public_profile only. [DONE 2026-10-26] whatsapp_business_messaging and whatsapp_business_management are out of the draft (Remaining gaps, first item, says why). Leave everything else in the 'Measure ad performance data with Marketing API' use case at Standard Access: ads_management, business_management, pages_show_list, pages_read_engagement, email, and the Marketing API Access Tier feature until it is eligible. Unneeded permissions are a common reason for rejection. If the dashboard asks for Business Verification at this point (Step 1.5), finish it first.
-14. [OWNER ONLY] Answer the data handling questions. They appear once Business Verification is approved, and Meta scores them within about 30 seconds. The drafts are in formAnswers; only you can confirm them. Meta advises checking with legal, policy and privacy advisers. Nango is not a processor any more: don't list it (Remaining gaps, the [OWNER] item on the ads_read text).
-15. [OWNER] Replace ads_read's usage description: the text pasted on 2026-10-26 names Nango. Paste the new text from the form answers below over all of it, Save, and reload to check; public_profile asks for none. Upload the recording in ads_read's dialog, tick both agreements, fill in App Verification with reviewerTestInstructions, click Submit for Review and accept the Platform Onboarding Terms. Meta aims to decide within a week.
+14. [ANSWERED 2026-11-03, owner to re-read before submitting; what was entered is under "Data handling" in the form answers] Answer the data handling questions. They appear once Business Verification is approved, and Meta scores them within about 30 seconds. The drafts are in formAnswers; only you can confirm them. Meta advises checking with legal, policy and privacy advisers. Nango is not a processor any more: don't list it (Remaining gaps, the [OWNER] item on the ads_read text).
+15. [OWNER; text and reviewer instructions DONE 2026-11-03] Replace ads_read's usage description: the text pasted on 2026-10-26 named Nango, and the new text from the form answers below replaced it on 2026-11-03; public_profile asks for none. Upload the recording in ads_read's dialog, tick both agreements, fill in App Verification with reviewerTestInstructions, click Submit for Review and accept the Platform Onboarding Terms. Meta aims to decide within a week.
 16. [SUBMITTED 2026-10-26, in review] Complete Access Verification (Tech Provider) under App Dashboard > Basics > Verifications > Access verification. It needs Business Verification and a business account with no restrictions, and can run while App Review is in progress. Meta decides in about 5 days. If it is denied, calls that need ads_read fail for anyone without a role on the app, even after App Review passes.
 17. [OWNER] After approval: complete the Data Use Checkup if Meta asks for it. The app is already Live (Published since 2026-10-11), so there is nothing to switch; in Live mode only approved permissions work for people without a role on the app. Tell Claude, who sets `META_ADS_ADVANCED_ACCESS` to "1". After that, watch Required Actions in the App Dashboard for Ongoing Review, the yearly Data Use Checkup, or Data Access Renewal, which Meta is rolling out in phases to merge these checks.
 18. [OWNER, as soon as eligible] Upgrade the Marketing API Access Tier from Limited to Full with the Upgrade button on that feature. You need 500 or more Marketing API calls in the last 15 days and errors under 15% in the last 500. No screen recording is needed. Limited's Ads Insights quota per ad account per hour is 600, plus 400 for each active ad. Full's base is 190,000.
@@ -551,7 +556,7 @@ Read this first. Four rules from Meta's docs set the order. (1) Since February 1
 
 **Requested Permissions and Features > ads_read > usage description (in the form: Allowed usage → "How will this app use ads_read?" → Get started)**
 
-The dialog "Tell us why you're requesting ads_read" has tick boxes, then this text box (no length limit), the screencast upload, the API test calls (ads_read: Completed, 2026-10-26) and the agreement. Tick "Provide API access to your ad performance data for use in custom dashboards and data analytics." A text describing Nango was **pasted 2026-10-26** in the draft (submission 980737984435696) and saved. **[OWNER] It must be replaced with the text below before submitting** (rewritten 2026-10-28 for bizinsights' own Facebook Login; updated 2026-11-02 for the current Advertising screens and for where Meta data goes: alert emails and the merchant's own Zapier. Meta's box has no length limit). Still open in that dialog: the new text, the screencast and the agreement (owner).
+The dialog "Tell us why you're requesting ads_read" has tick boxes, then this text box (no length limit), the screencast upload, the API test calls (ads_read: Completed, 2026-10-26) and the agreement. Tick "Provide API access to your ad performance data for use in custom dashboards and data analytics." The text below (rewritten 2026-10-28 for bizinsights' own Facebook Login; updated 2026-11-02 for the current Advertising screens and for where Meta data goes: alert emails and the merchant's own Zapier. Meta's box has no length limit) **replaced the 2026-10-26 Nango text in submission 980737984435696 on 2026-11-03**, checked after a reload. The agreement was already ticked. Still open in that dialog: the screencast (owner).
 
 > bizinsights (https://bizinsights.io) is a web analytics dashboard for Shopify merchants. Each merchant is a separate business. It signs in to bizinsights with its own bizinsights account and connects its own Meta ad accounts, so it can see what its Facebook and Instagram ads cost and returned next to its store's sales. ads_read is the only Marketing API permission bizinsights asks people to grant. We don't request ads_management, and bizinsights has no feature that creates, edits, pauses or deletes campaigns, ad sets, ads, audiences, budgets, billing or users.
 >
@@ -578,6 +583,18 @@ Seen 2026-10-26: Meta's form asks **no description and no recording** for public
 **App Verification > Platform Settings > instructions for reviewers**
 
 > Paste reviewerTestInstructions with the owner's reviewer credentials filled in.
+
+**Data handling: what was entered in submission 980737984435696 on 2026-11-03.** Meta's form has six questions; Q2 to Q4 below are one "Add data processor or service provider" dialog per processor (name, service categories, countries). Change any of these before submitting if they're wrong.
+
+> Processors: Yes.
+> Amazon Web Services: IT solutions and services, including cloud storage and processing; Australia.
+> Cloudflare: IT solutions and services, including cloud storage and processing; Australia, United States of America.
+> Resend: IT solutions and services, including cloud storage and processing; United States of America.
+> Responsible entity: Zodiix Pty Ltd; country Australia.
+> National-security requests in the past 12 months: No (the owner's answer).
+> Policies for public-authority requests: None of the above (the owner gave no preference, and neither /privacy nor the code describes such a policy; tick real ones here if Zodiix adopts any).
+
+Judgment calls in those answers: AWS lists only Australia, where the functions and database run, although CloudFront edges carry responses worldwide; Cloudflare lists Australia and the United States, although its proxy edges are worldwide; Resend lists the United States (its API; the sending region of the Resend account was not checked).
 
 **Data handling Q1: data processors or service providers (including your own companies) with access to Platform Data from Meta (OWNER must confirm)**
 
@@ -663,6 +680,8 @@ Rewritten 2026-10-26 against the app's current screens (Settings → Advertising
 21. Afterwards, connect Meta Ads again in your own workspace (step 3 ended it), and optionally in the reviewer workspace (prerequisite 12), so the hourly sync keeps counting toward the Marketing API Access Tier.
 
 ### Instructions for the reviewer
+
+Pasted into submission 980737984435696 (Reviewer instructions → "Provide instructions for accessing the app") on 2026-11-03, with "Is Facebook Login integrated on this platform?" = Yes. The email and password lines there read `[REVIEWER EMAIL]` and `[REVIEWER PASSWORD]` until the reviewer account exists: replace both before submitting. Step 2 is the "Continue with Meta Ads" version.
 
 bizinsights is a web app for Shopify merchants at https://bizinsights.io. Merchants sign in to bizinsights with a bizinsights email and password. Facebook Login for Business is used only to connect a merchant's own Meta ad accounts, with the ads_read permission only.
 
