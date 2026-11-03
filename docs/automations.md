@@ -62,9 +62,10 @@ messages are on the WhatsApp page (source Zapier), not in the hub's history.
 2. **Trigger.** Every trigger, with its state for the chosen channel and the store: *Available*,
    *One step needed* (with the step), or *Not available* with the reason. The states come from
    what the store's Shopify app really receives (`APP_WEBHOOK_TOPICS`, per-store subscriptions
-   Shopify confirmed, the last event of the trigger's topics). A store connected through the App
-   Store app gets no order or checkout topics until Shopify approves protected customer data, so
-   those triggers say so on both channels. *Check with Shopify* asks about the per-store topics now.
+   Shopify confirmed, the last event of the trigger's topics). A store connected through the first
+   App Store app (`public`) gets no order or checkout topics, because Shopify never approved its
+   protected customer data, so those triggers say so on both channels. The App Store app
+   (`appstore`) gets them since 2026-10-30. *Check with Shopify* asks about the per-store topics now.
 
    | Trigger | SMS | Email |
    | --- | --- | --- |

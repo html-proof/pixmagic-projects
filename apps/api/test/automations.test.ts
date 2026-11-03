@@ -197,8 +197,8 @@ describe("step 2: triggers", () => {
     expect(of("inbound_message")).toMatchObject({ sms: { state: "unavailable" }, email: { state: "unavailable" } });
     expect(t.find((x) => x.key === "scheduled_message")).toMatchObject({ instead: { href: "/messaging/campaigns" } });
 
-    // A store connected through the App Store app gets no order events from Shopify yet: neither channel can use them.
-    const listed = await owner("u3", "o3@shop.test", { shopifyAppKey: "appstore" });
+    // A store connected through the first App Store app ("public") gets no order events from Shopify: neither channel can use them.
+    const listed = await owner("u3", "o3@shop.test", { shopifyAppKey: "public" });
     const l = (await listed.call("GET", "/triggers")).json().triggers.find((x: { key: string }) => x.key === "order_created").channels;
     expect(l.sms.state).toBe("unavailable");
     expect(l.email).toMatchObject({ state: "unavailable", reason: expect.stringMatching(/App Store app/) });

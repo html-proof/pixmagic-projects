@@ -363,7 +363,7 @@ Where each app stands:
 | --- | --- | --- | --- |
 | Main (`default`, 57e9ef75) | yes (`optional_scopes`, after the common list) | yes | development stores: no review |
 | PixMagic (`pixmagic`, bb0ea9e4) | yes | yes | custom distribution: "always available", but the fields must be selected (step 2) |
-| App Store (`appstore`, cf5c717d) | no | no | needs Shopify's review, which can't be asked for while the app is in App Store review |
+| App Store (`appstore`, cf5c717d) | no | no | needs Shopify's review: Level 1 only (2026-10-30); Level 2 can be requested now that App Store review is over |
 | First App Store app (`public`, 658431ae) | no | no | as `appstore`; never to be submitted |
 
 The setting is the switch, and it stays empty until both tomls are released, because Shopify grants
@@ -506,10 +506,14 @@ choice is permanent. Our four apps, all named "bizinsights" and all served by th
 - Secrets: `SHOPIFY_APP_SECRET_APPSTORE` and `SHOPIFY_APP_SECRET_PUBLIC` in `insights/production/app`
   (put-secrets.mjs; `shopify app env show --config appstore` prints the client secret). Installs
   from a listing are recognised by their signature, so they work without anything else.
+- **Approved and published on 2026-11-03**: https://apps.shopify.com/bizinsights-1, with limited
+  visibility (only merchants with that link find it; **Make fully visible** on the Partner
+  Dashboard's App Store listing page lists it in search, the owner's call).
 - New stores (one-click connect, typed-in stores) go to `SHOPIFY_INSTALL_APP`
-  (apps/aws/src/settings.ts). It stays `default` until Shopify approves the App Store app: an
-  unapproved app installs only on development stores of its own organization, and ours are in the
-  main app's. Approved: set it to `appstore` and deploy.
+  (apps/aws/src/settings.ts): `appstore` since the approval. Before it, `default`, because an
+  unapproved app installs only on development stores of its own organization, and ours were in the
+  main app's. So a new merchant's workspace is an App Store workspace (next point) and offers what
+  the listing describes: the owner's choice on 2026-11-03.
 - Except in an **App Store workspace**: one whose every store came through an App Store app
   (`appstore` or `public`: `APP_STORE_APPS` and `appStoreWorkspace` in packages/core/src/apps.ts;
   `SHOPIFY_APP_STORE_PREVIEW_SHOPS` adds the App Store reviewer's test store, which is on the main
@@ -517,9 +521,10 @@ choice is permanent. Our four apps, all named "bizinsights" and all served by th
   app leaves out WhatsApp, Staff, advertising and email there (`APP_STORE_MODULES`,
   apps/web/src/lib/features.ts). Reconnecting a store always goes through the app it came through
   (`connectApp`), so no merchant is moved to an app their store may refuse.
-- Webhooks: as a public app it may not subscribe to order, refund or checkout topics until
-  **Protected customer data access** is granted for it (Partner Dashboard → the app → API access
-  requests). The toml lists what to add back then.
+- Webhooks: a public app may subscribe to order, refund or checkout topics only once **Protected
+  customer data access** is granted for it (Partner Dashboard → the app → API access requests).
+  Granted for `appstore` on 2026-10-30 (Level 1), so its toml subscribes to them as the main app's
+  does. `public` never got it and stays without them.
 - 2026-10-16: its first version, made in the Dashboard, was `embedded = true` with a secret the
   backend didn't have, so opening it from a store's admin showed "bizinsights.io refused to
   connect". `bizinsights-2` (the toml) made it non-embedded.

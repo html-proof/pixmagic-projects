@@ -41,22 +41,24 @@ export const APP_SETTINGS = {
   // "appstore" is the App Store app (shopify-app/shopify.app.appstore.toml, registered 2026-10-18),
   // in the Pixmagic Partner organization: the only kind of app of ours that can be submitted for
   // review (the main app's organization has no Partner account, and PixMagic's is
-  // custom-distributed for good). Its secret: SHOPIFY_APP_SECRET_APPSTORE. Installs from its
-  // listing work through it already; new stores are sent to it once SHOPIFY_INSTALL_APP below
-  // says "appstore".
+  // custom-distributed for good). Its secret: SHOPIFY_APP_SECRET_APPSTORE. Approved and published
+  // on 2026-11-03 (https://apps.shopify.com/bizinsights-1, limited visibility): new stores are sent
+  // to it (SHOPIFY_INSTALL_APP below).
   // "public" (shopify.app.public.toml, 658431ae) is the first App Store app, whose submission the
   // owner chose to start over with "appstore". Keep it, and SHOPIFY_APP_SECRET_PUBLIC, while any
   // store is connected through it: that store's tokens, webhooks and reconnects use its credentials.
   "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]},{\"key\":\"public\",\"clientId\":\"658431ae6a22c880e0ab2a0e2040a28a\",\"shops\":[]},{\"key\":\"appstore\",\"clientId\":\"cf5c717dba9317707e0cd5f5d3408fd0\",\"shops\":[]}]",
   // The app stores without one of their own are sent to (packages/core/src/apps.ts installTarget).
-  // "default" until Shopify approves "appstore": an unapproved app installs only on development
-  // stores of its own organization, and ours are in the main app's. Approved: set "appstore".
-  "SHOPIFY_INSTALL_APP": "default",
+  // "appstore" since Shopify approved it (2026-11-03); "default" before, because an unapproved app
+  // installs only on development stores of its own organization. A workspace whose every store came
+  // through it is an App Store workspace, which offers only what the listing describes
+  // (apps/web/src/lib/features.ts APP_STORE_MODULES): the owner's choice for new merchants.
+  "SHOPIFY_INSTALL_APP": "appstore",
   // Stores whose workspace is shown as an App Store install sees it (packages/core/src/apps.ts
   // appStoreWorkspace: only what the listing describes, connects through "appstore") though they
   // are connected through another app: "Insights Test", the store in the App Store reviewer's test
-  // account. It is a development store of the main app's organization, which the unapproved
-  // App Store app can't read, so it stays on the main app. Clear it once review is over.
+  // account, a development store on the main app. Kept after approval (owner, 2026-11-03), so a
+  // later Shopify re-review with that account sees the app it approved.
   "SHOPIFY_APP_STORE_PREVIEW_SHOPS": "insights-test-gpjkykfc.myshopify.com",
   // Paid plans (packages/core/src/billing.ts): "1" lets merchants start one and applies each plan's
   // store limit. Off until they launch; turn it on together with BILLING_ENABLED in

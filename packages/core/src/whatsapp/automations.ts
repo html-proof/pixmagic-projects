@@ -59,8 +59,8 @@ export interface TriggerAvailability {
 
 /**
  * What each trigger can do for this store: Shopify's events only where the store's app receives
- * them (the App Store app gets no order or checkout events until Shopify approves protected
- * customer data), new customers only with read_customers. Nothing is offered as working when it
+ * them (the first App Store app, "public", gets no order or checkout events: Shopify never approved
+ * its protected customer data), new customers only with read_customers. Nothing is offered as working when it
  * can't start a message.
  */
 export function triggerAvailability(store: Pick<Store, "shopifyAppKey" | "grantedScopes">): Record<WaTrigger, TriggerAvailability> {

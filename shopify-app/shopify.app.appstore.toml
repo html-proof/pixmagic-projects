@@ -24,8 +24,8 @@ scopes = "read_orders,read_products"
 # docs/shopify-setup.md "Optional scopes" before submitting without Protected customer data
 # access approved.
 # No read_reports (Shopify's reports, ShopifyQL), unlike the main and PixMagic apps: it waits
-# for App Store review to finish and Shopify to approve Level 2 protected customer data for this
-# app. Then add it here and to this app's SHOPIFY_APP_OPTIONAL_SCOPES, and
+# for Shopify to approve Level 2 protected customer data for this app (it has Level 1, granted
+# 2026-10-30 with the App Store review). Then add it here and to this app's SHOPIFY_APP_OPTIONAL_SCOPES, and
 # `shopify app deploy --config appstore` (docs/shopify-setup.md, "Shopify's reports").
 # The Inventory module's stock levels, locations and stock changes (docs/inventory.md); none of
 # them is protected customer data.
@@ -39,15 +39,21 @@ redirect_urls = ["https://bizinsights.io/api/shopify/callback"]
 api_version = "2026-10"
 
   [[webhooks.subscriptions]]
-  # Only topics without protected customer data. As a public app it may not subscribe to the
-  # order, refund and checkout topics (Shopify refuses the version: "not approved to subscribe to
-  # webhook topics containing protected customer data") until Protected customer data access is
-  # granted for it (Partner Dashboard -> API access requests). Then add back, as in
-  # shopify.app.toml: orders/create, orders/updated, orders/paid, orders/cancelled,
-  # orders/fulfilled, orders/partially_fulfilled, orders/delete, refunds/create, checkouts/create,
-  # checkouts/update - and `shopify app deploy --config appstore`. Until then its stores get
-  # orders from the import, the daily re-read and the dashboard's Sync, not live.
+  # The order, refund and checkout topics carry protected customer data: a public app may subscribe
+  # to them only once Protected customer data access is granted for it (Partner Dashboard -> API
+  # access requests; Shopify refuses the version otherwise, "not approved to subscribe to webhook
+  # topics containing protected customer data"). Granted for this app on 2026-10-30 (Level 1).
   topics = [
+    "orders/create",
+    "orders/updated",
+    "orders/paid",
+    "orders/cancelled",
+    "orders/fulfilled",
+    "orders/partially_fulfilled",
+    "orders/delete",
+    "refunds/create",
+    "checkouts/create",
+    "checkouts/update",
     "products/create",
     "products/update",
     "products/delete",
