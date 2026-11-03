@@ -29,6 +29,8 @@ const PATHS: Array<[RegExp, PathScope]> = [
   // Returns from signing in to a provider, and Zapier's API (by its token).
   [/^\/(ads\/[^/]+\/(callback|oauth-callback)|email\/oauth\/[^/]+\/callback)$/, { reason: "integrations_oauth" }],
   [/^\/(oauth|zapier)\//, { reason: "integrations_oauth" }],
+  // A connect link's page (routes/adLinks.ts): the store comes from the link.
+  [/^\/ads\/links\//, { reason: "integrations_oauth" }],
 ];
 
 const WORKSPACE = /^\/(?:workspaces|employee)\/([^/]+)(?:\/|$)/;

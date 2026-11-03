@@ -155,6 +155,13 @@ that sign-in, without Meta's screen: `{ connected }`, or `{ choose }` (a pending
 after a sign-in) when it reaches several ad accounts; 404 `reuse_unavailable`, 409 `reuse_ended` or
 `no_accounts`. [meta-discovery.md](../meta-discovery.md).
 
+Connect links (`routes/adLinks.ts`, [ads-setup.md](../ads-setup.md#connect-links)): `GET`, `POST` and `DELETE`
+`/workspaces/:ws/stores/:storeId/ads/meta/link` (Manage integrations) show, make (replacing) and turn off the
+store's link, `{ link: { url, createdAt, expiresAt, createdBy } | null }`. The link's page calls the public
+`/ads/links/*` routes with the token in the body: `open` (`{ token, pick? }` → the workspace's and store's names,
+`state` `open` | `used` | `ended`, and with `pick` the accounts to choose), `start` (`{ url }`, sets the sign-in's
+state cookie), `choose` and `cancel`; 404 `link_invalid`, 410 `link_used` or `link_ended`.
+
 ## Endpoints
 
 Generated from the route files (`apps/api/src/routes/*.ts`); "Access" is the permission each
@@ -165,6 +172,13 @@ route checks, or how a public route is protected.
 Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/ads` | dashboard:read | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/:provider/connect` | stores:manage | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/meta/reuse` | integrations.manage | ads.ts |
+| GET | `/workspaces/:ws/stores/:storeId/ads/meta/link` | integrations.manage | adLinks.ts |
+| POST | `/workspaces/:ws/stores/:storeId/ads/meta/link` | integrations.manage | adLinks.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/ads/meta/link` | integrations.manage | adLinks.ts |
+| POST | `/ads/links/open` | public (the link's token) | adLinks.ts |
+| POST | `/ads/links/start` | public (the link's token, origin-checked) | adLinks.ts |
+| POST | `/ads/links/choose` | public (the link's token, origin-checked) | adLinks.ts |
+| POST | `/ads/links/cancel` | public (the link's token, origin-checked) | adLinks.ts |
 | GET | `/ads/:provider/callback` | public (signed/origin-checked) | ads.ts |
 | GET | `/workspaces/:ws/stores/:storeId/ads/pending/:nonce` | stores:manage | ads.ts |
 | POST | `/workspaces/:ws/stores/:storeId/ads/pending/:nonce` | stores:manage | ads.ts |

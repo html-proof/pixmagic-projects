@@ -80,10 +80,11 @@ const ButtonMark = ({ P }: { P: AdPlatformInfo }) => (
  * and data status beside how the integration stands, with Sync data now, View data details and
  * Reconnect account under them. While nothing is connected: what connecting brings, what it needs,
  * and the button again. The rules (who may press what, which state, the demo) are the same as on
- * Settings → Integrations (components/integrations/adPlatformParts.tsx).
+ * Settings → Integrations (components/integrations/adPlatformParts.tsx). `extra` goes at the foot (Meta's
+ * connect link).
  */
-export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConnection) => ReactNode }) {
-  const { provider, answer, loadError, connections, view, store, manage, busy, leaving, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, onCheckLogin, onDisconnectLogin, rowExtra } = props;
+export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConnection) => ReactNode; extra?: ReactNode }) {
+  const { provider, answer, loadError, connections, view, store, manage, busy, leaving, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, onCheckLogin, onDisconnectLogin, rowExtra, extra } = props;
   const { P, configured, reconnect, readable, canAct, real, demoOffered, demoConnected, missing } = platformFacts(props);
   const { access, workspace, me, offers } = useApp();
   const [more, setMore] = useState(false);
@@ -274,6 +275,7 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
       </div>
       <ReadsFlow P={P} />
       {body}
+      {extra}
     </section>
   );
 }
