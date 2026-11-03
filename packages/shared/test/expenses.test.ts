@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { expenseInput, expenseInRange, expensesComplete, expenseTotals, netProfit, type ExpenseInput } from "../src/index.js";
+import { expenseInput, expenseInRange, expensesComplete, expenseTotals, netProfit, type ExpenseInputSent } from "../src/index.js";
 
 /**
  * A store's own costs (Settings → Costs): how each is spread over the days it covers, how a range's
  * costs add up, what the API takes, and when net profit may be given.
  */
 
-const cost = (over: Partial<ExpenseInput>): ExpenseInput => ({ name: "Cost", category: "other", amount: 100, cadence: "monthly", startsOn: "2026-01-01", endsOn: null, note: null, ...over });
+const cost = (over: Partial<ExpenseInputSent>): ExpenseInputSent & { category: string } => ({ name: "Cost", category: "other", amount: 100, cadence: "monthly", startsOn: "2026-01-01", endsOn: null, note: null, ...over });
 
 describe("a cost over the dates", () => {
   it("counts a monthly cost whole for a whole month, whatever its length, and by its share of a part", () => {
@@ -49,7 +49,16 @@ describe("a cost over the dates", () => {
       ],
       { from: "2026-10-01", to: "2026-10-31" },
     );
-    expect(totals).toEqual({ total: 59, byCategory: [{ category: "shopify_plan", amount: 39 }, { category: "shopify_apps", amount: 20 }], byGroup: { fixed: 59, variable: 0, non_operating: 0 }, counted: 3 });
+    expect(totals).toEqual({
+      total: 59,
+      byCategory: [
+        { category: "shopify_plan", section: "fixed", amount: 39 },
+        { category: "shopify_apps", section: "fixed", amount: 20 },
+      ],
+      byGroup: { fixed: 59, variable: 0, non_operating: 0 },
+      bySection: { advertising: 0, variable: 0, fixed: 59, non_operating: 0 },
+      counted: 3,
+    });
   });
 });
 

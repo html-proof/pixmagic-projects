@@ -1,7 +1,8 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
-import { EXPENSE_CATEGORY_LABEL, type Expense, type ExpenseTotals } from "@app/shared/expenses";
-import { canManage, useApp } from "@/components/AppContext";
+import { categoryLabel, type CustomCategory, type Expense, type ExpenseSection, type ExpenseTotals } from "@app/shared/expenses";
+import { useApp } from "@/components/AppContext";
 import { ConfirmDialog, Skeleton, useAction } from "@/components/AppUi";
 import { blankCost, CostFields, draftOf, inputOf, termsOf, whenOf, type CostDraft } from "@/components/costs/CostForm";
 import { fmtDay } from "@/components/dashboard/format";
@@ -21,6 +22,8 @@ interface Answer {
   currency: string;
   today: string;
   expenses: Expense[];
+  /** The store's own categories (absent from older answers). */
+  categories?: CustomCategory[];
   settings: { completeFrom: string | null; operatingWeekdays: number[]; updatedAt: string | null };
   thisMonth: ExpenseTotals & { from: string; to: string };
 }
@@ -28,10 +31,11 @@ interface Answer {
 type Draft = CostDraft;
 
 export default function CostsPage() {
-  const { workspace, store } = useApp();
+  const { workspace, store, allowed, me } = useApp();
   const path = store ? `/workspaces/${workspace.id}/stores/${store.id}/expenses` : null;
   const { data, error, loading, reload } = useApi<Answer>(path);
-  const editable = canManage(workspace.role);
+  // Owners, admins and members given "Manage costs", signed in to their account (a shared link only reads).
+  const editable = allowed("finance.costs") && !me.shared;
   const { busy, run } = useAction();
   const [editing, setEditing] = useState<{ id: string | null; draft: Draft } | null>(null);
   const [removing, setRemoving] = useState<Expense | null>(null);
@@ -60,7 +64,7 @@ export default function CostsPage() {
     if (!editing || !path) return;
     const { id, draft } = editing;
     const ok = await run("save", id ? "save the cost" : "add the cost", async () => {
-      await api(id ? `${path}/${id}` : path, { method: id ? "PUT" : "POST", body: inputOf(draft) });
+      await api(id ? `${path}/${id}` : path, { method: id ? "PUT" : "POST", body: inputOf(draft, data!.currency) });
       return id ? "Cost saved." : "Cost added.";
     });
     if (ok) {
@@ -92,6 +96,16 @@ export default function CostsPage() {
   }
 
   const set = (patch: Partial<Draft>) => setEditing((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e));
+  const categories = data.categories ?? [];
+  async function createCategory(name: string, section: ExpenseSection): Promise<CustomCategory | null> {
+    let made: CustomCategory | null = null;
+    await run("category", "add the category", async () => {
+      made = (await api<{ category: CustomCategory }>(`/workspaces/${workspace.id}/stores/${store!.id}/expense-categories`, { method: "POST", body: { name, section } })).category;
+      await reload();
+      return `${name} added.`;
+    });
+    return made;
+  }
 
   return (
     <>
@@ -116,17 +130,23 @@ export default function CostsPage() {
         <p className="text-sm" data-testid="costs-this-month">
           This month so far ({fmtDay(data.thisMonth.from, { year: false })} – {fmtDay(data.thisMonth.to, { year: false })}): <b className="tabular-nums">{money(data.thisMonth.total)}</b>
           {data.thisMonth.byCategory.length > 0 && (
-            <span className="text-muted"> · {data.thisMonth.byCategory.map((c) => `${EXPENSE_CATEGORY_LABEL[c.category]} ${money(c.amount)}`).join(" · ")}</span>
+            <span className="text-muted"> · {data.thisMonth.byCategory.map((c) => `${categoryLabel(c.category, categories)} ${money(c.amount)}`).join(" · ")}</span>
           )}
         </p>
-        {!editable && <Alert kind="info">Only owners and admins can change the costs.</Alert>}
+        <p className="text-sm">
+          <Link className="font-medium text-accent hover:underline" href="/profit">
+            Profit &amp; Loss
+          </Link>{" "}
+          has the full list: every payment of your recurring costs, pausing and resuming them, your own categories, and the profit and loss they give.
+        </p>
+        {!editable && <Alert kind="info">Ask an owner or admin for &ldquo;Manage costs&rdquo; in Team &amp; Access to change the costs.</Alert>}
       </section>
 
       {editing && (
         <section className="card">
           <h2 className="font-semibold">{editing.id ? "Change the cost" : "Add a cost"}</h2>
           <form onSubmit={save} className="mt-3 grid gap-3 sm:grid-cols-2" data-testid="cost-form">
-            <CostFields draft={editing.draft} currency={data.currency} set={set} />
+            <CostFields draft={editing.draft} currency={data.currency} set={set} categories={categories} onCreateCategory={createCategory} />
             <div className="flex gap-2 sm:col-span-2">
               <button className="btn-primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : editing.id ? "Save" : "Add"}</button>
               <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
@@ -146,7 +166,7 @@ export default function CostsPage() {
                 <span className="min-w-0 flex-1">
                   <span className="font-medium">{e.name}</span>
                   <span className="block text-xs text-muted">
-                    {EXPENSE_CATEGORY_LABEL[e.category]} · {whenOf(e)}
+                    {categoryLabel(e.category, categories)} · {whenOf(e)}
                     {e.endsOn && e.endsOn < data.today ? " · ended" : ""}
                     {e.note ? ` · ${e.note}` : ""}
                   </span>
@@ -154,7 +174,7 @@ export default function CostsPage() {
                 <span className="tabular-nums">{termsOf(e, data.currency)}</span>
                 {editable && (
                   <span className="flex gap-3">
-                    <button type="button" className="text-accent hover:underline" onClick={() => setEditing({ id: e.id, draft: draftOf(e) })} aria-label={`Change ${e.name}`}>
+                    <button type="button" className="text-accent hover:underline" onClick={() => setEditing({ id: e.id, draft: draftOf(e, categories) })} aria-label={`Change ${e.name}`}>
                       Change
                     </button>
                     <button type="button" className="text-danger hover:underline" onClick={() => setRemoving(e)} aria-label={`Remove ${e.name}`}>

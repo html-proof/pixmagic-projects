@@ -189,6 +189,21 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores/:storeId/overview` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
+| GET | `/workspaces/:ws/stores/:storeId/expenses` | finance.breakdown | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expenses` | finance.costs | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expenses/bulk-delete` | finance.costs | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expenses/settings` | finance.costs | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expenses/:id` (`?apply=next\|all`) | finance.costs | expenses.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/expenses/:id` | finance.costs | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expenses/:id/pause\|resume\|end` | finance.costs | expenses.ts |
+| GET | `/workspaces/:ws/stores/:storeId/expenses/:id/payments` | finance.breakdown | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expenses/:id/payments/:due` | finance.costs | expenses.ts |
+| GET | `/workspaces/:ws/stores/:storeId/expenses/:id/history` | finance.breakdown | expenses.ts |
+| POST | `/workspaces/:ws/stores/:storeId/expense-categories` | finance.costs | expenses.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/expense-categories/:id` | finance.costs | expenses.ts |
+| DELETE | `/workspaces/:ws/stores/:storeId/expense-categories/:id` | finance.costs | expenses.ts |
+| GET | `/workspaces/:ws/stores/:storeId/profit` (`?month=`) | finance.breakdown + analytics.sales | profit.ts |
+| GET | `/workspaces/:ws/stores/:storeId/profit/statement` (dates, `grain`) | finance.breakdown + analytics.sales | profit.ts |
 | GET | `/workspaces/:ws/stores/:storeId/integrations` | integrations.status | integrations.ts |
 | GET | `/workspaces/:ws/stores/:storeId/meta/discovery` | integrations.status | integrations.ts |
 | POST | `/pixel/:key` | per-store ingest key, rate-limited | pixel.ts |

@@ -909,27 +909,114 @@ of variable costs makes ₹4,333.33 of operating profit (`packages/shared/test/p
   "View advertising analytics", otherwise they are "hidden" and the profit they'd give away isn't given. A
   shared link and API keys may read it. The month must not be in the future (400 `invalid_month`).
 
+## Profit & Loss page (/profit)
+
+Reference implementation: `profitStatement` (`packages/core/src/reports/profit.ts`),
+`GET /workspaces/:ws/stores/:storeId/profit/statement` (the dashboard's date question, `preset`,
+`from`, `to`, `compare`, `cfrom`, `cto`, and `grain=day|week|month|year`), the page
+`apps/web/src/app/(app)/profit/page.tsx` and `components/profit/`.
+
+The owner's own profit and loss workbook (EEq.xlsx, a "Dashboard" sheet with a column a day and an
+"Add Cost" sheet) as a page: any dates and the dates they're compared with (the dashboard's pickers:
+today, yesterday, this week, this month, last month, this year, last year, custom; previous period,
+previous year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
+coarser when the dates need more), overview cards with the change from the comparison, charts
+(revenue, expenses and profit per column; daily profit or loss; the expense breakdown; advertising;
+fixed vs variable), the statement, the expenses table and the recurring expenses. Every figure is
+`profitAndLoss`'s (`packages/shared/src/profit.ts`), worked out on the server; the page formats it.
+
+| Row | Formula |
+| --- | --- |
+| Revenue (tax included) | Shopify's total sales: what customers paid, tax and duties included |
+| Revenue before tax | net sales + shipping + additional fees (the revenue profit is worked out from) |
+| Tax collected | revenue (tax included) − revenue before tax: never the store's income |
+| Orders, items sold | the sales records' |
+| Advertising | each connected platform's synced spend (Meta, Google) + your advertising costs (other paid channels, ad spend adjustments) |
+| Variable costs | product costs (each product's cost per item in Shopify) + your variable costs (shipping, pick and pack, packaging, transaction and merchant fees, commissions, product cost adjustments, your own variable categories) |
+| Fixed costs | your fixed costs' share of the dates (a monthly cost spread over its calendar month) |
+| Below operating profit | interest, income tax, depreciation (only when there are any) |
+| Total expenses | advertising + variable + fixed (+ below operating profit) |
+| Profit or loss | revenue before tax − total expenses (the dashboard's net profit) |
+| Profit margin | profit ÷ revenue before tax |
+| MER (marketing expense ratio) | advertising ÷ revenue tax included |
+| VCR, FCR | variable costs ÷ revenue before tax; fixed costs ÷ revenue before tax |
+| Sitewide ROAS | revenue tax included ÷ advertising |
+
+A ratio whose denominator is 0 or below (no sales, a day of refunds) is "—", never a figure.
+
+**Checked against the workbook** (`packages/shared/test/workbook.test.ts`): its October, day by day
+(sales with and without GST, orders, items, Meta spend, product costs, shipping $20, packaging $3 and
+transaction fees $0.30 an order, merchant fees 2% of sales with tax on days with sales, and five
+monthly fixed costs), gives its every cost total to the cent: advertising $11,950.77, variable
+$12,019.88, fixed $11,734.00, total $35,704.65, MER 35.43%, ROAS 2.82; 1 October's profit −$736.89.
+Two differences are deliberate and named in the test:
+- the workbook's month profit is −$5,039.65: it takes $33,731.50 ÷ 1.1 = $30,665.00 for the month,
+  where its own days before tax add up to $30,664.99 (as Shopify's do), giving −$5,039.66 here;
+- it divides profit %, VCR and FCR by revenue **with** tax (−14.94%, 35.63%, 34.79%); bizinsights
+  divides them by revenue before tax (−16.43%, 39.20%, 38.27%), since the tax collected is the
+  government's. MER and ROAS keep the workbook's base (revenue with tax).
+The workbook's merchant fee on the day of a refund (−$431) is 0: a percentage cost is never below 0
+on a day refunds outweigh sales.
+
 ## Costs and net profit
 
-Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `expenseTotals`,
-`netProfit`), `packages/core/src/expenses.ts`, Settings → Costs (`/settings/costs`) and the Profit
-sheet's Expense breakdown, which lists the month's costs and adds, changes and removes them too.
+Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `occurrences`,
+`expenseTotals`, `netProfit`), `packages/core/src/expenses.ts`, Profit & Loss (`/profit`), Settings →
+Costs (`/settings/costs`) and the Profit sheet's Expense breakdown, which all edit costs with the one
+form (`components/costs/CostForm.tsx`).
 
 What Shopify, its profit report and the ad platforms can't tell bizinsights (rent, salaries, software,
 the Shopify plan and apps, shipping labels, packaging, payment fees, commissions, ads on platforms that
 aren't connected, loan interest, income tax) comes only from the store's owner, as **costs** kept per
-store in the store's currency (`store_expenses`). Owners and admins add, change and remove them;
-members with "View gross sales, discounts, tax, shipping and total sales" (`finance.breakdown`) see
-them, on the page and as the dashboard's `expenses` module. Each change is in the audit log
-(`expense.added`, `expense.changed`, `expense.removed`; the note, free text, is never copied into it).
+store in the store's currency (`store_expenses`; a cost in another currency is refused, 400
+`currency_mismatch`: nothing is converted). Members with "Manage costs" (`finance.costs`: owners and
+admins, and whoever they give it to; never a shared link or an API key) add, change, pause and remove
+them; members with "View gross sales, discounts, tax, shipping and total sales" (`finance.breakdown`)
+see them, on the pages and as the dashboard's `expenses` module. Each change is in the audit log with
+what it was before (`expense.added`, `expense.changed`, `expense.removed`, `expense.paused`,
+`expense.resumed`, `expense.ended`, `expense.payment_changed`, `expense_category.*`; the description and
+note, free text, are never copied into it), and each cost's page shows its history
+(`GET …/expenses/:id/history`).
 
-Each category is in one group (`EXPENSE_CATEGORY_GROUP`):
+A cost has a name, a description, a category, how it is worked out, an amount, the currency, how
+often it is paid, its start and end dates, a vendor, a payment method and notes:
 
-| Group | Categories |
+- **How it is worked out** (`EXPENSE_METHODS`): a fixed amount; a percentage of each day's total sales
+  (tax included), revenue before tax or net sales (`PERCENT_BASES`); an amount per order; an amount
+  per item sold. The last three follow each day's sales from the start date to the end date (kept as
+  `cadence` `daily`) and are never below 0 on a day refunds outweigh sales.
+- **How often** an amount is paid (`EXPENSE_CADENCES`): once, every day, week, fortnight, month,
+  quarter, six months or year. Only an amount paid once may be below 0 (a refund, a credit, a
+  correction).
+- **Categories**: the built-in ones, each in one section (`EXPENSE_CATEGORY_SECTION`), and up to 50 of
+  the store's own (`expense_categories`; a cost names one `custom:<id>`), each in the section the owner
+  picks. A category a cost is in can't be removed (409 `category_in_use`); renamed or moved, its costs
+  go with it.
+
+| Section | Built-in categories |
 | --- | --- |
-| Fixed | rent and utilities, salaries and staff, software subscriptions, Shopify plan, Shopify apps, internet and phone, insurance, maintenance contracts, other fixed costs |
-| Variable | shipping and delivery, packaging, payment and transaction fees, sales commissions, other marketing, other variable costs |
+| Advertising | other paid channels, ad spend adjustment |
+| Variable | shipping and delivery, pick pack and 3PL, packaging, payment and transaction fees, merchant fees, sales commissions, product cost adjustment, other variable costs |
+| Fixed | rent and utilities, salaries and staff, software subscriptions, Shopify plan, Shopify apps, internet and phone, insurance, maintenance contracts, operating expenses, fixed advertising costs, other fixed costs |
 | Below operating profit | loan interest, income tax, depreciation, other costs below operating profit |
+
+Advertising counts with the variable costs in operating profit (`groupOfSection`). Synced figures
+(Shopify's product costs, each ad platform's spend) are never changed: an **adjustment** is a cost of
+its own (product cost adjustment, ad spend adjustment) beside the synced figure, which stays as it was
+synced, so nothing is counted twice. The form says so where a cost could be: ads in a connected account
+are already counted.
+
+**Recurring payments** (`expense_entries`): each payment of a recurring amount is recorded once it falls
+due (the cron sweep every 15 minutes, `recordDuePaymentsEverywhere`, and whenever the cost is saved),
+one row per cost and due day (unique), so a retried sweep never records a second. A month keeps its
+first payment's day of the month (31 Jan → 28 Feb → 31 Mar). Each payment can be changed (its amount,
+a note) or skipped on its own, keeping what the cost said (`scheduled_amount`), and put back. A change
+to a recurring cost's amount, frequency or start applies **from its next payment** by default
+(`PUT …/expenses/:id?apply=next`): the cost ends the day before it and a new cost with the new terms
+takes over (`replaces_id`), so no month already reported changes; `apply=all` changes every payment,
+past ones too (a payment changed on its own keeps its amount). **Pause** stops payments from the next
+one (`paused_from`); **resume** records those that fell due while paused as skipped; **end** (cancel)
+sets the last day to the one before the next payment.
 
 **Open days** (`store_expense_settings.operating_weekdays`, Monday = 0; empty: every day): the owner
 may say which weekdays the store is open. Recurring costs are then spread over those days only (a
@@ -939,7 +1026,7 @@ amount). Saved with `PUT …/expenses/settings` `{ operatingWeekdays }` (audited
 
 | Figure | Formula | Notes |
 | --- | --- | --- |
-| A cost over the dates | once: the amount, on its day; weekly: amount × days ÷ 7; monthly: per calendar month, amount × its days in the dates ÷ the month's days; yearly: the same per calendar year (366 days in a leap year). With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length. Rounded to the cent once per cost and run of consecutive days |
+| A cost over the dates | once: the amount, on its day; daily, weekly, fortnightly: each payment spread over the days it pays for (a weekly one a seventh a day); monthly, quarterly, six-monthly, yearly: per calendar month (quarter, half year, year), the payment due in it × its days in the dates ÷ the period's days (366 days in a leap year); a percentage or an amount per order or item: each day's own, from its sales. With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length; a payment recorded with another amount counts in its own period, a skipped one (or one due while paused) counts nothing. Rounded to the cent once per cost and run of consecutive days |
 | Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
 | Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
 | **Net profit** | revenue − product costs (Shopify's cost of goods sold, or the items sold at their cost per item) − the connected ad accounts' spend − your costs | Given only when every input is known (below) |

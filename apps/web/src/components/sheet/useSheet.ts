@@ -89,6 +89,8 @@ export function useSheet() {
               shipping: d.shipping,
               additionalFees: d.additionalFees,
               orders: d.orders,
+              totalSales: d.totalSales,
+              units: d.units,
               products: costs.has(d.day) ? { cost: costs.get(d.day)!.costOfGoodsSold, withCost: costs.get(d.day)!.netSalesWithCost, withoutCost: costs.get(d.day)!.netSalesWithoutCost } : null,
               adSpend: setup.ads === "known" ? (adDay.get(d.day) ?? null) : null,
             },

@@ -108,7 +108,7 @@ describe("a month's profit", () => {
     expect(pl.yours.byGroup).toEqual({ fixed: 50_000, variable: 3_000, non_operating: 4_500 });
     // Nothing counted twice: net profit is revenue less every cost once.
     expect(pl.netProfit).toBe(90_000 - 36_000 - 9_000 - pl.yours.total);
-    expect(pl.yours.byCategory[0]).toEqual({ category: "staff", amount: 30_000 });
+    expect(pl.yours.byCategory[0]).toEqual({ category: "staff", section: "fixed", amount: 30_000 });
   });
 
   it("counts the month so far while it runs, and only the costs running in it", () => {

@@ -1,5 +1,5 @@
 import type { AdSpendProvider } from "@app/shared/ads";
-import { EXPENSE_CATEGORY_LABEL, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
+import { categoryLabel, netProfit, PROFIT_GAP_WORDS, type ProfitGap } from "@app/shared/expenses";
 import type { AdAccount, AdsModule, Overview, ProductCostsModule, ProfitModule } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ export function costsOf(ov: Overview, currency: string, adsOn: boolean): Costs {
     adLeftOut,
     byProvider: ads && adSpend !== null ? ads.byProvider.filter((b) => b.current).map((b) => ({ provider: b.provider, spend: b.current!.spend })) : [],
     yourCosts: ov.modules.expenses?.current.total ?? null,
-    yourByCategory: ov.modules.expenses?.current.byCategory.map((c) => ({ label: EXPENSE_CATEGORY_LABEL[c.category], amount: c.amount })) ?? [],
+    yourByCategory: ov.modules.expenses?.current.byCategory.map((c) => ({ label: categoryLabel(c.category, ov.modules.expenses?.categories), amount: c.amount })) ?? [],
   };
 }
 
