@@ -240,6 +240,18 @@ jobs:
           done
           echo "::error::cdk deploy failed on the network three times: check the PC's connection (docs/aws-deployment.md, Deploy (GitHub Actions))."
           exit 1
+      # "Roll back on failure" moves `live` behind CloudFormation's back, so this run again for the
+      # same commit finds the App stack with "no changes" and nothing moves the aliases forward: the
+      # smoke tests then fail on the release before (Deploy 41661760406, 2026-11-03). So each alias
+      # goes to the version the App stack deployed as live, unless it already runs that code (after a
+      # restart for runtime settings, the same code published again). Those versions passed the
+      # stack's migrate gate when it deployed them. Before the restart below, which refuses an alias
+      # that doesn't run $LATEST's code. A commit whose rollback.mjs has no --to stack would read it
+      # as "the version before": nothing to do then.
+      - name: The live aliases run what the App stack deployed
+        run: |
+          if ! grep -q -- "--to stack" infra/cdk/scripts/rollback.mjs; then echo "::notice::This commit's rollback.mjs has no --to stack: nothing to check."; exit 0; fi
+          node infra/cdk/scripts/rollback.mjs --env production --to stack
       # Runtime settings changed (Google switched on, say): an instance that started between the App
       # stack's alias move and the Auth stack's update holds the old ones for its lifetime. Publish
       # the same code again and move `live` (docs/aws-deployment.md, "Restarting the functions"),

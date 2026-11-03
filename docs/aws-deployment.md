@@ -136,9 +136,18 @@ If Node's connections time out on this PC's network (IPv6-only hotspot with NAT6
 
 `.github/workflows/aws-deploy.yml` runs after CI passes on `main` (or by hand): build → `cdk
 deploy` (the App stack runs the release's migrations on its new cron version, then moves `live`) →
-migrate again (normally nothing new: grants, passwords) → smoke tests → automatic rollback of the
-`live` aliases if anything fails. It signs in with GitHub OIDC (role in the `InsightsCi-production`
-stack), no AWS keys in GitHub.
+`live` checked against the App stack's versions (below) → migrate again (normally nothing new:
+grants, passwords) → smoke tests → automatic rollback of the `live` aliases if anything fails. It
+signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS keys in GitHub.
+
+The rollback moves the aliases with `rollback.mjs`, behind CloudFormation's back: the App stack
+still records the new versions. Running that Deploy again for the same commit then finds "no
+changes", and before 2026-11-03 nothing moved `live` forward again (Deploy 41661760406 failed its
+smoke tests on the release before). So the step after `cdk deploy`, "The live aliases run what the
+App stack deployed", runs `rollback.mjs --to stack`: each alias goes to the version in the stack's
+`LiveVersions` output unless it already runs that code. After a normal deploy it is that version;
+after a restart for runtime settings it runs the same code as a newer version and stays. Re-running
+a rolled-back Deploy (`gh run rerun <id> --failed`) now puts its release live.
 
 It is two jobs, so the app's dependencies never run where the deploy role is reachable:
 
@@ -794,7 +803,10 @@ app to `d2mr8m2p1qkh58.cloudfront.net`.
 ## Roll back
 
 `node infra/cdk/scripts/rollback.mjs` moves the `live` aliases of api, jobs and cron to the previous
-version (UI included, it ships in the api package). The next deploy moves them forward again.
+version (UI included, it ships in the api package). The next deploy moves them forward again: a
+new commit's, or the same commit's run again, whose `rollback.mjs --to stack` step moves each alias
+to the App stack's `LiveVersions`. By hand, after `aws login`: `node infra/cdk/scripts/rollback.mjs
+--env production --to stack` (add `--dry-run` to see the moves first).
 Migrations are not undone, and neither a CloudFormation rollback nor rollback.mjs re-runs one.
 Infrastructure: `cdk deploy --all -c migrate=off` of the previous commit. Without `-c migrate=off`
 the gate runs that commit's migrate on its newly published cron version, and its older init.sql's

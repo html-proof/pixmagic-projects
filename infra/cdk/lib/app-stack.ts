@@ -671,6 +671,13 @@ export class AppStack extends Stack {
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
     if (migrated) new CfnOutput(this, "MigratedBeforeLive", { value: migrated.getAttString("Applied"), description: "What the migrate gate did with the newest cron version before moving live (applied, or why it skipped)" });
+    // The versions this stack points `live` at. rollback.mjs moves the aliases behind CloudFormation's
+    // back, so a Deploy run again for the same commit ("no changes") would leave them on the release
+    // before: the workflow then moves them to these (rollback.mjs --to stack).
+    new CfnOutput(this, "LiveVersions", {
+      value: `api=${api.alias.version.version},jobs=${jobs.alias.version.version},cron=${cron.alias.version.version}`,
+      description: "The function versions this stack deployed as live (rollback.mjs --to stack moves the aliases back to them)",
+    });
     new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });
   }
 }
