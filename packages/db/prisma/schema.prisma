@@ -324,6 +324,12 @@ model Store {
   pixelIngestKey        String?               @unique @map("pixel_ingest_key")
   installedAt           DateTime?             @map("installed_at")
   uninstalledAt         DateTime?             @map("uninstalled_at")
+  // When someone disconnected the store in bizinsights (Settings → Stores), which leaves the app
+  // installed in Shopify, and any charge on the store's bill with it. Null for a store Shopify
+  // uninstalled the app from (app/uninstalled clears it), which cancelled every such charge, and
+  // for one connected again. Status `uninstalled` covers both; billing tells them apart by this.
+  // Stores disconnected before it existed read as uninstalled in Shopify.
+  disconnectedAt        DateTime?             @map("disconnected_at")
   lastSyncedAt          DateTime?             @map("last_synced_at")
   // From when every Shopify order of the store is imported: the start of the earliest completed
   // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole

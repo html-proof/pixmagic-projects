@@ -276,13 +276,15 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         const setAside = stale ? state !== "revoked" : state === "works";
         let count = 0;
         if (!setAside) {
-          // Scoped to the installation looked at: a reinstall landing meanwhile is left alone.
+          // Scoped to the installation looked at: a reinstall landing meanwhile is left alone. A
+          // store disconnected in bizinsights before is now uninstalled in Shopify too
+          // (`disconnectedAt` cleared): its charges are over, which billing reads from that.
           ({ count } = await systemDb.store.updateMany({
             where: {
               id: store.id,
               ...(stale ? { installedAt: store.installedAt } : triggeredAt ? { OR: [{ installedAt: null }, { installedAt: { lte: triggeredAt } }] } : {}),
             },
-            data: { status: "uninstalled", uninstalledAt: new Date(), accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null },
+            data: { status: "uninstalled", uninstalledAt: new Date(), disconnectedAt: null, accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null },
           }));
         }
         const logFields = { topic: data.topic, shop: data.shop, storeId: store.id, triggeredAt: data.triggeredAt, installedAt: store.installedAt?.toISOString(), stale, state };

@@ -7,7 +7,7 @@ import { ConfirmDialog } from "@/components/AppUi";
 import { Alert } from "@/components/ui";
 import { ErrorState } from "@/components/ErrorState";
 import { LoadError } from "@/components/LoadError";
-import { actionError, api, useApi } from "@/lib/api";
+import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { BILLING_PAGE } from "@/lib/features";
 
 interface Plan {
@@ -83,6 +83,16 @@ function BillingPlans() {
       );
       await reload();
     } catch (e) {
+      // Not a failed payment: the store that pays was disconnected here, but Shopify still bills it
+      // until the app is uninstalled there. Said on this page, which stays, rather than "Payment failed".
+      if (e instanceof ApiError && e.code === "billed_store_disconnected") {
+        const shop = (e.data.detail as { shop?: string } | undefined)?.shop ?? "the store that pays";
+        setConfirmFree(false);
+        setError(
+          `Your plan is billed through ${shop}, which was disconnected from bizinsights but still has the app installed in Shopify, so the charge can't be cancelled from here. Uninstall bizinsights from ${shop} in your Shopify admin (Settings → Apps and sales channels): that ends the charge, and the plan moves to Free.`,
+        );
+        return;
+      }
       setPaymentFailed(true);
       setError(actionError(e, "switch to Free"));
     } finally {

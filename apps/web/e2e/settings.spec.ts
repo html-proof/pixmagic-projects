@@ -179,10 +179,12 @@ test("billing shows the plan in force, and a change awaiting Shopify as pending"
 
 test("an owner on a paid plan switches to Free from the billing page, without contacting anyone", async ({ page }) => {
   const { ws } = await owner(page, "downgrade");
-  // Paid through a store the app has since been uninstalled from, so the API settles it without
-  // reaching Shopify (which e2e can't); the cancellation in Shopify is apps/api/test/billing.test.ts.
+  // Paid through a store Shopify has since uninstalled the app from (uninstalled, and never
+  // disconnected in bizinsights: no disconnected_at), which cancelled the charge, so the API
+  // settles it without reaching Shopify (which e2e can't); the cancellation in Shopify, and a
+  // store only disconnected here (below), are apps/api/test/billing.test.ts.
   const storeId = await insertStore(ws, `downgrade-${Date.now()}.myshopify.com`, ["read_orders"]);
-  await db.query("UPDATE stores SET status = 'uninstalled' WHERE id = $1", [storeId]);
+  await db.query("UPDATE stores SET status = 'uninstalled', disconnected_at = NULL WHERE id = $1", [storeId]);
   await db.query("UPDATE subscriptions SET plan = 'growth', shopify_charge_id = 'gid://shopify/AppSubscription/7', billing_store_id = $2 WHERE workspace_id = $1", [ws, storeId]);
 
   await page.goto("/settings/billing");
@@ -197,6 +199,42 @@ test("an owner on a paid plan switches to Free from the billing page, without co
   await expect(page.getByText("You're on the Free plan now.")).toBeVisible();
   const { rows } = await db.query("SELECT plan, shopify_charge_id FROM subscriptions WHERE workspace_id = $1", [ws]);
   expect(rows[0]).toEqual({ plan: "free", shopify_charge_id: null });
+});
+
+// Disconnecting leaves the app, and its charge, installed in Shopify, with nothing left here to
+// cancel it: the store that pays stays, and each page says what ends the charge instead of the
+// generic "This item has changed".
+test("the store that pays for the plan isn't disconnected, and Settings → Stores says why", async ({ page }) => {
+  const { ws } = await owner(page, "billedstore");
+  const shop = `billed-${Date.now()}.myshopify.com`;
+  const storeId = await insertStore(ws, shop, ["read_orders"]);
+  await db.query("UPDATE subscriptions SET plan = 'growth', shopify_charge_id = 'gid://shopify/AppSubscription/8', billing_store_id = $2 WHERE workspace_id = $1", [ws, storeId]);
+
+  await page.goto("/settings/stores");
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: `Disconnect ${shop}` }).click();
+  await expect(page.getByRole("alert").filter({ hasText: `${shop} pays for this workspace's plan through its Shopify bill. Switch to Free in Settings → Billing first` })).toBeVisible();
+  await expect(page.getByRole("button", { name: `Disconnect ${shop}` })).toBeVisible();
+  const { rows } = await db.query("SELECT status, disconnected_at FROM stores WHERE id = $1", [storeId]);
+  expect(rows[0]).toEqual({ status: "active", disconnected_at: null });
+});
+
+test("Switch to Free for a plan billed through a store disconnected here says to uninstall the app in Shopify", async ({ page }) => {
+  const { ws } = await owner(page, "disconnectedbill");
+  const shop = `kept-${Date.now()}.myshopify.com`;
+  // Disconnected in bizinsights before Disconnect refused a store that pays: the charge runs on.
+  const storeId = await insertStore(ws, shop, ["read_orders"]);
+  await db.query("UPDATE stores SET status = 'uninstalled', disconnected_at = now() WHERE id = $1", [storeId]);
+  await db.query("UPDATE subscriptions SET plan = 'growth', shopify_charge_id = 'gid://shopify/AppSubscription/9', billing_store_id = $2 WHERE workspace_id = $1", [ws, storeId]);
+
+  await page.goto("/settings/billing");
+  await page.getByRole("button", { name: "Switch to Free" }).click();
+  await page.getByRole("dialog", { name: "Switch to Free?" }).getByRole("button", { name: "Switch to Free" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: `Uninstall bizinsights from ${shop} in your Shopify admin` })).toBeVisible();
+  // Still the billing page (not "Payment failed"), still on the plan Shopify bills.
+  await expect(page.getByText(/Current plan:\s*Growth\./)).toBeVisible();
+  const { rows } = await db.query("SELECT plan, shopify_charge_id FROM subscriptions WHERE workspace_id = $1", [ws]);
+  expect(rows[0]).toEqual({ plan: "growth", shopify_charge_id: "gid://shopify/AppSubscription/9" });
 });
 
 test("Settings → Workspace: an owner deletes it with DELETE and a code emailed to them, and the app moves to their other workspace", async ({ page }) => {

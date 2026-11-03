@@ -84,6 +84,15 @@ describe("billing when the app is uninstalled", () => {
     });
   });
 
+  it("uninstalling the app from a store disconnected in bizinsights ends what it was billed, and it reads as uninstalled in Shopify", async () => {
+    // Disconnected here (token wiped, app still installed), then uninstalled in Shopify.
+    const { ws, store } = await payingWorkspace();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "uninstalled", uninstalledAt: new Date(), disconnectedAt: new Date(), accessTokenEnc: null } });
+    await webhook("app/uninstalled", store.shopDomain, { id: 1 });
+    expect(await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).toMatchObject({ status: "uninstalled", disconnectedAt: null });
+    expect(await sub(ws)).toMatchObject({ plan: "free", shopifyChargeId: null, pendingChargeId: null, billingStoreId: null });
+  });
+
   it("uninstalling another of the workspace's stores leaves the plan alone", async () => {
     const { ws } = await payingWorkspace();
     const other = await addStore(ws, "other.myshopify.com");
