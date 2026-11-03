@@ -266,15 +266,16 @@ test("a Google-only account adds a password in Settings, then signs in with it",
   await expect(page).toHaveURL(/\/dashboard/);
 });
 
-test("Settings → Security: deleting the account takes DELETE and a code emailed to its address, never a password", async ({ page }) => {
+test("Settings → Security: deleting the account takes DELETE and a code emailed to its address, never a password, and the workspace it alone owns once ticked", async ({ page }) => {
   const email = uniqueEmail("delete-me");
   await signUp(page, email);
   await createWorkspace(page, "Delete Me Co");
+  const { rows } = await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1", [email]);
+  const ws = rows[0].workspace_id as string;
   await page.goto("/settings/security");
   const card = section(page, "Delete account");
-  // Nothing in the app deletes a workspace: its only owner hands it over or emails support.
-  await expect(card).toContainText("If you're the only owner of a workspace, make someone else an owner first, or email");
-  await expect(card.getByRole("link", { name: /@/ })).toHaveAttribute("href", /^mailto:[^?]+@[^?]+\?subject=Delete%20my%20workspace$/);
+  // A workspace it alone owns goes with it; the card says so before the dialog opens.
+  await expect(card).toContainText("A workspace you're the only owner of is deleted with your account, with its stores' data.");
   await card.getByRole("button", { name: "Delete my account" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete your account?" });
   // No password box: beside one, the browser's password manager filled the address into the DELETE box.
@@ -286,12 +287,13 @@ test("Settings → Security: deleting the account takes DELETE and a code emaile
   await expect(send).toBeDisabled();
   await typed.fill("DELETE");
 
-  // The workspace's only owner hears why, and what they can do instead, before any code is emailed.
-  await send.click();
-  await expect(dialog.getByRole("alert")).toContainText(
-    "You're the only owner of Delete Me Co. Make someone else an owner first, or email support@bizinsights.io to have that workspace and its data deleted.",
-  );
-  await db.query("UPDATE memberships SET role = 'admin' WHERE user_id = (SELECT id FROM users WHERE email = $1)", [email]);
+  // The workspace it is the only owner of goes with it: listed, and ticked off before any code is emailed.
+  const going = dialog.getByTestId("delete-workspaces");
+  await expect(going).toContainText("You're the only owner of this workspace");
+  await expect(going).toContainText("Delete Me Co (no store)");
+  await expect(send).toBeDisabled();
+  await expect(dialog).toContainText("Tick the box above first.");
+  await going.getByRole("checkbox", { name: "Also delete Delete Me Co and all of its data" }).check();
 
   const before = await newestMailId(email, /Confirm deleting/);
   await send.click();
@@ -305,6 +307,8 @@ test("Settings → Security: deleting the account takes DELETE and a code emaile
   await remove.click();
   await expect(page).toHaveURL(/\/login\?deleted=1/);
   expect((await db.query("SELECT 1 FROM users WHERE email = $1", [email])).rowCount).toBe(0);
+  expect((await db.query("SELECT 1 FROM workspaces WHERE id = $1", [ws])).rowCount).toBe(0);
+  expect((await db.query("SELECT metadata->>'via' AS via FROM audit_logs WHERE action = 'workspace.deleted' AND target_id = $1 AND workspace_id IS NULL", [ws])).rows).toEqual([{ via: "account" }]);
 });
 
 test("without Google offered, the sign-in pages show no Google button (and keep it when the settings can't be read)", async ({ page }) => {

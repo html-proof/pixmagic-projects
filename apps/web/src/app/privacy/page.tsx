@@ -50,7 +50,11 @@ export const metadata: Metadata = {
  *   - Zapier, only once a team connects it, receives the events in packages/core/src/zapier/events.ts (alerts, ad
  *     figures and syncs, integrations, paid orders, failed WhatsApp messages; never a customer's name, email,
  *     address or full phone number), and its Send WhatsApp Template action's number, first name and consent are
- *     kept as a WhatsApp contact only once the message is queued (packages/core/src/zapier/whatsapp.ts).
+ *     kept as a WhatsApp contact only once the message is queued (packages/core/src/zapier/whatsapp.ts);
+ *   - deleting a workspace (packages/core/src/workspaceDeletion.ts: DELETE /workspaces/:ws, or with the account of
+ *     its only owner, apps/api/src/routes/account.ts) erases its stores' data and every workspace table, revokes its
+ *     keys and connections, is refused while Shopify bills a paid plan, and keeps only an audit_logs row with no
+ *     workspace (who, when, which shops).
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
 const UPDATED = "2026-10-28";
@@ -430,8 +434,17 @@ export default function PrivacyPage() {
           customer asks to be erased, Shopify tells us and we delete what we hold about them.
         </p>
         <p>
-          To have your entire workspace and account deleted, email <SupportEmail subject="Delete my account" />. How to remove the data
-          that came from Meta and Google is explained on <Link href="/data-deletion">Delete your data</Link>.
+          A workspace&apos;s owner can delete the whole workspace in Settings → Workspace → Delete workspace: its stores&apos; data, everything
+          its team set up, and its connections to Meta, Google, WhatsApp, email providers and Zapier, which we disconnect and, where the
+          provider allows it, revoke. You can delete your own account in Settings → Security → Delete account, and a workspace you are the
+          only owner of is deleted with it. Both are confirmed with a code we email to your account&apos;s address, take effect at once and
+          can&apos;t be undone. A workspace on a paid plan has to be switched to Free first, so the Shopify charge ends. Of a deleted
+          workspace we keep only a record that it was deleted: when, by which account, and which shops it had.
+        </p>
+        <p>
+          If you can&apos;t sign in, or would rather ask, email <SupportEmail subject="Delete my account" /> from your account&apos;s address
+          and we will delete your workspace and account within 30 days. How to remove the data that came from Meta and Google is explained
+          on <Link href="/data-deletion">Delete your data</Link>.
         </p>
       </LegalSection>
 

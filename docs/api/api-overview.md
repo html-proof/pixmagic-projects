@@ -273,6 +273,9 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | POST | `/whatsapp/events` | the store's event key (`Authorization: Bearer whev_...`) | whatsappWebhook.ts |
 | POST | `/workspaces` | signed in | workspaces.ts |
 | PATCH | `/workspaces/:ws` | members:manage | workspaces.ts |
+| GET | `/workspaces/:ws/deletion` | workspace:delete (a session, never an API key or a shared link) | workspaces.ts |
+| POST | `/workspaces/:ws/delete/code` | workspace:delete (a session) | workspaces.ts |
+| DELETE | `/workspaces/:ws` | workspace:delete (a session), `{ confirm: "DELETE", code }`: the code emailed by `delete/code`; 409 `paid_plan` while Shopify bills a plan (packages/core/src/workspaceDeletion.ts) | workspaces.ts |
 | GET | `/workspaces/:ws/members` | dashboard:read | workspaces.ts |
 | POST | `/workspaces/:ws/invitations` | members:manage | workspaces.ts |
 | POST | `/invitations/accept` | signed in | workspaces.ts |

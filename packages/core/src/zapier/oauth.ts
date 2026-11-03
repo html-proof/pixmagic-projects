@@ -215,7 +215,7 @@ export async function authenticateZapierToken(bearer: string, now = new Date()):
 // Revocation
 // ---------------------------------------------------------------------------
 
-export type ZapierRevokeReason = "disconnected" | "member_removed" | "account_deleted" | "account_taken_over" | "refresh_token_reused" | "code_reused";
+export type ZapierRevokeReason = "disconnected" | "member_removed" | "account_deleted" | "workspace_deleted" | "account_taken_over" | "refresh_token_reused" | "code_reused";
 
 /**
  * Revoke the grants `where` names: their tokens stop working, their triggers are deleted, and what was

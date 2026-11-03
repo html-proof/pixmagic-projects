@@ -131,6 +131,15 @@ export async function deletionCode(ctx: TestCtx, headers: Record<string, string>
   return emailedDeletionCode(ctx, to);
 }
 
+/** Deleting workspace `ws`, step 1, as Settings → Workspace does it: the code emailed to the owner's address `to`. */
+export async function workspaceDeletionCode(ctx: TestCtx, headers: Record<string, string>, ws: string, to: string): Promise<string> {
+  const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/delete/code`, headers: { ...ORIGIN, ...headers } });
+  if (res.statusCode !== 200) throw new Error(`workspace-deletion code refused: ${res.body}`);
+  const mail = [...ctx.mailer.sent].reverse().find((m) => m.to === to && m.subject === "Confirm deleting your bizinsights workspace");
+  if (!mail) throw new Error(`no workspace-deletion code emailed to ${to}`);
+  return /^ {4}(\d{6})$/m.exec(mail.text)![1]!;
+}
+
 export async function createWorkspace(ctx: TestCtx, headers: Record<string, string>, name = "Acme") {
   const res = await ctx.app.inject({ method: "POST", url: "/workspaces", headers, payload: { name } });
   if (res.statusCode !== 200) throw new Error(res.body);

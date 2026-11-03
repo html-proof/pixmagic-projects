@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EMAIL_CODE_TTL_S } from "@app/shared/auth";
-import { accountDeletionEmail, AUTH_EMAIL_KINDS, authEmail, EMAIL_PURPOSES, isAuthEmailTrigger, type SenderSettings } from "../src/mailer.js";
+import { accountDeletionEmail, AUTH_EMAIL_KINDS, authEmail, EMAIL_PURPOSES, isAuthEmailTrigger, workspaceDeletionEmail, type SenderSettings } from "../src/mailer.js";
 
 const base = { code: "482913", email: "merchant@example.test", appUrl: "https://bizinsights.io" };
 const senders: SenderSettings = {
@@ -128,6 +128,20 @@ describe("Cognito's emails, as bizinsights sends them", () => {
     expect(/<div style="display:none[^>]*>([^<]*)<\/div>/.exec(m.html)![1]).not.toContain("482913");
     expect(m.html).toMatch(/aria-label="Verification code" style="[^"]*user-select:all[^"]*">482913</);
     expect(isAuthEmailTrigger("delete")).toBe(false);
+  });
+
+  it("words the workspace-deletion code with the workspace's name on one line, from the support sender", () => {
+    const m = workspaceDeletionEmail({ ...base, name: "Alex", senders, workspace: "Acme <b>\r\nBcc: x@y.z" });
+    expect(m).toMatchObject({ subject: "Confirm deleting your bizinsights workspace", purpose: "workspace_deletion_code" });
+    expect(EMAIL_PURPOSES[m.purpose]).toBe("support");
+    expect(m.text).toMatch(/^Hello Alex,\n\nUse the code below to confirm that you want to permanently delete the workspace "Acme <b> Bcc: x@y\.z", its stores' data/);
+    expect(m.html).toContain("Acme &lt;b&gt; Bcc: x@y.z");
+    expect(m.html).not.toContain("Acme <b>");
+    expect(m.text.split("\n")).toContain("    482913");
+    expect(m.subject).not.toContain("Acme");
+    expect(m.subject).not.toContain("482913");
+    // Without a name it still says what the code is for.
+    expect(workspaceDeletionEmail({ ...base, senders, workspace: " " }).text).toContain("permanently delete this bizinsights workspace");
   });
 
   it("sends nothing for a trigger it doesn't know (account-takeover notices need the Plus plan)", () => {

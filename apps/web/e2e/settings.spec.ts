@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { signedWebhook, signUp, uniqueEmail } from "./helpers";
+import { latestMailCode, newestMailId, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Settings, invitations, billing and the public pages, driven through the real app.
@@ -197,6 +197,35 @@ test("an owner on a paid plan switches to Free from the billing page, without co
   await expect(page.getByText("You're on the Free plan now.")).toBeVisible();
   const { rows } = await db.query("SELECT plan, shopify_charge_id FROM subscriptions WHERE workspace_id = $1", [ws]);
   expect(rows[0]).toEqual({ plan: "free", shopify_charge_id: null });
+});
+
+test("Settings → Workspace: an owner deletes it with DELETE and a code emailed to them, and the app moves to their other workspace", async ({ page }) => {
+  const { email, ws } = await owner(page, "delete-ws", "Gone Co");
+  await createWorkspace(page, "Kept Co");
+  const storeId = await insertStore(ws, `gone-${Date.now()}.myshopify.com`, ["read_orders"]);
+  await page.goto(`/settings/workspace?ws=${ws}`);
+  await expect(page.locator("#ws-name")).toHaveValue("Gone Co");
+  const card = page.locator("section", { has: page.getByRole("heading", { name: "Delete workspace", exact: true }) });
+  await card.getByRole("button", { name: "Delete workspace" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Gone Co?" });
+  await expect(dialog.getByTestId("delete-workspace-scope")).toContainText("The data of its store");
+  await expect(dialog.getByTestId("delete-workspace-scope")).toContainText("Your access to it.");
+  const send = dialog.getByRole("button", { name: "Email me a code" });
+  await expect(send).toBeDisabled();
+  await dialog.getByLabel("Type DELETE to confirm").fill("DELETE");
+  const before = await newestMailId(email, /Confirm deleting your bizinsights workspace/);
+  await send.click();
+  const code = await latestMailCode(email, before, /Confirm deleting your bizinsights workspace/);
+  const remove = dialog.getByRole("button", { name: "Delete workspace" });
+  await expect(remove).toBeDisabled();
+  await dialog.getByRole("group", { name: "Code from the email" }).getByRole("textbox").first().fill(code);
+  await remove.click();
+
+  await expect(page.getByText("Gone Co was deleted, with its stores' data.")).toBeVisible();
+  await expect(page.locator("#ws-name")).toHaveValue("Kept Co");
+  expect((await db.query("SELECT 1 FROM workspaces WHERE id = $1", [ws])).rowCount).toBe(0);
+  expect((await db.query("SELECT 1 FROM stores WHERE id = $1", [storeId])).rowCount).toBe(0);
+  expect((await db.query("SELECT 1 FROM users WHERE email = $1", [email])).rowCount).toBe(1);
 });
 
 test("the privacy and support pages describe what the product actually does", async ({ page }) => {
