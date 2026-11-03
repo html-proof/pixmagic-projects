@@ -24,7 +24,7 @@ export const CROSS_TENANT_REASONS = {
   shopify_install:
     "Shopify's install, claim and launch, and connecting a store from any workspace: finds or makes the store's workspace from the shop, says whether the shop is live in another one, and moves a store nobody claimed (apps/api/src/connectStore.ts).",
   webhooks: "Webhooks and public callbacks (Shopify, Meta, WhatsApp, email and SMS providers, unsubscribe links, the pixel): the workspace is found from what the provider sent.",
-  integrations_oauth: "OAuth callbacks of ad, email and Zapier connections, and Zapier's API: the workspace is found from the signed state or the token.",
+  integrations_oauth: "OAuth callbacks of ad, email and Zapier connections, ad connect links, and Zapier's API: the workspace is found from the signed state, the link or the token.",
 } as const;
 
 export type CrossTenantReason = keyof typeof CROSS_TENANT_REASONS;

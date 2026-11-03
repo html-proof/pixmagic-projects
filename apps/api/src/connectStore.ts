@@ -127,6 +127,7 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
       await purgeEmailStoreData(existing.id);
       await systemDb.$transaction([
         systemDb.storeExpense.deleteMany({ where: { storeId: existing.id } }),
+        systemDb.expenseCategory.deleteMany({ where: { storeId: existing.id } }),
         systemDb.storeExpenseSettings.deleteMany({ where: { storeId: existing.id } }),
         systemDb.businessEvent.deleteMany({ where: { storeId: existing.id } }),
       ]);

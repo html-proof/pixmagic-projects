@@ -29,6 +29,7 @@ import {
   ReceiptText,
   Search,
   Settings,
+  Scale,
   Sheet,
   ShieldCheck,
   UserCog,
@@ -158,6 +159,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     ...topic("overview", "Business Overview", Gauge),
     // The Profit sheet: every figure a column per day, week or month, with the business events (/sheet).
     ...(allowed("analytics.sales") ? [area("/sheet", "Profit sheet", Sheet)] : []),
+    // Profit & Loss: the statement for any dates and the store's own expenses, managed there (/profit).
+    ...(allowed("analytics.sales") && allowed("finance.breakdown") ? [area("/profit", "Profit & Loss", Scale)] : []),
     ...topic("sales", "Sales & Orders", ShoppingBag),
     ...topic("products", "Products", Package),
     // The Inventory section (stock per location, alerts, changes). It takes the place of the
@@ -714,6 +717,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
       ...(allowed("analytics.sales")
         ? [{ id: "sheet", label: "Profit sheet", group: "Insights", icon: Sheet, keywords: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer", go: go("/sheet") }]
+        : []),
+      ...(allowed("analytics.sales") && allowed("finance.breakdown")
+        ? [{ id: "profit", label: "Profit & Loss", group: "Insights", icon: Scale, keywords: "p&l profit loss expenses costs recurring categories mer roas vcr fcr statement", go: go("/profit") }]
         : []),
       ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
         (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),

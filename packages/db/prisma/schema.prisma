@@ -50,29 +50,29 @@ enum JobStatus {
 }
 
 model User {
-  id            String       @id @default(cuid())
-  email         String       @unique
-  emailVerified Boolean      @default(false) @map("email_verified")
-  displayName   String?      @map("display_name")
+  id                 String         @id @default(cuid())
+  email              String         @unique
+  emailVerified      Boolean        @default(false) @map("email_verified")
+  displayName        String?        @map("display_name")
   /// The profile picture's address, from the Google account the account was made with or signs in
   /// with under its own address (apps/api/src/identity.ts). https only; null when there is none.
-  avatarUrl     String?      @map("avatar_url")
-  timezone      String       @default("UTC")
+  avatarUrl          String?        @map("avatar_url")
+  timezone           String         @default("UTC")
   /// "Sign out everywhere": sessions issued before this instant are no longer accepted.
-  sessionsValidAfter DateTime? @map("sessions_valid_after")
-  createdAt     DateTime     @default(now()) @map("created_at")
-  updatedAt     DateTime     @updatedAt @map("updated_at")
-  memberships   Membership[]
-  identities    AuthIdentity[]
+  sessionsValidAfter DateTime?      @map("sessions_valid_after")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  memberships        Membership[]
+  identities         AuthIdentity[]
   /// Where this account is signed in (Settings → Security).
-  sessions      UserSession[]
+  sessions           UserSession[]
   /// Members and invitations this person brought into a workspace (Team & Access).
-  invitedMembers     Membership[] @relation("MembershipInviter")
-  sentInvitations    Invitation[] @relation("InvitationInviter")
+  invitedMembers     Membership[]   @relation("MembershipInviter")
+  sentInvitations    Invitation[]   @relation("InvitationInviter")
   /// Employee records this account signs in as (employee portal).
-  employments   Employee[]   @relation("EmployeeAccount")
+  employments        Employee[]     @relation("EmployeeAccount")
   /// Employees this person is the assigned manager of.
-  managedStaff  Employee[]   @relation("EmployeeManager")
+  managedStaff       Employee[]     @relation("EmployeeManager")
 
   @@map("users")
 }
@@ -80,20 +80,20 @@ model User {
 /// A sign-in identity of a user: one Cognito user (password or Google). Several can point at
 /// the same user, which is how an account is linked across sign-in methods; users.id never changes.
 model AuthIdentity {
-  id                String    @id @default(cuid())
-  userId            String    @map("user_id")
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
   /// "cognito".
-  provider          String
+  provider   String
   /// The Cognito user's `sub`.
-  subject           String
+  subject    String
   /// The Cognito user name (what refresh and admin calls address it by).
-  username          String
+  username   String
   /// How this Cognito user signs in: "password" or "google".
-  method            String
-  email             String?
-  createdAt         DateTime  @default(now()) @map("created_at")
-  lastUsedAt        DateTime? @map("last_used_at")
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  method     String
+  email      String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, subject])
   @@index([userId])
@@ -146,64 +146,64 @@ model UserSession {
 }
 
 model Workspace {
-  id           String        @id @default(cuid())
-  name         String
-  createdAt    DateTime      @default(now()) @map("created_at")
+  id                String                @id @default(cuid())
+  name              String
+  createdAt         DateTime              @default(now()) @map("created_at")
   /// Made for a store installed from Shopify before anyone had a login for it, and not claimed yet
   /// (apps/api/src/routes/shopify.ts). Only such a workspace can be claimed, or left for another.
-  awaitingClaim Boolean      @default(false) @map("awaiting_claim")
-  memberships  Membership[]
-  stores       Store[]
-  apiKeys      ApiKey[]
-  auditLogs    AuditLog[]
-  alerts       Alert[]
-  invitations  Invitation[]
-  subscription Subscription?
-  staffSettings      StaffSettings?
-  employees          Employee[]
-  departments        Department[]
-  overtimePolicies   OvertimePolicy[]
-  breakPolicies      BreakPolicy[]
-  staffHolidays      StaffHoliday[]
-  payrollPeriods     PayrollPeriod[]
-  emailSettings      EmailSettings?
-  emailAccounts      EmailAccount[]
-  emailDomains       EmailDomain[]
-  emailTemplates     EmailTemplate[]
-  emailRules         EmailAutomationRule[]
-  emailEvents        EmailBusinessEvent[]
-  emailSuppressions  EmailSuppression[]
-  dataRequests       DataRequest[]
-  emailIngestKeys    EmailIngestKey[]
-  emailDeliveries    EmailDelivery[]
+  awaitingClaim     Boolean               @default(false) @map("awaiting_claim")
+  memberships       Membership[]
+  stores            Store[]
+  apiKeys           ApiKey[]
+  auditLogs         AuditLog[]
+  alerts            Alert[]
+  invitations       Invitation[]
+  subscription      Subscription?
+  staffSettings     StaffSettings?
+  employees         Employee[]
+  departments       Department[]
+  overtimePolicies  OvertimePolicy[]
+  breakPolicies     BreakPolicy[]
+  staffHolidays     StaffHoliday[]
+  payrollPeriods    PayrollPeriod[]
+  emailSettings     EmailSettings?
+  emailAccounts     EmailAccount[]
+  emailDomains      EmailDomain[]
+  emailTemplates    EmailTemplate[]
+  emailRules        EmailAutomationRule[]
+  emailEvents       EmailBusinessEvent[]
+  emailSuppressions EmailSuppression[]
+  dataRequests      DataRequest[]
+  emailIngestKeys   EmailIngestKey[]
+  emailDeliveries   EmailDelivery[]
 
   @@map("workspaces")
 }
 
 model Membership {
-  id          String    @id @default(cuid())
-  workspaceId String    @map("workspace_id")
-  userId      String    @map("user_id")
-  role        Role
+  id              String     @id @default(cuid())
+  workspaceId     String     @map("workspace_id")
+  userId          String     @map("user_id")
+  role            Role
   /// Staff Management role for members who are not owners or admins (null: no staff access).
-  staffRole   StaffRole? @map("staff_role")
+  staffRole       StaffRole? @map("staff_role")
   /// Team & Access: the permissions granted to a restricted role (packages/shared/src/access.ts).
   /// Owners and admins have every permission and keep this empty.
-  permissions String[]  @default([])
+  permissions     String[]   @default([])
   /// Access revoked by an owner or admin: the membership stays, so it can be restored, but grants
   /// nothing until then. Every access check refuses a revoked membership.
-  revokedAt   DateTime? @map("revoked_at")
+  revokedAt       DateTime?  @map("revoked_at")
   /// Who invited them (null for a workspace's creator and members from before Team & Access).
-  invitedById String?   @map("invited_by_id")
+  invitedById     String?    @map("invited_by_id")
   /// When their role or permissions last changed.
-  accessChangedAt DateTime? @map("access_changed_at")
+  accessChangedAt DateTime?  @map("access_changed_at")
   /// Access given by an invitation ends here (60 days unless the inviter chose less) until an owner
   /// or admin renews it; null: no end (owners, and members from before invitations expired).
-  accessExpiresAt DateTime? @map("access_expires_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  invitedBy   User?     @relation("MembershipInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  accessExpiresAt DateTime?  @map("access_expires_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  workspace       Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy       User?      @relation("MembershipInviter", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, userId])
   @@index([userId])
@@ -215,36 +215,36 @@ model Membership {
 /// accepting, revoking or expiry ends it for good. Kept after it ends, for the team page's counts and
 /// the audit trail, until the daily retention sweep removes it (apps/worker, pruneTeamRecords).
 model Invitation {
-  id          String    @id @default(cuid())
-  workspaceId String    @map("workspace_id")
-  email       String
-  role        Role
-  staffRole   StaffRole? @map("staff_role")
+  id           String          @id @default(cuid())
+  workspaceId  String          @map("workspace_id")
+  email        String
+  role         Role
+  staffRole    StaffRole?      @map("staff_role")
   /// The permissions the member will have once they accept (restricted roles only).
-  permissions String[]  @default([])
+  permissions  String[]        @default([])
   /// The inviter's note, shown in the email and on the invitation page.
-  message     String?
-  tokenHash   String    @unique @map("token_hash")
-  expiresAt   DateTime  @map("expires_at")
-  acceptedAt  DateTime? @map("accepted_at")
-  acceptedById String?  @map("accepted_by_id")
-  revokedAt   DateTime? @map("revoked_at")
-  invitedById String?   @map("invited_by_id")
+  message      String?
+  tokenHash    String          @unique @map("token_hash")
+  expiresAt    DateTime        @map("expires_at")
+  acceptedAt   DateTime?       @map("accepted_at")
+  acceptedById String?         @map("accepted_by_id")
+  revokedAt    DateTime?       @map("revoked_at")
+  invitedById  String?         @map("invited_by_id")
   /// The last time the email went out, and the last time sending it failed.
-  sentAt      DateTime? @map("sent_at")
-  sendFailedAt DateTime? @map("send_failed_at")
-  sendCount   Int       @default(0) @map("send_count")
+  sentAt       DateTime?       @map("sent_at")
+  sendFailedAt DateTime?       @map("send_failed_at")
+  sendCount    Int             @default(0) @map("send_count")
   /// The link's token, encrypted with the app's keyring (AES-256-GCM, bound to this invitation), so an
   /// owner or admin can copy the same link again. Never stored in the clear: a copy of the database
   /// alone opens nothing. Null for invitations from before (their link can only be replaced).
-  tokenSealed String?   @map("token_sealed")
+  tokenSealed  String?         @map("token_sealed")
   /// The last time the link opened the dashboard, and how many times it has.
-  lastOpenedAt DateTime? @map("last_opened_at")
-  openCount   Int       @default(0) @map("open_count")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  invitedBy   User?     @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
-  deliveries  EmailDelivery[]
+  lastOpenedAt DateTime?       @map("last_opened_at")
+  openCount    Int             @default(0) @map("open_count")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy    User?           @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  deliveries   EmailDelivery[]
 
   @@index([workspaceId])
   @@index([workspaceId, email])
@@ -256,26 +256,26 @@ model Invitation {
 /// provider took it, its id there, and what the provider has reported since (delivered, bounced,
 /// marked as spam). No address or content is kept here; the invitation holds the address.
 model EmailDelivery {
-  id                String    @id @default(cuid())
-  workspaceId       String    @map("workspace_id")
-  invitationId      String?   @map("invitation_id")
+  id                String      @id @default(cuid())
+  workspaceId       String      @map("workspace_id")
+  invitationId      String?     @map("invitation_id")
   /// "team_invitation"
   kind              String
   /// "resend", "ses", "mailpit", "log"
   provider          String
-  providerMessageId String?   @map("provider_message_id")
+  providerMessageId String?     @map("provider_message_id")
   /// queued, sent, delivered, delayed, bounced, complained, failed, not_allowed (packages/core/src/mail)
   status            String
-  errorCode         String?   @map("error_code")
+  errorCode         String?     @map("error_code")
   /// What the provider said, without the recipient's address.
-  errorMessage      String?   @map("error_message")
-  attempts          Int       @default(0)
-  sentAt            DateTime? @map("sent_at")
-  deliveredAt       DateTime? @map("delivered_at")
+  errorMessage      String?     @map("error_message")
+  attempts          Int         @default(0)
+  sentAt            DateTime?   @map("sent_at")
+  deliveredAt       DateTime?   @map("delivered_at")
   /// The provider's last event (delivered, bounced, complained) as it timed it.
-  lastEventAt       DateTime? @map("last_event_at")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  lastEventAt       DateTime?   @map("last_event_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
   workspace         Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invitation        Invitation? @relation(fields: [invitationId], references: [id], onDelete: Cascade)
 
@@ -299,55 +299,55 @@ model NotificationPreference {
 }
 
 model Store {
-  id                    String      @id @default(cuid())
-  workspaceId           String      @map("workspace_id")
-  shopDomain            String      @unique @map("shop_domain")
+  id                    String                @id @default(cuid())
+  workspaceId           String                @map("workspace_id")
+  shopDomain            String                @unique @map("shop_domain")
   // Which of our Shopify apps the store is connected through ("default" = SHOPIFY_API_KEY;
   // others come from SHOPIFY_EXTRA_APPS, e.g. a custom-distribution app for one client).
-  shopifyAppKey         String      @default("default") @map("shopify_app_key")
+  shopifyAppKey         String                @default("default") @map("shopify_app_key")
   name                  String?
-  timezone              String      @default("UTC")
-  currency              String      @default("USD")
-  status                StoreStatus @default(pending)
+  timezone              String                @default("UTC")
+  currency              String                @default("USD")
+  status                StoreStatus           @default(pending)
   // AES-256-GCM ciphertexts (packages/shared/crypto.ts); never returned by the API.
-  accessTokenEnc        String?     @map("access_token_enc")
-  refreshTokenEnc       String?     @map("refresh_token_enc")
-  accessTokenExpiresAt  DateTime?   @map("access_token_expires_at")
-  refreshTokenExpiresAt DateTime?   @map("refresh_token_expires_at")
-  tokenKeyVersion       Int?        @map("token_key_version")
-  grantedScopes         String[]    @map("granted_scopes")
-  pixelInstalled        Boolean     @default(false) @map("pixel_installed")
+  accessTokenEnc        String?               @map("access_token_enc")
+  refreshTokenEnc       String?               @map("refresh_token_enc")
+  accessTokenExpiresAt  DateTime?             @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime?             @map("refresh_token_expires_at")
+  tokenKeyVersion       Int?                  @map("token_key_version")
+  grantedScopes         String[]              @map("granted_scopes")
+  pixelInstalled        Boolean               @default(false) @map("pixel_installed")
   // From when the web pixel counts the store's visits: when bizinsights first had it in place (the
   // install_pixel job, or the first event accepted before it), keeping the earliest; null with no
   // pixel yet. The dashboard compares visits only with dates from then on ("No earlier data").
-  pixelInstalledAt      DateTime?   @map("pixel_installed_at")
-  pixelIngestKey        String?     @unique @map("pixel_ingest_key")
-  installedAt           DateTime?   @map("installed_at")
-  uninstalledAt         DateTime?   @map("uninstalled_at")
+  pixelInstalledAt      DateTime?             @map("pixel_installed_at")
+  pixelIngestKey        String?               @unique @map("pixel_ingest_key")
+  installedAt           DateTime?             @map("installed_at")
+  uninstalledAt         DateTime?             @map("uninstalled_at")
   // When someone disconnected the store in bizinsights (Settings → Stores), which leaves the app
   // installed in Shopify, and any charge on the store's bill with it. Null for a store Shopify
   // uninstalled the app from (app/uninstalled clears it), which cancelled every such charge, and
   // for one connected again. Status `uninstalled` covers both; billing tells them apart by this.
   // Stores disconnected before it existed read as uninstalled in Shopify.
-  disconnectedAt        DateTime?   @map("disconnected_at")
-  lastSyncedAt          DateTime?   @map("last_synced_at")
+  disconnectedAt        DateTime?             @map("disconnected_at")
+  lastSyncedAt          DateTime?             @map("last_synced_at")
   // From when every Shopify order of the store is imported: the start of the earliest completed
   // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole
   // history was imported, null when no import has recorded it. Set by the worker's orders sync.
-  ordersHistoryFrom     DateTime?   @map("orders_history_from")
+  ordersHistoryFrom     DateTime?             @map("orders_history_from")
   // From when every stored order carries its customer (read_customers; docs/customer-analytics.md):
   // the moment the store granted it (core `customersFromChange`), moved back to the start of the
   // first full orders import queued since then once it is in (the epoch for the whole history; the
   // worker's orders sync). Null without read_customers, and for a store that granted it before this
   // column existed: the customer report then infers the day from the orders (`customersKnownDay`).
-  customersFrom         DateTime?   @map("customers_from")
+  customersFrom         DateTime?             @map("customers_from")
   // When Shopify created the store (Shop.createdAt), read with its details by the "shop" sync job;
   // null until it has been. The dashboard's dates begin on its day, or an earlier order's
   // (storeStartDay in @app/shared/dates): the earliest day custom dates may start, the years offered.
-  shopCreatedAt         DateTime?   @map("shop_created_at")
-  createdAt             DateTime    @default(now()) @map("created_at")
-  updatedAt             DateTime    @updatedAt @map("updated_at")
-  workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  shopCreatedAt         DateTime?             @map("shop_created_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  workspace             Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   billedSubscriptions   Subscription[]
   shopifyReports        ShopifyReport[]
   shopifyMarketingDays  ShopifyMarketingDay[]
@@ -364,6 +364,8 @@ model Store {
   inventorySyncRuns     InventorySyncRun[]
   expenses              StoreExpense[]
   expenseSettings       StoreExpenseSettings?
+  expenseCategories     ExpenseCategory[]
+  expenseEntries        ExpenseEntry[]
   businessEvents        BusinessEvent[]
 
   @@index([workspaceId])
@@ -482,7 +484,7 @@ model InventoryLocation {
   formattedAddress     String?   @map("formatted_address")
   syncedAt             DateTime  @map("synced_at")
   deletedAt            DateTime? @map("deleted_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store                Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, shopifyId])
   @@index([workspaceId])
@@ -510,7 +512,7 @@ model InventoryLevel {
   shopifyUpdatedAt  DateTime @map("shopify_updated_at")
   // When bizinsights last read it from Shopify (a sync, a check, a webhook's re-read).
   syncedAt          DateTime @map("synced_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, inventoryItemId, locationShopifyId])
   @@index([storeId, locationShopifyId])
@@ -546,7 +548,7 @@ model InventoryMovement {
   adjustmentId      String?  @map("adjustment_id")
   shopifyUpdatedAt  DateTime @map("shopify_updated_at")
   observedAt        DateTime @default(now()) @map("observed_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId, observedAt])
   @@index([storeId, variantShopifyId, observedAt])
@@ -578,7 +580,7 @@ model InventorySnapshot {
   variantsInStock   Int      @map("variants_in_stock")
   retailValue       Decimal  @map("retail_value") @db.Decimal(18, 2)
   takenAt           DateTime @map("taken_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, day, locationKey])
   @@index([workspaceId])
@@ -626,7 +628,7 @@ model InventoryAdjustment {
   resultQuantity    Int?      @map("result_quantity")
   createdAt         DateTime  @default(now()) @map("created_at")
   completedAt       DateTime? @map("completed_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store             Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, idempotencyKey])
   @@index([storeId, createdAt])
@@ -653,7 +655,7 @@ model InventorySettings {
   leadTimeDays      Int      @default(14) @map("lead_time_days")
   coverDays         Int      @default(30) @map("cover_days")
   updatedAt         DateTime @updatedAt @map("updated_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
   @@map("inventory_settings")
@@ -673,7 +675,7 @@ model InventoryAlert {
   openedAt         DateTime  @map("opened_at")
   resolvedAt       DateTime? @map("resolved_at")
   notifiedAt       DateTime? @map("notified_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store            Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, variantShopifyId, kind])
   @@index([storeId, resolvedAt])
@@ -698,7 +700,7 @@ model InventorySyncRun {
   error         String?
   startedAt     DateTime  @map("started_at")
   finishedAt    DateTime? @map("finished_at")
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store         Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId, startedAt])
   @@index([workspaceId])
@@ -819,30 +821,30 @@ model Refund {
 // newest year runs on to now (`toAt` null), the oldest from the store's first order back (its
 // search has no lower bound). A newer plan replaces the rows (one per store and year).
 model OrderHistoryWindow {
-  id               String    @id @default(cuid())
-  workspaceId      String    @map("workspace_id")
-  storeId          String    @map("store_id")
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  storeId         String    @map("store_id")
   // The import (sync_jobs.id) that planned the years, and the one working on this year now.
-  planJobId        String    @map("plan_job_id")
-  syncJobId        String    @map("sync_job_id")
-  year             Int
-  fromAt           DateTime  @map("from_at")
-  toAt             DateTime? @map("to_at")
+  planJobId       String    @map("plan_job_id")
+  syncJobId       String    @map("sync_job_id")
+  year            Int
+  fromAt          DateTime  @map("from_at")
+  toAt            DateTime? @map("to_at")
   // queued | running | done | failed
-  status           String    @default("queued")
+  status          String    @default("queued")
   // Orders created in the window and held once it was done.
-  orders           Int       @default(0)
+  orders          Int       @default(0)
   // Whether the plan read customers with the orders (read_customers): a plan read without them is
   // started over, not resumed, when the scope arrives, since its orders lack the customer.
-  withCustomers    Boolean   @map("with_customers")
+  withCustomers   Boolean   @map("with_customers")
   // The bulk export submitted for this year: a finished export of another year is never read as this one's.
-  bulkOperationId  String?   @map("bulk_operation_id")
-  attempts         Int       @default(0)
-  error            String?
-  startedAt        DateTime? @map("started_at")
-  finishedAt       DateTime? @map("finished_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  bulkOperationId String?   @map("bulk_operation_id")
+  attempts        Int       @default(0)
+  error           String?
+  startedAt       DateTime? @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   @@unique([storeId, year])
   @@index([workspaceId])
@@ -1013,36 +1015,36 @@ model OrderSale {
 }
 
 model DailyStoreMetrics {
-  workspaceId             String  @map("workspace_id")
-  storeId                 String  @map("store_id")
+  workspaceId             String   @map("workspace_id")
+  storeId                 String   @map("store_id")
   day                     String
-  grossSales              Decimal @default(0) @map("gross_sales") @db.Decimal(18, 2)
-  discounts               Decimal @default(0) @db.Decimal(18, 2)
+  grossSales              Decimal  @default(0) @map("gross_sales") @db.Decimal(18, 2)
+  discounts               Decimal  @default(0) @db.Decimal(18, 2)
   /// Returns: what refunds, cancellations and edits took back (Shopify's "sales reversals").
-  refunds                 Decimal @default(0) @db.Decimal(18, 2)
+  refunds                 Decimal  @default(0) @db.Decimal(18, 2)
   /// Shipping charged after shipping discounts and refunds, before tax.
-  shipping                Decimal @default(0) @db.Decimal(18, 2)
-  taxes                   Decimal @default(0) @db.Decimal(18, 2)
+  shipping                Decimal  @default(0) @db.Decimal(18, 2)
+  taxes                   Decimal  @default(0) @db.Decimal(18, 2)
   /// Import duties charged, before tax.
-  duties                  Decimal @default(0) @db.Decimal(18, 2)
+  duties                  Decimal  @default(0) @db.Decimal(18, 2)
   /// Shopify's fees and additional fees (and any sale it gives no type), before tax.
-  additionalFees          Decimal @default(0) @map("additional_fees") @db.Decimal(18, 2)
+  additionalFees          Decimal  @default(0) @map("additional_fees") @db.Decimal(18, 2)
   /// Net sales + shipping + taxes + duties + additional fees: Shopify's "Total sales".
-  totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
+  totalSales              Decimal  @default(0) @map("total_sales") @db.Decimal(18, 2)
   /// What refunds, returns and cancellations took off total sales that day: their sales with tax,
   /// shipping, duties and fees in (gift cards and tips aside, as total sales leaves them out).
-  totalRefunded           Decimal @default(0) @map("total_refunded") @db.Decimal(18, 2)
+  totalRefunded           Decimal  @default(0) @map("total_refunded") @db.Decimal(18, 2)
   /// Orders placed that day, gift-card-only orders left out (as Shopify's reports count them).
-  orders                  Int     @default(0)
+  orders                  Int      @default(0)
   /// What those orders sold on the day they were placed (items after discounts, before tax; no gift
   /// cards, no edits made on a later day): average order value's numerator. Null on rows from before
   /// it was kept.
   orderValue              Decimal? @map("order_value") @db.Decimal(18, 2)
   /// Items sold less items returned, gift cards included (Shopify's net items sold).
-  units                   Int     @default(0)
-  ordersWithCustomer      Int     @default(0) @map("orders_with_customer")
-  returningCustomerOrders Int     @default(0) @map("returning_customer_orders")
-  refundedOrders          Int     @default(0) @map("refunded_orders")
+  units                   Int      @default(0)
+  ordersWithCustomer      Int      @default(0) @map("orders_with_customer")
+  returningCustomerOrders Int      @default(0) @map("returning_customer_orders")
+  refundedOrders          Int      @default(0) @map("refunded_orders")
 
   @@id([storeId, day])
   @@index([workspaceId])
@@ -1075,32 +1077,95 @@ model SalesCalculation {
 // staff, rent, shipping labels, fees...). The dashboard spreads it over the days it covers
 // (expenseInRange in @app/shared/expenses); only the owner's own figure is kept.
 model StoreExpense {
-  id              String   @id @default(cuid())
-  workspaceId     String   @map("workspace_id")
-  storeId         String   @map("store_id")
+  id              String         @id @default(cuid())
+  workspaceId     String         @map("workspace_id")
+  storeId         String         @map("store_id")
   name            String
-  /// EXPENSE_CATEGORIES in @app/shared/expenses: fixed (rent, staff, software, shopify_plan, shopify_apps, internet_phone,
-  /// insurance, maintenance, other), variable (shipping, packaging, payment_fees, commissions, marketing, other_variable) or
-  /// below operating profit (interest, income_tax, depreciation, other_non_operating): EXPENSE_CATEGORY_GROUP.
+  description     String?
+  /// EXPENSE_CATEGORIES in @app/shared/expenses (each in a section: EXPENSE_CATEGORY_SECTION), or one of the store's
+  /// own, `custom:<expense_categories.id>`.
   category        String
-  /// In the store's currency.
-  amount          Decimal  @db.Decimal(18, 2)
-  /// once | weekly | monthly | yearly (EXPENSE_CADENCES)
+  /// amount | percent | per_order | per_item (EXPENSE_METHODS)
+  method          String         @default("amount")
+  /// In the store's currency; for `percent`, the percentage. Below 0 only for an amount paid once (a refund, a credit).
+  amount          Decimal        @db.Decimal(18, 2)
+  /// What a percentage is of: total_sales | revenue | net_sales (PERCENT_BASES); null for the other methods.
+  percentBase     String?        @map("percent_base")
+  /// The currency it was entered in (the store's); null for costs saved before the field.
+  currency        String?
+  /// once | daily | weekly | fortnightly | monthly | quarterly | half_yearly | yearly (EXPENSE_CADENCES); `daily` for
+  /// a cost that follows the sales.
   cadence         String
-  /// The store-local day it starts, YYYY-MM-DD (paid once: the day it was paid).
-  startsOn        String   @map("starts_on")
+  /// The store-local day it starts (paid once: the day it was paid).
+  startsOn        String         @map("starts_on")
   /// The last store-local day it applies to; null while it goes on.
-  endsOn          String?  @map("ends_on")
+  endsOn          String?        @map("ends_on")
+  /// While paused: no payment falls due from this store-local day on. Null: not paused.
+  pausedFrom      String?        @map("paused_from")
+  vendor          String?
+  paymentMethod   String?        @map("payment_method")
   note            String?
-  createdByUserId String?  @map("created_by_user_id")
-  updatedByUserId String?  @map("updated_by_user_id")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  /// The cost this one took over from when its terms changed from a payment on (that one ends the day before).
+  replacesId      String?        @map("replaces_id")
+  createdByUserId String?        @map("created_by_user_id")
+  updatedByUserId String?        @map("updated_by_user_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  store           Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  entries         ExpenseEntry[]
 
   @@index([workspaceId])
   @@index([storeId])
   @@map("store_expenses")
+}
+
+// A category a store made for its own costs (Profit & Loss → Categories), with the section of the profit
+// and loss its costs go in. A cost names it `custom:<id>` (store_expenses.category).
+model ExpenseCategory {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  name            String
+  /// advertising | variable | fixed | non_operating (EXPENSE_SECTIONS)
+  section         String
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, name])
+  @@index([workspaceId])
+  @@map("expense_categories")
+}
+
+// One payment of a recurring cost that has fallen due, kept as it was paid: recorded by bizinsights
+// on the day it falls due (the cron sweep every 15 minutes, or when the cost is saved), never twice (one row per cost
+// and due day), and changed or skipped one by one by the owner. Changing the cost later never
+// rewrites a payment already recorded.
+model ExpenseEntry {
+  id              String       @id @default(cuid())
+  workspaceId     String       @map("workspace_id")
+  storeId         String       @map("store_id")
+  expenseId       String       @map("expense_id")
+  /// The store-local day the payment fell due.
+  dueOn           String       @map("due_on")
+  /// What was paid (0 when skipped).
+  amount          Decimal      @db.Decimal(18, 2)
+  /// What the cost said when it was recorded: kept when the payment is changed.
+  scheduledAmount Decimal      @map("scheduled_amount") @db.Decimal(18, 2)
+  /// posted | skipped
+  status          String       @default("posted")
+  note            String?
+  editedByUserId  String?      @map("edited_by_user_id")
+  editedAt        DateTime?    @map("edited_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  expense         StoreExpense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  store           Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([expenseId, dueOn])
+  @@index([workspaceId])
+  @@index([storeId, dueOn])
+  @@map("expense_entries")
 }
 
 // Whether the store's costs list holds every cost, and from which day: net profit is given only for
@@ -1237,70 +1302,90 @@ model BusinessEvent {
 // person who connected: every account they connected in one go shares it, encrypted with the same
 // AAD (`ads:<provider>:<storeId>:<kind>`).
 model AdConnection {
-  id                   String    @id @default(cuid())
-  workspaceId          String    @map("workspace_id")
-  storeId              String    @map("store_id")
+  id                   String            @id @default(cuid())
+  workspaceId          String            @map("workspace_id")
+  storeId              String            @map("store_id")
   provider             String // "meta" | "google" | "adsense"
-  accountId            String    @map("account_id")
-  accountName          String?   @map("account_name")
+  accountId            String            @map("account_id")
+  accountName          String?           @map("account_name")
   currency             String?
   timezone             String?
-  /** Google: the manager account the client account is reached through. */
-  loginCustomerId      String?   @map("login_customer_id")
-  /** Shown on the dashboard and synced. Turned off from Settings without losing the connection. */
-  enabled              Boolean   @default(true)
+  /**
+   * Google: the manager account the client account is reached through.
+   */
+  loginCustomerId      String?           @map("login_customer_id")
+  /**
+   * Shown on the dashboard and synced. Turned off from Settings without losing the connection.
+   */
+  enabled              Boolean           @default(true)
   /**
    * "active" | "reconnect" (access ended: connect again) | "permission" (this login lost access to
    * this one account; connect with a login that has it) | "unavailable" (the platform won't report on
    * the account: closed, disabled, sign-up unfinished) | "error" (a failure a retry may fix).
    * AD_CONNECTION_STATUSES in @app/shared/ads.
    */
-  status               String    @default("active")
-  /** Why it isn't active, as a code the UI words (AD_ERROR_CODES in @app/shared/ads); null when active. */
-  errorCode            String?   @map("error_code")
-  /** The platform's own reason, through providerDetail(): for the logs and support, never shown raw. */
-  lastError            String?   @map("last_error")
-  lastSyncedAt         DateTime? @map("last_synced_at")
+  status               String            @default("active")
+  /**
+   * Why it isn't active, as a code the UI words (AD_ERROR_CODES in @app/shared/ads); null when active.
+   */
+  errorCode            String?           @map("error_code")
+  /**
+   * The platform's own reason, through providerDetail(): for the logs and support, never shown raw.
+   */
+  lastError            String?           @map("last_error")
+  lastSyncedAt         DateTime?         @map("last_synced_at")
   /**
    * The ad account's own health at the platform, normalized (AD_ACCOUNT_STATUSES in @app/shared/ads):
    * Meta's account_status, AdSense's state and pending tasks. Null until read.
    */
-  accountStatus        String?   @map("account_status")
-  /** What the platform says about that status (Meta's disable reason, AdSense's pending tasks). */
-  accountStatusDetail  String?   @map("account_status_detail")
-  /** AdSense: the sites (DOMAIN_CODE) whose earnings belong to this store; empty = every site. */
-  sites                String[]  @default([])
+  accountStatus        String?           @map("account_status")
+  /**
+   * What the platform says about that status (Meta's disable reason, AdSense's pending tasks).
+   */
+  accountStatusDetail  String?           @map("account_status_detail")
+  /**
+   * AdSense: the sites (DOMAIN_CODE) whose earnings belong to this store; empty = every site.
+   */
+  sites                String[]          @default([])
   /**
    * The last day (the account's own, YYYY-MM-DD) up to which every day from history_from on is
    * stored without a gap. A sync that leaves a gap after it fetches the gap first.
    */
-  syncedThrough        String?   @map("synced_through")
-  /** A sync was asked for (connect, Refresh) and hasn't finished yet: the card says "Synchronizing". */
-  syncRequestedAt      DateTime? @map("sync_requested_at")
-  /** Syncs that failed in a row; reset by one that works. Failing accounts are tried less often. */
-  consecutiveFailures  Int       @default(0) @map("consecutive_failures")
+  syncedThrough        String?           @map("synced_through")
+  /**
+   * A sync was asked for (connect, Refresh) and hasn't finished yet: the card says "Synchronizing".
+   */
+  syncRequestedAt      DateTime?         @map("sync_requested_at")
+  /**
+   * Syncs that failed in a row; reset by one that works. Failing accounts are tried less often.
+   */
+  consecutiveFailures  Int               @default(0) @map("consecutive_failures")
   /**
    * The first day (the account's own, YYYY-MM-DD) from which every day's figures are stored: the
    * start of the earliest window a sync fetched in full (the first sync fetches 90 days), keeping
    * the earliest; null before any sync worked. The dashboard compares only from then on.
    */
-  historyFrom          String?   @map("history_from")
-  accessTokenEnc       String    @map("access_token_enc")
-  refreshTokenEnc      String?   @map("refresh_token_enc")
-  accessTokenExpiresAt DateTime? @map("access_token_expires_at")
-  tokenKeyVersion      Int       @map("token_key_version")
-  connectedByUserId    String?   @map("connected_by_user_id")
-  /** The platform's id for the person who granted access (Google `sub`, Meta app-scoped user id). */
-  externalUserId       String?   @map("external_user_id")
-  /** The permissions that person granted (checked when connecting). */
-  grantedScopes        String[]  @default([]) @map("granted_scopes")
+  historyFrom          String?           @map("history_from")
+  accessTokenEnc       String            @map("access_token_enc")
+  refreshTokenEnc      String?           @map("refresh_token_enc")
+  accessTokenExpiresAt DateTime?         @map("access_token_expires_at")
+  tokenKeyVersion      Int               @map("token_key_version")
+  connectedByUserId    String?           @map("connected_by_user_id")
+  /**
+   * The platform's id for the person who granted access (Google `sub`, Meta app-scoped user id).
+   */
+  externalUserId       String?           @map("external_user_id")
+  /**
+   * The permissions that person granted (checked when connecting).
+   */
+  grantedScopes        String[]          @default([]) @map("granted_scopes")
   /**
    * A demo connection ("Try demo" on the Google Ads card, docs/ads-demo.md): its figures are generated
    * by bizinsights from demoSeed, never read from Google; it holds no token, and nothing it shows is
    * Google-verified. Added by migration 20261020150000 (the same rules as every other column).
    */
-  isDemo               Boolean   @default(false) @map("is_demo")
-  demoSeed             Int?      @map("demo_seed")
+  isDemo               Boolean           @default(false) @map("is_demo")
+  demoSeed             Int?              @map("demo_seed")
   /**
    * Who holds the sign-in: "direct" (bizinsights' own) on every row since the connections made through
    * Nango (2026-10-22 to 2026-10-28) were moved off it (docs/ads-setup.md, "Leaving Nango"). Still used:
@@ -1311,12 +1396,14 @@ model AdConnection {
    * later one (docs/database/migrations.md). Added by migration 20261022120000 (the same rules as every
    * other column).
    */
-  source               String    @default("direct")
-  sourceLoginId        String?   @map("source_login_id")
-  /** When a sync of this account last started, whatever came of it (lastSyncedAt is the last that worked). */
-  lastSyncAttemptAt    DateTime? @map("last_sync_attempt_at")
-  createdAt            DateTime  @default(now()) @map("created_at")
-  updatedAt            DateTime  @updatedAt @map("updated_at")
+  source               String            @default("direct")
+  sourceLoginId        String?           @map("source_login_id")
+  /**
+   * When a sync of this account last started, whatever came of it (lastSyncedAt is the last that worked).
+   */
+  lastSyncAttemptAt    DateTime?         @map("last_sync_attempt_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
   campaignDays         AdCampaignDaily[]
   campaigns            AdCampaign[]
   adsenseDays          AdsenseDaily[]
@@ -1339,7 +1426,9 @@ model AdLogin {
   workspaceId          String    @map("workspace_id")
   storeId              String    @map("store_id")
   provider             String // "meta"
-  /** The person's token to bizinsights' own app, encrypted like a connection's (logins.ts). A login without one ends at its next check. */
+  /**
+   * The person's token to bizinsights' own app, encrypted like a connection's (logins.ts). A login without one ends at its next check.
+   */
   accessTokenEnc       String    @default("") @map("access_token_enc")
   tokenKeyVersion      Int?      @map("token_key_version")
   /**
@@ -1349,11 +1438,17 @@ model AdLogin {
    */
   sourceLoginId        String?   @map("source_login_id")
   nangoIntegrationKey  String?   @map("nango_integration_key")
-  /** The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned. */
+  /**
+   * The platform's id for the person who signed in (Meta's app-scoped user id), when it was learned.
+   */
   externalUserId       String?   @map("external_user_id")
-  /** The name the platform's sign-in went by (Meta's profile name), for "Connected as …" on the card. */
+  /**
+   * The name the platform's sign-in went by (Meta's profile name), for "Connected as …" on the card.
+   */
   loginName            String?   @map("login_name")
-  /** The permissions that person granted. */
+  /**
+   * The permissions that person granted.
+   */
   grantedScopes        String[]  @default([]) @map("granted_scopes")
   accessTokenExpiresAt DateTime? @map("access_token_expires_at")
   connectedByUserId    String?   @map("connected_by_user_id")
@@ -1363,7 +1458,9 @@ model AdLogin {
    * didn't list them in time) or "choose" (it lists more than are connected without asking).
    */
   reason               String
-  /** When the platform was last asked for the login's ad accounts. */
+  /**
+   * When the platform was last asked for the login's ad accounts.
+   */
   checkedAt            DateTime  @default(now()) @map("checked_at")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
@@ -1378,25 +1475,29 @@ model AdLogin {
 // Each sync of one ad account, as it ended: when, what it was asked to fetch and by whom, and what came
 // of it. The settings cards show the last few; kept 90 days (pruned by the daily sweep).
 model AdSyncRun {
-  id           String   @id @default(cuid())
-  workspaceId  String   @map("workspace_id")
-  storeId      String   @map("store_id")
-  connectionId String   @map("connection_id")
+  id           String       @id @default(cuid())
+  workspaceId  String       @map("workspace_id")
+  storeId      String       @map("store_id")
+  connectionId String       @map("connection_id")
   provider     String
   // ad_connections.source when it ran: "direct" (a run from before 2026-10-28 may hold the old value until pruned)
   source       String
   // request | schedule | history (AdsSyncTrigger)
   trigger      String
-  /** The days fetched (the account's own), when the sync got that far. */
+  /**
+   * The days fetched (the account's own), when the sync got that far.
+   */
   since        String?
   until        String?
   // synced | skipped | failed
   outcome      String
-  rows         Int      @default(0)
-  /** A skipped sync's reason, or a failed one's error code (AD_ERROR_CODES in @app/shared/ads). */
+  rows         Int          @default(0)
+  /**
+   * A skipped sync's reason, or a failed one's error code (AD_ERROR_CODES in @app/shared/ads).
+   */
   reason       String?
-  startedAt    DateTime @map("started_at")
-  finishedAt   DateTime @map("finished_at")
+  startedAt    DateTime     @map("started_at")
+  finishedAt   DateTime     @map("finished_at")
   connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@index([connectionId, startedAt])
@@ -1406,29 +1507,37 @@ model AdSyncRun {
 
 // What an ad platform reports for one campaign on one day (the ad account's own calendar day).
 model AdCampaignDaily {
-  workspaceId     String   @map("workspace_id")
-  storeId         String   @map("store_id")
-  connectionId    String   @map("connection_id")
+  workspaceId     String       @map("workspace_id")
+  storeId         String       @map("store_id")
+  connectionId    String       @map("connection_id")
   provider        String
-  accountId       String   @map("account_id")
-  campaignId      String   @map("campaign_id")
-  campaignName    String   @map("campaign_name")
+  accountId       String       @map("account_id")
+  campaignId      String       @map("campaign_id")
+  campaignName    String       @map("campaign_name")
   day             String
-  spend           Decimal  @default(0) @db.Decimal(18, 2)
-  impressions     Int      @default(0)
-  /** Every click the platform counts (Meta's "clicks (all)" include likes, comments and profile clicks). */
-  clicks          Int      @default(0)
-  /** Clicks on the ad's link: Meta's inline_link_clicks, Google's clicks. Null until read (rows from before 2026-10-19). */
-  linkClicks      Int?     @map("link_clicks")
-  /** The platform's own conversions: Meta's purchases, Google's every primary conversion action (leads, calls...). */
-  conversions     Decimal  @default(0) @db.Decimal(18, 2)
-  conversionValue Decimal  @default(0) @map("conversion_value") @db.Decimal(18, 2)
-  /** Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null until read. */
-  purchases       Decimal? @db.Decimal(18, 2)
-  purchaseValue   Decimal? @map("purchase_value") @db.Decimal(18, 2)
-  leads           Int      @default(0)
+  spend           Decimal      @default(0) @db.Decimal(18, 2)
+  impressions     Int          @default(0)
+  /**
+   * Every click the platform counts (Meta's "clicks (all)" include likes, comments and profile clicks).
+   */
+  clicks          Int          @default(0)
+  /**
+   * Clicks on the ad's link: Meta's inline_link_clicks, Google's clicks. Null until read (rows from before 2026-10-19).
+   */
+  linkClicks      Int?         @map("link_clicks")
+  /**
+   * The platform's own conversions: Meta's purchases, Google's every primary conversion action (leads, calls...).
+   */
+  conversions     Decimal      @default(0) @db.Decimal(18, 2)
+  conversionValue Decimal      @default(0) @map("conversion_value") @db.Decimal(18, 2)
+  /**
+   * Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null until read.
+   */
+  purchases       Decimal?     @db.Decimal(18, 2)
+  purchaseValue   Decimal?     @map("purchase_value") @db.Decimal(18, 2)
+  leads           Int          @default(0)
   currency        String?
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
   connection      AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, campaignId, day])
@@ -1441,28 +1550,42 @@ model AdCampaignDaily {
 // Advertising pages' campaign filters. Its days are in ad_campaign_daily; one row per campaign an
 // account's syncs have seen, kept when the campaign stops spending (its status says why).
 model AdCampaign {
-  workspaceId  String   @map("workspace_id")
-  storeId      String   @map("store_id")
-  connectionId String   @map("connection_id")
-  provider     String
-  accountId    String   @map("account_id")
-  campaignId   String   @map("campaign_id")
-  name         String
-  /** The platform's own word: Google's campaign.status (ENABLED, PAUSED, REMOVED), Meta's effective_status (ACTIVE, PAUSED, ARCHIVED, WITH_ISSUES...). Null: not read yet. */
-  status       String?
-  /** Google's campaign.advertising_channel_type (SEARCH, SHOPPING, PERFORMANCE_MAX...). Null for Meta, and until read. */
-  channelType  String?  @map("channel_type")
-  /** Google's campaign.primary_status (ELIGIBLE, LIMITED, LEARNING, NOT_ELIGIBLE...): how it serves now. Null for Meta, and until read. */
-  primaryStatus String? @map("primary_status")
-  /** Google's campaign.primary_status_reasons (BUDGET_CONSTRAINED...); empty when none, for Meta, and until read. */
-  primaryStatusReasons String[] @default([]) @map("primary_status_reasons")
-  /** The budget's period as the platform says it: DAILY; Google's CUSTOM_PERIOD (one total over the campaign's own dates); Meta's LIFETIME. Null: none on the campaign (a Meta campaign whose budgets are its ad sets'), or not read. */
-  budgetPeriod String?  @map("budget_period")
-  /** The budget for that period, in the account's currency. */
-  budgetAmount Decimal? @map("budget_amount") @db.Decimal(18, 2)
-  /** When a sync last read the status (and the fields above, when its platform gives them). */
-  checkedAt    DateTime @map("checked_at")
-  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  workspaceId          String       @map("workspace_id")
+  storeId              String       @map("store_id")
+  connectionId         String       @map("connection_id")
+  provider             String
+  accountId            String       @map("account_id")
+  campaignId           String       @map("campaign_id")
+  name                 String
+  /**
+   * The platform's own word: Google's campaign.status (ENABLED, PAUSED, REMOVED), Meta's effective_status (ACTIVE, PAUSED, ARCHIVED, WITH_ISSUES...). Null: not read yet.
+   */
+  status               String?
+  /**
+   * Google's campaign.advertising_channel_type (SEARCH, SHOPPING, PERFORMANCE_MAX...). Null for Meta, and until read.
+   */
+  channelType          String?      @map("channel_type")
+  /**
+   * Google's campaign.primary_status (ELIGIBLE, LIMITED, LEARNING, NOT_ELIGIBLE...): how it serves now. Null for Meta, and until read.
+   */
+  primaryStatus        String?      @map("primary_status")
+  /**
+   * Google's campaign.primary_status_reasons (BUDGET_CONSTRAINED...); empty when none, for Meta, and until read.
+   */
+  primaryStatusReasons String[]     @default([]) @map("primary_status_reasons")
+  /**
+   * The budget's period as the platform says it: DAILY; Google's CUSTOM_PERIOD (one total over the campaign's own dates); Meta's LIFETIME. Null: none on the campaign (a Meta campaign whose budgets are its ad sets'), or not read.
+   */
+  budgetPeriod         String?      @map("budget_period")
+  /**
+   * The budget for that period, in the account's currency.
+   */
+  budgetAmount         Decimal?     @map("budget_amount") @db.Decimal(18, 2)
+  /**
+   * When a sync last read the status (and the fields above, when its platform gives them).
+   */
+  checkedAt            DateTime     @map("checked_at")
+  connection           AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, campaignId])
   @@index([workspaceId])
@@ -1473,19 +1596,21 @@ model AdCampaign {
 // What an AdSense account earned from ads shown on one site on one day (the account's own
 // calendar day). Earnings, never spend: kept apart from ad_campaign_daily so the two can't be summed.
 model AdsenseDaily {
-  workspaceId  String   @map("workspace_id")
-  storeId      String   @map("store_id")
-  connectionId String   @map("connection_id")
-  accountId    String   @map("account_id")
-  /** The host the ads were shown on (AdSense DOMAIN_CODE); "" when the report isn't split by site. */
+  workspaceId  String       @map("workspace_id")
+  storeId      String       @map("store_id")
+  connectionId String       @map("connection_id")
+  accountId    String       @map("account_id")
+  /**
+   * The host the ads were shown on (AdSense DOMAIN_CODE); "" when the report isn't split by site.
+   */
   site         String
   day          String
-  earnings     Decimal  @default(0) @db.Decimal(18, 2)
-  pageViews    Int      @default(0) @map("page_views")
-  impressions  Int      @default(0)
-  clicks       Int      @default(0)
+  earnings     Decimal      @default(0) @db.Decimal(18, 2)
+  pageViews    Int          @default(0) @map("page_views")
+  impressions  Int          @default(0)
+  clicks       Int          @default(0)
   currency     String?
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
   connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, site, day])
@@ -1496,9 +1621,9 @@ model AdsenseDaily {
 
 // Dedupe table for pixel events (Shopify may redeliver) and sessions.
 model PixelEventSeen {
-  storeId  String   @map("store_id")
-  eventId  String   @map("event_id")
-  seenAt   DateTime @default(now()) @map("seen_at")
+  storeId String   @map("store_id")
+  eventId String   @map("event_id")
+  seenAt  DateTime @default(now()) @map("seen_at")
 
   @@id([storeId, eventId])
   @@index([seenAt])
@@ -1560,18 +1685,18 @@ model ApiKey {
 }
 
 model AuditLog {
-  id          String    @id @default(cuid())
+  id          String     @id @default(cuid())
   /// Null for a system record that outlives the workspace it was about: a GDPR shop/redact that
   /// erased the store's unclaimed workspace with it (apps/worker/src/handlers/webhooks.ts). RLS shows
   /// such a row to no workspace, and a deleted workspace's own rows still go with it (Cascade).
-  workspaceId String?   @map("workspace_id")
-  actorUserId String?   @map("actor_user_id")
+  workspaceId String?    @map("workspace_id")
+  actorUserId String?    @map("actor_user_id")
   action      String
-  targetType  String?   @map("target_type")
-  targetId    String?   @map("target_id")
+  targetType  String?    @map("target_type")
+  targetId    String?    @map("target_id")
   metadata    Json?
   ip          String?
-  createdAt   DateTime  @default(now()) @map("created_at")
+  createdAt   DateTime   @default(now()) @map("created_at")
   workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
@@ -1632,7 +1757,9 @@ model WhatsappConnection {
   id                 String    @id @default(cuid())
   workspaceId        String    @map("workspace_id")
   storeId            String    @unique @map("store_id")
-  /** "embedded" (Embedded Signup through bizinsights' Meta app) | "manual" (the merchant's own app and system-user token). */
+  /**
+   * "embedded" (Embedded Signup through bizinsights' Meta app) | "manual" (the merchant's own app and system-user token).
+   */
   mode               String
   businessId         String?   @map("business_id")
   wabaId             String    @map("waba_id")
@@ -1642,23 +1769,37 @@ model WhatsappConnection {
   verifiedName       String?   @map("verified_name")
   nameStatus         String?   @map("name_status")
   qualityRating      String?   @map("quality_rating")
-  /** TIER_250, TIER_1K, ... : how many customers a day the number may start conversations with. */
+  /**
+   * TIER_250, TIER_1K, ... : how many customers a day the number may start conversations with.
+   */
   messagingLimitTier String?   @map("messaging_limit_tier")
-  /** Whether the number is registered with the Cloud API (it can't send until it is). */
+  /**
+   * Whether the number is registered with the Cloud API (it can't send until it is).
+   */
   registered         Boolean   @default(false)
-  /** "active" | "pending" (number not registered yet) | "reconnect" (Meta rejected the token) | "error". */
+  /**
+   * "active" | "pending" (number not registered yet) | "reconnect" (Meta rejected the token) | "error".
+   */
   status             String    @default("active")
   lastError          String?   @map("last_error")
   accessTokenEnc     String    @map("access_token_enc")
-  /** Manual mode: the merchant's Meta app secret, which signs their webhooks. */
+  /**
+   * Manual mode: the merchant's Meta app secret, which signs their webhooks.
+   */
   appSecretEnc       String?   @map("app_secret_enc")
-  /** Manual mode: the verify token the merchant enters in their Meta app's webhook settings. */
+  /**
+   * Manual mode: the verify token the merchant enters in their Meta app's webhook settings.
+   */
   verifyTokenEnc     String?   @map("verify_token_enc")
   verifyTokenHash    String?   @unique @map("verify_token_hash")
-  /** The number's two-step verification PIN, encrypted: the one bizinsights set when registering it, or the one the merchant entered. */
+  /**
+   * The number's two-step verification PIN, encrypted: the one bizinsights set when registering it, or the one the merchant entered.
+   */
   pinEnc             String?   @map("pin_enc")
   tokenKeyVersion    Int       @map("token_key_version")
-  /** When Meta last proved it can reach our webhook for this number (challenge or signed delivery). */
+  /**
+   * When Meta last proved it can reach our webhook for this number (challenge or signed delivery).
+   */
   webhookVerifiedAt  DateTime? @map("webhook_verified_at")
   lastWebhookAt      DateTime? @map("last_webhook_at")
   lastSyncedAt       DateTime? @map("last_synced_at")
@@ -1678,7 +1819,9 @@ model WhatsappSettings {
   storeId          String    @id @map("store_id")
   workspaceId      String    @map("workspace_id")
   config           Json      @default("{}")
-  /** Who chose the consent basis for order updates, and when (also in the audit log). */
+  /**
+   * Who chose the consent basis for order updates, and when (also in the audit log).
+   */
   basisSetByUserId String?   @map("basis_set_by_user_id")
   basisSetAt       DateTime? @map("basis_set_at")
   updatedByUserId  String?   @map("updated_by_user_id")
@@ -1698,9 +1841,13 @@ model WhatsappTemplate {
   metaId         String   @map("meta_id")
   name           String
   language       String
-  /** UTILITY | MARKETING | AUTHENTICATION (Meta's, which may differ from what was asked for). */
+  /**
+   * UTILITY | MARKETING | AUTHENTICATION (Meta's, which may differ from what was asked for).
+   */
   category       String
-  /** APPROVED | PENDING | REJECTED | PAUSED | DISABLED | IN_APPEAL ... */
+  /**
+   * APPROVED | PENDING | REJECTED | PAUSED | DISABLED | IN_APPEAL ...
+   */
   status         String
   components     Json
   rejectedReason String?  @map("rejected_reason")
@@ -1720,23 +1867,33 @@ model WhatsappContact {
   id                 String    @id @default(cuid())
   workspaceId        String    @map("workspace_id")
   storeId            String    @map("store_id")
-  /** HMAC(OTP_PEPPER, "wa:<storeId>:<wa_id>"): finds the contact from a webhook without decrypting anything. */
+  /**
+   * HMAC(OTP_PEPPER, "wa:<storeId>:<wa_id>"): finds the contact from a webhook without decrypting anything.
+   */
   phoneHash          String    @map("phone_hash")
   phoneEnc           String    @map("phone_enc")
   phoneMasked        String    @map("phone_masked")
   country            String?
-  /** Same keyed hash as orders.customer_key, when Shopify said which customer this is. */
+  /**
+   * Same keyed hash as orders.customer_key, when Shopify said which customer this is.
+   */
   customerKey        String?   @map("customer_key")
   firstNameEnc       String?   @map("first_name_enc")
-  /** "opted_in" | "opted_out" | "unknown" (never asked: no marketing). */
+  /**
+   * "opted_in" | "opted_out" | "unknown" (never asked: no marketing).
+   */
   marketingStatus    String    @default("unknown") @map("marketing_status")
   marketingSource    String?   @map("marketing_source")
   marketingUpdatedAt DateTime? @map("marketing_updated_at")
-  /** Replied STOP: nothing at all is sent to this number any more, order updates included. */
+  /**
+   * Replied STOP: nothing at all is sent to this number any more, order updates included.
+   */
   optedOut           Boolean   @default(false) @map("opted_out")
   optedOutAt         DateTime? @map("opted_out_at")
   optOutSource       String?   @map("opt_out_source")
-  /** Last message from the customer (opens WhatsApp's 24-hour customer service window). */
+  /**
+   * Last message from the customer (opens WhatsApp's 24-hour customer service window).
+   */
   lastInboundAt      DateTime? @map("last_inbound_at")
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
@@ -1755,15 +1912,23 @@ model WhatsappMessage {
   workspaceId       String    @map("workspace_id")
   storeId           String    @map("store_id")
   contactId         String?   @map("contact_id")
-  /** order_confirmation, order_shipped, abandoned_cart_1, review_request, campaign, automation, test, ... */
+  /**
+   * order_confirmation, order_shipped, abandoned_cart_1, review_request, campaign, automation, test, ...
+   */
   kind              String
-  /** utility | marketing | authentication | unknown: from the template Meta approved. */
+  /**
+   * utility | marketing | authentication | unknown: from the template Meta approved.
+   */
   category          String    @default("unknown")
   templateName      String?   @map("template_name")
   templateLanguage  String?   @map("template_language")
-  /** What the send needs that only the triggering event knew (customer name, address, ...), encrypted; cleared once sent. */
+  /**
+   * What the send needs that only the triggering event knew (customer name, address, ...), encrypted; cleared once sent.
+   */
   paramsEnc         String?   @map("params_enc")
-  /** One message per purpose: "order:<id>:order_shipped", "cart:<token>:1", "campaign:<id>:<contact>". */
+  /**
+   * One message per purpose: "order:<id>:order_shipped", "cart:<token>:1", "campaign:<id>:<contact>".
+   */
   dedupeKey         String    @map("dedupe_key")
   phoneMasked       String?   @map("phone_masked")
   trackingId        String?   @map("tracking_id")
@@ -1771,7 +1936,9 @@ model WhatsappMessage {
   checkoutId        String?   @map("checkout_id")
   campaignId        String?   @map("campaign_id")
   ruleId            String?   @map("rule_id")
-  /** scheduled | sending | sent | delivered | read | failed | cancelled | skipped */
+  /**
+   * scheduled | sending | sent | delivered | read | failed | cancelled | skipped
+   */
   status            String    @default("scheduled")
   scheduledFor      DateTime  @map("scheduled_for")
   enqueuedAt        DateTime? @map("enqueued_at")
@@ -1779,7 +1946,9 @@ model WhatsappMessage {
   providerMessageId String?   @unique @map("provider_message_id")
   errorCode         String?   @map("error_code")
   errorTitle        String?   @map("error_title")
-  /** Why it was skipped or cancelled (no_phone, opted_out, no_marketing_consent, checkout_completed, ...). */
+  /**
+   * Why it was skipped or cancelled (no_phone, opted_out, no_marketing_consent, checkout_completed, ...).
+   */
   reason            String?
   sentAt            DateTime? @map("sent_at")
   deliveredAt       DateTime? @map("delivered_at")
@@ -1788,11 +1957,15 @@ model WhatsappMessage {
   cancelledAt       DateTime? @map("cancelled_at")
   pricingCategory   String?   @map("pricing_category")
   billable          Boolean?
-  /** Short code of this message's tracked link (/api/r/<code>), and when it was first opened. */
+  /**
+   * Short code of this message's tracked link (/api/r/<code>), and when it was first opened.
+   */
   clickCode         String?   @unique @map("click_code")
   clickUrlEnc       String?   @map("click_url_enc")
   clickedAt         DateTime? @map("clicked_at")
-  /** The order this message is credited with (each order at most once; see docs/whatsapp.md, Attribution). */
+  /**
+   * The order this message is credited with (each order at most once; see docs/whatsapp.md, Attribution).
+   */
   attributedOrderId String?   @map("attributed_order_id")
   attributedRevenue Decimal?  @map("attributed_revenue") @db.Decimal(18, 2)
   attributedAt      DateTime? @map("attributed_at")
@@ -1845,18 +2018,28 @@ model OrderTracking {
   reviewTokenEnc  String    @map("review_token_enc")
   currency        String
   totalPrice      Decimal   @map("total_price") @db.Decimal(18, 2)
-  /** [{ productId, title, quantity }]: product data only. */
+  /**
+   * [{ productId, title, quantity }]: product data only.
+   */
   items           Json
   financialStatus String?   @map("financial_status")
-  /** placed | paid | processing | packed | shipped | in_transit | out_for_delivery | delivered | delivery_failed | cancelled | refunded */
+  /**
+   * placed | paid | processing | packed | shipped | in_transit | out_for_delivery | delivered | delivery_failed | cancelled | refunded
+   */
   status          String    @default("placed")
-  /** SHIPMENT_RANK of the furthest parcel stage seen (notifications never go backwards). */
+  /**
+   * SHIPMENT_RANK of the furthest parcel stage seen (notifications never go backwards).
+   */
   shipmentRank    Int       @default(0) @map("shipment_rank")
-  /** Whether a courier has ever reported progress (else the page says live tracking isn't available). */
+  /**
+   * Whether a courier has ever reported progress (else the page says live tracking isn't available).
+   */
   carrierEvents   Boolean   @default(false) @map("carrier_events")
   tags            String[]  @default([])
   checkoutToken   String?   @map("checkout_token")
-  /** What the order said about consent: the whatsapp_opt_in cart attribute, Shopify SMS marketing consent. */
+  /**
+   * What the order said about consent: the whatsapp_opt_in cart attribute, Shopify SMS marketing consent.
+   */
   cartOptIn       Boolean   @default(false) @map("cart_opt_in")
   smsConsent      Boolean   @default(false) @map("sms_consent")
   country         String?
@@ -1864,7 +2047,9 @@ model OrderTracking {
   paidAt          DateTime? @map("paid_at")
   deliveredAt     DateTime? @map("delivered_at")
   cancelledAt     DateTime? @map("cancelled_at")
-  /** The link stops working after this; the row goes a year after the order. */
+  /**
+   * The link stops working after this; the row goes a year after the order.
+   */
   expiresAt       DateTime  @map("expires_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
@@ -1910,12 +2095,18 @@ model AbandonedCheckout {
   phoneMasked        String?   @map("phone_masked")
   currency           String
   totalPrice         Decimal   @map("total_price") @db.Decimal(18, 2)
-  /** [{ title, quantity, price }]: product data only. */
+  /**
+   * [{ title, quantity, price }]: product data only.
+   */
   items              Json
-  /** Shopify's recovery link (it opens the customer's checkout, so it is encrypted). */
+  /**
+   * Shopify's recovery link (it opens the customer's checkout, so it is encrypted).
+   */
   recoveryUrlEnc     String?   @map("recovery_url_enc")
   marketingConsent   Boolean   @default(false) @map("marketing_consent")
-  /** open | reminded | recovered | completed | expired | ineligible */
+  /**
+   * open | reminded | recovered | completed | expired | ineligible
+   */
   status             String    @default("open")
   ineligibleReason   String?   @map("ineligible_reason")
   checkoutCreatedAt  DateTime  @map("checkout_created_at")
@@ -1944,7 +2135,9 @@ model WhatsappCampaign {
   templateName        String    @map("template_name")
   templateLanguage    String    @map("template_language")
   mapping             Json      @default("{}")
-  /** Values for the campaign's own variables: { greeting, discountPercentage, endDate }. */
+  /**
+   * Values for the campaign's own variables: { greeting, discountPercentage, endDate }.
+   */
   variables           Json      @default("{}")
   mediaUrl            String?   @map("media_url")
   linkUrl             String?   @map("link_url")
@@ -1952,7 +2145,9 @@ model WhatsappCampaign {
   audience            Json      @default("{}")
   startAt             DateTime  @map("start_at")
   endAt               DateTime? @map("end_at")
-  /** draft | scheduled | sending | paused | completed | cancelled */
+  /**
+   * draft | scheduled | sending | paused | completed | cancelled
+   */
   status              String    @default("draft")
   estimatedRecipients Int?      @map("estimated_recipients")
   createdByUserId     String?   @map("created_by_user_id")
@@ -1976,13 +2171,17 @@ model CustomerReview {
   trackingId        String    @map("tracking_id")
   shopifyOrderId    String    @map("shopify_order_id")
   orderName         String    @map("order_name")
-  /** "" for the order as a whole. */
+  /**
+   * "" for the order as a whole.
+   */
   productId         String    @default("") @map("product_id")
   productTitle      String?   @map("product_title")
   rating            Int
   body              String?
   reviewerName      String?   @map("reviewer_name")
-  /** pending | published | rejected */
+  /**
+   * pending | published | rejected
+   */
   status            String    @default("pending")
   moderationReason  String?   @map("moderation_reason")
   moderatedByUserId String?   @map("moderated_by_user_id")
@@ -2023,7 +2222,9 @@ model WhatsappAutomationRun {
   ruleId      String   @map("rule_id")
   trigger     String
   subjectKey  String   @map("subject_key")
-  /** done | skipped | error | test */
+  /**
+   * done | skipped | error | test
+   */
   outcome     String
   detail      String?
   messageId   String?  @map("message_id")
@@ -2094,34 +2295,34 @@ model WaConnection {
 
 // The store's WhatsApp choices: how customers agree to updates, sending hours, the test number.
 model WaSettings {
-  storeId           String    @id @map("store_id")
-  workspaceId       String    @map("workspace_id")
+  storeId            String    @id @map("store_id")
+  workspaceId        String    @map("workspace_id")
   /// unset | opt_in_only | checkout_notice (ORDER_UPDATE_BASES); who chose it and when, also audited.
-  orderUpdates      String    @default("unset") @map("order_updates")
-  orderUpdatesSetBy String?   @map("order_updates_set_by")
-  orderUpdatesSetAt DateTime? @map("order_updates_set_at")
+  orderUpdates       String    @default("unset") @map("order_updates")
+  orderUpdatesSetBy  String?   @map("order_updates_set_by")
+  orderUpdatesSetAt  DateTime? @map("order_updates_set_at")
   /// The store says its Shopify text-message marketing consent wording covers WhatsApp too.
-  shopifySmsConsent Boolean   @default(false) @map("shopify_sms_consent")
+  shopifySmsConsent  Boolean   @default(false) @map("shopify_sms_consent")
   /// Store-time hours marketing messages may go out (a workflow can choose its own).
-  sendWindowStart   Int       @default(9) @map("send_window_start")
-  sendWindowEnd     Int       @default(20) @map("send_window_end")
+  sendWindowStart    Int       @default(9) @map("send_window_start")
+  sendWindowEnd      Int       @default(20) @map("send_window_end")
   /// The store's own cap on business-started messages a day (null: Meta's limit only).
-  dailyLimit        Int?      @map("daily_limit")
+  dailyLimit         Int?      @map("daily_limit")
   /// The merchant's own phone, for test messages (encrypted) and as shown.
-  testPhoneEnc      String?   @map("test_phone_enc")
-  testPhoneMasked   String?   @map("test_phone_masked")
+  testPhoneEnc       String?   @map("test_phone_enc")
+  testPhoneMasked    String?   @map("test_phone_masked")
   /// SHA-256 of the store's custom-event key ("whev_..."), which the store's own tools send events with.
-  eventKeyHash      String?   @unique @map("event_key_hash")
+  eventKeyHash       String?   @unique @map("event_key_hash")
   /// The key's last characters, so the merchant can tell which one is in use.
-  eventKeyHint      String?   @map("event_key_hint")
-  eventKeyCreatedAt DateTime? @map("event_key_created_at")
+  eventKeyHint       String?   @map("event_key_hint")
+  eventKeyCreatedAt  DateTime? @map("event_key_created_at")
   /// "Pause all automation": since when workflows start nothing and their (and campaigns') waiting
   /// messages are held; null when automation runs. Who paused it is audited too.
   automationPausedAt DateTime? @map("automation_paused_at")
   automationPausedBy String?   @map("automation_paused_by")
-  updatedByUserId   String?   @map("updated_by_user_id")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  updatedByUserId    String?   @map("updated_by_user_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   @@index([workspaceId])
   @@map("wa_settings")
@@ -2319,39 +2520,39 @@ model WaWebhookEvent {
 
 // A workflow: trigger -> conditions -> template -> timing, written by the merchant.
 model WaWorkflow {
-  id               String    @id @default(cuid())
-  workspaceId      String    @map("workspace_id")
-  storeId          String    @map("store_id")
-  name             String
+  id                   String    @id @default(cuid())
+  workspaceId          String    @map("workspace_id")
+  storeId              String    @map("store_id")
+  name                 String
   /// WORKFLOW_TRIGGERS
-  trigger          String
+  trigger              String
   /// custom_event only: the event's name.
-  eventName        String?   @map("event_name")
-  conditions       Json      @default("[]")
+  eventName            String?   @map("event_name")
+  conditions           Json      @default("[]")
   /// "" for a message_received workflow, which answers with replyText instead of a template.
-  templateName     String    @map("template_name")
-  templateLanguage String    @map("template_language")
-  mapping          Json
-  headerMediaUrl   String?   @map("header_media_url")
+  templateName         String    @map("template_name")
+  templateLanguage     String    @map("template_language")
+  mapping              Json
+  headerMediaUrl       String?   @map("header_media_url")
   /// message_received only: the free-form reply (WhatsApp's 24-hour window is open: the customer just wrote).
-  replyText        String?   @map("reply_text")
+  replyText            String?   @map("reply_text")
   /// message_received only: the same customer gets this workflow's reply at most once in this many minutes.
-  replyCooldownMinutes Int?  @map("reply_cooldown_minutes")
+  replyCooldownMinutes Int?      @map("reply_cooldown_minutes")
   /// after_trigger | before_event
-  timingMode       String    @default("after_trigger") @map("timing_mode")
-  timingMinutes    Int       @default(0) @map("timing_minutes")
-  sendWindowStart  Int?      @map("send_window_start")
-  sendWindowEnd    Int?      @map("send_window_end")
+  timingMode           String    @default("after_trigger") @map("timing_mode")
+  timingMinutes        Int       @default(0) @map("timing_minutes")
+  sendWindowStart      Int?      @map("send_window_start")
+  sendWindowEnd        Int?      @map("send_window_end")
   /// draft | active | paused
-  status           String    @default("draft")
+  status               String    @default("draft")
   /// Goes up with every save: a message waiting from an older version re-checks the workflow.
-  version          Int       @default(1)
-  createdByUserId  String?   @map("created_by_user_id")
-  updatedByUserId  String?   @map("updated_by_user_id")
-  activatedAt      DateTime? @map("activated_at")
-  lastRunAt        DateTime? @map("last_run_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  version              Int       @default(1)
+  createdByUserId      String?   @map("created_by_user_id")
+  updatedByUserId      String?   @map("updated_by_user_id")
+  activatedAt          DateTime? @map("activated_at")
+  lastRunAt            DateTime? @map("last_run_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   @@index([storeId, trigger, status])
   @@index([workspaceId])
@@ -2531,26 +2732,26 @@ model WappSettings {
 
 /// A message template written in bizinsights. On cloud_api, Meta's review of it as well.
 model WappTemplate {
-  id                 String    @id @default(cuid())
-  workspaceId        String    @map("workspace_id")
-  storeId            String    @map("store_id")
-  name               String
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  storeId         String    @map("store_id")
+  name            String
   /// transactional | marketing
-  category           String
+  category        String
   /// The text with {{variables}} (WA_VARIABLES).
-  body               String
-  active             Boolean   @default(true)
+  body            String
+  active          Boolean   @default(true)
   /// cloud_api: the name and language it was submitted to Meta under, Meta's id, status and reason.
-  metaName           String?   @map("meta_name")
-  metaLanguage       String?   @map("meta_language")
-  metaId             String?   @map("meta_id")
-  metaStatus         String?   @map("meta_status")
-  metaReason         String?   @map("meta_reason")
-  metaCheckedAt      DateTime? @map("meta_checked_at")
-  createdByUserId    String?   @map("created_by_user_id")
-  updatedByUserId    String?   @map("updated_by_user_id")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  metaName        String?   @map("meta_name")
+  metaLanguage    String?   @map("meta_language")
+  metaId          String?   @map("meta_id")
+  metaStatus      String?   @map("meta_status")
+  metaReason      String?   @map("meta_reason")
+  metaCheckedAt   DateTime? @map("meta_checked_at")
+  createdByUserId String?   @map("created_by_user_id")
+  updatedByUserId String?   @map("updated_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   @@unique([storeId, name])
   @@index([workspaceId])

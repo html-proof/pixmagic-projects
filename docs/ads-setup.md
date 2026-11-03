@@ -290,6 +290,30 @@ Settings → Advertising / Integrations card: "Continue with Meta Ads" (or Googl
 - **Meta tokens** last about 60 days and can't be renewed silently: Settings warns from 14 days before, the alert from
   7. When it ends the account shows Reconnect required; history is kept.
 
+### Connect links
+
+For a store whose Meta ads someone else runs (an agency, a colleague with no bizinsights login). On the Meta Ads
+card of Settings → Advertising, a person with "Manage integrations" presses **Make a connect link** and sends the
+link (`https://bizinsights.io/connect/meta?t=…`). Whoever opens it sees the workspace's and the store's names,
+presses Continue with Meta Ads (the same Facebook Login for Business, `ads_read` only), and ticks the store's ad
+accounts on the link's page. No bizinsights account is needed. Code: `packages/core/src/adConnections/links.ts`,
+`apps/api/src/routes/adLinks.ts`, the callback's `finishLinkSignIn` in `routes/ads.ts`, and
+`apps/web/src/app/connect/meta/page.tsx`.
+
+- **One link per store**, in the coordinator (the record under the token's SHA-256; the store's current link with its
+  token, so it can be copied again). Making a new one or **Turn off** ends the last. It ends after 7 days, and the
+  first connection made through it uses it up; opened again, it says it was used.
+- **It works only while its maker may still connect** ad accounts to the store (`mayStillConnect`): checked when the
+  page opens, when the sign-in starts and when Facebook sends the browser back.
+- **The connection has no connecting member** (`connected_by_user_id` null): the grant is the outside person's, so it
+  never serves the maker's other stores (`reuse.ts`), and it stays when the maker leaves the workspace. The audit
+  log's `ads.connected` names the maker as actor, with `via: "link"`; `ads.link_created` and `ads.link_revoked` are
+  logged too. Disconnecting works as for any other account, and gives the grant back to Meta.
+- A Facebook login that reaches no ad account isn't kept waiting, as a member's is: the page says so, and the
+  person can sign in with another login.
+- Until Meta grants Advanced Access to `ads_read`, the person opening the link needs a role on the app (Tester), as
+  for "Continue with Meta Ads" itself ("Facebook says Feature Unavailable", below).
+
 ### What the callback's codes mean
 
 The callback sends problems to `/settings/ads?error=<code>&provider=<provider>`, worded for the merchant in

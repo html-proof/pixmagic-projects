@@ -57,11 +57,12 @@ test("the owner keeps the store's costs, and the dashboard counts them without c
   // A cost paid once today: all of it is this month's.
   await page.getByTestId("cost-add").click();
   const form = page.getByTestId("cost-form");
-  await form.getByLabel("Name").fill("Label printer");
-  await form.getByLabel("What it is for").selectOption("shipping");
+  await form.getByLabel("Expense name").fill("Label printer");
+  await form.getByRole("button", { name: "Variable costs" }).click();
+  await form.getByLabel("Category").selectOption("shipping");
   await form.getByLabel("Amount (USD)").fill("120");
-  await form.getByLabel("How often").selectOption("once");
-  await form.getByLabel("Paid on").fill(today());
+  await form.getByLabel("Payment frequency").selectOption("once");
+  await form.getByLabel("Expense date").fill(today());
   await form.getByRole("button", { name: "Add" }).click();
   const row = page.getByTestId("cost-row").filter({ hasText: "Label printer" });
   await expect(row).toContainText("$120.00 once");

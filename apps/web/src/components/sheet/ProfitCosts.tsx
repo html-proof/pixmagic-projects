@@ -1,13 +1,13 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { Plus } from "lucide-react";
-import { EXPENSE_CATEGORY_GROUP, EXPENSE_CATEGORY_LABEL, EXPENSE_GROUP_LABEL, EXPENSE_GROUPS, expenseInRange, type Expense, type ExpenseGroup } from "@app/shared/expenses";
+import { categoryLabel, categorySection, EXPENSE_GROUP_LABEL, EXPENSE_GROUPS, EXPENSE_SECTION_LABEL, expenseInRange, groupOfSection, type CustomCategory, type Expense, type ExpenseGroup, type ExpenseSection } from "@app/shared/expenses";
 import type { ProfitLoss } from "@app/shared/profit";
 import { ConfirmDialog, Dialog, useAction } from "@/components/AppUi";
 import { BarRow, StackedBar } from "@/components/dashboard/Charts";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMonth, weekdayNames } from "@/components/dashboard/format";
-import { blankCost, CostFields, draftOf, inputOf, termsOf, whenOf, type CostDraft } from "@/components/costs/CostForm";
+import { ApplyChoice, asksApplyFrom, blankCost, changesPayments, CostFields, draftOf, inputOf, termsOf, whenOf, type CostDraft } from "@/components/costs/CostForm";
 import { api, fmtMoney, friendlyError, liveDataChanged } from "@/lib/api";
 import { monthPeriods } from "./ProfitCharts";
 import type { ProfitAnswer, ProfitState } from "./useProfit";
@@ -42,7 +42,7 @@ export function ExpenseBreakdown({ p, data, day }: { p: ProfitState; data: Profi
   const ranked = [
     ...(t.productCosts !== null && t.productCosts > 0 ? [{ key: "products", label: "Product costs", group: "Variable costs", amount: t.productCosts }] : []),
     ...(t.adSpend !== null && t.adSpend > 0 ? [{ key: "ads", label: "Ad spend", group: "Variable costs", amount: t.adSpend }] : []),
-    ...t.yours.byCategory.map((c) => ({ key: c.category, label: EXPENSE_CATEGORY_LABEL[c.category], group: EXPENSE_GROUP_LABEL[EXPENSE_CATEGORY_GROUP[c.category]], amount: c.amount })),
+    ...t.yours.byCategory.map((c) => ({ key: c.category, label: categoryLabel(c.category, data.categories), group: EXPENSE_SECTION_LABEL[c.section], amount: c.amount })),
   ].sort((a, b) => b.amount - a.amount);
   const top = ranked[0]?.amount ?? 0;
   const trend = data.trend;
@@ -104,13 +104,28 @@ export function ExpenseBreakdown({ p, data, day }: { p: ProfitState; data: Profi
 
 /** The owner's costs that count in the month, by group, each with its share of the month and of the day looked at. */
 function CostsList({ p, data, day }: { p: ProfitState; data: ProfitAnswer; day: ProfitLoss }) {
-  const [editing, setEditing] = useState<{ id: string | null; draft: CostDraft } | null>(null);
+  const [editing, setEditing] = useState<{ id: string | null; draft: CostDraft; apply: "next" | "all" } | null>(null);
   const [removing, setRemoving] = useState<Expense | null>(null);
   const { busy, run } = useAction();
   const money = (n: number) => fmtMoney(n, data.currency);
   const open = data.setup.operatingWeekdays;
   const month = { from: data.allocation.from, to: data.allocation.to };
-  const list = (p.costs?.expenses ?? []).map((e) => ({ e, month: expenseInRange(e, month, open), day: expenseInRange(e, { from: day.from, to: day.from }, open) })).filter((x) => x.month !== 0);
+  const customs = p.costs?.categories ?? [];
+  const groupOf = (e: Expense) => groupOfSection(categorySection(e.category, customs) ?? "fixed");
+  // A cost that follows the sales has no amount of its own until the day's sales: it is listed with its terms.
+  const list = (p.costs?.expenses ?? [])
+    .map((e) => (e.method && e.method !== "amount" ? { e, month: null, day: null } : { e, month: expenseInRange(e, month, open), day: expenseInRange(e, { from: day.from, to: day.from }, open) }))
+    .filter((x) => (x.month === null ? x.e.startsOn <= month.to && (!x.e.endsOn || x.e.endsOn >= month.from) : x.month !== 0));
+  const editedCost = editing?.id ? (p.costs?.expenses.find((e) => e.id === editing.id) ?? null) : null;
+  async function createCategory(name: string, section: ExpenseSection): Promise<CustomCategory | null> {
+    let made: CustomCategory | null = null;
+    await run("category", "add the category", async () => {
+      made = (await api<{ category: CustomCategory }>(`${p.base}/expense-categories`, { method: "POST", body: { name, section } })).category;
+      await p.reloadCosts();
+      return `${name} added.`;
+    });
+    return made;
+  }
   const path = p.base ? `${p.base}/expenses` : null;
 
   const changed = async () => {
@@ -120,9 +135,9 @@ function CostsList({ p, data, day }: { p: ProfitState; data: ProfitAnswer; day: 
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!editing || !path) return;
-    const { id, draft } = editing;
+    const { id, draft, apply } = editing;
     const ok = await run("save", id ? "save the cost" : "add the cost", async () => {
-      await api(id ? `${path}/${id}` : path, { method: id ? "PUT" : "POST", body: inputOf(draft) });
+      await api(id ? `${path}/${id}?apply=${apply}` : path, { method: id ? "PUT" : "POST", body: inputOf(draft, data.currency) });
       return id ? "Cost saved." : "Cost added.";
     });
     if (ok) {
@@ -157,7 +172,7 @@ function CostsList({ p, data, day }: { p: ProfitState; data: ProfitAnswer; day: 
                 key={g}
                 type="button"
                 className={`${g === "fixed" ? "btn-primary" : "btn-secondary"} h-9 gap-1.5 px-3 text-sm`}
-                onClick={() => setEditing({ id: null, draft: blankCost(day.from, STARTS[g].category, STARTS[g].cadence) })}
+                onClick={() => setEditing({ id: null, draft: blankCost(day.from, STARTS[g].category, STARTS[g].cadence), apply: "next" })}
                 data-testid={`profit-add-${g}`}
               >
                 <Plus aria-hidden className="h-4 w-4" />
@@ -172,12 +187,12 @@ function CostsList({ p, data, day }: { p: ProfitState; data: ProfitAnswer; day: 
       {list.length > 0 && (
         <div className="mt-3 grid gap-4 md:grid-cols-3">
           {EXPENSE_GROUPS.map((g) => {
-            const rows = list.filter((x) => EXPENSE_CATEGORY_GROUP[x.e.category] === g).sort((a, b) => b.month - a.month);
+            const rows = list.filter((x) => groupOf(x.e) === g).sort((a, b) => (b.month ?? 0) - (a.month ?? 0));
             return (
               <div key={g} className="min-w-0" data-testid={`profit-costs-${g}`}>
                 <p className="flex items-baseline justify-between gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
                   <span>{EXPENSE_GROUP_LABEL[g]}</span>
-                  <span className="tabular-nums">{money(rows.reduce((a, x) => a + Math.round(x.month * 100), 0) / 100)}</span>
+                  <span className="tabular-nums">{money(rows.reduce((a, x) => a + Math.round((x.month ?? 0) * 100), 0) / 100)}</span>
                 </p>
                 {rows.length === 0 ? (
                   <p className="mt-1 text-sm text-muted">None.</p>
@@ -189,19 +204,19 @@ function CostsList({ p, data, day }: { p: ProfitState; data: ProfitAnswer; day: 
                           <span className="min-w-0 truncate font-medium" title={e.name}>
                             {e.name}
                           </span>
-                          <span className="shrink-0 tabular-nums">{money(m)}</span>
+                          <span className="shrink-0 tabular-nums">{m === null ? "Follows sales" : money(m)}</span>
                         </div>
                         <p className="text-xs text-muted">
-                          {EXPENSE_CATEGORY_LABEL[e.category]} · {termsOf(e, data.currency)} · {whenOf(e)}
+                          {categoryLabel(e.category, customs)} · {termsOf(e, data.currency)} · {whenOf(e)}
                         </p>
-                        {e.cadence !== "once" && (
+                        {e.cadence !== "once" && d !== null && (
                           <p className="text-xs text-muted">
                             {fmtDay(day.from, { year: false })}: {money(d)}
                           </p>
                         )}
                         {p.canManageCosts && (
                           <p className="mt-0.5 flex gap-3 text-xs" data-print-hide>
-                            <button type="button" className="text-accent hover:underline" onClick={() => setEditing({ id: e.id, draft: draftOf(e) })} aria-label={`Change ${e.name}`}>
+                            <button type="button" className="text-accent hover:underline" onClick={() => setEditing({ id: e.id, draft: draftOf(e, customs), apply: "next" })} aria-label={`Change ${e.name}`}>
                               Change
                             </button>
                             <button type="button" className="text-danger hover:underline" onClick={() => setRemoving(e)} aria-label={`Remove ${e.name}`}>
@@ -223,7 +238,10 @@ function CostsList({ p, data, day }: { p: ProfitState; data: ProfitAnswer; day: 
       <Dialog open={editing !== null} title={editing?.id ? "Change the cost" : "Add a cost"} onClose={() => setEditing(null)}>
         {editing && (
           <form onSubmit={save} className="grid gap-3 sm:grid-cols-2" data-testid="profit-cost-form">
-            <CostFields draft={editing.draft} currency={data.currency} set={(patch) => setEditing((x) => (x ? { ...x, draft: { ...x.draft, ...patch } } : x))} />
+            <CostFields draft={editing.draft} currency={data.currency} set={(patch) => setEditing((x) => (x ? { ...x, draft: { ...x.draft, ...patch } } : x))} categories={customs} onCreateCategory={createCategory} />
+            {editedCost && asksApplyFrom(editedCost, data.today) && changesPayments(editedCost, editing.draft) && (
+              <ApplyChoice value={editing.apply} onChange={(apply) => setEditing((x) => (x ? { ...x, apply } : x))} next={editedCost.nextDue ?? null} />
+            )}
             <div className="flex gap-2 sm:col-span-2">
               <button className="btn-primary" disabled={busy === "save"}>
                 {busy === "save" ? "Saving…" : editing.id ? "Save" : "Add"}

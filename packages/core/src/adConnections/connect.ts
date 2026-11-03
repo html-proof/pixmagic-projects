@@ -37,6 +37,8 @@ export interface PendingAdConnect {
    * none): cancelling the choice must not revoke it (dropUnusedGrant's `reusedRefreshToken`).
    */
   reusedRefreshToken?: boolean;
+  /** Made through a connect link (links.ts): its id. Only that link's page can finish the choice, and `userId` is the member who made it. */
+  link?: string;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
 }
@@ -65,6 +67,7 @@ export async function holdPendingAdConnect(
     externalUserId?: string | null;
     truncated?: boolean;
     reusedRefreshToken?: boolean;
+    link?: string;
   },
 ) {
   const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
@@ -81,6 +84,7 @@ export async function holdPendingAdConnect(
     externalUserId: input.externalUserId ?? null,
     truncated: !!(input.truncated ?? input.accounts.truncated),
     ...(input.reusedRefreshToken ? { reusedRefreshToken: true } : {}),
+    ...(input.link ? { link: input.link } : {}),
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);

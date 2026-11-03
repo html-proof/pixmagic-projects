@@ -1,11 +1,12 @@
 "use client";
 import type { ReactNode } from "react";
 import { Scale } from "lucide-react";
-import { EXPENSE_CATEGORY_GROUP, EXPENSE_CATEGORY_LABEL, type ExpenseGroup } from "@app/shared/expenses";
+import { categoryLabel, groupOfSection, type CustomCategory, type ExpenseGroup } from "@app/shared/expenses";
 import { outcomeOf, PROFIT_LOSS_GAP_WORDS, PROFIT_OUTCOME_LABEL, type ProfitLoss, type ProfitLossGap, type ProfitOutcome } from "@app/shared/profit";
 import { weekdayOf } from "@app/shared/sales";
 import { Skeleton } from "@/components/AppUi";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
+import { adsNotUsableWords } from "@/components/dashboard/profitFigures";
 import { fmtLongDay, fmtMonth, fmtSpan, fmtWeekday } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
@@ -245,9 +246,9 @@ function monthFixedNote(data: ProfitAnswer, money: (n: number) => string): strin
 }
 
 /** The categories of one group of the owner's costs in these days, biggest first: "Packaging ₹100.00 · Payment fees ₹300.00". */
-function categoriesNote(pl: ProfitLoss, group: ExpenseGroup, money: (n: number) => string): string | undefined {
-  const list = pl.yours.byCategory.filter((c) => EXPENSE_CATEGORY_GROUP[c.category] === group);
-  return list.length ? list.map((c) => `${EXPENSE_CATEGORY_LABEL[c.category]} ${money(c.amount)}`).join(" · ") : undefined;
+function categoriesNote(pl: ProfitLoss, group: ExpenseGroup, money: (n: number) => string, customs: readonly CustomCategory[] = []): string | undefined {
+  const list = pl.yours.byCategory.filter((c) => groupOfSection(c.section) === group);
+  return list.length ? list.map((c) => `${categoryLabel(c.category, customs)} ${money(c.amount)}`).join(" · ") : undefined;
 }
 
 /** Every step from sales to net profit, with the figure each step uses and where it comes from. */
@@ -268,7 +269,7 @@ function Breakdown({ pl, data, fixedNote, testid }: { pl: ProfitLoss; data: Prof
       : setup.ads === "hidden"
         ? ["Not shown to you", undefined]
         : setup.ads === "unusable"
-          ? ["Not usable", setup.adsDemo ? "The Google Ads demo's spend is simulated." : `Your ad accounts report in ${setup.adsCurrency ?? "another currency"}, not ${data.currency}.`]
+          ? ["Not usable", adsNotUsableWords({ demo: setup.adsDemo, currency: setup.adsCurrency, leftOut: setup.adsLeftOut ?? [] }, data.currency)]
           : pl.adSpend === null
             ? [null, "An ad account has no figures for some of these days yet."]
             : [money(pl.adSpend), "What the connected ad accounts spent."];
@@ -287,11 +288,11 @@ function Breakdown({ pl, data, fixedNote, testid }: { pl: ProfitLoss; data: Prof
           <Step sign="=" label="Sales (revenue)" value={v(pl.revenue)} strong />
           <Step sign="−" label="Product costs" value={product[0]} note={product[1]} />
           <Step sign="−" label="Ad spend" value={ads[0]} note={ads[1]} />
-          <Step sign="−" label="Your variable costs" value={money(pl.yours.byGroup.variable)} note={categoriesNote(pl, "variable", money)} />
+          <Step sign="−" label="Your variable costs" value={money(pl.yours.byGroup.variable)} note={categoriesNote(pl, "variable", money, data.categories)} />
           <Step sign="=" label="Left after variable costs" value={v(left)} strong />
-          <Step sign="−" label="Fixed costs (allocated)" value={money(pl.fixedCosts)} note={categoriesNote(pl, "fixed", money) ? `${fixedNote} ${categoriesNote(pl, "fixed", money)}` : fixedNote} />
+          <Step sign="−" label="Fixed costs (allocated)" value={money(pl.fixedCosts)} note={categoriesNote(pl, "fixed", money, data.categories) ? `${fixedNote} ${categoriesNote(pl, "fixed", money, data.categories)}` : fixedNote} />
           <Step sign="=" label="Operating profit" value={v(pl.operatingProfit)} strong signed={pl.operatingProfit} />
-          <Step sign="−" label="Interest, tax, depreciation" value={money(pl.belowOperating)} note={categoriesNote(pl, "non_operating", money)} />
+          <Step sign="−" label="Interest, tax, depreciation" value={money(pl.belowOperating)} note={categoriesNote(pl, "non_operating", money, data.categories)} />
           <Step sign="=" label="Net profit" value={v(pl.netProfit)} strong signed={pl.netProfit} />
         </tbody>
       </table>

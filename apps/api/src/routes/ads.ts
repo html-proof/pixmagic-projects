@@ -57,7 +57,10 @@ import {
   takePendingAdConnect,
   toCsv,
   AD_SIGN_IN_TTL_S,
+  openAdConnectLink,
+  useUpAdConnectLink,
   type AdSignInProgress,
+  type AdSignInState,
   type AdAccountList,
   type AdsenseLiveReport,
   type GoogleReport,
@@ -126,6 +129,11 @@ const MAX_PENDING_STATES = 5;
 const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
 
 const cookieOpts = () => ({ path: "/", httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production", maxAge: AD_SIGN_IN_TTL_S });
+
+/** Keep a started sign-in's nonce in this browser, beside the others it has waiting: the callback is accepted only here. */
+export function rememberSignIn(c: Ctx, nonce: string) {
+  setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
+}
 
 /**
  * How long a callback waits for the database before giving up on it. A database failover takes 10-20
@@ -313,7 +321,10 @@ export async function connectAccounts(
     provider: AdProvider;
     accounts: AdAccountList;
     tokens: TokenSet;
-    userId: string;
+    /** The member whose sign-in it is; null through a connect link, whose grant is the outside person's (core's links.ts). */
+    userId: string | null;
+    /** Through a connect link: the member who sent it, named in the audit log. */
+    linkSentBy?: string;
     externalUserId?: string | null;
   },
 ) {
@@ -325,11 +336,11 @@ export async function connectAccounts(
   if (saved.length) await dropAdLoginOf(input.storeId, input.provider, deps.fetchImpl);
   await audit({
     workspaceId: input.workspaceId,
-    actorUserId: input.userId,
+    actorUserId: input.userId ?? input.linkSentBy ?? null,
     action: "ads.connected",
     targetType: "store",
     targetId: input.storeId,
-    metadata: { provider: input.provider, accounts: saved.length },
+    metadata: { provider: input.provider, accounts: saved.length, ...(input.linkSentBy ? { via: "link" } : {}) },
     ip,
   }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
   return saved;
@@ -391,6 +402,64 @@ export function connectFailure(err: unknown, provider: AdProvider, storeId: stri
   }
   logger.error({ err, provider, storeId }, "ad platform connect failed");
   return "exchange_failed";
+}
+
+/**
+ * The way back from a sign-in started from a connect link (core's adConnections/links.ts): to the link's
+ * own page, never to Settings, since the person who opened it holds no bizinsights session. The link
+ * must still be open and its maker still allowed to connect ad accounts to the store. Then, as after a
+ * member's sign-in, one account (or only ones connected already) connects at once and uses the link up,
+ * and more wait for the person's choice on the link's page. A login that reaches no ad account isn't
+ * kept waiting, as a member's is: the person is told, and can sign in with another.
+ */
+async function finishLinkSignIn(c: Ctx, deps: Deps, state: AdSignInState, q: Record<string, string>, db: <T>(step: () => Promise<T>) => Promise<T>) {
+  const { provider } = state;
+  const back = (params: Record<string, string>) => c.redirect(`${env().APP_URL}/connect/meta?${new URLSearchParams({ t: state.linkToken ?? "", ...params })}`);
+  try {
+    if (q.error || !q.code) return back({ error: q.error === "access_denied" || q.error_reason === "user_denied" ? "denied" : "missing_params" });
+    const link = await openAdConnectLink(deps.coord, state.linkToken ?? "");
+    if (!link || link.id !== state.link || link.usedAt) return back({ error: "link_ended" });
+    if (!(await db(() => mayStillConnect(link.workspaceId, link.storeId, link.createdBy)))) return back({ error: "link_ended" });
+    const progress: AdSignInProgress = { externalUserId: null, reusedRefreshToken: false };
+    const fail = async (error: string) => {
+      if (progress.tokens) await dropUnusedGrant(provider, progress.tokens, progress.externalUserId, deps.fetchImpl, { coord: deps.coord });
+      return back({ error });
+    };
+    let accounts: AdAccountList;
+    try {
+      accounts = await readAdSignIn(state, q.code, progress, { coord: deps.coord, fetchImpl: deps.fetchImpl });
+    } catch (err) {
+      if (err instanceof AdPermissionMissingError) return await fail("permission_missing");
+      return await fail(connectFailure(err instanceof AdLoginWaitingError ? err.cause : err, provider, link.storeId));
+    }
+    if (!accounts.length) return await fail("no_accounts");
+    const tokens = progress.tokens!;
+    const known = await db(() => systemDb.adConnection.findMany({ where: { storeId: link.storeId, provider }, select: { accountId: true } }));
+    const knownIds = new Set(known.map((k) => k.accountId));
+    if (!accounts.truncated && (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId)))) {
+      const saved = await db(() =>
+        connectAccounts(deps, clientIp(c), { workspaceId: link.workspaceId, storeId: link.storeId, provider, accounts, tokens, userId: null, linkSentBy: link.createdBy, externalUserId: progress.externalUserId }),
+      );
+      await useUpAdConnectLink(deps.coord, link, saved.length);
+      logger.info({ provider, storeId: link.storeId, accounts: saved.length }, "ads: connected through a connect link");
+      return back({ done: String(saved.length) });
+    }
+    const pick = randomToken(24);
+    await holdPendingAdConnect(deps.coord, pick, {
+      userId: link.createdBy,
+      workspaceId: link.workspaceId,
+      storeId: link.storeId,
+      provider,
+      accounts,
+      tokens,
+      externalUserId: progress.externalUserId,
+      link: link.id,
+    });
+    return back({ choose: pick });
+  } catch (err) {
+    logger.error({ err, provider }, "ads callback failed (connect link)");
+    return back({ error: "temporarily_unavailable" });
+  }
 }
 
 /** Each platform's own "access ended" wording for a report. */
@@ -657,7 +726,7 @@ export function adsRoutes(app: App, deps: Deps) {
     const nonce = randomToken(24);
     const url = await startAdSignIn(deps.coord, nonce, { userId: user.id, workspaceId: ws, storeId, provider });
     if (!url) throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
-    setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
+    rememberSignIn(c, nonce);
     return c.json({ url });
   });
 
@@ -728,6 +797,8 @@ export function adsRoutes(app: App, deps: Deps) {
       const state = await takeAdSignInState(deps.coord, q.state!);
       if (!state) return back({ error: "state_expired", provider });
       if (state.provider !== provider) return back({ error: "state_mismatch", provider }, state.storeId);
+      // Started from a connect link: its own way back, without a bizinsights session.
+      if (state.link) return await finishLinkSignIn(c, deps, state, q, db);
       // They pressed Cancel / "Not now" on the platform's screen.
       if (q.error || !q.code) return back({ error: q.error === "access_denied" || q.error_reason === "user_denied" ? "denied" : "missing_params", provider }, state.storeId);
       // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.

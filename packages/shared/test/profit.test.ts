@@ -8,6 +8,7 @@ import {
   monthDays,
   operatingDaysBetween,
   outcomeOf,
+  profitAds,
   profitAndLoss,
   runsOf,
   type ProfitCost,
@@ -107,7 +108,7 @@ describe("a month's profit", () => {
     expect(pl.yours.byGroup).toEqual({ fixed: 50_000, variable: 3_000, non_operating: 4_500 });
     // Nothing counted twice: net profit is revenue less every cost once.
     expect(pl.netProfit).toBe(90_000 - 36_000 - 9_000 - pl.yours.total);
-    expect(pl.yours.byCategory[0]).toEqual({ category: "staff", amount: 30_000 });
+    expect(pl.yours.byCategory[0]).toEqual({ category: "staff", section: "fixed", amount: 30_000 });
   });
 
   it("counts the month so far while it runs, and only the costs running in it", () => {
@@ -172,6 +173,17 @@ describe("figures that can't be given", () => {
     expect(unknown.gaps).toEqual(["ad_spend"]);
     expect(profitAndLoss([day("2026-11-02", 10_000, 3_000, 0)], setup({ ads: "unusable" })).gaps).toEqual(["ad_spend"]);
     expect(profitAndLoss([day("2026-11-02", 10_000, 3_000, 0)], setup({ ads: "hidden" })).gaps).toEqual(["ads_hidden"]);
+  });
+
+  it("takes the ad spend off only when it is the whole spend in the store's currency", () => {
+    const ads = (o: { currency?: string; leftOut?: string[]; demo?: boolean } = {}) => ({ currency: "AUD", leftOut: [], demo: false, ...o });
+    expect(profitAds(true, ads(), "AUD")).toBe("known");
+    // Meta in AUD, Google in EUR: the AUD spend leaves Google's out, so it isn't the whole spend.
+    expect(profitAds(true, ads({ leftOut: ["google-eu"] }), "AUD")).toBe("unusable");
+    expect(profitAds(true, ads({ currency: "EUR" }), "AUD")).toBe("unusable");
+    expect(profitAds(true, ads({ demo: true }), "AUD")).toBe("unusable");
+    expect(profitAds(true, null, "AUD")).toBe("none");
+    expect(profitAds(false, ads({ leftOut: ["google-eu"] }), "AUD")).toBe("hidden");
   });
 });
 
