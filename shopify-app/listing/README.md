@@ -37,11 +37,26 @@ any change to that toml. The main app (`shopify.app.toml`) has no Partner accoun
 submitted.
 
 That is the whole of what the CLI can do. **It does not create the listing and it does not
-submit the app for review.** Those are Dashboard-only, and until review passes the app still
-installs only on development stores in our own Partner org - see
-`../../docs/shopify-setup.md` 3f.
+submit the app for review.** Those are Dashboard-only. Until review passed (2026-11-03) the app
+installed only on development stores in our own Partner org - see `../../docs/shopify-setup.md` 3f.
 
-## Where the submission stands (2026-10-18)
+## Published (checked 2026-11-03)
+
+`appstore` (cf5c717d) passed review and is **published**: https://apps.shopify.com/bizinsights-1
+(Free, developer Pixmagic). Its App Store listing page in the Partner Dashboard reads "Published",
+English primary, with **Limited visibility**: only merchants who have the direct URL can reach it,
+until someone presses **Make fully visible** on that page (the owner's call). Protected customer
+data access: approved on 2026-10-30 (Level 1). Shopify's reviewer tested it on 2026-10-29/30 on the
+review store `app-review-d3408fd0-r184206-a0`.
+
+Done after the approval: new stores go to `appstore` (`SHOPIFY_INSTALL_APP`), and its toml
+subscribes to the order, refund and checkout topics again (released with
+`shopify app deploy --config appstore`). The test account's store stays in
+`SHOPIFY_APP_STORE_PREVIEW_SHOPS`, so a later re-review with it sees the app that was approved.
+Every listing change from here goes through Shopify's review again. Edit the listing from its page,
+never start a new one. `public` (658431ae) stays a Draft and is never submitted (requirement 1.1.5).
+
+## Where the submission stood (2026-10-18)
 
 **Starting over with a new app.** The first App Store app (`public`, 658431ae…, checklist
 https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store) was submitted at
@@ -108,9 +123,10 @@ https://partners.shopify.com/5229240/apps/436930412545/distribution/app-store):
    ("Run") and the capabilities step, last, since the checks expire after 30 days.
 4. **Decide what happens to `public`'s submission** (requirement 1.1.5), then press **Submit for
    review** on `appstore`'s checklist. Never press **Submit fixes** on `public`'s page again.
-5. **After approval**: set `SHOPIFY_INSTALL_APP` to `appstore` (`apps/aws/src/settings.ts`), add the
-   order and refund webhook topics back to `../shopify.app.appstore.toml` once protected customer data
-   is granted, and `shopify app deploy --config appstore`.
+5. **After approval** (done 2026-11-03, see "Published" above): set `SHOPIFY_INSTALL_APP` to
+   `appstore` (`apps/aws/src/settings.ts`), add the order and refund webhook topics back to
+   `../shopify.app.appstore.toml` once protected customer data is granted, and
+   `shopify app deploy --config appstore`.
 
 Approval is what unblocks every live merchant store at once. Budget days to weeks for it.
 

@@ -104,8 +104,8 @@ describe("step 1: triggers", () => {
     expect(state("customer_birthday").state).toBe("unavailable");
     expect(t.contactsSeen).toBe(0);
 
-    // A store connected through the App Store app gets no order or checkout events from Shopify yet.
-    const listed = await owner("u3", "o3@shop.test", { shopifyAppKey: "appstore" });
+    // A store connected through the first App Store app ("public") gets no order or checkout events from Shopify.
+    const listed = await owner("u3", "o3@shop.test", { shopifyAppKey: "public" });
     const l = (await listed.call("GET", "/triggers")).json();
     expect(l.triggers.find((x: { key: string }) => x.key === "order_created")).toMatchObject({ state: "not_sent", reason: expect.stringMatching(/App Store app/) });
 
@@ -172,7 +172,7 @@ describe("step 4: test and activate", () => {
     expect(audit.map((a) => a.action)).toEqual(expect.arrayContaining(["rule_created", "automation_activated", "automation_republished", "rule_paused"]));
 
     // A trigger Shopify doesn't send for the store can't be turned on.
-    const listed = await owner("u5", "o5@shop.test", { shopifyAppKey: "appstore" });
+    const listed = await owner("u5", "o5@shop.test", { shopifyAppKey: "public" });
     const lid = (await listed.call("POST", "", shipped)).json().automation.id;
     const refused = await listed.call("POST", `/${lid}/activate`, { confirm: true });
     expect(refused.statusCode).toBe(409);

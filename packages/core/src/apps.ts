@@ -204,7 +204,8 @@ export const APP_WEBHOOK_TOPICS: Readonly<Record<string, readonly string[]>> = {
   [DEFAULT_APP]: [...ORDER_TOPICS, ...APP_TOPICS],
   pixmagic: [...ORDER_TOPICS, ...APP_TOPICS],
   public: APP_TOPICS,
-  [APP_STORE_APP]: APP_TOPICS,
+  // Since Shopify granted it protected customer data access (2026-10-30).
+  [APP_STORE_APP]: [...ORDER_TOPICS, ...APP_TOPICS],
 };
 
 /** The topics Shopify sends a store through its app's toml, or null when the app isn't one of those above. */
