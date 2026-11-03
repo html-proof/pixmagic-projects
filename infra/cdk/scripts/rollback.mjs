@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Roll the app back to the release before the live one: moves the `live` alias of the api, jobs
 // and cron functions to their previous published version, together (the UI ships inside the api
 // package, so it rolls back too). Takes effect within seconds. CloudFormation never hears of it:
