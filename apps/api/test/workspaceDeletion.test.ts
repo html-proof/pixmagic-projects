@@ -107,7 +107,9 @@ async function business(tag: string) {
     await systemDb.product.create({ data: { workspaceId: ws, storeId: s.id, shopifyId: "1", title: `Product ${tag}`, status: "active", vendor: tag, shopifyUpdatedAt: new Date() } });
     await systemDb.dailyStoreMetrics.create({ data: { workspaceId: ws, storeId: s.id, day, grossSales: 10, orders: 1 } });
     // What the merchant entered, which a Disconnect keeps.
-    await systemDb.storeExpense.create({ data: { workspaceId: ws, storeId: s.id, name: "Rent", category: "rent", amount: 100, cadence: "monthly", startsOn: "2026-10-01" } });
+    const rent = await systemDb.storeExpense.create({ data: { workspaceId: ws, storeId: s.id, name: "Rent", category: "rent", amount: 100, cadence: "monthly", startsOn: "2026-10-01" } });
+    await systemDb.expenseEntry.create({ data: { workspaceId: ws, storeId: s.id, expenseId: rent.id, dueOn: "2026-10-01", amount: 100, scheduledAmount: 100 } });
+    await systemDb.expenseCategory.create({ data: { workspaceId: ws, storeId: s.id, name: "Studio", section: "fixed" } });
     await systemDb.businessEvent.create({ data: { workspaceId: ws, storeId: s.id, kind: "other", title: "Sale", startsOn: day, endsOn: day } });
     await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: s.id, kind: "orders" } });
     await systemDb.webhookEvent.create({ data: { webhookId: `wh-${tag}-${s.id}`, shopDomain: s.shopDomain, topic: "orders/create", storeId: s.id, workspaceId: ws } });
@@ -157,7 +159,7 @@ describe("deleting a workspace", () => {
     const b = await business("other");
     const before = await rowsOf(a.ws, a.storeIds);
     // The seed reaches the corners this test is about.
-    for (const t of ["stores", "orders", "products", "store_expenses", "business_events", "ad_connections", "wapp_connections", "email_accounts", "email_oauth_credentials", "zapier_grants", "zapier_tokens", "zapier_hooks", "api_keys", "email_ingest_keys", "memberships", "invitations", "notification_preferences", "sync_jobs", "webhook_events", "alerts", "subscriptions", "departments", "employees", "payroll_periods", "payroll_items", "attendance_sessions", "break_sessions", "audit_logs"]) {
+    for (const t of ["stores", "orders", "products", "store_expenses", "expense_entries", "expense_categories", "business_events", "ad_connections", "wapp_connections", "email_accounts", "email_oauth_credentials", "zapier_grants", "zapier_tokens", "zapier_hooks", "api_keys", "email_ingest_keys", "memberships", "invitations", "notification_preferences", "sync_jobs", "webhook_events", "alerts", "subscriptions", "departments", "employees", "payroll_periods", "payroll_items", "attendance_sessions", "break_sessions", "audit_logs"]) {
       expect(before[t], t).toBeGreaterThan(0);
     }
     const otherBefore = await rowsOf(b.ws, b.storeIds);
