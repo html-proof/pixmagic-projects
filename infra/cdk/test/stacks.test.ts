@@ -573,6 +573,18 @@ describe("migrations before the switch (migrate-before-live.ts)", () => {
     t.app.hasOutput("MigratedBeforeLive", { Value: { "Fn::GetAtt": ["MigrateBeforeLive", "Applied"] } });
   });
 
+  it("names the versions it points live at (LiveVersions), for rollback.mjs --to stack", () => {
+    // Fn::Join's parts, each version written as its logical id: "api=<id>,jobs=<id>,cron=<id>".
+    const parts = ((t.app.toJSON().Outputs as Record<string, { Value: { "Fn::Join": [string, Json[]] } }>).LiveVersions!.Value["Fn::Join"][1]);
+    const joined = parts.map((p) => (typeof p === "string" ? p : `<${p["Fn::GetAtt"][0]}.${p["Fn::GetAtt"][1]}>`)).join("");
+    const aliasVersion = (name: string) => {
+      const [fnId] = fnNamed(t.app, `insights-production-${name}`)!;
+      const [, alias] = ofType(t.app, "AWS::Lambda::Alias").find(([, a]) => a.Properties.FunctionName?.Ref === fnId)!;
+      return `<${alias.Properties.FunctionVersion["Fn::GetAtt"][0]}.Version>`;
+    };
+    expect(joined).toBe(`api=${aliasVersion("api")},jobs=${aliasVersion("jobs")},cron=${aliasVersion("cron")}`);
+  });
+
   it("moves live as before with -c migrate=off, gate and all gone", () => {
     expect(ofType(off.app, "Custom::MigrateBeforeLive")).toEqual([]);
     expect(fnNamed(off.app, "insights-production-migrate-before-live")).toBeUndefined();
