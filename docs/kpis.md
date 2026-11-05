@@ -342,9 +342,36 @@ measure net sales only.
 
 **Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 
+## The simple Home (2026-11-05)
+
+What /dashboard shows first (`SIMPLE_HOME` in apps/web/src/lib/features.ts), from the owner's approved
+prototype: `apps/web/src/components/dashboard/SimpleHome.tsx` and `homeNeeds.ts`. "Show the full
+dashboard" under the greeting brings back every panel below ("Dashboard home") on that device
+(localStorage `home-layout`), and "Back to the simple Home" returns. Every figure is the full
+dashboard's, worked out by the same code:
+
+- **Needs you** (`needsOf`), worst first: the bell's open problems (warnings and critical alerts, for
+  this store or the whole workspace; not its notes, nor a sync that stopped, which is explained above
+  the numbers), orders waiting to ship ("Open in Shopify": bizinsights doesn't ship), stock running
+  out (the first of `inventory.lowStockItems` and how many more need stock, graded as the health
+  check grades stock; "See stock" opens Inventory → Low stock where the member has it) and sales with
+  no cost per item in Shopify ("Add in Shopify", for a member shown product costs). Nothing to do
+  says so.
+- **Four numbers**: Total sales (Net sales without `finance.breakdown`, with the same Refunds and
+  Custom sales lines), Orders, then **Left over** once some cost is known: Business profit
+  overview's figure (`leftOverOf` in profitFigures.ts), "Net profit" only when it is one, otherwise
+  "After product costs, ads and your costs" and "Not profit". Without a cost known, Average order
+  value instead. Last, **Visits that bought** (the funnel's conversion rate, of the visits the pixel
+  tracked) where there are tracked visits, otherwise Average order value (or Total products sold).
+- **Sales by day**: total sales (net without the breakdown) each day of the dates, today lighter.
+- **What changed**: the first three checks of the business health check, each opening its details.
+- **Working for you**: the Automations hub's own answer (GET …/automations): those on with what each
+  sent in the last 30 days (handed to the provider: sent, delivered or undelivered), one that's off
+  to review. Only where the menu shows Automations; elsewhere (App Store stores) Top products.
+
 ## Dashboard home (the owner's design)
 
-Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
+The full dashboard, one click from the simple Home. Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
 `HomeCards.tsx`), from the owner's mock of 2026-10-24. Every figure is one the overview already
 carries; nothing is estimated.
 

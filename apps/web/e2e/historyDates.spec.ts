@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, fullDashboard, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Historical dates in the browser: every calendar year of the store in the dates menu, a year
@@ -14,6 +14,8 @@ const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 test("any calendar year of the store, 12 months at a time, with where its orders begin", async ({ page }) => {
+  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
+  await fullDashboard(page);
   const email = uniqueEmail("history");
   await signUp(page, email);
   const ws = await createWorkspace(page, "History Co");
