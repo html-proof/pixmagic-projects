@@ -53,6 +53,13 @@
      green that keeps white text at 4.5:1. */
   --nav-bg: #0f1c2e;
   --nav-active: #198754;
+  /* The simple Home, as the Stitch design draws it (docs/kpis.md): its soft rows and buttons, their
+     hover, and the hairlines between rows. */
+  --home-soft: #eff4ff;
+  --home-soft-hover: #e5eeff;
+  --home-line: #e5eeff;
+  --home-tag: #dce9ff;
+  --home-prev: #bec9bf;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -95,6 +102,11 @@
     --viz-weekend: #ff8a5c;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -16px rgb(0 0 0 / 0.7);
     --nav-bg: #0c1522;
+    --home-soft: #212632;
+    --home-soft-hover: #293040;
+    --home-line: #2b303b;
+    --home-tag: #2b3550;
+    --home-prev: #5d6a61;
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
   }
 }
@@ -130,6 +142,11 @@
   --color-fill-good: var(--fill-good);
   --color-nav: var(--nav-bg);
   --color-nav-active: var(--nav-active);
+  --color-home-soft: var(--home-soft);
+  --color-home-soft-hover: var(--home-soft-hover);
+  --color-home-line: var(--home-line);
+  --color-home-tag: var(--home-tag);
+  --color-home-prev: var(--home-prev);
 }
 
 body {
@@ -172,6 +189,22 @@ body::before {
 @utility card {
   @apply rounded-xl border border-border bg-surface p-5;
   box-shadow: var(--shadow);
+}
+/* The simple Home's panels (Stitch design): white, a small radius, a faint shadow, no border. */
+@utility home-card {
+  @apply rounded-lg bg-surface;
+  box-shadow: 0 1px 2px rgb(11 28 48 / 0.06), 0 1px 3px rgb(11 28 48 / 0.04);
+}
+@utility home-h2 {
+  @apply text-lg leading-6 font-semibold tracking-[-0.01em];
+}
+/* A quiet button in a Needs you row: tinted, no border. */
+@utility home-btn {
+  @apply inline-flex h-9 shrink-0 items-center gap-1 rounded px-3 text-[13px] font-medium whitespace-nowrap text-text transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  background: var(--home-soft);
+  &:hover {
+    background: var(--home-soft-hover);
+  }
 }
 @utility label {
   @apply mb-1 block text-sm font-medium;

@@ -5,10 +5,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
-import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
-import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
+import { AboutThisData, EmptyStoreNote, StatusWords, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
+import { CompareDates, comparedWith, CompareSelect, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
-import { HistoryLine } from "@/components/dashboard/HistoryLine";
+import { HistoryFoot, HistoryLine } from "@/components/dashboard/HistoryLine";
 import { useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
@@ -16,7 +16,7 @@ import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, O
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
-import { costsOf, leftOverOf, leftOverWords } from "@/components/dashboard/profitFigures";
+import { costsOf, leftOverOf, leftOverWords, type LeftOver } from "@/components/dashboard/profitFigures";
 import { needsOf } from "@/components/dashboard/homeNeeds";
 import { greeting, NeedsYou, NumberTile, SalesByDay, useHomeAlerts, useHomeLayout, WhatChanged, WorkingForYou } from "@/components/dashboard/SimpleHome";
 import { plural } from "@/components/dashboard/format";
@@ -51,35 +51,64 @@ const AWAITING_GRANT_KEY = "insights:awaiting-scope-grant";
  * A missing *pixel* with the scopes already granted is none of these: a background job creates
  * it, so it resolves itself and the card just says so.
  */
-function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c: Capability) => void; pending: boolean }) {
+function LockedModule({ c, onRequest, pending, row = false }: { c: Capability; onRequest: (c: Capability) => void; pending: boolean; row?: boolean }) {
   const { workspace, store } = useApp();
   const reconnect = c.reconnectableScopes.length > 0;
   const requestable = !reconnect && c.missingScopes.length > 0 && c.requestableScopes.length === c.missingScopes.length;
+  // Named in plain words, not as scope strings: the merchant is being asked to decide about their
+  // own data, and `read_customer_events` doesn't tell them what that is.
+  const why =
+    c.missingScopes.length === 0
+      ? "Setting up storefront tracking. This page will update by itself."
+      : reconnect
+        ? `bizinsights needs access to ${scopeList(c.missingScopes)}. Reconnect the store to grant it.`
+        : requestable
+          ? `Needs your permission in Shopify to read ${scopeList(c.missingScopes)}. We'll take you there to approve it.`
+          : `Needs access to ${scopeList(c.missingScopes)}. We're waiting on Shopify to approve our access to that data — it isn't something you can turn on.`;
+  const action =
+    reconnect && canManage(workspace.role) && store ? (
+      <Link className={row ? "home-btn" : "btn-primary mt-2 inline-block"} href={reconnectHref(workspace.id, store.shopDomain)}>Reconnect</Link>
+    ) : requestable && canManage(workspace.role) ? (
+      <button type="button" className={row ? "home-btn" : "btn-primary mt-2"} onClick={() => onRequest(c)} disabled={pending}>
+        {pending ? "Opening Shopify…" : "Enable"}
+      </button>
+    ) : null;
+  // The simple Home: a row of one quiet list, as its Needs you (the Stitch design has no cards here).
+  if (row) {
+    return (
+      <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3 sm:flex-nowrap sm:px-6" data-testid={`locked-${c.id}`}>
+        <div className="min-w-0 text-sm">
+          <p className="font-medium">{c.title}</p>
+          <p className="text-muted">{c.description}</p>
+          <p className="mt-0.5 text-xs text-muted">{why}</p>
+        </div>
+        {action && <span className="shrink-0">{action}</span>}
+      </li>
+    );
+  }
   return (
     <li className="card lift border-dashed text-sm" data-testid={`locked-${c.id}`}>
       <p className="font-medium">{c.title}</p>
       <p className="text-muted">{c.description}</p>
-      <p className="mt-1 text-xs text-muted">
-        {/* Named in plain words, not as scope strings: the merchant is being asked to decide
-            about their own data, and `read_customer_events` doesn't tell them what that is. */}
-        {c.missingScopes.length === 0
-          ? "Setting up storefront tracking. This page will update by itself."
-          : reconnect
-            ? `bizinsights needs access to ${scopeList(c.missingScopes)}. Reconnect the store to grant it.`
-            : requestable
-              ? `Needs your permission in Shopify to read ${scopeList(c.missingScopes)}. We'll take you there to approve it.`
-              : `Needs access to ${scopeList(c.missingScopes)}. We're waiting on Shopify to approve our access to that data — it isn't something you can turn on.`}
-      </p>
-      {reconnect && canManage(workspace.role) && store && (
-        <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, store.shopDomain)}>Reconnect</Link>
-      )}
-      {requestable && canManage(workspace.role) && (
-        <button className="btn-primary mt-2" onClick={() => onRequest(c)} disabled={pending}>
-          {pending ? "Opening Shopify…" : "Enable"}
-        </button>
-      )}
+      <p className="mt-1 text-xs text-muted">{why}</p>
+      {action}
     </li>
   );
+}
+
+/** Currencies whose hundredth is a cent and whose unit a dollar: "41¢ of every $1" reads right for them. */
+const DOLLARS = new Set(["USD", "AUD", "CAD", "NZD"]);
+
+/**
+ * Under Left over, as the design words it: "41¢ of every $1, after product costs and your costs".
+ * A loss, or nothing sold, says only what was taken off.
+ */
+function leftOverSub(l: LeftOver, currency: string): string {
+  const words = leftOverWords(l);
+  if (l.base <= 0 || l.value < 0) return words;
+  const r = l.value / l.base;
+  const share = DOLLARS.has(currency) ? `${Math.round(r * 100)}¢ of every $1` : `${fmtPct(r)} of ${l.isNet ? "revenue" : "net sales"}`;
+  return l.isNet ? `${share}${DOLLARS.has(currency) ? " of revenue" : ""}` : `${share}, ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
 }
 
 /**
@@ -399,7 +428,7 @@ export default function DashboardPage() {
   const aovTile = (i: number) =>
     s && <NumberTile i={i} title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={money} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />;
   const simpleTiles = s && (
-    <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+    <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       {s.current.totalSales !== undefined ? (
         <NumberTile i={0} title="Total sales" value={figure(<AnimatedNumber value={s.current.totalSales} format={money} />)} delta={s.deltas.totalSales ?? null} compared={compared} versus={versus} extra={salesExtra} onClick={() => detail.open("sales")} />
       ) : (
@@ -413,11 +442,11 @@ export default function DashboardPage() {
           value={figure(<span className={leftOver.value < 0 ? "text-danger" : undefined}>{money(leftOver.value)}</span>)}
           sub={
             <span data-testid="left-over-what">
-              {leftOverWords(leftOver)}
-              {leftOver.base > 0 ? ` · ${fmtPct(leftOver.value / leftOver.base)} of ${leftOver.isNet ? "revenue" : "net sales"}` : ""}
+              {leftOverSub(leftOver, cur)}
+              {!leftOver.isNet && <span className="sr-only">. Not profit: bizinsights may not have every cost.</span>}
             </span>
           }
-          extra={!leftOver.isNet ? "Not profit: bizinsights may not have every cost." : undefined}
+          hint={!leftOver.isNet ? "Not profit: bizinsights may not have every cost." : undefined}
           onClick={() => (allowed("analytics.sales") ? router.push("/sheet") : detail.open("sales"))}
         />
       ) : (
@@ -431,7 +460,7 @@ export default function DashboardPage() {
           delta={funnel.previous.imported === false ? null : funnel.deltas.conversionRate}
           compared={compared}
           versus={versus}
-          extra={`Of ${plural(funnel.visits, "tracked visit")}`}
+          hint={`Of ${plural(funnel.visits, "tracked visit")}`}
           onClick={() => detail.open("shoppers")}
         />
       ) : showLeftOver ? (
@@ -441,33 +470,60 @@ export default function DashboardPage() {
       )}
     </section>
   );
-  // Beside What changed: the automations working, or (with none offered) the best sellers.
-  const besideChanges = ov && (automationsOn ? <WorkingForYou /> : m?.top_products ? <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} /> : null);
+  // While the store's dates are custom, their pickers under the header (either Home).
+  const customPickers = (
+    <>
+      {dates.preset === "custom" && (
+        <div className="flex w-full justify-end">
+          <CustomDates r={dates} />
+        </div>
+      )}
+      {dates.compare === "custom" && (
+        <div className="flex w-full justify-end">
+          <CompareDates r={dates} />
+        </div>
+      )}
+    </>
+  );
+  // Every panel of the full dashboard, or back: kept on this device (SimpleHome.tsx useHomeLayout).
+  const layoutSwitch = SIMPLE_HOME && (
+    <button type="button" className="font-medium whitespace-nowrap text-accent hover:underline" onClick={() => setLayout(simple ? "full" : "simple")} data-testid="home-layout-switch">
+      {simple ? "Show the full dashboard" : "Back to the simple Home"}
+    </button>
+  );
 
   return (
     <div className="space-y-6">
+      {simple ? (
+        // The Stitch design's header: the greeting, how current the numbers are, and the dates on one card.
+        <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <h1 className="text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] sm:text-[2rem] sm:leading-10">
+              {greeting(new Date().getHours())}
+              {name ? `, ${name}` : ""}
+            </h1>
+            <p className="mt-1 text-sm text-muted">
+              {headerStore && (
+                <>
+                  <StatusWords key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />
+                  {" · "}
+                </>
+              )}
+              {layoutSwitch}
+            </p>
+          </div>
+          <DateChip r={dates} shown={shown} current={!olderAnswer} />
+          {customPickers}
+        </header>
+      ) : (
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight sm:text-[1.75rem]">
-            {simple ? (
-              `${greeting(new Date().getHours())}${name ? `, ${name}` : ""}`
-            ) : (
-              <>
-                Welcome back{name ? `, ${name}` : ""}! <span aria-hidden>👋</span>
-              </>
-            )}
+            Welcome back{name ? `, ${name}` : ""}! <span aria-hidden>👋</span>
           </h1>
           <p className="mt-1 text-sm text-muted sm:text-base">
             Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
-            {/* Every panel of the full dashboard, or back: kept on this device (SimpleHome.tsx useHomeLayout). */}
-            {SIMPLE_HOME && (
-              <>
-                {" "}
-                <button type="button" className="whitespace-nowrap font-medium text-accent hover:underline" onClick={() => setLayout(simple ? "full" : "simple")} data-testid="home-layout-switch">
-                  {simple ? "Show the full dashboard" : "Back to the simple Home"}
-                </button>
-              </>
-            )}
+            {layoutSwitch && <> {layoutSwitch}</>}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
@@ -476,17 +532,9 @@ export default function DashboardPage() {
           {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
           <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
         </div>
-        {dates.preset === "custom" && (
-          <div className="flex w-full justify-end">
-            <CustomDates r={dates} />
-          </div>
-        )}
-        {dates.compare === "custom" && (
-          <div className="flex w-full justify-end">
-            <CompareDates r={dates} />
-          </div>
-        )}
+        {customPickers}
       </header>
+      )}
 
       {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
       {takenNotice}
@@ -499,6 +547,7 @@ export default function DashboardPage() {
           reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
           onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
           importing={pendingScope === "order_history"}
+          brief={simple}
         />
       )}
       {scopeError && pendingScope === null && disabled.length === 0 && <Alert>{scopeError}</Alert>}
@@ -577,17 +626,28 @@ export default function DashboardPage() {
 
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
-      {/* The simple Home (the owner's approved prototype, 2026-11-05): what needs you, four numbers,
-          sales by day, then what changed beside the automations working (components/dashboard/SimpleHome.tsx). */}
+      {/* The simple Home (the owner's approved Stitch design, 2026-11-05): what needs you, four
+          numbers, sales by day, then what changed beside the automations working; with no
+          automations offered (an App Store store), what changed beside the chart instead
+          (components/dashboard/SimpleHome.tsx). */}
       {simple && ov && <NeedsYou needs={needs} onOpen={detail.open} />}
       {simple && simpleTiles}
-      {simple && ov && s && <SalesByDay ov={ov} currency={cur} />}
-      {simple && ov && (
-        <div className={`grid gap-4 ${besideChanges ? "lg:grid-cols-2" : ""}`}>
-          <WhatChanged ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview", offers)} />
-          {besideChanges}
-        </div>
-      )}
+      {simple &&
+        ov &&
+        (automationsOn ? (
+          <>
+            {s && <SalesByDay ov={ov} currency={cur} />}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <WhatChanged ov={ov} currency={cur} onOpen={detail.open} />
+              <WorkingForYou />
+            </div>
+          </>
+        ) : (
+          <div className={`grid gap-6 ${s ? "lg:grid-cols-3" : ""}`}>
+            {s && <SalesByDay ov={ov} currency={cur} className="lg:col-span-2" />}
+            <WhatChanged ov={ov} currency={cur} onOpen={detail.open} stacked={!!s} />
+          </div>
+        ))}
 
       {!simple && (
         <>
@@ -657,26 +717,37 @@ export default function DashboardPage() {
       )}
 
       {disabled.length > 0 && (
-        <section aria-labelledby="more-h">
-          <h2 id="more-h" className="mb-2 text-sm font-semibold text-muted">More insights you can unlock</h2>
-          {scopeError && <div className="mb-2"><Alert>{scopeError}</Alert></div>}
+        <section aria-labelledby="more-h" className={simple ? "home-card overflow-hidden" : undefined}>
+          <h2 id="more-h" className={simple ? "home-h2 px-5 py-4 sm:px-6" : "mb-2 text-sm font-semibold text-muted"}>More insights you can unlock</h2>
+          {scopeError && <div className={simple ? "px-5 pb-3 sm:px-6" : "mb-2"}><Alert>{scopeError}</Alert></div>}
           {justGranted.length > 0 && (
-            <div className="mb-2">
+            <div className={simple ? "px-5 pb-3 sm:px-6" : "mb-2"}>
               <Alert kind="success">
                 Thanks — Shopify granted access to {scopeList(justGranted)}. We&apos;re importing the data behind it now; this page will fill in by itself.
               </Alert>
             </div>
           )}
-          <ul className="grid gap-3 sm:grid-cols-2">
+          <ul className={simple ? "divide-y divide-home-line border-t border-home-line" : "grid gap-3 sm:grid-cols-2"}>
             {disabled.map((c) => (
-              <LockedModule key={c.id} c={c} onRequest={requestScopes} pending={pendingScope === c.id} />
+              <LockedModule key={c.id} c={c} onRequest={requestScopes} pending={pendingScope === c.id} row={simple} />
             ))}
           </ul>
         </section>
       )}
 
+      {/* The design's foot: how far back the orders go, and what to do about it. */}
+      {simple && ov && (
+        <HistoryFoot
+          ov={ov}
+          canManage={canManage(workspace.role)}
+          reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
+          onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
+          importing={pendingScope === "order_history"}
+        />
+      )}
       {ov && (
         <AboutThisData
+          brief={simple}
           store={ov.store}
           data={ov.data}
           freshness={ov.freshness}

@@ -2,7 +2,7 @@
 import { fmtNum } from "@/lib/api";
 import { fmtDay, fmtRelative } from "./format";
 import { Dot, type Tone } from "./Primitives";
-import { CheckDetails, CheckPill } from "./ShopifyCheck";
+import { CheckDetails, CheckPill, checkPill } from "./ShopifyCheck";
 import type { CheckSummary, Freshness, ImportedData, OverviewStore } from "./types";
 
 const STATUS: Record<string, { tone: Tone; label: string }> = {
@@ -87,6 +87,43 @@ export function StoreStatus({ store, live, freshness, check, now }: { store: Ove
   );
 }
 
+/**
+ * The simple Home's line under the greeting (the Stitch design): "Updated 3 min ago · Matches
+ * Shopify". The same words as the full dashboard's pills (freshnessPill, checkPill) with their
+ * tooltips; the store's connection only when it isn't simply connected ("Importing your data…").
+ */
+export function StatusWords({ store, live, freshness, check, now }: { store: OverviewStore; live: LiveState; freshness: Freshness | undefined; check?: CheckSummary; now: number }) {
+  const status = STATUS[store.status] ?? { tone: "neutral" as Tone, label: store.status };
+  const fresh = freshnessPill(live, freshness, now);
+  const checked = checkPill(check, now);
+  const synced = fmtRelative(store.lastSyncedAt);
+  return (
+    <>
+      {store.status !== "active" && (
+        <>
+          <span className="inline-flex items-center gap-1.5" data-testid="store-status" title={synced ? `Synced with Shopify ${synced}` : "Waiting for the first sync with Shopify"}>
+            <Dot tone={status.tone} pulse={store.status === "syncing"} />
+            {status.label}
+          </span>
+          {" · "}
+        </>
+      )}
+      <span className="inline-flex items-center gap-1.5" title={fresh.title} data-testid="live-indicator">
+        <Dot tone={fresh.tone} />
+        {fresh.label}
+      </span>
+      {checked && (
+        <>
+          {" · "}
+          <span title={checked.title} data-testid="shopify-check" className={checked.tone === "danger" || checked.tone === "warn" ? "text-warn" : undefined}>
+            {checked.label}
+          </span>
+        </>
+      )}
+    </>
+  );
+}
+
 /** What has been imported and how the numbers are counted, folded away at the foot of the page. */
 export function AboutThisData({
   store,
@@ -97,6 +134,7 @@ export function AboutThisData({
   ws,
   seesFigures = false,
   canCheck = false,
+  brief = false,
 }: {
   store: OverviewStore;
   data: ImportedData | undefined;
@@ -106,17 +144,21 @@ export function AboutThisData({
   ws?: string;
   seesFigures?: boolean;
   canCheck?: boolean;
+  /** The simple Home: its header already says how current the numbers are, so only the fold. */
+  brief?: boolean;
 }) {
   const synced = fmtRelative(freshness?.asOf ?? store.lastSyncedAt);
   const fullHistory = store.grantedScopes.includes("read_all_orders");
   return (
-    <section aria-label="About this data" className="text-sm text-muted" data-testid="about-data">
-      <p>
-        {synced ? <>Up to date with Shopify as of {synced}</> : <>Waiting for the first sync with Shopify</>} · this page updates by itself
-      </p>
-      <details className="mt-1">
-        <summary className="w-fit cursor-pointer underline decoration-border underline-offset-4 hover:text-text">About this data</summary>
-        <div className="mt-2 space-y-1">
+    <section aria-label="About this data" className={`text-sm text-muted ${brief ? "text-center" : ""}`} data-testid="about-data">
+      {!brief && (
+        <p>
+          {synced ? <>Up to date with Shopify as of {synced}</> : <>Waiting for the first sync with Shopify</>} · this page updates by itself
+        </p>
+      )}
+      <details className={brief ? "" : "mt-1"}>
+        <summary className={`w-fit cursor-pointer underline decoration-border underline-offset-4 hover:text-text ${brief ? "mx-auto text-[13px]" : ""}`}>About this data</summary>
+        <div className={`mt-2 space-y-1 ${brief ? "mx-auto max-w-2xl text-left" : ""}`}>
           {data ? (
             // Only the counts this member may see (Team & Access leaves out the others).
             (data.orders !== undefined || data.products !== undefined) && (

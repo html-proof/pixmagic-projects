@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { CalendarRange, History, LoaderCircle } from "lucide-react";
 import { addDays, ALL_HISTORY } from "@app/shared/dates";
 import { fmtDay, fmtRange, plural } from "./format";
@@ -23,6 +24,7 @@ export function HistoryLine({
   reconnectHref,
   onImportHistory,
   importing,
+  brief = false,
 }: {
   ov: Overview;
   /** The dates being loaded now, while the numbers below are still the previous dates'. */
@@ -31,6 +33,11 @@ export function HistoryLine({
   reconnectHref: string;
   onImportHistory: () => void;
   importing: boolean;
+  /**
+   * The simple Home: its date chip says the dates and its foot how far back the orders go
+   * (HistoryFoot), so only what can't wait: the dates loading, and days that weren't imported.
+   */
+  brief?: boolean;
 }) {
   const d = ov.data;
   const { range } = ov;
@@ -44,8 +51,15 @@ export function HistoryLine({
   // From when the orders are in; the dates before that hold none because none were shared yet.
   const gap = historyFrom && !whole && range.from < historyFrom ? { from: range.from, to: range.to < historyFrom ? range.to : addDays(historyFrom, -1) } : null;
 
+  if (brief && !loading && !gap) return null;
   return (
     <section aria-label="What the numbers cover" className="space-y-1.5 text-sm" data-testid="history-line">
+      {brief && loading && (
+        <p className="inline-flex items-center gap-1 text-accent" role="status" data-testid="dates-loading">
+          <LoaderCircle aria-hidden className="h-3.5 w-3.5 animate-spin" /> Loading {loading}…
+        </p>
+      )}
+      {!brief && (
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted">
         <CalendarRange aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.8} />
         <span>
@@ -58,7 +72,8 @@ export function HistoryLine({
           </span>
         )}
       </p>
-      {history && (
+      )}
+      {history && !brief && (
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted" data-testid="history-availability">
           <History aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.8} />
           {history.access === "granted" ? (
@@ -109,6 +124,70 @@ export function HistoryLine({
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The simple Home's foot (the Stitch design): how far back the orders go, in one centred line,
+ * with the one thing to do about it: "Shopify shares your last 60 days of orders · Allow full
+ * history". The same states as HistoryLine's, in fewer words.
+ */
+export function HistoryFoot({
+  ov,
+  canManage,
+  reconnectHref,
+  onImportHistory,
+  importing,
+}: {
+  ov: Overview;
+  canManage: boolean;
+  reconnectHref: string;
+  onImportHistory: () => void;
+  importing: boolean;
+}) {
+  const d = ov.data;
+  const history = d?.history;
+  if (!history) return null;
+  const years = history.years;
+  const done = years.filter((y) => y.status === "done");
+  const reading = years.find((y) => y.status === "running" || y.status === "queued");
+  const failed = years.find((y) => y.status === "failed");
+  const link = "font-medium text-accent hover:underline disabled:opacity-60";
+  let words: ReactNode;
+  if (history.access === "granted") {
+    words = failed
+      ? `Importing ${failed.year} from Shopify stopped: bizinsights tries again about every half hour while this page is open`
+      : reading
+        ? `Importing your full order history from Shopify: ${reading.year} now (${done.length + 1} of ${plural(years.length, "year")})`
+        : d?.historyFrom === ALL_HISTORY
+          ? `Full order history${d.oldestOrderDay ? `: every order since ${fmtDay(d.oldestOrderDay)}` : ""}`
+          : "Your full order history is about to be imported from Shopify";
+  } else {
+    words = (
+      <>
+        Shopify shares your last 60 days of orders
+        {history.access === "requestable" && canManage && (
+          <>
+            {" · "}
+            <button type="button" className={link} onClick={onImportHistory} disabled={importing} data-testid="import-history">
+              {importing ? "Opening Shopify…" : "Allow full history"}
+            </button>
+          </>
+        )}
+        {history.access === "reconnect" && canManage && (
+          <>
+            {" · "}
+            <Link className={link} href={reconnectHref}>Reconnect to allow full history</Link>
+          </>
+        )}
+        {history.access === "awaiting_shopify" && " · full history once Shopify approves bizinsights for it"}
+      </>
+    );
+  }
+  return (
+    <p className="text-center text-[13px] text-muted" data-testid="history-availability">
+      {words}
+    </p>
   );
 }
 

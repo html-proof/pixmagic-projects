@@ -344,11 +344,18 @@ measure net sales only.
 
 ## The simple Home (2026-11-05)
 
-What /dashboard shows first (`SIMPLE_HOME` in apps/web/src/lib/features.ts), from the owner's approved
-prototype: `apps/web/src/components/dashboard/SimpleHome.tsx` and `homeNeeds.ts`. "Show the full
-dashboard" under the greeting brings back every panel below ("Dashboard home") on that device
-(localStorage `home-layout`), and "Back to the simple Home" returns. Every figure is the full
-dashboard's, worked out by the same code:
+What /dashboard shows first (`SIMPLE_HOME` in apps/web/src/lib/features.ts), drawn as the owner's
+approved Stitch design draws it (prototype v2, project 4270728427536011606: screen 01, 03 for a store
+without automations, 04 on a phone): `apps/web/src/components/dashboard/SimpleHome.tsx` and
+`homeNeeds.ts`. Plain white panels with a small radius and a faint shadow, soft tinted rows and
+buttons (globals.css `home-card`, `home-btn`, `--home-*`). The header is the greeting, "Updated 3 min
+ago · Matches Shopify" (the full dashboard's status pills in words, `StatusWords`) and one date card
+(`DateChip`: the dates over "vs" the dates compared with, the same two menus as the full dashboard's
+pills). How far back the orders go moves to the foot ("Shopify shares your last 60 days of orders ·
+Allow full history", `HistoryFoot`), with About this data under it. "Show the full dashboard" under
+the greeting brings back every panel below ("Dashboard home") on that device (localStorage
+`home-layout`), and "Back to the simple Home" returns. Every figure is the full dashboard's, worked
+out by the same code:
 
 - **Needs you** (`needsOf`), worst first: the bell's open problems (warnings and critical alerts, for
   this store or the whole workspace; not its notes, nor a sync that stopped, which is explained above
@@ -360,14 +367,24 @@ dashboard's, worked out by the same code:
 - **Four numbers**: Total sales (Net sales without `finance.breakdown`, with the same Refunds and
   Custom sales lines), Orders, then **Left over** once some cost is known: Business profit
   overview's figure (`leftOverOf` in profitFigures.ts), "Net profit" only when it is one, otherwise
-  "After product costs, ads and your costs" and "Not profit". Without a cost known, Average order
+  "41¢ of every $1, after product costs, ads and your costs" (a share of net sales in other
+  currencies) and, on hover and for screen readers, "Not profit". Without a cost known, Average order
   value instead. Last, **Visits that bought** (the funnel's conversion rate, of the visits the pixel
   tracked) where there are tracked visits, otherwise Average order value (or Total products sold).
-- **Sales by day**: total sales (net without the breakdown) each day of the dates, today lighter.
+  Each change is "+12.7%" under the number (beside its name on a phone); the date card says what
+  it is compared with.
+- **Sales by day**: total sales (net without the breakdown) each day of the dates as dark green
+  bars, today's paler with "today so far" over it, and the dates compared with as a dotted line, day
+  i over day i (`sales_overview.previousSeries`: each day's net and total sales, null when those
+  dates weren't imported). No axis: hovering, the arrow keys and a table for screen readers give
+  each day's figures.
 - **What changed**: the first three checks of the business health check, each opening its details.
-- **Working for you**: the Automations hub's own answer (GET …/automations): those on with what each
-  sent in the last 30 days (handed to the provider: sent, delivered or undelivered), one that's off
-  to review. Only where the menu shows Automations; elsewhere (App Store stores) Top products.
+- **Working for you**: the Automations hub's own answer (GET …/automations), as "Order confirmation
+  (SMS), On, 381 sent in 30 days" (handed to the provider: sent, delivered or undelivered), busiest
+  first, and one that's off with "Turn on" (the Automations page, which asks to confirm). Only where
+  the menu shows Automations; elsewhere (App Store stores) What changed sits beside the chart.
+- **More insights you can unlock** (owners and admins, when Shopify access is missing): one quiet
+  list under the panels, the same rows and buttons as the full dashboard's cards.
 
 ## Dashboard home (the owner's design)
 

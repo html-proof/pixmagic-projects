@@ -643,6 +643,7 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
         deltas: omit(s.deltas, ["grossSales", "totalSales"]),
       };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["grossSales", "discounts", ...lines]));
+      if (Array.isArray(s.previousSeries)) s.previousSeries = s.previousSeries.map((d: unknown) => omit(d, ["totalSales"]));
       // This year month by month ("View financial reports") keeps its net sales, without the lines.
       if (s.year !== undefined) s.year = omitFromMonths(s.year, MONTH_LINES);
       delete s.calculation;

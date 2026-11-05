@@ -358,6 +358,20 @@ function PillSelect<T extends string>({
       {size === "md" && <IconCmp aria-hidden className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.8} />}
       <span aria-hidden className="truncate">{text}</span>
       <ChevronDown aria-hidden className={`pointer-events-none absolute h-4 w-4 text-muted ${size === "sm" ? "right-2.5" : "right-3.5"}`} />
+      <SelectOver id={id} label={label} value={value} options={options} groups={groups} onChange={onChange} />
+    </div>
+  );
+}
+
+type Choices<T extends string> = {
+  options: ReadonlyArray<{ id: T; label: string; option?: string }>;
+  groups?: ReadonlyArray<{ label: string; options: ReadonlyArray<{ id: T; label: string }> }>;
+};
+
+/** The native select, invisible over whatever names its choice (its nearest positioned parent). */
+function SelectOver<T extends string>({ id, label, value, options, groups = [], onChange }: { id: string; label: string; value: T; onChange: (value: T) => void } & Choices<T>) {
+  return (
+    <>
       <label htmlFor={id} className="sr-only">{label}</label>
       <select id={id} className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0" value={value} onChange={(e) => onChange(e.target.value as T)}>
         {options.map((o) => (
@@ -371,7 +385,7 @@ function PillSelect<T extends string>({
           </optgroup>
         ))}
       </select>
-    </div>
+    </>
   );
 }
 
@@ -412,6 +426,12 @@ export function DateRangeSelect({
   label: string;
   size?: "sm" | "md";
 }) {
+  const d = datesChoice(r, shown);
+  return <PillSelect<string> id={id} label={label} icon={CalendarDays} text={d.text} title={d.title} size={size} {...d.select} />;
+}
+
+/** What the dates menu shows and offers: "Last 30 days", "2025", "1 Mar – 8 Mar 2026". */
+function datesChoice(r: DateRangeState, shown: Shown) {
   const year = yearChoice(r);
   const text =
     year !== null
@@ -421,23 +441,21 @@ export function DateRangeSelect({
         : r.from && r.to && !r.problem
           ? fmtRange(r.from, r.to)
           : "Pick dates";
-  return (
-    <PillSelect<string>
-      id={id}
-      label={label}
-      icon={CalendarDays}
-      text={text}
-      title={shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}); weeks run Monday to Sunday.` : undefined}
-      size={size}
-      value={year !== null ? yearId(year) : r.preset}
-      options={PRESETS}
-      groups={[{ label: "Calendar years", options: menuYears(r).map((y) => ({ id: yearId(y), label: String(y) })) }]}
-      onChange={(v) => {
+  return {
+    text,
+    /** A preset's name is followed by its dates, "(7 Oct – 5 Nov)": a custom range or a year already says them. */
+    named: year === null && r.preset !== "custom",
+    title: shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}); weeks run Monday to Sunday.` : undefined,
+    select: {
+      value: year !== null ? yearId(year) : r.preset,
+      options: PRESETS,
+      groups: [{ label: "Calendar years", options: menuYears(r).map((y) => ({ id: yearId(y), label: String(y) })) }],
+      onChange: (v: string) => {
         if (v.startsWith("year-")) r.chooseYear(Number(v.slice(5)));
         else r.choose(v as PresetId, shown?.range);
-      }}
-    />
-  );
+      },
+    },
+  };
 }
 
 /**
@@ -464,6 +482,27 @@ export function CompareSelect({
   label: string;
   size?: "sm" | "md";
 }) {
+  const c = compareChoice(r, shown, current);
+  return (
+    <PillSelect
+      id={id}
+      label={label}
+      icon={ArrowLeftRight}
+      text={
+        <span data-testid="compare-dates">
+          <span className="font-normal text-muted">vs </span>
+          {c.text}
+        </span>
+      }
+      title={c.title}
+      size={size}
+      {...c.select}
+    />
+  );
+}
+
+/** What the comparison menu shows ("17 Oct 2026", or how it is chosen while that isn't known) and offers. */
+function compareChoice(r: DateRangeState, shown: Shown, current: boolean) {
   const mode = COMPARISONS.find((c) => c.id === r.compare)!.label;
   const answered = current && shown && (shown.previous.compare ?? "previous") === r.compare ? shown.previous : null;
   const text =
@@ -474,23 +513,43 @@ export function CompareSelect({
       : answered
         ? fmtSpan(answered.from, answered.to, { year: true })
         : mode;
+  return {
+    text,
+    title: answered && r.compare !== "custom" ? `${mode}. ${comparedWith(shown)}` : comparedWith(shown),
+    select: { value: r.compare, options: COMPARISONS, onChange: (c: CompareMode) => r.chooseCompare(c, shown?.previous) },
+  };
+}
+
+/**
+ * The simple Home's dates (the Stitch design): one card, the dates on top ("Last 30 days (7 Oct –
+ * 5 Nov)") and what they are compared with under them ("vs 7 Sep – 6 Oct"). Each line is the page's
+ * own menu laid over it (ids `date-range` and `compare-with`), so it opens the same choices as the
+ * full dashboard's two pills.
+ */
+export function DateChip({ r, shown, current = true }: { r: DateRangeState; shown: Shown; current?: boolean }) {
+  const d = datesChoice(r, shown);
+  const c = compareChoice(r, shown, current);
+  const line = "relative block min-w-0 rounded-sm focus-within:ring-2 focus-within:ring-accent";
   return (
-    <PillSelect
-      id={id}
-      label={label}
-      icon={ArrowLeftRight}
-      text={
-        <span data-testid="compare-dates">
-          <span className="font-normal text-muted">vs </span>
-          {text}
+    <div className="home-card relative inline-flex min-w-0 max-w-full items-center gap-3 py-2 pr-9 pl-3 transition-colors hover:bg-home-soft" title={d.title} data-testid="date-chip">
+      <CalendarDays aria-hidden className="h-[18px] w-[18px] shrink-0 text-muted" strokeWidth={1.8} />
+      <span className="flex min-w-0 flex-col">
+        <span className={line}>
+          <span aria-hidden className="block truncate text-[13px] leading-4 font-medium">
+            {d.text}
+            {d.named && shown && <span className="hidden sm:inline"> ({fmtSpan(shown.range.from, shown.range.to)})</span>}
+          </span>
+          <SelectOver<string> id="date-range" label="Dates" {...d.select} />
         </span>
-      }
-      title={answered && r.compare !== "custom" ? `${mode}. ${comparedWith(shown)}` : comparedWith(shown)}
-      size={size}
-      value={r.compare}
-      options={COMPARISONS}
-      onChange={(c) => r.chooseCompare(c, shown?.previous)}
-    />
+        <span className={`${line} mt-0.5`} title={c.title}>
+          <span aria-hidden className="block truncate text-xs leading-4 text-muted" data-testid="compare-dates">
+            vs {c.text}
+          </span>
+          <SelectOver id="compare-with" label="Compare with" {...c.select} />
+        </span>
+      </span>
+      <ChevronDown aria-hidden className="pointer-events-none absolute right-3 h-[18px] w-[18px] text-muted" />
+    </div>
   );
 }
 

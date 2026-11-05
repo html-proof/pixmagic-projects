@@ -83,7 +83,8 @@ test("the owner keeps the store's costs, and the dashboard counts them without c
   // The simple Home's Left over is the same figure, and says it isn't profit.
   const leftOver = page.getByTestId("metric-Left over");
   await expect(leftOver).toContainText("$290.00");
-  await expect(leftOver.getByTestId("left-over-what")).toContainText("After product costs and your costs");
+  // As the design words it: "29¢ of every $1, after product costs and your costs".
+  await expect(leftOver.getByTestId("left-over-what")).toContainText("¢ of every $1, after product costs and your costs");
   await expect(leftOver).toContainText("Not profit");
   // Sales with no cost per item: Needs you sends the owner to add it in Shopify.
   await expect(page.getByTestId("need-costs")).toContainText("$200.00 of sales had no cost per item in Shopify");
