@@ -419,7 +419,15 @@ export function ProductsTab({ ov, currency }: { ov: Overview; currency: string }
       </ShortLine>
       <section aria-label="Product numbers" className="grid gap-3 sm:grid-cols-3 sm:gap-4">
         {c && s && <Figure title="Items sold" value={fmtNum(c.units)} change={<Change value={s.deltas.units} versus={versus} />} sub={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />}
-        {tp && <Figure title="Top product" value={<span className="text-lg sm:text-xl">{top ? top.title : "None yet"}</span>} sub={share !== null ? `${fmtPct(share)} of net sales` : top ? `${plural(top.units, "unit")} sold` : "No sales in these dates"} />}
+        {/* No top product when rankings are held back (some sales have no product to group by yet) is
+            "not available", not "no sales": items did sell. */}
+        {tp && (
+          <Figure
+            title="Top product"
+            value={<span className="text-lg sm:text-xl">{top ? top.title : tp.complete === false ? "Not available" : "None yet"}</span>}
+            sub={share !== null ? `${fmtPct(share)} of net sales` : top ? `${plural(top.units, "unit")} sold` : tp.complete === false ? "Waiting for complete sales data" : "No product sales in these dates"}
+          />
+        )}
         {catalog && (
           <Figure
             title="Products in your shop"

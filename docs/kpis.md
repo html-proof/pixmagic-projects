@@ -419,7 +419,9 @@ by month).
   - **Discount codes**: the three most used, the money each took off, and the total discounts.
 - **Products**:
   - **Items sold**: units less returns, with items per order.
-  - **Top product**: the first of `top_products`, its share of net sales.
+  - **Top product**: the first of `top_products`, its share of net sales. While the ranking is held back
+    (`top_products.complete` false: some sales can't be grouped by product yet) it reads "Not
+    available", never "no sales".
   - **Products in your shop**: the catalogue's active products, with draft and archived.
   - Then Top 100 products, Sales by collection and Catalog, unchanged.
 - **Customers**: customers who ordered, new, returning (and the returning rate), and the returning
