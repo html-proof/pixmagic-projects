@@ -300,6 +300,15 @@ describe("the app stack", () => {
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
   });
 
+  it("sends no traces to X-Ray (nothing reads them; docs/aws-migration, change 3)", () => {
+    for (const name of ["insights-production-api", "insights-production-jobs", "insights-production-cron"]) {
+      const [fn] = Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }));
+      expect(fn!.Properties.TracingConfig, name).toBeUndefined();
+    }
+    const statements = Object.values(t.app.findResources("AWS::IAM::Policy")).flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: unknown }>);
+    expect(statements.flatMap((st) => [st.Action].flat()).filter((a) => String(a).startsWith("xray:"))).toEqual([]);
+  });
+
   it("routes SMS delivery events from the configuration set to the jobs function, publishable only by this account's SMS service", () => {
     t.app.hasResourceProperties("AWS::SMSVOICE::ConfigurationSet", {
       ConfigurationSetName: "insights-production-sms",
@@ -1453,10 +1462,41 @@ describe("the WhatsApp stack (Evolution API)", () => {
     expect([def.Cpu, def.Memory]).toEqual(["512", "1024"]);
     w.hasResourceProperties("AWS::ECS::Service", {
       DesiredCount: 1,
-      LaunchType: "FARGATE",
       DeploymentConfiguration: { MinimumHealthyPercent: 0, MaximumPercent: 100, DeploymentCircuitBreaker: { Enable: true, Rollback: true } },
       NetworkConfiguration: { AwsvpcConfiguration: Match.objectLike({ AssignPublicIp: "DISABLED" }) },
     });
+  });
+
+  it("runs on Fargate Spot in production, with the cluster's Spot capacity provider in place first", () => {
+    const [id, svc] = Object.entries(w.findResources("AWS::ECS::Service"))[0]!;
+    // A capacity provider strategy and a launch type can't both be set (ECS refuses the service).
+    expect(svc.Properties.LaunchType).toBeUndefined();
+    expect(svc.Properties.CapacityProviderStrategy).toEqual([{ CapacityProvider: "FARGATE_SPOT", Weight: 1 }]);
+    // Changing the provider alone leaves the running task where it is: the nonce forces the move.
+    expect(svc.Properties.ForceNewDeployment).toEqual({ EnableForceNewDeployment: true, ForceNewDeploymentNonce: "FARGATE_SPOT" });
+    const [assocId, assoc] = Object.entries(w.findResources("AWS::ECS::ClusterCapacityProviderAssociations"))[0]!;
+    expect(assoc.Properties.CapacityProviders).toEqual(expect.arrayContaining(["FARGATE", "FARGATE_SPOT"]));
+    // Without this, CloudFormation can update the service before FARGATE_SPOT belongs to the cluster.
+    expect([svc.DependsOn].flat(), id).toContain(assocId);
+  });
+
+  it("goes back to on demand with spot: false through the FARGATE capacity provider, never the launch type", async () => {
+    // From a capacity provider back to the launch type, CloudFormation replaces the service, and its fixed
+    // name makes that fail ("already exists"; tried on a throwaway stack, 2026-11-06).
+    const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
+    const app = new App();
+    const base = envConfig((k) => app.node.tryGetContext(k));
+    const cfg = { ...base, whatsapp: { ...base.whatsapp, spot: false } };
+    const env = { account: cfg.account, region: cfg.region };
+    const data = new DataStack(app, "D", cfg, { env });
+    const t = Template.fromStack(new WhatsappStack(app, "W", cfg, data, { env }));
+    const [, svc] = Object.entries(t.findResources("AWS::ECS::Service"))[0]!;
+    expect(svc.Properties.LaunchType).toBeUndefined();
+    expect(svc.Properties.CapacityProviderStrategy).toEqual([{ CapacityProvider: "FARGATE", Weight: 1 }]);
+    expect(svc.Properties.ForceNewDeployment).toEqual({ EnableForceNewDeployment: true, ForceNewDeploymentNonce: "FARGATE" });
+  });
+
+  it("keeps no load balancer and its private address", () => {
     w.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 0);
     w.hasResourceProperties("AWS::ServiceDiscovery::PrivateDnsNamespace", { Name: "whatsapp.production.insights.internal" });
   });

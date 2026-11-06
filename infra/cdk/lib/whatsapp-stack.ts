@@ -119,6 +119,8 @@ export class WhatsappStack extends Stack {
     super(scope, id, props);
     const prefix = `insights-${cfg.name}`;
     const shard = EVOLUTION_SHARD;
+    // Fargate Spot (`whatsapp.spot`) or on demand: docs/whatsapp.md, "Cost".
+    const capacity = cfg.whatsapp.spot ? "FARGATE_SPOT" : "FARGATE";
 
     const sg = new ec2.SecurityGroup(this, "EvolutionSg", { vpc: data.vpc, securityGroupName: `${prefix}-evolution`, description: "Insights WhatsApp: Evolution API (in from the functions only)", allowAllOutbound: true });
     sg.addIngressRule(data.appSg, ec2.Port.tcp(8080), "Lambda functions call Evolution API");
@@ -255,9 +257,21 @@ export class WhatsappStack extends Stack {
       securityGroups: [sg],
       assignPublicIp: false,
       cloudMapOptions: { cloudMapNamespace: namespace, name: `evolution-${shard}`, dnsRecordType: servicediscovery.DnsRecordType.A, dnsTtl: Duration.seconds(10) },
-      ...(cfg.whatsapp.spot ? { capacityProviderStrategies: [{ capacityProvider: "FARGATE_SPOT", weight: 1 }] } : {}),
+      // Always a capacity provider, never the FARGATE launch type: Spot or on demand is then one in-place
+      // update either way. Going from a capacity provider back to the launch type makes CloudFormation replace
+      // the service, which its fixed name refuses ("already exists"; tried on a throwaway stack 2026-11-06).
+      capacityProviderStrategies: [{ capacityProvider: capacity, weight: 1 }],
     });
-    if (cfg.whatsapp.spot) cluster.enableFargateCapacityProviders();
+    cluster.enableFargateCapacityProviders();
+    // CDK doesn't order the service after the cluster's capacity providers (their association resource is
+    // added under the cluster later, during synthesis). Without this, CloudFormation can move the service to
+    // FARGATE_SPOT before FARGATE_SPOT belongs to the cluster, and ECS refuses it. A dependency on the whole
+    // cluster construct is resolved after that, so it takes the association in.
+    service.node.addDependency(cluster);
+    // A new capacity provider applies only to tasks started after it (ECS UpdateService), so changing it
+    // also forces a new deployment: the running task is replaced on the new capacity. The nonce is the
+    // provider, so a deploy that leaves it alone forces nothing.
+    (service.node.defaultChild as ecs.CfnService).forceNewDeployment = { enableForceNewDeployment: true, forceNewDeploymentNonce: capacity };
     service.node.addDependency(dbInit);
 
     // Alarms → the app stack's topic.

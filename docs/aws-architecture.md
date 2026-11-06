@@ -36,7 +36,7 @@ Principles:
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
 | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
 | WhatsApp Automation's gateway (Evolution API, a container) | **ECS Fargate** (one task, private subnets, no public address, no load balancer), found by the functions through **Cloud Map**; its own database on the same RDS instance | WhatsApp sessions are long-lived connections a Lambda can't hold ([whatsapp.md](whatsapp.md)). |
-| Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
+| Logs | **CloudWatch Logs**, metric filters, alarms (X-Ray tracing was on until 2026-11-06; nothing read the traces) | One place for logs, metrics and alarms. |
 | Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication, of which nothing is left in the app ([cognito-setup.md](cognito-setup.md), section 4). |
 | Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; no rotation (section 4). |
 | Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
@@ -189,7 +189,7 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 - Metric filters and alarms: Lambda errors and throttles, 5xx at CloudFront, sign-in service
   unavailable, DLQ depth > 0, queue age > 15 min, RDS CPU / free storage / connections (and, with RDS
   Proxy, pinned connections and borrow latency), NAT errors. All → one SNS topic → email (and Slack).
-- One CloudWatch dashboard per environment; X-Ray tracing at 10% sampling.
+- One CloudWatch dashboard per environment. No X-Ray tracing (off since 2026-11-06, docs/aws-migration).
 - A CloudWatch Synthetics canary loading the sign-in page and `/api/readyz` every 5 minutes.
 
 ## 7. Integrations on the app's address

@@ -108,9 +108,21 @@ On-demand in Sydney, from AWS's price list (2026-10-25), before GST:
 | Logs (errors and warnings only), the DB-init function, SQS | cents |
 | **Total** | **~US$19** |
 
-Fargate Spot would bring the task to about US$5: `whatsapp.spot: true` in `infra/cdk/lib/config.ts`
-(staging uses it). Production runs on demand because a Spot interruption drops every linked phone
-for the minute or two the replacement takes; that is the owner's call.
+**Production runs on Fargate Spot** since 2026-11-06 (the owner's yes, change 5 of
+[aws-migration/AWS_MIGRATION_PLAN.md](aws-migration/AWS_MIGRATION_PLAN.md)): `whatsapp.spot: true` in
+`infra/cdk/lib/config.ts`. AWS doesn't publish Spot's rate in its price list (it states up to 70 %
+off); the bill shows the real figure about a week after the switch. When AWS reclaims the task (two
+minutes' notice), ECS starts another and every linked phone drops for the minute or two that takes;
+sessions resume from the database, as after a deploy. If Spot capacity runs out, no task starts until
+it returns, and the `whatsapp-service-down` alarm emails after 10 minutes.
+
+Back to on demand: `whatsapp.spot: false`, by pull request. The service always runs through a
+**capacity provider** (`FARGATE_SPOT` or `FARGATE`, the latter on demand) and never the `FARGATE`
+launch type: moving between two capacity providers is an in-place update, but CloudFormation moves
+a service from a capacity provider back to a launch type by replacing it, and the service's fixed
+name makes that fail ("already exists"). All four switches were tried on a throwaway stack on
+2026-11-06. Changing the provider forces a new deployment (`ForceNewDeployment`, its nonce is the
+provider), so the running task moves at once.
 
 ## Where things live
 

@@ -64,10 +64,12 @@ RDS Protection → turn off Advanced RDS. *Check:* `aws guardduty get-detector` 
 `infra/cdk/lib/config.ts`; the stack already supports it and staging is set that way. When AWS
 reclaims a Spot task, ECS starts another, and every linked phone drops for a minute or two while
 the WhatsApp sessions reload from the `evolution` database. *Who:* a pull request, on the owner's
-yes. *Check:* the service runs on `FARGATE_SPOT`, the WhatsApp page shows connected numbers, the
-smoke test passes; a week of billing gives the real Spot rate. The task is ARM64: if the Deploy
-shows Fargate Spot refusing ARM64 in Sydney, it rolls back by itself, and the alternative is the
-same multi-arch image on x86 Spot.
+yes (given 2026-11-06). *Check:* the service runs on `FARGATE_SPOT`, the WhatsApp page shows
+connected numbers, the smoke test passes; a week of billing gives the real Spot rate. Tried first on
+a throwaway stack (2026-11-06): an ARM64 task on the `FARGATE` launch type moves to `FARGATE_SPOT` in
+place, but only with a forced new deployment, and the way back must be the `FARGATE` capacity
+provider, because returning to the launch type makes CloudFormation replace the service, which its
+fixed name refuses. The stack is built that way (docs/whatsapp.md, "Cost").
 
 **6. AWS WAF → Cloudflare's rules** (10.08). Cloudflare already proxies `bizinsights.io`, so its
 free-plan security can stand in for the WAF. In three pull requests, each checked before the next:

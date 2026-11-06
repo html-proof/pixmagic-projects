@@ -193,7 +193,9 @@ export class AppStack extends Stack {
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         securityGroups: [data.appSg],
         logGroup,
-        tracing: lambda.Tracing.ACTIVE,
+        // No X-Ray: nothing in the code reads traces, and storing them was ~US$0.46 a month
+        // (docs/aws-migration/AWS_COST_AUDIT.md). Logs, metrics and alarms stay in CloudWatch.
+        tracing: lambda.Tracing.DISABLED,
         // Each release publishes a version; keeping the old ones is what scripts/rollback.mjs moves
         // the `live` alias back to (CloudFormation would otherwise delete them on the next deploy).
         currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
