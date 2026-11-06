@@ -18,6 +18,7 @@ import { columnDates, csvField, csvFigure } from "@/components/sheet/sheetUi";
 import { useSheet, type SheetState } from "@/components/sheet/useSheet";
 import { Alert, EmptyState } from "@/components/ui";
 import { friendlyError, isTransient } from "@/lib/api";
+import { SalesTabs } from "@/components/dashboard/SalesFrame";
 
 /**
  * The Profit sheet: whether the store is making money, a day and a month at a time (its profit and
@@ -63,6 +64,8 @@ function SheetView() {
 
   return (
     <div className="space-y-5" data-print-root>
+      {/* The Sales area's tabs (the Stitch design): this is its Profit sheet tab. */}
+      <SalesTabs active="sheet" />
       <SheetHeader s={s} onAddEvent={() => ov && setDraft({ from: ov.range.to, to: ov.range.to })} onDownload={download} />
       <ProfitPanel />
       <SheetControls s={s} />

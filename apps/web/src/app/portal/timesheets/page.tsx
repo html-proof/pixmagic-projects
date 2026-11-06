@@ -3,8 +3,8 @@ import { useCallback, useState, type FormEvent } from "react";
 import { BREAK_KIND_LABEL, localDayOf, shiftDay } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { usePortal, type MyShift, type MyTimesheet } from "@/components/staff/PortalContext";
-import { ApprovalBadge, Field, Flags, Modal } from "@/components/staff/ui";
-import { Badge, Empty } from "@/components/dashboard/Primitives";
+import { ApprovalBadge, Field, Flags, Modal, Pill as Badge } from "@/components/staff/ui";
+import { Empty } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
@@ -13,6 +13,7 @@ import { fmtDateTime, fmtDay, fmtHours, fmtTime, fromLocalInput, toLocalInput } 
 // ---------------------------------------------------------------------------------------------
 // The employee's own shifts: times, breaks, hours, flags and where approval stands, with a way
 // to ask for a change (or report a shift they forgot to clock). A manager decides each request.
+// No Stitch screen draws this tab; it takes screen 29's look (white cards, soft figure tiles).
 // ---------------------------------------------------------------------------------------------
 
 function browserToday() {
@@ -49,19 +50,19 @@ export default function PortalTimesheets() {
 
   return (
     <>
-      <section className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold">Timesheets</h1>
-            <p className="mt-1 text-sm text-muted">Every shift you&apos;ve clocked, with breaks and where approval stands.</p>
-          </div>
-          {canAsk && (
-            <button type="button" className="btn-secondary min-h-11" onClick={() => setEditing({ shift: null })}>
-              Report a missed shift
-            </button>
-          )}
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold">Timesheets</h1>
+          <p className="mt-1 text-sm text-muted">Every shift you&apos;ve clocked, with breaks and where approval stands.</p>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:max-w-md">
+        {canAsk && (
+          <button type="button" className="btn-secondary min-h-11" onClick={() => setEditing({ shift: null })}>
+            Report a missed shift
+          </button>
+        )}
+      </header>
+      <section className="home-card animate-rise p-4 sm:p-5" aria-label="Which dates">
+        <div className="grid grid-cols-2 gap-3 sm:max-w-md">
           <label>
             <span className="label text-xs text-muted">From</span>
             <input type="date" className="input min-h-11" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
@@ -116,7 +117,7 @@ function ShiftCard({ s, tz, canAsk, onAsk }: { s: MyShift; tz: string; canAsk: b
   const pendingChange = s.corrections.some((c) => c.status === "pending");
   const sameDay = s.clockOutAt && localDayOf(Date.parse(s.clockOutAt), tz) === s.day;
   return (
-    <li className="card !p-4">
+    <li className="home-card animate-rise p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold">{fmtDay(s.day)}</p>
@@ -131,15 +132,15 @@ function ShiftCard({ s, tz, canAsk, onAsk }: { s: MyShift; tz: string; canAsk: b
       </div>
 
       <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
-        <div>
+        <div className="rounded bg-home-soft px-3 py-2">
           <dt className="text-xs text-muted">Worked</dt>
           <dd className="font-semibold tabular-nums">{fmtHours(s.workedSeconds)}</dd>
         </div>
-        <div>
+        <div className="rounded bg-home-soft px-3 py-2">
           <dt className="text-xs text-muted">Unpaid breaks</dt>
           <dd className="tabular-nums">{fmtHours(s.unpaidBreakSeconds)}</dd>
         </div>
-        <div>
+        <div className="rounded bg-home-soft px-3 py-2">
           <dt className="text-xs text-muted">Paid breaks</dt>
           <dd className="tabular-nums">{fmtHours(s.paidBreakSeconds)}</dd>
         </div>

@@ -1,19 +1,27 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { LIVE_STATUS_LABEL, LIVE_STATUSES, type LiveStatus } from "@app/shared/staff";
-import { Dot, Empty, Stat } from "@/components/dashboard/Primitives";
+import { Dot, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
-import { EstimateNote, LiveBadge, Table, Td, Th } from "@/components/staff/ui";
+import { Card, FigureTile } from "@/components/PageKit";
+import { EstimateNote, Initials, InfoStrip, LiveBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
 import { PageHeader, Skeleton } from "@/components/AppUi";
 import { useApi, useLiveApi } from "@/lib/api";
 import { fmtHours, fmtMoney, fmtTime, useStaff, type StaffConfig } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
-// Live attendance: who is working right now. The board re-checks every 10 seconds while the page
-// is visible (useLiveApi); running shifts tick every second in between, from the server's clock.
+// Live attendance: who is working right now, in the look of the Stitch design's screen 25 (the
+// day's figures as tiles, then the board on a white card). The board re-checks every 10 seconds
+// while the page is visible (useLiveApi); running shifts tick every second in between, from the
+// server's clock.
 // ---------------------------------------------------------------------------------------------
+
+/** One of the day's figures, with the old tile's coloured dot when it is worth a look. */
+function Stat({ label, value, note, tone }: { label: string; value: ReactNode; note?: ReactNode; tone?: Tone }) {
+  return <FigureTile title={label} value={value} sub={note} icon={tone ? <Dot tone={tone} /> : undefined} />;
+}
 
 interface LiveRow {
   employee: { id: string; fullName: string; employeeNumber: string; jobTitle: string; department: string | null; managerUserId: string | null };
@@ -180,9 +188,11 @@ export default function LiveAttendancePage() {
       )}
 
       {data?.holiday && (
-        <div className="rounded-lg border border-border bg-surface px-4 py-3 text-sm" role="status">
-          <span className="font-medium">Today is a public holiday: {data.holiday.name}.</span>{" "}
-          <span className="text-muted">Nobody is marked as missing today. Anyone who works is still recorded as usual.</span>
+        <div role="status">
+          <InfoStrip>
+            <span className="font-medium">Today is a public holiday: {data.holiday.name}.</span>{" "}
+            <span className="text-muted">Nobody is marked as missing today. Anyone who works is still recorded as usual.</span>
+          </InfoStrip>
         </div>
       )}
 
@@ -190,7 +200,7 @@ export default function LiveAttendancePage() {
         <Skeleton lines={6} />
       ) : (
         <>
-          <section aria-label="Today at a glance" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <section aria-label="Today at a glance" className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5">
             <Stat label="Total employees" value={nf.format(k.totalEmployees)} note="Active and on leave" />
             <Stat label="Clocked in" value={nf.format(k.working)} tone={k.working ? "good" : undefined} note="Working now" />
             <Stat label="On break" value={nf.format(k.onBreak)} tone={k.onBreak ? "warn" : undefined} />
@@ -221,19 +231,18 @@ export default function LiveAttendancePage() {
             )}
           </section>
 
-          <section className="card animate-rise" aria-labelledby={`${id}-board`}>
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <h2 id={`${id}-board`} className="font-semibold">
-                Today&apos;s board
-              </h2>
-              {filtered && (
-                <button type="button" className="text-sm text-accent underline-offset-2 hover:underline" onClick={clear}>
+          <Card
+            id="board"
+            title="Today's board"
+            aside={
+              filtered && (
+                <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" onClick={clear}>
                   Clear filters
                 </button>
-              )}
-            </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5" role="search" aria-label="Filter the board">
+              )
+            }
+          >
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5" role="search" aria-label="Filter the board">
               <label className="min-w-0">
                 <span className="label text-xs text-muted">Employee</span>
                 <input className="input" type="search" placeholder="Name or number" value={search} onChange={(e) => setSearch(e.target.value)} maxLength={100} />
@@ -321,13 +330,18 @@ export default function LiveAttendancePage() {
                       return (
                         <tr key={r.employee.id}>
                           <Td>
-                            <Link className="font-medium hover:underline" href={`/staff/employee?id=${encodeURIComponent(r.employee.id)}`}>
-                              {r.employee.fullName}
-                            </Link>
-                            <p className="text-xs text-muted">
-                              {r.employee.employeeNumber}
-                              {r.employee.department ? ` · ${r.employee.department}` : ""}
-                            </p>
+                            <span className="flex items-center gap-3">
+                              <Initials name={r.employee.fullName} small />
+                              <span className="min-w-0">
+                                <Link className="font-medium hover:text-accent hover:underline" href={`/staff/employee?id=${encodeURIComponent(r.employee.id)}`}>
+                                  {r.employee.fullName}
+                                </Link>
+                                <span className="block text-xs text-muted">
+                                  {r.employee.employeeNumber}
+                                  {r.employee.department ? ` · ${r.employee.department}` : ""}
+                                </span>
+                              </span>
+                            </span>
                           </Td>
                           <Td>{r.employee.jobTitle || <span className="text-muted">—</span>}</Td>
                           <Td>
@@ -392,7 +406,7 @@ export default function LiveAttendancePage() {
                 <EstimateNote />
               </div>
             )}
-          </section>
+          </Card>
         </>
       )}
     </>

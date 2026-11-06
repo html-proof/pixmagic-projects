@@ -49,7 +49,7 @@ export function AudienceCount({ estimate, loading, marketing, daily }: { estimat
   if (loading && !estimate) return <p className="text-sm text-muted">Counting customers…</p>;
   if (!estimate) return null;
   return (
-    <p className="flex flex-wrap items-baseline gap-x-2 text-sm" aria-live="polite">
+    <p className="flex flex-wrap items-baseline gap-x-2 rounded bg-home-soft px-4 py-3 text-sm" aria-live="polite">
       <span className="font-semibold">
         Recipients: {estimate.customers === null ? "1 customer per event" : plural(estimate.customers, "customer")}
       </span>
@@ -71,7 +71,7 @@ export function SegmentPicker({ base, value, onChange, disabled, manage, id = "a
   const chosen = list.find((s) => s.id === value);
   if (!list.length)
     return (
-      <p className="rounded-lg border border-dashed border-border p-3 text-sm text-muted">
+      <p className="rounded bg-surface p-3 text-sm text-muted">
         You have no customer segments yet.{" "}
         {manage ? (
           <Link className="font-medium text-accent underline" href="/messaging/segments">
@@ -150,7 +150,7 @@ export function CustomerPicker({ base, value, onChange, disabled, contact }: { b
       {value.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" aria-label="Chosen customers">
           {value.map((id) => (
-            <li key={id} className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/5 py-0.5 pl-2.5 pr-1 text-xs">
+            <li key={id} className="inline-flex items-center gap-1 rounded bg-accent/10 py-0.5 pr-1 pl-2.5 text-xs font-medium text-accent">
               {label(known[id], id)}
               <button type="button" className="rounded-full p-0.5 hover:bg-accent/10" disabled={disabled} aria-label={`Remove ${label(known[id], id)}`} onClick={() => onChange(value.filter((x) => x !== id))}>
                 <X aria-hidden className="h-3 w-3" />
@@ -173,7 +173,7 @@ export function CustomerPicker({ base, value, onChange, disabled, contact }: { b
       ) : !found.length ? (
         <p className="text-sm text-muted">{q ? "No customer matches." : "No customer with a mobile number has reached bizinsights from this store yet."}</p>
       ) : (
-        <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-lg border border-border" aria-label="Customers">
+        <ul className="max-h-64 divide-y divide-home-line overflow-y-auto rounded bg-surface" aria-label="Customers">
           {found.map((c) => (
             <li key={c.id}>
               <label className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm ${c.optedOut ? "opacity-60" : ""}`}>

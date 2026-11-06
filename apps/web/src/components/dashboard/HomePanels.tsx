@@ -72,11 +72,11 @@ function DetailsLink({ onClick, href, children = "View details" }: { onClick?: (
 /** A panel of the home page: a heading with its one line, a way into the details, and its body. */
 function HomeCard({ id, title, sub, icon, action, className = "", children }: { id: string; title: string; sub?: ReactNode; icon?: ReactNode; action?: ReactNode; className?: string; children: ReactNode }) {
   return (
-    <section id={id} aria-labelledby={`${id}-h`} data-testid={`home-${id}`} className={`card animate-rise flex min-w-0 flex-col rounded-2xl ${className}`}>
+    <section id={id} aria-labelledby={`${id}-h`} data-testid={`home-${id}`} className={`card animate-rise flex min-w-0 flex-col ${className}`}>
       <div className="flex items-start gap-3">
         {icon}
         <div className="min-w-0 flex-1">
-          <h2 id={`${id}-h`} className="font-semibold leading-tight">{title}</h2>
+          <h2 id={`${id}-h`} className="home-h2">{title}</h2>
           {sub && <p className="mt-1 text-xs text-muted">{sub}</p>}
         </div>
         {action && <div className="shrink-0 pt-0.5">{action}</div>}
@@ -1019,7 +1019,7 @@ export function RecentOrdersHome({ ov, currency, onOpen }: { ov: Overview; curre
     <HomeCard
       id="recent-orders"
       title="Recent orders"
-      sub="The latest orders, whatever dates are picked."
+      sub="The latest orders placed in these dates."
       icon={<Disc icon={ReceiptText} className="bg-emerald-600 text-white dark:bg-emerald-500" />}
       action={<DetailsLink onClick={() => onOpen("orders")}>View all</DetailsLink>}
     >

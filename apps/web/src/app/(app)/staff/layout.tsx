@@ -26,7 +26,7 @@ export default function StaffLayout({ children }: { children: ReactNode }) {
   if (!access.permissions.length) {
     return (
       <div className="card max-w-xl">
-        <h1 className="text-lg font-semibold">Staff Management</h1>
+        <h1 className="card-title">Staff Management</h1>
         <p className="mt-1 text-sm text-muted">You don&apos;t have access to Staff Management in this workspace. An owner or admin can give you a staff role in Settings → Members &amp; roles.</p>
       </div>
     );

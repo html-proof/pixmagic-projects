@@ -4,6 +4,8 @@ import { useState, type ReactNode } from "react";
 import { ArrowRight, BarChart3, Check, CircleAlert, Clock, Cloud, FileText, Gauge, History, Radio, ShieldCheck, Smartphone, UserCheck } from "lucide-react";
 import { ConfirmDialog, PageHeader, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Card } from "@/components/PageKit";
+import { FootLine } from "@/components/automations/MarketingKit";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { fmtMonth } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
@@ -18,6 +20,8 @@ import type { ReadinessItem, SmsOverview, SmsSetupState } from "./types";
  * verification, customer permissions, the monthly limit, automatic SMS, test recipients), each
  * with where it's changed. Under Advanced, for owners and admins: the specialist pages, the
  * provider connection and the activity log. Changes go through the same API as the setup guide.
+ * The cards are the Stitch design's (components/PageKit.tsx), as its screen 18 sets out a channel:
+ * its state in a word on the right, what is done and what is missing under it.
  */
 
 const CONNECTION: Record<SmsSetupState["connection"]["status"], { tone: Tone; label: string; help: string }> = {
@@ -44,17 +48,12 @@ const ADVANCED: Array<{ href: string; title: string; help: string; icon: typeof 
   { href: "/messaging/analytics", title: "Delivery analytics", help: "Delivery, cost and orders that followed a text.", icon: BarChart3 },
 ];
 
+/** One of the page's cards: its heading, its state (a badge) on the right, then its rows. */
 function Section({ id, title, action, children }: { id: string; title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section id={id} className="card animate-rise scroll-mt-4 space-y-3" aria-labelledby={`${id}-h`}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id={`${id}-h`} className="font-semibold">
-          {title}
-        </h2>
-        {action}
-      </div>
-      {children}
-    </section>
+    <Card id={id} title={title} aside={action && <span className="text-text">{action}</span>} className="scroll-mt-4">
+      <div className="space-y-3">{children}</div>
+    </Card>
   );
 }
 
@@ -76,7 +75,7 @@ function ActivityLog() {
   if (!list.rows.length) return <p className="text-sm text-muted">Nothing changed yet.</p>;
   return (
     <>
-      <ul className="divide-y divide-border text-sm">
+      <ul className="divide-y divide-home-line text-sm">
         {list.rows.map((e) => (
           <li key={e.id} className="flex flex-wrap items-baseline gap-x-3 py-2">
             <span className="w-36 shrink-0 text-xs text-muted">{fmtWhen(e.at, store?.timezone)}</span>
@@ -152,12 +151,12 @@ export function SmsSettings() {
         {!readiness ? (
           overview.error ? <p className="text-sm text-muted">Couldn&apos;t load your setup.</p> : <div className="skeleton h-24" />
         ) : (
-          <ul className="divide-y divide-border">
+          <ul className="divide-y divide-home-line">
             {items.map((i) => {
               const link = !i.ok ? i.fix : CHANGE[i.key];
               return (
                 <li key={i.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                  <span aria-hidden className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${i.ok ? "bg-good/15 text-good" : i.waiting ? "bg-text/[0.06] text-muted" : "bg-warn/15 text-warn"}`}>
+                  <span aria-hidden className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${i.ok ? "bg-accent text-accent-ink" : i.waiting ? "bg-home-soft text-muted" : "bg-warn/15 text-warn"}`}>
                     {i.ok ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : i.waiting ? <Clock className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
                   </span>
                   <span className="min-w-0 flex-1">
@@ -208,7 +207,7 @@ export function SmsSettings() {
       {manage && (
         <section className="space-y-3" aria-labelledby="set-adv-h">
           <div>
-            <h2 id="set-adv-h" className="font-semibold">
+            <h2 id="set-adv-h" className="home-h2">
               Advanced
             </h2>
             <p className="text-sm text-muted">For owners and admins. You don&apos;t need these to create an automation.</p>
@@ -216,7 +215,7 @@ export function SmsSettings() {
           <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {ADVANCED.map((a) => (
               <li key={a.href}>
-                <Link href={a.href} className="card flex h-full items-start gap-3 transition hover:border-accent/60">
+                <Link href={a.href} className="home-card flex h-full items-start gap-3 p-5 transition-colors outline-none hover:bg-home-soft focus-visible:ring-2 focus-visible:ring-accent">
                   <a.icon aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
                   <span className="min-w-0">
                     <span className="block font-medium">{a.title}</span>
@@ -227,7 +226,7 @@ export function SmsSettings() {
             ))}
           </ul>
 
-          <details className="card">
+          <details className="home-card p-5 sm:p-6">
             <summary className="flex cursor-pointer flex-wrap items-center gap-2 font-medium">
               <Cloud aria-hidden className="h-4 w-4 text-accent" /> Provider configuration <Badge tone={conn.tone}>{conn.label}</Badge>
             </summary>
@@ -252,7 +251,7 @@ export function SmsSettings() {
             </div>
           </details>
 
-          <details className="card">
+          <details className="home-card p-5 sm:p-6">
             <summary className="flex cursor-pointer items-center gap-2 font-medium">
               <History aria-hidden className="h-4 w-4 text-accent" /> Activity log
             </summary>
@@ -262,9 +261,11 @@ export function SmsSettings() {
             </div>
           </details>
 
-          <p className="flex items-center gap-1.5 text-xs text-muted">
-            <Smartphone aria-hidden className="h-3.5 w-3.5" /> Every text is checked right before it goes: the customer&apos;s permission, opt-outs, quiet hours and your monthly limit.
-          </p>
+          <FootLine>
+            <span className="flex items-center gap-1.5">
+              <Smartphone aria-hidden className="h-3.5 w-3.5 shrink-0" /> Every text is checked right before it goes: the customer&apos;s permission, opt-outs, quiet hours and your monthly limit.
+            </span>
+          </FootLine>
         </section>
       )}
 

@@ -1,14 +1,17 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useState } from "react";
-import { Badge, type Tone } from "@/components/dashboard/Primitives";
+import type { Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { EmptyState } from "@/components/ui";
 import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/AppUi";
-import { Table, Td, Th } from "@/components/staff/ui";
+import { Initials, Pill as Badge, Table, Td, Th } from "@/components/staff/ui";
 import { InvitationLinkPanel, inviteEmployee, type SharedLink } from "@/components/staff/EmployeeForm";
 import { api, useApi } from "@/lib/api";
 import { fmtDateTime, useStaff, type StaffConfig } from "@/lib/staff";
+
+// Invitations, in the look of the Stitch design's screen 26 ("People"): who was invited, when it
+// expires, how it was sent, and Resend / Copy new link / Revoke for each open one.
 
 interface InvitationRow {
   id: string;
@@ -86,23 +89,25 @@ export default function InvitationsPage() {
         }
       />
 
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Which invitations">
-        {(
-          [
-            ["open", "Open"],
-            ["all", "All invitations"],
-          ] as const
-        ).map(([v, l]) => (
-          <button
-            key={v}
-            type="button"
-            aria-pressed={status === v}
-            onClick={() => setStatus(v)}
-            className={`rounded-full border px-3 py-1.5 text-sm transition ${status === v ? "border-accent bg-accent text-accent-ink" : "border-border bg-surface text-muted hover:text-text"}`}
-          >
-            {l}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1 rounded bg-home-soft p-1" role="group" aria-label="Which invitations">
+          {(
+            [
+              ["open", "Open"],
+              ["all", "All invitations"],
+            ] as const
+          ).map(([v, l]) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={status === v}
+              onClick={() => setStatus(v)}
+              className={`rounded px-3 py-1.5 text-sm whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${status === v ? "bg-surface font-medium text-text shadow-[var(--shadow)]" : "text-muted hover:text-text"}`}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
         <p className="text-xs text-muted">{status === "open" ? "Waiting to be accepted, or expired without being used." : "Every invitation, including accepted and replaced ones."}</p>
       </div>
 
@@ -127,7 +132,7 @@ export default function InvitationsPage() {
           }
         />
       ) : (
-        <section className={`card transition-opacity ${list.loading ? "opacity-70" : ""}`} aria-busy={list.loading}>
+        <section className={`home-card animate-rise p-5 transition-opacity sm:p-6 ${list.loading ? "opacity-70" : ""}`} aria-busy={list.loading}>
           <Table label="Invitations">
             <thead>
               <tr>
@@ -146,12 +151,17 @@ export default function InvitationsPage() {
                 return (
                   <tr key={row.id}>
                     <Td>
-                      <Link href={`/staff/employee?id=${enc(row.employee.id)}`} className="font-medium hover:text-accent hover:underline">
-                        {row.employee.fullName}
-                      </Link>
-                      <p className="text-xs text-muted">
-                        {row.employee.jobTitle} · <span className="break-all">{row.employee.email}</span>
-                      </p>
+                      <span className="flex items-center gap-3">
+                        <Initials name={row.employee.fullName} small />
+                        <span className="min-w-0">
+                          <Link href={`/staff/employee?id=${enc(row.employee.id)}`} className="font-medium hover:text-accent hover:underline">
+                            {row.employee.fullName}
+                          </Link>
+                          <span className="block text-xs text-muted">
+                            {row.employee.jobTitle} · <span className="break-all">{row.employee.email}</span>
+                          </span>
+                        </span>
+                      </span>
                     </Td>
                     <Td className="whitespace-nowrap">{fmtDateTime(row.sentAt, tz)}</Td>
                     <Td className="whitespace-nowrap">{row.status === "accepted" || row.status === "revoked" ? <span className="text-muted">—</span> : fmtDateTime(row.expiresAt, tz)}</Td>

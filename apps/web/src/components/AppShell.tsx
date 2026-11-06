@@ -68,9 +68,9 @@ import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } f
 // The signed-in frame, in the owner's design (2026-10-24): a dark sidebar down the whole left side
 // (logo, the dashboard's topics and the other areas, help, and the account at its foot) beside a
 // top bar over the page (store, search, notifications). On a phone the sidebar slides in from the
-// menu button and the account sits in the top bar. Topics open the dashboard's detail panels
-// (?view=…), the same ones its cards open; advertising (/advertising) and the shopping funnel (/funnel)
-// have pages of their own.
+// menu button and the account sits in the top bar. Topics open the dashboard's topic pages
+// (?view=…, the Sales tabs of components/dashboard/SalesFrame.tsx), the same ones its cards open;
+// advertising (/advertising) and the shopping funnel (/funnel) have pages of their own.
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";
@@ -606,7 +606,7 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
   const { workspaces, workspace, setWorkspaceId } = useApp();
   const mac = useMac();
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-surface/85 backdrop-blur-md print:hidden lg:border-transparent lg:bg-bg/75">
+    <header className="sticky top-0 z-30 bg-surface/95 shadow-[0_1px_8px_rgb(0_0_0/0.04)] backdrop-blur-md print:hidden">
       <div className="flex h-16 items-center gap-3 pl-2 pr-3 sm:pl-3 sm:pr-5 lg:px-8">
         {/* On a wide screen the logo heads the sidebar instead. */}
         <div className="flex shrink-0 items-center gap-1 lg:hidden">
@@ -628,11 +628,11 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
         <button
           type="button"
           onClick={onSearch}
-          className="hidden h-11 min-w-0 max-w-md flex-1 items-center gap-2.5 rounded-xl border border-border bg-bg/70 px-3.5 text-sm text-muted transition-colors hover:border-accent/40 md:flex"
+          className="hidden h-10 min-w-0 max-w-md flex-1 items-center gap-2.5 rounded-lg border border-transparent bg-bg px-3.5 text-sm text-muted transition-colors hover:border-accent/30 md:flex"
         >
           <Search aria-hidden className="h-4 w-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate text-left">Search insights, pages and settings…</span>
-          <kbd aria-hidden className="shrink-0 rounded-md border border-border bg-surface px-1.5 py-0.5 font-sans text-[11px]">{mac ? "⌘ K" : "Ctrl K"}</kbd>
+          <kbd aria-hidden className="shrink-0 rounded bg-home-soft-hover px-1.5 py-0.5 font-sans text-[11px]">{mac ? "⌘ K" : "Ctrl K"}</kbd>
         </button>
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <button type="button" onClick={onSearch} aria-label="Search" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text md:hidden">
@@ -761,7 +761,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed, offers]);
 
   return (
-    <div className="min-h-dvh lg:flex">
+    <div className="app-look min-h-dvh lg:flex">
       <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col bg-nav lg:flex print:hidden">
         <div className="flex h-16 shrink-0 items-center px-5">
           <Link href={DASHBOARD} className="flex items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-emerald-300" aria-label="bizinsights home">
@@ -805,7 +805,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
       <div className="min-w-0 flex-1">
         <TopBar onMenu={() => setDrawer(true)} onSearch={() => setPalette(true)} />
-        <main className="px-4 pb-24 pt-6 sm:px-6 lg:px-8 lg:pt-2">
+        <main className="px-4 pb-24 pt-6 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-[90rem]">
             <AccessNotice />
             {allowedHere ? children : <p className="text-muted">Loading…</p>}

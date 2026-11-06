@@ -35,7 +35,7 @@ export function SectionLayout({ title, icon, items, children }: { title: string;
               key={item.href}
               href={item.href}
               aria-current={item.active ? "page" : undefined}
-              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${item.active ? "bg-surface font-semibold shadow-sm" : "text-muted hover:text-text"}`}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${item.active ? "bg-accent/10 font-semibold text-accent" : "text-muted hover:bg-surface hover:text-text"}`}
             >
               {item.label}
             </Link>
@@ -47,16 +47,15 @@ export function SectionLayout({ title, icon, items, children }: { title: string;
   );
 }
 
+/** A page's header, as the Stitch design heads every page: its title, one line under it, and its actions at the right. */
 export function PageHeader({ title, sub, actions }: { title: string; sub?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="card animate-rise">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold">{title}</h1>
-          {sub && <div className="mt-1 text-sm text-muted">{sub}</div>}
-        </div>
-        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    <div className="animate-rise flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pb-1">
+      <div className="min-w-0">
+        <h1 className="page-title">{title}</h1>
+        {sub && <div className="mt-1 text-sm text-muted">{sub}</div>}
       </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

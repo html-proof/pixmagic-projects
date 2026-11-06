@@ -7,6 +7,7 @@ import { ConfirmDialog, Skeleton, useAction } from "@/components/AppUi";
 import { blankCost, CostFields, draftOf, inputOf, termsOf, whenOf, type CostDraft } from "@/components/costs/CostForm";
 import { fmtDay } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
+import { Card, FigureTile } from "@/components/PageKit";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, fmtMoney, useApi } from "@/lib/api";
 
@@ -108,61 +109,68 @@ export default function CostsPage() {
   }
 
   return (
-    <>
-      <section className="card space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold">Costs</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted">
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-80">
+          <h1 className="page-title">Costs</h1>
+          <p className="mt-1 max-w-3xl text-sm text-muted">
               The costs bizinsights can&apos;t read from Shopify or your ad accounts: rent, salaries, software, your Shopify plan and apps,
               shipping labels, packaging, payment fees, ads on platforms you haven&apos;t connected, and loan interest or income tax. Each is
               spread over the days it covers (a monthly cost counts in full for a whole month), in {data.currency}, and shown on the dashboard
               and in the Profit sheet&apos;s profit and loss as fixed, variable or below operating profit. They are your own figures: bizinsights
-              doesn&apos;t check them.
-            </p>
-          </div>
-          {editable && !editing && (
-            <button type="button" className="btn-primary" onClick={() => setEditing({ id: null, draft: blankCost(data.today) })} data-testid="cost-add">
-              Add a cost
-            </button>
-          )}
+            doesn&apos;t check them.
+          </p>
         </div>
-        <p className="text-sm" data-testid="costs-this-month">
-          This month so far ({fmtDay(data.thisMonth.from, { year: false })} – {fmtDay(data.thisMonth.to, { year: false })}): <b className="tabular-nums">{money(data.thisMonth.total)}</b>
-          {data.thisMonth.byCategory.length > 0 && (
-            <span className="text-muted"> · {data.thisMonth.byCategory.map((c) => `${categoryLabel(c.category, categories)} ${money(c.amount)}`).join(" · ")}</span>
-          )}
-        </p>
-        <p className="text-sm">
-          <Link className="font-medium text-accent hover:underline" href="/profit">
-            Profit &amp; Loss
-          </Link>{" "}
-          has the full list: every payment of your recurring costs, pausing and resuming them, your own categories, and the profit and loss they give.
-        </p>
-        {!editable && <Alert kind="info">Ask an owner or admin for &ldquo;Manage costs&rdquo; in Team &amp; Access to change the costs.</Alert>}
-      </section>
+        {editable && !editing && (
+          <button type="button" className="btn-primary" onClick={() => setEditing({ id: null, draft: blankCost(data.today) })} data-testid="cost-add">
+            Add a cost
+          </button>
+        )}
+      </header>
+
+      {/* This month's figure as the design's tile (Stitch screen 31, "Your costs"), its categories under it. */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+        <FigureTile
+          testId="costs-this-month"
+          title="This month so far"
+          value={money(data.thisMonth.total)}
+          sub={
+            <>
+              {fmtDay(data.thisMonth.from, { year: false })} – {fmtDay(data.thisMonth.to, { year: false })}
+              {data.thisMonth.byCategory.length > 0 && <> · {data.thisMonth.byCategory.map((c) => `${categoryLabel(c.category, categories)} ${money(c.amount)}`).join(" · ")}</>}
+            </>
+          }
+        />
+        <div className="home-card flex min-w-0 items-center p-4 text-sm sm:p-5">
+          <p>
+            <Link className="font-medium text-accent hover:underline" href="/profit">
+              Profit &amp; Loss
+            </Link>{" "}
+            has the full list: every payment of your recurring costs, pausing and resuming them, your own categories, and the profit and loss they give.
+          </p>
+        </div>
+      </div>
+      {!editable && <Alert kind="info">Ask an owner or admin for &ldquo;Manage costs&rdquo; in Team &amp; Access to change the costs.</Alert>}
 
       {editing && (
-        <section className="card">
-          <h2 className="font-semibold">{editing.id ? "Change the cost" : "Add a cost"}</h2>
-          <form onSubmit={save} className="mt-3 grid gap-3 sm:grid-cols-2" data-testid="cost-form">
+        <Card id="cost-edit" title={editing.id ? "Change the cost" : "Add a cost"}>
+          <form onSubmit={save} className="grid gap-3 sm:grid-cols-2" data-testid="cost-form">
             <CostFields draft={editing.draft} currency={data.currency} set={set} categories={categories} onCreateCategory={createCategory} />
             <div className="flex gap-2 sm:col-span-2">
               <button className="btn-primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : editing.id ? "Save" : "Add"}</button>
               <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
             </div>
           </form>
-        </section>
+        </Card>
       )}
 
-      <section className="card space-y-3">
-        <h2 className="font-semibold">Your costs</h2>
+      <Card id="cost-list-card" title="Your costs">
         {data.expenses.length === 0 ? (
           <EmptyState title="No costs yet" body="Add what your store pays for besides its products and the ad accounts you've connected." />
         ) : (
-          <ul className="divide-y divide-border text-sm" data-testid="cost-list">
+          <ul className="divide-y divide-home-line border-t border-home-line text-sm" data-testid="cost-list">
             {data.expenses.map((e) => (
-              <li key={e.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5" data-testid="cost-row">
+              <li key={e.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3" data-testid="cost-row">
                 <span className="min-w-0 flex-1">
                   <span className="font-medium">{e.name}</span>
                   <span className="block text-xs text-muted">
@@ -186,24 +194,23 @@ export default function CostsPage() {
             ))}
           </ul>
         )}
-      </section>
+      </Card>
 
-      <section className="card space-y-3" data-testid="costs-complete">
-        <h2 className="font-semibold">Net profit</h2>
-        <p className="max-w-2xl text-sm text-muted">
+      <Card id="net-profit" title="Net profit" testId="costs-complete" aside="Sales › Profit & Loss uses it too">
+        <p className="max-w-3xl text-sm text-muted">
           The dashboard shows net profit only once you say this list holds every cost your store has, and only for dates from that day: it is
           your revenue (net sales, shipping and fees, without tax) less Shopify&apos;s product costs, your connected ad accounts&apos; spend and the
           costs above. Until then it shows what&apos;s left after the costs it can see, and says that isn&apos;t net profit.
         </p>
         {data.settings.completeFrom ? (
-          <p className="text-sm">
+          <p className="mt-3 text-sm">
             Marked complete from <b>{fmtDay(data.settings.completeFrom)}</b>.
           </p>
         ) : (
-          <p className="text-sm">Not marked complete.</p>
+          <p className="mt-3 text-sm">Not marked complete.</p>
         )}
         {editable && (
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="mt-3 flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={shownComplete.on} onChange={(e) => setComplete({ ...shownComplete, on: e.target.checked })} />
               This list holds every cost from
@@ -214,13 +221,13 @@ export default function CostsPage() {
             </button>
           </div>
         )}
-      </section>
+      </Card>
 
       <ConfirmDialog open={removing !== null} title="Remove this cost?" confirmLabel="Remove" danger busy={busy === "remove"} onConfirm={remove} onCancel={() => setRemoving(null)}>
         <p className="text-sm text-muted">
           {removing ? `${removing.name} (${termsOf(removing, data.currency)}) stops counting on every date, past ones too. To stop it from a day on, give it an end date instead.` : ""}
         </p>
       </ConfirmDialog>
-    </>
+    </div>
   );
 }

@@ -5,17 +5,24 @@ import {
   daysBetweenInclusive,
   orderGoesAhead,
   orderOutcome,
+  PAYMENT_GROUP_STATUSES,
+  SHIPPING_GROUP_STATUSES,
   TRAFFIC_LABEL,
   TRAFFIC_SOURCES,
   TRAFFIC_SPLIT_LABEL,
   TRAFFIC_SPLITS,
   trafficSplitOf,
   type DateRange,
+  type OrderListItem,
+  type OrderListQuery,
+  type OrderListSort,
   type OrderOutcomes,
+  type PaymentGroup,
+  type ShippingGroup,
   type TrafficSource,
   type TrafficSplit,
 } from "@app/shared";
-import { argMax, localMoment, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
+import { argMax, escapeLike, localMoment, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -299,56 +306,122 @@ export async function discountCodes(tx: Tx, { ws, storeId }: Scope, r: DateRange
   return { items: rows.map((x) => ({ code: x.code, orders: num(x.orders), discount: num(x.discount), sales: num(x.sales) })) };
 }
 
+/** When Shopify processed an order (its creation, while that isn't read): when every order figure dates it. */
+const PLACED_AT = Prisma.sql`COALESCE(o.shopify_processed_at, o.shopify_created_at)`;
+
+interface OrderRowDb {
+  id: string;
+  shopify_id: string;
+  name: string;
+  created_at: string;
+  total: string;
+  financial_status: string | null;
+  fulfillment_status: string | null;
+  source_name: string | null;
+  cancelled: boolean;
+  units: number;
+}
+
+/** One order row's columns, from `orders o`: the recent orders' and the order list's. */
+const orderRowColumns = ({ ws, storeId }: Scope) => Prisma.sql`
+    o.id, o.shopify_id, o.name,
+    to_char(${PLACED_AT}, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
+    o.total_price::text AS total, o.financial_status, o.fulfillment_status, o.source_name,
+    (o.cancelled_at IS NOT NULL) AS cancelled,
+    COALESCE((
+      SELECT SUM(li.quantity) FROM order_line_items li
+      WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.order_id = o.id
+    ), 0)::int AS units`;
+
+/** One order of the recent orders and the order list, every field in (`redactOrderRows` in @app/shared takes out what a member isn't shown). */
+const orderRow = (x: OrderRowDb): Required<OrderListItem> => ({
+  id: x.id,
+  shopifyId: x.shopify_id,
+  name: x.name,
+  createdAt: x.created_at,
+  total: num(x.total),
+  financialStatus: x.financial_status,
+  fulfillmentStatus: x.fulfillment_status,
+  channel: channelLabel(x.source_name),
+  units: num(x.units),
+  cancelled: Boolean(x.cancelled),
+});
+
+/** What each of the order list's sorts orders by: the order's id last, so equal values keep one order from page to page. */
+const ORDER_LIST_ORDER: Record<OrderListSort, Prisma.Sql> = {
+  newest: Prisma.sql`${PLACED_AT} DESC, o.id DESC`,
+  oldest: Prisma.sql`${PLACED_AT} ASC, o.id ASC`,
+  total_desc: Prisma.sql`o.total_price DESC, ${PLACED_AT} DESC, o.id DESC`,
+  total_asc: Prisma.sql`o.total_price ASC, ${PLACED_AT} DESC, o.id DESC`,
+};
+
+/** The payment group's orders (PAYMENT_GROUP_STATUSES in @app/shared): "other" is any state none of the groups lists, or none. */
+function paymentFilter(group: PaymentGroup): Prisma.Sql {
+  if (group !== "other") return Prisma.sql`o.financial_status IN (${Prisma.join(PAYMENT_GROUP_STATUSES[group])})`;
+  return Prisma.sql`(o.financial_status IS NULL OR o.financial_status NOT IN (${Prisma.join(Object.values(PAYMENT_GROUP_STATUSES).flat())}))`;
+}
+
+/** The shipping group's orders (SHIPPING_GROUP_STATUSES in @app/shared): "not_shipped" is any state none of the groups lists, or none. */
+function shippingFilter(group: ShippingGroup): Prisma.Sql {
+  if (group !== "not_shipped") return Prisma.sql`o.fulfillment_status IN (${Prisma.join(SHIPPING_GROUP_STATUSES[group])})`;
+  return Prisma.sql`(o.fulfillment_status IS NULL OR o.fulfillment_status NOT IN (${Prisma.join(Object.values(SHIPPING_GROUP_STATUSES).flat())}))`;
+}
+
+/** The orders placed in the range that the order list's filters let through. */
+function orderListWhere({ ws, storeId }: Scope, r: DateRange, q: OrderListQuery): Prisma.Sql {
+  const parts = [Prisma.sql`o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.local_day BETWEEN ${r.from} AND ${r.to}`];
+  // Part of the order number, any case, with or without its "#".
+  const number = (q.q ?? "").trim().replace(/^#+/, "").trim();
+  if (number) parts.push(Prisma.sql`o.name ILIKE ${`%${escapeLike(number)}%`}`);
+  if (q.payment) parts.push(paymentFilter(q.payment));
+  if (q.shipping) parts.push(shippingFilter(q.shipping));
+  if (q.cancelled === "only") parts.push(Prisma.sql`o.cancelled_at IS NOT NULL`);
+  if (q.cancelled === "exclude") parts.push(Prisma.sql`o.cancelled_at IS NULL`);
+  return Prisma.join(parts, " AND ");
+}
+
 /**
  * The 10 latest orders placed in the range (on the day Shopify processed them, as every order
  * figure counts them), cancelled ones included and flagged; and how many orders were cancelled in
  * the range, on the day each was cancelled (transaction date, whenever the order was placed), so a
- * cancellation counts in the dates it happened, once.
+ * cancellation counts in the dates it happened, once. The items are the order list's first page,
+ * unfiltered, newest first (`orderList`).
  */
-export async function recentOrders(tx: Tx, { ws, storeId }: Scope, r: DateRange, timeZone: string) {
-  const rows = await tx.$queryRaw<
-    Array<{
-      id: string;
-      shopify_id: string;
-      name: string;
-      created_at: string;
-      total: string;
-      financial_status: string | null;
-      fulfillment_status: string | null;
-      source_name: string | null;
-      cancelled: boolean;
-      units: number;
-    }>
-  >`
-    SELECT o.id, o.shopify_id, o.name,
-           to_char(COALESCE(o.shopify_processed_at, o.shopify_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
-           o.total_price::text AS total, o.financial_status, o.fulfillment_status, o.source_name,
-           (o.cancelled_at IS NOT NULL) AS cancelled,
-           COALESCE((
-             SELECT SUM(li.quantity) FROM order_line_items li
-             WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.order_id = o.id
-           ), 0)::int AS units
+export async function recentOrders(tx: Tx, scope: Scope, r: DateRange, timeZone: string) {
+  const { ws, storeId } = scope;
+  const rows = await tx.$queryRaw<OrderRowDb[]>`
+    SELECT ${orderRowColumns(scope)}
     FROM orders o
     WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.local_day BETWEEN ${r.from} AND ${r.to}
-    ORDER BY COALESCE(o.shopify_processed_at, o.shopify_created_at) DESC, o.id DESC
+    ORDER BY ${ORDER_LIST_ORDER.newest}
     LIMIT 10`;
   const [cancelled] = await tx.$queryRaw<Array<{ n: number }>>`
     SELECT COUNT(*)::int AS n FROM orders o
     WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
       AND o.cancelled_at >= ${localMoment(r.from, "00:00:00", timeZone)} AND o.cancelled_at < ${localMoment(addDays(r.to, 1), "00:00:00", timeZone)}`;
-  return {
-    cancelledInRange: num(cancelled?.n),
-    items: rows.map((x) => ({
-      id: x.id,
-      shopifyId: x.shopify_id,
-      name: x.name,
-      createdAt: x.created_at,
-      total: num(x.total),
-      financialStatus: x.financial_status,
-      fulfillmentStatus: x.fulfillment_status,
-      channel: channelLabel(x.source_name),
-      units: num(x.units),
-      cancelled: Boolean(x.cancelled),
-    })),
-  };
+  return { cancelledInRange: num(cancelled?.n), items: rows.map(orderRow) };
+}
+
+/**
+ * A page of the orders placed in the range, picked as the recent orders are (on the day Shopify
+ * processed them, cancelled ones included), narrowed by `q` (part of the order number), the payment
+ * and shipping groups and cancellation (OrderListQuery in @app/shared), in the sort asked for.
+ * `total` is how many orders match, whatever the page. Every field of each order is in: the route
+ * leaves out what the member isn't shown (`redactOrderRows`).
+ */
+export async function orderList(tx: Tx, scope: Scope, r: DateRange, q: OrderListQuery) {
+  const where = orderListWhere(scope, r, q);
+  const [count] = await tx.$queryRaw<Array<{ n: number }>>`SELECT COUNT(*)::int AS n FROM orders o WHERE ${where}`;
+  const total = num(count?.n);
+  const offset = (q.page - 1) * q.pageSize;
+  const rows =
+    offset < total
+      ? await tx.$queryRaw<OrderRowDb[]>`
+    SELECT ${orderRowColumns(scope)}
+    FROM orders o
+    WHERE ${where}
+    ORDER BY ${ORDER_LIST_ORDER[q.sort]}
+    LIMIT ${q.pageSize} OFFSET ${offset}`
+      : [];
+  return { total, page: q.page, pageSize: q.pageSize, items: rows.map(orderRow) };
 }

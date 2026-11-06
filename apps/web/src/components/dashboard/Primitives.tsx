@@ -22,7 +22,7 @@ export function Panel({
     <section id={id} className={`card min-w-0 animate-rise scroll-mt-28 ${className}`} aria-labelledby={`${id}-h`} data-testid={`module-${id}`}>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
         <div className="min-w-0">
-          <h2 id={`${id}-h`} className="font-semibold">{title}</h2>
+          <h2 id={`${id}-h`} className="home-h2">{title}</h2>
           {help && <p className="mt-0.5 text-xs text-muted">{help}</p>}
         </div>
         {aside && <div className="text-sm">{aside}</div>}

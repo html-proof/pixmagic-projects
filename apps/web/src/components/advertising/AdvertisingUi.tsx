@@ -93,8 +93,8 @@ export function AdvertisingHeader({
   const { store, access, allowed } = useApp();
   const compared = comparedWith(shown);
   return (
-    <div className="card animate-rise">
-      <h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+    <div className="animate-rise">
+      <h1 className="page-title flex flex-wrap items-center gap-2">
         {icon}
         {title}
         {badge}

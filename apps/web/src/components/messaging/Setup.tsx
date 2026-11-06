@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Check, CircleAlert, Cloud, Info, Lock, MessageSquareText } from "lucide-react";
+import { Check, CircleAlert, Cloud, Info, Lock } from "lucide-react";
 import { callingCode, normalizePhone, PHONE_COUNTRIES } from "@app/shared/messaging";
 import {
   checkSenderName,
@@ -27,8 +27,9 @@ import {
   type SmsTrigger,
   type SmsVariable,
 } from "@app/shared/sms";
-import { ConfirmDialog, Skeleton, useToast } from "@/components/AppUi";
+import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { SoftBox, StepNumber, Switch } from "@/components/automations/MarketingKit";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
@@ -40,6 +41,9 @@ import type { SmsMessage, SmsSetupState } from "./types";
 // Set up SMS: five steps for a merchant who knows nothing about AWS (connect, sender name,
 // message, test, automatic texts), next to a phone showing what customers will get. Every button
 // is the API's (apps/api/src/routes/smsSetup.ts); nothing here claims more than the API says.
+// In the Stitch design's look (screens 18 and 19): the page's title on the page, the steps as
+// numbered discs on a white card, each step on its own card with its number, soft rows for what
+// the provider says, and the design's switches for the automatic texts.
 // ---------------------------------------------------------------------------
 
 const STEP_LABEL: Record<SetupStep, string> = {
@@ -117,27 +121,34 @@ const requestId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto
 /** The countries the setup offers, by name: those AWS's sender-name rules are known for, and the usual ones. */
 const SETUP_COUNTRIES = [...new Set([...COUNTRY_CHOICES, ...Object.keys(SENDER_ID_SUPPORT)])].sort((a, b) => countryName(a).localeCompare(countryName(b)));
 
+/** A step's heading, numbered as the design numbers a form's parts ("1 When", "2 Who"). */
 function StepHeader({ n, title, question, children }: { n: number; title: string; question?: string; children?: ReactNode }) {
   return (
     <header className="space-y-1">
-      <p className="text-xs font-semibold uppercase tracking-wide text-accent">
+      <p className="text-[11px] font-semibold tracking-wider text-accent uppercase">
         Step {n} of {SETUP_STEPS.length}
       </p>
-      <h2 className="text-xl font-semibold">{title}</h2>
-      {question && <p className="text-base">{question}</p>}
-      {children && <div className="text-sm text-muted">{children}</div>}
+      <h2 className="home-h2 flex items-center gap-3">
+        <StepNumber n={n} />
+        <span className="min-w-0">{title}</span>
+      </h2>
+      {question && <p className="text-base sm:pl-9">{question}</p>}
+      {children && <div className="text-sm text-muted sm:pl-9">{children}</div>}
     </header>
   );
 }
 
 function Hint({ children }: { children: ReactNode }) {
   return (
-    <p className="flex gap-2 rounded-lg border border-border bg-bg/60 p-3 text-sm text-muted">
+    <p className="flex gap-2 rounded bg-home-soft px-4 py-3 text-sm text-muted">
       <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
       <span>{children}</span>
     </p>
   );
 }
+
+/** A choice on a soft row: the chosen one outlined in green. */
+const optionClass = (on: boolean) => `flex cursor-pointer items-start gap-3 rounded border p-3 text-sm ${on ? "border-accent bg-accent/5" : "border-home-line bg-surface"}`;
 
 /** The progress across the top: each step done, current or to do; any step can be opened. */
 function Progress({ step, done, onGo }: { step: SetupStep; done: Record<SetupStep, boolean>; onGo: (s: SetupStep) => void }) {
@@ -149,7 +160,7 @@ function Progress({ step, done, onGo }: { step: SetupStep; done: Record<SetupSte
           {count} of {SETUP_STEPS.length} done
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-bg" aria-hidden>
+      <div className="h-1.5 rounded-full bg-home-soft" aria-hidden>
         <div className="h-1.5 rounded-full bg-accent transition-all" style={{ width: `${(count / SETUP_STEPS.length) * 100}%` }} />
       </div>
       <ol className="grid grid-cols-5 gap-1">
@@ -161,11 +172,11 @@ function Progress({ step, done, onGo }: { step: SetupStep; done: Record<SetupSte
                 type="button"
                 onClick={() => onGo(s)}
                 aria-current={current ? "step" : undefined}
-                className={`flex w-full flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] transition sm:text-xs ${current ? "bg-accent/10 font-semibold text-text" : "text-muted hover:bg-bg hover:text-text"}`}
+                className={`flex w-full flex-col items-center gap-1 rounded px-1 py-2 text-center text-[11px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent sm:text-xs ${current ? "bg-accent/10 font-semibold text-accent" : "text-muted hover:bg-home-soft hover:text-text"}`}
               >
                 <span
                   aria-hidden
-                  className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${done[s] ? "bg-good text-white" : current ? "bg-accent text-accent-ink" : "border border-border bg-surface"}`}
+                  className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold tabular-nums ${done[s] ? "bg-accent text-accent-ink" : current ? "bg-surface text-accent ring-2 ring-accent" : "bg-home-soft text-text"}`}
                 >
                   {done[s] ? <Check className="h-4 w-4" strokeWidth={3} /> : i + 1}
                 </span>
@@ -222,7 +233,7 @@ function MessageEditor({ id, value, onChange, trigger, disabled }: { id: string;
             <button
               key={v}
               type="button"
-              className="rounded-full border border-border px-2.5 py-1 text-xs transition hover:border-accent hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded bg-home-tag px-2.5 py-1 text-xs font-medium transition-colors outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
               disabled={disabled || !ok}
               title={ok ? SMS_VARIABLE_INFO[v].description : `Not in this message: ${TRIGGER_INFO[trigger].label} texts have no ${SMS_VARIABLE_INFO[v].label.toLowerCase()}.`}
               onClick={() => insert(v)}
@@ -231,7 +242,7 @@ function MessageEditor({ id, value, onChange, trigger, disabled }: { id: string;
             </button>
           );
         })}
-        <button type="button" className="rounded-full border border-dashed border-border px-2.5 py-1 text-xs opacity-50" disabled title="Shopify doesn't record appointments, so there is no appointment date to fill in.">
+        <button type="button" className="rounded border border-dashed border-home-line px-2.5 py-1 text-xs opacity-50" disabled title="Shopify doesn't record appointments, so there is no appointment date to fill in.">
           Appointment date
         </button>
       </div>
@@ -372,27 +383,25 @@ export function SmsSetup() {
 
   return (
     <div className="space-y-4">
-      <section className="card animate-rise space-y-4" aria-labelledby="setup-h">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 id="setup-h" className="flex items-center gap-2 text-lg font-semibold">
-              <MessageSquareText aria-hidden className="h-5 w-5 text-accent" /> Set up SMS
-            </h1>
-            <p className="mt-1 text-sm text-muted">Text your customers order updates in five short steps. No AWS account, keys or technical setup needed.</p>
-          </div>
-          {manage && (
-            <div className="flex flex-wrap gap-2">
+      <PageHeader
+        title="Set up SMS"
+        sub="Text your customers order updates in five short steps. No AWS account, keys or technical setup needed."
+        actions={
+          manage ? (
+            <>
               <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => void run("draft", "save the draft", () => saveDraft(), "Draft saved.")}>
                 {busy === "draft" ? "Saving…" : "Save draft"}
               </button>
               <button type="button" className="btn-secondary" disabled={!!busy} onClick={continueLater}>
                 Continue later
               </button>
-            </div>
-          )}
-        </div>
+            </>
+          ) : undefined
+        }
+      />
+      <div className="home-card animate-rise p-4 sm:p-5">
         <Progress step={current} done={data.done} onGo={go} />
-      </section>
+      </div>
 
       <ModeBanner mode={data.mode} />
       {readOnly && (
@@ -402,7 +411,7 @@ export function SmsSetup() {
       )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="card animate-rise min-w-0 space-y-5" aria-live="off">
+        <section className="home-card animate-rise min-w-0 space-y-5 p-5 sm:p-6" aria-live="off">
           {problem && <Alert onDismiss={() => setProblem(null)}>{problem}</Alert>}
 
           {current === "connect" && (
@@ -410,8 +419,8 @@ export function SmsSetup() {
               <StepHeader n={1} title="Connect your SMS provider" question="bizinsights sends your texts through Amazon Web Services' SMS service.">
                 You don&apos;t need an AWS account, API keys or passwords: bizinsights connects with its own secure access, which never reaches your browser.
               </StepHeader>
-              <div className="flex flex-wrap items-center gap-4 rounded-xl border border-border p-4">
-                <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10 text-accent">
+              <div className="flex flex-wrap items-center gap-4 rounded bg-home-soft p-4">
+                <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded bg-accent/10 text-accent">
                   <Cloud className="h-6 w-6" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -536,7 +545,7 @@ export function SmsSetup() {
               ) : null}
 
               {country && (
-                <div className="rounded-xl border border-border p-4 text-sm">
+                <SoftBox className="p-4">
                   <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
                     <dt className="text-muted">Customers see</dt>
                     <dd className="font-medium">{nameCheck.customerSees}</dd>
@@ -551,7 +560,7 @@ export function SmsSetup() {
                     <dt className="text-muted">What happens next</dt>
                     <dd>{nameCheck.next}</dd>
                   </dl>
-                </div>
+                </SoftBox>
               )}
               <Hint>
                 A sender name isn&apos;t always possible. Some countries only show names registered with a regulator, others show a phone number or a shared short code instead, and the length and
@@ -559,9 +568,9 @@ export function SmsSetup() {
               </Hint>
 
               {country && (
-                <div className="space-y-3 rounded-xl border border-border p-4" aria-live="polite">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-medium">{nameCheck.support === "none" ? "Your sending number" : "Your sender name"}</p>
+                <div className="space-y-3 rounded border border-home-line p-4" aria-live="polite">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold">{nameCheck.support === "none" ? "Your sending number" : "Your sender name"}</p>
                     <Badge tone={nameDirty ? "neutral" : statusInfo.tone}>{nameDirty ? "Not saved" : statusInfo.label}</Badge>
                   </div>
                   <p className="text-sm text-muted">{nameDirty ? "Request it to save and send it for approval." : statusInfo.help}</p>
@@ -660,8 +669,8 @@ export function SmsSetup() {
                 Choose the moments, check each message, and turn them on. You can change or stop them any time.
               </StepHeader>
 
-              <div className="space-y-3 rounded-xl border border-border p-4">
-                <p className="font-medium">Before anything is sent</p>
+              <div className="space-y-3 rounded bg-home-soft p-4">
+                <p className="font-semibold">Before anything is sent</p>
                 <div className="space-y-4">
                   <div className="max-w-xs">
                     <label className="label" htmlFor="setup-budget">
@@ -674,7 +683,7 @@ export function SmsSetup() {
                     <legend className="label">How did customers agree to order updates by text?</legend>
                     <div className="space-y-2">
                       {(Object.keys(BASIS) as Array<keyof typeof BASIS>).map((b) => (
-                        <label key={b} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${basis === b ? "border-accent bg-accent/5" : "border-border"}`}>
+                        <label key={b} className={optionClass(basis === b)}>
                           <input type="radio" name="setup-basis" className="mt-0.5 accent-[var(--accent)]" checked={basis === b} onChange={() => setBasis(b)} />
                           <span>
                             <span className="font-medium">{BASIS[b].label}</span>
@@ -703,7 +712,7 @@ export function SmsSetup() {
                   const body = edits[a.key] ?? a.body;
                   const changed = body !== a.body;
                   return (
-                    <li key={a.key} className={`rounded-xl border p-4 ${a.unavailable ? "border-dashed border-border opacity-70" : a.on ? "border-accent/50 bg-accent/5" : "border-border"}`}>
+                    <li key={a.key} className={`rounded border p-4 ${a.unavailable ? "border-dashed border-home-line opacity-70" : a.on ? "border-accent/50 bg-accent/5" : "border-home-line"}`}>
                       <div className="flex flex-wrap items-start gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="flex flex-wrap items-center gap-2 font-medium">
@@ -714,15 +723,12 @@ export function SmsSetup() {
                         </div>
                         {!a.unavailable && a.trigger && (
                           <div className="flex items-center gap-2">
-                            <button type="button" className="btn-secondary h-9 px-3 text-sm" aria-expanded={open} onClick={() => setEditing(open ? null : a.key)}>
+                            <button type="button" className="home-btn" aria-expanded={open} onClick={() => setEditing(open ? null : a.key)}>
                               {open ? "Close" : "Edit message"}
                             </button>
                             {manage && (
                               <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
-                                <input
-                                  type="checkbox"
-                                  role="switch"
-                                  className="h-5 w-5 accent-[var(--accent)]"
+                                <Switch
                                   checked={a.on}
                                   disabled={!!busy}
                                   onChange={() => {
@@ -774,7 +780,7 @@ export function SmsSetup() {
                     </li>
                   );
                 })}
-                <li className="rounded-xl border border-dashed border-border p-4 text-sm">
+                <li className="rounded border border-dashed border-home-line p-4 text-sm">
                   <p className="font-medium">Custom notifications</p>
                   <p className="text-muted">
                     Texts for other moments (a cancelled order, a refund, an abandoned checkout) are in{" "}
@@ -794,7 +800,7 @@ export function SmsSetup() {
             </>
           )}
 
-          <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+          <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-home-line pt-4">
             <button type="button" className="btn-secondary" disabled={index === 0 || !!busy} onClick={() => go(SETUP_STEPS[index - 1]!)}>
               Back
             </button>
@@ -874,7 +880,7 @@ function AutomationConfirm({ data, trigger, body, business }: { data: SmsSetupSt
       <p>
         From now on, {a.help.replace(/^Sent when/, "when").replace(/\.$/, "")}, the customer gets this text:
       </p>
-      <div className="whitespace-pre-wrap rounded-xl border border-border bg-bg px-3 py-2 text-text">{text}</div>
+      <div className="rounded bg-home-soft px-3 py-2 whitespace-pre-wrap text-text">{text}</div>
       <p>
         It goes to real customers who may receive order updates and haven&apos;t opted out
         {quiet[0] !== quiet[1] ? `; texts that would arrive between ${fmtHour(quiet[0]!)} and ${fmtHour(quiet[1]!)} wait until morning` : ""}. Turning it on approves this message in your name.
@@ -896,17 +902,17 @@ export function MasterSwitch({ data, manage, busy, onToggle, onText }: { data: S
   ].filter((x): x is string => !!x);
   const anyOn = data.automations.some((a) => a.on);
   return (
-    <div className={`rounded-xl border-2 p-4 ${on ? "border-good/60 bg-good/5" : "border-border"}`}>
+    <div className={`rounded border p-4 ${on ? "border-accent/50 bg-accent/5" : "border-home-line bg-home-soft/60"}`}>
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 text-base font-semibold">
+          <p className="flex flex-wrap items-center gap-2 text-base font-semibold">
             Enable Automatic SMS <Badge tone={on ? "good" : "neutral"}>{on ? "On" : "Off"}</Badge>
           </p>
           <p className="text-sm text-muted">{on ? (onText ?? (anyOn ? "Your automatic texts that are on go out as orders happen." : "On, but none of the texts above is on yet.")) : "Nothing is sent to customers while this is off."}</p>
         </div>
         {manage && (
           <label className="inline-flex cursor-pointer items-center gap-2">
-            <input type="checkbox" role="switch" className="h-6 w-6 accent-[var(--accent)]" checked={on} disabled={!!busy || (!on && blockers.length > 0)} onChange={() => onToggle(!on)} />
+            <Switch checked={on} disabled={!!busy || (!on && blockers.length > 0)} onChange={() => onToggle(!on)} />
             <span className="sr-only">Enable Automatic SMS</span>
           </label>
         )}
@@ -1007,14 +1013,14 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
       {problem && <Alert onDismiss={() => setProblem(null)}>{problem}</Alert>}
 
       {manage && (
-        <div className="space-y-3 rounded-xl border border-border p-4">
-          <p className="font-medium">1. Your mobile number</p>
+        <div className="space-y-3 rounded border border-home-line p-4">
+          <p className="font-semibold">1. Your mobile number</p>
           <p className="text-sm text-muted">AWS texts it a code first, so tests only ever go to a phone you have in your hand.</p>
           {verified.length > 0 && (
             <fieldset className="space-y-2">
               <legend className="sr-only">Send the test to</legend>
               {verified.map((t) => (
-                <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm ${numberId === t.id ? "border-accent bg-accent/5" : "border-border"}`}>
+                <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded border p-3 text-sm ${numberId === t.id ? "border-accent bg-accent/5" : "border-home-line"}`}>
                   <input type="radio" name="setup-test-number" className="accent-[var(--accent)]" checked={numberId === t.id} onChange={() => setNumberId(t.id)} />
                   <span className="font-mono">{t.number}</span>
                   <Badge tone="good">Verified</Badge>
@@ -1023,7 +1029,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
             </fieldset>
           )}
           {pending.map((t) => (
-            <div key={t.id} className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-3">
+            <div key={t.id} className="flex flex-wrap items-end gap-2 rounded bg-home-soft p-3">
               <div className="min-w-0 flex-1 text-sm">
                 <p className="font-mono">{t.number}</p>
                 <p className="text-xs text-muted">Enter the code AWS texted to this number.</p>
@@ -1081,11 +1087,11 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
                 });
               }}
             >
-              <div>
+              <div className="w-full min-w-0 sm:w-44">
                 <label className="label" htmlFor="setup-test-country">
                   Country code
                 </label>
-                <select id="setup-test-country" className="input h-11 w-44" value={country} onChange={(e) => setCountry(e.target.value)}>
+                <select id="setup-test-country" className="input h-11" value={country} onChange={(e) => setCountry(e.target.value)}>
                   {[...PHONE_COUNTRIES].sort((a, b) => countryName(a).localeCompare(countryName(b))).map((c) => (
                     <option key={c} value={c}>
                       {countryName(c)} (+{callingCode(c)})
@@ -1118,15 +1124,15 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
         </div>
       )}
 
-      <div className="space-y-3 rounded-xl border border-border p-4">
-        <p className="font-medium">2. Send the test</p>
+      <div className="space-y-3 rounded border border-home-line p-4">
+        <p className="font-semibold">2. Send the test</p>
         {manage && (
           <button type="button" className="btn-primary h-12 px-6 text-base" disabled={!!busy || !numberId || !senderReady || !data.templateId || wait > 0 || data.mode === "off"} onClick={() => void send()}>
             {busy === "send" ? "Sending…" : wait > 0 ? `Send again in ${wait} s` : "Send Test SMS"}
           </button>
         )}
         {message && outcome && (
-          <div className="rounded-lg border border-border bg-bg/50 p-3 text-sm" role="status" aria-live="polite">
+          <div className="rounded bg-home-soft p-3 text-sm" role="status" aria-live="polite">
             <p className="flex flex-wrap items-center gap-2">
               <SmsStatusBadge status={message.status} why={message.reasonLabel} label={message.statusLabel} />
               {message.to && <span className="text-muted">to {message.to}</span>}

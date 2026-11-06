@@ -5,6 +5,10 @@ import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { EmployeeForm, InvitationLinkPanel, inviteEmployee, type EmployeePayload, type SharedLink } from "@/components/staff/EmployeeForm";
+import { Initials } from "@/components/staff/ui";
+
+// Adding an employee, in the look of the Stitch design's screen 26 ("People"): the form on one
+// white card, then their new employee ID and the two ways to invite them.
 import { api, useApi } from "@/lib/api";
 import { fmtDateTime, useStaff, type EmployeeRow, type StaffConfig } from "@/lib/staff";
 
@@ -18,7 +22,7 @@ export default function NewEmployeePage() {
   if (!can("staff:manage")) {
     return (
       <div className="card max-w-xl">
-        <h1 className="text-lg font-semibold">Add employee</h1>
+        <h1 className="card-title">Add employee</h1>
         <p className="mt-1 text-sm text-muted">Only owners, admins and HR managers can add employees. Ask one of them to add this person for you.</p>
       </div>
     );
@@ -49,7 +53,7 @@ export default function NewEmployeePage() {
       ) : !config.data ? (
         <Skeleton lines={8} />
       ) : (
-        <section className="card animate-rise">
+        <section className="home-card animate-rise p-5 sm:p-6" aria-label="New employee">
           <EmployeeForm key={`${base}-${formKey}`} config={config.data} submitLabel="Save employee" onSubmit={save} />
         </section>
       )}
@@ -76,16 +80,17 @@ function Added({ employee, timeZone, onAddAnother }: { employee: EmployeeRow; ti
   return (
     <>
       <PageHeader title="Employee added" sub={`${employee.fullName} is now on your team.`} />
-      <section className="card animate-rise space-y-5" aria-labelledby="added-heading">
+      <section className="home-card animate-rise space-y-5 p-5 sm:p-6" aria-labelledby="added-heading">
         <div className="flex flex-wrap items-center gap-4">
-          <div className="rounded-xl border border-border bg-bg px-4 py-3">
-            <p className="text-xs text-muted">Employee ID</p>
+          <div className="rounded bg-home-soft px-4 py-3">
+            <p className="text-[11px] font-semibold tracking-wider text-muted uppercase">Employee ID</p>
             <p className="text-2xl font-semibold tabular-nums" data-testid="new-employee-number">
               {employee.employeeNumber}
             </p>
           </div>
+          <Initials name={employee.fullName} />
           <div className="min-w-0">
-            <h2 id="added-heading" className="font-semibold">
+            <h2 id="added-heading" className="home-h2">
               {employee.fullName}
             </h2>
             <p className="text-sm text-muted">
@@ -119,7 +124,7 @@ function Added({ employee, timeZone, onAddAnother }: { employee: EmployeeRow; ti
           {link && <InvitationLinkPanel key={link.url} link={link} name={firstName} timeZone={timeZone} onDismiss={() => setLink(null)} />}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+        <div className="flex flex-wrap items-center gap-3 border-t border-home-line pt-4">
           <Link href={`/staff/employee?id=${encodeURIComponent(employee.id)}`} className="btn-secondary">
             View employee
           </Link>

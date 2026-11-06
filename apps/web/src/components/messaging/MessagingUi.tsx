@@ -287,9 +287,9 @@ export function TemplatePicker({
   );
 }
 
-/** A text as it would look on a phone. */
+/** A text as it would look on a phone (the design's soft bubble, as screen 15's preview draws it). */
 export function TextBubble({ children }: { children: ReactNode }) {
-  return <div className="max-w-md whitespace-pre-wrap break-words rounded-2xl rounded-bl-sm border border-border bg-bg px-4 py-3 text-sm shadow-sm">{children}</div>;
+  return <div className="max-w-md rounded-2xl rounded-bl-sm bg-home-tag px-4 py-3 text-sm break-words whitespace-pre-wrap">{children}</div>;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ export function CountryPicker({ label, value, onChange, disabled = false, help }
         {all.map((c) => {
           const on = value.includes(c);
           return (
-            <label key={c} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-accent bg-accent/10" : "border-border hover:bg-bg"}`}>
+            <label key={c} className={`inline-flex cursor-pointer items-center gap-1.5 rounded px-2.5 py-1 text-xs transition ${on ? "bg-accent/10 text-accent" : "bg-home-soft hover:bg-home-soft-hover"}`}>
               <input type="checkbox" className="h-3.5 w-3.5 accent-[var(--accent)]" checked={on} onChange={() => toggle(c)} />
               {countryName(c)} <span className="text-muted">{c}</span>
             </label>

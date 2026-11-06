@@ -6,17 +6,19 @@ import { Suspense, useCallback, useMemo, useState } from "react";
 import { EDITABLE_STATUSES, PAY_CYCLE_LABEL, PAYABLE_STATUSES } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { RecordPaymentModal } from "@/components/staff/RecordPayment";
-import { PayrollBadge } from "@/components/staff/ui";
+import { InfoStrip, PayrollBadge } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
 import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { exportFile, fmtDateTime, fmtDay, fmtMoney, fmtSpan, useStaff } from "@/lib/staff";
 import { type Adjustment, type Flow, FLOW, type Issue, isZero, type Item, type Period } from "@/components/staff/payroll/payRun";
 import { AdjustmentModal } from "@/components/staff/payroll/AdjustmentModal";
-import { AdjustmentsPanel, IssuesPanel, PayItems, PayRunHistory, TotalsPanel } from "@/components/staff/payroll/PayRunSections";
+import { AdjustmentsPanel, IssuesPanel, PayItems, PayRunHistory, RunSummary, TotalsPanel } from "@/components/staff/payroll/PayRunSections";
 
-// One pay run: its figures per employee, what stands in the way of approving it, the approval
-// workflow, earnings and deductions, payments, payslips and exports.
+// One pay run, as the Stitch design's screen 28 ("Pay") draws it: what bizinsights does and
+// doesn't do with pay, the run's figure (estimated, before tax) beside what stands in the way of
+// approving it, a row per person with Record payment, then the totals, earnings and deductions,
+// and the history. The approval workflow, payments, payslips and exports are this page's actions.
 
 export default function PayPeriodPage() {
   return (
@@ -101,6 +103,8 @@ function PayPeriod() {
   const pay = can("payments:manage");
   const base_ = `${base}/payroll/periods/${encodeURIComponent(p.id)}`;
   const label = fmtSpan(p.startDate, p.endDate);
+  // "Before you can approve" sits beside the figure while the payroll can still be approved.
+  const showIssues = p.issues.length > 0 || editable || p.status === "pending_approval";
 
   const recalc = () =>
     run("calc", "recalculate the payroll", async () => {
@@ -196,7 +200,7 @@ function PayPeriod() {
 
   return (
     <>
-      <Link href="/staff/payroll" className="inline-block text-sm text-muted hover:text-text">
+      <Link href="/staff/payroll" className="inline-block text-sm text-muted hover:text-text hover:underline">
         ← All pay runs
       </Link>
       <PageHeader
@@ -234,9 +238,12 @@ function PayPeriod() {
         </Alert>
       )}
 
-      <IssuesPanel period={p} />
+      <InfoStrip>bizinsights works out pay from approved hours. It doesn&apos;t pay anyone or work out tax: pay through your bank or provider, then record the payment here.</InfoStrip>
 
-      <TotalsPanel period={p} />
+      <div className={`grid gap-4 ${showIssues ? "lg:grid-cols-2" : ""}`}>
+        <RunSummary period={p} label={label} status={<PayrollBadge status={p.status} />} />
+        {showIssues && <IssuesPanel period={p} open />}
+      </div>
 
       <PayItems
         period={p}
@@ -249,6 +256,8 @@ function PayPeriod() {
         onPayslip={payslip}
         onPay={setPaying}
       />
+
+      <TotalsPanel period={p} />
 
       <AdjustmentsPanel period={p} editable={editable} manage={manage} names={names} onAdd={() => setAdding(true)} onRemove={setRemoving} />
 

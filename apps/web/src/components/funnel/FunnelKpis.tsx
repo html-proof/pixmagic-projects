@@ -35,7 +35,7 @@ function Kpi({
   testId: string;
 }) {
   return (
-    <div className="lift animate-rise relative flex min-w-0 flex-col rounded-2xl border border-border bg-surface shadow-[var(--shadow)]" data-testid={testId}>
+    <div className="lift animate-rise relative flex min-w-0 flex-col rounded-lg border border-transparent bg-surface shadow-[var(--shadow)]" data-testid={testId}>
       {/* The tip sits beside the card's button, not inside it: a button can't hold another. */}
       <span className="absolute right-2 top-2 z-10">
         <InfoTip label={`How ${title.toLowerCase()} is counted`}>{tip}</InfoTip>

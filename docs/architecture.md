@@ -186,8 +186,82 @@ failed action (save, delete): `actionError(e, "what you tried")` in a toast or a
 while rendering is caught by `app/(app)/error.tsx` inside the shell, or `app/error.tsx` for public
 pages. Unknown paths get `app/not-found.tsx`.
 
-**Fonts and prefetch.** Only the landing page, the split-card auth pages (`AuthSplitShell`) and the
-legal pages (`LegalPage`: /support, /privacy, /terms, /data-deletion) are in Geist. Prefetching one of
+**The signed-in look (the owner's Stitch design, 2026-11-06).** Every signed-in page follows the
+approved Stitch prototypes (docs/kpis.md "The simple Home"), through the shared pieces rather than
+page by page:
+- `globals.css` tokens: a cool off-white page, navy ink, slate secondary text, cool hairlines and a
+  faint shadow.
+- `card`: white, 8px radius, no outline. A card that sets a border colour (a highlighted one) or is
+  dashed keeps that border.
+- `btn` has a 4px radius; `btn-secondary` is a soft tinted button with no outline.
+- `PageHeader` is a page's 32px title (`page-title`) on the page itself, not in a panel; a title
+  inside the panel that heads its page is `card-title`.
+- Section menus are a pale green row with green words.
+- `AppShell` (`app-look`) sets the type in Inter, bundled from `@fontsource-variable/inter`: plain
+  `@font-face`, so nothing is preloaded.
+- `components/PageKit.tsx` holds the pieces a rebuilt page's layout is made of: `Card` (a white
+  card with its heading), `FigureTile` and `ChangeTag` (a page's few numbers), `InShortLine` (the
+  opening sentence), `ShareRow` (a labelled share bar) and `PageTabs` (a row of tabs).
+
+A new page uses these pieces rather than its own borders and radii. The menu itself is unchanged:
+the owner kept it.
+
+**The Sales pages (Stitch screens 05–12).** The dashboard's topics (`?view=sales`, `products`,
+`customers`, `orders`, `shipping`, `channels`, `discounts`, `timing`, `overview`) are pages of their
+own, not panels over the Home: `components/dashboard/SalesFrame.tsx` draws the frame (title, the
+store's status as a pill, the date chip, Download and Print, the breadcrumb back to Home) and the
+row of tabs, Overview · Products · Customers · Orders & shipping · Visitors · Ads · Profit & Loss ·
+Profit sheet. The last four tabs are the pages they always were (/funnel, /advertising, /profit,
+/sheet), which put `SalesTabs` above their own header; a tab is shown to whoever the menu shows its
+page to, and moving between tabs keeps the dates. The tabs' layouts are in
+`components/dashboard/SalesViews.tsx` (each from the same overview answer the Home reads); the
+panels with more detail, and the topics that share the Overview tab, stay in `Details.tsx`. Every
+menu entry still opens its own page.
+
+**The Settings pages (Stitch screens 30–35).** The settings menu and its pages are unchanged; what is
+on each follows the design: Integrations is screen 30's Connections, a card per connection two to a
+row (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, Email, Zapier), each with its own state
+and the same on the one scale of six (`data-status`, [Integration status](#integration-status)).
+SMS and Email are told by `GET …/integrations` alone (`components/integrations/ChannelCards.tsx`);
+the others keep their own answers and wording (`IntegrationRow.tsx`, `AdRow.tsx`, `ZapierCard.tsx`).
+Workspace and Costs are screen 31's Business details (the time zone and currency locked, as Shopify
+gives them), Team & Access is screen 32, Notifications 33, Profile and Security 34, Privacy requests
+and Audit log 35; Shopify, Advertising, Billing and API keys take the same look. Each page's title is
+on the page (`page-title`), its panels are white `home-card`s with `home-h2` headings, and its
+tables have the soft header row of the Sales pages.
+
+**The Staff pages (Stitch screens 25–29).** The Staff section keeps its menu and its pages; what is
+on them follows the Team screens. /staff is screen 25 ("Today"): Needs you, this week's hours and
+wages, who's in (a row of counts), who is clocked in now, and today's shifts on one timeline
+(`components/staff/overview/Today.tsx`, from the live board and that day's schedule), then the
+shortcuts and this month's figures. All employees is screen 26 (a row per person with initials,
+status and account, beside "How staff join"); Shift schedules is screen 27's week planner (a column
+a day, totals per person and per day); Payroll and a pay run are screen 28 (what bizinsights does
+and doesn't do with pay, the run as one figure "estimated, before tax" beside "Before you can
+approve", Record payment per person). The other pages take the same look from the shared pieces in
+`components/staff/ui.tsx`: statuses as tinted pills (`Pill`), figures as PageKit's `FigureTile`
+(`KpiCard`), tables with a soft header row, tabs with a green underline. The employee portal is
+screen 29: the organization and who is signed in at the top, one big Clock in, and the sections as
+a bar of icons along the bottom of a phone; it sets the same Inter type (`app-look`) as the app.
+
+**The Marketing pages (Stitch screens 14–20).** Automations, Customer Messaging, WhatsApp and the
+email pages keep their routes and section menus; what is on each page follows the design, through
+`components/automations/MarketingKit.tsx` on top of PageKit: tables with a tinted head row
+(`TableCard`, `TableHead`, `Th`, `TD`, `ROW`), a channel's chip (`Chip`), the line of a page's few
+facts (`FactsLine`), numbered form parts (`StepCard`, `StepTitle`: the number stays in the
+heading's words for screen readers and the specs), a channel's card with one status word and its
+facts (`ChannelPanel`, `FactList`), a filter bar (`FilterBar`) and the design's switch (`Switch`, a
+real checkbox with role "switch"). /automations is screen 14 (the automations as rows, each
+channel's card under them), the setup and the builders are 19 (numbered steps ending in "Check and
+turn on"), the message histories and Delivery Analytics are 17, campaigns (SMS and WhatsApp) are 15,
+consent, segments and WhatsApp customers are 16, and the SMS setup and sender, WhatsApp setup and
+settings and the email accounts and domains are 18. Every figure is the page's own API answer; what
+the design shows and no API returns (a total reach per channel, a "Pause all" across channels, SMS
+spend beside the sender) is left out.
+
+**Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
+auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
+/data-deletion) are in Geist. Prefetching one of
 those routes makes the current page preload Geist and its stylesheet, and Chrome then warns that they
 were "preloaded but not used", and warns again a few seconds after every later request while they
 stay unused. So a link from any other page to one of them is `<Link prefetch={false}>`. Geist Mono is
@@ -211,8 +285,8 @@ health grading lives in `@app/shared/health` and its drop-off and landing-page m
 When a page needs to know what the API will allow (what a template draft breaks), it asks the same
 function the API uses (`waTemplateIssues` in `@app/shared/whatsapp`) rather than writing the rule
 out again.
-Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code that only a click
-needs out of the page's first load.
+A topic's page loads its panels on demand (`components/dashboard/Details.tsx`, a `dynamic` import in
+the dashboard page): keep code that only a click needs out of the page's first load.
 
 **Landing page motion.** On integrated graphics the page drops frames on GPU work, not JavaScript,
 so every effect has to be cheap for the GPU process. Many laptops also refresh at 120–144 Hz, which

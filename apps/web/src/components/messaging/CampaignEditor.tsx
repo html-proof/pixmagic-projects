@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_ATTRIBUTION_DAYS, smsCampaignSchema, templateVariables } from "@app/shared/sms";
 import { useToast } from "@/components/AppUi";
+import { Chip, SoftBox, StepCard } from "@/components/automations/MarketingKit";
 import { Alert } from "@/components/ui";
 import { api, fmtNum } from "@/lib/api";
 import { countryName, fmtUsd, smsError, TemplatePicker, useSms } from "./MessagingUi";
@@ -93,7 +94,11 @@ function Reach({ base, d }: { base: string; d: Draft }) {
   );
 }
 
-/** Write a campaign (a draft): its name, marketing template, audience and discount code. */
+/**
+ * Write a campaign (a draft): its name, marketing template, audience and discount code, in the
+ * numbered steps the Stitch design's screen 15 draws (name and message, who, reach and cost,
+ * approval). SMS only: WhatsApp campaigns are written on the WhatsApp pages.
+ */
 export function CampaignEditor({ campaign, templates, segments, onDone }: { campaign: SmsCampaign | null; templates: SmsTemplate[]; segments: SmsSegment[]; onDone: (saved: boolean) => void }) {
   const { base, store } = useSms();
   const toast = useToast();
@@ -101,6 +106,11 @@ export function CampaignEditor({ campaign, templates, segments, onDone }: { camp
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
+  // It opens under the list (the design's order), so it is brought into view.
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, []);
   if (!base) return null;
   const options = templates.filter((t) => t.category === "marketing" && t.status !== "archived");
   const chosen = options.find((t) => t.id === d.templateId);
@@ -122,17 +132,21 @@ export function CampaignEditor({ campaign, templates, segments, onDone }: { camp
     }
   };
   return (
-    <section className="card animate-rise border-accent/40" aria-labelledby="cmp-ed-h">
-      <h2 id="cmp-ed-h" className="font-semibold">
-        {campaign ? `Edit “${campaign.name}”` : "New campaign"}
-      </h2>
-      {error && (
-        <div className="mt-3">
-          <Alert>{error}</Alert>
-        </div>
-      )}
-      <div className="mt-3 grid gap-5 lg:grid-cols-[1fr_22rem]">
-        <div className="min-w-0 space-y-4">
+    <section ref={ref} className="scroll-mt-20 space-y-4" aria-labelledby="cmp-ed-h">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="cmp-ed-h" className="home-h2 flex items-center gap-2">
+          <span aria-hidden className="h-2 w-2 rounded-full bg-accent" />
+          {campaign ? `Edit “${campaign.name}”` : "New campaign"}
+        </h2>
+        <p className="text-[11px] font-semibold tracking-wider text-muted uppercase">Draft in progress</p>
+      </div>
+      {error && <Alert>{error}</Alert>}
+      <StepCard id="cmp-step-message" n={1} level={3} title="Name and message">
+        <div className="max-w-xl space-y-4">
+          <p className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted">Channel:</span> <Chip tone="accent">SMS</Chip>
+            <span className="text-xs text-muted">Email campaigns: not available yet</span>
+          </p>
           <div>
             <label className="label" htmlFor="cmp-name">
               Name
@@ -164,8 +178,11 @@ export function CampaignEditor({ campaign, templates, segments, onDone }: { camp
               <p className="mt-1 text-xs text-muted">Create it in Shopify first: the text shows it as typed here.</p>
             </div>
           )}
-          <fieldset className="min-w-0 space-y-3 rounded-lg border border-border p-3">
-            <legend className="px-1 text-sm font-medium">Audience</legend>
+        </div>
+      </StepCard>
+      <StepCard id="cmp-step-who" n={2} level={3} title="Who">
+          <fieldset className="min-w-0 space-y-3">
+            <legend className="sr-only">Audience</legend>
             <div className="flex flex-wrap gap-4 text-sm">
               <label className="inline-flex items-center gap-2">
                 <input type="radio" name="cmp-audience" className="accent-[var(--accent)]" checked={d.audience === "filter"} onChange={() => setD({ ...d, audience: "filter" })} />
@@ -195,7 +212,13 @@ export function CampaignEditor({ campaign, templates, segments, onDone }: { camp
               <SegmentFilterFields value={d.filter} onChange={(filter) => setD({ ...d, filter })} currency={store?.currency} />
             )}
           </fieldset>
-          <div className="max-w-xs">
+      </StepCard>
+      <StepCard id="cmp-step-reach" n={3} level={3} title="Reach and cost">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <SoftBox>
+            <Reach base={base} d={d} />
+          </SoftBox>
+          <div>
             <label className="label" htmlFor="cmp-attr">
               Attribution window (days)
             </label>
@@ -203,13 +226,10 @@ export function CampaignEditor({ campaign, templates, segments, onDone }: { camp
             <p className="mt-1 text-xs text-muted">An order within this many days after the text counts as following it (not as caused by it).</p>
           </div>
         </div>
-        <div className="min-w-0">
-          <p className="label">Reach and cost</p>
-          <Reach base={base} d={d} />
-        </div>
-      </div>
-      {tried && !parsed.ok && (
-        <div className="mt-3">
+      </StepCard>
+      <StepCard id="cmp-step-approval" n={4} level={3} title="Approval">
+        <SoftBox>Saving keeps it as a draft. Submitted, an owner or admin approves it; then it is scheduled, typing the exact number of customers to confirm. Nothing goes out before.</SoftBox>
+        {tried && !parsed.ok && (
           <Alert>
             <ul className="list-disc space-y-0.5 pl-4">
               {parsed.problems.map((p) => (
@@ -217,16 +237,16 @@ export function CampaignEditor({ campaign, templates, segments, onDone }: { camp
               ))}
             </ul>
           </Alert>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-primary" disabled={busy} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save draft"}
+          </button>
+          <button type="button" className="btn-secondary" disabled={busy} onClick={() => onDone(false)}>
+            Cancel
+          </button>
         </div>
-      )}
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" className="btn-primary" disabled={busy} onClick={() => void save()}>
-          {busy ? "Saving…" : "Save draft"}
-        </button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => onDone(false)}>
-          Cancel
-        </button>
-      </div>
+      </StepCard>
     </section>
   );
 }

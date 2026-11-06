@@ -18,6 +18,7 @@ import { webhookRoutes } from "./routes/webhooks.js";
 import { mailEventRoutes } from "./routes/mailEvents.js";
 import { pixelRoutes } from "./routes/pixel.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { orderRoutes } from "./routes/orders.js";
 import { businessEventRoutes } from "./routes/businessEvents.js";
 import { expenseRoutes } from "./routes/expenses.js";
 import { profitRoutes } from "./routes/profit.js";
@@ -237,6 +238,7 @@ export function buildApp(deps: Deps): App {
   mailEventRoutes(app, deps);
   pixelRoutes(app, deps);
   dashboardRoutes(app, deps);
+  orderRoutes(app, deps);
   businessEventRoutes(app, deps);
   expenseRoutes(app, deps);
   profitRoutes(app, deps);

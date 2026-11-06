@@ -27,6 +27,7 @@ import { useFunnel } from "@/components/funnel/useFunnel";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
 import { friendlyError, isTransient } from "@/lib/api";
+import { SalesTabs } from "@/components/dashboard/SalesFrame";
 
 /**
  * The Shopping Funnel: how tracked visits become customers, where they drop off, and what to do
@@ -75,6 +76,8 @@ function FunnelView() {
 
   return (
     <div className="space-y-5" data-print-root>
+      {/* The Sales area's tabs (the Stitch design): this is its Visitors tab. */}
+      <SalesTabs active="visitors" />
       <FunnelHeader s={s} />
 
       {s.error && !ov && <LoadError what="your shopping funnel" error={s.error} onRetry={s.refresh} busy={s.loading} />}

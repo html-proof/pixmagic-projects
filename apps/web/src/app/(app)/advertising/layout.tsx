@@ -36,7 +36,7 @@ export default function AdvertisingLayout({ children }: { children: ReactNode })
           <StoresPending />
         ) : !store ? (
           <div className="card">
-            <h1 className="text-lg font-semibold">Advertising</h1>
+            <h1 className="card-title">Advertising</h1>
             <p className="mt-1 text-sm text-muted">Connect a Shopify store first: ad accounts are connected to a store, and set against its sales.</p>
             {canManage(workspace.role) && (
               <Link href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`} className="btn-primary mt-3 inline-flex">

@@ -2,8 +2,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { BREAK_KIND_LABEL, BREAK_KINDS, PAYMENT_METHOD_LABEL, type BreakKind } from "@app/shared/staff";
+import { CalendarCheck, CalendarDays, Coffee, LogOut, Pointer, ReceiptText, TimerOff } from "lucide-react";
+import { BREAK_KIND_LABEL, BREAK_KINDS, localDayOf, PAYMENT_METHOD_LABEL, type BreakKind } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
+import { Card, FigureTile } from "@/components/PageKit";
 import { usePortal, useLiveRetry, type ClockResult, type ClockState, type EmployeeDashboard, type ShiftSummary } from "@/components/staff/PortalContext";
 import { ApprovalBadge, EstimateNote, Figure, Flags, PaymentBadge } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
@@ -13,10 +15,12 @@ import { signInAndReturn } from "@/lib/returnTo";
 import { fmtDateTime, fmtDay, fmtHours, fmtMoney, fmtSpan, fmtTime, newKey, postIdempotent } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
-// The employee's home: clock in and out, breaks, a live shift timer and their hours and pay so
-// far. Every figure comes from the API; the timer only counts on from the server's last answer
-// (workedSeconds as of serverTime), corrected for this device's clock, so a refresh, another
-// device or a wrong phone clock never changes what is recorded or shown.
+// The employee's home, as the Stitch design's screen 29 (the staff page on a phone) draws it:
+// today and their shift, one big Clock in button, their hours and estimated pay (before tax), then
+// the next shift and the last payment; the detail follows. Every figure comes from the API; the
+// timer only counts on from the server's last answer (workedSeconds as of serverTime), corrected
+// for this device's clock, so a refresh, another device or a wrong phone clock never changes what
+// is recorded or shown.
 // ---------------------------------------------------------------------------------------------
 
 type Action = "clock-in" | "clock-out" | "break/start" | "break/end";
@@ -164,41 +168,56 @@ export default function PortalHome() {
   const inactive = d.employee.status === "inactive";
   const worked = workedNow(clock, now);
   const pendingTotal = d.pending.shifts + d.pending.corrections;
+  // Today's planned shift, when the next one on the schedule is today's (screen 29's "Your shift 11 AM–6 PM").
+  const nextShift = d.upcomingShifts[0] ?? null;
+  const todaysShift = nextShift && localDayOf(Date.parse(nextShift.startsAt), tz) === d.today.day ? nextShift : null;
+  const lastPayment = d.recentPayments[0] ?? null;
 
   return (
     <>
-      <section className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold">Welcome, {first}</h1>
-            <p className="mt-0.5 text-sm text-muted">
-              {d.employee.jobTitle ? `${d.employee.jobTitle} · ` : ""}
-              {d.organization}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-semibold tabular-nums" aria-live="off">
-              {new Intl.DateTimeFormat(undefined, { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" }).format(serverNow)}
-            </p>
-            <p className="text-xs text-muted">{new Intl.DateTimeFormat(undefined, { timeZone: tz, weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(serverNow)}</p>
-          </div>
-        </div>
+      <h1 className="text-xl font-semibold">Welcome, {first}</h1>
 
-        <div className="mt-5 rounded-xl border border-border bg-bg/60 p-4 text-center sm:p-6">
+      <section aria-label="Today" className="home-card animate-rise flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3">
+        <p className="flex min-w-0 items-center gap-2 text-sm font-medium">
+          <CalendarCheck aria-hidden className="h-4 w-4 shrink-0 text-accent" />
+          <span className="min-w-0">
+            Today, {new Intl.DateTimeFormat(undefined, { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(serverNow)}
+            {todaysShift && ` · Your shift ${fmtTime(todaysShift.startsAt, tz)}–${fmtTime(todaysShift.endsAt, tz)}`}
+          </span>
+        </p>
+        <p className="text-sm text-muted tabular-nums" aria-live="off">
+          {new Intl.DateTimeFormat(undefined, { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" }).format(serverNow)}
+          <span className="sr-only"> ({new Intl.DateTimeFormat(undefined, { timeZone: tz, weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(serverNow)})</span>
+        </p>
+      </section>
+
+      <section aria-labelledby="clock-h" className="home-card animate-rise p-4 sm:p-6">
+        <h2 id="clock-h" className="sr-only">
+          Clock in and out
+        </h2>
+        <div className="text-center">
           <p className="inline-flex items-center gap-2 text-sm font-medium">
-            <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${st.status === "working" ? "bg-good" : st.status === "on_break" ? "bg-warn" : "bg-muted"}`} />
+            {st.status === "clocked_out" ? (
+              <TimerOff aria-hidden className="h-4 w-4 text-muted" />
+            ) : (
+              <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${st.status === "working" ? "bg-good" : "bg-warn"}`} />
+            )}
             <span data-testid="shift-status">{STATUS_TEXT[st.status]}</span>
           </p>
-          <p className="mt-2 text-5xl font-semibold tabular-nums tracking-tight sm:text-6xl" data-testid="shift-timer" role="timer" aria-label="Time worked this shift">
-            {fmtTimer(worked)}
-          </p>
           {st.session ? (
-            <p className="mt-1 text-sm text-muted">
-              Clocked in at {fmtTime(st.session.clockInAt, tz)}
-              {st.session.unpaidBreakSeconds > 0 && ` · unpaid breaks ${fmtHours(st.session.unpaidBreakSeconds)}`}
-            </p>
+            <>
+              <p className="mt-2 text-5xl font-semibold tracking-tight tabular-nums sm:text-6xl" data-testid="shift-timer" role="timer" aria-label="Time worked this shift">
+                {fmtTimer(worked)}
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Clocked in at {fmtTime(st.session.clockInAt, tz)}
+                {st.session.unpaidBreakSeconds > 0 && ` · unpaid breaks ${fmtHours(st.session.unpaidBreakSeconds)}`}
+              </p>
+            </>
           ) : (
-            <p className="mt-1 text-sm text-muted">Time worked this shift</p>
+            <p className="mt-1 text-xs text-muted">
+              Time worked this shift: <span data-testid="shift-timer">{fmtTimer(worked)}</span>
+            </p>
           )}
           {st.status === "on_break" && st.session?.currentBreak && (
             <p className="mt-3 inline-flex items-center gap-2 rounded-full bg-warn/12 px-3 py-1 text-sm text-warn" data-testid="break-timer">
@@ -232,18 +251,19 @@ export default function PortalHome() {
             )}
 
             {st.status === "clocked_out" && (
-              <button type="button" className="btn-primary min-h-16 w-full text-lg" onClick={() => press("clock-in")} disabled={busy}>
+              <button type="button" className="btn-primary min-h-14 w-full text-lg font-semibold" onClick={() => press("clock-in")} disabled={busy}>
+                <Pointer aria-hidden className="h-5 w-5" />
                 {busy && attempt?.action === "clock-in" ? "Clocking in…" : "Clock in"}
               </button>
             )}
 
             {st.status === "working" &&
               (choosingBreak ? (
-                <div className="rounded-xl border border-border p-3" role="group" aria-label="Choose a break">
+                <div className="rounded bg-home-soft p-3" role="group" aria-label="Choose a break">
                   <p className="mb-2 text-sm font-medium">What kind of break?</p>
                   <div className="grid grid-cols-2 gap-2">
                     {BREAK_KINDS.map((k) => (
-                      <button key={k} type="button" className="btn-secondary min-h-14 text-base" onClick={() => press("break/start", k)} disabled={busy}>
+                      <button key={k} type="button" className="btn min-h-14 border border-home-line bg-surface text-base text-text hover:bg-home-soft-hover" onClick={() => press("break/start", k)} disabled={busy}>
                         {BREAK_KIND_LABEL[k]}
                       </button>
                     ))}
@@ -254,10 +274,12 @@ export default function PortalHome() {
                 </div>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <button type="button" className="btn-secondary min-h-16 text-lg" onClick={() => setChoosingBreak(true)} disabled={busy}>
+                  <button type="button" className="btn-secondary min-h-14 text-lg" onClick={() => setChoosingBreak(true)} disabled={busy}>
+                    <Coffee aria-hidden className="h-5 w-5" />
                     {busy && attempt?.action === "break/start" ? "Starting break…" : "Start break"}
                   </button>
-                  <button type="button" className="btn-primary min-h-16 text-lg" onClick={() => setConfirmOut(true)} disabled={busy}>
+                  <button type="button" className="btn-primary min-h-14 text-lg" onClick={() => setConfirmOut(true)} disabled={busy}>
+                    <LogOut aria-hidden className="h-5 w-5" />
                     {busy && attempt?.action === "clock-out" ? "Clocking out…" : "Clock out"}
                   </button>
                 </div>
@@ -265,10 +287,11 @@ export default function PortalHome() {
 
             {st.status === "on_break" && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <button type="button" className="btn-primary min-h-16 text-lg" onClick={() => press("break/end")} disabled={busy}>
+                <button type="button" className="btn-primary min-h-14 text-lg" onClick={() => press("break/end")} disabled={busy}>
                   {busy && attempt?.action === "break/end" ? "Ending break…" : "End break"}
                 </button>
-                <button type="button" className="btn-secondary min-h-16 text-lg" onClick={() => setConfirmOut(true)} disabled={busy}>
+                <button type="button" className="btn-secondary min-h-14 text-lg" onClick={() => setConfirmOut(true)} disabled={busy}>
+                  <LogOut aria-hidden className="h-5 w-5" />
                   {busy && attempt?.action === "clock-out" ? "Clocking out…" : "Clock out"}
                 </button>
               </div>
@@ -282,26 +305,62 @@ export default function PortalHome() {
       {summary && <SummaryCard s={summary} tz={tz} onClose={() => setSummary(null)} />}
 
       <section aria-label="Your hours and pay" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Figure label="Today" value={fmtHours(d.today.workedSeconds)} sub="worked" />
-        <Figure label="This week" value={fmtHours(d.week.workedSeconds)} sub={d.week.overtimeSeconds > 0 ? `incl. ${fmtHours(d.week.overtimeSeconds)} overtime` : `since ${fmtDay(d.week.from, { weekday: true, year: false })}`} />
-        <Figure label="This month" value={fmtHours(d.month.workedSeconds)} sub="worked" />
-        <Figure label="Current pay period" value={fmtHours(d.payPeriod.workedSeconds)} sub={fmtSpan(d.payPeriod.from, d.payPeriod.to)} />
-        <Figure
-          label="Estimated gross earnings"
+        <FigureTile title="This week" value={fmtHours(d.week.workedSeconds)} sub={d.week.overtimeSeconds > 0 ? `incl. ${fmtHours(d.week.overtimeSeconds)} overtime` : `since ${fmtDay(d.week.from, { weekday: true, year: false })}`} />
+        <FigureTile title="Current pay period" value={fmtHours(d.payPeriod.workedSeconds)} sub={fmtSpan(d.payPeriod.from, d.payPeriod.to)} />
+        <FigureTile
+          title="Estimated pay so far"
           value={fmtMoney(d.payPeriod.estimatedGross, d.currency)}
-          sub={d.payPeriod.rateMissing ? "Pay rate not set yet — ask your manager" : "estimated, this pay period"}
+          sub={d.payPeriod.rateMissing ? "Pay rate not set yet — ask your manager" : "gross, before tax, this pay period"}
         />
-        <Figure label="Overtime this pay period" value={fmtHours(d.payPeriod.overtimeSeconds)} sub={d.payPeriod.overtimeSeconds > 0 ? "paid at your overtime rate" : "none so far"} />
+        <FigureTile
+          title="Waiting for approval"
+          value={pendingTotal === 0 ? "Nothing" : d.pending.shifts > 0 ? `${d.pending.shifts} ${d.pending.shifts === 1 ? "shift" : "shifts"}` : `${d.pending.corrections} ${d.pending.corrections === 1 ? "request" : "requests"}`}
+          sub={pendingTotal === 0 ? "your manager has reviewed everything" : d.pending.shifts > 0 && d.pending.corrections > 0 ? `and ${d.pending.corrections} change ${d.pending.corrections === 1 ? "request" : "requests"}` : "for your manager to review"}
+        />
+        <FigureTile title="Today" value={fmtHours(d.today.workedSeconds)} sub="worked" />
+        <FigureTile title="This month" value={fmtHours(d.month.workedSeconds)} sub="worked" />
+        <FigureTile title="Overtime this pay period" value={fmtHours(d.payPeriod.overtimeSeconds)} sub={d.payPeriod.overtimeSeconds > 0 ? "paid at your overtime rate" : "none so far"} />
       </section>
       <EstimateNote>{d.estimateNotice}</EstimateNote>
 
+      <section aria-label="Next shift and last payment" className="home-card animate-rise divide-y divide-home-line px-4">
+        <p className="flex items-start gap-3 py-3 text-sm">
+          <CalendarDays aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+          <span className="min-w-0 flex-1">
+            {nextShift ? (
+              <>
+                Next shift: {fmtDateTime(nextShift.startsAt, tz)}–{fmtTime(nextShift.endsAt, tz)}
+              </>
+            ) : (
+              "No shifts scheduled yet."
+            )}
+          </span>
+          <Link href="/portal/schedule" className="shrink-0 font-medium text-accent hover:underline">
+            Full schedule
+          </Link>
+        </p>
+        <p className="flex items-start gap-3 py-3 text-sm">
+          <ReceiptText aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+          <span className="min-w-0 flex-1">
+            {lastPayment ? (
+              <>
+                Last payment: {fmtDay(lastPayment.paidOn, { weekday: false, year: false })}, {fmtMoney(lastPayment.amount, lastPayment.currency)}
+              </>
+            ) : (
+              "No payments recorded yet."
+            )}
+          </span>
+          <Link href="/portal/pay" className="shrink-0 font-medium text-accent hover:underline">
+            Payslips
+          </Link>
+        </p>
+      </section>
+
+      <h2 className="home-h2 pt-2">More detail</h2>
       <div className="grid gap-4 md:grid-cols-2">
-        <section className="card" aria-labelledby="last-shift">
-          <h2 id="last-shift" className="font-semibold">
-            Last completed shift
-          </h2>
+        <Card id="last-shift" title="Last completed shift">
           {d.lastShift ? (
-            <div className="mt-3 space-y-2 text-sm">
+            <div className="space-y-2 text-sm">
               <p>
                 {fmtDateTime(d.lastShift.clockInAt, tz)} – {fmtTime(d.lastShift.clockOutAt, tz)}
               </p>
@@ -311,21 +370,18 @@ export default function PortalHome() {
               <Flags flags={d.lastShift.flags} />
             </div>
           ) : (
-            <p className="mt-2 text-sm text-muted">No completed shifts yet. Your first one shows up here after you clock out.</p>
+            <p className="text-sm text-muted">No completed shifts yet. Your first one shows up here after you clock out.</p>
           )}
-          <Link href="/portal/timesheets" className="mt-3 inline-block text-sm text-accent hover:underline">
+          <Link href="/portal/timesheets" className="mt-3 text-sm font-medium text-accent hover:underline">
             See all your shifts
           </Link>
-        </section>
+        </Card>
 
-        <section className="card" aria-labelledby="pending">
-          <h2 id="pending" className="font-semibold">
-            Waiting for approval
-          </h2>
+        <Card id="pending" title="Waiting for approval">
           {pendingTotal === 0 ? (
-            <p className="mt-2 text-sm text-muted">Nothing waiting. Your manager has reviewed everything you&apos;ve sent.</p>
+            <p className="text-sm text-muted">Nothing waiting. Your manager has reviewed everything you&apos;ve sent.</p>
           ) : (
-            <ul className="mt-3 space-y-1.5 text-sm">
+            <ul className="space-y-1.5 text-sm">
               {d.pending.shifts > 0 && (
                 <li>
                   <span className="font-semibold tabular-nums">{d.pending.shifts}</span> {d.pending.shifts === 1 ? "shift" : "shifts"} waiting for your manager to approve
@@ -338,19 +394,16 @@ export default function PortalHome() {
               )}
             </ul>
           )}
-          <Link href="/portal/timesheets" className="mt-3 inline-block text-sm text-accent hover:underline">
+          <Link href="/portal/timesheets" className="mt-3 text-sm font-medium text-accent hover:underline">
             Open timesheets
           </Link>
-        </section>
+        </Card>
 
-        <section className="card" aria-labelledby="upcoming">
-          <h2 id="upcoming" className="font-semibold">
-            Upcoming shifts
-          </h2>
+        <Card id="upcoming" title="Upcoming shifts">
           {d.upcomingShifts.length ? (
-            <ul className="mt-3 divide-y divide-border text-sm">
+            <ul className="divide-y divide-home-line text-sm">
               {d.upcomingShifts.map((s) => (
-                <li key={s.id} className="py-2">
+                <li key={s.id} className="py-2 first:pt-0">
                   <p className="font-medium">
                     {fmtDateTime(s.startsAt, tz)} – {fmtTime(s.endsAt, tz)}
                   </p>
@@ -361,21 +414,18 @@ export default function PortalHome() {
               ))}
             </ul>
           ) : (
-            <p className="mt-2 text-sm text-muted">No shifts scheduled. Your manager adds them in bizinsights; they&apos;ll show up here.</p>
+            <p className="text-sm text-muted">No shifts scheduled. Your manager adds them in bizinsights; they&apos;ll show up here.</p>
           )}
-          <Link href="/portal/schedule" className="mt-3 inline-block text-sm text-accent hover:underline">
+          <Link href="/portal/schedule" className="mt-3 text-sm font-medium text-accent hover:underline">
             Full schedule
           </Link>
-        </section>
+        </Card>
 
-        <section className="card" aria-labelledby="payments">
-          <h2 id="payments" className="font-semibold">
-            Recent payments
-          </h2>
+        <Card id="payments" title="Recent payments">
           {d.recentPayments.length ? (
-            <ul className="mt-3 divide-y divide-border text-sm">
+            <ul className="divide-y divide-home-line text-sm">
               {d.recentPayments.map((p) => (
-                <li key={p.id} className="flex flex-wrap items-start justify-between gap-2 py-2">
+                <li key={p.id} className="flex flex-wrap items-start justify-between gap-2 py-2 first:pt-0">
                   <div className="min-w-0">
                     <p className="font-semibold tabular-nums">{fmtMoney(p.amount, p.currency)}</p>
                     <p className="text-xs text-muted">
@@ -388,12 +438,12 @@ export default function PortalHome() {
               ))}
             </ul>
           ) : (
-            <p className="mt-2 text-sm text-muted">No payments recorded yet. They show up here once your employer records them.</p>
+            <p className="text-sm text-muted">No payments recorded yet. They show up here once your employer records them.</p>
           )}
-          <Link href="/portal/pay" className="mt-3 inline-block text-sm text-accent hover:underline">
+          <Link href="/portal/pay" className="mt-3 text-sm font-medium text-accent hover:underline">
             Pay and payslips
           </Link>
-        </section>
+        </Card>
       </div>
 
       <ConfirmDialog
@@ -419,10 +469,10 @@ export default function PortalHome() {
 
 function SummaryCard({ s, tz, onClose }: { s: ShiftSummary; tz: string; onClose: () => void }) {
   return (
-    <section className="card animate-rise border-good" aria-labelledby="shift-done" data-testid="shift-summary">
+    <section className="home-card animate-rise border border-good p-4 sm:p-6" aria-labelledby="shift-done" data-testid="shift-summary">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 id="shift-done" className="font-semibold">
+          <h2 id="shift-done" className="home-h2">
             Shift complete
           </h2>
           <p className="text-sm text-muted">
@@ -440,7 +490,7 @@ function SummaryCard({ s, tz, onClose }: { s: ShiftSummary; tz: string; onClose:
         <Figure
           label="Estimated earnings"
           value={s.rateMissing || !s.estimatedEarnings ? "—" : fmtMoney(s.estimatedEarnings, s.currency)}
-          sub={s.rateMissing ? "Pay rate not set yet — ask your manager" : "estimated gross"}
+          sub={s.rateMissing ? "Pay rate not set yet — ask your manager" : "estimated gross, before tax"}
         />
       </div>
       <div className="mt-2">

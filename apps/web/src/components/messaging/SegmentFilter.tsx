@@ -104,7 +104,7 @@ export function SegmentReach({ base, draft }: { base: string; draft: FilterDraft
   }
   const fresh = state && state.key === key ? state : null;
   return (
-    <div className="rounded-lg border border-border bg-bg/50 p-3 text-sm" aria-live="polite">
+    <div className="rounded bg-home-soft px-4 py-3 text-sm" aria-live="polite">
       <p className="text-muted">{describeSegment(parsed.filter)}.</p>
       {!fresh ? (
         <p className="mt-1">Counting…</p>

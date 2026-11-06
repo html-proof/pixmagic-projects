@@ -17,6 +17,7 @@ import { saveFile, Statement, statementCsv } from "@/components/profit/Statement
 import { useStatement, type ListedExpense, type StatementState } from "@/components/profit/useStatement";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, friendlyError, isTransient } from "@/lib/api";
+import { SalesTabs } from "@/components/dashboard/SalesFrame";
 
 const GRAIN_LABEL: Record<StatementGrain, string> = { day: "Daily", week: "Weekly", month: "Monthly", year: "Yearly" };
 
@@ -63,6 +64,8 @@ function ProfitView() {
 
   return (
     <div className="space-y-5" data-print-root data-testid="pl-page">
+      {/* The Sales area's tabs (the Stitch design): this is its Profit & Loss tab. */}
+      <SalesTabs active="profit" />
       <Header s={s} onAdd={() => setEditing({ expense: null, draft: blankCost(today) })} onCategories={() => setCategoriesOpen(true)} />
 
       {s.error && !data && <LoadError what="your profit and loss" error={s.error} onRetry={() => window.dispatchEvent(new Event("insights:retry"))} busy={s.loading} />}
@@ -115,10 +118,10 @@ function Header({ s, onAdd, onCategories }: { s: StatementState; onAdd: () => vo
   const { stores, store, setStoreId } = useApp();
   const { dates, shown, data } = s;
   return (
-    <header className="card animate-rise">
+    <header className="animate-rise">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight sm:text-2xl">
+          <h1 className="page-title flex items-center gap-2">
             <span aria-hidden className="grid size-9 place-items-center rounded-xl bg-accent/12 text-accent">
               <Scale className="h-[18px] w-[18px]" />
             </span>

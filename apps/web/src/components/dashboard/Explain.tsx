@@ -15,7 +15,7 @@ import type { Topic } from "./topics";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// The bottom of every detail panel: what to do about these numbers, worked out from the store's
+// The bottom of every topic's page: what to do about these numbers, worked out from the store's
 // own figures, and what each figure means in plain words. Nothing here is advice from outside
 // the data: each "next" line names the number it comes from.
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Phone from the checkout", "When a shopper has no customer record yet, the phone number and name come from what they typed into the checkout's address."],
   ],
   orders: [
-    ["Recent orders", "The 10 latest orders, whatever dates are picked. Cancelled ones are shown and marked."],
+    ["Orders", "Every order placed in the dates picked, newest first unless you sort them. Cancelled ones are shown and marked."],
     ["Payment status", "Paid, pending, refunded and so on, as Shopify reports it."],
     ["Fulfillment status", "Whether the order has shipped."],
     ["Channel", "Where the order was placed."],

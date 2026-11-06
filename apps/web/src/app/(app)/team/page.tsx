@@ -1,17 +1,30 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Ban, CalendarX2, CircleCheck, Link2, ChevronLeft, ChevronRight, Clock, EllipsisVertical, MailX, Plus, RotateCcw, Search, Send, Shield, UsersRound } from "lucide-react";
+import { Ban, CalendarX2, CircleCheck, Link2, ChevronLeft, ChevronRight, Clock, EllipsisVertical, Info, MailX, Plus, RotateCcw, Search, Send, Shield, UsersRound } from "lucide-react";
 import { ROLE_INFO } from "@app/shared/access";
 import { ROLES, type Role } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { ConfirmDialog, ToastProvider, useAction } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { AccessPanel, emailProblemText, HistoryPanel, InvitePanel, LinkPanel } from "@/components/team/Panels";
+import { canOpenPage } from "@/lib/access";
 import { api, useApi } from "@/lib/api";
 import { offeredCatalog, type Catalog, type TeamPage, type TeamRow } from "@/lib/team";
 import { AccessSummary, AccessUntil, type Act, Avatar, DeliveryLine, lastSeen, ROLE_LOOK, RolePill, RowActions, StatusPill } from "@/components/team/MemberRow";
 import { Menu, type MenuItem, SummaryCard } from "@/components/team/TeamUi";
+
+// ---------------------------------------------------------------------------
+// Team & Access, as the Stitch design's People and access screen draws it (prototype v2, screen
+// 32): the note that staff who clock in live under Staff, the page's few counts, then everyone with
+// access in the design's table (name, role, what they can see, status, when the access ends, and a
+// menu of what can be done), and how roles work. Inviting opens the invitation panel
+// (components/team/Panels.tsx), where the role, the sections and how long the access lasts are
+// chosen: the design's inline form, kept in its panel so the list stays in view.
+// ---------------------------------------------------------------------------
+
+/** A header cell of the design's tables (as components/dashboard/SalesViews.tsx OrdersTable). */
+const TH = "px-3 py-2.5 text-[11px] font-semibold tracking-wider text-muted uppercase first:pl-5 last:pr-5 sm:first:pl-6 sm:last:pr-6";
 
 const STATUS_FILTERS: Array<[value: string, label: string]> = [
   ["", "All statuses"],
@@ -37,8 +50,10 @@ const SORTS: Array<[value: string, label: string]> = [
 const RENEW_DAYS = 60;
 
 function TeamAccess() {
-  const { workspace, me, offers } = useApp();
+  const { workspace, me, offers, access } = useApp();
   const ws = workspace.id;
+  // The note about staff links to their page when this member may open it (Team & Access).
+  const staffPage = canOpenPage("/staff", access, workspace.staffRole ?? null, !!me.shared, offers);
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -186,7 +201,7 @@ function TeamAccess() {
       <span className="min-w-0">
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate font-semibold">{r.name ?? r.email}</span>
-          {you(r) && <span className="shrink-0 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">You</span>}
+          {you(r) && <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[11px] font-medium text-accent">You</span>}
         </span>
         {r.name && <span className="block truncate text-xs text-muted">{r.email}</span>}
         <span className="block text-xs text-muted">{lastSeen(r)}</span>
@@ -221,7 +236,7 @@ function TeamAccess() {
         </nav>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-[1.75rem] font-bold leading-tight tracking-tight">Team &amp; Access</h1>
+            <h1 className="page-title">Team &amp; Access</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted">Manage who can access your business dashboard and control exactly what information they can see.</p>
           </div>
           <div className="flex items-center gap-2">
@@ -233,28 +248,46 @@ function TeamAccess() {
               label="More team options"
               items={pageMenu}
               onPick={pickPageMenu}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-surface text-muted shadow-[var(--shadow)] transition-colors hover:text-text"
+              className="inline-flex h-11 w-11 items-center justify-center rounded bg-home-soft text-muted transition-colors outline-none hover:bg-home-soft-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent"
               trigger={<EllipsisVertical aria-hidden className="h-4 w-4" />}
             />
           </div>
         </div>
       </header>
 
-      <section aria-label="Summary" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-        <SummaryCard testId="summary-total" icon={UsersRound} tone="green" label="Total Invitations" value={s?.invitations?.total} trend={undefined} note={s ? `${s.totalMembers} ${s.totalMembers === 1 ? "member" : "members"} in the team` : "Every invitation on record"} />
-        <SummaryCard testId="summary-active" icon={CircleCheck} tone="blue" label="Active Shared Access" value={s?.invitations?.active} trend={undefined} note="Opened and still working" />
-        <SummaryCard testId="summary-pending" icon={Clock} tone="violet" label="Pending Invitations" value={s?.invitations?.pending} trend={s?.trend?.pendingInvitations} note="Sent, not opened yet" />
-        <SummaryCard testId="summary-expired" icon={CalendarX2} tone="slate" label="Expired" value={s?.invitations?.expired} trend={undefined} note="Ended: renew to reopen" />
-        <SummaryCard testId="summary-ended" icon={MailX} tone="red" label="Revoked" value={s?.invitations?.revoked} trend={undefined} note="Cancelled or access revoked" />
+      {/* The design's note above the people (Stitch screen 32): staff who clock in aren't members. */}
+      {offers("staff") && (
+        <p className="home-card flex items-center gap-3 bg-home-soft px-4 py-3 text-sm sm:px-5" data-testid="team-staff-note">
+          <Info aria-hidden className="h-4 w-4 shrink-0 text-accent" />
+          <span>
+            Staff who clock in are under{" "}
+            {staffPage ? (
+              <Link className="font-medium text-accent hover:underline" href="/staff">
+                Staff
+              </Link>
+            ) : (
+              "Staff"
+            )}
+            , not here: this page is for the people who open the dashboard.
+          </span>
+        </p>
+      )}
+
+      <section aria-label="Summary" className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
+        <SummaryCard testId="summary-total" icon={UsersRound} label="Total Invitations" value={s?.invitations?.total} trend={undefined} note={s ? `${s.totalMembers} ${s.totalMembers === 1 ? "member" : "members"} in the team` : "Every invitation on record"} />
+        <SummaryCard testId="summary-active" icon={CircleCheck} label="Active Shared Access" value={s?.invitations?.active} trend={undefined} note="Opened and still working" />
+        <SummaryCard testId="summary-pending" icon={Clock} label="Pending Invitations" value={s?.invitations?.pending} trend={s?.trend?.pendingInvitations} note="Sent, not opened yet" />
+        <SummaryCard testId="summary-expired" icon={CalendarX2} label="Expired" value={s?.invitations?.expired} trend={undefined} note="Ended: renew to reopen" />
+        <SummaryCard testId="summary-ended" icon={MailX} label="Revoked" value={s?.invitations?.revoked} trend={undefined} note="Cancelled or access revoked" />
       </section>
 
-      <section className="card space-y-5" aria-labelledby="members-h">
+      <section className="home-card animate-rise min-w-0 space-y-5 p-5 sm:p-6" aria-labelledby="members-h">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-[15rem] flex-1">
-            <h2 id="members-h" className="flex items-center gap-2.5 text-lg font-semibold">
+            <h2 id="members-h" className="home-h2 flex items-center gap-2.5">
               Team Members
               {team.data && (
-                <span className="rounded-full bg-text/[0.06] px-2.5 py-0.5 text-xs font-medium text-muted">
+                <span className="rounded bg-home-soft px-2 py-0.5 text-xs font-medium text-muted">
                   {team.data.total} {team.data.total === 1 ? (filtered ? "match" : "member") : filtered ? "matches" : "members"}
                 </span>
               )}
@@ -298,14 +331,14 @@ function TeamAccess() {
             {[0, 1, 2].map((i) => <div key={i} className="skeleton h-14" />)}
           </div>
         ) : rows.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-8 text-center">
+          <div className="rounded border border-dashed border-border p-8 text-center">
             <p className="font-medium">{filtered ? "Nobody matches these filters" : "It's just you so far"}</p>
             <p className="mt-1 text-sm text-muted">{filtered ? "Try another search or filter." : "Invite a teammate, an agency or a client, and choose exactly what they can see."}</p>
           </div>
         ) : (
           <>
             {/* Phones and tablets: one card per person. */}
-            <ul className="divide-y divide-border lg:hidden" data-testid="team-cards">
+            <ul className="divide-y divide-home-line border-t border-home-line lg:hidden" data-testid="team-cards">
               {rows.map((r) => (
                 <li key={`${r.kind}:${r.id}`} className="flex items-start gap-3 py-4" data-testid="team-row">
                   <div className="min-w-0 flex-1 space-y-2.5">
@@ -325,31 +358,33 @@ function TeamAccess() {
                 </li>
               ))}
             </ul>
-            {/* Desktops: a table. */}
-            <div className="hidden overflow-x-auto rounded-xl border border-border lg:block">
+            {/* Desktops: the design's table, its header row on the soft tint (Stitch screen 32). */}
+            <div className="-mx-5 hidden overflow-x-auto sm:-mx-6 lg:block">
               <table className="w-full text-sm" data-testid="team-table">
-                <thead className="bg-text/[0.025] text-left text-[13px] text-muted">
+                <thead className="bg-home-soft text-left">
                   <tr>
-                    <th className="px-4 py-3 font-medium">Recipient</th>
-                    <th className="px-4 py-3 font-medium">Role</th>
-                    <th className="px-4 py-3 font-medium">Permissions</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Expiration</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                    <th scope="col" className={TH}>Name</th>
+                    <th scope="col" className={TH}>Role</th>
+                    <th scope="col" className={TH}>What they can see</th>
+                    <th scope="col" className={TH}>Status</th>
+                    <th scope="col" className={TH}>Access ends</th>
+                    <th scope="col" className={`${TH} text-right`}>
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={`${r.kind}:${r.id}`} className="border-t border-border transition-colors hover:bg-text/[0.015]" data-testid="team-row">
-                      <td className="max-w-[20rem] px-4 py-3">{person(r)}</td>
-                      <td className="px-4 py-3"><RolePill role={r.role} /></td>
-                      <td className="max-w-[18rem] px-4 py-3"><AccessSummary row={r} /></td>
-                      <td className="px-4 py-3">
+                    <tr key={`${r.kind}:${r.id}`} className="border-b border-home-line transition-colors last:border-0 hover:bg-home-soft/40" data-testid="team-row">
+                      <td className="max-w-[20rem] py-3 pr-3 pl-5 sm:pl-6">{person(r)}</td>
+                      <td className="px-3 py-3"><RolePill role={r.role} /></td>
+                      <td className="max-w-[18rem] px-3 py-3"><AccessSummary row={r} /></td>
+                      <td className="px-3 py-3">
                         <StatusPill row={r} />
                         <DeliveryLine row={r} />
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3"><AccessUntil row={r} /></td>
-                      <td className="px-4 py-3 text-right"><RowActions row={r} actions={actionsFor(r)} onAct={(a) => void act(r, a)} /></td>
+                      <td className="px-3 py-3 whitespace-nowrap"><AccessUntil row={r} /></td>
+                      <td className="py-3 pr-5 pl-3 text-right sm:pr-6"><RowActions row={r} actions={actionsFor(r)} onAct={(a) => void act(r, a)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -374,23 +409,23 @@ function TeamAccess() {
         )}
       </section>
 
-      <section className="card" aria-labelledby="roles-h">
+      <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby="roles-h">
         <div className="flex items-start gap-3">
-          <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-text/[0.05] text-text/80">
-            <Shield className="h-5 w-5" strokeWidth={1.8} />
+          <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-home-soft text-muted">
+            <Shield className="h-4 w-4" strokeWidth={1.8} />
           </span>
           <div className="min-w-0">
-            <h2 id="roles-h" className="text-lg font-semibold">How access works</h2>
+            <h2 id="roles-h" className="home-h2">How access works</h2>
             <p className="mt-0.5 text-sm text-muted">Choose the right role, or tick custom permissions, to control what each team member can see and do.</p>
           </div>
         </div>
         <ul className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
           {(["owner", "admin", "manager", "analyst", "viewer", "custom"] satisfies Role[]).map((r) => {
-            const { icon: Icon, card, tile } = ROLE_LOOK[r];
+            const { icon: Icon } = ROLE_LOOK[r];
             return (
-              <li key={r} className={`flex gap-3 rounded-xl border p-4 ${card}`}>
-                <span aria-hidden className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tile}`}>
-                  <Icon className="h-5 w-5" strokeWidth={1.8} />
+              <li key={r} className="flex gap-3 rounded bg-home-soft p-4">
+                <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-surface text-muted">
+                  <Icon className="h-4 w-4" strokeWidth={1.8} />
                 </span>
                 <span className="min-w-0">
                   <span className="block font-semibold">{ROLE_INFO[r].label}</span>

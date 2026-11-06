@@ -301,20 +301,20 @@ export function OrderName({ o, shopDomain }: { o: RecentOrder; shopDomain: strin
 
 // Payment, fulfillment and cancellation each need their own permission (Team & Access): a field
 // that isn't in the answer gets no badge, rather than a guess.
-const PaymentBadge = ({ o }: { o: RecentOrder }) =>
+export const PaymentBadge = ({ o }: { o: RecentOrder }) =>
   o.cancelled ? (
     <Badge tone="danger">Cancelled</Badge>
   ) : o.financialStatus !== undefined ? (
     <Badge tone={financialTone(o.financialStatus)}>{humanize(o.financialStatus)}</Badge>
   ) : null;
-const FulfillmentBadge = ({ o }: { o: RecentOrder }) =>
+export const FulfillmentBadge = ({ o }: { o: RecentOrder }) =>
   o.fulfillmentStatus !== undefined ? <Badge tone={fulfillmentTone(o.fulfillmentStatus)}>{o.fulfillmentStatus ? humanize(o.fulfillmentStatus) : "Not synced yet"}</Badge> : null;
 
 export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { items: RecentOrder[]; currency: string; timezone: string; shopDomain: string }) {
   const showPayment = items.some((o) => o.financialStatus !== undefined || o.cancelled !== undefined);
   const showFulfillment = items.some((o) => o.fulfillmentStatus !== undefined);
   return (
-    <Panel id="recent_orders" title="Recent orders" help={`The 10 latest orders, whatever dates are selected. Times are in the store's time zone (${timezone}).`}>
+    <Panel id="recent_orders" title="Recent orders" help={`The 10 latest orders placed in these dates. Times are in the store's time zone (${timezone}).`}>
       {items.length === 0 ? (
         <Empty>No orders have been imported yet. They appear here as soon as they arrive from Shopify.</Empty>
       ) : (

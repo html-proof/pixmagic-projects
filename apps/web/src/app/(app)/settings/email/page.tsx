@@ -2,9 +2,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import { errorLabel, MESSAGE_STATUS_LABEL } from "@app/shared/email";
-import { Empty, Panel, Stat } from "@/components/dashboard/Primitives";
+import { StepNumber } from "@/components/automations/MarketingKit";
 import { AccountStatusBadge, Note, ProviderMark, providerLabel } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
+import { Card, FigureTile } from "@/components/PageKit";
 import { Alert } from "@/components/ui";
 import { PageHeader, Skeleton } from "@/components/AppUi";
 import { fmtNum, useApi } from "@/lib/api";
@@ -16,7 +17,22 @@ const PERIODS = [
   [90, "Last 90 days"],
 ] as const;
 
-/** Settings → Email integrations → Overview: every number here is counted from what was actually sent. */
+/** One of a card's counts on a soft box, as the Stitch design's screen 17 shows a channel's figures. */
+function Count({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: "good" | "danger" }) {
+  return (
+    <div className="flex min-w-0 flex-col rounded bg-home-soft px-3 py-2.5">
+      <span className="text-xs text-muted">{label}</span>
+      <span className={`text-lg leading-6 font-semibold tabular-nums ${tone === "good" ? "text-good" : tone === "danger" ? "text-danger" : ""}`}>{value}</span>
+      {note && <span className="mt-0.5 text-xs text-muted">{note}</span>}
+    </div>
+  );
+}
+
+/**
+ * Settings → Email integrations → Overview: every number here is counted from what was actually
+ * sent. Laid out as the Stitch design's Marketing pages (screen 17): the few numbers as tiles,
+ * then the period's emails on a white card, honest about what providers don't report.
+ */
 export default function EmailOverviewPage() {
   const { base, manage } = useEmail();
   const [days, setDays] = useState<number>(30);
@@ -32,6 +48,11 @@ export default function EmailOverviewPage() {
   const days_ = data.analytics.byDay;
   const peak = Math.max(1, ...days_.map((d) => d.counts.accepted_by_provider + d.counts.failed + d.counts.bounced + d.counts.queued + d.counts.deferred));
   const noAccounts = data.accounts.total === 0;
+  const steps = [
+    "Connect the mailbox you want to send from (Gmail, Google Workspace, Outlook, Microsoft 365 or another provider over SMTP).",
+    <>Write a template: the email, with placeholders such as the customer&apos;s name or order number.</>,
+    "Create an automation: when an order is paid (or another event happens), send that template.",
+  ];
 
   return (
     <div className="space-y-4">
@@ -57,35 +78,41 @@ export default function EmailOverviewPage() {
       )}
 
       {noAccounts && (
-        <section className="card space-y-2">
-          <h2 className="font-semibold">Start here</h2>
-          <ol className="list-decimal space-y-1 pl-5 text-sm text-muted">
-            <li>Connect the mailbox you want to send from (Gmail, Google Workspace, Outlook, Microsoft 365 or another provider over SMTP).</li>
-            <li>Write a template: the email, with placeholders such as the customer&apos;s name or order number.</li>
-            <li>Create an automation: when an order is paid (or another event happens), send that template.</li>
+        <Card id="email-start" title="Start here">
+          <ol className="space-y-3 text-sm text-muted">
+            {steps.map((s, i) => (
+              <li key={i} className="flex gap-3">
+                <StepNumber n={i + 1} />
+                <span className="min-w-0 pt-0.5">
+                  <span className="sr-only">{i + 1}. </span>
+                  {s}
+                </span>
+              </li>
+            ))}
           </ol>
           {manage && (
-            <Link href="/settings/email/accounts?add=1" className="btn-primary inline-flex">
+            <Link href="/settings/email/accounts?add=1" className="btn-primary mt-4 inline-flex w-fit">
               Connect an email account
             </Link>
           )}
-        </section>
+        </Card>
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Connected accounts" value={fmtNum(data.accounts.total)} note={`${data.accounts.healthy} working`} tone={data.accounts.attention.length ? "warn" : data.accounts.total ? "good" : undefined} />
-        <Stat label="Verified domains" value={fmtNum(data.domains.verified)} note={`of ${data.domains.total}`} />
-        <Stat label="Active automations" value={fmtNum(data.automations.active)} note={`of ${data.automations.total}`} />
-        <Stat label="Templates" value={fmtNum(data.templates)} />
+        <FigureTile title="Connected accounts" value={fmtNum(data.accounts.total)} sub={`${data.accounts.healthy} working`} testId="email-figure-accounts" />
+        <FigureTile title="Verified domains" value={fmtNum(data.domains.verified)} sub={`of ${data.domains.total}`} testId="email-figure-domains" />
+        <FigureTile title="Active automations" value={fmtNum(data.automations.active)} sub={`of ${data.automations.total}`} testId="email-figure-automations" />
+        <FigureTile title="Templates" value={fmtNum(data.templates)} testId="email-figure-templates" />
       </div>
 
-      <Panel id="email-sent" title="Emails in this period" help="Counted from bizinsights' own records. Providers confirm they accepted a message, not that it reached the inbox.">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <Stat label="Waiting to send" value={fmtNum(m.queued)} />
-          <Stat label="Accepted by provider" value={fmtNum(m.accepted)} tone={m.accepted ? "good" : undefined} />
-          <Stat label="Confirmed delivered" value={m.delivered === null ? "Not reported" : fmtNum(m.delivered)} note={m.delivered === null ? data.analytics.unavailable.delivered : undefined} />
-          <Stat label="Failed or bounced" value={fmtNum(m.failed)} tone={m.failed ? "danger" : undefined} />
-          <Stat label="Suppressed" value={fmtNum(m.suppressed)} note="Unsubscribed or blocked" />
+      <Card id="email-sent" title="Emails in this period">
+        <p className="-mt-2 mb-4 text-xs text-muted">Counted from bizinsights&apos; own records. Providers confirm they accepted a message, not that it reached the inbox.</p>
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          <Count label="Waiting to send" value={fmtNum(m.queued)} />
+          <Count label="Accepted by provider" value={fmtNum(m.accepted)} tone={m.accepted ? "good" : undefined} />
+          <Count label="Confirmed delivered" value={m.delivered === null ? "Not reported" : fmtNum(m.delivered)} note={m.delivered === null ? data.analytics.unavailable.delivered : undefined} />
+          <Count label="Failed or bounced" value={fmtNum(m.failed)} tone={m.failed ? "danger" : undefined} />
+          <Count label="Suppressed" value={fmtNum(m.suppressed)} note="Unsubscribed or blocked" />
         </div>
         {m.unknown > 0 && (
           <p className="mt-3 text-sm">
@@ -95,9 +122,9 @@ export default function EmailOverviewPage() {
             <span className="text-muted">— sending was interrupted; they weren&apos;t retried automatically, to avoid duplicates.</span>
           </p>
         )}
-        <div className="mt-4">
+        <div className="mt-5">
           {days_.length === 0 ? (
-            <Empty>No emails in this period.</Empty>
+            <p className="rounded bg-home-soft px-4 py-6 text-center text-sm text-muted">No emails in this period.</p>
           ) : (
             <div>
               <div className="flex h-32 items-end gap-1" role="img" aria-label="Emails per day: accepted and failed">
@@ -123,15 +150,15 @@ export default function EmailOverviewPage() {
           )}
         </div>
         <p className="mt-3 text-xs text-muted">{data.analytics.unavailable.opens} {data.analytics.unavailable.clicks}</p>
-      </Panel>
+      </Card>
 
-      <Panel id="email-attention" title="Accounts needing attention">
+      <Card id="email-attention" title="Accounts needing attention">
         {data.accounts.attention.length === 0 ? (
-          <Empty>{noAccounts ? "No accounts connected yet." : "Every connected account is working."}</Empty>
+          <p className="text-sm text-muted">{noAccounts ? "No accounts connected yet." : "Every connected account is working."}</p>
         ) : (
-          <ul className="divide-y divide-border">
+          <ul className="divide-y divide-home-line">
             {data.accounts.attention.map((a) => (
-              <li key={a.id} className="flex flex-wrap items-center gap-3 py-2">
+              <li key={a.id} className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
                 <ProviderMark provider={a.provider} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{a.email}</span>
@@ -141,14 +168,14 @@ export default function EmailOverviewPage() {
                   </span>
                 </span>
                 <AccountStatusBadge status={a.status} />
-                <Link className="text-sm text-accent underline" href="/settings/email/accounts">
+                <Link className="home-btn h-8" href="/settings/email/accounts">
                   Fix
                 </Link>
               </li>
             ))}
           </ul>
         )}
-      </Panel>
+      </Card>
 
       {(!data.providersConfigured.google || !data.providersConfigured.microsoft) && (
         <Note>

@@ -2,12 +2,13 @@
 import { useState, type ReactNode } from "react";
 import { PageHeader } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
-import { BarRow, ColumnChart } from "@/components/dashboard/Charts";
+import { Card, FigureTile, ShareRow } from "@/components/PageKit";
+import { ColumnChart } from "@/components/dashboard/Charts";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { fmtDay, fmtMoneyCompact } from "@/components/dashboard/format";
-import { ConnectCard, Defined, useInventory, variantLabel } from "@/components/inventory/InventoryUi";
+import { ConnectCard, useInventory, variantLabel } from "@/components/inventory/InventoryUi";
 import { RangePicker, rangeQuery, type RangeChoice } from "@/components/inventory/RangePicker";
-import { Table, Td, Th } from "@/components/staff/ui";
+import { DefinedMark, KIT_ROW, KitHead, KitTable, KitTd, KitTh, SoftNote } from "@/components/inventory/StockKit";
 import { fmtMoney, fmtNum, useApi } from "@/lib/api";
 import { openProduct } from "@/lib/inventory";
 
@@ -38,9 +39,14 @@ interface ReportsAnswer {
   unitsByFulfillmentLocation: null;
 }
 
+const SELL_THROUGH = "Units sold ÷ (units sold + units on hand now).";
+const TURNOVER = "Cost of the units sold ÷ the average stock value at cost over the period, from the daily stock records.";
+
 /**
- * Charts over a period. Trends come only from the day's-end stock records bizinsights has kept
- * (never worked back from today's stock); sales from the imported orders.
+ * Charts over a period, in the look of the Stitch design's Stock pages (its screen 23 draws the
+ * stock value over time): the period's sales figures as tiles, then each chart and list on a card.
+ * Trends come only from the day's-end stock records bizinsights has kept (never worked back from
+ * today's stock); sales from the imported orders.
  */
 export default function InventoryReportsPage() {
   const { base, status } = useInventory();
@@ -50,6 +56,7 @@ export default function InventoryReportsPage() {
   const q = rangeQuery(range, tz);
   const { data, error, loading, reload } = useApi<ReportsAnswer>(q ? `${base}/reports?${q}` : null);
   const recorded = data?.trend.filter((d) => d.recorded) ?? [];
+  const lastValue = [...recorded].reverse().find((d) => d.costValue !== null && d.costValue !== undefined);
 
   return (
     <>
@@ -60,131 +67,169 @@ export default function InventoryReportsPage() {
       ) : !data ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="skeleton h-56 rounded-xl" />
+            <div key={i} className="skeleton h-56 rounded-lg" />
           ))}
         </div>
       ) : (
-        <div className={`grid gap-4 lg:grid-cols-2 ${loading ? "opacity-70" : ""}`}>
-          <Card title="Available stock over time" note={trendNote(data)}>
-            {recorded.length >= 2 ? (
-              <LineChart
-                days={recorded.map((d) => d.day)}
-                series={[
-                  { key: "available", label: "Available", color: "var(--viz-cat-1)", values: recorded.map((d) => d.available ?? 0) },
-                  { key: "onHand", label: "On hand", color: "var(--viz-cat-2)", values: recorded.map((d) => d.onHand ?? 0) },
-                ]}
-                format={(v) => `${fmtNum(v)} units`}
-                fmtAxis={(v) => fmtNum(v)}
-                integer
-                label="Available and on-hand units at each recorded day's end"
+        <div className={`space-y-4 ${loading ? "opacity-70" : ""}`}>
+          <section aria-label="Sales velocity and sell-through" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+            <FigureTile testId="report-units" title="Units sold" value={fmtNum(data.products.unitsSold)} sub={data.products.ordersCoverRange ? "In the period, less returns" : "The imported orders don't cover the whole period"} />
+            <FigureTile testId="report-per-day" title="Units per day" value={fmtNum(data.products.perDay)} />
+            <FigureTile
+              testId="report-sell-through"
+              title="Sell-through"
+              icon={<DefinedMark definition={SELL_THROUGH} />}
+              value={data.products.sellThrough === null ? "—" : `${fmtNum(data.products.sellThrough)}%`}
+              sub={<span className="sr-only">{SELL_THROUGH}</span>}
+            />
+            {data.turnover && (
+              <FigureTile
+                testId="report-turnover"
+                title="Inventory turnover"
+                icon={<DefinedMark definition={TURNOVER} />}
+                value={data.turnover.value === null ? "—" : `${fmtNum(data.turnover.value)}×`}
+                sub={
+                  <>
+                    <span className="sr-only">{TURNOVER} </span>
+                    {data.turnover.note}
+                  </>
+                }
               />
-            ) : (
-              <Empty>{recorded.length === 1 ? `One day recorded so far (${fmtDay(recorded[0]!.day)}): ${fmtNum(recorded[0]!.available)} available.` : "No day recorded in this period yet."}</Empty>
             )}
-          </Card>
-          {status?.can.costs && (
-            <Card title="Stock value over time" note="On-hand units at cost (items with a cost) and at selling price, at each recorded day's end. Retail value isn't sales or profit.">
+            <FigureTile testId="report-stockouts" title="Times items sold out" value={fmtNum(data.stockouts.total)} sub="Available falling to 0, as seen" />
+          </section>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card id="trend-available" title="Available stock over time">
               {recorded.length >= 2 ? (
                 <LineChart
                   days={recorded.map((d) => d.day)}
                   series={[
-                    { key: "cost", label: "At cost", color: "var(--viz-cat-1)", values: recorded.map((d) => d.costValue ?? 0) },
-                    { key: "retail", label: "At selling price", color: "var(--viz-cat-3)", values: recorded.map((d) => d.retailValue ?? 0) },
+                    { key: "available", label: "Available", color: "var(--viz-cat-1)", values: recorded.map((d) => d.available ?? 0) },
+                    { key: "onHand", label: "On hand", color: "var(--viz-cat-2)", values: recorded.map((d) => d.onHand ?? 0) },
                   ]}
-                  format={(v) => fmtMoney(v, currency)}
-                  fmtAxis={(v) => fmtMoneyCompact(v, currency)}
-                  label="Stock value at cost and at selling price at each recorded day's end"
+                  format={(v) => `${fmtNum(v)} units`}
+                  fmtAxis={(v) => fmtNum(v)}
+                  integer
+                  label="Available and on-hand units at each recorded day's end"
                 />
               ) : (
-                <Empty>Needs two recorded days.</Empty>
+                <SoftNote>{recorded.length === 1 ? `One day recorded so far (${fmtDay(recorded[0]!.day)}): ${fmtNum(recorded[0]!.available)} available.` : "No day recorded in this period yet."}</SoftNote>
               )}
+              <Note>{trendNote(data)}</Note>
             </Card>
-          )}
-          <Card title="Low and out of stock over time" note="Variants low and out of stock at each recorded day's end.">
-            {recorded.length >= 2 ? (
-              <LineChart
-                days={recorded.map((d) => d.day)}
-                series={[
-                  { key: "low", label: "Low stock", color: "var(--viz-cat-2)", values: recorded.map((d) => d.lowStock ?? 0) },
-                  { key: "out", label: "Out of stock", color: "var(--viz-cat-3)", values: recorded.map((d) => d.outOfStock ?? 0) },
-                ]}
-                format={(v) => fmtNum(v)}
-                fmtAxis={(v) => fmtNum(v)}
-                integer
-                label="Low-stock and out-of-stock variants at each recorded day's end"
-              />
-            ) : (
-              <Empty>Needs two recorded days.</Empty>
+            {status?.can.costs && (
+              <Card
+                id="trend-value"
+                title="Stock value over time"
+                aside={
+                  lastValue && (
+                    <span>
+                      <span className="text-lg font-semibold text-text tabular-nums">{fmtMoney(lastValue.costValue ?? null, currency)}</span> at cost, {fmtDay(lastValue.day)}
+                    </span>
+                  )
+                }
+              >
+                {recorded.length >= 2 ? (
+                  <LineChart
+                    days={recorded.map((d) => d.day)}
+                    series={[
+                      { key: "cost", label: "At cost", color: "var(--viz-cat-1)", values: recorded.map((d) => d.costValue ?? 0) },
+                      { key: "retail", label: "At selling price", color: "var(--viz-cat-3)", values: recorded.map((d) => d.retailValue ?? 0) },
+                    ]}
+                    format={(v) => fmtMoney(v, currency)}
+                    fmtAxis={(v) => fmtMoneyCompact(v, currency)}
+                    label="Stock value at cost and at selling price at each recorded day's end"
+                  />
+                ) : (
+                  <SoftNote>Needs two recorded days.</SoftNote>
+                )}
+                <Note>On-hand units at cost (items with a cost) and at selling price, at each recorded day&apos;s end. Retail value isn&apos;t sales or profit.</Note>
+              </Card>
             )}
-          </Card>
-          <Card title="Stock movement" note="Available units added and taken off each day, as bizinsights saw the changes (sales, restocks, changes made here).">
-            {data.movement.some((m) => m.added || m.removed) ? (
-              <LineChart
-                days={data.movement.map((m) => m.day)}
-                series={[
-                  { key: "added", label: "Added", color: "var(--viz-cat-1)", values: data.movement.map((m) => m.added) },
-                  { key: "removed", label: "Taken off", color: "var(--viz-cat-3)", values: data.movement.map((m) => m.removed) },
-                ]}
-                format={(v) => `${fmtNum(v)} units`}
-                fmtAxis={(v) => fmtNum(v)}
-                integer
-                bars
-                label="Available units added and taken off per day"
-              />
-            ) : (
-              <Empty>No stock changes seen in this period.</Empty>
-            )}
-          </Card>
-
-          <Card title="Top sellers" note={`Items sold in the period less items returned, as Shopify's sales by product count them; revenue is net sales before tax. Most sold first.${data.products.ordersCoverRange ? "" : " The imported orders don't cover the whole period."}`}>
-            <PerfTable rows={data.products.top} currency={currency} empty="Nothing sold in this period." money={!!status?.can.costs} />
-          </Card>
-          <Card title="Slow movers" note="Items with stock available that sold the fewest units in the period.">
-            <PerfTable rows={data.products.slow} currency={currency} empty="No items with stock." money={!!status?.can.costs} />
-          </Card>
-
-          <Card title="Sales velocity and sell-through" note="">
-            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-              <Stat label="Units sold" value={fmtNum(data.products.unitsSold)} />
-              <Stat label="Units per day" value={fmtNum(data.products.perDay)} />
-              <Stat label={<Defined label="Sell-through" definition="Units sold ÷ (units sold + units on hand now)." />} value={data.products.sellThrough === null ? "—" : `${fmtNum(data.products.sellThrough)}%`} />
-              {data.turnover && (
-                <Stat
-                  label={<Defined label="Inventory turnover" definition="Cost of the units sold ÷ the average stock value at cost over the period, from the daily stock records." />}
-                  value={data.turnover.value === null ? "—" : `${fmtNum(data.turnover.value)}×`}
-                  sub={data.turnover.note ?? undefined}
+            <Card id="trend-low-out" title="Low and out of stock over time">
+              {recorded.length >= 2 ? (
+                <LineChart
+                  days={recorded.map((d) => d.day)}
+                  series={[
+                    { key: "low", label: "Low stock", color: "var(--viz-cat-2)", values: recorded.map((d) => d.lowStock ?? 0) },
+                    { key: "out", label: "Out of stock", color: "var(--viz-cat-3)", values: recorded.map((d) => d.outOfStock ?? 0) },
+                  ]}
+                  format={(v) => fmtNum(v)}
+                  fmtAxis={(v) => fmtNum(v)}
+                  integer
+                  label="Low-stock and out-of-stock variants at each recorded day's end"
                 />
+              ) : (
+                <SoftNote>Needs two recorded days.</SoftNote>
               )}
-              <Stat label="Times items sold out" value={fmtNum(data.stockouts.total)} sub="Available falling to 0, as seen" />
-            </div>
-            {data.stockouts.items.length > 0 && (
-              <ul className="mt-3 space-y-1 text-sm">
-                {data.stockouts.items.slice(0, 5).map((s) => (
-                  <li key={s.variantId ?? s.productTitle} className="flex justify-between gap-2">
-                    <span className="truncate">{variantLabel(s.productTitle ?? "Deleted product", s.variantTitle ?? "")}</span>
-                    <span className="tabular-nums text-muted">{fmtNum(s.count)}×</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          <Card title="Stock by location" note="Available units at each location now. Which location fulfilled each sale isn't in the orders bizinsights imports, so units sold by location aren't shown.">
-            {data.locations.filter((l) => l.available !== null).length ? (
-              <div className="space-y-2">
-                {(() => {
-                  const most = Math.max(1, ...data.locations.map((l) => l.available ?? 0));
-                  return data.locations.map((l) => <BarRow key={l.id} label={l.name} value={fmtNum(l.available)} fraction={(l.available ?? 0) / most} sub={l.active ? undefined : "Inactive"} />);
-                })()}
-              </div>
-            ) : (
-              <Empty>Needs stock-level access in Shopify.</Empty>
-            )}
-          </Card>
-          {data.movement.length > 0 && data.movement.some((m) => m.bizinsights) && (
-            <Card title="Changes made in bizinsights" note="Net available units changed from bizinsights each day.">
-              <ColumnChart values={data.movement.map((m) => Math.abs(m.bizinsights))} labels={data.movement.map((m) => `${fmtDay(m.day)}: ${m.bizinsights > 0 ? "+" : ""}${fmtNum(m.bizinsights)}`)} highlight={null} format={(n) => fmtNum(n)} label="Net units changed in bizinsights per day" />
+              <Note>Variants low and out of stock at each recorded day&apos;s end.</Note>
             </Card>
-          )}
+            <Card id="movement" title="Stock movement">
+              {data.movement.some((m) => m.added || m.removed) ? (
+                <LineChart
+                  days={data.movement.map((m) => m.day)}
+                  series={[
+                    { key: "added", label: "Added", color: "var(--viz-cat-1)", values: data.movement.map((m) => m.added) },
+                    { key: "removed", label: "Taken off", color: "var(--viz-cat-3)", values: data.movement.map((m) => m.removed) },
+                  ]}
+                  format={(v) => `${fmtNum(v)} units`}
+                  fmtAxis={(v) => fmtNum(v)}
+                  integer
+                  bars
+                  label="Available units added and taken off per day"
+                />
+              ) : (
+                <SoftNote>No stock changes seen in this period.</SoftNote>
+              )}
+              <Note>Available units added and taken off each day, as bizinsights saw the changes (sales, restocks, changes made here).</Note>
+            </Card>
+
+            <Card id="top-sellers" title="Top sellers">
+              <PerfTable rows={data.products.top} currency={currency} empty="Nothing sold in this period." money={!!status?.can.costs} />
+              <Note>
+                Items sold in the period less items returned, as Shopify&apos;s sales by product count them; revenue is net sales before tax. Most sold first.
+                {data.products.ordersCoverRange ? "" : " The imported orders don't cover the whole period."}
+              </Note>
+            </Card>
+            <Card id="slow-movers" title="Slow movers">
+              <PerfTable rows={data.products.slow} currency={currency} empty="No items with stock." money={!!status?.can.costs} />
+              <Note>Items with stock available that sold the fewest units in the period.</Note>
+            </Card>
+
+            {data.stockouts.items.length > 0 && (
+              <Card id="stockouts" title="Items that sold out" aside={`${fmtNum(data.stockouts.total)}× in all`}>
+                <ul className="space-y-1.5">
+                  {data.stockouts.items.slice(0, 5).map((s) => (
+                    <li key={s.variantId ?? s.productTitle} className="flex items-center justify-between gap-3 rounded bg-home-soft px-3 py-2 text-sm">
+                      <span className="min-w-0 truncate">{variantLabel(s.productTitle ?? "Deleted product", s.variantTitle ?? "")}</span>
+                      <span className="shrink-0 font-semibold tabular-nums">{fmtNum(s.count)}×</span>
+                    </li>
+                  ))}
+                </ul>
+                <Note>Available falling to 0, as seen.</Note>
+              </Card>
+            )}
+            <Card id="by-location" title="Stock by location">
+              {data.locations.filter((l) => l.available !== null).length ? (
+                <ul className="space-y-3">
+                  {(() => {
+                    const most = Math.max(1, ...data.locations.map((l) => l.available ?? 0));
+                    return data.locations.map((l) => <ShareRow key={l.id} label={l.name} value={fmtNum(l.available)} fraction={(l.available ?? 0) / most} sub={l.active ? undefined : "Inactive"} />);
+                  })()}
+                </ul>
+              ) : (
+                <SoftNote>Needs stock-level access in Shopify.</SoftNote>
+              )}
+              <Note>Available units at each location now. Which location fulfilled each sale isn&apos;t in the orders bizinsights imports, so units sold by location aren&apos;t shown.</Note>
+            </Card>
+            {data.movement.length > 0 && data.movement.some((m) => m.bizinsights) && (
+              <Card id="made-here" title="Changes made in bizinsights">
+                <ColumnChart values={data.movement.map((m) => Math.abs(m.bizinsights))} labels={data.movement.map((m) => `${fmtDay(m.day)}: ${m.bizinsights > 0 ? "+" : ""}${fmtNum(m.bizinsights)}`)} highlight={null} format={(n) => fmtNum(n)} label="Net units changed in bizinsights per day" />
+                <Note>Net available units changed from bizinsights each day.</Note>
+              </Card>
+            )}
+          </div>
         </div>
       )}
     </>
@@ -196,61 +241,40 @@ function trendNote(d: ReportsAnswer): string {
   return `Each day's end, from bizinsights' own stock records: ${fmtNum(d.recordedDays)} of ${fmtNum(days)} days recorded. Days before bizinsights followed the stock aren't filled in.`;
 }
 
-function Card({ title, note, children }: { title: string; note: string; children: ReactNode }) {
-  return (
-    <section className="card min-w-0" aria-label={title}>
-      <h2 className="font-semibold">{title}</h2>
-      {note && <p className="mb-3 mt-0.5 text-xs text-muted">{note}</p>}
-      {children}
-    </section>
-  );
-}
-
-function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted">{children}</p>;
-}
-
-function Stat({ label, value, sub }: { label: ReactNode; value: ReactNode; sub?: string }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-border bg-bg p-2.5">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="mt-0.5 font-semibold tabular-nums">{value}</p>
-      {sub && <p className="mt-0.5 text-[11px] text-muted">{sub}</p>}
-    </div>
-  );
-}
+/** What a card shows and where it comes from, at its foot. */
+const Note = ({ children }: { children: ReactNode }) => <p className="mt-auto pt-4 text-xs text-muted">{children}</p>;
 
 function PerfTable({ rows, currency, empty, money }: { rows: PerfRow[]; currency: string; empty: string; money: boolean }) {
-  if (!rows.length) return <Empty>{empty}</Empty>;
+  if (!rows.length) return <SoftNote>{empty}</SoftNote>;
   return (
-    <Table label="Products">
-      <thead>
+    <KitTable label="Products" minWidth="32rem">
+      <KitHead>
         <tr>
-          <Th>Item</Th>
-          <Th right>Units</Th>
-          <Th right>Per day</Th>
-          {money && <Th right>Revenue</Th>}
-          <Th right>On hand</Th>
-          <Th right>Sell-through</Th>
+          <KitTh>Item</KitTh>
+          <KitTh right>Units</KitTh>
+          <KitTh right>Per day</KitTh>
+          {money && <KitTh right>Revenue</KitTh>}
+          <KitTh right>On hand</KitTh>
+          <KitTh right>Sell-through</KitTh>
         </tr>
-      </thead>
+      </KitHead>
       <tbody>
         {rows.map((r) => (
-          <tr key={r.variantId}>
-            <Td>
-              <button type="button" className="text-left hover:underline" onClick={() => openProduct(r.productId)}>
+          <tr key={r.variantId} className={KIT_ROW}>
+            <KitTd>
+              <button type="button" className="text-left font-medium hover:underline" onClick={() => openProduct(r.productId)}>
                 {variantLabel(r.productTitle, r.variantTitle)}
               </button>
               {r.sku && <span className="block text-xs text-muted">SKU {r.sku}</span>}
-            </Td>
-            <Td right>{fmtNum(r.units)}</Td>
-            <Td right>{fmtNum(r.perDay)}</Td>
-            {money && <Td right>{fmtMoney(r.revenue ?? null, currency)}</Td>}
-            <Td right>{r.onHand === null ? "—" : fmtNum(r.onHand)}</Td>
-            <Td right>{r.sellThrough === null ? "—" : `${fmtNum(r.sellThrough)}%`}</Td>
+            </KitTd>
+            <KitTd right>{fmtNum(r.units)}</KitTd>
+            <KitTd right>{fmtNum(r.perDay)}</KitTd>
+            {money && <KitTd right>{fmtMoney(r.revenue ?? null, currency)}</KitTd>}
+            <KitTd right>{r.onHand === null ? "—" : fmtNum(r.onHand)}</KitTd>
+            <KitTd right>{r.sellThrough === null ? "—" : `${fmtNum(r.sellThrough)}%`}</KitTd>
           </tr>
         ))}
       </tbody>
-    </Table>
+    </KitTable>
   );
 }

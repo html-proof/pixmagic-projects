@@ -71,22 +71,31 @@ export default function AuditPage() {
 
   if (!allowed) return <Alert kind="info">Only owners and admins can view the audit log.</Alert>;
   return (
-    <section className="card space-y-3">
-      <h1 className="text-lg font-semibold">Audit log</h1>
+    <div className="space-y-6">
+      <header>
+        <h1 className="page-title">Audit log</h1>
+        <p className="mt-1 text-sm text-muted sm:text-base">Who changed what and when, newest first.</p>
+      </header>
       {error && <Alert>{error}</Alert>}
-      <ul className="divide-y divide-border text-sm">
-        {items.map((i) => (
-          <li key={i.id} className="flex flex-wrap gap-2 py-2">
-            <span className="w-44 text-muted">{new Date(i.createdAt).toLocaleString()}</span>
-            <span className="flex-1">
-              <strong>{i.actor ?? "System"}</strong> {DESCRIBE[i.action] ?? i.action}
-            </span>
-          </li>
-        ))}
-        {items.length === 0 && !loading && !error && <li className="py-2 text-muted">Nothing recorded yet.</li>}
-        {loading && <li className="py-2 text-muted">Loading…</li>}
-      </ul>
+      {/* The design's audit log (Stitch screen 35): a dot, who did what, and when on the right. */}
+      <section aria-label="Changes" className="home-card animate-rise min-w-0 px-5 py-2 sm:px-6">
+        <ul className="divide-y divide-home-line text-sm">
+          {items.map((i) => (
+            <li key={i.id} className="flex items-start gap-3 py-3">
+              <span aria-hidden className="mt-[7px] size-1.5 shrink-0 rounded-full bg-home-tag" />
+              <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+                <span className="min-w-0 break-words">
+                  <strong className="font-medium">{i.actor ?? "System"}</strong> {DESCRIBE[i.action] ?? i.action}
+                </span>
+                <span className="text-xs whitespace-nowrap text-muted tabular-nums">{new Date(i.createdAt).toLocaleString()}</span>
+              </span>
+            </li>
+          ))}
+          {items.length === 0 && !loading && !error && <li className="py-3 text-muted">Nothing recorded yet.</li>}
+          {loading && <li className="py-3 text-muted">Loading…</li>}
+        </ul>
+      </section>
       {cursor && !loading && <button className="btn-secondary" onClick={() => load(cursor)}>Load more</button>}
-    </section>
+    </div>
   );
 }

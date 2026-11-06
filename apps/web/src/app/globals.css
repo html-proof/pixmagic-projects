@@ -1,11 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #f7f7f5;
+  /* The Stitch design's palette (prototype v2, 2026-11-05; docs/kpis.md): a cool off-white page,
+     navy ink, slate secondary text and cool hairlines, on every signed-in page. */
+  --bg: #f8f9ff;
   --surface: #ffffff;
-  --border: #e4e4e0;
-  --text: #1b1b18;
-  --muted: #6b6b63;
+  --border: #e1e7f0;
+  --text: #0b1c30;
+  --muted: #565d79;
   --accent: #18794e;
   --accent-ink: #ffffff;
   /* Warm partner to the green: highlights, gradients, the second series. */
@@ -47,8 +49,9 @@
   --viz-year-1: #33597a;
   /* Weekend dates under the columns: an orange that reads as text. */
   --viz-weekend: #c2410c;
-  --shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 8px 24px -14px rgb(20 28 22 / 0.14);
-  --shadow-lift: 0 2px 4px rgb(20 28 22 / 0.06), 0 22px 44px -18px rgb(20 28 22 / 0.26);
+  /* The design's faint panel shadow, and a deeper one on hover. */
+  --shadow: 0 1px 2px rgb(11 28 48 / 0.06), 0 1px 3px rgb(11 28 48 / 0.04);
+  --shadow-lift: 0 2px 4px rgb(11 28 48 / 0.06), 0 12px 28px -12px rgb(11 28 48 / 0.18);
   /* The signed-in sidebar (the owner's design): deep navy in both schemes, the page you're on in a
      green that keeps white text at 4.5:1. */
   --nav-bg: #0f1c2e;
@@ -154,6 +157,12 @@ body {
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+/* Signed in (AppShell): the Stitch design's Inter (bundled, @fontsource-variable/inter) on its flat page. */
+@utility app-look {
+  background: var(--bg);
+  font-family: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "cv11";
+}
 /*
  * Two soft washes of the brand colours behind everything, so pages don't read as flat grey. They
  * stay put while the page scrolls, on a fixed layer of their own: as `background-attachment: fixed`
@@ -172,28 +181,47 @@ body::before {
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:opacity-50;
+  @apply inline-flex items-center justify-center gap-2 rounded px-4 py-2 text-sm font-medium transition disabled:opacity-50;
 }
 @utility btn-primary {
   @apply btn bg-accent text-accent-ink hover:opacity-90;
 }
 @utility btn-secondary {
-  @apply btn border border-border bg-surface text-text hover:bg-bg;
+  @apply btn border border-transparent text-text;
+  background: var(--home-soft);
+  &:hover {
+    background: var(--home-soft-hover);
+  }
 }
 @utility btn-danger {
   @apply btn border border-danger text-danger hover:bg-danger hover:text-white;
 }
 @utility input {
-  @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent;
+  @apply w-full rounded border border-border bg-surface px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent;
 }
+/* A panel, as the Stitch design draws every one: white, a small radius, a faint shadow, no outline
+   (a card that sets a border colour, as a highlighted one does, still shows it; a dashed one keeps
+   its hairline). */
 @utility card {
-  @apply rounded-xl border border-border bg-surface p-5;
+  @apply rounded-lg border border-transparent bg-surface p-5;
   box-shadow: var(--shadow);
+  &.border-dashed {
+    border-color: var(--border);
+    box-shadow: none;
+  }
+}
+/* A page's title (PageHeader and the pages' own headers): the design's 32px headline. */
+@utility page-title {
+  @apply text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] sm:text-[2rem] sm:leading-10;
+}
+/* A title inside a panel that heads its page (a settings page's form): the design's 24px headline. */
+@utility card-title {
+  @apply text-2xl leading-8 font-semibold tracking-[-0.015em];
 }
 /* The simple Home's panels (Stitch design): white, a small radius, a faint shadow, no border. */
 @utility home-card {
   @apply rounded-lg bg-surface;
-  box-shadow: 0 1px 2px rgb(11 28 48 / 0.06), 0 1px 3px rgb(11 28 48 / 0.04);
+  box-shadow: var(--shadow);
 }
 @utility home-h2 {
   @apply text-lg leading-6 font-semibold tracking-[-0.01em];
@@ -570,8 +598,11 @@ body::before {
   to { background-position: 200% 50%; }
 }
 
+/* `backwards`, not `both`: the first frame holds through the stagger's delay, and once the rise is
+   over nothing of it stays applied. Kept applied, the finished animation left every card a layer of
+   its own, which painted over a menu opened from the card or row above it. */
 @utility animate-rise {
-  animation: rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
   animation-delay: calc(var(--i, 0) * 70ms);
 }
 @utility animate-grow-x {

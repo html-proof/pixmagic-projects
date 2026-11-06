@@ -133,7 +133,7 @@ export function SmsEditor({ trigger, draft, onChange, sender, business }: { trig
             <p className="label">Ready-made messages</p>
             <div className="flex flex-wrap gap-2">
               {AUTOMATION_STARTERS[trigger].map((s) => (
-                <button key={s.name} type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => set({ body: s.body, name: draft.name || s.name })}>
+                <button key={s.name} type="button" className="home-btn h-8 text-xs" onClick={() => set({ body: s.body, name: draft.name || s.name })}>
                   {s.name}
                 </button>
               ))}
@@ -147,7 +147,7 @@ export function SmsEditor({ trigger, draft, onChange, sender, business }: { trig
           <textarea id="sms-body" ref={ref} className="input min-h-32" maxLength={1600} value={draft.body} onChange={(e) => set({ body: e.target.value })} />
           <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Insert a detail">
             {automationVariables(trigger).map((v) => (
-              <button key={v} type="button" className="rounded-full border border-border px-2.5 py-1 text-xs hover:border-accent hover:text-accent" onClick={() => insert(v)}>
+              <button key={v} type="button" className="rounded bg-home-tag px-2.5 py-1 text-xs font-medium text-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent" onClick={() => insert(v)}>
                 + {SMS_VARIABLE_INFO[v].label}
               </button>
             ))}
@@ -200,7 +200,7 @@ export function SmsEditor({ trigger, draft, onChange, sender, business }: { trig
             </span>
           </label>
         </div>
-        <div className="rounded-xl border border-border bg-bg/60 px-3 py-2 text-xs text-muted">
+        <div className="rounded bg-home-soft px-3 py-2.5 text-xs text-muted">
           <p className="font-medium text-text">Who gets it</p>
           <p>{consentWords(trigger)}</p>
           {marketing && <p className="mt-1">A marketing text must carry the opt-out link; quiet hours and frequency caps apply.</p>}
@@ -325,12 +325,12 @@ export function EmailEditor({ trigger, draft, onChange }: { trigger: HubTrigger;
           <p className="mt-1 text-xs text-muted">A blank line starts a new paragraph.</p>
           <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Insert a detail">
             {variables.map((v) => (
-              <button key={v.path} type="button" className="rounded-full border border-border px-2.5 py-1 text-xs hover:border-accent hover:text-accent" onClick={() => insert(v.path)}>
+              <button key={v.path} type="button" className="rounded bg-home-tag px-2.5 py-1 text-xs font-medium text-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent" onClick={() => insert(v.path)}>
                 + {v.label}
               </button>
             ))}
             {custom && (
-              <button type="button" className="rounded-full border border-dashed border-border px-2.5 py-1 text-xs hover:border-accent hover:text-accent" onClick={() => insert("data.reference")}>
+              <button type="button" className="rounded border border-dashed border-home-tag px-2.5 py-1 text-xs font-medium text-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent" onClick={() => insert("data.reference")}>
                 + A field of your event (data.…)
               </button>
             )}
@@ -355,7 +355,7 @@ export function EmailEditor({ trigger, draft, onChange }: { trigger: HubTrigger;
             </select>
           </div>
         </div>
-        <div className="rounded-xl border border-border bg-bg/60 px-3 py-2 text-xs text-muted">
+        <div className="rounded bg-home-soft px-3 py-2.5 text-xs text-muted">
           <p className="font-medium text-text">Who gets it</p>
           {draft.category === "marketing" ? (
             <p>Only customers who agreed to email marketing. Every email carries an unsubscribe link and your postal address, and unsubscribed addresses are skipped.</p>
@@ -369,14 +369,14 @@ export function EmailEditor({ trigger, draft, onChange }: { trigger: HubTrigger;
         <p className="label">Preview with sample data</p>
         {preview ? (
           <>
-            <p className="rounded-lg border border-border px-3 py-2 text-sm">
+            <p className="rounded bg-home-soft px-3 py-2 text-sm">
               <span className="text-muted">Subject: </span>
               {preview.subject}
             </p>
             <EmailPreviewFrame html={preview.html} height={360} />
           </>
         ) : (
-          <p className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-sm text-muted">{errorFree ? "The preview appears here." : "Fix the problems to see the preview."}</p>
+          <p className="rounded border border-dashed border-home-tag px-3 py-8 text-center text-sm text-muted">{errorFree ? "The preview appears here." : "Fix the problems to see the preview."}</p>
         )}
       </div>
     </div>

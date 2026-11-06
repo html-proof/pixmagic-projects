@@ -58,7 +58,7 @@ function Tile({
 }) {
   const t = TINT[tint];
   return (
-    <div className={`card lift animate-rise flex min-w-0 flex-col rounded-2xl ${small ? "p-3 sm:p-4" : ""}`} data-testid={testid}>
+    <div className={`card lift animate-rise flex min-w-0 flex-col ${small ? "p-3 sm:p-4" : ""}`} data-testid={testid}>
       <div className="flex min-w-0 items-start gap-3">
         <span aria-hidden className={`shrink-0 items-center justify-center rounded-full text-white shadow-sm ${small ? "hidden h-8 w-8 @md:flex" : "flex h-10 w-10"} ${t.disc}`}>
           <IconCmp className={small ? "h-4 w-4" : "h-5 w-5"} strokeWidth={2} />

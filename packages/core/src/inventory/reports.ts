@@ -27,7 +27,7 @@ import {
   type DateRange,
   type StockQuery,
 } from "@app/shared";
-import { ITEM_SALES, localMoment, SALE_UNITS, SALE_VALUE } from "../reports/common.js";
+import { escapeLike, ITEM_SALES, localMoment, SALE_UNITS, SALE_VALUE } from "../reports/common.js";
 import type { StoreInventorySettings } from "./settings.js";
 import { soldCte, STATUS, variantStockCte, type StockScope } from "./stock.js";
 import { livePassWhere } from "./sync.js";
@@ -300,8 +300,6 @@ async function turnoverKpi(tx: Tx, scope: StockScope, dates: { range: DateRange;
 // ---------------------------------------------------------------------------
 // The stock list
 // ---------------------------------------------------------------------------
-
-const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 function stockFilters(q: StockQuery): Prisma.Sql {
   const parts: Prisma.Sql[] = [Prisma.sql`TRUE`];

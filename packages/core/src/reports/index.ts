@@ -5,6 +5,7 @@
  */
 export { recentSyncJobs, storeOverview, syncProblem, workspaceStores, type AdsView } from "./overview.js";
 export { productPerformance, PRODUCT_SORTS } from "./products.js";
+export { orderList } from "./orders.js";
 export { PROFIT_TREND_MONTHS, profitReport, profitStatement, type ProfitReport, type ProfitSees, type ProfitStatement } from "./profit.js";
 export { COLLECTION_LIMIT, collectionSales, type CollectionFigures, type CollectionSalesRow } from "./collections.js";
 export { customerAnalytics, type CustomerAnalyticsView, type CustomerCohorts, type CustomerDates } from "./customers.js";

@@ -4,12 +4,24 @@ import { useEffect, useState } from "react";
 import { SMS_STATUS_LABEL, SMS_STATUSES, smsCampaignCan, smsCampaignEditable, type SmsCampaignAction } from "@app/shared/sms";
 import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Chip, FootLine, TableCard } from "@/components/automations/MarketingKit";
 import { Empty } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { ApiError, api, fmtNum, useApi } from "@/lib/api";
 import { CampaignEditor } from "./CampaignEditor";
 import { CAMPAIGN_STATUS, fmtUsd, fmtWhen, ModeBanner, smsError, StatusPill, useSms, useSmsAction } from "./MessagingUi";
 import type { CampaignEstimate, SmsCampaign, SmsOverview, SmsSegment, SmsTemplate } from "./types";
+
+// ---------------------------------------------------------------------------
+// SMS campaigns, as the Stitch design's screen 15 draws them: the campaigns as rows of a table
+// (name, channel, status, date, then delivered, orders that followed and cost, which only SMS
+// reports), and under them the one being written, in numbered steps (./CampaignEditor.tsx). Every
+// figure is the campaign's own (its metrics, once texts went out); a campaign that hasn't sent
+// shows a dash, never a zero. Approval and the typed count stay exactly as they work.
+// ---------------------------------------------------------------------------
+
+/** The rows' columns from a laptop up (one grid for the head row and every row); a phone stacks each row. */
+const COLUMNS = "xl:grid-cols-[minmax(0,2.4fr)_minmax(0,0.8fr)_minmax(0,1.2fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.2fr)] xl:items-center xl:gap-4";
 
 /** "2026-10-22T09:30" in the browser's own zone, for datetime-local inputs. */
 const localInput = (d: Date) => {
@@ -158,6 +170,104 @@ export function SmsCampaigns() {
         </Alert>
       )}
 
+      {!campaigns.data.campaigns.length ? (
+        !editing && <Empty>No campaigns yet.</Empty>
+      ) : (
+        <TableCard id="campaigns" title="Your campaigns" aside="Newest first. Delivered, orders that followed and cost are counted once texts go out.">
+          {/* The design's head row, for the eye: each row says the same in words. */}
+          <div aria-hidden className={`hidden bg-home-soft px-6 py-2.5 text-[11px] font-semibold tracking-wider text-muted uppercase xl:grid ${COLUMNS}`}>
+            <span>Name</span>
+            <span>Channel</span>
+            <span>Status</span>
+            <span>Date</span>
+            <span className="text-right">Customers</span>
+            <span className="text-right">Delivered</span>
+            <span className="text-right">Orders that followed</span>
+            <span className="text-right">Cost</span>
+          </div>
+          <ul className="divide-y divide-home-line border-t border-home-line xl:border-t-0" aria-label="Campaigns">
+            {campaigns.data.campaigns.map((c) => {
+              const m = c.metrics;
+              const counts = m ? SMS_STATUSES.filter((s) => (m.counts[s] ?? 0) > 0) : [];
+              const customers = c.confirmedRecipients !== null ? fmtNum(c.confirmedRecipients) : c.estimatedRecipients !== null ? `about ${fmtNum(c.estimatedRecipients)}` : "—";
+              const figure = (label: string, value: string) => (
+                <p className="flex items-baseline justify-between gap-2 text-sm tabular-nums xl:block xl:text-right">
+                  <span className="text-xs text-muted xl:sr-only">{label}</span>
+                  <span className={value === "—" ? "text-muted" : "font-medium"}>{value}</span>
+                </p>
+              );
+              return (
+                <li key={c.id} className="px-5 py-4 sm:px-6" aria-label={c.name}>
+                  <div className={`grid gap-2 ${COLUMNS}`}>
+                    <div className="min-w-0">
+                      <p className="font-semibold">{c.name}</p>
+                      <p className="mt-0.5 text-xs text-muted">
+                        “{names.get(c.templateId) ?? "Template"}” · {c.segmentId ? (segmentNames.get(c.segmentId) ?? "a segment") : (c.audience ?? "custom audience")}
+                        {c.discountCode ? ` · code ${c.discountCode}` : ""}
+                      </p>
+                    </div>
+                    <p>
+                      <Chip>SMS</Chip>
+                    </p>
+                    <p>
+                      <StatusPill map={CAMPAIGN_STATUS} status={c.status} />
+                    </p>
+                    <p className="text-xs text-muted xl:text-sm xl:text-text">
+                      {c.scheduledAt ? `${c.startedAt ? "Started" : "Starts"} ${fmtWhen(c.startedAt ?? c.scheduledAt, store?.timezone)}` : `Created ${fmtWhen(c.createdAt, store?.timezone)}`}
+                      {c.completedAt ? <span className="block text-xs text-muted">Finished {fmtWhen(c.completedAt, store?.timezone)}</span> : null}
+                    </p>
+                    {figure(c.confirmedRecipients !== null ? "Confirmed customers" : "Customers when last counted", customers)}
+                    {figure("Delivered", m ? fmtNum(m.counts.delivered ?? 0) : "—")}
+                    {figure("Orders that followed", m ? fmtNum(m.attributedOrders) : "—")}
+                    {figure(m ? "Cost (billed by AWS)" : "Expected cost (estimate)", m ? fmtUsd(m.costUsd) : c.estimatedCostUsd !== null ? `${fmtUsd(c.estimatedCostUsd)} (estimate)` : "—")}
+                  </div>
+                  {(counts.length > 0 || manage) && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                      {counts.length > 0 ? (
+                        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted" aria-label={`${c.name}: texts by status`}>
+                          {counts.map((s) => (
+                            <li key={s}>
+                              {SMS_STATUS_LABEL[s]}: <span className="font-medium text-text tabular-nums">{fmtNum(m!.counts[s])}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span />
+                      )}
+                      {manage && (
+                        <div className="flex flex-wrap gap-2">
+                          {smsCampaignEditable(c.status) && (
+                            <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing({ campaign: c, key: Date.now() })}>
+                              Edit
+                            </button>
+                          )}
+                          {button(c, "submit", "Submit for approval")}
+                          {button(c, "approve", "Approve", true)}
+                          {button(c, "reject", "Send back")}
+                          {smsCampaignCan(c.status, "schedule") && (
+                            <button type="button" className="btn-primary h-8 px-3 text-xs" disabled={!!busy} onClick={() => setScheduling(c)}>
+                              Schedule…
+                            </button>
+                          )}
+                          {button(c, "pause", "Pause")}
+                          {button(c, "resume", "Resume", true)}
+                          {smsCampaignCan(c.status, "cancel") && (
+                            <button type="button" className="btn-danger h-8 px-3 text-xs" disabled={!!busy} onClick={() => setCancelling(c)}>
+                              Cancel campaign…
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </TableCard>
+      )}
+
+      {/* The design's screen 15: the campaigns first, then the one being written, in numbered steps. */}
       {editing && (
         <CampaignEditor
           key={editing.key}
@@ -170,93 +280,14 @@ export function SmsCampaigns() {
           }}
         />
       )}
-
-      {!campaigns.data.campaigns.length ? (
-        !editing && <Empty>No campaigns yet.</Empty>
-      ) : (
-        <ul className="space-y-3">
-          {campaigns.data.campaigns.map((c) => {
-            const m = c.metrics;
-            const counts = m ? SMS_STATUSES.filter((s) => (m.counts[s] ?? 0) > 0) : [];
-            return (
-              <li key={c.id} className="card animate-rise">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="flex flex-wrap items-center gap-2 font-semibold">
-                      {c.name} <StatusPill map={CAMPAIGN_STATUS} status={c.status} />
-                    </p>
-                    <p className="mt-1 text-sm text-muted">
-                      “{names.get(c.templateId) ?? "Template"}” · {c.segmentId ? (segmentNames.get(c.segmentId) ?? "a segment") : (c.audience ?? "custom audience")}
-                      {c.discountCode ? ` · code ${c.discountCode}` : ""}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted">
-                      {c.scheduledAt ? `${c.startedAt ? "Started" : "Starts"} ${fmtWhen(c.startedAt ?? c.scheduledAt, store?.timezone)}` : `Created ${fmtWhen(c.createdAt, store?.timezone)}`}
-                      {c.confirmedRecipients !== null ? ` · ${fmtNum(c.confirmedRecipients)} confirmed customers` : c.estimatedRecipients !== null ? ` · about ${fmtNum(c.estimatedRecipients)} customers when last counted` : ""}
-                      {!m && c.estimatedCostUsd !== null ? ` · expected cost ${fmtUsd(c.estimatedCostUsd)} (estimate)` : ""}
-                      {c.completedAt ? ` · finished ${fmtWhen(c.completedAt, store?.timezone)}` : ""}
-                    </p>
-                  </div>
-                  {manage && (
-                    <div className="flex flex-wrap gap-2">
-                      {smsCampaignEditable(c.status) && (
-                        <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing({ campaign: c, key: Date.now() })}>
-                          Edit
-                        </button>
-                      )}
-                      {button(c, "submit", "Submit for approval")}
-                      {button(c, "approve", "Approve", true)}
-                      {button(c, "reject", "Send back")}
-                      {smsCampaignCan(c.status, "schedule") && (
-                        <button type="button" className="btn-primary h-8 px-3 text-xs" disabled={!!busy} onClick={() => setScheduling(c)}>
-                          Schedule…
-                        </button>
-                      )}
-                      {button(c, "pause", "Pause")}
-                      {button(c, "resume", "Resume", true)}
-                      {smsCampaignCan(c.status, "cancel") && (
-                        <button type="button" className="btn-danger h-8 px-3 text-xs" disabled={!!busy} onClick={() => setCancelling(c)}>
-                          Cancel campaign…
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {m && (
-                  <div className="mt-3 border-t border-border pt-3">
-                    <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                      <div>
-                        <dt className="text-xs text-muted">Cost (billed by AWS)</dt>
-                        <dd className="font-medium tabular-nums">{fmtUsd(m.costUsd)}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-muted">Orders that followed</dt>
-                        <dd className="font-medium tabular-nums">{fmtNum(m.attributedOrders)}</dd>
-                      </div>
-                    </dl>
-                    {counts.length > 0 && (
-                      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                        {counts.map((s) => (
-                          <li key={s}>
-                            {SMS_STATUS_LABEL[s]}: <span className="font-medium text-text tabular-nums">{fmtNum(m.counts[s])}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <p className="text-xs text-muted">
+      <FootLine>
         &ldquo;Orders that followed&rdquo; counts an order once, for the last text its customer received within the campaign&apos;s attribution window. It shows what followed a text, not that the text
         caused it. Revenue by currency is in{" "}
         <Link className="text-accent underline" href="/messaging/analytics">
           Delivery Analytics
         </Link>
         .
-      </p>
+      </FootLine>
 
       {scheduling && (
         <ScheduleDialog

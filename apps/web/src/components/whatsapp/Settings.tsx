@@ -1,17 +1,22 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { PROVIDER_INFO } from "@app/shared/whatsapp";
+import { Building2, Clock, Gauge, Info, Phone, PlugZap, UserRound } from "lucide-react";
+import { PROVIDER_INFO, WA_CAMPAIGN_MAX } from "@app/shared/whatsapp";
 import { ConfirmDialog } from "@/components/AppUi";
-import { Badge, Panel } from "@/components/dashboard/Primitives";
+import { ChannelPanel, Fact, FactList } from "@/components/automations/MarketingKit";
+import { Badge } from "@/components/dashboard/Primitives";
+import { Card } from "@/components/PageKit";
 import { Alert } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, fmtNum } from "@/lib/api";
 import { SettingsForm } from "./SettingsForm";
 import type { WaOverview } from "./types";
-import { CONNECTION_TONE, fmtAgo, useWaAction, waHref } from "./WaUi";
+import { CONNECTION_TONE, fmtAgo, useWaAction, waHref, WhatsappIcon } from "./WaUi";
 
 // Settings: the connection (check, reconnect, disconnect), pausing all automation, the store's
-// WhatsApp settings, and Evolution API's notice (its licence asks for one).
+// WhatsApp settings, and Evolution API's notice (its licence asks for one). The connection is the
+// Stitch design's WhatsApp card on its Channels screen (18): one status word, the one main button,
+// its facts, and the quieter buttons at its foot.
 
 export function Settings({ base, overview, reload }: { base: string; overview: WaOverview; reload: () => void }) {
   const conn = overview.connection && overview.connection.status !== "disconnected" ? overview.connection : null;
@@ -19,6 +24,7 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [confirmPause, setConfirmPause] = useState(false);
   const paused = !!overview.settings.automationPausedAt;
+  const down = !!conn && (conn.status === "logged_out" || conn.status === "failed");
 
   const act = (key: string, what: string, path: string, method: string, done: string, body: unknown = {}) =>
     run(key, what, async () => {
@@ -27,95 +33,127 @@ export function Settings({ base, overview, reload }: { base: string; overview: W
       return done;
     });
 
+  const checkButton = conn && (
+    <button type="button" className={down ? "home-btn" : "btn-primary h-9"} disabled={!!busy} onClick={() => void act("check", "check the connection", "/connection/check", "POST", "Checked with WhatsApp.")}>
+      {busy === "check" ? "Checking…" : "Check again"}
+    </button>
+  );
+
   return (
     <div className="space-y-4">
-      <Panel id="wa-connection" title="Connection">
-        {!conn ? (
-          <div className="space-y-2 text-sm">
-            <p className="text-muted">{overview.connection?.status === "disconnected" ? `Disconnected ${fmtAgo(overview.connection.disconnectedAt)}. The message history stays.` : "WhatsApp isn't connected."}</p>
-            <Link href={waHref("setup")} className="btn-primary inline-flex">
-              Connect WhatsApp
-            </Link>
-          </div>
-        ) : (
-          <div className="space-y-3 text-sm">
-            <p className="flex flex-wrap items-center gap-2">
-              <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>
-              <span>{PROVIDER_INFO[conn.provider].label}</span>
-            </p>
-            <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
-              <div>
-                <dt className="text-muted">Number</dt>
-                <dd>{conn.phone ?? "–"}</dd>
-              </div>
-              <div>
-                <dt className="text-muted">WhatsApp profile name</dt>
-                <dd>{conn.profileName ?? "–"}</dd>
-              </div>
-              {conn.wabaId && (
-                <div>
-                  <dt className="text-muted">WhatsApp Business account</dt>
-                  <dd className="font-mono text-xs">{conn.wabaId}</dd>
-                </div>
-              )}
-              <div>
-                <dt className="text-muted">Connected</dt>
-                <dd>{conn.connectedAt ? new Date(conn.connectedAt).toLocaleString() : "–"}</dd>
-              </div>
-            </dl>
-            {conn.reason && <Alert kind="info">{conn.reason}</Alert>}
-            {overview.can.connect ? (
-              <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => void act("check", "check the connection", "/connection/check", "POST", "Checked with WhatsApp.")}>
-                  {busy === "check" ? "Checking…" : "Check again"}
-                </button>
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <ChannelPanel
+          id="wa-connection"
+          title="Connection"
+          icon={<WhatsappIcon size={20} />}
+          status={conn ? <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge> : <Badge tone="neutral">Not connected</Badge>}
+          action={
+            !conn ? (
+              <Link href={waHref("setup")} className="btn-primary h-9">
+                Connect WhatsApp
+              </Link>
+            ) : overview.can.connect && down ? (
+              <Link href={waHref("setup")} className="btn-primary h-9">
+                Link again
+              </Link>
+            ) : overview.can.connect ? (
+              checkButton
+            ) : undefined
+          }
+          footer={
+            conn && overview.can.connect ? (
+              <>
+                {down && checkButton}
                 {conn.provider === "qr" && (conn.status === "connected" || conn.status === "reconnecting") && (
-                  <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => void act("reconnect", "reconnect", "/connection/reconnect", "POST", "Reconnecting with the saved session.")}>
+                  <button type="button" className="home-btn" disabled={!!busy} onClick={() => void act("reconnect", "reconnect", "/connection/reconnect", "POST", "Reconnecting with the saved session.")}>
                     {busy === "reconnect" ? "Reconnecting…" : "Reconnect"}
                   </button>
                 )}
-                {(conn.status === "logged_out" || conn.status === "failed") && (
-                  <Link href={waHref("setup")} className="btn-primary">
-                    Link again
-                  </Link>
-                )}
-                <button type="button" className="btn-danger" disabled={!!busy} onClick={() => setConfirmDisconnect(true)}>
+                <button type="button" className="btn-danger ml-auto h-9 px-3 text-[13px]" disabled={!!busy} onClick={() => setConfirmDisconnect(true)}>
                   Disconnect
                 </button>
+              </>
+            ) : undefined
+          }
+        >
+          {!conn ? (
+            <p className="text-muted">{overview.connection?.status === "disconnected" ? `Disconnected ${fmtAgo(overview.connection.disconnectedAt)}. The message history stays.` : "WhatsApp isn't connected."}</p>
+          ) : (
+            <>
+              {conn.reason && <Alert kind="info">{conn.reason}</Alert>}
+              <FactList label="The connection">
+                <Fact icon={<PlugZap />}>{PROVIDER_INFO[conn.provider].label}</Fact>
+                <Fact icon={<Phone />}>
+                  <span className="text-muted">Number: </span>
+                  {conn.phone ?? "–"}
+                </Fact>
+                <Fact icon={<UserRound />}>
+                  <span className="text-muted">WhatsApp profile name: </span>
+                  {conn.profileName ?? "–"}
+                </Fact>
+                {conn.wabaId && (
+                  <Fact icon={<Building2 />}>
+                    <span className="text-muted">WhatsApp Business account: </span>
+                    <span className="font-mono text-xs">{conn.wabaId}</span>
+                  </Fact>
+                )}
+                <Fact icon={<Clock />}>
+                  <span className="text-muted">Connected: </span>
+                  {conn.connectedAt ? new Date(conn.connectedAt).toLocaleString() : "–"}
+                </Fact>
+              </FactList>
+              {/* How it works and its limits, as the design's WhatsApp card adds them: the connection's own description and the limits this store's settings and connection set. */}
+              <div className="space-y-2 border-t border-home-line pt-3">
+                <div>
+                  <p className="text-xs font-medium text-muted">How it works</p>
+                  <p>{PROVIDER_INFO[conn.provider].short}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-muted">Limits</p>
+                  <p className="flex items-start gap-2">
+                    <Gauge aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+                    <span>
+                      {fmtNum(overview.limits.dailyLimit)} messages a day, {fmtNum(WA_CAMPAIGN_MAX[conn.provider])} per campaign
+                    </span>
+                  </p>
+                </div>
               </div>
-            ) : (
-              <p className="text-muted">Only people who may manage integrations can reconnect or disconnect.</p>
-            )}
-          </div>
-        )}
-      </Panel>
+              {!overview.can.connect && <p className="text-muted">Only people who may manage integrations can reconnect or disconnect.</p>}
+            </>
+          )}
+        </ChannelPanel>
 
-      <Panel id="wa-pause" title="Pause all automation" help="Automations start nothing while paused, and messages waiting from automations and campaigns are held (cancelled after 48 hours). Messages you send yourself still go.">
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <Badge tone={paused ? "warn" : "good"}>{paused ? `Paused ${fmtAgo(overview.settings.automationPausedAt)}` : "Running"}</Badge>
-          {overview.can.manage &&
-            (paused ? (
-              <button type="button" className="btn-primary" disabled={!!busy} onClick={() => void act("resume", "resume automation", "/settings/pause", "POST", "Automation resumed.", { paused: false })}>
-                {busy === "resume" ? "Resuming…" : "Resume"}
-              </button>
-            ) : (
-              <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => setConfirmPause(true)}>
-                Pause all automation
-              </button>
-            ))}
-        </div>
-      </Panel>
+        <Card id="wa-pause" title="Pause all automation" aside={<Badge tone={paused ? "warn" : "good"}>{paused ? `Paused ${fmtAgo(overview.settings.automationPausedAt)}` : "Running"}</Badge>}>
+          <p className="text-sm text-muted">Automations start nothing while paused, and messages waiting from automations and campaigns are held (cancelled after 48 hours). Messages you send yourself still go.</p>
+          {overview.can.manage && (
+            <div className="mt-4">
+              {paused ? (
+                <button type="button" className="btn-primary" disabled={!!busy} onClick={() => void act("resume", "resume automation", "/settings/pause", "POST", "Automation resumed.", { paused: false })}>
+                  {busy === "resume" ? "Resuming…" : "Resume"}
+                </button>
+              ) : (
+                <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => setConfirmPause(true)}>
+                  Pause all automation
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
 
-      <Panel id="wa-settings" title="Messaging settings">
+      <Card id="wa-settings" title="Messaging settings">
         <SettingsForm base={base} overview={overview} onSaved={reload} />
-      </Panel>
+      </Card>
 
-      <Panel id="wa-about" title="About this service">
-        <p className="text-sm text-muted">{overview.notice}</p>
+      <Card id="wa-about" title="About this service">
+        <p className="flex gap-2 text-sm text-muted">
+          <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+          <span className="min-w-0">{overview.notice}</span>
+        </p>
         <p className="mt-2 text-sm text-muted">
           Instance keys and session data stay on bizinsights&apos; servers, encrypted; this page never receives them. Message texts are kept for {overview.settings.retentionDays} days.
         </p>
-      </Panel>
+      </Card>
 
       <ConfirmDialog
         open={confirmDisconnect}

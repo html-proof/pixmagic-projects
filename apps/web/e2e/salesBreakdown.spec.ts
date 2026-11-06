@@ -105,7 +105,8 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   // Apply it: saved for the store and shown, named, beside Shopify's figures.
   await page.getByRole("button", { name: "Apply to dashboard" }).click();
   await expect(card).toContainText('Shown on the dashboard as "Custom sales · Sales excluding tax and duties"');
-  await page.getByRole("button", { name: "Close details" }).click();
+  // The Sales page is a page of its own (the Stitch design): Home is back through its breadcrumb.
+  await page.getByTestId("crumb-home").click();
   await expect(page.getByTestId("tile-custom-sales")).toContainText("Custom sales $1,060.00");
   await expect(page.getByTestId("tile-custom-sales")).toContainText("Sales excluding tax and duties");
   await expect(page.getByTestId("metric-Total sales")).toContainText("$1,210.00");
@@ -128,16 +129,14 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   await monthly.getByLabel("Sales card shows").selectOption("net");
   await expect(monthly.getByTestId("custom-measure")).toHaveCount(0);
   await expect(monthly).not.toContainText("$1,060.00");
-  await page.getByRole("button", { name: "Close details" }).click();
+  await page.getByTestId("crumb-home").click();
 
   // On a phone the card fits the screen: no sideways scrolling.
   await page.setViewportSize({ width: 375, height: 812 });
   await page.getByTestId("metric-Total sales").click();
   await expect(card).toBeVisible();
-  const overflow = await page.getByTestId("detail-panel").evaluate((el) => {
-    const scroller = el.querySelector("[data-print-scroll]") as HTMLElement;
-    return scroller.scrollWidth - scroller.clientWidth;
-  });
+  await expect(page.getByTestId("detail-panel")).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 
   // Back to Shopify's own: nothing but Shopify's figures again.

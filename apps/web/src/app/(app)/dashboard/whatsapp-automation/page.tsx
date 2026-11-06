@@ -62,8 +62,8 @@ function WhatsappAutomation() {
   if (storesStatus !== "ready") body = <StoresPending />;
   else if (!store || !base)
     body = (
-      <div className="card">
-        <h1 className="text-lg font-semibold">{title}</h1>
+      <div className="home-card animate-rise p-5 sm:p-6">
+        <h1 className="card-title">{title}</h1>
         <p className="mt-1 text-sm text-muted">Connect a Shopify store first: WhatsApp messages are about a store&apos;s orders and customers.</p>
         {canManage(workspace.role) && (
           <Link href="/onboarding" className="btn-primary mt-3 inline-flex">
@@ -79,10 +79,11 @@ function WhatsappAutomation() {
     const conn = data.connection && data.connection.status !== "disconnected" ? data.connection : null;
     body = (
       <>
-        <div className="card animate-rise">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* The page's header as the Stitch design heads Marketing (screens 14–18): the title, one line, and the connection's one status word on the right. */}
+        <div className="animate-rise pb-1">
+          <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
             <div className="min-w-0">
-              <h1 className="flex items-center gap-2 text-lg font-semibold">
+              <h1 className="page-title flex items-center gap-2">
                 <WhatsappIcon size={22} /> {title}
               </h1>
               <p className="mt-1 text-sm text-muted">
@@ -94,7 +95,7 @@ function WhatsappAutomation() {
             {conn ? (
               <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>
             ) : (
-              <Link href={waHref("setup")} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#25D366] px-4 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95">
+              <Link href={waHref("setup")} className="btn-primary h-10">
                 <WhatsappIcon size={18} /> Connect WhatsApp
               </Link>
             )}

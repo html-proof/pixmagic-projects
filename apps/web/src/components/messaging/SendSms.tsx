@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Clock, Megaphone, PackageCheck, Send, Users } from "lucide-react";
 import {
   previewSms,
@@ -21,6 +21,7 @@ import { ConfirmDialog, PageHeader, Skeleton } from "@/components/AppUi";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
+import { StepCard } from "@/components/automations/MarketingKit";
 import { api, useApi } from "@/lib/api";
 import { PhonePreview, type PreviewSender } from "./PhonePreview";
 import { countryName, fmtUsd, fmtWhen, ModeBanner, plural, sendable, smsError, SmsStatusBadge, TemplatePicker, TextBubble, useSms } from "./MessagingUi";
@@ -201,7 +202,7 @@ function SendProgress({ base, sendId, initial, timeZone, onChanged }: { base: st
       {following && <p className="text-xs text-muted">Updating as the SMS provider and the carriers report back…</p>}
       {error && <Alert>{error}</Alert>}
       {send.messages.length > 0 && (
-        <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-lg border border-border text-sm">
+        <ul className="max-h-64 divide-y divide-home-line overflow-y-auto rounded border border-home-line text-sm">
           {send.messages.map((m) => (
             <li key={m.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
               <span className="font-mono">{m.to ?? "—"}</span>
@@ -233,24 +234,16 @@ function SendProgress({ base, sendId, initial, timeZone, onChanged }: { base: st
 }
 
 // ---------------------------------------------------------------------------
-// The four steps
+// The four steps, each on a numbered card as the Stitch design's screen 15 writes a new campaign
+// (who, the message with its phone preview, the cost, when), with a yes asked before it goes.
 // ---------------------------------------------------------------------------
 
-function StepHeader({ n, title, children }: { n: number; title: string; children?: ReactNode }) {
-  return (
-    <header className="space-y-1">
-      <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-        Step {n + 1} of {STEPS.length}
-      </p>
-      <h2 className="text-lg font-semibold">{title}</h2>
-      {children && <div className="text-sm text-muted">{children}</div>}
-    </header>
-  );
-}
+/** Each step's heading on its numbered card, as the Stitch design's screen 15 numbers a new campaign's parts. */
+const STEP_TITLE = ["Who gets it?", "What does it say?", "Check it", "When does it go?"] as const;
 
 function Steps({ step, reachable, onGo }: { step: number; reachable: number; onGo: (i: number) => void }) {
   return (
-    <nav aria-label="Send SMS steps">
+    <nav aria-label="Send SMS steps" className="home-card animate-rise p-3 sm:p-4">
       <ol className="grid grid-cols-4 gap-1">
         {STEPS.map((s, i) => {
           const current = i === step;
@@ -262,10 +255,10 @@ function Steps({ step, reachable, onGo }: { step: number; reachable: number; onG
                 onClick={() => onGo(i)}
                 disabled={i > reachable}
                 aria-current={current ? "step" : undefined}
-                className={`flex w-full flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] transition disabled:cursor-not-allowed disabled:opacity-50 sm:text-xs ${current ? "bg-accent/10 font-semibold text-text" : "text-muted hover:bg-bg hover:text-text"}`}
+                className={`flex w-full flex-col items-center gap-1 rounded px-1 py-2 text-center text-[11px] transition outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 sm:text-xs ${current ? "bg-home-soft font-semibold text-text" : "text-muted hover:bg-home-soft hover:text-text"}`}
               >
-                <span aria-hidden className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${done ? "bg-good text-white" : current ? "bg-accent text-accent-ink" : "border border-border bg-surface"}`}>
-                  {done ? <Check className="h-4 w-4" strokeWidth={3} /> : i + 1}
+                <span aria-hidden className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums ${done || current ? "bg-accent text-accent-ink" : "bg-home-tag text-text"}`}>
+                  {done ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : i + 1}
                 </span>
                 <span className="leading-tight">{s}</span>
               </button>
@@ -282,9 +275,9 @@ function KindChoice({ value, onChange }: { value: SmsCategory; onChange: (k: Sms
     <fieldset className="grid gap-2 sm:grid-cols-2">
       <legend className="label">What are you sending?</legend>
       {(["transactional", "marketing"] as const).map((k) => (
-        <label key={k} className={`flex cursor-pointer gap-3 rounded-xl border-2 p-3 transition ${value === k ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"}`}>
+        <label key={k} className={`flex cursor-pointer gap-3 rounded-lg p-3 transition ${value === k ? "bg-accent/5 ring-2 ring-accent" : "bg-home-soft hover:bg-home-soft-hover"}`}>
           <input type="radio" name="send-kind" className="mt-1 accent-[var(--accent)]" checked={value === k} onChange={() => onChange(k)} />
-          <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${value === k ? "bg-accent text-accent-ink" : "bg-accent/10 text-accent"}`}>
+          <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded ${value === k ? "bg-accent text-accent-ink" : "bg-surface text-accent"}`}>
             {k === "transactional" ? <PackageCheck className="h-5 w-5" /> : <Megaphone className="h-5 w-5" />}
           </span>
           <span className="min-w-0">
@@ -349,12 +342,12 @@ function ChooseCustomers({ base, kind, chosen, setChosen }: { base: string; kind
       ) : !shown.length ? (
         <p className="text-sm text-muted">{q ? "No customer matches that." : "No customers with a mobile number yet. They appear as Shopify orders and checkouts arrive."}</p>
       ) : (
-        <ul className="max-h-80 divide-y divide-border overflow-y-auto rounded-lg border border-border" aria-label="Customers">
+        <ul className="max-h-80 divide-y divide-home-line overflow-y-auto rounded border border-home-line" aria-label="Customers">
           {shown.map((c) => {
             const on = chosen.has(c.id);
             return (
               <li key={c.id}>
-                <label className={`flex items-center gap-3 px-3 py-2 text-sm ${c.canReceive ? "cursor-pointer hover:bg-bg" : "cursor-not-allowed opacity-60"}`}>
+                <label className={`flex items-center gap-3 px-3 py-2 text-sm ${c.canReceive ? "cursor-pointer hover:bg-home-soft" : "cursor-not-allowed opacity-60"}`}>
                   <input type="checkbox" className="accent-[var(--accent)]" checked={on} disabled={!c.canReceive || (!on && full)} onChange={() => toggle(c)} aria-label={`${c.name ?? "Customer"}, ${c.number}`} />
                   <span className="min-w-0 flex-1">
                     <span className="font-medium">{c.name ?? "No name"}</span> <span className="font-mono text-muted">{c.number}</span>
@@ -417,7 +410,7 @@ function ChooseMessage({
       <fieldset className="flex flex-wrap gap-2">
         <legend className="sr-only">Saved or new message</legend>
         {(["saved", "new"] as const).map((m) => (
-          <label key={m} className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${draft.mode === m ? "border-accent bg-accent/10 font-medium" : "border-border hover:bg-bg"}`}>
+          <label key={m} className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded px-3 text-[13px] font-medium transition ${draft.mode === m ? "bg-accent/5 ring-2 ring-accent" : "bg-home-soft hover:bg-home-soft-hover"}`}>
             <input type="radio" name="message-mode" className="accent-[var(--accent)]" checked={draft.mode === m} onChange={() => setDraft({ ...draft, mode: m })} />
             {m === "saved" ? "Use a saved message" : "Write a new message"}
           </label>
@@ -444,9 +437,9 @@ function ChooseMessage({
               Message
             </label>
             <textarea id="send-body" ref={ref} className="input min-h-[7rem]" maxLength={2000} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
-            <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Personalize">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Personalize">
               {variablesFor(kind, recipients).map((v) => (
-                <button key={v} type="button" className="rounded-full border border-border px-2.5 py-1 text-xs hover:bg-bg" onClick={() => insert(v)}>
+                <button key={v} type="button" className="rounded bg-home-tag px-2.5 py-1 text-xs font-medium transition outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent" onClick={() => insert(v)}>
                   + {SMS_VARIABLE_INFO[v].label}
                 </button>
               ))}
@@ -572,8 +565,8 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
 
   if (sent) {
     return (
-      <section className="card animate-rise space-y-3" aria-labelledby="sent-h">
-        <h2 id="sent-h" className="flex items-center gap-2 font-semibold">
+      <section className="home-card animate-rise space-y-3 p-5 sm:p-6" aria-labelledby="sent-h">
+        <h2 id="sent-h" className="home-h2 flex items-center gap-2">
           <Check aria-hidden className="h-5 w-5 text-good" /> {sent.practice ? "Recorded in test mode" : new Date(sent.scheduledAt).getTime() > Date.now() + 60_000 ? "Send scheduled" : "Sending"}
         </h2>
         <SendProgress base={base} sendId={sent.id} initial={sent} timeZone={timeZone} onChanged={onSent} />
@@ -586,31 +579,28 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
 
   const blocked = !!preview && (preview.blockers.length > 0 || preview.issues.some((i) => i.level === "error") || preview.recipients.sending === 0);
   return (
-    <section className="card animate-rise space-y-5" aria-label="Send SMS">
+    <section className="space-y-4" aria-label="Send SMS">
       <Steps step={step} reachable={reachable} onGo={(i) => (i === 2 ? void loadPreview() : setStep(i))} />
+      <StepCard id="send-step" n={step + 1} title={STEP_TITLE[step] ?? ""} aside={`Step ${step + 1} of ${STEPS.length}`}>
       {step === 0 && (
         <div className="space-y-4">
-          <StepHeader n={0} title="Who gets it?">
-            Choose up to {SMS_SEND_MAX_RECIPIENTS} customers. Each one is checked for consent and opt-outs now, and again right before their text goes.
-          </StepHeader>
+          <p className="text-sm text-muted">Choose up to {SMS_SEND_MAX_RECIPIENTS} customers. Each one is checked for consent and opt-outs now, and again right before their text goes.</p>
           <KindChoice value={kind} onChange={(k) => (setKind(k), setChosen(new Map()), setDraft({ ...draft, templateId: "" }))} />
           <ChooseCustomers base={base} kind={kind} chosen={chosen} setChosen={setChosen} />
         </div>
       )}
       {step === 1 && (
         <div className="space-y-4">
-          <StepHeader n={1} title="What does it say?">
+          <p className="text-sm text-muted">
             {KIND[kind].title} to {plural(chosen.size, "customer")}. Personal details are filled in for each customer.
-          </StepHeader>
+          </p>
           <ChooseMessage kind={kind} templates={templates} recipients={chosen.size} draft={draft} setDraft={setDraft} />
         </div>
       )}
       {step === 2 && preview && (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
           <div className="min-w-0 space-y-3">
-            <StepHeader n={2} title="Check it">
-              As {preview.recipients.sending ? "the first customer" : "a customer"} will read it.
-            </StepHeader>
+            <p className="text-sm text-muted">As {preview.recipients.sending ? "the first customer" : "a customer"} will read it.</p>
             {preview.blockers.map((b) => (
               <Alert key={b.code}>
                 {b.message}{" "}
@@ -626,8 +616,8 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
                 {i.message}
               </Alert>
             ))}
-            <ul className="space-y-1.5 text-sm">
-              <li className="flex items-center gap-2" data-testid="send-going">
+            <ul className="space-y-1.5 rounded bg-home-soft px-4 py-3 text-sm">
+              <li className="flex items-center gap-2 font-medium" data-testid="send-going">
                 <Check aria-hidden className="h-4 w-4 text-good" /> {plural(preview.recipients.sending, "customer")} will get it
               </li>
               {preview.recipients.notSending.map((r) => (
@@ -642,7 +632,7 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
                 </li>
               )}
             </ul>
-            <p className="text-sm text-muted">
+            <p className="rounded bg-home-soft px-4 py-3 text-sm text-muted">
               {preview.cost.estimatedUsd > 0 ? `About ${fmtUsd(preview.cost.estimatedUsd)} (estimated, US dollars)` : "No price is known yet for these countries"}
               {preview.cost.unpricedRecipients > 0 && preview.cost.estimatedUsd > 0 ? `, plus ${preview.cost.unpricedRecipients} texts without a known price` : ""}.
               {preview.limit ? ` This month: ${fmtUsd(preview.limit.usedUsd)} of your ${fmtUsd(preview.limit.monthlyUsd)} messaging limit used.` : ""}
@@ -653,7 +643,6 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
       )}
       {step === 3 && preview && (
         <div className="space-y-4">
-          <StepHeader n={3} title="When does it go?" />
           <fieldset className="space-y-2">
             <legend className="sr-only">When</legend>
             <label className="flex items-center gap-2 text-sm">
@@ -666,13 +655,13 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
             <p className="text-xs text-muted">Times are your computer&apos;s. Quiet hours still apply in each customer&apos;s own time zone. You can cancel a scheduled send until its texts go.</p>
           </fieldset>
           <TextBubble>{preview.text}</TextBubble>
-          <p className="text-sm">
+          <p className="rounded bg-home-soft px-4 py-3 text-sm">
             {KIND[preview.category].title} to <strong>{plural(preview.recipients.sending, "customer")}</strong>, {when === "now" ? "now" : `on ${fmtWhen(scheduledAt, timeZone)}`}.
           </p>
         </div>
       )}
       {error && <Alert>{error}</Alert>}
-      <div className="flex flex-wrap justify-between gap-2 border-t border-border pt-4">
+      <div className="flex flex-wrap justify-between gap-2 border-t border-home-line pt-4">
         <button type="button" className="btn-secondary" disabled={step === 0} onClick={() => setStep(step - 1)}>
           Back
         </button>
@@ -692,6 +681,7 @@ function SendWizard({ base, templates, timeZone, sender, onSent }: { base: strin
           </button>
         )}
       </div>
+      </StepCard>
       <ConfirmDialog
         open={confirm}
         title={when === "now" ? `Text ${plural(preview?.recipients.sending ?? 0, "customer")} now?` : "Schedule these texts?"}
@@ -719,14 +709,14 @@ function RecentSends({ base, timeZone, version }: { base: string; timeZone?: str
   if (!list.data) return <Skeleton lines={2} />;
   if (!list.data.sends.length) return null;
   return (
-    <section className="card animate-rise" aria-labelledby="recent-h">
-      <h2 id="recent-h" className="font-semibold">
+    <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby="recent-h">
+      <h2 id="recent-h" className="home-h2">
         Your sends
       </h2>
-      <ul className="mt-3 divide-y divide-border">
+      <ul className="mt-3 divide-y divide-home-line">
         {list.data.sends.map((s) => (
           <li key={s.id} className="py-3">
-            <button type="button" className="flex w-full flex-wrap items-center gap-2 text-left text-sm" aria-expanded={open === s.id} onClick={() => setOpen(open === s.id ? null : s.id)}>
+            <button type="button" className="flex w-full flex-wrap items-center gap-2 rounded-sm text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent" aria-expanded={open === s.id} onClick={() => setOpen(open === s.id ? null : s.id)}>
               <strong>{s.templateName ?? "Message"}</strong>
               <span className="text-muted">
                 {plural(s.recipients, "customer")} · {fmtWhen(new Date(s.scheduledAt) > new Date() ? s.scheduledAt : s.createdAt, timeZone)} · {s.createdBy}
@@ -779,8 +769,8 @@ function SendTest({ base, templates }: { base: string; templates: SmsTemplate[] 
     }
   };
   return (
-    <details className="card animate-rise" open={!!new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("template") || undefined}>
-      <summary className="cursor-pointer font-semibold">Send yourself a test</summary>
+    <details className="home-card animate-rise p-5 sm:p-6" open={!!new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("template") || undefined}>
+      <summary className="home-h2 cursor-pointer">Send yourself a test</summary>
       <p className="mt-1 text-sm text-muted">Text a message&apos;s latest version, approved or not, to one of your team&apos;s approved test recipients, with sample details. Customers never get tests.</p>
       {numbers.error ? (
         <div className="mt-3">
@@ -858,9 +848,9 @@ export function SendSms() {
         </Alert>
       )}
       {!manage ? (
-        <div className="card text-sm text-muted">Only owners and admins can send texts. You can see what was sent in Message History.</div>
+        <div className="home-card p-5 text-sm text-muted">Only owners and admins can send texts. You can see what was sent in Message History.</div>
       ) : !contact ? (
-        <div className="card text-sm text-muted">Sending to customers needs &ldquo;View contact information&rdquo; in Team &amp; Access, since it shows their (masked) numbers.</div>
+        <div className="home-card p-5 text-sm text-muted">Sending to customers needs &ldquo;View contact information&rdquo; in Team &amp; Access, since it shows their (masked) numbers.</div>
       ) : (
         <>
           <SendWizard base={base} templates={templates.data.templates} timeZone={timeZone} sender={senderOf(overview.data)} onSent={() => setVersion((v) => v + 1)} />

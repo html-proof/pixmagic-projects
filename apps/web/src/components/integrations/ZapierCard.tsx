@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Check, ExternalLink, Workflow, X } from "lucide-react";
+import type { IntegrationStatus } from "@app/shared/integrations";
 import { ZAPIER_EVENT_INFO, type ZapierEvent } from "@app/shared/zapier";
 import { ConfirmDialog, useAction } from "@/components/AppUi";
 import { fmtRelative } from "@/components/dashboard/format";
@@ -61,7 +62,7 @@ const when = (iso: string | null) => (iso ? (fmtRelative(iso) ?? new Date(iso).t
 
 function SetupChecklist({ setup }: { setup: Setup }) {
   return (
-    <div className="rounded-xl border border-border bg-bg/60 p-3" data-testid="zapier-setup">
+    <div className="rounded bg-home-soft p-3" data-testid="zapier-setup">
       <p className="font-medium">Platform setup (owners and admins see this)</p>
       <ul className="mt-2 space-y-1">
         {SETUP_STEPS.map(([key, label]) => (
@@ -86,24 +87,26 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
   const [confirm, setConfirm] = useState<Connection | null>(null);
   const o = z.data;
 
-  const state: { key: string; label: string; tone: StateTone; busy?: boolean } = !store
-    ? { key: "not_connected", label: "Not connected", tone: "neutral" }
+  // `status`: the same on the one scale of six the other cards are told on (Zapier isn't one of the
+  // API's modules, so the card places it there itself).
+  const state: { key: string; label: string; tone: StateTone; busy?: boolean; status?: IntegrationStatus } = !store
+    ? { key: "not_connected", label: "Not connected", tone: "neutral", status: "disconnected" }
     : !o
       ? z.error
         ? { key: "unknown", label: "Status unavailable", tone: "neutral" }
         : { key: "checking", label: "Checking…", tone: "neutral", busy: true }
       : !o.configured
-        ? { key: "unavailable", label: "Not set up yet", tone: "neutral" }
+        ? { key: "unavailable", label: "Not set up yet", tone: "neutral", status: "disconnected" }
         : o.connections.length
           ? o.deliveries.some((d) => d.status === "failed")
-            ? { key: "action_required", label: "Some events failed", tone: "warn" }
-            : { key: "connected", label: "Connected", tone: "good" }
-          : { key: "not_connected", label: "Not connected", tone: "neutral" };
+            ? { key: "action_required", label: "Some events failed", tone: "warn", status: "error" }
+            : { key: "connected", label: "Connected", tone: "good", status: "connected" }
+          : { key: "not_connected", label: "Not connected", tone: "neutral", status: "disconnected" };
 
   const connect =
     manage && o?.configured && o.inviteUrl ? (
-      <a className="btn-primary h-11 px-5 font-semibold" href={o.inviteUrl} target="_blank" rel="noopener noreferrer" data-testid="int-zapier-connect" aria-label="Connect Zapier (opens Zapier)">
-        <ExternalLink size={17} strokeWidth={2.2} aria-hidden />
+      <a className="btn-primary h-9 px-3.5 text-[13px] font-semibold" href={o.inviteUrl} target="_blank" rel="noopener noreferrer" data-testid="int-zapier-connect" aria-label="Connect Zapier (opens Zapier)">
+        <ExternalLink size={15} strokeWidth={2.2} aria-hidden />
         {o.connections.length ? "Add a Zap" : "Connect"}
       </a>
     ) : null;
@@ -131,7 +134,8 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
     <IntegrationRow
       testid="int-zapier"
       state={state.key}
-      logo={<Workflow size={38} strokeWidth={2} className="text-[#ff4f00]" />}
+      status={state.status}
+      logo={<Workflow size={20} strokeWidth={2} className="text-[#ff4f00]" />}
       name="Zapier"
       sub="Send this store's alerts and advertising results to the apps you use, with Zaps in your own Zapier account."
       pill={<RowPill label={state.label} tone={state.tone} busy={state.busy} state={state.key} />}
@@ -159,7 +163,7 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
             </p>
           )}
           {o.connections.map((c) => (
-            <div key={c.id} className="rounded-xl border border-border p-3" data-testid="zapier-connection">
+            <div key={c.id} className="rounded border border-home-line p-3" data-testid="zapier-connection">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <p>
                   <span className="text-muted">Connected by</span> {c.authorizedBy?.name || c.authorizedBy?.email || "a former member"}
@@ -202,7 +206,7 @@ export function ZapierCard({ workspaceId, store, manage, full }: { workspaceId: 
             </div>
           ))}
           {o.deliveries.length > 0 && (
-            <details className="rounded-xl border border-border p-3">
+            <details className="rounded border border-home-line p-3">
               <summary className="cursor-pointer font-medium">Recent events sent to Zapier</summary>
               <ul className="mt-2 space-y-1.5" data-testid="zapier-deliveries">
                 {o.deliveries.map((d) => (

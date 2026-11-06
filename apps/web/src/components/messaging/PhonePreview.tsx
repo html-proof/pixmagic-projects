@@ -43,12 +43,13 @@ export function PhonePreview({
   useEffect(() => setNow(new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date())), []);
   return (
     <figure className="space-y-3" aria-label="Preview of the text on a customer's phone">
-      <div className="mx-auto w-full max-w-[290px] rounded-[2.6rem] border-[9px] border-neutral-900 bg-neutral-900 shadow-2xl shadow-black/20 dark:border-neutral-700 dark:bg-neutral-700">
+      {/* The design's navy phone (screen 15), in the sidebar's navy. */}
+      <div className="mx-auto w-full max-w-[290px] rounded-[2.6rem] border-[9px] border-nav bg-nav shadow-[var(--shadow-lift)]">
         <div className="overflow-hidden rounded-[2rem] bg-surface">
           {/* Status bar with the notch. */}
           <div className="relative flex items-center justify-between px-6 pb-1 pt-2.5 text-[11px] font-semibold" aria-hidden>
             <span>{now.replace(/\s?[AP]M$/i, "")}</span>
-            <span className="absolute left-1/2 top-1.5 h-5 w-20 -translate-x-1/2 rounded-full bg-neutral-900 dark:bg-neutral-700" />
+            <span className="absolute left-1/2 top-1.5 h-5 w-20 -translate-x-1/2 rounded-full bg-nav" />
             <span className="flex items-center gap-1">
               <Signal className="h-3 w-3" strokeWidth={2.4} />
               <Wifi className="h-3 w-3" strokeWidth={2.4} />
@@ -58,7 +59,7 @@ export function PhonePreview({
             </span>
           </div>
           {/* The conversation's header: who it is from. */}
-          <div className="flex flex-col items-center gap-1 border-b border-border px-4 pb-2.5 pt-1">
+          <div className="flex flex-col items-center gap-1 border-b border-home-line px-4 pt-1 pb-2.5">
             <div className="flex w-full items-center">
               <ChevronLeft className="h-5 w-5 text-accent" aria-hidden />
               <span className="flex-1" />
@@ -80,13 +81,13 @@ export function PhonePreview({
             {empty ? (
               <p className="px-2 pt-6 text-center text-xs text-muted">Your message shows here as you write it.</p>
             ) : (
-              <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.1rem] rounded-bl-[0.35rem] bg-bg px-3 py-2 text-[13px] leading-snug shadow-sm ring-1 ring-border" data-testid="preview-text">
+              <div className="max-w-[88%] rounded-[1.1rem] rounded-bl-[0.35rem] bg-home-tag px-3 py-2 text-[13px] leading-snug break-words whitespace-pre-wrap" data-testid="preview-text">
                 {text}
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2 border-t border-border px-3 py-2" aria-hidden>
-            <span className="flex-1 rounded-full border border-border px-3 py-1 text-[11px] text-muted">Text Message</span>
+          <div className="flex items-center gap-2 border-t border-home-line px-3 py-2" aria-hidden>
+            <span className="flex-1 rounded-full bg-home-soft px-3 py-1 text-[11px] text-muted">Text Message</span>
           </div>
         </div>
       </div>

@@ -38,9 +38,10 @@ import { useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
+import { StepCard, Switch } from "@/components/automations/MarketingKit";
 import { api, useApi } from "@/lib/api";
 import { AudienceCount, CustomerPicker, SegmentPicker, useAudienceEstimate } from "./AutomationAudience";
-import { ReviewStep, TestStep } from "./AutomationReview";
+import { ReviewChecks, ReviewStep, TestStep } from "./AutomationReview";
 import { ActivateDialog, AUTOMATION_STATUS, consentWords, previewText, quietWords, timingWords, TriggerIcon } from "./AutomationUi";
 import { fmtHour, fmtWhen, smsError, useSms } from "./MessagingUi";
 import { PhonePreview, type PreviewSender } from "./PhonePreview";
@@ -53,6 +54,8 @@ import type { AutomationChecks, AutomationsResponse, AutomationView, SmsSegment,
 // limits, permissions) isn't asked for here: the review lists only what's still missing, with where
 // to fix it. Every check is also the API's (apps/api/src/routes/smsAutomations.ts, @app/shared/sms);
 // nothing is sent by saving, and an automation is "on" only when the API says its rule is active.
+// Laid out as the Stitch design's screen 19 draws one automation: its name and status on the page,
+// each step on a numbered card, and on the review a "Check and turn on" panel beside it.
 // ---------------------------------------------------------------------------
 
 const STEP_LABEL: Record<AutomationStep, string> = { trigger: "When", audience: "Who", message: "Message", test: "Test", review: "Review & activate" };
@@ -265,21 +268,12 @@ const TRIGGER_STATE: Record<TriggerCapability["state"], { tone: Tone; label: str
 const selectable = (c: TriggerCapability | undefined) => !!c && c.state !== "unavailable" && c.state !== "not_sent";
 const AWAITING_GRANT = "insights:awaiting-scope-grant";
 
-function StepHeader({ n, title, children }: { n: number; title: string; children?: ReactNode }) {
-  return (
-    <header className="space-y-1">
-      <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-        Step {n} of {AUTOMATION_STEPS.length}
-      </p>
-      <h2 className="text-xl font-semibold">{title}</h2>
-      {children && <div className="text-sm text-muted">{children}</div>}
-    </header>
-  );
-}
+/** Each step's heading, as its numbered card says it (the Stitch design's screen 19: "1 When", "2 Who"…). */
+const STEP_TITLE = ["When should this message be sent?", "Who should get this SMS?", "Write your message", "Send a test", "Review and activate"] as const;
 
 function Hint({ children }: { children: ReactNode }) {
   return (
-    <p className="flex gap-2 rounded-lg border border-border bg-bg/60 p-3 text-sm text-muted">
+    <p className="flex gap-2 rounded bg-home-soft p-3 text-sm text-muted">
       <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
       <span>{children}</span>
     </p>
@@ -289,9 +283,9 @@ function Hint({ children }: { children: ReactNode }) {
 /** The steps across the top: done, current or to come; a step can be opened once the ones before it are complete. */
 function Progress({ step, reachable, onGo }: { step: number; reachable: number; onGo: (i: number) => void }) {
   return (
-    <nav aria-label="Automation steps">
-      <div className="h-1.5 rounded-full bg-bg" aria-hidden>
-        <div className="h-1.5 rounded-full bg-accent transition-all" style={{ width: `${((step + 1) / AUTOMATION_STEPS.length) * 100}%` }} />
+    <nav aria-label="Automation steps" className="home-card animate-rise p-3 sm:p-4">
+      <div className="h-1 rounded-full bg-home-soft" aria-hidden>
+        <div className="h-1 rounded-full bg-accent transition-all" style={{ width: `${((step + 1) / AUTOMATION_STEPS.length) * 100}%` }} />
       </div>
       <ol className="mt-2 grid grid-cols-5 gap-1">
         {AUTOMATION_STEPS.map((s, i) => {
@@ -304,10 +298,10 @@ function Progress({ step, reachable, onGo }: { step: number; reachable: number; 
                 onClick={() => onGo(i)}
                 disabled={i > reachable}
                 aria-current={current ? "step" : undefined}
-                className={`flex w-full flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] transition disabled:cursor-not-allowed disabled:opacity-50 sm:text-xs ${current ? "bg-accent/10 font-semibold text-text" : "text-muted hover:bg-bg hover:text-text"}`}
+                className={`flex w-full flex-col items-center gap-1 rounded px-1 py-2 text-center text-[11px] transition outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 sm:text-xs ${current ? "bg-home-soft font-semibold text-text" : "text-muted hover:bg-home-soft hover:text-text"}`}
               >
-                <span aria-hidden className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${done ? "bg-good text-white" : current ? "bg-accent text-accent-ink" : "border border-border bg-surface"}`}>
-                  {done ? <Check className="h-4 w-4" strokeWidth={3} /> : i + 1}
+                <span aria-hidden className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums ${done || current ? "bg-accent text-accent-ink" : "bg-home-tag text-text"}`}>
+                  {done ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : i + 1}
                 </span>
                 <span className="leading-tight">
                   {STEP_LABEL[s]}
@@ -322,14 +316,14 @@ function Progress({ step, reachable, onGo }: { step: number; reachable: number; 
   );
 }
 
-/** A big choice card (a radio), with what the choice needs under it once chosen. */
+/** A big choice (a radio) on a soft tile, the chosen one ringed green as the design marks its pick, with what the choice needs under it once chosen. */
 function Choice({ name, checked, disabled, onChange, icon, title, help, children }: { name: string; checked: boolean; disabled?: boolean; onChange: () => void; icon?: ReactNode; title: string; help: string; children?: ReactNode }) {
   return (
-    <div className={`rounded-xl border-2 p-3 transition ${checked ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"} ${disabled ? "opacity-50" : ""}`}>
+    <div className={`rounded-lg p-3 transition ${checked ? "bg-accent/5 ring-2 ring-accent" : "bg-home-soft hover:bg-home-soft-hover"} ${disabled ? "opacity-50" : ""}`}>
       <label className={`flex gap-3 ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
         <input type="radio" name={name} className="mt-1 accent-[var(--accent)]" checked={checked} disabled={disabled} onChange={onChange} />
         {icon && (
-          <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${checked ? "bg-accent text-accent-ink" : "bg-accent/10 text-accent"}`}>
+          <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded ${checked ? "bg-accent text-accent-ink" : "bg-surface text-accent"}`}>
             {icon}
           </span>
         )}
@@ -620,6 +614,15 @@ export function AutomationBuilder() {
         ? `1 customer per event, if they're one of the ${customersWord(estimate.customers)} who qualify now`
         : `${customersWord(estimate.customers)} qualify today`;
 
+  /** The step's one line under its heading. */
+  const stepSub = [
+    "Choose what happens in your store that sends the text. Only events Shopify really sends bizinsights for your store can be chosen.",
+    trigger === "customer_segment" ? "Customers who join the segment you chose in step 1." : "The text goes to the one customer each event is about. Narrow that down if you like.",
+    "What should the customer read? Add their name or order details with Personalize: each customer sees their own.",
+    "See exactly what customers get, on your own phone. You can skip this and test later.",
+    "Click any part to change it. When it checks out, activate it: it runs by itself from then on.",
+  ][step];
+
   const triggerCard = (c: (typeof AUTOMATION_TRIGGER_CARDS)[number]) => {
     const capability = triggers.data!.triggers.find((x) => x.key === c.key);
     const state = capability ? TRIGGER_STATE[capability.state] : TRIGGER_STATE.unavailable;
@@ -633,10 +636,10 @@ export function AutomationBuilder() {
           aria-checked={chosen}
           disabled={!can}
           onClick={() => c.trigger && changeTrigger(c.trigger)}
-          className={`flex h-full w-full flex-col gap-2 rounded-xl border-2 p-3 text-left transition disabled:cursor-not-allowed ${chosen ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"} ${!selectable(capability) ? "opacity-60" : ""}`}
+          className={`flex h-full w-full flex-col gap-2 rounded-lg p-3 text-left transition outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed ${chosen ? "bg-accent/5 ring-2 ring-accent" : "bg-home-soft hover:bg-home-soft-hover"} ${!selectable(capability) ? "opacity-60" : ""}`}
         >
           <span className="flex items-start gap-3">
-            <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${chosen ? "bg-accent text-accent-ink" : "bg-accent/10 text-accent"}`}>
+            <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded ${chosen ? "bg-accent text-accent-ink" : "bg-surface text-accent"}`}>
               <TriggerIcon trigger={c.trigger} card={c.key} className="h-[18px] w-[18px]" />
             </span>
             <span className="min-w-0 flex-1">
@@ -666,29 +669,26 @@ export function AutomationBuilder() {
 
   return (
     <div className="space-y-4">
-      <section className="card animate-rise space-y-4" aria-labelledby="builder-h">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 id="builder-h" className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-              <MessageSquareText aria-hidden className="h-5 w-5 text-accent" /> {id ? (saved?.name ?? "Edit automation") : "Create SMS Automation"}
-              {saved && <Badge tone={AUTOMATION_STATUS[saved.status].tone}>{AUTOMATION_STATUS[saved.status].label}</Badge>}
-              {saved?.pendingChanges && <Badge tone="warn">Changes not live</Badge>}
-            </h1>
-            <p className="mt-1 text-sm text-muted">Choose what happened, who gets the text and what it says, send yourself a test, then activate it. Nothing is sent until you do.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/messaging/automations" className="btn-secondary inline-flex items-center gap-1.5">
-              <ArrowLeft aria-hidden className="h-4 w-4" /> All automations
-            </Link>
-            {manage && step < REVIEW && (
-              <button type="button" className="btn-secondary" disabled={!!busy || !valid[WHEN] || !valid[WHO] || !valid[MESSAGE]} title={!valid[MESSAGE] ? "Fix the message first" : undefined} onClick={() => void save()}>
-                {busy === "save" ? "Saving…" : "Save draft"}
-              </button>
-            )}
-          </div>
+      {/* The page's head, as the design's screen 19 draws one automation: the way back, its name and status, Save, and one sentence. */}
+      <header className="animate-rise space-y-1">
+        <Link href="/messaging/automations" className="inline-flex items-center gap-1 rounded-sm text-[13px] font-medium text-muted outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-accent">
+          <ArrowLeft aria-hidden className="h-3.5 w-3.5" /> All automations
+        </Link>
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 pt-1">
+          <h1 id="builder-h" className="page-title flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <MessageSquareText aria-hidden className="h-6 w-6 shrink-0 text-accent" /> <span className="min-w-0 break-words">{id ? (saved?.name ?? "Edit automation") : "Create SMS Automation"}</span>
+            {saved && <Badge tone={AUTOMATION_STATUS[saved.status].tone}>{AUTOMATION_STATUS[saved.status].label}</Badge>}
+            {saved?.pendingChanges && <Badge tone="warn">Changes not live</Badge>}
+          </h1>
+          {manage && step < REVIEW && (
+            <button type="button" className="btn-secondary" disabled={!!busy || !valid[WHEN] || !valid[WHO] || !valid[MESSAGE]} title={!valid[MESSAGE] ? "Fix the message first" : undefined} onClick={() => void save()}>
+              {busy === "save" ? "Saving…" : "Save draft"}
+            </button>
+          )}
         </div>
-        <Progress step={step} reachable={reachable} onGo={(i) => void go(i)} />
-      </section>
+        <p className="max-w-3xl text-sm text-muted">Choose what happened, who gets the text and what it says, send yourself a test, then activate it. Nothing is sent until you do.</p>
+      </header>
+      <Progress step={step} reachable={reachable} onGo={(i) => void go(i)} />
 
       {readOnly && (
         <Alert kind="info">
@@ -697,7 +697,13 @@ export function AutomationBuilder() {
       )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="card animate-rise min-w-0 space-y-5">
+        <StepCard
+          id="builder-step"
+          n={step + 1}
+          title={STEP_TITLE[step]}
+          aside={`Step ${step + 1} of ${AUTOMATION_STEPS.length}`}
+        >
+          {stepSub && <p className="text-sm text-muted">{stepSub}</p>}
           {problem && (
             <Alert onDismiss={() => setProblem(null)}>
               {problem.text}
@@ -711,9 +717,6 @@ export function AutomationBuilder() {
 
           {step === WHEN && (
             <>
-              <StepHeader n={1} title="When should this message be sent?">
-                Choose what happens in your store that sends the text. Only events Shopify really sends bizinsights for your store can be chosen.
-              </StepHeader>
               <ul role="radiogroup" aria-label="Trigger" className="grid gap-3 sm:grid-cols-2">
                 {mains.map(triggerCard)}
               </ul>
@@ -744,9 +747,9 @@ export function AutomationBuilder() {
               )}
 
               {card && cap && trigger && (
-                <div className="space-y-4 rounded-xl border border-border p-4">
+                <div className="space-y-4 border-t border-home-line pt-4">
                   {cap.state === "ready" ? (
-                    <p className="flex gap-2 text-sm">
+                    <p className="flex gap-2 rounded bg-home-soft px-3 py-2 text-sm">
                       <ShieldCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-good" />
                       <span>
                         Shopify sends bizinsights this event for your store
@@ -832,7 +835,7 @@ export function AutomationBuilder() {
                     <p className="mt-1 text-xs text-muted">Only you and your team see it.</p>
                   </div>
 
-                  <details className="rounded-xl border border-border p-4">
+                  <details className="rounded bg-home-soft p-4">
                     <summary className="cursor-pointer text-sm font-semibold">More timing options (optional)</summary>
                     <fieldset className="mt-4 space-y-4" disabled={readOnly}>
                       <p className="text-sm text-muted">{quietWords(d, store?.timezone)}. A text due then waits until they end.</p>
@@ -886,7 +889,7 @@ export function AutomationBuilder() {
                         day(s).
                       </div>
                       <label className="flex items-start gap-2 text-sm">
-                        <input type="checkbox" role="switch" className="mt-0.5 h-4 w-4 accent-[var(--accent)]" checked={d.dryRun} onChange={(e) => set({ dryRun: e.target.checked })} />
+                        <Switch className="mt-0.5" checked={d.dryRun} onChange={(e) => set({ dryRun: e.target.checked })} />
                         <span>
                           Practice run
                           <span className="block text-xs text-muted">Record in Message History what it would send, and send nothing.</span>
@@ -908,11 +911,8 @@ export function AutomationBuilder() {
 
           {step === WHO && trigger && (
             <>
-              <StepHeader n={2} title="Who should get this SMS?">
-                {trigger === "customer_segment" ? "Customers who join the segment you chose in step 1." : "The text goes to the one customer each event is about. Narrow that down if you like."}
-              </StepHeader>
               {trigger === "customer_segment" ? (
-                <div className="rounded-xl border border-border p-4 text-sm">
+                <div className="rounded bg-home-soft p-4 text-sm">
                   <p className="font-medium">{audienceText}</p>
                   <button type="button" className="mt-1 text-accent underline-offset-2 hover:underline" onClick={() => void go(WHEN)}>
                     Change the segment
@@ -933,7 +933,7 @@ export function AutomationBuilder() {
               <AudienceCount estimate={estimate} loading={estimating} marketing={marketing} daily={daily} />
 
               {TRIGGER_CONDITION_FIELDS[trigger].length > 0 && (
-                <details className="rounded-xl border border-border p-4" open={d.filter === "conditions"}>
+                <details className="rounded bg-home-soft p-4" open={d.filter === "conditions"}>
                   <summary className="cursor-pointer text-sm font-semibold">Only when… (optional conditions)</summary>
                   <fieldset className="mt-3 space-y-2" disabled={readOnly}>
                     <legend className="sr-only">Conditions</legend>
@@ -983,7 +983,7 @@ export function AutomationBuilder() {
                 </details>
               )}
 
-              <div className="space-y-2 rounded-xl border border-border p-4 text-sm">
+              <div className="space-y-2 rounded bg-home-soft p-4 text-sm">
                 <p className="flex gap-2">
                   <ShieldCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-good" />
                   <span>
@@ -1011,10 +1011,6 @@ export function AutomationBuilder() {
 
           {step === MESSAGE && trigger && (
             <>
-              <StepHeader n={3} title="Write your message">
-                What should the customer read? Add their name or order details with Personalize: each customer sees their own.
-              </StepHeader>
-
               {AUTOMATION_STARTERS[trigger].length > 0 && (
                 <div>
                   <p className="label flex items-center gap-1.5">
@@ -1022,7 +1018,7 @@ export function AutomationBuilder() {
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {AUTOMATION_STARTERS[trigger].map((s) => (
-                      <button key={s.name} type="button" disabled={readOnly} aria-pressed={d.body === s.body} className={`rounded-full border px-3 py-1.5 text-sm transition ${d.body === s.body ? "border-accent bg-accent/10" : "border-border hover:border-accent"}`} onClick={() => set({ body: s.body })}>
+                      <button key={s.name} type="button" disabled={readOnly} aria-pressed={d.body === s.body} className={`h-9 rounded px-3 text-[13px] font-medium transition outline-none focus-visible:ring-2 focus-visible:ring-accent ${d.body === s.body ? "bg-accent text-accent-ink" : "bg-home-soft text-text hover:bg-home-soft-hover"}`} onClick={() => set({ body: s.body })}>
                         {s.name}
                       </button>
                     ))}
@@ -1040,7 +1036,7 @@ export function AutomationBuilder() {
                   </button>
                 </div>
                 {personalize && (
-                  <div id="auto-personalize" className="space-y-2 rounded-xl border border-border bg-bg/50 p-3" role="group" aria-label="Insert a detail">
+                  <div id="auto-personalize" className="space-y-2 rounded bg-home-soft p-3" role="group" aria-label="Insert a detail">
                     <p className="text-xs text-muted">Click a detail to put it where your cursor is. Only details a &ldquo;{automationTriggerCard(trigger).label.toLowerCase()}&rdquo; event has are listed.</p>
                     {SMS_VARIABLE_GROUPS.map((g) => {
                       const vs = variables.filter((v) => SMS_VARIABLE_GROUP[v] === g);
@@ -1049,7 +1045,7 @@ export function AutomationBuilder() {
                         <div key={g} className="flex flex-wrap items-center gap-1.5">
                           <span className="w-16 shrink-0 text-xs font-semibold text-muted">{g}</span>
                           {vs.map((v) => (
-                            <button key={v} type="button" className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs transition hover:border-accent hover:bg-accent/5" title={SMS_VARIABLE_INFO[v].description} onClick={() => insert(v)}>
+                            <button key={v} type="button" className="rounded bg-surface px-2.5 py-1 text-xs font-medium transition outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent" title={SMS_VARIABLE_INFO[v].description} onClick={() => insert(v)}>
                               {SMS_VARIABLE_INFO[v].label} <span className="font-mono text-[10px] text-muted">{`{{${v}}}`}</span>
                             </button>
                           ))}
@@ -1123,18 +1119,12 @@ export function AutomationBuilder() {
 
           {step === TEST && trigger && (
             <>
-              <StepHeader n={4} title="Send a test">
-                See exactly what customers get, on your own phone. You can skip this and test later.
-              </StepHeader>
               <TestStep automationId={saved?.id ?? null} setup={setup.data} readiness={readiness} base={base} manage={manage} dirty={dirty} onSetup={setup.setData} />
             </>
           )}
 
           {step === REVIEW && trigger && (
             <>
-              <StepHeader n={5} title="Review and activate">
-                Click any part to change it. When it checks out, activate it: it runs by itself from then on.
-              </StepHeader>
               <ReviewStep
                 name={d.name}
                 trigger={trigger}
@@ -1144,22 +1134,16 @@ export function AutomationBuilder() {
                 message={text}
                 timing={settings.length ? "Not finished" : daily ? "Checked once a day" : timingWords(toInput(d) as SmsAutomationInput)}
                 saved={saved}
-                dirty={dirty}
                 checks={checks.data}
-                checksLoading={checks.loading}
                 manage={manage}
                 busy={busy}
                 onGo={(i) => void go(i)}
-                onTest={() => void go(TEST)}
-                onActivate={() => setConfirm("activate")}
-                onPause={() => setConfirm("pause")}
-                onSave={() => void save()}
               />
             </>
           )}
 
           {step < REVIEW && (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-home-line pt-4">
               <button type="button" className="btn-secondary" disabled={step === 0 || !!busy} onClick={() => void go(step - 1)}>
                 ← Back
               </button>
@@ -1168,12 +1152,27 @@ export function AutomationBuilder() {
               </button>
             </div>
           )}
-        </section>
+        </StepCard>
 
-        <aside className="space-y-3 lg:sticky lg:top-4" aria-label="Preview">
+        {/* Beside the steps: on the review, the design's "Check and turn on" panel first; always the phone. A tall review column isn't sticky, so all of it can be reached. */}
+        <aside className={`min-w-0 space-y-4 ${step === REVIEW ? "" : "lg:sticky lg:top-4"}`} aria-label="Preview">
+          {step === REVIEW && trigger && (
+            <ReviewChecks
+              saved={saved}
+              dirty={dirty}
+              checks={checks.data}
+              checksLoading={checks.loading}
+              manage={manage}
+              busy={busy}
+              onTest={() => void go(TEST)}
+              onActivate={() => setConfirm("activate")}
+              onPause={() => setConfirm("pause")}
+              onSave={() => void save()}
+            />
+          )}
           <PhonePreview sender={senderPreview} text={text} segments={segmentsInfo} worstParts={worst.segments} />
           {trigger && (
-            <div className="card space-y-1.5 text-xs text-muted">
+            <div className="home-card space-y-1.5 p-4 text-xs text-muted">
               <p className="flex items-center gap-1.5 font-medium text-text">
                 <TriggerIcon trigger={trigger} className="h-4 w-4 text-accent" /> {automationTriggerCard(trigger).label}
               </p>

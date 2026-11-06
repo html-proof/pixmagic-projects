@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
@@ -7,9 +8,9 @@ import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StatusWords, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
 import { CompareDates, comparedWith, CompareSelect, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
-import { TopicDetail } from "@/components/dashboard/TopicDetail";
+import { SalesActions, SalesCrumbs, SalesHeader, SalesTabs, salesTabOf, StatusPill } from "@/components/dashboard/SalesFrame";
 import { HistoryFoot, HistoryLine } from "@/components/dashboard/HistoryLine";
-import { useDetailView } from "@/components/dashboard/topics";
+import { topicInfo, useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
 import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, PaidVsOrganic, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
@@ -28,7 +29,24 @@ import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
-import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
+import { hasDashboardAccess, seesTopic, showsDashboardHome, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
+
+/** While a topic's contents load (the first time one opens): its first panels, as shapes. */
+function TopicLoading() {
+  return (
+    <div className="space-y-4">
+      <p className="sr-only" role="status">Loading the details…</p>
+      <div className="skeleton h-14" aria-hidden />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-hidden>
+        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-28" />)}
+      </div>
+      <div className="skeleton h-72" aria-hidden />
+    </div>
+  );
+}
+
+// Every topic's panels (components/dashboard/Details.tsx): loaded the first time a topic opens, so the Home starts without them.
+const TopicContents = dynamic(() => import("@/components/dashboard/Details").then((m) => m.TopicContents), { loading: () => <TopicLoading /> });
 
 /**
  * Set just before we hand the browser to Shopify's optional-scope screen, and read when the
@@ -242,6 +260,10 @@ export default function DashboardPage() {
     url.searchParams.delete("view");
     router.replace(`${page}${url.search}`);
   }, [page, router]);
+  // A topic opens as a page of its own: at its top, not wherever the Home was scrolled to.
+  useEffect(() => {
+    if (detail.view) window.scrollTo({ top: 0 });
+  }, [detail.view]);
   // Driven by the answer the poll itself brings back, so the page speeds up the moment it sees
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
@@ -492,85 +514,9 @@ export default function DashboardPage() {
     </button>
   );
 
-  return (
-    <div className="space-y-6">
-      {simple ? (
-        // The Stitch design's header: the greeting, how current the numbers are, and the dates on one card.
-        <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-          <div className="min-w-0">
-            <h1 className="text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] sm:text-[2rem] sm:leading-10">
-              {greeting(new Date().getHours())}
-              {name ? `, ${name}` : ""}
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              {headerStore && (
-                <>
-                  <StatusWords key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />
-                  {" · "}
-                </>
-              )}
-              {layoutSwitch}
-            </p>
-          </div>
-          <DateChip r={dates} shown={shown} current={!olderAnswer} />
-          {customPickers}
-        </header>
-      ) : (
-      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-[1.75rem]">
-            Welcome back{name ? `, ${name}` : ""}! <span aria-hidden>👋</span>
-          </h1>
-          <p className="mt-1 text-sm text-muted sm:text-base">
-            Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
-            {layoutSwitch && <> {layoutSwitch}</>}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
-          <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
-          {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
-          <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
-        </div>
-        {customPickers}
-      </header>
-      )}
-
-      {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
-      {takenNotice}
-
-      {ov && (
-        <HistoryLine
-          ov={ov}
-          loading={olderAnswer && loading && !error ? (asking?.label ?? null) : null}
-          canManage={canManage(workspace.role)}
-          reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
-          onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
-          importing={pendingScope === "order_history"}
-          brief={simple}
-        />
-      )}
-      {scopeError && pendingScope === null && disabled.length === 0 && <Alert>{scopeError}</Alert>}
-
-      {error && !ov && (
-        <Alert kind={isTransient(error) ? "info" : "error"}>
-          {friendlyError(error)}
-          <RetryButton />
-        </Alert>
-      )}
-      {error && ov && olderAnswer && (
-        <Alert kind={isTransient(error) ? "info" : "error"}>
-          Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
-          <RetryButton />
-        </Alert>
-      )}
-      {loading && !ov && (
-        <>
-          <p className="sr-only" role="status">Loading your numbers…</p>
-          <DashboardSkeleton />
-        </>
-      )}
-      {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
+  // How the store's sync stands, when something is wrong (the Home and every topic page say it alike).
+  const storeAlerts = (
+    <>
       {ov && ov.store.status === "error" && (
         <Alert>
           {/* What `autoRefresh` actually does: the failed *job* is given up on, but the store is
@@ -623,6 +569,156 @@ export default function DashboardPage() {
           )}
         </Alert>
       )}
+    </>
+  );
+
+  // ---- A topic as a page of its own (the Stitch design's Sales tabs, components/dashboard/SalesFrame.tsx) ----
+  if (detail.view && !page) {
+    const topic = detail.view;
+    const tab = salesTabOf(topic);
+    const title = tab ? "Sales" : topicInfo(topic).title;
+    return (
+      <div className="space-y-6" data-testid="detail-panel" data-print-root>
+        <SalesHeader
+          crumbs={showsDashboardHome(access) ? <SalesCrumbs here={title} /> : undefined}
+          title={title}
+          sub={tab ? "How your store is selling" : "Right now, with sales speed from the last 30 days"}
+          status={
+            headerStore && (
+              <StatusPill>
+                <StatusWords key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />
+              </StatusPill>
+            )
+          }
+          dates={topic !== "stock" && <DateChip r={dates} shown={shown} current={!olderAnswer} />}
+          actions={<SalesActions exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />}
+          tabs={tab && <SalesTabs active={tab} onDashboard />}
+        />
+        {topic !== "stock" && customPickers}
+        {ov && (
+          <HistoryLine
+            ov={ov}
+            loading={olderAnswer && loading && !error ? (asking?.label ?? null) : null}
+            canManage={canManage(workspace.role)}
+            reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
+            onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
+            importing={pendingScope === "order_history"}
+            brief
+          />
+        )}
+        {error && !ov && (
+          <Alert kind={isTransient(error) ? "info" : "error"}>
+            {friendlyError(error)}
+            <RetryButton />
+          </Alert>
+        )}
+        {error && ov && olderAnswer && (
+          <Alert kind={isTransient(error) ? "info" : "error"}>
+            Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
+            <RetryButton />
+          </Alert>
+        )}
+        {loading && !ov && <TopicLoading />}
+        {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
+        {storeAlerts}
+        {ov && <TopicContents topic={topic} ov={ov} currency={cur} contactsOn={contactsOn} onOpen={detail.open} />}
+        {ov && (
+          <AboutThisData
+            brief
+            store={ov.store}
+            data={ov.data}
+            freshness={ov.freshness}
+            everySec={everySec}
+            check={ov.check}
+            ws={workspace.id}
+            seesFigures={allowed("finance.breakdown")}
+            canCheck={allowed("integrations.manage")}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {simple ? (
+        // The Stitch design's header: the greeting, how current the numbers are, and the dates on one card.
+        <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <h1 className="page-title">
+              {greeting(new Date().getHours())}
+              {name ? `, ${name}` : ""}
+            </h1>
+            <p className="mt-1 text-sm text-muted">
+              {headerStore && (
+                <>
+                  <StatusWords key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />
+                  {" · "}
+                </>
+              )}
+              {layoutSwitch}
+            </p>
+          </div>
+          <DateChip r={dates} shown={shown} current={!olderAnswer} />
+          {customPickers}
+        </header>
+      ) : (
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+        <div className="min-w-0">
+          <h1 className="page-title">
+            Welcome back{name ? `, ${name}` : ""}! <span aria-hidden>👋</span>
+          </h1>
+          <p className="mt-1 text-sm text-muted sm:text-base">
+            Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
+            {layoutSwitch && <> {layoutSwitch}</>}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
+          <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
+          {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
+          <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
+        </div>
+        {customPickers}
+      </header>
+      )}
+
+      {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
+      {takenNotice}
+
+      {ov && (
+        <HistoryLine
+          ov={ov}
+          loading={olderAnswer && loading && !error ? (asking?.label ?? null) : null}
+          canManage={canManage(workspace.role)}
+          reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
+          onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
+          importing={pendingScope === "order_history"}
+          brief={simple}
+        />
+      )}
+      {scopeError && pendingScope === null && disabled.length === 0 && <Alert>{scopeError}</Alert>}
+
+      {error && !ov && (
+        <Alert kind={isTransient(error) ? "info" : "error"}>
+          {friendlyError(error)}
+          <RetryButton />
+        </Alert>
+      )}
+      {error && ov && olderAnswer && (
+        <Alert kind={isTransient(error) ? "info" : "error"}>
+          Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
+          <RetryButton />
+        </Alert>
+      )}
+      {loading && !ov && (
+        <>
+          <p className="sr-only" role="status">Loading your numbers…</p>
+          <DashboardSkeleton />
+        </>
+      )}
+      {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
+      {storeAlerts}
 
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
@@ -655,8 +751,8 @@ export default function DashboardPage() {
             what's left after the costs we can see, then sales, advertising and best sellers, then
             costs, recent orders and key insights (components/dashboard/HomePanels.tsx); sales day by
             day and month by month against the years before (OverviewCharts.tsx); and the
-            integrations strip. Every number and panel opens the full details
-            (components/dashboard/TopicDetail.tsx). */}
+            integrations strip. Every number and panel opens the full details, a Sales page of its
+            own (components/dashboard/SalesFrame.tsx). */}
         {s && (
           <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
@@ -759,9 +855,6 @@ export default function DashboardPage() {
         />
       )}
 
-      {ov && detail.view && !page && (
-        <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />
-      )}
     </div>
   );
 }
