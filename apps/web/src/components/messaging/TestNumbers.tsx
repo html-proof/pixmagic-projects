@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Card } from "@/components/PageKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { api, useApi } from "@/lib/api";
 import { COUNTRY_CHOICES, countryName, useSms, useSmsAction } from "./MessagingUi";
@@ -10,7 +11,8 @@ import type { SmsMode, TestNumber } from "./types";
 /**
  * Test recipients: the team's own phones. While the SMS account is being verified (the provider's
  * sandbox) texts only reach numbers approved with a code the provider texts them, typed in here.
- * Owners and admins only.
+ * Owners and admins only. A white card of the Stitch design (components/PageKit.tsx), its numbers
+ * as rows with hairlines between them.
  */
 export function TestNumbers({ mode }: { mode: SmsMode }) {
   const { base } = useSms();
@@ -40,11 +42,8 @@ export function TestNumbers({ mode }: { mode: SmsMode }) {
       return "A new code is on its way.";
     });
   return (
-    <section id="test-recipients" className="card animate-rise scroll-mt-4" aria-labelledby="tn-h">
-      <h2 id="tn-h" className="font-semibold">
-        Test recipients
-      </h2>
-      <p className="mt-1 text-sm text-muted">
+    <Card id="test-recipients" title="Test recipients" className="scroll-mt-4">
+      <p className="text-sm text-muted">
         Your team&apos;s own mobiles, for test messages. {mode === "sandbox" ? "While your SMS account is being verified, these are the only numbers that can receive texts." : ""} Each is approved with a code we text to it. Up to 5 per store.
       </p>
       {mode === "off" && <p className="mt-2 text-sm text-muted">No code can be texted while SMS isn&apos;t available for your account.</p>}
@@ -57,9 +56,9 @@ export function TestNumbers({ mode }: { mode: SmsMode }) {
       ) : (
         <>
           {data.testNumbers.length > 0 && (
-            <ul className="mt-3 divide-y divide-border">
+            <ul className="mt-3 divide-y divide-home-line border-y border-home-line">
               {data.testNumbers.map((t) => (
-                <li key={t.id} className="flex flex-wrap items-center gap-3 py-2">
+                <li key={t.id} className="flex flex-wrap items-center gap-3 py-2.5">
                   <span className="font-mono text-sm">{t.number}</span>
                   <span className="text-xs text-muted">{countryName(t.country)}</span>
                   <Badge tone={t.status === "verified" ? "good" : "warn"}>{t.status === "verified" ? "Approved" : "Waiting for the code"}</Badge>
@@ -105,17 +104,17 @@ export function TestNumbers({ mode }: { mode: SmsMode }) {
                 if (number.trim().length >= 6) void add();
               }}
             >
-              <div>
+              <div className="w-full min-w-0 sm:w-56">
                 <label className="text-xs text-muted" htmlFor="tn-number">
                   Mobile number, with its country code
                 </label>
-                <input id="tn-number" className="input w-56" type="tel" autoComplete="off" placeholder="+61 412 345 678" value={number} onChange={(e) => setNumber(e.target.value)} />
+                <input id="tn-number" className="input" type="tel" autoComplete="off" placeholder="+61 412 345 678" value={number} onChange={(e) => setNumber(e.target.value)} />
               </div>
-              <div>
+              <div className="w-full min-w-0 sm:w-44">
                 <label className="text-xs text-muted" htmlFor="tn-country">
                   Country (if no +code)
                 </label>
-                <select id="tn-country" className="input w-44" value={country} onChange={(e) => setCountry(e.target.value)}>
+                <select id="tn-country" className="input" value={country} onChange={(e) => setCountry(e.target.value)}>
                   <option value="">From the number</option>
                   {COUNTRY_CHOICES.map((c) => (
                     <option key={c} value={c}>
@@ -149,6 +148,6 @@ export function TestNumbers({ mode }: { mode: SmsMode }) {
       >
         <p>It can&apos;t receive test messages any more. You can add it again later with a new code.</p>
       </ConfirmDialog>
-    </section>
+    </Card>
   );
 }

@@ -20,6 +20,7 @@ import { ConfirmDialog, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
+import { ROW, Switch, TableHead, TD, Th } from "@/components/automations/MarketingKit";
 import { api, fmtNum, useApi } from "@/lib/api";
 import { actionLabel, fmtDelay, fmtHour, fmtWhen, RULE_STATUS, sendable, smsError, StatusPill, TemplatePicker, useSms, useSmsAction, whoLabel } from "./MessagingUi";
 import type { DryRunResult, RuleDetail, SmsRule, SmsTemplate } from "./types";
@@ -208,7 +209,7 @@ const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 function Box({ step, title, children }: { step: string; title: string; children: ReactNode }) {
   return (
-    <fieldset className="min-w-0 rounded-lg border border-border p-3">
+    <fieldset className="min-w-0 rounded-lg border border-home-line p-3">
       <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-muted">
         {step} · {title}
       </legend>
@@ -294,10 +295,10 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
     });
 
   return (
-    <section className="card animate-rise border-accent/40" aria-labelledby="rule-h">
+    <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby="rule-h">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 id="rule-h" className="flex flex-wrap items-center gap-2 font-semibold">
+          <h2 id="rule-h" className="home-h2 flex flex-wrap items-center gap-2">
             {rule ? rule.name : "New workflow"}
             {rule && <StatusPill map={RULE_STATUS} status={rule.status} />}
             {rule?.dryRun && <Badge tone="neutral">Dry run</Badge>}
@@ -521,7 +522,7 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
             days.
           </div>
           <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" role="switch" className="mt-0.5 h-4 w-4 accent-[var(--accent)]" checked={draft.dryRun} disabled={!editable} onChange={(e) => set({ dryRun: e.target.checked })} />
+            <Switch className="mt-0.5" checked={draft.dryRun} disabled={!editable} onChange={(e) => set({ dryRun: e.target.checked })} />
             <span>
               Dry run
               <span className="block text-xs text-muted">Record in Message History what it would have sent, and send nothing. Turn it off only once the dry runs look right.</span>
@@ -538,7 +539,7 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
         )}
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-home-line pt-4">
         {editable && (
           <button type="button" className="btn-primary" disabled={saving || (!!rule && !dirty)} onClick={() => void save()}>
             {saving ? "Saving…" : rule ? "Save changes" : "Save draft"}
@@ -594,19 +595,17 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
           {dry.results.length > 0 && (
             <div className="relative mt-2 overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-xs text-muted">
-                  <tr>
-                    <th className="py-1 pr-3 text-left font-medium">Order</th>
-                    <th className="py-1 pr-3 text-left font-medium">Result</th>
-                    <th className="py-1 text-left font-medium">Why not</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
+                <TableHead>
+                  <Th>Order</Th>
+                  <Th>Result</Th>
+                  <Th>Why not</Th>
+                </TableHead>
+                <tbody>
                   {dry.results.map((r, i) => (
-                    <tr key={i}>
-                      <td className="py-1.5 pr-3">{r.subject}</td>
-                      <td className="py-1.5 pr-3">{r.pass ? <Badge tone="good">Would send</Badge> : <Badge tone="neutral">Wouldn&apos;t send</Badge>}</td>
-                      <td className="py-1.5 text-xs text-muted">{r.pass ? "" : r.reason === "conditions" ? "Its conditions don't hold" : skipLabel(r.reason)}</td>
+                    <tr key={i} className={ROW}>
+                      <td className={TD}>{r.subject}</td>
+                      <td className={TD}>{r.pass ? <Badge tone="good">Would send</Badge> : <Badge tone="neutral">Wouldn&apos;t send</Badge>}</td>
+                      <td className={`${TD} text-xs text-muted`}>{r.pass ? "" : r.reason === "conditions" ? "Its conditions don't hold" : skipLabel(r.reason)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -618,13 +617,13 @@ export function RuleEditor({ id: initialId, templates, onClose, onChanged }: { i
       )}
 
       {detail.data && detail.data.history.length > 0 && (
-        <details className="mt-5 border-t border-border pt-4">
+        <details className="mt-5 border-t border-home-line pt-4">
           <summary className="cursor-pointer text-sm font-semibold">Version history</summary>
           <ol className="mt-3 space-y-2 text-sm">
             {detail.data.history.map((h, i) => {
               const s = summary(h.snapshot, templates);
               return (
-                <li key={i} className="rounded-lg border border-border p-2">
+                <li key={i} className="rounded bg-home-soft p-2.5">
                   <p>
                     <span className="font-medium">{actionLabel(h.action)}</span>
                     {h.version ? ` · version ${h.version}` : ""} · {whoLabel(h.actorUserId, meId, h.actor)} · <span className="text-muted">{fmtWhen(h.at, store?.timezone)}</span>

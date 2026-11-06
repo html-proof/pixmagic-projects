@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { BadgeCheck, Clock, Cloud, Gauge, Globe, Hash, Info, Moon, Radio, Reply, ShieldCheck, Wallet } from "lucide-react";
 import {
   COUNTRY_RULES,
   SENDER_TYPE_LABEL,
@@ -12,6 +13,8 @@ import {
 } from "@app/shared/sms";
 import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Card } from "@/components/PageKit";
+import { ChannelPanel, Fact, FactList, FootLine, SoftBox, Switch } from "@/components/automations/MarketingKit";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, fmtNum, useApi } from "@/lib/api";
@@ -159,17 +162,13 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
   };
   const editable = manage;
   return (
-    <section className="card animate-rise" aria-labelledby="snd-form-h">
-      <h2 id="snd-form-h" className="font-semibold">
-        Sender settings
-      </h2>
-      {!manage && <p className="mt-1 text-sm text-muted">Only owners and admins can change these.</p>}
+    <Card id="snd-form" title="Sender settings" aside={!manage ? "Only owners and admins can change these." : undefined}>
       {error && (
-        <div className="mt-3">
+        <div className="mb-3">
           <Alert>{error}</Alert>
         </div>
       )}
-      <fieldset disabled={!editable} className="mt-4 min-w-0 space-y-5">
+      <fieldset disabled={!editable} className="min-w-0 space-y-5">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="snd-type">
@@ -183,7 +182,7 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
               ))}
             </select>
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="label" htmlFor="snd-identity">
               Origination identity (ARN or id)
             </label>
@@ -213,7 +212,7 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
           help="India needs a sender of its own (AWS sends Indian traffic from Mumbai); it can't share one with other countries."
         />
         {d.countries.length > 0 && (
-          <ul className="space-y-1 text-xs text-muted">
+          <ul className="space-y-1 rounded bg-home-soft px-4 py-3 text-xs text-muted">
             {d.countries.map((c) => (
               <li key={c}>
                 <strong className="text-text">{countryName(c)}:</strong> {COUNTRY_RULES[c]?.registration ?? "Check AWS's requirements for this country before sending there."}
@@ -257,7 +256,7 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
           <legend className="label">How customers agree to order updates by text</legend>
           <div className="space-y-2">
             {SMS_TRANSACTIONAL_BASES.map((b) => (
-              <label key={b} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${d.transactionalBasis === b ? "border-accent bg-accent/5" : "border-border"}`}>
+              <label key={b} className={`flex cursor-pointer items-start gap-3 rounded border p-3 text-sm ${d.transactionalBasis === b ? "border-accent bg-accent/5" : "border-home-line bg-home-soft/60"}`}>
                 <input type="radio" name="snd-basis" className="mt-0.5 accent-[var(--accent)]" checked={d.transactionalBasis === b} onChange={() => set({ transactionalBasis: b })} />
                 <span>
                   <span className="font-medium">{BASIS[b].label}</span>
@@ -314,7 +313,7 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
         </div>
       )}
       {manage && (
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-home-line pt-4">
           <button type="button" className="btn-primary" disabled={busy || !dirty} onClick={() => void save()}>
             {busy ? "Saving…" : "Save"}
           </button>
@@ -325,11 +324,15 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
           )}
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
-/** Sender Configuration: the AWS identity texts come from, where to, within what budget, and the switches. */
+/**
+ * Sender Configuration: the AWS identity texts come from, where to, within what budget, and the
+ * switches. Its two cards are the SMS card of the Stitch design's screen 18 (one status word, one
+ * main button, the facts under it); the switches, the form and the test numbers follow.
+ */
 export function SenderConfiguration() {
   const { base, manage, store } = useSms();
   const tz = store?.timezone;
@@ -355,6 +358,7 @@ export function SenderConfiguration() {
       await reload();
       return kind === "sending" ? (on ? "Sending is on." : "Sending is off. Texts that were waiting were cancelled.") : on ? "Marketing texts are on." : "Marketing texts are off.";
     });
+  const account = data.mode !== "off" && !data.accountError ? data.account : null;
 
   return (
     <div className="space-y-4">
@@ -362,102 +366,85 @@ export function SenderConfiguration() {
       <ModeBanner mode={data.mode} showLive />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card animate-rise" aria-labelledby="snd-aws-h">
-          <h2 id="snd-aws-h" className="font-semibold">
-            AWS account
-          </h2>
-          {data.mode === "off" ? (
-            <p className="mt-2 text-sm text-muted">Not checked while SMS isn&apos;t switched on for bizinsights.</p>
-          ) : data.accountError || !data.account ? (
-            <p className="mt-2 text-sm text-warn">AWS didn&apos;t answer the account check. Try again in a few minutes.</p>
-          ) : (
-            <dl className="mt-2 grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <dt className="text-xs text-muted">Access</dt>
-                <dd>{data.account.sandbox ? <Badge tone="warn">SMS sandbox</Badge> : <Badge tone="good">Production</Badge>}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted">Tier</dt>
-                <dd>{data.account.tier || "—"}</dd>
-              </div>
-              {data.account.spendLimitUsd !== undefined && data.account.spendLimitUsd !== null && (
-                <div>
-                  <dt className="text-xs text-muted">AWS monthly spend limit</dt>
-                  <dd>
-                    {fmtUsd(data.account.spendLimitUsd)}
-                    {data.account.spendLimitMaxUsd ? <span className="text-xs text-muted"> (up to {fmtUsd(data.account.spendLimitMaxUsd)})</span> : null}
-                  </dd>
-                </div>
-              )}
-            </dl>
-          )}
-          {data.account?.sandbox && <p className="mt-2 text-xs text-muted">In the sandbox AWS only delivers to verified test numbers, whatever else is set up.</p>}
-          <p className="mt-3 text-sm">
-            <span className="text-xs text-muted">Delivery reports (configuration set): </span>
-            {data.configurationSet ?? <span className="text-warn">none set, so delivery reports and prices won&apos;t arrive</span>}
-          </p>
-        </section>
-
-        <section className="card animate-rise" aria-labelledby="snd-status-h">
-          <h2 id="snd-status-h" className="flex flex-wrap items-center gap-2 font-semibold">
-            Sender {s ? <Badge tone={check.tone}>{check.label}</Badge> : <Badge tone="neutral">Not set up</Badge>}
-          </h2>
+        <ChannelPanel
+          id="snd-status"
+          title="Sender"
+          icon={<Radio className="h-5 w-5" />}
+          status={s ? <Badge tone={check.tone}>{check.label}</Badge> : <Badge tone="neutral">Not set up</Badge>}
+          action={
+            s && manage ? (
+              <button type="button" className={verified ? "btn-secondary" : "btn-primary"} disabled={!!busy} onClick={() => void verify()}>
+                {busy === "verify" ? "Checking…" : "Check with AWS"}
+              </button>
+            ) : undefined
+          }
+        >
           {!s ? (
-            <p className="mt-2 text-sm text-muted">Fill in the settings below and save, then check the sender with AWS.</p>
+            <p className="text-muted">Fill in the settings below and save, then check the sender with AWS.</p>
           ) : (
             <>
-              <p className="mt-1 text-sm text-muted">{check.help}</p>
-              <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <dt className="text-xs text-muted">Shows as</dt>
-                  <dd>{s.identityLabel ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted">Registration</dt>
-                  <dd>{REGISTRATION[s.registrationStatus] ?? s.registrationStatus}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted">AWS region</dt>
-                  <dd>{s.awsRegion}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted">Replies (STOP)</dt>
-                  <dd>{s.twoWay ? "Two-way: customers can reply STOP" : "One-way: opt-out link only"}</dd>
-                </div>
-                {s.identityStatus && (
-                  <div>
-                    <dt className="text-xs text-muted">Status at AWS</dt>
-                    <dd>{s.identityStatus}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt className="text-xs text-muted">Last checked</dt>
-                  <dd>{fmtWhen(s.identityCheckedAt, tz)}</dd>
-                </div>
-              </dl>
+              <p className="text-muted">{check.help}</p>
+              <FactList label="The sender">
+                <Fact icon={<BadgeCheck />}>Shows as {s.identityLabel ?? "—"}</Fact>
+                <Fact icon={<ShieldCheck />}>Registration: {REGISTRATION[s.registrationStatus] ?? s.registrationStatus}</Fact>
+                <Fact icon={<Globe />}>AWS region {s.awsRegion}</Fact>
+                <Fact icon={<Reply />}>{s.twoWay ? "Two-way: customers can reply STOP" : "One-way: opt-out link only"}</Fact>
+                {s.identityStatus && <Fact icon={<Info />}>Status at AWS: {s.identityStatus}</Fact>}
+                <Fact icon={<Wallet />}>{s.monthlyBudgetUsd > 0 ? `Budget ${fmtUsd(s.monthlyBudgetUsd)} a month` : "No monthly budget yet: nothing is sent while it is 0"}</Fact>
+                <Fact icon={<Moon />}>
+                  Quiet hours {fmtHour(s.quietStart)} to {fmtHour(s.quietEnd)} for campaigns and Send SMS
+                </Fact>
+                <Fact icon={<Gauge />}>
+                  At most {fmtNum(s.maxPerCustomerDay)} text{s.maxPerCustomerDay === 1 ? "" : "s"} per customer a day
+                </Fact>
+                <Fact icon={<Clock />} muted>
+                  Last checked {fmtWhen(s.identityCheckedAt, tz)}
+                </Fact>
+              </FactList>
               {held && (
-                <p className="mt-3 text-sm text-warn">
+                <p className="text-warn">
                   Texts are held until {fmtWhen(s.heldUntil, tz)}
                   {s.heldReason ? `: ${skipLabel(s.heldReason)}` : ""}.
                 </p>
               )}
-              {manage && (
-                <button type="button" className="btn-secondary mt-3" disabled={!!busy} onClick={() => void verify()}>
-                  {busy === "verify" ? "Checking…" : "Check with AWS"}
-                </button>
-              )}
             </>
           )}
-        </section>
+        </ChannelPanel>
+
+        <ChannelPanel
+          id="snd-aws"
+          title="AWS account"
+          icon={<Cloud className="h-5 w-5" />}
+          status={account ? account.sandbox ? <Badge tone="warn">SMS sandbox</Badge> : <Badge tone="good">Production</Badge> : undefined}
+        >
+          {data.mode === "off" ? (
+            <p className="text-muted">Not checked while SMS isn&apos;t switched on for bizinsights.</p>
+          ) : !account ? (
+            <p className="text-warn">AWS didn&apos;t answer the account check. Try again in a few minutes.</p>
+          ) : (
+            <FactList label="The AWS account">
+              <Fact icon={<ShieldCheck />}>Access: {account.sandbox ? "SMS sandbox" : "Production"}</Fact>
+              <Fact icon={<Hash />}>Tier: {account.tier || "—"}</Fact>
+              {account.spendLimitUsd !== undefined && account.spendLimitUsd !== null && (
+                <Fact icon={<Wallet />}>
+                  AWS monthly spend limit: {fmtUsd(account.spendLimitUsd)}
+                  {account.spendLimitMaxUsd ? <span className="text-muted"> (up to {fmtUsd(account.spendLimitMaxUsd)})</span> : null}
+                </Fact>
+              )}
+            </FactList>
+          )}
+          {data.account?.sandbox && <p className="text-xs text-muted">In the sandbox AWS only delivers to verified test numbers, whatever else is set up.</p>}
+          <SoftBox>
+            <span className="text-xs text-muted">Delivery reports (configuration set): </span>
+            {data.configurationSet ?? <span className="text-warn">none set, so delivery reports and prices won&apos;t arrive</span>}
+          </SoftBox>
+        </ChannelPanel>
       </div>
 
       {s && (
-        <section className="card animate-rise" aria-labelledby="snd-switch-h">
-          <h2 id="snd-switch-h" className="font-semibold">
-            Switches
-          </h2>
-          <p className="mt-1 text-sm text-muted">Both are off until you turn them on. They need a sender verified with AWS and a budget above 0.</p>
-          <ul className="mt-3 divide-y divide-border">
+        <Card id="snd-switch" title="Switches">
+          <p className="text-sm text-muted">Both are off until you turn them on. They need a sender verified with AWS and a budget above 0.</p>
+          <ul className="mt-2 divide-y divide-home-line">
             {(
               [
                 ["sending", "Send texts", s.sendingEnabled, "Approved workflows, campaigns and Send SMS can text customers. Off cancels texts that are waiting."],
@@ -466,9 +453,9 @@ export function SenderConfiguration() {
             ).map(([kind, label, on, help]) => {
               const blocked = !on && (!verified || !(s.monthlyBudgetUsd > 0) || (kind === "marketing" && !s.sendingEnabled));
               return (
-                <li key={kind} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <li key={kind} className="flex items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
-                    <p className="flex items-center gap-2 font-medium">
+                    <p className="flex flex-wrap items-center gap-2 font-medium">
                       {label} <Badge tone={on ? "good" : "neutral"}>{on ? "On" : "Off"}</Badge>
                     </p>
                     <p className="text-xs text-muted">{help}</p>
@@ -478,31 +465,24 @@ export function SenderConfiguration() {
                       </p>
                     )}
                   </div>
-                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      className="h-4 w-4 accent-[var(--accent)]"
-                      checked={on}
-                      disabled={!manage || !!busy || blocked}
-                      onChange={() => setSwitching({ kind, on: !on })}
-                    />
+                  <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-sm">
+                    <Switch checked={on} disabled={!manage || !!busy || blocked} onChange={() => setSwitching({ kind, on: !on })} />
                     <span className="sr-only">{label}</span>
                   </label>
                 </li>
               );
             })}
           </ul>
-        </section>
+        </Card>
       )}
 
       <SenderForm data={data} onSaved={reload} />
       {manage && <TestNumbers mode={data.mode} />}
       {s && (
-        <p className="text-xs text-muted">
+        <FootLine>
           Limits: at most {fmtNum(s.maxPerCustomerDay)} text{s.maxPerCustomerDay === 1 ? "" : "s"} per customer a day and {fmtNum(s.maxMarketingPerWeek)} marketing text
           {s.maxMarketingPerWeek === 1 ? "" : "s"} a week; quiet from {fmtHour(s.quietStart)} to {fmtHour(s.quietEnd)} for campaigns and Send SMS. Workflows keep their own quiet hours, and these daily and weekly limits apply to every text.
-        </p>
+        </FootLine>
       )}
 
       <ConfirmDialog

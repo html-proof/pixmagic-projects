@@ -9,6 +9,7 @@ import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Menu } from "@/components/team/TeamUi";
 import { Alert, EmptyState } from "@/components/ui";
+import { Chip, FactsLine, FootLine, Switch, TableCard } from "@/components/automations/MarketingKit";
 import { api, fmtNum, useApi } from "@/lib/api";
 import { ActivateDialog, AUTOMATION_STATUS, problemsFor, timingWords, TriggerIcon } from "./AutomationUi";
 import { fmtWhen, smsError, SmsStatusBadge, useSms } from "./MessagingUi";
@@ -16,10 +17,11 @@ import { RuleEditor } from "./RuleEditor";
 import type { AutomationsResponse, AutomationView, SmsTemplate } from "./types";
 
 // ---------------------------------------------------------------------------
-// SMS Automations: one card each (what starts it, who gets it, its message, whether it's on and
-// what it sent), with its switch, Edit, and a menu to duplicate it, see its texts or delete it.
-// Every state shown is the API's (apps/api/src/routes/smsAutomations.ts): "Active" is the rule's
-// stored status, and a text is "Delivered" only on the carrier's delivery report.
+// SMS Automations, as the Stitch design's screen 14 lists them: a line of how many are on and what
+// they sent, then one row each (what starts it, who gets it and its message; its channel; its
+// status; its last 30 days; Edit, its switch and a menu to duplicate it, see its texts or delete
+// it). Every state shown is the API's (apps/api/src/routes/smsAutomations.ts): "Active" is the
+// rule's stored status, and a text is "Delivered" only on the carrier's delivery report.
 // ---------------------------------------------------------------------------
 
 type StatusFilter = "all" | "active" | "paused" | "draft" | "disabled";
@@ -33,6 +35,10 @@ const STATUS_FILTERS: Array<[StatusFilter, string]> = [
 const inFilter = (a: AutomationView, f: StatusFilter) => f === "all" || (f === "draft" ? a.status === "draft" || a.status === "pending_approval" : a.status === f);
 /** With more than this many automations the list gets its search and filters. */
 const FILTER_FROM = 4;
+/** The rows' columns on a wide screen (the design's table); a narrower one stacks each row. */
+const COLUMNS = "xl:grid xl:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_auto] xl:items-start xl:gap-4";
+/** A head cell of that row, as MarketingKit's TH draws one (the row sets the side padding). */
+const HEAD = "py-2.5 text-[11px] font-semibold tracking-wider whitespace-nowrap text-muted uppercase";
 
 /** A message with its variables as labelled chips ("Hi [Customer first name], …"). */
 export function MessageWithVariables({ body }: { body: string }) {
@@ -82,6 +88,8 @@ export function SmsAutomations() {
   const missing = readiness.items.filter((i) => !i.ok && !i.optional && i.key !== "account");
   const triggersUsed = AUTOMATION_TRIGGER_CARDS.filter((c) => c.trigger && automations.some((a) => a.trigger === c.trigger));
   const business = store?.name ?? "your store";
+  const onCount = automations.filter((a) => a.status === "active").length;
+  const sentTotal = automations.reduce((n, a) => n + a.last30Days.accepted, 0);
 
   /** One change, then the list again: the API's answer is what's shown. */
   const act = async (key: string, what: string, fn: () => Promise<unknown>, done: string) => {
@@ -129,6 +137,21 @@ export function SmsAutomations() {
   return (
     <div className="space-y-4">
       <PageHeader title="SMS Automations" sub="Texts that go out by themselves when something happens in your store. Each one: what happened, who gets it, the message, and whether it's on." actions={manage ? create : undefined} />
+      {automations.length > 0 && (
+        <FactsLine
+          testId="automations-facts"
+          items={[
+            `${fmtNum(onCount)} of ${fmtNum(automations.length)} on`,
+            `${fmtNum(sentTotal)} sent in 30 days`,
+            missing.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 font-medium text-danger">
+                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-danger" />
+                {fmtNum(missing.length)} {missing.length === 1 ? "needs" : "need"} you
+              </span>
+            ),
+          ]}
+        />
+      )}
 
       {missing.length > 0 && (
         <Alert kind="info">
@@ -191,7 +214,7 @@ export function SmsAutomations() {
       ) : (
         <>
           {automations.length > FILTER_FROM && (
-            <div className="card animate-rise flex flex-wrap items-end gap-3" role="search">
+            <div className="home-card animate-rise flex flex-wrap items-end gap-3 p-4 sm:p-5" role="search">
               <div className="min-w-[12rem] flex-1">
                 <label className="label" htmlFor="auto-search">
                   Search automations
@@ -230,7 +253,7 @@ export function SmsAutomations() {
           )}
 
           {shown.length === 0 ? (
-            <div className="card text-sm text-muted">
+            <div className="home-card p-5 text-sm text-muted">
               No automation matches.{" "}
               <button
                 type="button"
@@ -245,91 +268,87 @@ export function SmsAutomations() {
               </button>
             </div>
           ) : (
-            <ul className="grid gap-3 lg:grid-cols-2" aria-label="Automations">
-              {shown.map((a) => {
-                const s = AUTOMATION_STATUS[a.status] ?? AUTOMATION_STATUS.draft;
-                const on = a.status === "active";
-                const blocked = problemsFor(problems, a.category);
-                const sent = a.last30Days.accepted;
-                return (
-                  <li key={a.id} className={`card animate-rise flex flex-col gap-3 ${on ? "border-good/40" : ""}`} aria-label={a.name}>
-                    <div className="flex items-start gap-3">
-                      <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
-                        <TriggerIcon trigger={a.trigger} />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-semibold">{a.name}</p>
-                        <p className="mt-0.5 text-sm text-muted">
-                          {a.triggerLabel ? `When: ${a.triggerLabel.toLowerCase()}` : "Its settings need fixing"}
-                          {a.config ? ` · ${timingWords(a.config).toLowerCase()}` : ""}
+            <TableCard id="sms-automations" testId="sms-automations">
+              {/* The design's head row: for the eye only, each row below names its own parts. */}
+              <div aria-hidden className={`hidden bg-home-soft px-5 sm:px-6 ${COLUMNS}`}>
+                <span className={HEAD}>Automation</span>
+                <span className={HEAD}>Channel</span>
+                <span className={HEAD}>Status</span>
+                <span className={`${HEAD} text-right`}>Last 30 days</span>
+                <span className={`${HEAD} text-right`}>{manage ? "State" : ""}</span>
+              </div>
+              <ul className="divide-y divide-home-line" aria-label="Automations">
+                {shown.map((a) => {
+                  const s = AUTOMATION_STATUS[a.status] ?? AUTOMATION_STATUS.draft;
+                  const on = a.status === "active";
+                  const blocked = problemsFor(problems, a.category);
+                  const sent = a.last30Days.accepted;
+                  return (
+                    <li key={a.id} className={`animate-rise flex flex-col gap-3 px-5 py-4 sm:px-6 ${COLUMNS}`} aria-label={a.name}>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-accent/10 text-accent">
+                          <TriggerIcon trigger={a.trigger} className="h-[18px] w-[18px]" />
+                        </span>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <p className="truncate font-semibold">{a.name}</p>
+                          <p className="text-xs text-muted">
+                            {a.triggerLabel ? `When: ${a.triggerLabel.toLowerCase()}` : "Its settings need fixing"}
+                            {a.config ? ` · ${timingWords(a.config).toLowerCase()}` : ""}
+                          </p>
+                          {a.audienceLabel && (
+                            <p className="flex gap-1.5 text-xs text-muted">
+                              <Users aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                              {a.audienceLabel}
+                            </p>
+                          )}
+                          {a.body && (
+                            <p className="line-clamp-2 rounded bg-home-soft px-3 py-2 text-xs leading-relaxed">
+                              <MessageWithVariables body={a.body} />
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <p className="flex flex-wrap items-center gap-1.5">
+                        <Chip>SMS</Chip>
+                        {a.category === "marketing" && <Chip tone="accent">marketing</Chip>}
+                        {a.dryRun && <Badge tone="neutral">Practice run</Badge>}
+                      </p>
+
+                      <p className="flex flex-wrap items-center gap-1.5 text-sm">
+                        <Badge tone={s.tone}>{on ? "✓ Active" : a.status === "paused" ? "● Paused" : s.label}</Badge>
+                        {a.pendingChanges && <Badge tone="warn">Changes not live</Badge>}
+                      </p>
+
+                      <div className="space-y-1 text-xs text-muted xl:text-right">
+                        <p className="font-medium text-text tabular-nums">
+                          {fmtNum(sent)} message{sent === 1 ? "" : "s"} sent <span className="font-normal text-muted">in the last 30 days</span>
+                          {a.last30Days.dryRun ? <span className="font-normal text-muted"> · {fmtNum(a.last30Days.dryRun)} recorded only</span> : null}
+                        </p>
+                        <p className="flex flex-wrap items-center gap-1.5 xl:justify-end">
+                          {a.lastResult ? (
+                            <>
+                              Last text {fmtWhen(a.lastResult.at, store?.timezone)}: <SmsStatusBadge status={a.lastResult.status} why={a.lastResult.reasonLabel} />
+                              {a.lastResult.reasonLabel && a.lastResult.status !== "dry_run" && <span>{a.lastResult.reasonLabel}</span>}
+                            </>
+                          ) : a.lastRunAt ? (
+                            `Last ran ${fmtWhen(a.lastRunAt, store?.timezone)}`
+                          ) : (
+                            "Hasn't run yet"
+                          )}
                         </p>
                       </div>
+
                       {manage && (
-                        <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-xs text-muted">
-                          <span>{on ? "On" : "Off"}</span>
-                          <input
-                            type="checkbox"
-                            role="switch"
-                            className="h-5 w-5 accent-[var(--accent)]"
-                            aria-label={`${a.name}: ${on ? "on" : "off"}`}
-                            checked={on}
-                            disabled={!!busy || !a.config}
-                            onChange={() => (on ? setPausing(a) : setActivating(a))}
-                          />
-                        </label>
-                      )}
-                    </div>
-
-                    <p className="flex flex-wrap items-center gap-2 text-sm">
-                      <Badge tone={s.tone}>{on ? "✓ Active" : a.status === "paused" ? "● Paused" : s.label}</Badge>
-                      {a.pendingChanges && <Badge tone="warn">Changes not live</Badge>}
-                      {a.dryRun && <Badge tone="neutral">Practice run</Badge>}
-                    </p>
-                    {a.audienceLabel && (
-                      <p className="flex gap-1.5 text-xs text-muted">
-                        <Users aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        {a.audienceLabel}
-                      </p>
-                    )}
-
-                    {a.body && (
-                      <p className="line-clamp-3 rounded-xl border border-border bg-bg/60 px-3 py-2 text-sm leading-relaxed">
-                        <MessageWithVariables body={a.body} />
-                      </p>
-                    )}
-
-                    <div className="space-y-1 text-xs text-muted">
-                      <p className="font-medium text-text">
-                        {fmtNum(sent)} message{sent === 1 ? "" : "s"} sent <span className="font-normal text-muted">in the last 30 days</span>
-                        {a.last30Days.dryRun ? <span className="font-normal text-muted"> · {fmtNum(a.last30Days.dryRun)} recorded only</span> : null}
-                      </p>
-                      <p className="flex flex-wrap items-center gap-1.5">
-                        {a.lastResult ? (
-                          <>
-                            Last text {fmtWhen(a.lastResult.at, store?.timezone)}: <SmsStatusBadge status={a.lastResult.status} why={a.lastResult.reasonLabel} />
-                            {a.lastResult.reasonLabel && a.lastResult.status !== "dry_run" && <span>{a.lastResult.reasonLabel}</span>}
-                          </>
-                        ) : a.lastRunAt ? (
-                          `Last ran ${fmtWhen(a.lastRunAt, store?.timezone)}`
-                        ) : (
-                          "Hasn't run yet"
-                        )}
-                      </p>
-                      {on && blocked.length > 0 && (
-                        <p className="flex gap-1.5 text-warn">
-                          <CircleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          {blocked[0]!.code === "test_mode" ? "Test mode: recorded in Message History, not sent." : `Not reaching customers yet: ${blocked[0]!.message}`}
-                        </p>
-                      )}
-                    </div>
-
-                    {manage && (
-                      <div className="mt-auto flex items-center gap-2 border-t border-border pt-3">
-                        <Link href={`/messaging/automations/edit?id=${a.id}`} className="btn-secondary inline-flex h-8 items-center gap-1.5 px-3 text-xs" aria-label={`Edit ${a.name}`}>
-                          <Pencil aria-hidden className="h-3.5 w-3.5" /> Edit
-                        </Link>
-                        {busy === `dup:${a.id}` && <span className="text-xs text-muted">Copying…</span>}
-                        <span className="ml-auto">
+                        <div className="flex items-center gap-3 xl:justify-end">
+                          <Link href={`/messaging/automations/edit?id=${a.id}`} className="inline-flex h-8 items-center gap-1.5 text-[13px] font-medium text-accent hover:underline" aria-label={`Edit ${a.name}`}>
+                            <Pencil aria-hidden className="h-3.5 w-3.5" /> Edit
+                          </Link>
+                          {busy === `dup:${a.id}` && <span className="text-xs text-muted">Copying…</span>}
+                          <label className="ml-auto inline-flex shrink-0 cursor-pointer items-center gap-2 text-xs text-muted xl:ml-0">
+                            <span>{on ? "On" : "Off"}</span>
+                            <Switch aria-label={`${a.name}: ${on ? "on" : "off"}`} checked={on} disabled={!!busy || !a.config} onChange={() => (on ? setPausing(a) : setActivating(a))} />
+                          </label>
                           <Menu<MenuAction>
                             label={`More for ${a.name}`}
                             items={[
@@ -339,16 +358,23 @@ export function SmsAutomations() {
                               { id: "delete", label: "Delete", icon: Trash2, danger: true },
                             ]}
                             onPick={onMenu(a)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface text-muted transition-colors hover:bg-text/[0.04] hover:text-text"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded bg-home-soft text-muted transition-colors outline-none hover:bg-home-soft-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent"
                             trigger={<MoreHorizontal aria-hidden className="h-4 w-4" />}
                           />
-                        </span>
-                      </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+                        </div>
+                      )}
+
+                      {on && blocked.length > 0 && (
+                        <p className="flex gap-1.5 text-xs text-warn xl:col-span-5">
+                          <CircleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          {blocked[0]!.code === "test_mode" ? "Test mode: recorded in Message History, not sent." : `Not reaching customers yet: ${blocked[0]!.message}`}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </TableCard>
           )}
         </>
       )}
@@ -357,10 +383,16 @@ export function SmsAutomations() {
         <RuleEditor key={advanced.key} id={advanced.id} templates={templates.data.templates} onClose={() => setAdvanced(null)} onChanged={() => void list.reload()} />
       )}
 
-      <p className="text-xs text-muted">
+      <FootLine
+        actions={
+          <Link href="/messaging/history" className="font-medium text-accent hover:underline">
+            Message History
+          </Link>
+        }
+      >
         Each Shopify event texts a customer once per automation, however often Shopify reports it. The customer&apos;s permission, opt-outs, quiet hours and your monthly limit are checked again right
         before each text goes, and a text counts as delivered only when the carrier confirms it.
-      </p>
+      </FootLine>
 
       <ActivateDialog
         open={!!activating}

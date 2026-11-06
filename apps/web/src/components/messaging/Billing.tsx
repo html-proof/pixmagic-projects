@@ -1,50 +1,51 @@
 "use client";
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { billingMonth, BUDGET_LEVELS } from "@app/shared/sms";
 import { PageHeader, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
-import { Empty, Stat } from "@/components/dashboard/Primitives";
+import { Card, FigureTile } from "@/components/PageKit";
+import { ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
+import { Dot, Empty } from "@/components/dashboard/Primitives";
 import { fmtMonth } from "@/components/dashboard/format";
 import { fmtNum, fmtPct, useApi } from "@/lib/api";
 import { countryName, fmtUsd, fmtWhen, useSms } from "./MessagingUi";
 import type { SmsBilling } from "./types";
 
-const Th = ({ children, right = false }: { children: ReactNode; right?: boolean }) => <th className={`py-1.5 pr-3 font-medium ${right ? "text-right" : "text-left"}`}>{children}</th>;
-const Td = ({ children, right = false }: { children: ReactNode; right?: boolean }) => <td className={`py-1.5 pr-3 ${right ? "text-right tabular-nums" : ""}`}>{children}</td>;
+// ---------------------------------------------------------------------------
+// Messaging costs & limit, in the Stitch design's look (screens 17 and 18): the month's spend
+// against the budget on a white card, the month's few numbers as tiles, then the costs by country,
+// campaign and workflow and the latest charges as tables with a tinted head row. Every amount is
+// what AWS billed, or its estimate until it does, as the API returns it.
+// ---------------------------------------------------------------------------
 
-function CostTable({ title, rows, empty }: { title: string; rows: Array<{ key: string; label: string; messages: number; parts?: number; costUsd: number }>; empty: string }) {
+function CostTable({ id, title, rows, empty }: { id: string; title: string; rows: Array<{ key: string; label: string; messages: number; parts?: number; costUsd: number }>; empty: string }) {
   const parts = rows.some((r) => r.parts !== undefined);
   return (
-    <section className="card min-w-0" aria-label={title}>
-      <h2 className="font-semibold">{title}</h2>
+    <TableCard id={id} title={title}>
       {!rows.length ? (
-        <p className="mt-2 text-sm text-muted">{empty}</p>
+        <p className="px-5 pb-5 text-sm text-muted sm:px-6">{empty}</p>
       ) : (
-        <div className="relative mt-2 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-xs text-muted">
-              <tr>
-                <Th>{title.replace(/^By /, "").replace(/^./, (c) => c.toUpperCase())}</Th>
-                <Th right>Texts</Th>
-                {parts && <Th right>Parts</Th>}
-                <Th right>Cost</Th>
+        <table className="w-full text-sm" aria-label={title}>
+          <TableHead>
+            <Th>{title.replace(/^By /, "").replace(/^./, (c) => c.toUpperCase())}</Th>
+            <Th right>Texts</Th>
+            {parts && <Th right>Parts</Th>}
+            <Th right>Cost</Th>
+          </TableHead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className={ROW}>
+                <td className={TD}>{r.label}</td>
+                <td className={`${TD} text-right tabular-nums`}>{fmtNum(r.messages)}</td>
+                {parts && <td className={`${TD} text-right tabular-nums`}>{fmtNum(r.parts ?? 0)}</td>}
+                <td className={`${TD} text-right font-medium tabular-nums`}>{fmtUsd(r.costUsd)}</td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {rows.map((r) => (
-                <tr key={r.key}>
-                  <Td>{r.label}</Td>
-                  <Td right>{fmtNum(r.messages)}</Td>
-                  {parts && <Td right>{fmtNum(r.parts ?? 0)}</Td>}
-                  <Td right>{fmtUsd(r.costUsd)}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       )}
-    </section>
+    </TableCard>
   );
 }
 
@@ -76,22 +77,20 @@ export function SmsBillingPage() {
         <Skeleton lines={5} />
       ) : (
         <>
-          <section className="card animate-rise" aria-labelledby="b-budget-h">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 id="b-budget-h" className="font-semibold">
-                  {fmtMonth(data.month, { year: true })}
-                </h2>
-                <p className="mt-1 text-3xl font-semibold tabular-nums">{fmtUsd(data.totalUsd)}</p>
-                <p className="text-sm text-muted">{data.budgetUsd > 0 ? `of a ${fmtUsd(data.budgetUsd)} monthly budget${pct !== null ? ` · ${fmtPct(pct / 100)} used` : ""}` : "No monthly budget is set, so nothing is sent."}</p>
-              </div>
-              <Link href="/messaging/sender" className="btn-secondary h-8 px-3 text-xs">
+          <Card
+            id="b-budget"
+            title={fmtMonth(data.month, { year: true })}
+            aside={
+              <Link href="/messaging/sender" className="home-btn h-8">
                 Change the budget
               </Link>
-            </div>
+            }
+          >
+            <p className="text-[28px] leading-8 font-semibold tracking-[-0.02em] tabular-nums">{fmtUsd(data.totalUsd)}</p>
+            <p className="mt-1 text-sm text-muted">{data.budgetUsd > 0 ? `of a ${fmtUsd(data.budgetUsd)} monthly budget${pct !== null ? ` · ${fmtPct(pct / 100)} used` : ""}` : "No monthly budget is set, so nothing is sent."}</p>
             {data.budgetUsd > 0 && (
               <div className="mt-4">
-                <div className="relative h-3 rounded-full bg-bg" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(pct ?? 0))} aria-label="Budget used">
+                <div className="relative h-3 rounded-full bg-home-soft" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(pct ?? 0))} aria-label="Budget used">
                   <div className={`h-3 rounded-full ${(pct ?? 0) >= 100 ? "bg-danger" : (pct ?? 0) >= 80 ? "bg-warn" : "bg-accent"}`} style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
                   {BUDGET_LEVELS.map((l) => (
                     <span key={l} aria-hidden className="absolute top-[-3px] h-[18px] w-px bg-text/40" style={{ left: `${Math.min(99.8, l)}%` }} />
@@ -111,66 +110,64 @@ export function SmsBillingPage() {
                 </p>
               </div>
             )}
-          </section>
+          </Card>
 
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="This month">
-            <Stat label="Billed by AWS" value={fmtUsd(data.billedUsd)} note="Prices AWS reported with each delivery" />
-            <Stat label="Waiting for AWS's price" value={fmtUsd(data.pendingUsd)} note="Estimates for texts AWS hasn't priced yet" />
-            <Stat label="Texts accepted by AWS" value={fmtNum(data.messages)} note={data.quota ? `of a ${fmtNum(data.quota)} monthly limit` : "No monthly text limit set"} />
-            <Stat
-              label="When the budget runs out"
-              value={data.hardStop ? "Texts stop" : "Texts continue"}
-              note={data.hardStop ? "Nothing more is sent until next month or a bigger budget" : "You're still told at each level; nothing stops sending"}
-              tone={data.hardStop ? "good" : "warn"}
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="This month">
+            <FigureTile testId="billing-billed" title="Billed by AWS" value={fmtUsd(data.billedUsd)} sub="Prices AWS reported with each delivery" />
+            <FigureTile testId="billing-pending" title="Waiting for AWS's price" value={fmtUsd(data.pendingUsd)} sub="Estimates for texts AWS hasn't priced yet" />
+            <FigureTile testId="billing-texts" title="Texts accepted by AWS" value={fmtNum(data.messages)} sub={data.quota ? `of a ${fmtNum(data.quota)} monthly limit` : "No monthly text limit set"} />
+            <FigureTile
+              testId="billing-hard-stop"
+              title="When the budget runs out"
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <Dot tone={data.hardStop ? "good" : "warn"} />
+                  {data.hardStop ? "Texts stop" : "Texts continue"}
+                </span>
+              }
+              sub={data.hardStop ? "Nothing more is sent until next month or a bigger budget" : "You're still told at each level; nothing stops sending"}
             />
           </section>
 
           <div className="grid gap-4 2xl:grid-cols-3">
             <CostTable
+              id="b-country"
               title="By country"
               empty="Nothing billed this month."
               rows={data.byCountry.map((c) => ({ key: c.country ?? "none", label: countryName(c.country), messages: c.messages, parts: c.parts, costUsd: c.costUsd }))}
             />
-            <CostTable title="By campaign" empty="No campaign texts billed this month." rows={data.byCampaign.map((c) => ({ key: c.id ?? c.name, label: c.name, messages: c.messages, costUsd: c.costUsd }))} />
-            <CostTable title="By workflow" empty="No workflow texts billed this month." rows={data.byRule.map((r) => ({ key: r.id ?? r.name, label: r.name, messages: r.messages, costUsd: r.costUsd }))} />
+            <CostTable id="b-campaign" title="By campaign" empty="No campaign texts billed this month." rows={data.byCampaign.map((c) => ({ key: c.id ?? c.name, label: c.name, messages: c.messages, costUsd: c.costUsd }))} />
+            <CostTable id="b-workflow" title="By workflow" empty="No workflow texts billed this month." rows={data.byRule.map((r) => ({ key: r.id ?? r.name, label: r.name, messages: r.messages, costUsd: r.costUsd }))} />
           </div>
 
-          <section className="card" aria-labelledby="b-rec-h">
-            <h2 id="b-rec-h" className="font-semibold">
-              Latest charges
-            </h2>
-            <p className="text-xs text-muted">Each line is one text as AWS priced it; the 50 most recent this month.</p>
+          <TableCard id="b-rec" title="Latest charges" aside="Each line is one text as AWS priced it; the 50 most recent this month.">
             {!data.records.length ? (
-              <p className="mt-2 text-sm text-muted">AWS hasn&apos;t billed any text this month.</p>
+              <p className="px-5 pb-5 text-sm text-muted sm:px-6">AWS hasn&apos;t billed any text this month.</p>
             ) : (
-              <div className="relative mt-2 overflow-x-auto">
-                <table className="w-full min-w-[36rem] text-sm">
-                  <thead className="text-xs text-muted">
-                    <tr>
-                      <Th>When</Th>
-                      <Th>Country</Th>
-                      <Th right>Parts</Th>
-                      <Th right>Price</Th>
-                      <Th right>Carrier fee</Th>
-                      <Th right>Total</Th>
+              <table className="w-full min-w-[36rem] text-sm">
+                <TableHead>
+                  <Th>When</Th>
+                  <Th>Country</Th>
+                  <Th right>Parts</Th>
+                  <Th right>Price</Th>
+                  <Th right>Carrier fee</Th>
+                  <Th right>Total</Th>
+                </TableHead>
+                <tbody>
+                  {data.records.map((r) => (
+                    <tr key={r.id} className={ROW}>
+                      <td className={`${TD} whitespace-nowrap`}>{fmtWhen(r.recordedAt, store?.timezone)}</td>
+                      <td className={TD}>{countryName(r.country)}</td>
+                      <td className={`${TD} text-right tabular-nums`}>{fmtNum(r.parts)}</td>
+                      <td className={`${TD} text-right tabular-nums`}>{fmtUsd(r.priceUsd)}</td>
+                      <td className={`${TD} text-right tabular-nums`}>{r.carrierFeeUsd ? fmtUsd(r.carrierFeeUsd) : "—"}</td>
+                      <td className={`${TD} text-right font-medium tabular-nums`}>{fmtUsd(r.totalUsd)}</td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {data.records.map((r) => (
-                      <tr key={r.id}>
-                        <Td>{fmtWhen(r.recordedAt, store?.timezone)}</Td>
-                        <Td>{countryName(r.country)}</Td>
-                        <Td right>{fmtNum(r.parts)}</Td>
-                        <Td right>{fmtUsd(r.priceUsd)}</Td>
-                        <Td right>{r.carrierFeeUsd ? fmtUsd(r.carrierFeeUsd) : "—"}</Td>
-                        <Td right>{fmtUsd(r.totalUsd)}</Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             )}
-          </section>
+          </TableCard>
         </>
       )}
     </div>
