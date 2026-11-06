@@ -1,9 +1,9 @@
 "use client";
 /** The Requests tab: employees' correction requests, approved or rejected by a manager. */
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
-import { Badge, Empty } from "@/components/dashboard/Primitives";
+import { Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
-import { Field, Modal } from "@/components/staff/ui";
+import { Field, Modal, Pill as Badge } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
 import { Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
@@ -36,10 +36,10 @@ export function Requests({ base, tz, manage, onPending, onChanged }: { base: str
 
   const items = list.data?.items ?? [];
   return (
-    <section className="card animate-rise mt-4" aria-labelledby={`${id}-h`}>
+    <section className="home-card animate-rise mt-4 p-5 sm:p-6" aria-labelledby={`${id}-h`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 id={`${id}-h`} className="font-semibold">
+          <h2 id={`${id}-h`} className="home-h2">
             Change requests
           </h2>
           <p className="mt-0.5 text-xs text-muted">Employees ask here when they forgot to clock in or out, or a time is wrong. Approving applies the new times.</p>
@@ -62,7 +62,7 @@ export function Requests({ base, tz, manage, onPending, onChanged }: { base: str
         ) : (
           <ul className="space-y-3">
             {items.map((r) => (
-              <li key={r.id} className="rounded-lg border border-border p-3">
+              <li key={r.id} className="rounded bg-home-soft p-3 sm:p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-medium">{r.employee.fullName}</p>
@@ -74,11 +74,11 @@ export function Requests({ base, tz, manage, onPending, onChanged }: { base: str
                   <Badge tone={REQUEST_STATUS[r.status]?.tone ?? "neutral"}>{REQUEST_STATUS[r.status]?.label ?? r.status}</Badge>
                 </div>
                 <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
-                  <div className="rounded-lg bg-bg px-3 py-2">
+                  <div className="rounded bg-surface px-3 py-2">
                     <dt className="text-xs text-muted">Recorded</dt>
                     <dd>{r.session ? fmtRange(r.session.clockInAt, r.session.clockOutAt, tz) : "No shift recorded (asking to add one)"}</dd>
                   </div>
-                  <div className="rounded-lg bg-bg px-3 py-2">
+                  <div className="rounded bg-surface px-3 py-2">
                     <dt className="text-xs text-muted">Asking for</dt>
                     <dd className="font-medium">{fmtRange(r.proposedClockInAt, r.proposedClockOutAt, tz, "no end time")}</dd>
                   </div>
@@ -89,12 +89,13 @@ export function Requests({ base, tz, manage, onPending, onChanged }: { base: str
                 </p>
                 {r.decisionNote && <p className="mt-1 text-xs text-muted">Reply: “{r.decisionNote}”</p>}
                 {manage && r.status === "pending" && (
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  // As screen 27's change requests have them: Reject in red, then Approve.
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button type="button" className="btn bg-surface text-danger hover:opacity-90" onClick={() => setDecide({ req: r, approve: false })}>
+                      Reject
+                    </button>
                     <button type="button" className="btn-primary" onClick={() => setDecide({ req: r, approve: true })}>
                       Approve
-                    </button>
-                    <button type="button" className="btn-secondary" onClick={() => setDecide({ req: r, approve: false })}>
-                      Reject
                     </button>
                   </div>
                 )}

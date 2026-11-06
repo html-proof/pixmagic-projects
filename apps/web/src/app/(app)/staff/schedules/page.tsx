@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useId, useMemo, useState, type FormEvent } from "react";
+import { CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { daysInclusive, isCalendarDay, localDayOf, localTimeOf, shiftDay, startOfWeek, WEEKDAY_SHORT } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
@@ -11,8 +12,10 @@ import { actionError, api, useApi } from "@/lib/api";
 import { fmtDay, fmtHours, fmtSpan, fmtTime, useStaff, type EmployeeRow, type StaffConfig } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
-// Shift schedules: one week at a time, a row per employee. Times are the organization's local
-// times; a shift that ends at or before its start time ends the next day.
+// Shift schedules: one week at a time, a row per employee, as the Stitch design's screen 27
+// ("Hours") draws its week planner: the week's dates between two arrows, a column a day with each
+// shift as a soft chip, and the planned hours added up per person and per day. Times are the
+// organization's local times; a shift that ends at or before its start time ends the next day.
 // ---------------------------------------------------------------------------------------------
 
 interface ScheduleItem {
@@ -100,47 +103,49 @@ function WeekView({ config }: { config: StaffConfig }) {
         sub={`Plan who works when. Times are in ${tz}. Scheduled shifts are compared with clock-ins to spot late starts and early finishes.`}
         actions={
           manage && (
-            <button type="button" className="btn-primary" onClick={() => setEditor({ mode: "add", employeeId: "", day: week <= today && today <= to ? today : week })} disabled={!activeEmployees.length}>
+            <button type="button" className="btn-primary h-10" onClick={() => setEditor({ mode: "add", employeeId: "", day: week <= today && today <= to ? today : week })} disabled={!activeEmployees.length}>
+              <Plus aria-hidden className="h-4 w-4" />
               Add shift
             </button>
           )
         }
       />
 
-      <section className="card space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className="btn-secondary px-3" onClick={() => setWeek(shiftDay(week, -7))} aria-label="Previous week">
-              ‹
-            </button>
-            <h2 className="min-w-44 text-center font-semibold" aria-live="polite">
-              {fmtSpan(week, to)}
-            </h2>
-            <button type="button" className="btn-secondary px-3" onClick={() => setWeek(shiftDay(week, 7))} aria-label="Next week">
-              ›
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => setWeek(thisWeek)} disabled={week === thisWeek}>
-              This week
-            </button>
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-48">
-              <label className="label text-xs text-muted" htmlFor={`${uid}-dept`}>
-                Department
-              </label>
-              <select id={`${uid}-dept`} className="input" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-                <option value="">All departments</option>
-                {config.departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {sched.data && <p className="pb-2 text-sm text-muted">{fmtHours(weekTotal)} planned this week</p>}
-          </div>
+      <section className="home-card animate-rise flex flex-wrap items-end justify-between gap-3 p-4 sm:px-5" aria-label="Which week">
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="home-btn h-10 px-2.5" onClick={() => setWeek(shiftDay(week, -7))} aria-label="Previous week">
+            <ChevronLeft aria-hidden className="h-4 w-4" />
+          </button>
+          <h2 className="inline-flex h-10 min-w-44 items-center justify-center gap-2 rounded bg-home-soft px-3 text-sm font-semibold" aria-live="polite">
+            <CalendarDays aria-hidden className="h-4 w-4 text-muted" />
+            {fmtSpan(week, to)}
+          </h2>
+          <button type="button" className="home-btn h-10 px-2.5" onClick={() => setWeek(shiftDay(week, 7))} aria-label="Next week">
+            <ChevronRight aria-hidden className="h-4 w-4" />
+          </button>
+          <button type="button" className="home-btn h-10 disabled:opacity-50" onClick={() => setWeek(thisWeek)} disabled={week === thisWeek}>
+            This week
+          </button>
         </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-48">
+            <label className="label text-xs text-muted" htmlFor={`${uid}-dept`}>
+              Department
+            </label>
+            <select id={`${uid}-dept`} className="input" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+              <option value="">All departments</option>
+              {config.departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {sched.data && <p className="pb-2 text-sm text-muted">{fmtHours(weekTotal)} planned this week</p>}
+        </div>
+      </section>
 
+      <section className="home-card animate-rise space-y-4 p-4 sm:p-5" aria-label="Week planner">
         {emps.error ? (
           <LoadError what="your employees" error={emps.error} onRetry={() => void emps.reload()} busy={emps.loading} />
         ) : sched.error ? (
@@ -160,38 +165,38 @@ function WeekView({ config }: { config: StaffConfig }) {
             }
           />
         ) : (
-          <div className="-mx-5 overflow-x-auto px-5">
-            <table className="w-full min-w-[56rem] table-fixed border-collapse text-sm" aria-label={`Shifts for the week ${fmtSpan(week, to)}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[60rem] table-fixed border-collapse text-sm" aria-label={`Shifts for the week ${fmtSpan(week, to)}`}>
               <thead>
-                <tr>
-                  <th scope="col" className="w-48 border-b border-border px-2 py-2 text-left text-xs font-medium text-muted">
+                <tr className="text-[11px] font-semibold tracking-wider uppercase">
+                  <th scope="col" className="w-44 rounded-l bg-home-soft px-3 py-2.5 text-left text-muted">
                     Employee
                   </th>
                   {days.map((d) => (
-                    <th key={d} scope="col" className={`border-b border-border px-1 py-2 text-left text-xs font-medium ${d === today ? "text-accent" : "text-muted"}`}>
+                    <th key={d} scope="col" className={`bg-home-soft px-1.5 py-2.5 text-left ${d === today ? "text-accent" : "text-muted"}`}>
                       {WEEKDAY_SHORT[new Date(`${d}T00:00:00Z`).getUTCDay()]} {Number(d.slice(8, 10))}
                       {d === today && <span className="sr-only"> (today)</span>}
                     </th>
                   ))}
+                  <th scope="col" className="w-20 rounded-r bg-home-soft px-3 py-2.5 text-right text-muted">
+                    Total
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="align-top">
-                    <th scope="row" className="border-b border-border/70 px-2 py-2 text-left font-normal">
+                    <th scope="row" className="border-b border-home-line px-3 py-2.5 text-left font-normal">
                       <Link href={`/staff/employee?id=${encodeURIComponent(r.id)}&tab=schedule`} className="font-medium hover:text-accent hover:underline">
                         {r.name}
                       </Link>
                       <p className="truncate text-xs text-muted">{r.jobTitle}</p>
-                      <p className="text-xs text-muted">
-                        {fmtHours(plannedBy((s) => s.employeeId === r.id))} planned
-                        {!r.active && " · not active"}
-                      </p>
+                      {!r.active && <p className="text-xs text-muted">Not active</p>}
                     </th>
                     {days.map((d) => {
                       const shifts = cell.get(`${r.id}|${d}`) ?? [];
                       return (
-                        <td key={d} className={`border-b border-border/70 p-1 ${d === today ? "bg-accent/5" : ""}`}>
+                        <td key={d} className={`border-b border-home-line p-1.5 ${d === today ? "bg-accent/5" : ""}`}>
                           <div className="flex min-h-14 flex-col gap-1">
                             {shifts.map((s) => {
                               const overnight = localDayOf(Date.parse(s.endsAt) - 1, tz) !== s.day;
@@ -208,12 +213,12 @@ function WeekView({ config }: { config: StaffConfig }) {
                                   {s.location && <span className="block truncate text-muted">{s.location}</span>}
                                 </>
                               );
-                              const cls = "w-full rounded-md border border-accent/30 bg-accent/10 px-1.5 py-1 text-left text-[11px] leading-snug";
+                              const cls = "w-full rounded bg-home-soft px-2 py-1 text-left text-[11px] leading-snug";
                               return manage ? (
                                 <button
                                   key={s.id}
                                   type="button"
-                                  className={`${cls} transition hover:border-accent`}
+                                  className={`${cls} outline-none transition-colors hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent`}
                                   onClick={() => setEditor({ mode: "edit", shift: s })}
                                   aria-label={`Edit ${r.name}'s shift on ${fmtDay(d)}, ${fmtTime(s.startsAt, tz)} to ${fmtTime(s.endsAt, tz)}`}
                                   title={s.note ?? undefined}
@@ -226,10 +231,15 @@ function WeekView({ config }: { config: StaffConfig }) {
                                 </div>
                               );
                             })}
+                            {!shifts.length && !(manage && r.active) && (
+                              <span aria-hidden className="py-1 text-center text-muted">
+                                –
+                              </span>
+                            )}
                             {manage && r.active && (
                               <button
                                 type="button"
-                                className="mt-auto rounded-md border border-dashed border-border px-1 py-0.5 text-[11px] text-muted opacity-60 transition hover:border-accent hover:text-accent hover:opacity-100 focus:opacity-100"
+                                className="mt-auto rounded border border-dashed border-home-line px-1 py-0.5 text-[11px] text-muted opacity-60 transition hover:border-accent hover:text-accent hover:opacity-100 focus:opacity-100"
                                 onClick={() => setEditor({ mode: "add", employeeId: r.id, day: d })}
                                 aria-label={`Add a shift for ${r.name} on ${fmtDay(d)}`}
                               >
@@ -240,19 +250,24 @@ function WeekView({ config }: { config: StaffConfig }) {
                         </td>
                       );
                     })}
+                    <td className="border-b border-home-line px-3 py-2.5 text-right font-semibold whitespace-nowrap text-accent tabular-nums">
+                      {fmtHours(plannedBy((s) => s.employeeId === r.id))}
+                      <span className="sr-only"> planned</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
-                <tr>
-                  <th scope="row" className="px-2 py-2 text-left text-xs font-medium text-muted">
+                <tr className="bg-home-soft">
+                  <th scope="row" className="rounded-l px-3 py-2.5 text-left text-xs font-semibold text-muted">
                     Planned per day
                   </th>
                   {days.map((d) => (
-                    <td key={d} className="px-1 py-2 text-xs font-medium tabular-nums text-muted">
+                    <td key={d} className="px-1.5 py-2.5 text-xs font-semibold tabular-nums">
                       {fmtHours(plannedBy((s) => s.day === d))}
                     </td>
                   ))}
+                  <td className="rounded-r px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap text-accent tabular-nums">{fmtHours(weekTotal)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -425,7 +440,7 @@ function ShiftForm({
       </div>
 
       {lengthMin !== null && (
-        <p className="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-muted">
+        <p className="rounded bg-home-soft px-3 py-2 text-sm text-muted">
           {overnight ? "Overnight: ends the next day. " : ""}
           About {fmtHours(lengthMin * 60)} long
           {Number.isInteger(brk) && brk > 0 && brk < lengthMin ? `, ${fmtHours((lengthMin - brk) * 60)} after the unpaid break` : ""}. Times are in {tz}.
@@ -433,7 +448,7 @@ function ShiftForm({
       )}
 
       {editor.mode === "add" && (
-        <div className="space-y-3 rounded-lg border border-border p-3">
+        <div className="space-y-3 rounded border border-home-line p-3">
           <WeekdayPicker legend="Repeat on (optional)" value={repeatDays} weekStartsOn={config.settings.weekStartsOn} onChange={setRepeatDays} hint="Adds the same shift on these weekdays after the day above, up to the date below (120 shifts at most)." />
           {repeatDays.length > 0 && (
             <Field label="Repeat until" htmlFor={`${uid}-until`} error={errors.repeatUntil} required>

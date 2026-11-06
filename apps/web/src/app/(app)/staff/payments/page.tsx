@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
+import { Plus } from "lucide-react";
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, PAYMENT_STATUS_LABEL, PAYMENT_STATUSES, type PaymentMethod, type PaymentStatus } from "@app/shared/staff";
 import { Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { RecordPaymentModal, type PaymentView } from "@/components/staff/RecordPayment";
-import { Field, Modal, Pagination, PaymentBadge, Table, Td, Th } from "@/components/staff/ui";
+import { Field, InfoStrip, Modal, Pagination, PaymentBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
 import { PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
@@ -13,7 +14,8 @@ import { fmtDateTime, fmtDay, fmtMoney, fmtSpan, useStaff, type EmployeeRow, typ
 
 // ---------------------------------------------------------------------------------------------
 // Payment history: every payment recorded against approved payroll, with totals, and marking a
-// payment as failed or reversed. Recording a payment moves no money; it keeps track of what was
+// payment as failed or reversed, in the look of the Stitch design's screen 28 ("Pay"): "Record
+// payment" is the action, because recording a payment moves no money; it keeps track of what was
 // paid outside bizinsights.
 // ---------------------------------------------------------------------------------------------
 
@@ -67,17 +69,20 @@ export default function PaymentsPage() {
     <>
       <PageHeader
         title="Payment history"
-        sub="Payments recorded against approved payroll. Recording a payment doesn't send money: it keeps track of what you've paid through your bank or provider."
+        sub="Payments recorded against approved payroll."
         actions={
           manage ? (
-            <button type="button" className="btn-primary" onClick={() => setRecording(true)}>
+            <button type="button" className="btn-primary h-10" onClick={() => setRecording(true)}>
+              <Plus aria-hidden className="h-4 w-4" />
               Record payment
             </button>
           ) : undefined
         }
       />
 
-      <section className="card animate-rise" aria-labelledby={`${id}-h`}>
+      <InfoStrip>Recording a payment doesn&apos;t send money: it keeps track of what you&apos;ve paid through your bank or provider, and what is still owed.</InfoStrip>
+
+      <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby={`${id}-h`}>
         <h2 id={`${id}-h`} className="sr-only">
           Payments
         </h2>
@@ -142,7 +147,7 @@ export default function PaymentsPage() {
         {byCurrency.size > 0 && (
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Totals">
             {[...byCurrency.entries()].map(([currency, lines]) => (
-              <div key={currency} className="rounded-lg border border-border bg-surface p-3">
+              <div key={currency} className="rounded bg-home-soft p-3">
                 <p className="text-xs text-muted">{filtered ? "Matching payments" : "All payments"} in {currency}</p>
                 <ul className="mt-1 space-y-0.5 text-sm">
                   {[...lines]

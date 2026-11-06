@@ -3,15 +3,17 @@
  * The sections of a pay run's page, each drawn from the pay run the API returned: what stands in
  * the way of approving it, the totals, the pay per employee (with each row's breakdown), earnings
  * and deductions, and the history. The page (app/(app)/staff/payroll/period) owns the actions.
+ * Laid out as the Stitch design's screen 28 ("Pay") draws a pay run: its figure and what stands
+ * in the way side by side, then a row per person, then everything else on white cards.
  */
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, CircleCheck } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { PAY_CATEGORY_LABEL } from "@app/shared/staff";
-import { Badge, type Tone } from "@/components/dashboard/Primitives";
-import { EstimateNote, Figure, Table, Td, Th } from "@/components/staff/ui";
+import type { Tone } from "@/components/dashboard/Primitives";
+import { EstimateNote, Figure, Initials, Pill as Badge, Table, Td, Th } from "@/components/staff/ui";
 import { EmptyState } from "@/components/ui";
-import { fmtDateTime, fmtHoursDec, fmtMoney } from "@/lib/staff";
+import { fmtDateTime, fmtDay, fmtHoursDec, fmtMoney } from "@/lib/staff";
 import { HISTORY_LABEL, hours, isZero, PAYMENT_STATUS, WARNING_LABEL, type Adjustment, type Issue, type Item, type Period } from "@/components/staff/payroll/payRun";
 
 /** Where each kind of issue gets fixed. */
@@ -33,32 +35,52 @@ function issueLink(p: Period, i: Issue): { href: string; text: string } | null {
   }
 }
 
-/** What has to be sorted out before the payroll can be sent for approval or approved. */
-export function IssuesPanel({ period: p }: { period: Period }) {
-  if (!p.issues.length) return null;
+/**
+ * "Before you can approve" (the Stitch design's screen 28): what has to be sorted out before the
+ * payroll can be sent for approval or approved, each with where it gets fixed. While the payroll
+ * can still be approved and nothing is open, it says so.
+ */
+export function IssuesPanel({ period: p, open = false }: { period: Period; open?: boolean }) {
+  if (!p.issues.length) {
+    if (!open) return null;
+    return (
+      <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby="issues-h">
+        <h2 id="issues-h" className="home-h2">
+          Before you can approve
+        </h2>
+        <p className="mt-3 flex items-center gap-2 text-sm text-muted">
+          <CircleCheck aria-hidden className="h-4 w-4 shrink-0 text-good" strokeWidth={2.25} />
+          Nothing is in the way of approval.
+        </p>
+      </section>
+    );
+  }
   return (
-    <section className="card animate-rise border-warn/60" aria-label="Issues to sort out">
-      <h2 className="font-semibold">Sort these out before approval</h2>
+    <section className="home-card animate-rise border border-warn/60 p-5 sm:p-6" aria-label="Issues to sort out">
+      <h2 className="home-h2">Before you can approve</h2>
       <p className="mt-0.5 text-xs text-muted">The payroll can&apos;t be sent for approval or approved while these are open.</p>
       <ul className="mt-3 space-y-2">
         {p.issues.map((i) => {
           const link = issueLink(p, i);
           return (
-            <li key={i.code} className="rounded-lg border border-border bg-bg/50 px-3 py-2 text-sm">
-              <p>
-                <span className="font-medium">{i.message}</span> <span className="text-muted">({i.count})</span>
-              </p>
-              {i.employees.length > 0 && (
-                <p className="text-xs text-muted">
-                  {i.employees.join(", ")}
-                  {i.count > i.employees.length ? " and others" : ""}
-                </p>
-              )}
-              {link && (
-                <Link className="mt-1 inline-block text-sm text-accent underline-offset-2 hover:underline" href={link.href}>
-                  {link.text}
-                </Link>
-              )}
+            <li key={i.code} className="flex items-start gap-3 rounded bg-home-soft px-3 py-2.5 text-sm">
+              <CircleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+              <span className="min-w-0">
+                <span className="block">
+                  <span className="font-medium">{i.message}</span> <span className="text-muted">({i.count})</span>
+                </span>
+                {i.employees.length > 0 && (
+                  <span className="block text-xs text-muted">
+                    {i.employees.join(", ")}
+                    {i.count > i.employees.length ? " and others" : ""}
+                  </span>
+                )}
+                {link && (
+                  <Link className="mt-1 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline" href={link.href}>
+                    {link.text}
+                  </Link>
+                )}
+              </span>
             </li>
           );
         })}
@@ -67,10 +89,45 @@ export function IssuesPanel({ period: p }: { period: Period }) {
   );
 }
 
+/**
+ * "This pay run" (screen 28): its dates and status, how many people, and its pay so far as one
+ * figure, estimated and before tax, with what is paid and still to pay under it. One block per
+ * currency when people are paid in more than one.
+ */
+export function RunSummary({ period: p, label, status }: { period: Period; label: string; status: ReactNode }) {
+  const currencies = Object.entries(p.totals);
+  return (
+    <section className="home-card animate-rise p-5 sm:p-6" aria-label="This pay run">
+      <p className="text-[11px] font-semibold tracking-wider text-muted uppercase">This pay run · {label}</p>
+      <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+        {status}
+        <span>{p.employees === 1 ? "1 person" : `${new Intl.NumberFormat().format(p.employees)} people`}</span>
+        {p.payDate && <span>Pay date {fmtDay(p.payDate)}</span>}
+      </p>
+      {currencies.length === 0 ? (
+        <p className="mt-4 text-sm text-muted">No pay worked out for these dates yet.</p>
+      ) : (
+        <div className="mt-4 flex flex-wrap gap-x-10 gap-y-4">
+          {currencies.map(([c, t]) => (
+            <div key={c} className="min-w-0">
+              <p className="text-[32px] leading-10 font-semibold tracking-[-0.02em] tabular-nums">{fmtMoney(t.gross, c)}</p>
+              <p className="text-xs text-muted">gross pay, estimated, before tax{currencies.length > 1 ? ` (${c})` : ""}</p>
+              <p className="mt-2 text-sm">
+                Net {fmtMoney(t.net, c)} · Paid {fmtMoney(t.paid, c)} · <span className="font-medium">Still to pay {fmtMoney(t.outstanding, c)}</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function TotalsPanel({ period: p }: { period: Period }) {
   const currencies = Object.entries(p.totals);
   return (
-    <section className="card animate-rise" aria-label="Totals">
+    <section className="home-card animate-rise p-5 sm:p-6" aria-label="Totals">
+      <h2 className="home-h2 mb-4">Totals</h2>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Figure label="Employees" value={new Intl.NumberFormat().format(p.employees)} />
         <Figure label="Regular hours" value={hours(p.regularSeconds)} />
@@ -132,11 +189,14 @@ export function PayItems({
     });
   const colSpan = 11;
   return (
-    <section className="card animate-rise" aria-labelledby="pay-items">
+    <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby="pay-items">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <h2 id="pay-items" className="font-semibold">
-          Pay per employee
-        </h2>
+        <div className="min-w-0">
+          <h2 id="pay-items" className="home-h2">
+            Pay per employee
+          </h2>
+          <p className="mt-0.5 text-xs text-muted">From approved hours at each person&apos;s pay rate: estimated, before tax.</p>
+        </div>
         {exportOk && (
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Download this pay run">
             <span className="text-xs text-muted">Download:</span>
@@ -200,14 +260,19 @@ export function PayItems({
                         </button>
                       </Td>
                       <Td>
-                        <p className="font-medium">{i.employee.fullName}</p>
-                        <p className="text-xs text-muted">
-                          {i.employee.employeeNumber}
-                          {i.employee.jobTitle ? ` · ${i.employee.jobTitle}` : ""}
-                        </p>
-                        {i.warnings.length > 0 && (
-                          <p className="mt-0.5 text-[11px] text-warn">{i.warnings.map((w) => WARNING_LABEL[w] ?? w).join(" · ")}</p>
-                        )}
+                        <div className="flex items-start gap-3">
+                          <Initials name={i.employee.fullName} small />
+                          <div className="min-w-0">
+                            <p className="font-medium">{i.employee.fullName}</p>
+                            <p className="text-xs text-muted">
+                              {i.employee.employeeNumber}
+                              {i.employee.jobTitle ? ` · ${i.employee.jobTitle}` : ""}
+                            </p>
+                            {i.warnings.length > 0 && (
+                              <p className="mt-0.5 text-[11px] text-warn">{i.warnings.map((w) => WARNING_LABEL[w] ?? w).join(" · ")}</p>
+                            )}
+                          </div>
+                        </div>
                       </Td>
                       <Td right>{fmtHoursDec(i.regularSeconds + i.holidaySeconds)}</Td>
                       <Td right>{fmtHoursDec(i.overtimeSeconds + i.doubleTimeSeconds)}</Td>
@@ -223,7 +288,11 @@ export function PayItems({
                         <span className="flex flex-col items-start gap-1.5">
                           {payable ? <Badge tone={st.tone}>{st.label}</Badge> : <span className="text-xs text-muted">Not approved yet</span>}
                           {payable && pay && !isZero(i.outstanding) && (
-                            <button type="button" className="text-sm text-accent underline-offset-2 hover:underline" onClick={() => onPay({ employeeId: i.employee.id, payrollItemId: i.id })}>
+                            <button
+                              type="button"
+                              className="inline-flex h-8 items-center rounded bg-accent px-2.5 text-xs font-medium whitespace-nowrap text-accent-ink transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1"
+                              onClick={() => onPay({ employeeId: i.employee.id, payrollItemId: i.id })}
+                            >
                               Record payment<span className="sr-only"> for {i.employee.fullName}</span>
                             </button>
                           )}
@@ -238,7 +307,7 @@ export function PayItems({
                     </tr>
                     {open && (
                       <tr id={`item-${i.id}`}>
-                        <td colSpan={colSpan} className="border-b border-border/70 bg-bg/50 px-3 py-3">
+                        <td colSpan={colSpan} className="border-b border-home-line bg-home-soft/50 px-3 py-3">
                           <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
                             <div className="min-w-0">
                               <p className="text-xs font-medium text-muted">How the gross pay adds up ({i.shifts === 1 ? "1 shift" : `${i.shifts} shifts`})</p>
@@ -265,7 +334,7 @@ export function PayItems({
                                   </thead>
                                   <tbody>
                                     {i.lines.map((l, n) => (
-                                      <tr key={n} className="border-t border-border/60">
+                                      <tr key={n} className="border-t border-home-line">
                                         <td className="py-1">{PAY_CATEGORY_LABEL[l.category] ?? l.category}</td>
                                         <td className="py-1 text-right tabular-nums">{fmtHoursDec(l.seconds)}</td>
                                         <td className="py-1 text-right tabular-nums">{fmtMoney(l.hourlyRate, i.currency)}/h</td>
@@ -343,10 +412,10 @@ export function AdjustmentsPanel({
 }) {
   const tz = p.timezone;
   return (
-    <section id="adjustments" className="card animate-rise scroll-mt-24" aria-labelledby="adj-h">
+    <section id="adjustments" className="home-card animate-rise scroll-mt-24 p-5 sm:p-6" aria-labelledby="adj-h">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 id="adj-h" className="font-semibold">
+          <h2 id="adj-h" className="home-h2">
             Earnings and deductions
           </h2>
           <p className="mt-0.5 text-xs text-muted">Bonuses, allowances, advances or other amounts added to or taken off pay for this period.</p>
@@ -360,7 +429,7 @@ export function AdjustmentsPanel({
       {!p.adjustments.length ? (
         <p className="mt-3 text-sm text-muted">None for this pay run.</p>
       ) : (
-        <ul className="mt-3 divide-y divide-border">
+        <ul className="mt-3 divide-y divide-home-line">
           {p.adjustments.map((a) => (
             <li key={a.id} className="flex flex-wrap items-start justify-between gap-3 py-2.5 text-sm">
               <div className="min-w-0">
@@ -397,8 +466,8 @@ export function AdjustmentsPanel({
 export function PayRunHistory({ period: p }: { period: Period }) {
   const tz = p.timezone;
   return (
-    <section className="card animate-rise" aria-labelledby="hist-h">
-      <h2 id="hist-h" className="font-semibold">
+    <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby="hist-h">
+      <h2 id="hist-h" className="home-h2">
         History
       </h2>
       {!p.history.length ? (

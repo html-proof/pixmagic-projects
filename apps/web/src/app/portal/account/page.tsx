@@ -54,13 +54,13 @@ export default function PortalAccount() {
 
   return (
     <>
-      <section className="card animate-rise">
+      <header>
         <h1 className="text-xl font-semibold">Account</h1>
         <p className="mt-1 text-sm text-muted">Your details at {employment.organization}, your password and where you&apos;re signed in.</p>
-      </section>
+      </header>
 
-      <section className="card" aria-labelledby="profile-h">
-        <h2 id="profile-h" className="font-semibold">
+      <section className="home-card animate-rise p-4 sm:p-6" aria-labelledby="profile-h">
+        <h2 id="profile-h" className="home-h2">
           Your details
         </h2>
         {q.error && !q.data ? (
@@ -82,7 +82,7 @@ export default function PortalAccount() {
                   ["Employee ID", emp.employeeNumber],
                 ] as const
               ).map(([k, v]) => (
-                <div key={k} className="min-w-0 rounded-lg border border-border bg-bg/50 px-3 py-2">
+                <div key={k} className="min-w-0 rounded bg-home-soft px-3 py-2">
                   <dt className="text-xs text-muted">{k}</dt>
                   <dd className="truncate font-medium">{v}</dd>
                 </div>

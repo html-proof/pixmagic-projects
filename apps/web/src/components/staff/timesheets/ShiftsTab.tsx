@@ -1,11 +1,11 @@
 "use client";
 /** The Shifts tab: filters, the list of shifts, approving, and the dialogs it opens. */
-import { Lock } from "lucide-react";
+import { Lock, Plus } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { localDayOf, shiftDay, startOfWeek } from "@app/shared/staff";
-import { Badge, Empty } from "@/components/dashboard/Primitives";
+import { Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
-import { ApprovalBadge, Flags, Modal, Pagination, Table, Td, Th } from "@/components/staff/ui";
+import { ApprovalBadge, Flags, Modal, Pagination, Pill as Badge, Table, Td, Th } from "@/components/staff/ui";
 import { EmptyState } from "@/components/ui";
 import { Skeleton, useAction, useToast } from "@/components/AppUi";
 import { api, useApi } from "@/lib/api";
@@ -161,13 +161,17 @@ export function Shifts({
 
   return (
     <div className="mt-4 space-y-4">
-      <section className="card animate-rise" aria-labelledby={`${id}-h`}>
+      <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby={`${id}-h`}>
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <h2 id={`${id}-h`} className="font-semibold">
-            Shifts
-          </h2>
+          <div className="min-w-0">
+            <h2 id={`${id}-h`} className="home-h2">
+              Shifts
+            </h2>
+            <p className="mt-0.5 text-xs text-muted">The hours to check and approve, with the dates and people below. Only approved hours go into payroll.</p>
+          </div>
           {manage && (
             <button type="button" className="btn-secondary" onClick={() => setDialog({ kind: "add" })}>
+              <Plus aria-hidden className="h-4 w-4" />
               Add missing shift
             </button>
           )}
@@ -221,7 +225,7 @@ export function Shifts({
         {employees.error && !employees.data && <p className="mt-2 text-xs text-muted">The employee list couldn&apos;t be loaded, so you can&apos;t filter by employee right now.</p>}
 
         {manage && selectedIds.length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg px-3 py-2" role="region" aria-label="Selected shifts">
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded bg-home-soft px-3 py-2" role="region" aria-label="Selected shifts">
             <span className="text-sm">{plural(selectedIds.length, "shift selected", "shifts selected")}</span>
             <button type="button" className="btn-primary" disabled={busy !== null} onClick={() => void approveSelected()}>
               {busy === "bulk" ? "Approving…" : "Approve selected"}
@@ -268,7 +272,7 @@ export function Shifts({
                   {rows.map((s) => {
                     const nextDay = s.clockOutAt && localDayOf(Date.parse(s.clockOutAt), tz) !== localDayOf(Date.parse(s.clockInAt), tz);
                     return (
-                      <tr key={s.id} className="cursor-pointer hover:bg-bg/60" onClick={() => setDetailId(s.id)}>
+                      <tr key={s.id} className="cursor-pointer transition-colors hover:bg-home-soft/60" onClick={() => setDetailId(s.id)}>
                         <Td>
                           {selectable(s) && (
                             <input
@@ -419,24 +423,30 @@ function ShiftActions({
       </span>
     );
   }
-  const link = "text-sm text-accent underline-offset-2 hover:underline disabled:opacity-50";
+  // As the Stitch design's screen 27 draws a shift's choices: Change, Reject (in red) and Approve (green).
+  const quiet = "home-btn disabled:opacity-50";
   return (
-    <span className="flex flex-wrap gap-x-3 gap-y-1">
-      {!s.open && s.approvalStatus !== "approved" && (
-        <button type="button" className={link} disabled={busy !== null} onClick={onApprove}>
-          {busy === `approve:${s.id}` ? "Approving…" : "Approve"}
-        </button>
-      )}
+    <span className="flex flex-wrap gap-1.5">
+      <button type="button" className={quiet} disabled={busy !== null} onClick={onCorrect}>
+        Correct
+      </button>
       {!s.open && s.approvalStatus === "pending" && (
-        <button type="button" className={link} disabled={busy !== null} onClick={onReject}>
+        <button type="button" className={`${quiet} text-danger`} disabled={busy !== null} onClick={onReject}>
           Reject
         </button>
       )}
-      <button type="button" className={link} disabled={busy !== null} onClick={onCorrect}>
-        Correct
-      </button>
+      {!s.open && s.approvalStatus !== "approved" && (
+        <button
+          type="button"
+          className="inline-flex h-9 shrink-0 items-center rounded bg-accent px-3 text-[13px] font-medium whitespace-nowrap text-accent-ink transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 disabled:opacity-50"
+          disabled={busy !== null}
+          onClick={onApprove}
+        >
+          {busy === `approve:${s.id}` ? "Approving…" : "Approve"}
+        </button>
+      )}
       {!s.open && s.approvalStatus !== "pending" && (
-        <button type="button" className={link} disabled={busy !== null} onClick={onReopen}>
+        <button type="button" className={quiet} disabled={busy !== null} onClick={onReopen}>
           {busy === `reopen:${s.id}` ? "Reopening…" : "Reopen"}
         </button>
       )}

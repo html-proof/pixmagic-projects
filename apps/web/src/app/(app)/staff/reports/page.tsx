@@ -21,7 +21,9 @@ import { exportFile, fmtDay, fmtHours, fmtMoney, fmtSpan, useStaff } from "@/lib
 // ---------------------------------------------------------------------------------------------
 // Reports & analytics: one date range for the whole page (kept in the address bar, so a link
 // reproduces the view), KPI cards, six charts and a downloadable report table. The API does all
-// the counting; this page only arranges and formats its answers.
+// the counting; this page only arranges and formats its answers. No Stitch screen draws it: it
+// takes the Team screens' look from the shared pieces (figure tiles, white cards, soft-header
+// tables and tabs in components/staff/ui.tsx).
 // ---------------------------------------------------------------------------------------------
 
 interface Analytics {

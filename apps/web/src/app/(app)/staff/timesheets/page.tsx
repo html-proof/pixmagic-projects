@@ -11,7 +11,9 @@ import { Requests } from "@/components/staff/timesheets/RequestsTab";
 
 // Timesheets: every shift in a date range, approving, rejecting and correcting hours, setting a
 // forgotten clock-out, adding a missed shift, and employees' change requests. Times are shown and
-// entered in the organization's time zone.
+// entered in the organization's time zone. The Stitch design's screen 27 ("Hours") puts the hours
+// to approve and the change requests side by side; here they stay two tabs, since the shifts are a
+// wide table with its filters, and each shift's choices are the design's Correct, Reject, Approve.
 
 type Tab = "shifts" | "requests";
 

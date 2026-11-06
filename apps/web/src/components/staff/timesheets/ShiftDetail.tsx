@@ -3,8 +3,7 @@
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { BREAK_KIND_LABEL, type BreakKind } from "@app/shared/staff";
-import { Badge } from "@/components/dashboard/Primitives";
-import { ApprovalBadge, Flags } from "@/components/staff/ui";
+import { ApprovalBadge, Flags, Pill as Badge } from "@/components/staff/ui";
 import { fmtDateTime, fmtHours, fmtTime, type SessionRow } from "@/lib/staff";
 import { fmtRange, LOCKED_HELP, plural, REQUEST_STATUS } from "@/components/staff/timesheets/format";
 

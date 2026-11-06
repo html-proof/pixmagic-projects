@@ -11,7 +11,8 @@ import { downloadFrom, fmtDay, fmtHours, fmtMoney, fmtSpan } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
 // The employee's pay: approved pay periods only (drafts never show here), what was earned, what
-// has been paid and what is still owed, and the payslip for each.
+// has been paid and what is still owed, and the payslip for each. No Stitch screen draws this tab;
+// it takes screen 29's look (white cards on the page, the title above them).
 // ---------------------------------------------------------------------------------------------
 
 export default function PortalPay() {
@@ -34,10 +35,10 @@ export default function PortalPay() {
 
   return (
     <>
-      <section className="card animate-rise">
+      <header>
         <h1 className="text-xl font-semibold">Pay</h1>
         <p className="mt-1 text-sm text-muted">Your approved pay periods, what has been paid so far, and your payslips.</p>
-      </section>
+      </header>
 
       {q.error && !q.data ? (
         <LoadError what="your pay" error={q.error} onRetry={() => void q.reload()} busy={q.loading} />
@@ -78,7 +79,7 @@ function PayCard({ i, busy, disabled, onDownload }: { i: MyPayItem; busy: boolea
   const m = (v: string) => fmtMoney(v, i.currency);
   const owing = Number(i.outstanding) > 0;
   return (
-    <li className="card !p-4">
+    <li className="home-card animate-rise p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold">{fmtSpan(i.period.from, i.period.to)}</p>
@@ -94,7 +95,7 @@ function PayCard({ i, busy, disabled, onDownload }: { i: MyPayItem; busy: boolea
           <Row label="Gross pay" value={m(i.gross)} />
           <Row label="Other earnings" value={m(i.otherEarnings)} />
           <Row label="Deductions" value={Number(i.deductions) > 0 ? `− ${m(i.deductions)}` : m(i.deductions)} />
-          <div className="mt-1 border-t border-border pt-1">
+          <div className="mt-1 border-t border-home-line pt-1">
             <Row label="Net pay (estimated)" value={m(i.net)} strong />
           </div>
         </dl>
@@ -104,7 +105,7 @@ function PayCard({ i, busy, disabled, onDownload }: { i: MyPayItem; busy: boolea
             <Row label="Still to be paid" value={m(i.outstanding)} strong={owing} />
           </dl>
           {i.payments.length > 0 ? (
-            <ul className="mt-2 space-y-1.5 border-t border-border pt-2" aria-label="Payments">
+            <ul className="mt-2 space-y-1.5 border-t border-home-line pt-2" aria-label="Payments">
               {i.payments.map((p) => (
                 <li key={p.id} className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-muted">
@@ -118,7 +119,7 @@ function PayCard({ i, busy, disabled, onDownload }: { i: MyPayItem; busy: boolea
               ))}
             </ul>
           ) : (
-            <p className="mt-2 border-t border-border pt-2 text-xs text-muted">No payment recorded for this period yet.</p>
+            <p className="mt-2 border-t border-home-line pt-2 text-xs text-muted">No payment recorded for this period yet.</p>
           )}
         </div>
       </div>

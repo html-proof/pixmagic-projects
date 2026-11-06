@@ -3,17 +3,19 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { dayDiff, PAY_CYCLE_LABEL, PAYROLL_STATUS_LABEL, PAYROLL_STATUSES, type DayRange, type PayCycle, type PayrollStatus } from "@app/shared/staff";
+import { ArrowRight } from "lucide-react";
 import { Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
-import { EstimateNote, Field, Pagination, PayrollBadge, Table, Td, Th } from "@/components/staff/ui";
+import { EstimateNote, Field, InfoStrip, Pagination, PayrollBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
 import { PageHeader, Skeleton } from "@/components/AppUi";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { fmtDay, fmtHoursDec, fmtMoney, fmtSpan, useStaff } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
-// Payroll home: how a pay run works, starting one for the next period (or any dates), and every
-// pay run so far with its totals.
+// Payroll home, as the Stitch design's screen 28 ("Pay") draws it: what bizinsights does and
+// doesn't do with pay, the latest pay run as one figure (estimated, before tax), starting one for
+// the next period (or any dates) beside how a pay run works, and every pay run so far.
 // ---------------------------------------------------------------------------------------------
 
 type MoneyTotals = { gross: string; otherEarnings: string; deductions: string; net: string; paid: string; outstanding: string };
@@ -72,6 +74,44 @@ function PerCurrency({ totals, pick }: { totals: Record<string, MoneyTotals>; pi
   );
 }
 
+/** The latest pay run as screen 28's "This pay run": its dates and status, how many people, and its pay as one figure. */
+function LatestRun({ p }: { p: PeriodSummary }) {
+  const currencies = Object.entries(p.totals);
+  const label = fmtSpan(p.startDate, p.endDate);
+  return (
+    <section className="home-card animate-rise flex flex-wrap items-end justify-between gap-4 p-5 sm:p-6" aria-label="Latest pay run">
+      <div className="min-w-0">
+        <p className="text-[11px] font-semibold tracking-wider text-muted uppercase">Latest pay run · {label}</p>
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+          <PayrollBadge status={p.status} />
+          <span>{p.employees === 1 ? "1 person" : `${new Intl.NumberFormat().format(p.employees)} people`}</span>
+          {p.payDate && <span>Pay date {fmtDay(p.payDate)}</span>}
+        </p>
+        {currencies.length ? (
+          <div className="mt-3 flex flex-wrap gap-x-10 gap-y-3">
+            {currencies.map(([c, t]) => (
+              <div key={c} className="min-w-0">
+                <p className="text-[32px] leading-10 font-semibold tracking-[-0.02em] tabular-nums">{fmtMoney(t.gross, c)}</p>
+                <p className="text-xs text-muted">gross pay, estimated, before tax{currencies.length > 1 ? ` (${c})` : ""}</p>
+                <p className="mt-1 text-sm">
+                  Paid {fmtMoney(t.paid, c)} · <span className="font-medium">Still to pay {fmtMoney(t.outstanding, c)}</span>
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-muted">{p.calculatedAt ? "Nothing to pay in this period yet." : "Not calculated yet."}</p>
+        )}
+      </div>
+      <Link href={`/staff/payroll/period?id=${encodeURIComponent(p.id)}`} className="btn-primary">
+        Open pay run
+        <ArrowRight aria-hidden className="h-4 w-4" />
+        <span className="sr-only"> for {label}</span>
+      </Link>
+    </section>
+  );
+}
+
 export default function PayrollPage() {
   const id = useId();
   const router = useRouter();
@@ -88,6 +128,13 @@ export default function PayrollPage() {
   useEffect(() => {
     if (list.data) setShown(list.data);
   }, [list.data]);
+  // The latest pay run (the API lists the newest first), taken from the unfiltered first page and
+  // kept while another page or status is shown.
+  const [newest, setNewest] = useState<{ base: string; p: PeriodSummary | null } | null>(null);
+  useEffect(() => {
+    if (list.data && page === 1 && !status) setNewest({ base, p: list.data.items[0] ?? null });
+  }, [list.data, page, status, base]);
+  const latest = newest?.base === base ? newest.p : null;
 
   // Starting a pay run (one-click from a suggestion, or custom dates).
   const [creating, setCreating] = useState<string | null>(null);
@@ -143,120 +190,121 @@ export default function PayrollPage() {
         sub="Turn approved hours into pay for a period, get it approved, then keep track of what you've paid."
       />
 
-      <section className="card animate-rise" aria-labelledby={`${id}-how`}>
-        <h2 id={`${id}-how`} className="font-semibold">
-          How a pay run works
-        </h2>
-        <ol className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {STEPS.map(([title, text], i) => (
-            <li key={title} className="relative rounded-lg border border-border bg-bg/50 p-3">
-              <p className="flex items-center gap-2 text-sm font-semibold">
-                <span aria-hidden className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-accent-ink">
-                  {i + 1}
-                </span>
-                {title}
-                {i < STEPS.length - 1 && (
-                  <span aria-hidden className="ml-auto hidden text-muted lg:inline">
-                    →
-                  </span>
-                )}
-              </p>
-              <p className="mt-1.5 text-xs text-muted">{text}</p>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <InfoStrip>bizinsights works out pay from approved hours. It doesn&apos;t pay anyone or work out tax: pay through your bank or provider, then record the payment here.</InfoStrip>
 
-      {manage && (
-        <section className="card animate-rise" aria-labelledby={`${id}-start`}>
-          <h2 id={`${id}-start`} className="font-semibold">
-            Start a pay run
-          </h2>
-          {suggestions.error && !s ? (
-            <div className="mt-3">
-              <LoadError what="the suggested pay periods" error={suggestions.error} onRetry={() => void suggestions.reload()} busy={suggestions.loading} />
-            </div>
-          ) : !s ? (
-            <div className="mt-3 space-y-2" aria-busy="true" aria-label="Loading">
-              <div className="skeleton h-12" />
-              <div className="skeleton h-12 w-3/4" />
-            </div>
-          ) : (
-            <>
-              <p className="mt-1 text-xs text-muted">
-                You pay {PAY_CYCLE_LABEL[s.payCycle]?.toLowerCase() ?? s.payCycle} (change this in Staff settings).
-                {s.lastRun ? ` Your latest pay run covered ${fmtSpan(s.lastRun.from, s.lastRun.to)}.` : " You haven't run payroll here yet."}
-              </p>
-              <ul className="mt-3 space-y-2">
-                {offers.map((o) => {
-                  const future = o.range.from > s.today;
-                  // The latest live pay run is known; one overlapping it would be refused.
-                  const taken = !!s.lastRun && o.range.from <= s.lastRun.to && o.range.to >= s.lastRun.from;
-                  return (
-                    <li key={o.key} className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5 ${o.primary ? "border-accent/50 bg-accent/5" : "border-border"}`}>
-                      <div className="min-w-0">
-                        <p className="text-xs text-muted">{o.label}</p>
-                        <p className="font-medium">{fmtSpan(o.range.from, o.range.to)}</p>
-                        {future && <p className="text-xs text-muted">Can be started from {fmtDay(o.range.from)}.</p>}
-                        {taken && <p className="text-xs text-muted">Already covered by your latest pay run.</p>}
-                      </div>
-                      <button
-                        type="button"
-                        className={o.primary ? "btn-primary" : "btn-secondary"}
-                        disabled={!!creating || future || taken}
-                        onClick={() => void start(o.key, o.range.from, o.range.to, null)}
-                      >
-                        {creating === o.key ? "Starting…" : "Start pay run"}
-                        <span className="sr-only"> for {fmtSpan(o.range.from, o.range.to)}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </>
-          )}
+      {latest && <LatestRun p={latest} />}
 
-          <details className="mt-4 rounded-lg border border-border px-3 py-2">
-            <summary className="cursor-pointer text-sm font-medium">Choose your own dates</summary>
-            <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-start" onSubmit={submitCustom} noValidate>
-              <Field label="First day" htmlFor={`${id}-s`} error={errors.startDate} required>
-                <input id={`${id}-s`} type="date" className="input" value={form.startDate} max={today ?? undefined} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
-              </Field>
-              <Field label="Last day" htmlFor={`${id}-e`} error={errors.endDate} required>
-                <input id={`${id}-e`} type="date" className="input" value={form.endDate} min={form.startDate || undefined} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
-              </Field>
-              <Field label="Pay date" htmlFor={`${id}-p`} error={errors.payDate} hint="Optional: when people will be paid.">
-                <input id={`${id}-p`} type="date" className="input" value={form.payDate} min={form.startDate || undefined} onChange={(e) => setForm({ ...form, payDate: e.target.value })} />
-              </Field>
-              <div className="sm:pt-6">
-                <button type="submit" className="btn-primary w-full" disabled={!!creating}>
-                  {creating === "custom" ? "Starting…" : "Start pay run"}
-                </button>
+      <div className={`grid gap-4 ${manage ? "xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" : ""}`}>
+        {manage && (
+          <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby={`${id}-start`}>
+            <h2 id={`${id}-start`} className="home-h2">
+              Start a pay run
+            </h2>
+            {suggestions.error && !s ? (
+              <div className="mt-3">
+                <LoadError what="the suggested pay periods" error={suggestions.error} onRetry={() => void suggestions.reload()} busy={suggestions.loading} />
               </div>
-            </form>
-          </details>
+            ) : !s ? (
+              <div className="mt-3 space-y-2" aria-busy="true" aria-label="Loading">
+                <div className="skeleton h-12" />
+                <div className="skeleton h-12 w-3/4" />
+              </div>
+            ) : (
+              <>
+                <p className="mt-1 text-xs text-muted">
+                  You pay {PAY_CYCLE_LABEL[s.payCycle]?.toLowerCase() ?? s.payCycle} (change this in Staff settings).
+                  {s.lastRun ? ` Your latest pay run covered ${fmtSpan(s.lastRun.from, s.lastRun.to)}.` : " You haven't run payroll here yet."}
+                </p>
+                <ul className="mt-3 space-y-2">
+                  {offers.map((o) => {
+                    const future = o.range.from > s.today;
+                    // The latest live pay run is known; one overlapping it would be refused.
+                    const taken = !!s.lastRun && o.range.from <= s.lastRun.to && o.range.to >= s.lastRun.from;
+                    return (
+                      <li key={o.key} className={`flex flex-wrap items-center justify-between gap-3 rounded px-3 py-2.5 ${o.primary ? "border border-accent/50 bg-accent/5" : "bg-home-soft"}`}>
+                        <div className="min-w-0">
+                          <p className="text-xs text-muted">{o.label}</p>
+                          <p className="font-medium">{fmtSpan(o.range.from, o.range.to)}</p>
+                          {future && <p className="text-xs text-muted">Can be started from {fmtDay(o.range.from)}.</p>}
+                          {taken && <p className="text-xs text-muted">Already covered by your latest pay run.</p>}
+                        </div>
+                        <button
+                          type="button"
+                          className={o.primary ? "btn-primary" : "btn border border-home-line bg-surface text-text hover:bg-home-soft-hover"}
+                          disabled={!!creating || future || taken}
+                          onClick={() => void start(o.key, o.range.from, o.range.to, null)}
+                        >
+                          {creating === o.key ? "Starting…" : "Start pay run"}
+                          <span className="sr-only"> for {fmtSpan(o.range.from, o.range.to)}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
 
-          {problem && (
-            <div className="mt-3">
-              <Alert>
-                {problem.message}
-                {problem.periodId && (
-                  <>
-                    {" "}
-                    <Link className="underline" href={`/staff/payroll/period?id=${encodeURIComponent(problem.periodId)}`}>
-                      Open that pay run
-                    </Link>
-                  </>
-                )}
-              </Alert>
-            </div>
-          )}
+            <details className="mt-4 rounded border border-home-line px-3 py-2">
+              <summary className="cursor-pointer text-sm font-medium">Choose your own dates</summary>
+              <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-start" onSubmit={submitCustom} noValidate>
+                <Field label="First day" htmlFor={`${id}-s`} error={errors.startDate} required>
+                  <input id={`${id}-s`} type="date" className="input" value={form.startDate} max={today ?? undefined} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
+                </Field>
+                <Field label="Last day" htmlFor={`${id}-e`} error={errors.endDate} required>
+                  <input id={`${id}-e`} type="date" className="input" value={form.endDate} min={form.startDate || undefined} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
+                </Field>
+                <Field label="Pay date" htmlFor={`${id}-p`} error={errors.payDate} hint="Optional: when people will be paid.">
+                  <input id={`${id}-p`} type="date" className="input" value={form.payDate} min={form.startDate || undefined} onChange={(e) => setForm({ ...form, payDate: e.target.value })} />
+                </Field>
+                <div className="sm:pt-6">
+                  <button type="submit" className="btn-primary w-full" disabled={!!creating}>
+                    {creating === "custom" ? "Starting…" : "Start pay run"}
+                  </button>
+                </div>
+              </form>
+            </details>
+
+            {problem && (
+              <div className="mt-3">
+                <Alert>
+                  {problem.message}
+                  {problem.periodId && (
+                    <>
+                      {" "}
+                      <Link className="underline" href={`/staff/payroll/period?id=${encodeURIComponent(problem.periodId)}`}>
+                        Open that pay run
+                      </Link>
+                    </>
+                  )}
+                </Alert>
+              </div>
+            )}
+          </section>
+        )}
+
+        <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby={`${id}-how`}>
+          <h2 id={`${id}-how`} className="home-h2">
+            How a pay run works
+          </h2>
+          <ol className={`mt-3 grid gap-3 ${manage ? "sm:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-4"}`}>
+            {STEPS.map(([title, text], i) => (
+              <li key={title} className="relative rounded bg-home-soft p-3">
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <span aria-hidden className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-accent-ink">
+                    {i + 1}
+                  </span>
+                  {title}
+                </p>
+                <p className="mt-1.5 text-xs text-muted">{text}</p>
+              </li>
+            ))}
+          </ol>
         </section>
-      )}
+      </div>
 
-      <section className="card animate-rise" aria-labelledby={`${id}-list`}>
+      <section className="home-card animate-rise p-5 sm:p-6" aria-labelledby={`${id}-list`}>
         <div className="flex flex-wrap items-end justify-between gap-2">
-          <h2 id={`${id}-list`} className="font-semibold">
+          <h2 id={`${id}-list`} className="home-h2">
             Pay runs
           </h2>
           <label className="min-w-[11rem]">

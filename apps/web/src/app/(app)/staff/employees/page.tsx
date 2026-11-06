@@ -2,14 +2,22 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
+import { Plus, Search } from "lucide-react";
 import { EMPLOYEE_STATUS_LABEL, EMPLOYEE_STATUSES, EMPLOYMENT_TYPE_LABEL, EMPLOYMENT_TYPES, type EmploymentType } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
+import { Card } from "@/components/PageKit";
 import { EmptyState } from "@/components/ui";
 import { PageHeader, Skeleton } from "@/components/AppUi";
-import { AccountBadge, EmployeeStatusBadge, Pagination, Table, Td, Th } from "@/components/staff/ui";
+import { AccountBadge, EmployeeStatusBadge, Initials, Pagination } from "@/components/staff/ui";
 import { fmtRate } from "@/components/staff/EmployeeForm";
 import { useApi } from "@/lib/api";
 import { fmtDay, useStaff, type EmployeeRow, type StaffConfig } from "@/lib/staff";
+
+// ---------------------------------------------------------------------------------------------
+// Everyone on the team, as the Stitch design's screen 26 ("People") draws it: Add, the status as a
+// row of choices, a search, then one row per person (initials, name and role, rate, status and
+// account) beside a short "How staff join". The other filters and the sort sit under the search.
+// ---------------------------------------------------------------------------------------------
 
 interface EmployeeList {
   items: EmployeeRow[];
@@ -95,6 +103,7 @@ export default function EmployeesPage() {
   };
   const showPay = can("pay:view");
   const id = (k: string) => `${uid}-${k}`;
+  const open = (e: EmployeeRow) => router.push(`/staff/employee?id=${encodeURIComponent(e.id)}`);
 
   return (
     <>
@@ -103,35 +112,41 @@ export default function EmployeesPage() {
         sub={view ? `${new Intl.NumberFormat().format(view.total)} ${view.total === 1 ? "person" : "people"}${filtered ? " match these filters" : ""}` : "Everyone on your team, their status and whether they've set up their account."}
         actions={
           can("staff:manage") && (
-            <Link href="/staff/employees/new" className="btn-primary">
+            <Link href="/staff/employees/new" className="btn-primary h-10">
+              <Plus aria-hidden className="h-4 w-4" />
               Add staff
             </Link>
           )
         }
       />
 
-      <section className="card space-y-4" aria-label="Find employees">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="sm:col-span-2 lg:col-span-3">
-            <label className="label" htmlFor={id("q")}>
+      <section className="home-card animate-rise space-y-4 p-4 sm:p-5" aria-label="Find employees">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div role="group" aria-label="Status" className="-mx-1 flex max-w-full gap-1 overflow-x-auto rounded bg-home-soft p-1 sm:mx-0">
+            {STATUS_OPTIONS.map(([v, l]) => (
+              <button
+                key={v || "current"}
+                type="button"
+                aria-pressed={status === v}
+                onClick={() => setStatus(v)}
+                className={`rounded px-3 py-1.5 text-sm whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${status === v ? "bg-surface font-medium text-text shadow-[var(--shadow)]" : "text-muted hover:text-text"}`}
+              >
+                {l}
+                {status === v && view && <span className="ml-1.5 tabular-nums">{new Intl.NumberFormat().format(view.total)}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="relative w-full sm:w-72">
+            <label className="sr-only" htmlFor={id("q")}>
               Search
             </label>
-            <input id={id("q")} type="search" className="input" value={q} maxLength={100} placeholder="Name, email, employee ID or job title" onChange={(e) => setQ(e.target.value)} />
+            <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted" />
+            <input id={id("q")} type="search" className="input pl-9" value={q} maxLength={100} placeholder="Name, email, employee ID or job title" onChange={(e) => setQ(e.target.value)} />
           </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <div>
-            <label className="label" htmlFor={id("status")}>
-              Status
-            </label>
-            <select id={id("status")} className="input" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-              {STATUS_OPTIONS.map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label" htmlFor={id("dept")}>
+            <label className="label text-xs text-muted" htmlFor={id("dept")}>
               Department
             </label>
             <select id={id("dept")} className="input" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
@@ -144,7 +159,7 @@ export default function EmployeesPage() {
             </select>
           </div>
           <div>
-            <label className="label" htmlFor={id("type")}>
+            <label className="label text-xs text-muted" htmlFor={id("type")}>
               Employment type
             </label>
             <select id={id("type")} className="input" value={employmentType} onChange={(e) => setEmploymentType(e.target.value as "" | EmploymentType)}>
@@ -157,13 +172,13 @@ export default function EmployeesPage() {
             </select>
           </div>
           <div>
-            <label className="label" htmlFor={id("position")}>
+            <label className="label text-xs text-muted" htmlFor={id("position")}>
               Position
             </label>
             <input id={id("position")} className="input" value={jobTitle} maxLength={80} placeholder="Exact job title, like Barista" onChange={(e) => setJobTitle(e.target.value)} />
           </div>
           <div>
-            <label className="label" htmlFor={id("account")}>
+            <label className="label text-xs text-muted" htmlFor={id("account")}>
               Account
             </label>
             <select id={id("account")} className="input" value={account} onChange={(e) => setAccount(e.target.value as AccountFilter)}>
@@ -175,7 +190,7 @@ export default function EmployeesPage() {
             </select>
           </div>
           <div>
-            <label className="label" htmlFor={id("sort")}>
+            <label className="label text-xs text-muted" htmlFor={id("sort")}>
               Sort by
             </label>
             <select id={id("sort")} className="input" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
@@ -188,7 +203,7 @@ export default function EmployeesPage() {
           </div>
         </div>
         {filtered && (
-          <button type="button" className="text-sm text-accent underline-offset-2 hover:underline" onClick={clear}>
+          <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" onClick={clear}>
             Clear filters
           </button>
         )}
@@ -197,76 +212,85 @@ export default function EmployeesPage() {
       {list.error && <LoadError what="the employee list" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />}
       {config.error && !list.error && <LoadError what="your departments" error={config.error} onRetry={() => void config.reload()} busy={config.loading} />}
 
-      {!view && !list.error ? (
-        <Skeleton lines={6} />
-      ) : view && view.total === 0 ? (
-        filtered ? (
-          <EmptyState
-            title="No one matches these filters"
-            body="Try a different search, or clear the filters to see everyone."
-            action={
-              <button type="button" className="btn-secondary" onClick={clear}>
-                Clear filters
-              </button>
-            }
-          />
-        ) : (
-          <EmptyState
-            title="No employees yet"
-            body={can("staff:manage") ? "Add your first employee, then invite them so they can clock in and out and see their hours from their phone." : "Employees appear here once an owner, admin or HR manager adds them."}
-            action={
-              can("staff:manage") && (
-                <Link href="/staff/employees/new" className="btn-primary">
-                  Add staff
-                </Link>
-              )
-            }
-          />
-        )
-      ) : view ? (
-        <section className={`card transition-opacity ${list.loading ? "opacity-70" : ""}`} aria-busy={list.loading}>
-          <Table label="Employees">
-            <thead>
-              <tr>
-                <Th>Employee</Th>
-                <Th>Position</Th>
-                <Th>Department</Th>
-                <Th>Type</Th>
-                <Th>Status</Th>
-                <Th>Account</Th>
-                {showPay && <Th right>Hourly rate</Th>}
-                <Th>Joined</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.items.map((e) => (
-                <tr key={e.id} className="cursor-pointer transition hover:bg-bg/60" onClick={() => router.push(`/staff/employee?id=${encodeURIComponent(e.id)}`)}>
-                  <Td>
-                    <Link href={`/staff/employee?id=${encodeURIComponent(e.id)}`} className="font-medium hover:text-accent hover:underline" onClick={(ev) => ev.stopPropagation()}>
-                      {e.fullName}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="min-w-0">
+          {!view && !list.error ? (
+            <Skeleton lines={6} />
+          ) : view && view.total === 0 ? (
+            filtered ? (
+              <EmptyState
+                title="No one matches these filters"
+                body="Try a different search, or clear the filters to see everyone."
+                action={
+                  <button type="button" className="btn-secondary" onClick={clear}>
+                    Clear filters
+                  </button>
+                }
+              />
+            ) : (
+              <EmptyState
+                title="No employees yet"
+                body={can("staff:manage") ? "Add your first employee, then invite them so they can clock in and out and see their hours from their phone." : "Employees appear here once an owner, admin or HR manager adds them."}
+                action={
+                  can("staff:manage") && (
+                    <Link href="/staff/employees/new" className="btn-primary">
+                      Add staff
                     </Link>
-                    <p className="text-xs text-muted">
-                      {e.employeeNumber} · <span className="break-all">{e.email}</span>
-                    </p>
-                  </Td>
-                  <Td>{e.jobTitle}</Td>
-                  <Td>{e.department?.name ?? <span className="text-muted">—</span>}</Td>
-                  <Td>{EMPLOYMENT_TYPE_LABEL[e.employmentType]}</Td>
-                  <Td>
-                    <EmployeeStatusBadge status={e.status} />
-                  </Td>
-                  <Td>
-                    <AccountBadge account={e.account} />
-                  </Td>
-                  {showPay && <Td right>{"hourlyRate" in e && e.hourlyRate ? fmtRate(e.hourlyRate, e.currency) : <span className="text-muted">Not set</span>}</Td>}
-                  <Td className="whitespace-nowrap">{fmtDay(e.joinedOn, { weekday: false, year: true })}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-          <Pagination page={view.page} pageSize={view.pageSize} total={view.total} onPage={setPage} />
-        </section>
-      ) : null}
+                  )
+                }
+              />
+            )
+          ) : view ? (
+            <section className={`home-card animate-rise overflow-hidden transition-opacity ${list.loading ? "opacity-70" : ""}`} aria-label="Employees" aria-busy={list.loading}>
+              <ul className="divide-y divide-home-line">
+                {view.items.map((e) => (
+                  <li key={e.id} className="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-home-soft/60 sm:flex-nowrap sm:px-5" onClick={() => open(e)}>
+                    <span className="flex min-w-0 flex-1 items-center gap-3">
+                      <Initials name={e.fullName} />
+                      <span className="min-w-0">
+                        <Link href={`/staff/employee?id=${encodeURIComponent(e.id)}`} className="font-medium hover:text-accent hover:underline" onClick={(ev) => ev.stopPropagation()}>
+                          {e.fullName}
+                        </Link>
+                        <span className="block truncate text-sm text-muted">
+                          {e.jobTitle}
+                          {e.department ? ` · ${e.department.name}` : ""} · {EMPLOYMENT_TYPE_LABEL[e.employmentType]}
+                        </span>
+                        <span className="block truncate text-xs text-muted">
+                          {e.employeeNumber} · <span className="break-all">{e.email}</span>
+                        </span>
+                      </span>
+                    </span>
+                    <span className="ml-13 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm sm:ml-0 sm:flex-nowrap sm:justify-end">
+                      {showPay && (
+                        <span className="tabular-nums whitespace-nowrap">
+                          {"hourlyRate" in e && e.hourlyRate ? fmtRate(e.hourlyRate, e.currency) : <span className="text-muted">No hourly rate</span>}
+                          <span className="sr-only"> hourly rate</span>
+                        </span>
+                      )}
+                      <EmployeeStatusBadge status={e.status} />
+                      <AccountBadge account={e.account} />
+                      <span className="text-xs whitespace-nowrap text-muted">Joined {fmtDay(e.joinedOn, { weekday: false, year: true })}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="border-t border-home-line px-4 pb-4 sm:px-5">
+                <Pagination page={view.page} pageSize={view.pageSize} total={view.total} onPage={setPage} />
+              </div>
+            </section>
+          ) : null}
+        </div>
+
+        <Card id="how-staff-join" title="How staff join" className="self-start">
+          <p className="text-sm leading-relaxed text-muted">
+            They get an invitation by email, or a link you send them yourself, and set a password. Then, in their phone&apos;s browser, they clock in, take breaks and see their
+            shifts, hours and pay. They never see your sales.
+          </p>
+          <Link href="/staff/invitations" className="mt-3 text-sm font-medium text-accent hover:underline">
+            Invitations
+          </Link>
+        </Card>
+      </div>
     </>
   );
 }
