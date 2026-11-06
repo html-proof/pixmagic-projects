@@ -623,6 +623,34 @@ function omitFromMonths(year: unknown, keys: readonly string[]): unknown {
 }
 
 /**
+ * The fields of an order row (the overview's recent orders, the order list's orders) that need a
+ * permission past "View order list", and that permission. Filtering the order list on one of them
+ * needs it too, or the filter would tell what the field hides (GET .../orders).
+ */
+export const ORDER_FIELD_ACCESS = {
+  financialStatus: "orders.payments",
+  fulfillmentStatus: "orders.fulfillment",
+  cancelled: "orders.cancellations",
+} as const satisfies Record<string, AccessKey>;
+type OrderField = keyof typeof ORDER_FIELD_ACCESS;
+
+/** The order row fields a member with these permissions isn't shown. */
+const hiddenOrderFields = (g: ReadonlySet<AccessKey>): OrderField[] => (Object.keys(ORDER_FIELD_ACCESS) as OrderField[]).filter((f) => !g.has(ORDER_FIELD_ACCESS[f]));
+
+/** An order row with the fields of ORDER_FIELD_ACCESS possibly left out. */
+export type RedactedOrderRow<T> = Omit<T, OrderField> & Partial<Pick<T, Extract<keyof T, OrderField>>>;
+
+/**
+ * Order rows as this member may see them: without each field of ORDER_FIELD_ACCESS whose permission
+ * they weren't granted. The overview's recent orders go through the same rule (`redactOverview`).
+ * Owners and admins get every field.
+ */
+export function redactOrderRows<T extends object>(rows: readonly T[], access: MemberAccess): Array<RedactedOrderRow<T>> {
+  const drop = hiddenOrderFields(grantedKeys(access));
+  return drop.length ? rows.map((r) => omit(r, drop) as RedactedOrderRow<T>) : [...rows];
+}
+
+/**
  * The fields inside a module that need a permission of their own, and the parts of the module they
  * live in. Applied after the modules themselves are cut down.
  */
@@ -663,11 +691,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   if (isObj(inv) && !g.has("products.prices")) out.inventory = { ...inv, current: omit(inv.current, ["stockValueAtCost", "variantsWithCost", "retailValue"]) };
   const recent = out.recent_orders;
   if (isObj(recent) && Array.isArray(recent.items)) {
-    const drop = [
-      ...(g.has("orders.payments") ? [] : ["financialStatus"]),
-      ...(g.has("orders.fulfillment") ? [] : ["fulfillmentStatus"]),
-      ...(g.has("orders.cancellations") ? [] : ["cancelled"]),
-    ];
+    // The order list's rule (redactOrderRows).
+    const drop = hiddenOrderFields(g);
     // How many orders were cancelled in the dates is cancellation detail too.
     if (drop.length) out.recent_orders = { ...((g.has("orders.cancellations") ? recent : omit(recent, ["cancelledInRange"])) as Obj), items: recent.items.map((i: unknown) => omit(i, drop)) };
   }

@@ -345,6 +345,234 @@ describe("order modules (store time zone, DST weekend)", () => {
   });
 });
 
+describe("the order list (GET …/orders, the Orders & shipping page)", () => {
+  const MARCH = "preset=custom&from=2026-03-01&to=2026-03-31";
+  interface Item { id: string; name: string; total: number; createdAt: string; financialStatus?: string | null; fulfillmentStatus?: string | null; cancelled?: boolean }
+
+  function list(headers: Record<string, string>, ws: string, storeId: string, qs = MARCH) {
+    return ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/orders?${qs}`, headers });
+  }
+  /** The order numbers of an answer that must be a 200. */
+  async function names(headers: Record<string, string>, ws: string, storeId: string, qs: string): Promise<string[]> {
+    const res = await list(headers, ws, storeId, qs);
+    expect(res.statusCode, `${qs}: ${res.body}`).toBe(200);
+    return (res.json().items as Item[]).map((o) => o.name);
+  }
+
+  /**
+   * March 2026 in New York (EDT from the 8th): one order in each payment and fulfillment state worth
+   * telling apart, 12 orders placed at the same moment for the same total (only their ids tell them
+   * apart), one placed on 28 February local time (1 March in UTC) and one on 31 March local time
+   * (1 April in UTC). 21 orders in March.
+   */
+  async function seedMarch(store: Store) {
+    const at = (day: string) => `2026-03-${day}T15:00:00Z`;
+    const one = (id: string, createdAt: string, subtotal: number, financial: string | null, fulfillment: string | null, cancelled = false) =>
+      seedOrder(store, { id, createdAt, subtotal, financial, fulfillment, cancelled, source: "web", lines: [{ qty: 2, price: subtotal / 2 }] });
+    await one("0999", "2026-03-01T03:00:00Z", 99, "paid", "fulfilled");
+    await one("1001", at("10"), 50, "paid", "fulfilled");
+    await one("1002", at("11"), 20, "pending", "unfulfilled");
+    await one("1003", at("12"), 80, "authorized", "partially_fulfilled");
+    await one("1004", at("13"), 30, "refunded", "restocked", true);
+    await one("1005", at("14"), 40, "partially_refunded", "fulfilled");
+    await one("1006", at("15"), 10, "voided", null, true);
+    await one("1007", at("16"), 60, null, "on_hold");
+    await one("EU-12", at("17"), 15, "expired", "unfulfilled");
+    await one("3001", "2026-04-01T03:00:00Z", 70, "partially_paid", "fulfilled");
+    for (let i = 1; i <= 12; i++) await one(`50${String(i).padStart(2, "0")}`, "2026-03-20T12:00:00Z", 25, "paid", null);
+  }
+
+  it("pages through the orders placed in the dates (store-local days), each as the overview's recent orders give it", async () => {
+    const { a, ws, store } = await owner();
+    await seedMarch(store);
+    const res = await list(a.headers, ws, store.id, `${MARCH}&pageSize=100`);
+    expect(res.statusCode, res.body).toBe(200);
+    const all = res.json();
+    expect(Object.keys(all).sort()).toEqual(["items", "page", "pageSize", "range", "total"]);
+    expect(all).toMatchObject({ range: { from: "2026-03-01", to: "2026-03-31" }, total: 21, page: 1, pageSize: 100 });
+    // 28 February in New York is out, 31 March in New York is in, whatever the UTC date says.
+    const listed = (all.items as Item[]).map((o) => o.name);
+    expect(listed).toHaveLength(21);
+    expect(listed).not.toContain("#0999");
+    expect(listed[0]).toBe("#3001");
+    // Every field of every order, exactly the overview's: its recent orders are the list's first 10, newest first.
+    const recent = (await overview(a.headers, ws, store.id, MARCH)).json().modules.recent_orders.items;
+    expect(all.items.slice(0, 10)).toEqual(recent);
+    expect(all.items.find((o: Item) => o.name === "#1004")).toEqual({
+      id: expect.any(String), shopifyId: "1004", name: "#1004", createdAt: "2026-03-13T15:00:00.000Z", total: 30,
+      financialStatus: "refunded", fulfillmentStatus: "restocked", channel: "Online Store", units: 2, cancelled: true,
+    });
+
+    // The default page: 25 newest first.
+    const first = (await list(a.headers, ws, store.id)).json();
+    expect(first).toMatchObject({ total: 21, page: 1, pageSize: 25 });
+    expect(first.items).toEqual(all.items);
+    // Fewer days, fewer orders.
+    expect(await names(a.headers, ws, store.id, "preset=custom&from=2026-03-10&to=2026-03-12")).toEqual(["#1003", "#1002", "#1001"]);
+    // The default dates (the last 30 days) hold none of them.
+    const now = (await list(a.headers, ws, store.id, "")).json();
+    expect(now).toMatchObject({ total: 0, items: [] });
+    expect(now.range.to).toBe(localDay(new Date(), TZ));
+  });
+
+  it("sorts newest, oldest or by total, the order's id breaking ties, so pages never overlap or skip one", async () => {
+    const { a, ws, store } = await owner();
+    await seedMarch(store);
+    for (const sort of ["newest", "oldest", "total_desc", "total_asc"]) {
+      const whole = (await list(a.headers, ws, store.id, `${MARCH}&sort=${sort}&pageSize=100`)).json().items as Item[];
+      const pages: Item[] = [];
+      for (const page of [1, 2, 3]) {
+        const res = (await list(a.headers, ws, store.id, `${MARCH}&sort=${sort}&pageSize=10&page=${page}`)).json();
+        expect(res).toMatchObject({ total: 21, page, pageSize: 10 });
+        expect(res.items, `${sort} page ${page}`).toHaveLength(page < 3 ? 10 : 1);
+        pages.push(...res.items);
+      }
+      expect(pages.map((o) => o.id), sort).toEqual(whole.map((o) => o.id));
+      expect(new Set(pages.map((o) => o.id)).size).toBe(21);
+      // Asked again, the same page.
+      expect((await list(a.headers, ws, store.id, `${MARCH}&sort=${sort}&pageSize=10&page=2`)).json().items).toEqual(pages.slice(10, 20));
+      // Past the last page: none, and still how many there are.
+      expect((await list(a.headers, ws, store.id, `${MARCH}&sort=${sort}&pageSize=10&page=4`)).json()).toMatchObject({ total: 21, page: 4, items: [] });
+
+      const totals = whole.map((o) => o.total);
+      const times = whole.map((o) => o.createdAt);
+      if (sort === "total_desc") expect(totals).toEqual([...totals].sort((x, y) => y - x));
+      if (sort === "total_asc") expect(totals).toEqual([...totals].sort((x, y) => x - y));
+      if (sort === "newest") expect(times).toEqual([...times].sort().reverse());
+      if (sort === "oldest") expect(times).toEqual([...times].sort());
+      // The 12 orders placed at the same moment for the same total: in id order, by the sort's direction.
+      const tied = whole.filter((o) => o.createdAt === "2026-03-20T12:00:00.000Z").map((o) => o.id);
+      expect(tied).toHaveLength(12);
+      expect(tied).toEqual(sort === "oldest" ? [...tied].sort() : [...tied].sort().reverse());
+    }
+    expect(await names(a.headers, ws, store.id, `${MARCH}&sort=total_desc&pageSize=10`).then((n) => n.slice(0, 4))).toEqual(["#1003", "#3001", "#1007", "#1001"]);
+    expect(await names(a.headers, ws, store.id, `${MARCH}&sort=total_asc&pageSize=10`).then((n) => n.slice(0, 3))).toEqual(["#1006", "#EU-12", "#1002"]);
+  });
+
+  it("filters by payment, shipping and cancellation, and searches order numbers", async () => {
+    const { a, ws, store } = await owner();
+    await seedMarch(store);
+    const bulk = Array.from({ length: 12 }, (_, i) => `#50${String(i + 1).padStart(2, "0")}`);
+    const of = async (qs: string) => (await names(a.headers, ws, store.id, `${MARCH}&pageSize=100&${qs}`)).sort();
+
+    // Payment: paid; waiting on the money; refunded in full or in part; anything else, or not known.
+    expect(await of("payment=paid")).toEqual(["#1001", ...bulk].sort());
+    expect(await of("payment=pending")).toEqual(["#1002", "#1003", "#3001"]);
+    expect(await of("payment=refunded")).toEqual(["#1004", "#1005"]);
+    expect(await of("payment=other")).toEqual(["#1006", "#1007", "#EU-12"]);
+    // Shipping: sent in full, in part, or nothing sent (restocked, on hold, or not known yet included).
+    expect(await of("shipping=shipped")).toEqual(["#1001", "#1005", "#3001"]);
+    expect(await of("shipping=partly")).toEqual(["#1003"]);
+    expect(await of("shipping=not_shipped")).toEqual(["#1002", "#1004", "#1006", "#1007", "#EU-12", ...bulk].sort());
+    expect(await of("cancelled=only")).toEqual(["#1004", "#1006"]);
+    expect(await of("cancelled=exclude")).toHaveLength(19);
+    expect(await of("payment=paid&shipping=shipped&cancelled=exclude")).toEqual(["#1001"]);
+    // The total counts the filtered orders.
+    expect((await list(a.headers, ws, store.id, `${MARCH}&payment=paid&pageSize=10`)).json()).toMatchObject({ total: 13, pageSize: 10 });
+
+    // Part of an order number, any case, its "#" optional; LIKE's wildcards are only themselves.
+    expect(await of("q=100")).toEqual(["#1001", "#1002", "#1003", "#1004", "#1005", "#1006", "#1007"]);
+    expect(await of("q=1003")).toEqual(["#1003"]);
+    expect(await of(`q=${encodeURIComponent("#1003")}`)).toEqual(["#1003"]);
+    expect(await of(`q=${encodeURIComponent("  #eu-1 ")}`)).toEqual(["#EU-12"]);
+    expect(await of("q=100&cancelled=only")).toEqual(["#1004", "#1006"]);
+    expect(await of(`q=${encodeURIComponent("%")}`)).toEqual([]);
+    expect(await of(`q=${encodeURIComponent("1_0")}`)).toEqual([]);
+    expect(await of("q=0999")).toEqual([]);
+    // Nothing but a "#": every order.
+    expect(await of(`q=${encodeURIComponent("#")}`)).toHaveLength(21);
+  });
+
+  it("refuses a question it can't answer with a 400, and a store without order access with a 403", async () => {
+    const { a, ws, store } = await owner();
+    for (const qs of ["pageSize=9", "pageSize=101", "page=0", "page=x", "sort=price", "payment=failed", "shipping=sent", "cancelled=yes", `q=${"1".repeat(41)}`]) {
+      const res = await list(a.headers, ws, store.id, `${MARCH}&${qs}`);
+      expect(res.statusCode, qs).toBe(400);
+      expect(res.json().error, qs).toBe("validation");
+    }
+    for (const qs of ["preset=custom&from=2026-03-09&to=2026-03-01", "preset=custom&from=2026-03-09"]) {
+      const res = await list(a.headers, ws, store.id, qs);
+      expect(res.statusCode, qs).toBe(400);
+      expect(res.json().error, qs).toBe("invalid_range");
+    }
+    const productsOnly = await createStore(ws, "p.myshopify.com", ["read_products"], { timezone: TZ });
+    const res = await list(a.headers, ws, productsOnly.id);
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("missing_scopes");
+  });
+
+  it("never reads another workspace's store (404) and never mixes stores", async () => {
+    const { a, ws, store } = await owner();
+    await seedMarch(store);
+    const b = await signIn(ctx, "ub", "b@x.com");
+    const wsB = await createWorkspace(ctx, b.headers, "B");
+    const storeB = await createStore(wsB, "b.myshopify.com", ALL_SCOPES, { timezone: TZ });
+    // The same Shopify ids and order numbers in the other business's store.
+    await seedOrder(storeB, { id: "1001", createdAt: "2026-03-10T15:00:00Z", subtotal: 999, financial: "paid", fulfillment: "fulfilled" });
+
+    expect((await list(b.headers, ws, store.id)).statusCode).toBe(404);
+    expect((await list(b.headers, wsB, store.id)).statusCode).toBe(404);
+    expect((await list(a.headers, ws, storeB.id)).statusCode).toBe(404);
+    // A filter or a bad question changes nothing: still 404.
+    expect((await list(b.headers, wsB, store.id, `${MARCH}&pageSize=5`)).statusCode).toBe(404);
+
+    const mine = (await list(a.headers, ws, store.id, `${MARCH}&q=1001`)).json();
+    expect(mine.total).toBe(1);
+    expect(mine.items[0]).toMatchObject({ name: "#1001", total: 50 });
+    expect((await list(b.headers, wsB, storeB.id, MARCH)).json()).toMatchObject({ total: 1, items: [{ name: "#1001", total: 999 }] });
+  });
+
+  it("needs View order list; payment status, fulfillment status and cancellations each need their own permission, to see or to filter by", async () => {
+    const { a, ws, store } = await owner();
+    await seedMarch(store);
+    const m = await signIn(ctx, "um", "member@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: m.user.id, role: "custom", permissions: ["analytics.sales", "orders.fulfillment"] } });
+    const grant = (permissions: string[]) => systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: m.user.id } }, data: { permissions } });
+    const fields = async () => {
+      const res = await list(m.headers, ws, store.id, `${MARCH}&q=1004`);
+      expect(res.statusCode, res.body).toBe(200);
+      return Object.keys(res.json().items[0]).sort();
+    };
+    const refused = async (qs: string) => {
+      const res = await list(m.headers, ws, store.id, `${MARCH}&${qs}`);
+      return res.statusCode === 403 && res.json().error === "forbidden";
+    };
+    const BASE = ["channel", "createdAt", "id", "name", "shopifyId", "total", "units"];
+
+    // Fulfillment status alone isn't the order list.
+    expect((await list(m.headers, ws, store.id)).statusCode).toBe(403);
+
+    await grant(["orders.list"]);
+    expect(await fields()).toEqual(BASE);
+    // Searching, sorting and paging need nothing more; a filter on a hidden field is refused, whatever its value.
+    expect((await list(m.headers, ws, store.id, `${MARCH}&q=100&sort=total_desc&page=2&pageSize=10`)).statusCode).toBe(200);
+    for (const qs of ["payment=paid", "payment=other", "shipping=shipped", "shipping=not_shipped", "cancelled=only", "cancelled=exclude"]) expect(await refused(qs), qs).toBe(true);
+
+    await grant(["orders.list", "orders.payments"]);
+    expect(await fields()).toEqual([...BASE, "financialStatus"].sort());
+    expect(await refused("payment=refunded")).toBe(false);
+    expect(await names(m.headers, ws, store.id, `${MARCH}&payment=refunded`)).toEqual(["#1005", "#1004"]);
+    expect(await refused("shipping=partly")).toBe(true);
+    expect(await refused("cancelled=only")).toBe(true);
+
+    await grant(["orders.list", "orders.fulfillment"]);
+    expect(await fields()).toEqual([...BASE, "fulfillmentStatus"].sort());
+    expect(await names(m.headers, ws, store.id, `${MARCH}&shipping=partly`)).toEqual(["#1003"]);
+    expect(await refused("payment=paid")).toBe(true);
+    expect(await refused("cancelled=exclude")).toBe(true);
+
+    await grant(["orders.list", "orders.cancellations"]);
+    expect(await fields()).toEqual([...BASE, "cancelled"].sort());
+    expect(await names(m.headers, ws, store.id, `${MARCH}&cancelled=only`)).toEqual(["#1006", "#1004"]);
+    expect(await refused("shipping=shipped")).toBe(true);
+
+    await grant(["orders.list", "orders.payments", "orders.fulfillment", "orders.cancellations"]);
+    const member = (await list(m.headers, ws, store.id, `${MARCH}&pageSize=100`)).json();
+    // With every permission, exactly what the owner gets.
+    expect(member).toEqual((await list(a.headers, ws, store.id, `${MARCH}&pageSize=100`)).json());
+  });
+});
+
 describe("date ranges", () => {
   it("charts every day of the range, quiet days as zero", async () => {
     const { a, ws, store } = await owner();

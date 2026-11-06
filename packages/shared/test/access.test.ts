@@ -13,7 +13,9 @@ import {
   grantedKeys,
   LEGACY_GRANTS,
   modulesOf,
+  ORDER_FIELD_ACCESS,
   redactContact,
+  redactOrderRows,
   redactOverview,
   removePermission,
   RESTRICTED_ROLES,
@@ -377,6 +379,36 @@ describe("redactOverview", () => {
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
     expect(out.modules.recent_orders.cancelledInRange).toBe(2);
+  });
+});
+
+describe("redactOrderRows", () => {
+  const row = { id: "o", shopifyId: "1", name: "#1", createdAt: "2026-03-09T20:00:00.000Z", total: 100, financialStatus: "paid", fulfillmentStatus: "fulfilled", channel: "Online Store", units: 2, cancelled: true };
+  const recent = (access: MemberAccess) => redactOverview({ modules: { recent_orders: { items: [row], cancelledInRange: 1 } }, capabilities: [] }, access).modules.recent_orders as { items: unknown[] };
+
+  it("leaves out payment status, fulfillment status and cancelled until each is granted, as the overview's recent orders do", () => {
+    const base = { id: "o", shopifyId: "1", name: "#1", createdAt: row.createdAt, total: 100, channel: "Online Store", units: 2 };
+    const cases: Array<[string[], object]> = [
+      [["orders.list"], base],
+      [["orders.list", "orders.payments"], { ...base, financialStatus: "paid" }],
+      [["orders.list", "orders.fulfillment"], { ...base, fulfillmentStatus: "fulfilled" }],
+      [["orders.list", "orders.cancellations"], { ...base, cancelled: true }],
+      [["orders.list", "orders.payments", "orders.fulfillment", "orders.cancellations"], row],
+    ];
+    for (const [permissions, expected] of cases) {
+      expect(redactOrderRows([row], member(permissions)), permissions.join()).toEqual([expected]);
+      // One rule for both: the overview's recent orders lose exactly the same fields.
+      expect(recent(member(permissions)).items, permissions.join()).toEqual([expected]);
+    }
+    expect(redactOrderRows([row], member([], "owner"))).toEqual([row]);
+    expect(redactOrderRows([row], member([], "admin"))).toEqual([row]);
+    // The rows passed in are untouched.
+    expect(row.financialStatus).toBe("paid");
+  });
+
+  it("names the permission each hidden field needs, every one a permission of the catalog", () => {
+    expect(ORDER_FIELD_ACCESS).toEqual({ financialStatus: "orders.payments", fulfillmentStatus: "orders.fulfillment", cancelled: "orders.cancellations" });
+    for (const key of Object.values(ORDER_FIELD_ACCESS)) expect(ACCESS_KEYS).toContain(key);
   });
 });
 
