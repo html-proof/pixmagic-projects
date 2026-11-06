@@ -1,5 +1,6 @@
 "use client";
 import { FlaskConical } from "lucide-react";
+import { adIntegrationStatus } from "@app/shared/integrations";
 import { META_STATE_INFO } from "@app/shared/metaDiscovery";
 import { useApp, type StoreSummary } from "@/components/AppContext";
 import { friendlyError } from "@/lib/api";
@@ -11,8 +12,9 @@ import { MetaDiscoveryNote, useMetaDiscovery } from "./MetaDiscovery";
 import type { useAdConnections } from "./useAdConnections";
 
 // ---------------------------------------------------------------------------
-// An ad platform's row on Settings → Integrations (Google Ads, Meta Ads, Google AdSense): where it
-// stands, one button that opens the platform's own sign-in, and the accounts connected. Everything
+// An ad platform's card on Settings → Integrations (Google Ads, Meta Ads, Google AdSense): where it
+// stands (its own state, and the same on the one scale of six), one button that opens the
+// platform's own sign-in, and the accounts connected. Everything
 // about single accounts (refresh, hide, sites, disconnect) stays on Settings → Advertising, behind
 // Manage.
 // ---------------------------------------------------------------------------
@@ -124,7 +126,8 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
     <IntegrationRow
       testid={`int-${p}`}
       state={state}
-      logo={<P.Icon size={p === "meta" ? 46 : 42} />}
+      status={adIntegrationStatus(state)}
+      logo={<P.Icon size={p === "meta" ? 22 : 20} />}
       name={P.name}
       sub={SUB[p]}
       pill={

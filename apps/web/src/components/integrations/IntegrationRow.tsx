@@ -1,38 +1,62 @@
 "use client";
 import Link from "next/link";
 import { useId, useState, type ReactNode } from "react";
-import { ArrowRight, Check, Link2, Settings, Zap, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, Link2, Zap, type LucideIcon } from "lucide-react";
+import type { IntegrationStatus } from "@app/shared/integrations";
 import type { StateTone } from "@/lib/adConnections";
 
 // ---------------------------------------------------------------------------
-// The pieces Settings → Integrations is drawn with (the owner's design, 2026-10-23): the "One Click
-// Setup" banner, and a card per platform with its logo tile, name and what it does, the state pill,
-// one button (Connect, or Manage once connected) and the chips of what it brings.
+// The pieces Settings → Integrations is drawn with, as the owner's approved Stitch design draws its
+// Connections screen (prototype v2, screen 30): the "One Click Setup" line, then one white card per
+// connection with its small logo tile, name and state at the top, what it does and how it stands
+// under them, and its one button (Connect, or Manage once connected) at the foot, beside the chips of
+// what it brings.
 // ---------------------------------------------------------------------------
 
 /** "info": Meta seen in Shopify, with nothing authorized for bizinsights (MetaDiscovery.tsx): known, and not a connection. */
 const TONE_COLOR: Record<StateTone | "info", string> = { good: "var(--good)", warn: "var(--warn)", danger: "var(--danger)", neutral: "var(--muted)", info: "var(--info)" };
 
 /**
- * Where a platform stands, as a tinted pill with a dot: the label always says it, the colour backs it
- * up, and the dot pulses while something is under way.
+ * How each status of the one scale every connection is told on (@app/shared/integrations) is
+ * coloured: green when it works, amber while a step is left, red when someone must act, grey
+ * otherwise. The cards whose own states are finer (the ad platforms, Shopify, WhatsApp, Zapier) keep
+ * their own colours, which a demo's orange needs; SMS and email are told on this scale alone.
+ */
+export const STATUS_TONE: Record<IntegrationStatus, StateTone> = {
+  connected: "good",
+  pending: "warn",
+  reauthorization_required: "danger",
+  syncing: "neutral",
+  error: "danger",
+  disconnected: "neutral",
+};
+
+/**
+ * Where a connection stands, as the design's quiet label: a dot and the words in the state's colour.
+ * The label always says it, the colour backs it up, and the dot pulses while something is under way.
  */
 export function RowPill({ label, tone, busy = false, state }: { label: string; tone: StateTone | "info"; busy?: boolean; state: string }) {
   return (
-    <span className="tone-pill px-3 py-1 text-[0.8125rem] font-medium" style={{ ["--tone" as string]: TONE_COLOR[tone] }} data-testid="platform-state" data-state={state}>
-      <span aria-hidden className="relative inline-flex size-2 shrink-0">
+    <span
+      className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium text-[color-mix(in_oklab,var(--tone)_82%,var(--text))]"
+      style={{ ["--tone" as string]: TONE_COLOR[tone] }}
+      data-testid="platform-state"
+      data-state={state}
+    >
+      <span aria-hidden className="relative inline-flex size-1.5 shrink-0">
         {busy && <span className="animate-ping-soft absolute inset-0 rounded-full bg-[var(--tone)]" />}
-        <span className="relative inline-block size-2 rounded-full bg-[var(--tone)]" />
+        <span className="relative inline-block size-1.5 rounded-full bg-[var(--tone)]" />
       </span>
       {label}
     </span>
   );
 }
 
-/** One platform: its logo, name and what it does, its state and button, then what it brings. */
+/** One connection: its logo, name and state; what it does and how it stands; what it brings and its button. */
 export function IntegrationRow({
   testid,
   state,
+  status,
   logo,
   name,
   sub,
@@ -44,11 +68,13 @@ export function IntegrationRow({
   testid: string;
   /** For tests and styling: the state the pill shows. */
   state: string;
+  /** The same state on the one scale of six every page is told (`data-status`). */
+  status?: IntegrationStatus;
   logo: ReactNode;
   name: string;
   sub: string;
   pill: ReactNode;
-  /** The row's button (Connect, Manage, Fix it), if this member may press one. */
+  /** The card's button (Connect, Manage, Fix it), if this member may press one. */
   action?: ReactNode;
   /** What connecting it brings, as ticked chips. */
   brings: string[];
@@ -56,51 +82,38 @@ export function IntegrationRow({
   children?: ReactNode;
 }) {
   return (
-    <section
-      className="card animate-rise grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-4 p-5 sm:gap-x-6 sm:p-6"
-      aria-labelledby={`${testid}-h`}
-      data-testid={testid}
-      data-state={state}
-    >
-      {/* A smaller tile on a phone, its logo with it. */}
-      <span
-        className="grid size-14 shrink-0 place-items-center rounded-2xl border border-border bg-white shadow-[var(--shadow)] max-sm:[&_img]:size-9 max-sm:[&_svg]:size-9 sm:size-[4.5rem]"
-        aria-hidden
-      >
-        {logo}
-      </span>
-      <div className="min-w-0 space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-          <div className="min-w-0 max-w-xl flex-1 basis-64">
-            <h2 id={`${testid}-h`} className="text-lg font-semibold tracking-tight">
-              {name}
-            </h2>
-            <p className="mt-1 text-sm leading-relaxed text-muted">{sub}</p>
-          </div>
-          {/* The pill stays level with the button, whatever the button says under it (WhatsApp's sign-up). */}
-          <div className="flex shrink-0 flex-wrap items-start gap-x-3 gap-y-2">
-            <span className="flex h-11 items-center">{pill}</span>
-            {action}
-          </div>
+    <section className="home-card animate-rise flex min-w-0 flex-col p-4 sm:p-5" aria-labelledby={`${testid}-h`} data-testid={testid} data-state={state} data-status={status}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {/* The logo on the design's small soft tile: never green, so Shopify's bag keeps its own colours. */}
+          <span className="grid size-9 shrink-0 place-items-center rounded bg-home-soft" aria-hidden>
+            {logo}
+          </span>
+          <h2 id={`${testid}-h`} className="home-h2 min-w-0 break-words">
+            {name}
+          </h2>
         </div>
-        {children && <div className="space-y-1.5 text-sm">{children}</div>}
-        <ul aria-label={`What ${name} brings`} className="flex flex-wrap gap-2 pt-1">
+        <span className="flex h-9 shrink-0 items-center">{pill}</span>
+      </div>
+      <p className="mt-2 text-[13px] leading-[18px] text-muted">{sub}</p>
+      {children && <div className="mt-2 min-w-0 space-y-1.5 text-[13px] leading-[18px] break-words">{children}</div>}
+      <div className="mt-auto flex flex-wrap items-end justify-between gap-x-4 gap-y-3 pt-4">
+        <ul aria-label={`What ${name} brings`} className="flex min-w-0 flex-1 basis-48 flex-wrap gap-1.5">
           {brings.map((b) => (
-            <li key={b} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-bg/60 py-1 pl-1.5 pr-2.5 text-xs font-medium">
-              <span className="grid size-4 shrink-0 place-items-center rounded-full bg-good text-[var(--surface)]" aria-hidden>
-                <Check size={10} strokeWidth={3.4} />
-              </span>
+            <li key={b} className="inline-flex items-center gap-1 rounded bg-home-soft px-2 py-0.5 text-[11px] font-medium">
+              <Check aria-hidden size={11} strokeWidth={3} className="shrink-0 text-accent" />
               {b}
             </li>
           ))}
         </ul>
+        {action && <div className="flex shrink-0 flex-wrap items-center gap-2">{action}</div>}
       </div>
     </section>
   );
 }
 
-/** The class of a row's button: the page's own, a little taller, as in the design. */
-const ROW_BUTTON = "h-11 px-5 font-semibold";
+/** The class of a card's button: the design's small one. */
+const ROW_BUTTON = "h-9 px-3.5 text-[13px] font-semibold";
 
 /** Connect: a button that opens the platform's sign-in, or a link to the page that does. */
 export function ConnectButton({
@@ -126,11 +139,11 @@ export function ConnectButton({
 }) {
   const inner = (
     <>
-      <Glyph size={17} strokeWidth={2.2} aria-hidden />
+      <Glyph size={15} strokeWidth={2.2} aria-hidden />
       {busy ?? children ?? "Connect"}
     </>
   );
-  // The page has a Connect button per row: each is named for its platform.
+  // The page has a Connect button per card: each is named for its platform.
   const label = busy || children ? undefined : `Connect ${name}`;
   return href ? (
     <Link className={`btn-primary ${ROW_BUTTON}`} href={href} aria-label={label} data-testid={testid}>
@@ -145,50 +158,40 @@ export function ConnectButton({
 
 /** Manage (or "Fix it" when an account is waiting for someone): to where the connection is managed in depth. */
 export function ManageLink({ name, href, attention = false }: { name: string; href: string; attention?: boolean }) {
-  return (
-    <Link className={`${attention ? "btn-primary" : "btn-secondary"} ${ROW_BUTTON}`} href={href} aria-label={`${attention ? "Fix" : "Manage"} ${name}`}>
-      <Settings size={17} strokeWidth={2} aria-hidden />
-      {attention ? "Fix it" : "Manage"}
+  return attention ? (
+    <Link className={`btn-primary ${ROW_BUTTON}`} href={href} aria-label={`Fix ${name}`}>
+      Fix it
+    </Link>
+  ) : (
+    <Link className="home-btn px-3.5 font-semibold" href={href} aria-label={`Manage ${name}`}>
+      Manage
     </Link>
   );
 }
 
-/** Above the platforms: connecting is one button and the platform's own sign-in; Learn more says how. */
+/** Above the connections: connecting is one button and the platform's own sign-in; Learn more says how. */
 export function OneClickSetup({ adPlatforms }: { adPlatforms: boolean }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
-    <section
-      className="rounded-2xl border p-5 sm:p-6"
-      style={{ ["--tone" as string]: "var(--info)", borderColor: "color-mix(in oklab, var(--info) 22%, var(--border))", background: "color-mix(in oklab, var(--info) 7%, var(--surface))" }}
-      aria-labelledby={`${id}-h`}
-      data-testid="one-click-setup"
-    >
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-        <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-surface shadow-[var(--shadow)]" aria-hidden>
-          <span className="grid size-10 place-items-center rounded-full bg-[var(--tone)] text-[var(--surface)]">
-            <Zap size={20} strokeWidth={2.2} fill="currentColor" />
-          </span>
+    <section className="home-card animate-rise bg-home-soft px-4 py-3 sm:px-5" aria-labelledby={`${id}-h`} data-testid="one-click-setup">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-accent text-accent-ink">
+          <Zap size={16} strokeWidth={2.2} />
         </span>
-        <div className="min-w-0 flex-1 basis-60">
-          <h2 id={`${id}-h`} className="font-semibold">
+        <div className="min-w-0 flex-1 basis-56">
+          <h2 id={`${id}-h`} className="text-sm font-semibold">
             One Click Setup
           </h2>
-          <p className="mt-1 text-sm text-muted">Connect your accounts securely. We handle the setup, so you can focus on growing your business.</p>
+          <p className="text-[13px] leading-[18px] text-muted">Connect your accounts securely. We handle the setup, so you can focus on growing your business.</p>
         </div>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 text-sm font-semibold text-[color-mix(in_oklab,var(--info)_85%,var(--text))] underline-offset-4 hover:underline"
-          aria-expanded={open}
-          aria-controls={`${id}-how`}
-          onClick={() => setOpen((o) => !o)}
-        >
+        <button type="button" className="home-btn bg-surface" aria-expanded={open} aria-controls={`${id}-how`} onClick={() => setOpen((o) => !o)}>
           Learn more
-          <ArrowRight size={16} strokeWidth={2.2} aria-hidden className={`transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} />
+          <ArrowRight size={14} strokeWidth={2.2} aria-hidden className={`transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} />
         </button>
       </div>
       {open && (
-        <ol id={`${id}-how`} className="mt-4 grid gap-3 border-t border-[color-mix(in_oklab,var(--info)_18%,var(--border))] pt-4 text-sm sm:grid-cols-3">
+        <ol id={`${id}-how`} className="mt-3 grid gap-3 border-t border-home-line pt-3 text-[13px] leading-[18px] sm:grid-cols-3">
           {[
             ["Press Connect", "next to the platform you use."],
             ["Sign in on its own page", `${adPlatforms ? "Shopify, Google or Meta" : "Shopify"} asks you to sign in and choose what to share with bizinsights.`],
@@ -197,8 +200,8 @@ export function OneClickSetup({ adPlatforms }: { adPlatforms: boolean }) {
               `bizinsights fills in your dashboard and keeps it up to date by itself. There are no keys or codes to copy${adPlatforms ? ", and ad accounts are read-only: bizinsights can't change your ads or spend money" : ""}.`,
             ],
           ].map(([title, text], i) => (
-            <li key={title} className="flex items-start gap-3">
-              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--tone)] text-xs font-semibold text-[var(--surface)]" aria-hidden>
+            <li key={title} className="flex items-start gap-2.5">
+              <span className="grid size-5 shrink-0 place-items-center rounded-full bg-accent text-[11px] font-semibold text-accent-ink" aria-hidden>
                 {i + 1}
               </span>
               <span>

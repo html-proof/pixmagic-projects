@@ -1,55 +1,31 @@
 "use client";
-/** Team & Access building blocks: the summary cards and the small action menu. */
+/** Team & Access building blocks: the summary figures and the small action menu. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Sparkline } from "@/components/dashboard/Motion";
+import { FigureTile } from "@/components/PageKit";
 
-type CardTone = "green" | "blue" | "violet" | "red" | "slate";
-
-const CARD_TONE: Record<CardTone, { tile: string; line: string }> = {
-  green: { tile: "bg-emerald-50 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-300", line: "#10b981" },
-  blue: { tile: "bg-sky-50 text-sky-600 dark:bg-sky-400/10 dark:text-sky-300", line: "#3b82f6" },
-  violet: { tile: "bg-violet-50 text-violet-600 dark:bg-violet-400/10 dark:text-violet-300", line: "#8b5cf6" },
-  red: { tile: "bg-rose-50 text-rose-600 dark:bg-rose-400/10 dark:text-rose-300", line: "#f43f5e" },
-  slate: { tile: "bg-text/[0.06] text-text/70", line: "#94a3b8" },
-};
-
-export function SummaryCard({
-  icon: Icon,
-  tone,
-  label,
-  value,
-  note,
-  trend,
-  testId,
-}: {
-  icon: LucideIcon;
-  tone: CardTone;
-  label: string;
-  value: number | undefined;
-  note: string;
-  trend: number[] | undefined;
-  testId: string;
-}) {
-  const look = CARD_TONE[tone];
+/**
+ * One of the page's few numbers, as the Stitch design draws every page's (components/PageKit.tsx
+ * FigureTile): its name, the count, and a line under it; a count with a history (pending
+ * invitations) has its last 30 days beside it.
+ */
+export function SummaryCard({ icon: Icon, label, value, note, trend, testId }: { icon: LucideIcon; label: string; value: number | undefined; note: string; trend: number[] | undefined; testId: string }) {
   return (
-    <div className="card flex min-w-0 items-start gap-4" data-testid={testId}>
-      <span aria-hidden className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${look.tile}`}>
-        <Icon className="h-6 w-6" strokeWidth={1.8} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{label}</p>
-        <div className="mt-1 flex items-end gap-3">
-          <p className="text-3xl font-bold tabular-nums tracking-tight">{value ?? "—"}</p>
-          {trend && trend.length > 1 && (
-            <span className="ml-auto h-10 w-full max-w-28 min-w-0" title="Last 30 days">
-              <Sparkline values={trend} color={look.line} className="h-full w-full" />
-            </span>
-          )}
-        </div>
-        <p className="mt-1 text-xs text-muted">{note}</p>
-      </div>
-    </div>
+    <FigureTile
+      testId={testId}
+      title={label}
+      icon={<Icon className="h-4 w-4" strokeWidth={1.8} />}
+      value={value ?? "—"}
+      change={
+        trend && trend.length > 1 ? (
+          <span className="ml-auto h-7 w-20 min-w-0" title="Last 30 days">
+            <Sparkline values={trend} color="var(--accent)" className="h-full w-full" />
+          </span>
+        ) : undefined
+      }
+      sub={note}
+    />
   );
 }
 

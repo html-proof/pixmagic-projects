@@ -173,9 +173,9 @@ export default function AdAccountsPage() {
         </div>
       )}
 
-      <div className="card text-sm text-muted">
-        <h2 className="font-semibold text-text">What bizinsights reads</h2>
-        <ul className="mt-2 list-disc space-y-1 pl-5">
+      <section aria-labelledby="ads-reads-h" className="home-card p-5 text-sm text-muted sm:p-6">
+        <h2 id="ads-reads-h" className="home-h2 text-text">What bizinsights reads</h2>
+        <ul className="mt-3 list-disc space-y-1 pl-5">
           <li>For each ad campaign and day: what was spent, impressions, clicks, and the conversions and their value the platform counts.</li>
           <li>From AdSense, for each site and day: estimated earnings, page views, impressions and clicks.</li>
           <li>
@@ -186,7 +186,7 @@ export default function AdAccountsPage() {
           <li>Nothing about the people who saw your ads, and nothing is ever changed in your accounts.</li>
           <li>Access is stored encrypted on the server and never sent to your browser. Disconnecting deletes it and every number fetched with it.</li>
         </ul>
-      </div>
+      </section>
 
       <GoogleAdsDemoDialog open={ads.demoOpen} store={store} onClose={ads.closeDemo} onConnect={ads.connectDemo} onDisconnect={ads.disconnectDemo} />
       <DisconnectDialog c={ads.confirming} busy={!!ads.busy} onConfirm={() => void ads.disconnect()} onCancel={ads.cancelDisconnect} />

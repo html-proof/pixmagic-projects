@@ -56,38 +56,43 @@ function ApiKeys() {
     await reload();
   }
 
+  // The Settings pages' look (Stitch screens 30–35): the title on the page, the keys on a white card.
   return (
-    <section className="card space-y-4">
-      <h1 className="card-title">API keys</h1>
-      <p className="text-sm text-muted">
-        Read-only keys for pulling your metrics into other tools. Send as <code>Authorization: Bearer sk_live_…</code> to
-        <code> /api/workspaces/{workspace.id}/…</code>.
-      </p>
-      {error && <Alert>{error.message}</Alert>}
-      {actionMsg && <Alert>{actionMsg}</Alert>}
-      {secret && (
-        <Alert kind="success">
-          Copy this key now. You won&apos;t be able to see it again: <code className="break-all font-mono">{secret}</code>
-        </Alert>
-      )}
-      <form onSubmit={create} className="flex gap-2">
-        <input aria-label="Key name" className="input" placeholder="e.g. Looker Studio" required value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn-primary">Create key</button>
-      </form>
-      {data?.keys.length === 0 && <EmptyState title="No keys yet" body="Create one when you need to connect another tool." />}
-      <ul className="divide-y divide-border text-sm">
-        {data?.keys.map((k) => (
-          <li key={k.id} className="flex flex-wrap items-center gap-3 py-2">
-            <span className="flex-1">{k.name} <code className="text-muted">{k.prefix}…</code></span>
-            <span className="text-xs text-muted">{k.revokedAt ? "Revoked" : k.lastUsedAt ? `Used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "Never used"}</span>
-            {!k.revokedAt && (
-              <button className="text-danger" aria-label={`Revoke key ${k.name}`} onClick={() => revoke(k.id)}>
-                Revoke
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <div className="space-y-6">
+      <header>
+        <h1 className="page-title">API keys</h1>
+        <p className="mt-1 text-sm break-words text-muted sm:text-base">
+          Read-only keys for pulling your metrics into other tools. Send as <code>Authorization: Bearer sk_live_…</code> to
+          <code> /api/workspaces/{workspace.id}/…</code>.
+        </p>
+      </header>
+      <section aria-label="Your keys" className="home-card animate-rise min-w-0 space-y-4 p-5 sm:p-6">
+        {error && <Alert>{error.message}</Alert>}
+        {actionMsg && <Alert>{actionMsg}</Alert>}
+        {secret && (
+          <Alert kind="success">
+            Copy this key now. You won&apos;t be able to see it again: <code className="break-all font-mono">{secret}</code>
+          </Alert>
+        )}
+        <form onSubmit={create} className="flex gap-2">
+          <input aria-label="Key name" className="input" placeholder="e.g. Looker Studio" required value={name} onChange={(e) => setName(e.target.value)} />
+          <button className="btn-primary">Create key</button>
+        </form>
+        {data?.keys.length === 0 && <EmptyState title="No keys yet" body="Create one when you need to connect another tool." />}
+        <ul className="divide-y divide-home-line text-sm">
+          {data?.keys.map((k) => (
+            <li key={k.id} className="flex flex-wrap items-center gap-3 py-2.5">
+              <span className="min-w-0 flex-1 break-words">{k.name} <code className="text-muted">{k.prefix}…</code></span>
+              <span className="text-xs text-muted">{k.revokedAt ? "Revoked" : k.lastUsedAt ? `Used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "Never used"}</span>
+              {!k.revokedAt && (
+                <button className="text-danger" aria-label={`Revoke key ${k.name}`} onClick={() => revoke(k.id)}>
+                  Revoke
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
   );
 }
