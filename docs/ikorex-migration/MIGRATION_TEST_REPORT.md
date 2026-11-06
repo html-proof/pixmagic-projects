@@ -3,6 +3,27 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-07: stage A live on AWS; the SMS events bridge
+
+Stage A (#348) merged as `b7e9ef3e`; its Deploy to AWS passed (unit tests, `cdk deploy`, the
+migration `20261106120000_selfhost_runtime` on RDS, smoke tests): `/api/version` reports that commit
+as release 167 and `/api/readyz` answers 200. On AWS it added four empty tables and moved the
+maintenance actions into `actions.ts`; nothing else changed there.
+
+Then, with SMS kept on AWS (decision 3), `apps/aws/src/sqsBridge.ts`: the worker long-polls the
+`smsEvents` SQS queue into its own queue.
+
+| Test | What it shows | Result |
+| --- | --- | --- |
+| `test/selfhost.test.ts`, 4 new tests | The queue URL's region read, and anything not an SQS URL refused (incl. a look-alike host); events moved into the local queue, then the batch deleted from SQS (unreadable bodies dropped and deleted); nothing deleted when the local queue refuses an event, so SQS hands it out again; polling continues after failed reads and stops when asked | **20 of 20 passed** |
+| `apps/aws` suite without PostgreSQL | Nothing else moved | **96 passed** (the 13 PostgreSQL tests skipped: no local cluster this time; the bridge doesn't touch PostgreSQL beyond the existing `send`) |
+| `tsc --noEmit`, `eslint` (apps/aws) | Types, lint | **Clean** |
+| `build-server.mjs --skip-web` (stand-in UI page) | The bundle builds with the bridge in it | **Built** |
+| Alert rules parsed | `SmsEventsUnread` added | **16 rules** |
+
+Not run: a read of the real queue (the AWS session had expired; it runs at the cutover, when
+`SCHEDULES=on` starts it).
+
 ## 2026-11-06: stage A (the self-hosted runtime), on the owner's PC
 
 Branch `claude/ikorex-selfhost-runtime`. PostgreSQL 18 (a throwaway local cluster; production will

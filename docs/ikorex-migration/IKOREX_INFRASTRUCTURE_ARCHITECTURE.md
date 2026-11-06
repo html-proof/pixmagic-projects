@@ -100,9 +100,14 @@ counting exactly, which pg-boss's retry policies don't, with no extra dependency
 
 **Events (SNS).** SNS only carries the alarm emails and the SMS delivery events today; the app's own
 notifications (`packages/core/src/notify.ts`, the bell, alerts) already run through the queues, the
-database and Resend. Alarms move to Alertmanager. SMS delivery events depend on the SMS decision:
-with AWS End User Messaging kept, its SNS topic gets an HTTPS subscription to the app (to build in
-stage B, with SNS signature checks).
+database and Resend. Alarms move to Alertmanager. SMS stays on AWS End User Messaging (decided
+2026-11-07), and so do its delivery events' topic and queue: the configuration set → SNS topic →
+`smsEvents` SQS queue path is unchanged, and the server's worker long-polls that queue and moves each
+event into its own `smsEvents` queue (`apps/aws/src/sqsBridge.ts`, with `SMS_EVENTS_QUEUE_URL`, only
+when `SCHEDULES=on`). This replaced the plan of an SNS HTTPS subscription to the app: SQS keeps an
+event 4 days, so a server down for hours loses none (SNS gives up on an HTTPS endpoint after an
+hour), and no new public endpoint is needed. Polling costs nothing (~130,000 requests a month, in
+SQS's free tier).
 
 ### Schedules (replaces EventBridge Scheduler + the `cron` function): `apps/aws/src/schedules.ts`
 
@@ -156,11 +161,12 @@ Prometheus (15 days), Alertmanager (email through Resend's SMTP), Grafana (one p
 dashboard; reached through the tunnel behind Cloudflare Access, never public), node-exporter (the
 host), postgres-exporter (a `pg_monitor` login, no table data), and the app's own `/metrics` on port
 9464 of `web` and `worker`: request counts and times, job outcomes and times, queue depth by state,
-the oldest waiting job, schedule successes. Fifteen alert rules (`monitoring/alerts.yml`) cover what
+the oldest waiting job, schedule successes, SMS events moved. Sixteen alert rules (`monitoring/alerts.yml`) cover what
 the CloudWatch alarms did: app down, 5xx rate, slow API, dead jobs, queue backlog, failing jobs,
 missed schedules, database down or out of connections, WAL archiving failing, disk, memory, load,
-tunnel down. Loki and Grafana Alloy (logs, 30 days) are a separate profile, because Alloy needs the
-Docker socket (root-equivalent): the server administrator's call.
+tunnel down, SMS events unread. Loki and Grafana Alloy (logs, 30 days) are a separate profile, because
+Alloy needs the Docker socket (root-equivalent): **off** (decision 7), unless the server administrator
+agrees to it.
 
 A monitor on the same server can't report that the server is down, so **an external uptime check**
 watches `https://bizinsights.io/api/readyz`, and the backup's ping is external too.
@@ -223,12 +229,17 @@ Staging is a second Compose project (`bizinsights-staging`, its own volumes and 
   Docker access is root-equivalent. A compromise of any workload under `deployer` reaches all of them.
   A separate Linux user for bizinsights would be better, and is the server administrator's call.
 
-## Decisions this design needs
+## Decisions (2026-11-07)
 
-1. The server administrator's agreement, and an SSH key for this PC (the guide's steps 2-4).
-2. Cognito: keep (recommended) or leave (password resets or a lazy migration).
-3. SMS: keep AWS End User Messaging or move to another provider.
-4. Backup destination: Cloudflare R2 (recommended) or Backblaze B2.
-5. Accepting one server instead of Multi-AZ: no automatic failover; recovery is a restore.
-6. A maintenance window for the cutover (about 30 minutes).
-7. Whether to run the logs profile (Alloy needs the Docker socket).
+The owner asked for these to be made for them ("do it for me", 2026-11-07); each is recorded with
+its reason, and any can be revisited before the cutover.
+
+| # | Decision | Made | Why, and what it means |
+| --- | --- | --- | --- |
+| 1 | The server administrator's agreement and an SSH key for this PC | **Waiting on the administrator** | The key is made on this PC (the guide's step 2, with a passphrase only the owner knows); steps 3-4 (sending the public key, reading its fingerprint by phone) and the agreement are between the owner and the administrator |
+| 2 | Cognito | **Keep** | Cognito can't export passwords, so leaving means every password user resets or a lazy migration; keeping costs ~US$1.15 a month (its email key) and changes nothing for users |
+| 3 | SMS | **Keep AWS End User Messaging** | Sender registrations, the spend limits and the opt-out list stay where they are; delivery events reach the server through the existing SQS queue (above), so no new provider, account or route is needed |
+| 4 | Backup destination | **Cloudflare R2** | The domain is already on Cloudflare; no egress fees for a restore; a ~2 GB database's compressed backups and 14 days of WAL should fit in R2's free 10 GB. The bucket and its token are made in stage C |
+| 5 | One server instead of Multi-AZ | **Accepted** | It is what moving to one server means. Loss of the server loses at most the last 5 minutes of writes (WAL archived every 300 s to R2); recovery is a restore on another host: AWS during the 14-day rollback period, any Docker host after it (a few hours, rehearsed weekly by the restore test) |
+| 6 | The cutover window | **A Sunday, 20:00-21:00 Melbourne time (09:00-10:00 UTC while daylight saving lasts)**, the first Sunday after stages B and C pass and the administrator agrees | The work takes ~30 minutes; the hour leaves room. Sunday evening is outside Australian business hours, the middle of the night in the Americas and before noon in Europe, and away from the 07:00 cost email; the owner can be there for the checks only they can do (signing in, WhatsApp numbers, Cloudflare). Shopify retries webhooks for hours, so orders in the window arrive afterwards. Before it is fixed, CloudWatch's hourly request counts (at the next `aws login`) confirm it is among the quietest hours |
+| 7 | The logs profile (Loki + Alloy) | **Off** | Alloy needs the Docker socket, which is root on a server shared with the websites, n8n and CCTV. Logs stay in Docker's rotated files (`docker compose logs`); the profile can be turned on later if the administrator agrees |

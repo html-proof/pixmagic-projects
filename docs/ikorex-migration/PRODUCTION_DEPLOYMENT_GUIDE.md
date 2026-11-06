@@ -7,7 +7,7 @@ each gets its evidence in [MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md) w
 
 The files: `infra/ikorex/` (Compose files, images, scripts, monitoring) and the runtime in
 `apps/aws/src/` (`selfhost.ts`, `server.ts`, `admin.ts`, `pgQueues.ts`, `schedules.ts`, `pgCoord.ts`,
-`fsBlobs.ts`, `metrics.ts`).
+`fsBlobs.ts`, `metrics.ts`, `sqsBridge.ts`).
 
 ## Before anything: the owner and the server's administrator
 
@@ -30,7 +30,8 @@ Accounts and keys (owner, in each provider's console):
 | An R2 bucket `bizinsights-backups` and an API token (Object Read & Write, this bucket only) | Cloudflare → R2 | `env/postgres.env` `PGBACKREST_REPO1_*` |
 | A backup passphrase (`openssl rand -base64 48`), also in the owner's password manager | — | `env/postgres.env` `PGBACKREST_REPO1_CIPHER_PASS` |
 | Two checks: the nightly backup ping, and `https://bizinsights.io/api/readyz` every 5 minutes | healthchecks.io / UptimeRobot (free tiers) | `env/postgres.env` `BACKUP_PING_URL` |
-| An IAM user `bizinsights-ikorex` with only: Cognito admin actions on the pool, `sms-voice:SendTextMessage` (and what `smsProvider.ts` reads), `ce:GetCostAndUsage` | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
+| An IAM user `bizinsights-ikorex` with only: Cognito admin actions on the pool, `sms-voice:SendTextMessage` (and what `smsProvider.ts` reads), `sqs:ReceiveMessage` + `sqs:DeleteMessage` on the `insights-production-smsEvents` queue, `ce:GetCostAndUsage` | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
+| The `smsEvents` queue's URL, `https://sqs.ap-southeast-2.amazonaws.com/<account>/insights-production-smsEvents` (also the `smsEvents` entry of the functions' `QUEUE_URLS`) | AWS | `env/app.env` `SMS_EVENTS_QUEUE_URL`, production only, read only once `SCHEDULES=on` |
 
 On the server, as `deployer`, the project folder (nothing outside it is touched):
 
@@ -98,7 +99,7 @@ cd ~/bizinsights && scripts/render-monitoring.sh && docker compose -f docker-com
 | What is configured (names only) | `docker compose --profile admin run --rm admin config` |
 | Backups in the bucket | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
 | Restore test now | `docker compose exec backup restore-test.sh` |
-| Turn schedules on (production, at the cutover) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
+| Turn schedules on (production, at the cutover; also starts reading AWS's SMS events) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
 
 ## Rolling back a release
 

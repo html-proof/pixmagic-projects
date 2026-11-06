@@ -17,7 +17,7 @@ service to Fargate Spot (up to −12.10); neither changes the conclusion below.
 
 ## After: what stays on AWS
 
-If Cognito and SMS stay on AWS (the recommendation for Cognito, the owner's choice for SMS):
+Cognito and SMS stay on AWS (both decided 2026-11-07, [IKOREX_INFRASTRUCTURE_ARCHITECTURE.md](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)):
 
 | Service | Before GST | Why it stays |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ If Cognito and SMS stay on AWS (the recommendation for Cognito, the owner's choi
 | Lambda `cognito-email` | 0.00 | Free tier |
 | Secrets Manager: the one secret that function reads | 0.40 | Resend's key for the code emails |
 | End User Messaging SMS | per message | Sandbox now: nothing sent, nothing billed |
-| SNS (SMS delivery events) | 0.00 | Free tier |
+| SNS + the `smsEvents` SQS queue (SMS delivery events) | 0.00 | Free tiers: the server's long polls are ~130,000 SQS requests a month of the free 1,000,000 |
 | CloudTrail + its bucket | ~0.05 | Audit of what remains |
 | Cost Explorer (daily cost email) | 0.30 | Optional once the bill is this small |
 | Support plan | 0.00 | Basic |
@@ -34,7 +34,7 @@ If Cognito and SMS stay on AWS (the recommendation for Cognito, the owner's choi
 
 Everything else is deleted at stage F: RDS (44.54), the WhatsApp service and its DNS zone (17.79),
 the WAF (10.08), the NAT instances, their disks and addresses (18.34), the other secrets, CloudWatch,
-DynamoDB, S3 buckets, SQS, Lambda `api`/`jobs`/`cron`, CloudFront, GuardDuty.
+DynamoDB, S3 buckets, the other SQS queues, Lambda `api`/`jobs`/`cron`, CloudFront, GuardDuty.
 
 If Cognito is replaced too (option 2 or 3 in the matrix) and SMS moves elsewhere, the AWS account
 can be closed: **0.00**. Not before then.
