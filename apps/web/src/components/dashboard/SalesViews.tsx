@@ -1,9 +1,10 @@
 "use client";
-import { useState, type ReactNode } from "react";
-import { ArrowRight, ArrowUpRight, CalendarDays, Clock, Sigma, Sparkles, Tag } from "lucide-react";
+import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
+import { ArrowRight, ArrowUpRight, CalendarDays, Clock, Search, Sigma, Sparkles, Tag } from "lucide-react";
 import { TRAFFIC_SPLIT_LABEL } from "@app/shared/traffic";
 import { Card as KitCard, ChangeTag, FigureTile, InShortLine, ShareRow } from "@/components/PageKit";
-import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { useApp } from "@/components/AppContext";
+import { fmtMoney, fmtNum, fmtPct, friendlyError, useApi } from "@/lib/api";
 import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
 import { ContactsCard } from "./Contacts";
 import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
@@ -608,7 +609,8 @@ export function OrdersTab({ ov, currency }: { ov: Overview; currency: string }) 
           )}
         </div>
       )}
-      {recent && <OrdersTable items={recent.items} currency={currency} timezone={ov.store.timezone} shopDomain={ov.store.shopDomain} cancelledInRange={recent.cancelledInRange} />}
+      {/* Every order in the dates, searchable and in pages (GET …/orders); the 10 latest from the overview while it loads or if it can't. */}
+      {recent && <OrdersList ov={ov} currency={currency} recent={recent.items} cancelledInRange={recent.cancelledInRange} />}
       {refunds && (
         <Card id="refunds" title="Refunds" className="lg:max-w-md">
           <p className="text-[28px] leading-8 font-semibold tabular-nums">{fmtMoney(refunds.current.refunds, currency)}</p>
@@ -625,24 +627,49 @@ export function OrdersTab({ ov, currency }: { ov: Overview; currency: string }) 
   );
 }
 
-/** The latest orders as the design's table, each opening in Shopify. */
-function OrdersTable({ items, currency, timezone, shopDomain, cancelledInRange }: { items: RecentOrder[]; currency: string; timezone: string; shopDomain: string; cancelledInRange?: number }) {
+/** Orders as the design's table, each opening in Shopify: a title, a note, controls over it and a foot under it. */
+function OrdersTable({
+  items,
+  currency,
+  timezone,
+  shopDomain,
+  cancelledInRange,
+  title = "Recent orders",
+  note,
+  controls,
+  foot,
+  empty = "No orders have been imported yet. They appear here as soon as they arrive from Shopify.",
+  busy = false,
+}: {
+  items: RecentOrder[];
+  currency: string;
+  timezone: string;
+  shopDomain: string;
+  cancelledInRange?: number;
+  title?: string;
+  note?: ReactNode;
+  controls?: ReactNode;
+  foot?: ReactNode;
+  empty?: string;
+  busy?: boolean;
+}) {
   const showPayment = items.some((o) => o.financialStatus !== undefined || o.cancelled !== undefined);
   const showShipping = items.some((o) => o.fulfillmentStatus !== undefined);
   const th = "px-3 py-2.5 text-[11px] font-semibold tracking-wider text-muted uppercase";
   return (
-    <section aria-labelledby="recent-orders-h" className="home-card animate-rise min-w-0 overflow-hidden" data-testid="sales-recent-orders">
+    <section aria-labelledby="recent-orders-h" aria-busy={busy || undefined} className="home-card animate-rise min-w-0 overflow-hidden" data-testid="sales-recent-orders">
       <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 pt-5 pb-4 sm:px-6">
-        <h2 id="recent-orders-h" className="home-h2">Recent orders</h2>
-        <p className="text-xs text-muted">The 10 latest placed in these dates · times in {timezone}</p>
+        <h2 id="recent-orders-h" className="home-h2">{title}</h2>
+        <p className="text-xs text-muted">{note ?? <>The 10 latest placed in these dates · times in {timezone}</>}</p>
       </div>
+      {controls}
       {cancelledInRange !== undefined && cancelledInRange > 0 && (
         <p className="px-5 pb-3 text-xs text-muted sm:px-6" data-testid="cancelled-in-range">
           {plural(cancelledInRange, "order")} {cancelledInRange === 1 ? "was" : "were"} cancelled in these dates, counted on the day of the cancellation.
         </p>
       )}
       {items.length === 0 ? (
-        <p className="px-5 pb-5 text-sm text-muted sm:px-6">No orders have been imported yet. They appear here as soon as they arrive from Shopify.</p>
+        <p className="px-5 pb-5 text-sm text-muted sm:px-6">{empty}</p>
       ) : (
         <>
           <ul className="divide-y divide-home-line border-t border-home-line sm:hidden">
@@ -712,7 +739,141 @@ function OrdersTable({ items, currency, timezone, shopDomain, cancelledInRange }
           </div>
         </>
       )}
+      {foot}
     </section>
+  );
+}
+
+/** A page of GET …/orders: every order placed in the dates that matches, shaped as the overview's latest orders. */
+interface OrdersPage {
+  range: { from: string; to: string };
+  total: number;
+  page: number;
+  pageSize: number;
+  items: RecentOrder[];
+}
+
+const PAYMENT_CHOICES: Array<[string, string]> = [["", "Any payment"], ["paid", "Paid"], ["pending", "Not paid yet"], ["refunded", "Refunded"], ["other", "Other"]];
+const SHIPPING_CHOICES: Array<[string, string]> = [["", "Any shipping"], ["shipped", "Shipped"], ["partly", "Partly shipped"], ["not_shipped", "Not shipped"]];
+const CANCELLED_CHOICES: Array<[string, string]> = [["", "Cancelled or not"], ["exclude", "Not cancelled"], ["only", "Cancelled only"]];
+const SORT_CHOICES: Array<[string, string]> = [["newest", "Newest first"], ["oldest", "Oldest first"], ["total_desc", "Highest total"], ["total_asc", "Lowest total"]];
+const PAGE_SIZE = 25;
+
+/**
+ * Every order placed in the dates (screen 08's table, with search and pages): search by order
+ * number, filter by payment, shipping and cancellation, sort, and page through. A filter is offered
+ * only to a member shown that field (Team & Access), as the API refuses it otherwise. Until the
+ * first page arrives, or if it can't, the overview's 10 latest stand in, and the page says so.
+ */
+function OrdersList({ ov, currency, recent, cancelledInRange }: { ov: Overview; currency: string; recent: RecentOrder[]; cancelledInRange?: number }) {
+  const { workspace, allowed } = useApp();
+  const [typed, setTyped] = useState("");
+  const [q, setQ] = useState("");
+  const [payment, setPayment] = useState("");
+  const [shipping, setShipping] = useState("");
+  const [cancelled, setCancelled] = useState("");
+  const [sort, setSort] = useState("newest");
+  const [page, setPage] = useState(1);
+  // The search asks once typing pauses, not on every key.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setQ(typed.trim());
+      setPage(1);
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [typed]);
+  const params = new URLSearchParams({ preset: "custom", from: ov.range.from, to: ov.range.to, sort, page: String(page), pageSize: String(PAGE_SIZE) });
+  if (q) params.set("q", q);
+  if (payment) params.set("payment", payment);
+  if (shipping) params.set("shipping", shipping);
+  if (cancelled) params.set("cancelled", cancelled);
+  const { data, error, loading } = useApi<OrdersPage>(`/workspaces/${workspace.id}/stores/${ov.store.id}/orders?${params}`);
+  // The page before stays up while the next loads, so the table doesn't jump.
+  const [shown, setShown] = useState<OrdersPage | null>(null);
+  useEffect(() => {
+    if (data) setShown(data);
+  }, [data]);
+  const pages = shown ? Math.max(1, Math.ceil(shown.total / shown.pageSize)) : 1;
+  const filtered = !!(q || payment || shipping || cancelled);
+  const pick = (set: (v: string) => void) => (e: ChangeEvent<HTMLSelectElement>) => {
+    set(e.target.value);
+    setPage(1);
+  };
+  const select = "input h-9 w-auto py-1 pr-8 text-[13px]";
+  const controls = (
+    <div className="flex flex-wrap items-center gap-2 px-5 pb-4 sm:px-6" data-print-hide>
+      <label className="relative min-w-0 flex-1 basis-48">
+        <span className="sr-only">Search by order number</span>
+        <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted" />
+        <input type="search" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Order number, e.g. 1042" maxLength={40} className="input h-9 bg-home-soft pl-9 text-[13px]" data-testid="orders-search" />
+      </label>
+      {allowed("orders.payments") && (
+        <select aria-label="Payment" value={payment} onChange={pick(setPayment)} className={select} data-testid="orders-payment">
+          {PAYMENT_CHOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      )}
+      {allowed("orders.fulfillment") && (
+        <select aria-label="Shipping" value={shipping} onChange={pick(setShipping)} className={select} data-testid="orders-shipping">
+          {SHIPPING_CHOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      )}
+      {allowed("orders.cancellations") && (
+        <select aria-label="Cancelled" value={cancelled} onChange={pick(setCancelled)} className={select} data-testid="orders-cancelled">
+          {CANCELLED_CHOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      )}
+      <select aria-label="Sort orders" value={sort} onChange={pick(setSort)} className={select} data-testid="orders-sort">
+        {SORT_CHOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      {error && !shown && (
+        <p className="w-full text-xs text-muted" role="status" data-testid="orders-fallback">
+          The full list couldn&apos;t load ({friendlyError(error)}), so these are the 10 latest orders.
+        </p>
+      )}
+    </div>
+  );
+  if (!shown) {
+    return <OrdersTable items={recent} currency={currency} timezone={ov.store.timezone} shopDomain={ov.store.shopDomain} cancelledInRange={cancelledInRange} title="Orders" controls={controls} busy={loading} />;
+  }
+  const first = shown.total === 0 ? 0 : (shown.page - 1) * shown.pageSize + 1;
+  const lastShown = Math.min(shown.total, shown.page * shown.pageSize);
+  return (
+    <OrdersTable
+      items={shown.items}
+      currency={currency}
+      timezone={ov.store.timezone}
+      shopDomain={ov.store.shopDomain}
+      cancelledInRange={cancelledInRange}
+      title="Orders"
+      note={
+        <span data-testid="orders-count">
+          {plural(shown.total, filtered ? "matching order" : "order")} placed in these dates · times in {ov.store.timezone}
+        </span>
+      }
+      controls={controls}
+      busy={loading}
+      empty={filtered ? "No orders in these dates match. Clear the search or a filter to see more." : "No orders were placed in these dates."}
+      foot={
+        shown.total > shown.pageSize && (
+          <nav aria-label="Pages of orders" className="flex flex-wrap items-center justify-between gap-3 border-t border-home-line px-5 py-3 text-xs sm:px-6" data-print-hide data-testid="orders-pager">
+            <span className="text-muted tabular-nums">
+              {fmtNum(first)}–{fmtNum(lastShown)} of {fmtNum(shown.total)}
+            </span>
+            <span className="flex items-center gap-2">
+              <button type="button" className="home-btn h-8" disabled={shown.page <= 1 || loading} onClick={() => setPage((n) => Math.max(1, n - 1))}>
+                Previous
+              </button>
+              <span className="tabular-nums">
+                Page {fmtNum(shown.page)} of {fmtNum(pages)}
+              </span>
+              <button type="button" className="home-btn h-8" disabled={shown.page >= pages || loading} onClick={() => setPage((n) => Math.min(pages, n + 1))}>
+                Next
+              </button>
+            </span>
+          </nav>
+        )
+      }
+    />
   );
 }
 

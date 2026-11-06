@@ -386,6 +386,58 @@ out by the same code:
 - **More insights you can unlock** (owners and admins, when Shopify access is missing): one quiet
   list under the panels, the same rows and buttons as the full dashboard's cards.
 
+## The Sales pages (2026-11-06)
+
+The dashboard's topics as pages of their own, in the Stitch design's layouts (screens 05–08:
+`apps/web/src/components/dashboard/SalesViews.tsx`, frame and tabs in `SalesFrame.tsx`). Each reads
+the same overview answer as the Home (GET …/overview for the dates picked), so a figure is the same
+wherever it shows. Under the Overview's layout, "More detail" keeps the earlier panels (Total sales
+breakdown, the check against Shopify, gross profit, the comparison table, returns, sales by day and
+by month).
+
+- **Overview**:
+  - **In short**: total sales (net sales without `finance.breakdown`), its change on the dates
+    compared with, orders and items sold.
+  - **Four numbers**: Total sales (or Net sales), Orders, Average order (net sales ÷ orders, as
+    "Formulas"), and Visits that bought (the funnel's conversion rate of tracked visits) or, with no
+    tracked visits, Items sold.
+  - **How your sales add up**: Gross sales − Discounts − Returns = Net sales, + Shipping (+ Duties,
+    + Additional fees when there were any) + Taxes = Total sales, the lines of Shopify's total sales
+    breakdown. Only for a member shown every line. Returns is `returns` from the API, or gross −
+    discounts − net where an older answer lacks it.
+  - **Sales by day**, as on the simple Home. Under it:
+    - **Best day**: the day with the highest total sales (net without the breakdown).
+    - **Best weekday**: the weekday whose days add up to the most, in the store's time zone.
+    - **Average day**: the dates' total ÷ their days, today included (so far).
+  - **Sales by channel**: net sales per sales channel (`channels`).
+  - **Where buyers came from**: orders by how their last visit came, from Shopify's record of each
+    order's visit (`traffic.split`: paid, organic, email, direct, not recorded; `traffic.items` when
+    the member isn't shown attribution).
+  - **Top products**: the top five of `top_products` by net sales, the same ranking as Products.
+  - **Busiest times**: orders by weekday and by hour of the day, each counted on its own (the API
+    returns no weekday-by-hour grid, so there is none). The peak is `busiestDay` and `busiestHour`.
+  - **Discount codes**: the three most used, the money each took off, and the total discounts.
+- **Products**:
+  - **Items sold**: units less returns, with items per order.
+  - **Top product**: the first of `top_products`, its share of net sales.
+  - **Products in your shop**: the catalogue's active products, with draft and archived.
+  - Then Top 100 products, Sales by collection and Catalog, unchanged.
+- **Customers**: customers who ordered, new, returning (and the returning rate), and the returning
+  rate for the dates compared with, as "Repeat customers and monthly cohorts" counts them. The bar
+  splits customers who ordered into bought before (`returningCustomers`) and first purchase
+  (customers − returning). Someone whose first and second orders both fall in the dates is both new
+  and returning, so new + returning can be more than customers.
+- **Orders & shipping**:
+  - **Orders at a glance**: completed, awaiting payment and unsuccessful (cancelled, payment failed,
+    refunded in full) add up to the orders placed in the dates, as "Orders at a glance" on the full
+    dashboard (`order_outcomes`), with shoppers left at checkout where the pixel counted them.
+  - **Shipping**: waiting to ship (open orders from any date), average time to ship and the share
+    shipped of the dates' orders (`fulfillment`).
+  - **Orders**: every order placed in the dates (GET …/orders), searchable by order number and
+    filtered by payment, shipping and cancellation where the member is shown them, 25 to a page;
+    each opens in Shopify. Until it loads (or if it can't), the overview's 10 latest.
+  - **Refunds**: refunds booked in the dates, as a share of sales.
+
 ## Dashboard home (the owner's design)
 
 The full dashboard, one click from the simple Home. Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
