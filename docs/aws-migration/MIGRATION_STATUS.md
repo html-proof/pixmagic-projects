@@ -10,9 +10,9 @@ change, or the day an owner-only step is done.
 | --- | --- | --- | --- | --- |
 | 1 | Support plan Business Support+ → Basic | 29.00 | Not started: AWS allows it from ~2026-11-14 04:43 UTC | Owner (console) |
 | 2 | 1-year reserved instance for the database | 7.96 | Not started: two orders failed payment on 2026-10-18 | Owner: a payment method AWS can charge |
-| 3 | X-Ray tracing off | 0.46 | Not started | A pull request |
+| 3 | X-Ray tracing off | 0.46 | Pull request open (2026-11-06), with change 5 | Its Deploy |
 | 4 | GuardDuty Advanced RDS off | 6.78 | Not started; trial ends ~2026-11-15 | Owner's decision |
-| 5 | WhatsApp service on Fargate Spot | up to ~12.10 | Not started | Owner's decision |
+| 5 | WhatsApp service on Fargate Spot | up to ~12.10 | Owner said yes 2026-11-06; pull request open with change 3; switch tried on a throwaway stack first | Its Deploy, then a week of billing for the real rate |
 | 6 | AWS WAF → Cloudflare's rules | 10.08 | Not started | Owner's decision |
 | 7 | Secrets Manager → SSM SecureString | up to 2.43 | Not started (optional) | — |
 | 8 | Database single-AZ | 21.74 | Not proposed for now (owner chose Multi-AZ) | Owner |
@@ -47,5 +47,10 @@ change, or the day an owner-only step is done.
 
 ## Log
 
-- **2026-11-06**: audit done (read-only); these pages written. Run rate US$126.37 a month before
-  GST today, ~135.76 after GuardDuty's trial. Nothing changed in AWS.
+- **2026-11-06**: audit done (read-only); these pages written (#342). Run rate US$126.37 a month
+  before GST today, ~135.76 after GuardDuty's trial. Nothing changed in AWS.
+- **2026-11-06**: the owner said yes to changes 3 and 5. Before the pull request, the Spot switch was
+  tried on a throwaway CloudFormation stack in the default VPC (one busybox task, deleted after):
+  launch type → `FARGATE_SPOT` and both provider-to-provider moves update in place; capacity
+  provider → launch type fails (replacement against the fixed name), so `spot: false` now means the
+  `FARGATE` capacity provider.

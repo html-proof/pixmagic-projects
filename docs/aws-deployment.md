@@ -1111,10 +1111,10 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
 | CloudWatch: 33 alarms (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
-| Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
+| Admin host's disk (stopped), EBS snapshots, SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES (X-Ray tracing is off since 2026-11-06: nothing read the traces) | ~2.4 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
-| WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, on demand, 17.29; Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 |
+| WhatsApp's Evolution API service (priced 2026-10-25): Fargate task 0.5 vCPU + 1 GB on Graviton, 17.29 on demand, **on Fargate Spot since 2026-11-06** (AWS states up to 70 % off; the bill gives the figure); Cloud Map's private zone ~0.60; its two secrets 0.80; its three alarms 0.30 ([whatsapp.md](whatsapp.md), "Cost") | ~19 on demand |
 | **Total** | **~107.3** (~118 with GST) |
 
 The figures in this paragraph were worked out with CloudWatch at ~1.5, before the recount and the
@@ -1224,7 +1224,9 @@ stopped the app. Now nothing the app needs is in one AZ only:
 - **Functions** run in both AZs and Lambda uses the one that works.
 - **WhatsApp service**: one Fargate task (a WhatsApp session can't be open in two places), placed in
   either AZ's private subnet. A task that stops is replaced, and sessions resume from its database
-  without a new QR code; meanwhile messages wait (docs/whatsapp.md, "Scaling").
+  without a new QR code; meanwhile messages wait (docs/whatsapp.md, "Scaling"). Since 2026-11-06 the
+  task runs on Fargate Spot, so AWS can also reclaim it; the same replacement follows
+  (docs/whatsapp.md, "Cost").
 
 State on 2026-10-17 06:45Z (main 7379a95): RDS db.t4g.micro Multi-AZ (2a + standby 2b), NAT instances
 `insights-production-nat-a` (2a) and `-b` (2b), no NAT gateway. Trusted Advisor cleared the RDS finding at

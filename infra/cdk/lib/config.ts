@@ -158,8 +158,10 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
     natGateways: 2,
     natInstanceType: "t4g.nano",
     logRetentionDays: 90,
-    // US$17.29/month on demand in Sydney (0.5 vCPU + 1 GB on Graviton; AWS price list 2026-10-25): docs/whatsapp.md, "Cost".
-    whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: false },
+    // On Fargate Spot since 2026-11-06 (the owner's yes; docs/aws-migration/AWS_MIGRATION_PLAN.md, change 5):
+    // US$17.29/month on demand was the bill's second-largest line. When AWS reclaims the task, ECS starts
+    // another and linked phones drop for a minute or two; back to on demand: `spot: false`. docs/whatsapp.md, "Cost".
+    whatsapp: { cpu: 512, memoryMiB: 1024, tasks: 1, spot: true },
     schedulesEnabled: true,
     domain: {
       name: "bizinsights.io",
