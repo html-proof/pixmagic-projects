@@ -1,15 +1,16 @@
 "use client";
 import { localDayOf } from "@app/shared/staff";
-import { Badge } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { usePortal, type MySchedule } from "@/components/staff/PortalContext";
+import { Pill as Badge } from "@/components/staff/ui";
 import { EmptyState } from "@/components/ui";
 import { Skeleton } from "@/components/AppUi";
 import { useApi } from "@/lib/api";
 import { fmtDateTime, fmtDay, fmtHours, fmtTime } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
-// The employee's shift schedule, a week back and four weeks ahead, grouped by day.
+// The employee's shift schedule, a week back and four weeks ahead, grouped by day. No Stitch
+// screen draws this tab; it takes screen 29's look (a white card a day, today's outlined in green).
 // ---------------------------------------------------------------------------------------------
 
 export default function PortalSchedule() {
@@ -36,10 +37,10 @@ export default function PortalSchedule() {
 
   return (
     <>
-      <section className="card animate-rise">
+      <header>
         <h1 className="text-xl font-semibold">Schedule</h1>
         <p className="mt-1 text-sm text-muted">Your shifts for the next four weeks{d ? ` (times in ${d.timezone})` : ""}. Your manager plans them in bizinsights.</p>
-      </section>
+      </header>
 
       {q.error && !d ? (
         <LoadError what="your schedule" error={q.error} onRetry={() => void q.reload()} busy={q.loading} />
@@ -55,10 +56,10 @@ export default function PortalSchedule() {
             <DayList days={upcoming} today={today} tz={d.timezone} label="Upcoming shifts" />
           )}
           {past.length > 0 && (
-            <details className="card">
+            <details className="home-card p-4 sm:p-5">
               <summary className="cursor-pointer text-sm font-medium">Last 7 days ({past.reduce((a, [, s]) => a + s.length, 0)})</summary>
               <div className="mt-3 opacity-80">
-                <DayList days={past} today={today} tz={d.timezone} label="Past shifts" />
+                <DayList days={past} today={today} tz={d.timezone} label="Past shifts" inset />
               </div>
             </details>
           )}
@@ -68,15 +69,16 @@ export default function PortalSchedule() {
   );
 }
 
-function DayList({ days, today, tz, label }: { days: Array<[string, MySchedule["items"]]>; today: string; tz: string; label: string }) {
+/** A card a day (`inset`: soft tiles, inside the past week's card). */
+function DayList({ days, today, tz, label, inset = false }: { days: Array<[string, MySchedule["items"]]>; today: string; tz: string; label: string; inset?: boolean }) {
   return (
     <ol className="space-y-3" aria-label={label}>
       {days.map(([day, shifts]) => (
-        <li key={day} className={`card !p-4 ${day === today ? "border-accent" : ""}`}>
+        <li key={day} className={inset ? "rounded bg-home-soft p-3" : `home-card animate-rise p-4 sm:p-5 ${day === today ? "border border-accent" : ""}`}>
           <p className="flex items-center gap-2 font-semibold">
             {fmtDay(day)} {day === today && <Badge tone="good">Today</Badge>}
           </p>
-          <ul className="mt-2 divide-y divide-border">
+          <ul className="mt-2 divide-y divide-home-line">
             {shifts.map((s) => {
               const overnight = localDayOf(Date.parse(s.endsAt), tz) !== s.day;
               return (

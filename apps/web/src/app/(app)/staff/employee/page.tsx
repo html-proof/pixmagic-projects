@@ -17,8 +17,9 @@ import { PayrollTab } from "@/components/staff/employee/PayrollTab";
 import { PaymentsTab } from "@/components/staff/employee/PaymentsTab";
 import { ScheduleTab } from "@/components/staff/employee/ScheduleTab";
 
-// One employee: who they are, what they're doing now, their hours, pay and history. Everything
-// comes from the API; this page only arranges it. Tabs the member may not see aren't offered.
+// One employee: who they are, what they're doing now, their hours, pay and history, in the look of
+// the Stitch design's screen 26 ("People": initials beside the name, white cards, green tabs).
+// Everything comes from the API; this page only arranges it. Tabs the member may not see aren't offered.
 
 const enc = encodeURIComponent;
 
@@ -110,7 +111,7 @@ function EmployeeDetail() {
   return (
     <>
       <EmployeeHeader employee={employee} config={cfg} onChanged={changed} onRefresh={refresh} onConfigStale={() => void config.reload()} />
-      <section className="card animate-rise">
+      <section className="home-card animate-rise p-5 sm:p-6">
         <Tabs tabs={tabs} value={tab} onChange={setTab} label="Employee sections" />
         <div className="mt-5" role="tabpanel" aria-label={TAB_LABEL[tab]}>
           {tab === "overview" && <OverviewTab key={version} employee={employee} config={cfg} onChanged={changed} onShowAudit={() => setTab("audit")} />}

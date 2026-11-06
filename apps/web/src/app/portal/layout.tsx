@@ -1,12 +1,15 @@
 "use client";
+// The Stitch design's typeface, as on the signed-in pages (globals.css `app-look`): bundled with the app, nothing preloaded.
+import "@fontsource-variable/inter";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Banknote, CalendarDays, Clock, LayoutGrid, UserRound, type LucideIcon } from "lucide-react";
 import type { Me } from "@/components/AppContext";
 import { Unreachable } from "@/components/LoadError";
 import { PORTAL_WS_KEY, PortalProvider, portalSignOut, type PortalCtx } from "@/components/staff/PortalContext";
 import { Alert } from "@/components/ui";
-import { BrandLogo, BrandMark } from "@/components/Brand";
+import { BrandLogo } from "@/components/Brand";
 import { ToastProvider } from "@/components/AppUi";
 import { getMe, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
 import { setReturnTo, signInAndReturn } from "@/lib/returnTo";
@@ -16,14 +19,16 @@ import { readLocal, writeLocal } from "@/lib/storage";
  * The employee portal's shell: who is signed in (GET /me), which organization they work for (a
  * switcher when there are several), and the portal's own navigation. Employees aren't workspace
  * members, so this stands apart from the (app) shell; managers who are also employees get a link
- * across.
+ * across. Drawn as the Stitch design's screen 29 (the staff page on a phone): the organization and
+ * who is signed in at the top, Sign out beside them, and the sections as a bar of icons along the
+ * bottom of a phone (a row of tabs under the header on a wider screen).
  */
-const NAV: ReadonlyArray<readonly [string, string]> = [
-  ["/portal", "Dashboard"],
-  ["/portal/timesheets", "Timesheets"],
-  ["/portal/pay", "Pay"],
-  ["/portal/schedule", "Schedule"],
-  ["/portal/account", "Account"],
+const NAV: ReadonlyArray<readonly [string, string, LucideIcon]> = [
+  ["/portal", "Dashboard", LayoutGrid],
+  ["/portal/timesheets", "Timesheets", Clock],
+  ["/portal/pay", "Pay", Banknote],
+  ["/portal/schedule", "Schedule", CalendarDays],
+  ["/portal/account", "Account", UserRound],
 ];
 
 export default function PortalLayout({ children }: { children: ReactNode }) {
@@ -91,26 +96,28 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
 
   if (!value) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-12">
-        <p className="mb-6">
-          <BrandLogo size={24} className="text-[15px] text-text" />
-        </p>
-        <h1 className="text-2xl font-semibold">Your account isn&apos;t linked to an employer yet</h1>
-        <p className="mt-2 text-sm text-muted">
-          You&apos;re signed in as {me.user.email}. To see your hours and pay here, open the invitation link your employer emailed you. If it has expired, ask your manager to send a new
-          one.
-        </p>
-        <div className="mt-6 flex flex-wrap gap-3">
-          {me.workspaces.length > 0 && (
-            <Link className="btn-primary" href="/dashboard">
-              Go to your dashboard
-            </Link>
-          )}
-          <button type="button" className="btn-secondary" onClick={() => void portalSignOut(router)}>
-            Sign out
-          </button>
-        </div>
-      </main>
+      <div className="app-look min-h-dvh">
+        <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-12">
+          <p className="mb-6">
+            <BrandLogo size={24} className="text-[15px] text-text" />
+          </p>
+          <h1 className="text-2xl font-semibold">Your account isn&apos;t linked to an employer yet</h1>
+          <p className="mt-2 text-sm text-muted">
+            You&apos;re signed in as {me.user.email}. To see your hours and pay here, open the invitation link your employer emailed you. If it has expired, ask your manager to send a new
+            one.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            {me.workspaces.length > 0 && (
+              <Link className="btn-primary" href="/dashboard">
+                Go to your dashboard
+              </Link>
+            )}
+            <button type="button" className="btn-secondary" onClick={() => void portalSignOut(router)}>
+              Sign out
+            </button>
+          </div>
+        </main>
+      </div>
     );
   }
 
@@ -120,72 +127,91 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   return (
     <PortalProvider value={value}>
       <ToastProvider>
-        <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur-md">
-          <div className="mx-auto max-w-4xl px-4 pt-3">
-            <div className="flex items-center gap-3">
-              <BrandMark size={36} tile className="shrink-0" />
-              <div className="min-w-0 flex-1">
-                {employments.length > 1 ? (
-                  <select aria-label="Organization" className="input w-full max-w-[16rem] py-1 font-semibold" value={employment.workspaceId} onChange={(e) => value.setWs(e.target.value)}>
-                    {employments.map((e) => (
-                      <option key={e.workspaceId} value={e.workspaceId}>
-                        {e.organization}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <p className="truncate text-sm font-semibold">{employment.organization}</p>
-                )}
-                <p className="truncate text-xs text-muted">
-                  {employment.fullName}
-                  {employment.jobTitle ? ` · ${employment.jobTitle}` : ""}
-                </p>
+        <div className="app-look min-h-dvh">
+          <header className="sticky top-0 z-30 bg-surface shadow-[var(--shadow)]">
+            <div className="mx-auto max-w-4xl px-4 pt-3 sm:pt-4">
+              <div className="flex items-start gap-3 pb-3 sm:pb-2">
+                <div className="min-w-0 flex-1">
+                  {employments.length > 1 ? (
+                    <select aria-label="Organization" className="input w-full max-w-[16rem] py-1 text-xs text-muted" value={employment.workspaceId} onChange={(e) => value.setWs(e.target.value)}>
+                      {employments.map((e) => (
+                        <option key={e.workspaceId} value={e.workspaceId}>
+                          {e.organization}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="truncate text-xs text-muted">{employment.organization} · Staff</p>
+                  )}
+                  <p className="mt-0.5 truncate text-base font-semibold sm:text-lg">
+                    {employment.fullName}
+                    {employment.jobTitle ? `, ${employment.jobTitle}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1 text-sm">
+                  {me.workspaces.length > 0 && (
+                    <Link href="/dashboard" className="inline-flex min-h-10 items-center rounded px-2 text-muted transition hover:text-text">
+                      Manager view
+                    </Link>
+                  )}
+                  <button type="button" className="min-h-10 rounded px-2 text-muted transition hover:text-text" onClick={() => void portalSignOut(router)}>
+                    Sign out
+                  </button>
+                </div>
               </div>
-              <div className="flex shrink-0 items-center gap-3 text-sm">
-                {me.workspaces.length > 0 && (
-                  <Link href="/dashboard" className="hidden text-muted transition hover:text-text sm:inline">
-                    Manager view
-                  </Link>
-                )}
-                <button type="button" className="min-h-10 text-muted transition hover:text-text" onClick={() => void portalSignOut(router)}>
-                  Sign out
-                </button>
-              </div>
+              {/* On a phone the same links sit in the bar along the bottom (below), as screen 29 has them. */}
+              <nav aria-label="Employee portal" className="-mx-4 hidden overflow-x-auto px-4 sm:block">
+                <ul className="flex min-w-max gap-6 text-sm">
+                  {NAV.map(([href, label]) => {
+                    const on = active(href);
+                    return (
+                      <li key={href}>
+                        <Link
+                          href={href}
+                          aria-current={on ? "page" : undefined}
+                          className={`-mb-px block border-b-2 pt-1 pb-2.5 font-medium whitespace-nowrap outline-none transition-colors focus-visible:text-accent ${on ? "border-accent text-accent" : "border-transparent text-muted hover:text-text"}`}
+                        >
+                          {label}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </nav>
             </div>
-            <nav aria-label="Employee portal" className="-mx-4 mt-2 flex gap-1 overflow-x-auto px-4 pb-2">
-              {NAV.map(([href, label]) => {
+          </header>
+          <main className="mx-auto max-w-4xl space-y-4 px-4 pt-5 pb-28 sm:pb-8">
+            {employment.status === "inactive" && (
+              <Alert kind="info">
+                Your employee account at {employment.organization} has been deactivated. You can still see your hours and pay history here. Contact your manager if you think
+                that&apos;s a mistake.
+              </Alert>
+            )}
+            {/* Keyed by organization: switching starts each page afresh instead of showing the other one's data. */}
+            <div key={employment.workspaceId} className="space-y-4">
+              {children}
+            </div>
+          </main>
+          <nav aria-label="Employee portal" className="fixed inset-x-0 bottom-0 z-30 border-t border-home-line bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden">
+            <ul className="grid grid-cols-5">
+              {NAV.map(([href, label, Icon]) => {
                 const on = active(href);
                 return (
-                  <Link
-                    key={href}
-                    href={href}
-                    aria-current={on ? "page" : undefined}
-                    className={`whitespace-nowrap rounded-full px-3.5 py-2 text-sm transition ${on ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`}
-                  >
-                    {label}
-                  </Link>
+                  <li key={href}>
+                    <Link
+                      href={href}
+                      aria-current={on ? "page" : undefined}
+                      className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium outline-none transition-colors focus-visible:bg-home-soft ${on ? "text-accent" : "text-muted hover:text-text"}`}
+                    >
+                      <Icon aria-hidden className="h-5 w-5" strokeWidth={on ? 2.25 : 1.75} />
+                      {label}
+                    </Link>
+                  </li>
                 );
               })}
-              {me.workspaces.length > 0 && (
-                <Link href="/dashboard" className="whitespace-nowrap rounded-full px-3.5 py-2 text-sm text-muted transition hover:text-text sm:hidden">
-                  Manager view
-                </Link>
-              )}
-            </nav>
-          </div>
-        </header>
-        <main className="mx-auto max-w-4xl space-y-4 px-4 py-5">
-          {employment.status === "inactive" && (
-            <Alert kind="info">
-              Your employee account at {employment.organization} has been deactivated. You can still see your hours and pay history here. Contact your manager if you think
-              that&apos;s a mistake.
-            </Alert>
-          )}
-          {/* Keyed by organization: switching starts each page afresh instead of showing the other one's data. */}
-          <div key={employment.workspaceId} className="space-y-4">
-            {children}
-          </div>
-        </main>
+            </ul>
+          </nav>
+        </div>
       </ToastProvider>
     </PortalProvider>
   );

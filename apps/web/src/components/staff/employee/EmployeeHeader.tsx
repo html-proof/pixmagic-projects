@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useId, useState } from "react";
 import { ConfirmDialog, useAction, useToast } from "@/components/AppUi";
-import { AccountBadge, EmployeeStatusBadge, Modal } from "@/components/staff/ui";
+import { AccountBadge, EmployeeStatusBadge, Initials, Modal } from "@/components/staff/ui";
 import { EmployeeForm, InvitationLinkPanel, inviteEmployee, type EmployeePayload, type SharedLink } from "@/components/staff/EmployeeForm";
 import { api } from "@/lib/api";
 import { fmtDateTime, useStaff, type EmployeeRow, type StaffConfig } from "@/lib/staff";
@@ -76,12 +76,16 @@ export function EmployeeHeader({
 
   const inv = employee.invitation;
   return (
-    <section className="card animate-rise">
-      <Link href="/staff/employees" className="text-xs text-muted hover:text-text">
+    <section className="home-card animate-rise p-5 sm:p-6">
+      <Link href="/staff/employees" className="text-xs text-muted hover:text-text hover:underline">
         ← All employees
       </Link>
-      <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
+      <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-4">
+          <span className="hidden sm:block">
+            <Initials name={employee.fullName} />
+          </span>
+          <div className="min-w-0">
           <h1 className="card-title">{employee.fullName}</h1>
           <p className="mt-0.5 text-sm text-muted">
             <span className="font-medium text-text">{employee.employeeNumber}</span> · {employee.jobTitle}
@@ -104,6 +108,7 @@ export function EmployeeHeader({
               {inv.emailFailed && <span className="text-warn"> · the email didn&apos;t go out</span>}
             </p>
           )}
+          </div>
         </div>
         {manage && (
           <div className="flex flex-wrap gap-2">

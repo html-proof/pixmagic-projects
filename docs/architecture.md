@@ -218,6 +218,20 @@ page to, and moving between tabs keeps the dates. The tabs' layouts are in
 panels with more detail, and the topics that share the Overview tab, stay in `Details.tsx`. Every
 menu entry still opens its own page.
 
+**The Staff pages (Stitch screens 25–29).** The Staff section keeps its menu and its pages; what is
+on them follows the Team screens. /staff is screen 25 ("Today"): Needs you, this week's hours and
+wages, who's in (a row of counts), who is clocked in now, and today's shifts on one timeline
+(`components/staff/overview/Today.tsx`, from the live board and that day's schedule), then the
+shortcuts and this month's figures. All employees is screen 26 (a row per person with initials,
+status and account, beside "How staff join"); Shift schedules is screen 27's week planner (a column
+a day, totals per person and per day); Payroll and a pay run are screen 28 (what bizinsights does
+and doesn't do with pay, the run as one figure "estimated, before tax" beside "Before you can
+approve", Record payment per person). The other pages take the same look from the shared pieces in
+`components/staff/ui.tsx`: statuses as tinted pills (`Pill`), figures as PageKit's `FigureTile`
+(`KpiCard`), tables with a soft header row, tabs with a green underline. The employee portal is
+screen 29: the organization and who is signed in at the top, one big Clock in, and the sections as
+a bar of icons along the bottom of a phone; it sets the same Inter type (`app-look`) as the app.
+
 **Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
 auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
 /data-deletion) are in Geist. Prefetching one of
