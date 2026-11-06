@@ -417,7 +417,7 @@ function Head({ planning, levels, costs, sort, pickAll }: { planning: boolean; l
         {planning && <KitTh>Days left</KitTh>}
         {planning && (
           <KitTh right>
-            <Defined label="Suggested order" definition="Units to order now to cover the lead time and the days of sales set in Stock settings, less what's available and incoming." />
+            <Defined label="Suggested order" definition="Units to order now to cover the lead time and the days of sales set in Stock settings, plus oversold units in orders not yet fulfilled, less what's available and incoming." />
           </KitTh>
         )}
         {!planning && <KitTh>Status</KitTh>}
