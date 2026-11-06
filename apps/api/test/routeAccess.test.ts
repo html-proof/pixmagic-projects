@@ -314,6 +314,13 @@ describe("every route of the API, deny by default", () => {
     for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE]) expect(list.has(collections)).toBe(false);
   });
 
+  it("places the order list: a store's read for View order list, in no list above (every rule below holds for it), never public", () => {
+    const orders = "GET /workspaces/:ws/stores/:storeId/orders";
+    expect(new Set(ctx.routes.map(key)).has(orders)).toBe(true);
+    expect(isWorkspaceRoute(orders)).toBe(true);
+    for (const list of [PUBLIC, SHARED_ACCOUNT_ROUTES, CONFIG_FIRST, EVERY_MEMBER, READ_ONLY_POSTS, LINK_MAY_WRITE, new Set(Object.keys(QUERY))]) expect(list.has(orders)).toBe(false);
+  });
+
   it("places customer lifetime figures and cohorts: a store's read for View returning vs new customers, in no list above (every rule below holds for it), never public", () => {
     const customers = "GET /workspaces/:ws/stores/:storeId/analytics/customers";
     expect(new Set(ctx.routes.map(key)).has(customers)).toBe(true);

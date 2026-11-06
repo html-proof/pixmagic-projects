@@ -162,6 +162,43 @@ store's link, `{ link: { url, createdAt, expiresAt, createdBy } | null }`. The l
 `state` `open` | `used` | `ended`, and with `pick` the accounts to choose), `start` (`{ url }`, sets the sign-in's
 state cookie), `choose` and `cancel`; 404 `link_invalid`, 410 `link_used` or `link_ended`.
 
+## Order list
+
+`GET /workspaces/:ws/stores/:storeId/orders` answers a page of the store's orders for the Orders &
+shipping page (`routes/orders.ts`, core's `reports/orders.ts` `orderList`). The orders are those the
+overview's recent orders pick: placed in the dates, on the store-local day Shopify processed them,
+cancelled ones included unless filtered out. Each order has exactly the recent orders' fields.
+
+| Parameter | Means |
+| --- | --- |
+| `preset`, `from`, `to` (`compare`, `cfrom`, `cto`) | The dashboard's dates, read as `/overview` and `/export` read them (`datesQuery`, `resolveQueryDates`); 30 days when absent. The comparison is checked but not used. A range that can't be reported on is a 400 `invalid_range`. |
+| `q` | Part of an order number, at most 40 characters: any case, its leading `#` optional (`q=1003`, `q=#1003`, `q=eu-1`). |
+| `payment` | `paid` \| `pending` \| `refunded` \| `other`: `paymentGroup` in `@app/shared/orders`. Pending is pending, authorized and partly paid; refunded is refunded in full or in part; other is voided, expired, any other state, or none. |
+| `shipping` | `shipped` \| `partly` \| `not_shipped`: `shippingGroup` in `@app/shared/orders`. Shipped is fulfilled, partly is partially fulfilled, not shipped is every other state (unfulfilled, on hold, scheduled, restocked, ...) or none. |
+| `cancelled` | `only` \| `exclude`. |
+| `sort` | `newest` (default) \| `oldest` \| `total_desc` \| `total_asc`. Equal totals are newest first, and the order's id breaks any tie left, so pages never overlap or skip one. |
+| `page`, `pageSize` | From 1 (default 1, at most 10,000); 10 to 100 (default 25). |
+
+```json
+{ "range": { "from": "2026-03-01", "to": "2026-03-31" }, "total": 21, "page": 1, "pageSize": 25,
+  "items": [{ "id": "…", "shopifyId": "1004", "name": "#1004", "createdAt": "2026-03-13T15:00:00.000Z", "total": 30,
+    "financialStatus": "refunded", "fulfillmentStatus": "restocked", "channel": "Online Store", "units": 2, "cancelled": true }] }
+```
+
+`total` is how many orders match the filters, whatever the page; a page past the last answers
+`items: []`. `createdAt` is when Shopify processed the order (UTC), `total` its total as placed,
+`channel` the sales channel's name (`channelLabel`).
+
+It needs **View order list** (`orders.list`); without it, 403. Inside each order, `financialStatus`
+needs **View payment status** (`orders.payments`), `fulfillmentStatus` **View fulfillment status**
+(`orders.fulfillment`) and `cancelled` **View cancellations** (`orders.cancellations`): without one,
+that field is left out, as on the overview (`redactOrderRows`, `ORDER_FIELD_ACCESS` in
+`@app/shared/access`). A filter on a field the caller isn't shown (`payment`, `shipping`,
+`cancelled`) is refused with 403 `forbidden`, so it can't tell what the field hides; `q`, `sort` and
+the pages need nothing more. Another workspace's store, 404; a store that hasn't granted its orders
+(`read_orders`), 403 `missing_scopes`; a parameter out of range, 400 `validation`. It reads the
+database only, so only the global per-IP limit applies, as with the other lists.
+
 ## Endpoints
 
 Generated from the route files (`apps/api/src/routes/*.ts`); "Access" is the permission each
@@ -201,6 +238,7 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sync` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/overview` | dashboard:read | dashboard.ts |
+| GET | `/workspaces/:ws/stores/:storeId/orders` (dates, `q`, `payment`, `shipping`, `cancelled`, `sort`, `page`, `pageSize`) | orders.list (filters: see [Order list](#order-list)) | orders.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
 | PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/expenses` | finance.breakdown | expenses.ts |

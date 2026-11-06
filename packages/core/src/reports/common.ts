@@ -38,6 +38,9 @@ export const localMoment = (day: string, time: string, timeZone: string) =>
 /** Lines whose value is net sales (MERCHANDISE_LINES in @app/shared). */
 export const MERCHANDISE = Prisma.sql`s.line_type IN ('product', 'adjustment')`;
 
+/** Text searched for with (I)LIKE, its wildcards and the escape character taken literally. */
+export const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 /** Tenant + store being reported on. */
 export interface Scope {
   ws: string;
