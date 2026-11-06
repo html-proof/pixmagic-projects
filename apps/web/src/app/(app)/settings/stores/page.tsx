@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
 import { ShopifyConnect } from "@/components/ShopifyConnect";
+import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError } from "@/lib/api";
@@ -9,25 +11,35 @@ import { fmtDateTime, fmtRelative } from "@/components/dashboard/format";
 import { revokeWords } from "@/components/settings/scopeRevoke";
 import { CAPABILITIES, SCOPE_LABELS, expandScopes, scopeLabel, scopeList } from "@app/shared/capabilities";
 
+// ---------------------------------------------------------------------------
+// Settings → Shopify: each connected store in the look of the Stitch design's Connections screen
+// (prototype v2, screen 30), which this page's card on Settings → Integrations opens with Manage. A
+// white card per store: its name and status, what bizinsights can read from it (each permission,
+// and which are optional), what that gives the dashboard, its last update and its buttons.
+// ---------------------------------------------------------------------------
+
 /** Plain words for a status a merchant has no reason to know the internal name of. */
-function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { text: string; tone: string } {
+function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { text: string; tone: string; dot: string } {
+  const good = { tone: "text-good", dot: "bg-good" };
+  const quiet = { tone: "text-muted", dot: "bg-muted" };
+  const bad = { tone: "text-danger", dot: "bg-danger" };
   switch (status) {
     case "active":
-      return { text: "Connected", tone: "text-good" };
+      return { text: "Connected", ...good };
     case "syncing":
-      return { text: "Importing your data…", tone: "text-muted" };
+      return { text: "Importing your data…", ...quiet };
     case "pending":
-      return { text: "Finishing setup…", tone: "text-muted" };
+      return { text: "Finishing setup…", ...quiet };
     case "uninstalled":
-      return { text: "Removed in Shopify", tone: "text-muted" };
+      return { text: "Removed in Shopify", ...quiet };
     case "error":
       // Reconnecting fixes lost access (and is the best guess when Shopify didn't say), not these.
-      if (problem === "not_approved") return { text: "Waiting for Shopify to approve bizinsights to read orders", tone: "text-muted" };
-      if (problem === "shop_unavailable" || problem === "shop_locked") return { text: "Shopify has paused this store — syncing resumes once it's back", tone: "text-danger" };
-      if (problem === "shop_gone") return { text: "Shopify can't find this store any more", tone: "text-danger" };
-      return { text: "Something went wrong — reconnect to fix it", tone: "text-danger" };
+      if (problem === "not_approved") return { text: "Waiting for Shopify to approve bizinsights to read orders", ...quiet };
+      if (problem === "shop_unavailable" || problem === "shop_locked") return { text: "Shopify has paused this store — syncing resumes once it's back", ...bad };
+      if (problem === "shop_gone") return { text: "Shopify can't find this store any more", ...bad };
+      return { text: "Something went wrong — reconnect to fix it", ...bad };
     default:
-      return { text: status, tone: "text-muted" };
+      return { text: status, ...quiet };
   }
 }
 
@@ -127,7 +139,10 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
 
   return (
     <section className="space-y-4">
-      <h1 className="page-title">Shopify stores</h1>
+      <header>
+        <h1 className="page-title">Shopify stores</h1>
+        <p className="mt-1 text-sm text-muted sm:text-base">Each store connected to this workspace, what bizinsights can read from it, and when it was last brought up to date.</p>
+      </header>
       {connected && (
         <Alert kind="success">
           {justConnected ? `${justConnected.name ?? justConnected.shopDomain} is connected.` : "Your store is connected."} We&apos;re importing its
@@ -161,17 +176,26 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
         const empty = s.status === "active" && s.imported && s.imported.orders === 0 && s.imported.products === 0;
 
         return (
-          <div key={s.id} className="card space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="font-medium">{s.name ?? s.shopDomain}</p>
-                <p className="text-xs text-muted">{s.shopDomain} · {s.currency} · {s.timezone}</p>
+          <section key={s.id} aria-labelledby={`store-${s.id}-h`} className="home-card animate-rise min-w-0 space-y-5 p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded bg-home-soft">
+                  <ShopifyIcon size={26} />
+                </span>
+                <div className="min-w-0">
+                  {/* A paragraph, as before: the e2e suite finds the store's card by this line. */}
+                  <p id={`store-${s.id}-h`} className="home-h2 break-words">{s.name ?? s.shopDomain}</p>
+                  <p className="text-xs break-words text-muted">{s.shopDomain} · {s.currency} · {s.timezone}</p>
+                </div>
               </div>
-              <span className={`text-xs ${status.tone}`}>● {status.text}</span>
+              <span className={`inline-flex items-center gap-1.5 pt-1 text-xs font-medium ${status.tone}`}>
+                <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${status.dot}`} />
+                {status.text}
+              </span>
             </div>
 
             {empty && (
-              <p className="rounded-lg border border-border bg-bg p-3 text-sm" data-testid="store-empty">
+              <p className="rounded bg-home-soft p-3 text-sm" data-testid="store-empty">
                 Connected, but there was nothing to import: this store has no orders or products in Shopify yet. Add a product, or create
                 an order in Shopify (Orders → Create order, then mark it as paid), and press Sync now. Test orders aren&apos;t counted, as in
                 Shopify&apos;s reports.
@@ -181,11 +205,11 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
             {/* What the app can read. Lead with what the data *is*, because the scope string is
                 the one part of this page a merchant has no way to interpret. */}
             <div className="space-y-2">
-              <h2 className="text-sm font-medium">What bizinsights can read from this store</h2>
+              <h2 className="text-sm font-semibold">What bizinsights can read from this store</h2>
               {s.grantedScopes.length === 0 ? (
                 <p className="text-sm text-muted">Nothing yet — reconnect the store to grant access.</p>
               ) : (
-                <ul className="divide-y divide-border border-y border-border">
+                <ul className="divide-y divide-home-line rounded border border-home-line">
                   {s.grantedScopes.map((scope) => {
                     // Optional is a fact about the permission, not about who is looking: viewers and
                     // analysts saw every optional permission labelled "Required".
@@ -193,11 +217,11 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
                     const canRevoke = manage && optional;
                     const busy = revoking === `${s.id}:${scope}`;
                     return (
-                      <li key={scope} className="flex items-start justify-between gap-4 py-2" title={scope}>
-                        <div>
+                      <li key={scope} className="flex items-start justify-between gap-4 px-3 py-2.5" title={scope}>
+                        <div className="min-w-0">
                           <p className="text-sm">
                             {scopeLabel(scope)}
-                            <span className="ml-2 text-xs text-muted">{optional ? "Optional" : "Required"}</span>
+                            <span className="ml-2 rounded bg-home-soft px-1.5 py-0.5 text-[11px] font-medium text-muted">{optional ? "Optional" : "Required"}</span>
                           </p>
                           <p className="text-xs text-muted">{SCOPE_LABELS[scope]?.description ?? scope}</p>
                         </div>
@@ -231,17 +255,18 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
             {/* The same list as before, but split: a row of identical pills made "working" and
                 "not working" look like one undifferentiated set. */}
             <div className="space-y-2">
-              <h2 className="text-sm font-medium">
+              <h2 className="text-sm font-semibold">
                 What you get on the dashboard{" "}
                 <span className="font-normal text-muted">
                   ({working.length} of {modules.length} reports{empty ? ", waiting for data" : ""})
                 </span>
               </h2>
               {working.length > 0 && (
-                <ul className="flex flex-wrap gap-2 text-xs">
+                <ul className="flex flex-wrap gap-1.5 text-xs">
                   {working.map((c) => (
-                    <li key={c.id} className="rounded-full border border-good px-2 py-0.5 text-good" title={c.description}>
-                      ✓ {c.title}
+                    <li key={c.id} className="inline-flex items-center gap-1 rounded bg-home-soft px-2 py-0.5 font-medium" title={c.description}>
+                      <Check aria-hidden size={11} strokeWidth={3} className="shrink-0 text-accent" />
+                      {c.title}
                     </li>
                   ))}
                 </ul>
@@ -261,7 +286,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
               )}
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-home-line pt-4">
               {s.lastSyncedAt ? (
                 // Relative, the way the dashboard header already says it, with the exact time on
                 // hover — in the *store's* zone, not the viewer's: the line above this card states
@@ -289,7 +314,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
                 </div>
               )}
             </div>
-          </div>
+          </section>
         );
       })}
     </section>

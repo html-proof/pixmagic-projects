@@ -78,7 +78,8 @@ export function AccountSecurity({ title = "Security", intro, heading = "h1" }: {
     <div className="@container space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 pt-1">
-          <Heading className={heading === "h1" ? "text-2xl font-semibold tracking-tight sm:text-[1.75rem]" : "text-xl font-semibold"}>{title}</Heading>
+          {/* As a page of its own (Settings → Security), the Stitch design's page title. */}
+          <Heading className={heading === "h1" ? "page-title" : "text-xl font-semibold"}>{title}</Heading>
           <p className="mt-1 text-sm text-muted">{intro ?? "Manage your account security, connected devices, and sign-in activity."}</p>
         </div>
         {status && <StatusCard status={status} onOpen={openStatus} />}

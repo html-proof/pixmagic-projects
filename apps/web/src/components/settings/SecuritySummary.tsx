@@ -5,7 +5,9 @@ import { useSecurityStatus } from "@/lib/accountSecurity";
 
 /**
  * The settings menu's "Account security" card: what Settings → Security last found (the share of its
- * checks that pass, and the one thing to do first), or an invitation to look before it has.
+ * checks that pass, and the one thing to do first), or an invitation to look before it has. A white
+ * card as the Stitch design's Settings screens draw every panel; its colour only on the shield and
+ * the bar.
  */
 export function SecuritySummary() {
   const status = useSecurityStatus();
@@ -15,7 +17,7 @@ export function SecuritySummary() {
   return (
     <Link
       href="/settings/security"
-      className="tone-card block rounded-xl border p-4 shadow-[var(--shadow)] transition hover:brightness-[1.03]"
+      className="home-card block p-4 transition-colors outline-none hover:bg-home-soft focus-visible:ring-2 focus-visible:ring-accent"
       style={{ ["--tone" as string]: warn ? "var(--warn)" : "var(--good)" }}
     >
       <span className="flex items-start gap-3">

@@ -218,6 +218,18 @@ page to, and moving between tabs keeps the dates. The tabs' layouts are in
 panels with more detail, and the topics that share the Overview tab, stay in `Details.tsx`. Every
 menu entry still opens its own page.
 
+**The Settings pages (Stitch screens 30–35).** The settings menu and its pages are unchanged; what is
+on each follows the design: Integrations is screen 30's Connections, a card per connection two to a
+row (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, Email, Zapier), each with its own state
+and the same on the one scale of six (`data-status`, [Integration status](#integration-status)).
+SMS and Email are told by `GET …/integrations` alone (`components/integrations/ChannelCards.tsx`);
+the others keep their own answers and wording (`IntegrationRow.tsx`, `AdRow.tsx`, `ZapierCard.tsx`).
+Workspace and Costs are screen 31's Business details (the time zone and currency locked, as Shopify
+gives them), Team & Access is screen 32, Notifications 33, Profile and Security 34, Privacy requests
+and Audit log 35; Shopify, Advertising, Billing and API keys take the same look. Each page's title is
+on the page (`page-title`), its panels are white `home-card`s with `home-h2` headings, and its
+tables have the soft header row of the Sales pages.
+
 **Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
 auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
 /data-deletion) are in Geist. Prefetching one of

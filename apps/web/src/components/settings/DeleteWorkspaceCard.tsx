@@ -93,21 +93,22 @@ export function DeleteWorkspaceCard() {
   // Only owners may delete it (workspace:delete); someone who just did may land in a workspace they don't own.
   if (workspace.role !== "owner") return done || null;
   return (
-    <section className="tone-card rounded-xl border p-5 shadow-[var(--shadow)]" style={tone("danger")} aria-labelledby="delete-ws-h">
+    // The design's last card on Business details (Stitch screen 31): a pale red panel, its button on the right.
+    <section className="tone-card rounded-lg border p-5 sm:p-6" style={tone("danger")} aria-labelledby="delete-ws-h">
       {done}
-      <div className="flex items-start gap-3.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <ToneIcon icon={Trash2} t="danger" size="sm" />
-        <div className="min-w-0">
-          <h2 id="delete-ws-h" className="text-base font-semibold text-danger">
+        <div className="min-w-0 flex-1 basis-64">
+          <h2 id="delete-ws-h" className="home-h2 text-danger">
             Delete workspace
           </h2>
           <p className="mt-0.5 text-sm text-muted">
             Permanently deletes {workspace.name}: its stores&apos; data, everything set up here, and everyone&apos;s access to it. This can&apos;t be undone. Your account stays.
           </p>
-          <button type="button" className="btn-danger mt-4 min-h-11" onClick={() => setOpen(true)}>
-            Delete workspace
-          </button>
         </div>
+        <button type="button" className="btn-danger min-h-10 shrink-0" onClick={() => setOpen(true)}>
+          Delete workspace
+        </button>
       </div>
       <ConfirmDialog
         open={open}
