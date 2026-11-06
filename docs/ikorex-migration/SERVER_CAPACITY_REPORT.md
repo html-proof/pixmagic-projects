@@ -74,8 +74,18 @@ run.
 
 [inspect-server.sh](inspect-server.sh) reads the facts above and changes nothing: no installs,
 restarts or writes, no environment variables or config contents printed, sudo only tried with `-n`
-(never prompts) for read-only status. Once this PC's key is on the server:
+(never prompts) for read-only status. Once this PC's key is on the server, from the repository's
+folder. In Git Bash:
 
 ```
 ssh deployer@103.146.112.176 'bash -s' < docs/ikorex-migration/inspect-server.sh > ikorex-inventory.txt
 ```
+
+In PowerShell 5.1, which has no `<`, through `cmd` (it passes the file through unchanged):
+
+```
+cmd /c "ssh deployer@103.146.112.176 bash -s < docs\ikorex-migration\inspect-server.sh > ikorex-inventory.txt"
+```
+
+Run it at most once or twice in a row: each SSH connection counts toward the server's
+5-failures-in-10-minutes block if the key is refused.

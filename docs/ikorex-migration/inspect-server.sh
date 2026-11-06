@@ -2,6 +2,7 @@
 # Read-only inventory of the iKorex server, for SERVER_CAPACITY_REPORT.md.
 #
 #   ssh deployer@103.146.112.176 'bash -s' < docs/ikorex-migration/inspect-server.sh > ikorex-inventory.txt
+#   (PowerShell 5.1: SERVER_CAPACITY_REPORT.md has the `cmd /c` form.)
 #
 # It changes nothing: no installs, no restarts, no files written, no containers touched.
 # It prints no secrets: no environment variables, no file contents beyond nginx `listen` and
