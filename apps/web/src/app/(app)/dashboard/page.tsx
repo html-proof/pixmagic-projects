@@ -260,6 +260,10 @@ export default function DashboardPage() {
     url.searchParams.delete("view");
     router.replace(`${page}${url.search}`);
   }, [page, router]);
+  // A topic opens as a page of its own: at its top, not wherever the Home was scrolled to.
+  useEffect(() => {
+    if (detail.view) window.scrollTo({ top: 0 });
+  }, [detail.view]);
   // Driven by the answer the poll itself brings back, so the page speeds up the moment it sees
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
