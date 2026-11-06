@@ -45,7 +45,7 @@ export function AppTokenConnect({ base, onConnected }: { base: string; onConnect
   };
 
   return (
-    <details className="rounded-lg border border-border bg-bg p-3" data-testid="wa-token-connect">
+    <details className="rounded bg-home-soft p-3" data-testid="wa-token-connect">
       <summary className="cursor-pointer text-sm font-semibold">bizinsights team: connect with the app&apos;s own token</summary>
       {/* A password field makes browsers take this for a sign-in form and fill in the bizinsights login:
           new-password (as the email settings' SMTP password) and off keep them out. */}

@@ -15,6 +15,7 @@ import {
 } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Chip, SoftBox } from "@/components/automations/MarketingKit";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
@@ -25,7 +26,8 @@ import { fmtAgo, useWaAction, WaBubble } from "./WaUi";
 // ---------------------------------------------------------------------------
 // Message templates (docs/whatsapp.md, "Templates"): the store's own wording with {{variables}}.
 // On a linked phone nobody reviews them; on the Cloud API each one also goes to Meta, and a
-// business-started message can only use one Meta approved.
+// business-started message can only use one Meta approved. Each template is a white card as the
+// Stitch design's Marketing screens draw them, its text in a phone-style bubble.
 // ---------------------------------------------------------------------------
 
 const META_TONE: Record<string, Tone> = { APPROVED: "good", PENDING: "warn", IN_APPEAL: "warn", REJECTED: "danger", PAUSED: "danger", DISABLED: "danger", DELETED: "danger" };
@@ -76,7 +78,7 @@ export function Templates({ base, overview, reload }: { base: string; overview: 
     );
   else
     body = (
-      <ul className="space-y-3">
+      <ul className="grid gap-4 lg:grid-cols-2">
         {list.data.templates.map((t) => (
           <TemplateRow key={t.id} t={t} cloud={cloud} manage={manage} onEdit={() => setDraft({ id: t.id, name: t.name, category: t.category, body: t.body, active: t.active })} base={base} onChanged={refresh} />
         ))}
@@ -85,10 +87,10 @@ export function Templates({ base, overview, reload }: { base: string; overview: 
 
   return (
     <div className="space-y-4">
-      <div className="card animate-rise">
+      <div className="home-card animate-rise p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold">Message templates</h2>
+            <h2 className="home-h2">Message templates</h2>
             <p className="mt-1 text-sm text-muted">
               {cloud
                 ? "On Meta's Cloud API, each template is also submitted to Meta for review. A message that starts a conversation can only use a template Meta approved."
@@ -134,10 +136,10 @@ function TemplateRow({ t, cloud, manage, onEdit, base, onChanged }: { t: WaTempl
   const [deleting, setDeleting] = useState(false);
   const used = t.usedBy ? t.usedBy.automations + t.usedBy.campaigns : 0;
   return (
-    <li className="card animate-rise space-y-3">
+    <li className="home-card animate-rise flex min-w-0 flex-col gap-3 p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
-          <h3 className="truncate font-medium">{t.name}</h3>
+          <h3 className="truncate font-semibold">{t.name}</h3>
           <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
             <Badge tone={t.category === "marketing" ? "warn" : "neutral"}>{WA_CATEGORY_INFO[t.category]?.label ?? t.category}</Badge>
             <Badge tone={t.active ? "good" : "neutral"}>{t.active ? "Active" : "Switched off"}</Badge>
@@ -172,7 +174,9 @@ function TemplateRow({ t, cloud, manage, onEdit, base, onChanged }: { t: WaTempl
           </div>
         )}
       </div>
-      <WaBubble>{t.body}</WaBubble>
+      <SoftBox className="p-4">
+        <WaBubble>{t.body}</WaBubble>
+      </SoftBox>
       <div className="space-y-1 text-xs text-muted">
         {!t.usable && t.unusableReason && <p className="text-warn">Can&apos;t be sent now: {t.unusableReason}</p>}
         {cloud && t.meta?.reason && t.meta.reason !== "NONE" && <p>Meta&apos;s reason: {t.meta.reason}</p>}
@@ -210,14 +214,14 @@ function StarterDialog({ onClose, onPick }: { onClose: () => void; onPick: (d: D
       <p className="text-sm text-muted">Start from a ready-made message and change it to fit your store, or from a blank page.</p>
       <ul className="mt-3 space-y-2">
         <li>
-          <button type="button" className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm transition hover:bg-bg" onClick={() => onPick({ ...blank })}>
+          <button type="button" className="w-full rounded bg-home-soft px-3 py-2 text-left text-sm transition outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent" onClick={() => onPick({ ...blank })}>
             <span className="font-medium">Blank template</span>
             <span className="block text-xs text-muted">Write your own from scratch.</span>
           </button>
         </li>
         {WA_STARTER_TEMPLATES.map((s) => (
           <li key={s.key}>
-            <button type="button" className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm transition hover:bg-bg" onClick={() => onPick({ name: s.name, category: s.category, body: s.body, active: true })}>
+            <button type="button" className="w-full rounded bg-home-soft px-3 py-2 text-left text-sm transition outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent" onClick={() => onPick({ name: s.name, category: s.category, body: s.body, active: true })}>
               <span className="font-medium">{s.name}</span>
               <span className="ml-2 text-xs text-muted">{WA_CATEGORY_INFO[s.category].label}</span>
               <span className="mt-0.5 block truncate text-xs text-muted">{s.body}</span>
@@ -283,7 +287,7 @@ function TemplateEditor({ base, draft, samples, cloud, onClose, onSaved }: { bas
           <legend className="label">Kind of message</legend>
           <div className="grid gap-2 sm:grid-cols-2">
             {WA_TEMPLATE_CATEGORIES.map((c) => (
-              <label key={c} className={`flex cursor-pointer flex-col gap-1 rounded-lg border p-3 text-sm transition ${d.category === c ? "border-accent bg-accent/10" : "border-border hover:bg-bg"}`}>
+              <label key={c} className={`flex cursor-pointer flex-col gap-1 rounded border p-3 text-sm transition ${d.category === c ? "border-accent bg-accent/10" : "border-transparent bg-home-soft hover:bg-home-soft-hover"}`}>
                 <span className="flex items-center gap-2 font-medium">
                   <input type="radio" name="wa-tpl-category" className="accent-[var(--accent)]" checked={d.category === c} onChange={() => setD({ ...d, category: c })} />
                   {WA_CATEGORY_INFO[c].label}
@@ -313,8 +317,8 @@ function TemplateEditor({ base, draft, samples, cloud, onClose, onSaved }: { bas
             <p className="text-xs text-muted">Insert a variable (each is filled in from the order or customer the message is about):</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {WA_VARIABLES.map((v) => (
-                <button key={v} type="button" className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs transition hover:bg-bg" onClick={() => insert(v)} title={`{{${v}}}`}>
-                  {WA_VARIABLE_INFO[v].label}
+                <button key={v} type="button" className="rounded outline-none focus-visible:ring-2 focus-visible:ring-accent" onClick={() => insert(v)} title={`{{${v}}}`}>
+                  <Chip>{WA_VARIABLE_INFO[v].label}</Chip>
                 </button>
               ))}
             </div>
@@ -340,13 +344,13 @@ function TemplateEditor({ base, draft, samples, cloud, onClose, onSaved }: { bas
         )}
         <div>
           <p className="label">Preview, with sample values</p>
-          <div className="rounded-xl border border-border bg-bg p-4">{preview ? <WaBubble>{preview}</WaBubble> : <p className="text-sm text-muted">Write the message to see it here.</p>}</div>
+          <SoftBox className="p-4">{preview ? <WaBubble>{preview}</WaBubble> : <p className="text-sm text-muted">Write the message to see it here.</p>}</SoftBox>
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" className="accent-[var(--accent)]" checked={d.active} onChange={(e) => setD({ ...d, active: e.target.checked })} />
           Active (switched off, nothing sends it)
         </label>
-        <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-home-line pt-4">
           <button type="button" className="btn-secondary" onClick={onClose} disabled={!!busy}>
             Cancel
           </button>

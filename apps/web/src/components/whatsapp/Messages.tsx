@@ -2,6 +2,8 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Paperclip, Send } from "lucide-react";
+import { ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
+import { FigureTile } from "@/components/PageKit";
 import { WA_ATTACHMENT_MAX_BYTES, WA_ATTACHMENT_TYPES, WA_SEND_REASONS, WA_SEND_REASON_INFO, WA_TEXT_MAX, type WaSendReason } from "@app/shared/whatsapp";
 import { Dialog, Skeleton } from "@/components/AppUi";
 import { Drawer, plural, usePagedList } from "@/components/messaging/MessagingUi";
@@ -10,10 +12,12 @@ import { LoadError } from "@/components/LoadError";
 import { api, useApi } from "@/lib/api";
 import { LiveStatus } from "./Setup";
 import type { WaMessage, WaMessageEvent, WaOverview, WaTemplatesResponse } from "./types";
-import { fmtAgo, MessageStatus, newIdempotencyKey, SOURCE_LABEL, useWaAction, WaBubble, waHref } from "./WaUi";
+import { fmtAgo, fmtShare, MessageStatus, newIdempotencyKey, SOURCE_LABEL, useWaAction, WaBubble, waHref } from "./WaUi";
 
 // Message history (searchable, filtered, paged), each message's delivery reports, Retry, and the
-// composer. Customers' texts show only to people who may see contact information.
+// composer. Customers' texts show only to people who may see contact information. Laid out as the
+// Stitch design's Results screen (17): the filters in a row, what WhatsApp reported in the last 30
+// days as a few numbers (the overview's own counts), then the history as a table.
 
 const STATUS_FILTERS: Array<[string, string]> = [
   ["", "Any status"],
@@ -56,13 +60,16 @@ export function Messages({ base, overview }: { base: string; overview: WaOvervie
   }, [base, status, direction, source, from, to, phoneQuery, campaignId, automationId]);
   const list = usePagedList<WaMessage>(path, "messages");
   const canSend = overview.can.manage && overview.connection?.status === "connected";
+  const month = overview.stats.month;
 
   return (
     <div className="space-y-4">
-      <div className="card space-y-3">
+      <section aria-labelledby={`${id}-h`} className="home-card animate-rise space-y-4 p-5 sm:p-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold">Message history</h2>
+          <div className="min-w-0">
+            <h2 id={`${id}-h`} className="home-h2">
+              Message history
+            </h2>
             <p className="text-sm text-muted">Every message sent and received, with WhatsApp&apos;s reports as they arrive.</p>
           </div>
           {(campaignId || automationId) && (
@@ -112,6 +119,14 @@ export function Messages({ base, overview }: { base: string; overview: WaOvervie
             </form>
           )}
         </div>
+      </section>
+
+      {/* The last 30 days in numbers, as the overview counts them from each message's record: they don't follow the filters. */}
+      <div role="group" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Last 30 days">
+        <FigureTile testId="wa-figure-delivered" title="Delivered" value={month.delivered} sub="Last 30 days, from WhatsApp's reports" />
+        <FigureTile testId="wa-figure-read" title="Read" value={month.read} sub={`Read rate ${fmtShare(month.readRate)}`} />
+        <FigureTile testId="wa-figure-failed" title="Failed" value={month.failed} sub={month.notSent ? `${month.notSent} not sent, each with its reason` : "Last 30 days"} />
+        <FigureTile testId="wa-figure-rate" title="Delivery rate" value={fmtShare(month.deliveryRate)} sub="Delivered or read, of what reached WhatsApp." />
       </div>
 
       {list.error ? (
@@ -121,32 +136,30 @@ export function Messages({ base, overview }: { base: string; overview: WaOvervie
       ) : list.rows.length === 0 ? (
         <EmptyState title="No messages" body={status || direction || source || from || to || phoneQuery ? "Nothing matches these filters." : "Messages appear here as soon as one is sent or received."} />
       ) : (
-        <div className="card overflow-x-auto p-0">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="border-b border-border text-left text-xs text-muted">
-              <tr>
-                <th className="px-4 py-2 font-medium">When</th>
-                <th className="px-4 py-2 font-medium">Number</th>
-                <th className="px-4 py-2 font-medium">Source</th>
-                <th className="px-4 py-2 font-medium">Message</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
+        <TableCard id="wa-history" testId="wa-history">
+          <table className="w-full min-w-[640px] text-sm" aria-label="Messages">
+            <TableHead>
+              <Th>When</Th>
+              <Th>Number</Th>
+              <Th>Source</Th>
+              <Th>Message</Th>
+              <Th>Status</Th>
+            </TableHead>
             <tbody>
               {list.rows.map((m) => (
-                <tr key={m.id} className="cursor-pointer border-b border-border/60 hover:bg-bg" onClick={() => setOpen(m.id)}>
-                  <td className="whitespace-nowrap px-4 py-2 text-muted">{fmtAgo(m.createdAt)}</td>
-                  <td className="whitespace-nowrap px-4 py-2">
+                <tr key={m.id} className={`${ROW} cursor-pointer hover:bg-home-soft/60`} onClick={() => setOpen(m.id)}>
+                  <td className={`${TD} whitespace-nowrap text-muted`}>{fmtAgo(m.createdAt)}</td>
+                  <td className={`${TD} whitespace-nowrap`}>
                     {m.direction === "in" ? "← " : "→ "}
                     {m.phone ?? "–"}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2 text-muted">{SOURCE_LABEL[m.source] ?? m.source}</td>
-                  <td className="max-w-xs truncate px-4 py-2">
+                  <td className={`${TD} whitespace-nowrap text-muted`}>{SOURCE_LABEL[m.source] ?? m.source}</td>
+                  <td className={`${TD} max-w-xs truncate`}>
                     <button type="button" className="max-w-full truncate text-left hover:underline" onClick={() => setOpen(m.id)}>
                       {m.preview ?? (overview.can.contacts ? <span className="text-muted">(text no longer kept)</span> : <span className="text-muted">Open for details</span>)}
                     </button>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2">
+                  <td className={`${TD} whitespace-nowrap`}>
                     <MessageStatus m={m} />
                   </td>
                 </tr>
@@ -154,13 +167,13 @@ export function Messages({ base, overview }: { base: string; overview: WaOvervie
             </tbody>
           </table>
           {list.cursor && (
-            <div className="p-3 text-center">
+            <div className="border-t border-home-line p-3 text-center">
               <button type="button" className="btn-secondary" onClick={list.loadMore} disabled={list.loading}>
                 {list.loading ? "Loading…" : "Load more"}
               </button>
             </div>
           )}
-        </div>
+        </TableCard>
       )}
 
       {open && <MessageDrawer base={base} id={open} overview={overview} onClose={() => setOpen(null)} onChanged={() => void list.reload()} />}
@@ -246,7 +259,7 @@ function MessageDrawer({ base, id, overview, onClose, onChanged }: { base: strin
             {r.data!.events.length === 0 ? (
               <p className="text-sm text-muted">None yet.</p>
             ) : (
-              <ol className="mt-1 space-y-1 text-sm">
+              <ol className="mt-1 divide-y divide-home-line text-sm [&>li]:py-1.5">
                 {r.data!.events.map((e) => (
                   <li key={`${e.status}-${e.at}`}>
                     <span className="font-medium">{e.status}</span> {e.providerStatus && <span className="text-xs text-muted">({e.providerStatus})</span>} · {new Date(e.at).toLocaleString()}

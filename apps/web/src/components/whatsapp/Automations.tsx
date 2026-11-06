@@ -21,8 +21,11 @@ import {
   type WaRecipient,
   type WaTrigger,
 } from "@app/shared/whatsapp";
+import { Plus } from "lucide-react";
 import { ConfirmDialog, Skeleton } from "@/components/AppUi";
+import { Chip, FactsLine, SoftBox, StepCard, StepNumber, TableCard } from "@/components/automations/MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
+import { Card } from "@/components/PageKit";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
@@ -34,6 +37,9 @@ import { AUTOMATION_STATUS, MessageStatus, problemsOf, useWaAction, WaBubble, wa
 // Automations (docs/whatsapp.md, "Automations"): the list, a five-step builder (trigger, conditions,
 // message, recipient and timing, review) and each automation's runs. Nothing is switched on except
 // by pressing Activate; a new automation starts in test mode (only the store's verified number).
+// The list is the Stitch design's Automations screen (14): a line of facts, the ready-made ones,
+// then a row each with its status, last 30 days and buttons; the builder numbers its steps as the
+// design's one-automation screen (19) does.
 // ---------------------------------------------------------------------------
 
 type DelayUnit = "minutes" | "hours" | "days";
@@ -228,29 +234,32 @@ export function Automations({ base, overview, reload }: { base: string; overview
     return { ...draftOf(null), name: p.name, description: p.description, trigger: p.trigger, templateId: tpl?.id ?? "", delayValue: d.value, delayUnit: d.unit };
   };
 
+  const on = all.filter((a) => a.status === "active").length;
+  const queued = all.reduce((n, a) => n + (a.stats?.queued ?? 0), 0);
+  const blocked = overview.automation.blocked.length;
+
   return (
     <div className="space-y-4">
-      <div className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold">Automations</h2>
-            <p className="mt-1 text-sm text-muted">
-              An automation sends a message when something happens in your store: a trigger, optional conditions, a template, then who gets it and when. Each one runs at most once per order,
-              checkout or customer, so a repeated event never sends twice.
-            </p>
-          </div>
-          {manage && (
-            <button type="button" className="btn-primary" onClick={() => setEditing({ automation: null, draft: draftOf(null) })}>
-              New automation
-            </button>
-          )}
-        </div>
-        {overview.settings.automationPausedAt && (
-          <div className="mt-3">
-            <Alert kind="info">All automation is paused (Settings). Automations record what happened but send nothing until you resume.</Alert>
-          </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <FactsLine
+          testId="wa-automation-facts"
+          items={[
+            all.length ? `${on} of ${all.length} on` : null,
+            all.some((a) => a.stats) ? `${plural(queued, "message")} queued in 30 days` : null,
+            blocked ? <span className="text-danger">{blocked} can&apos;t send</span> : null,
+          ]}
+        />
+        {manage && (
+          <button type="button" className="btn-primary ml-auto" onClick={() => setEditing({ automation: null, draft: draftOf(null) })}>
+            <Plus aria-hidden className="h-4 w-4" /> New automation
+          </button>
         )}
       </div>
+      <p className="text-sm text-muted">
+        An automation sends a message when something happens in your store: a trigger, optional conditions, a template, then who gets it and when. Each one runs at most once per order,
+        checkout or customer, so a repeated event never sends twice.
+      </p>
+      {overview.settings.automationPausedAt && <Alert kind="info">All automation is paused (Settings). Automations record what happened but send nothing until you resume.</Alert>}
 
       {tested && (
         <Alert kind="success" onDismiss={() => setTested(null)}>
@@ -263,16 +272,18 @@ export function Automations({ base, overview, reload }: { base: string; overview
       )}
 
       {manage && (
-        <div className="card">
-          <h3 className="text-sm font-semibold">Start from a ready-made automation</h3>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Card id="wa-presets" title="Start from a ready-made automation">
+          <div className="grid gap-3 sm:grid-cols-2">
             {WA_AUTOMATION_PRESETS.map((p) => {
               const starter = WA_STARTER_TEMPLATES.find((s) => s.key === p.template);
               const tpl = starter ? tpls.find((t) => t.name === starter.name) : undefined;
               const avail = triggers[p.trigger];
               return (
-                <div key={p.key} className="rounded-lg border border-border p-3">
-                  <p className="text-sm font-medium">{p.name}</p>
+                <div key={p.key} className="flex min-w-0 flex-col rounded bg-home-soft p-3">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    {p.name}
+                    {WA_TRIGGER_INFO[p.trigger].category === "marketing" && <Chip tone="accent">marketing</Chip>}
+                  </p>
                   <p className="mt-1 text-xs text-muted">{p.description}</p>
                   <p className="mt-1 text-xs text-muted">
                     When: {WA_TRIGGER_INFO[p.trigger].label.toLowerCase()} · {fmtDelay(p.delayMinutes)}
@@ -287,44 +298,47 @@ export function Automations({ base, overview, reload }: { base: string; overview
                       first (start from its ready-made text).
                     </p>
                   )}
-                  <button type="button" className="btn-secondary mt-2 h-8 px-3 text-xs" disabled={!avail?.available} onClick={() => setEditing({ automation: null, draft: presetDraft(p.key) })}>
-                    Use this
-                  </button>
+                  <div className="mt-auto pt-2">
+                    <button type="button" className="home-btn h-8 bg-surface" disabled={!avail?.available} onClick={() => setEditing({ automation: null, draft: presetDraft(p.key) })}>
+                      Use this
+                    </button>
+                  </div>
                 </div>
               );
             })}
           </div>
-        </div>
+        </Card>
       )}
 
       {all.length === 0 ? (
         <EmptyState title="No automations yet" body="Create one from a ready-made automation above, or build your own. It starts in test mode, so only your own verified number receives its messages until you say otherwise." />
       ) : (
-        <ul className="space-y-3">
+        <TableCard id="wa-automations" title="Your automations" testId="wa-automations">
+          {/* The design's head row (screen 14); on a phone each row stacks. */}
+          <div aria-hidden className="hidden grid-cols-[minmax(0,1fr)_9rem_minmax(0,14rem)] gap-4 bg-home-soft px-5 py-2.5 text-[11px] font-semibold tracking-wider text-muted uppercase sm:grid sm:px-6">
+            <span>Automation</span>
+            <span>Status</span>
+            <span className="text-right">Last 30 days</span>
+          </div>
+          <ul className="divide-y divide-home-line" aria-label="Automations">
           {all.map((a) => {
             const st = AUTOMATION_STATUS[a.status] ?? { tone: "neutral" as const, label: a.status };
             const problems = a.problems ?? [];
             return (
-              <li key={a.id} className="card">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+              <li key={a.id} className="px-5 py-4 sm:px-6">
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem_minmax(0,14rem)] sm:gap-4">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <button type="button" className="text-left font-medium hover:underline" onClick={() => setDetail(a)}>
+                      <button type="button" className="text-left font-semibold hover:underline" onClick={() => setDetail(a)}>
                         {a.name}
                       </button>
-                      <Badge tone={st.tone}>{st.label}</Badge>
-                      {a.testMode && <Badge tone="warn">Test mode</Badge>}
+                      <Chip>WhatsApp</Chip>
+                      {WA_TRIGGER_INFO[a.trigger]?.category === "marketing" && <Chip tone="accent">marketing</Chip>}
                     </div>
                     <p className="mt-1 text-sm text-muted">
                       {a.triggerLabel}
                       {a.conditionLabels.length ? `, if ${a.conditionLabels.join(" and ").toLowerCase()}` : ""} · sends {fmtDelay(a.delayMinutes)}
                     </p>
-                    {a.stats && (
-                      <p className="mt-1 text-xs text-muted">
-                        Last 30 days: {plural(a.stats.queued, "message")} queued, {plural(a.stats.skipped, "run")} that sent nothing
-                        {a.lastRunAt ? ` · last ran ${fmtWhen(a.lastRunAt, tz)}` : ""}
-                      </p>
-                    )}
                     {problems.length > 0 && (
                       <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-warn">
                         {problems.map((p) => (
@@ -345,8 +359,27 @@ export function Automations({ base, overview, reload }: { base: string; overview
                       </div>
                     )}
                   </div>
-                  {manage && (
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-start gap-1.5">
+                    <Badge tone={st.tone}>{st.label}</Badge>
+                    {a.testMode && <Badge tone="warn">Test mode</Badge>}
+                  </div>
+                  <div className="text-xs text-muted sm:text-right">
+                    {a.stats ? (
+                      <>
+                        <p>
+                          <span className="sm:sr-only">Last 30 days: </span>
+                          <span className="font-medium text-text tabular-nums">{plural(a.stats.queued, "message")}</span> queued
+                        </p>
+                        <p>{plural(a.stats.skipped, "run")} that sent nothing</p>
+                        {a.lastRunAt && <p>last ran {fmtWhen(a.lastRunAt, tz)}</p>}
+                      </>
+                    ) : (
+                      <span aria-hidden>–</span>
+                    )}
+                  </div>
+                </div>
+                {manage && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 sm:justify-end">
                       {a.status === "active" ? (
                         <button
                           type="button"
@@ -388,11 +421,11 @@ export function Automations({ base, overview, reload }: { base: string; overview
                       </button>
                     </div>
                   )}
-                </div>
               </li>
             );
           })}
-        </ul>
+          </ul>
+        </TableCard>
       )}
 
       {detail && <RunsDrawer base={base} automation={detail} tz={tz} onClose={() => setDetail(null)} />}
@@ -454,6 +487,7 @@ function Builder({
   const missingVars = template && info ? template.variables.filter((v) => v !== "store_name" && !(info.variables as string[]).includes(v)) : [];
   const local = draftProblems(d);
   const idx = STEPS.indexOf(step);
+  const savedStatus = saved ? (AUTOMATION_STATUS[saved.status] ?? { tone: "neutral" as const, label: saved.status }) : null;
 
   const save = async () => {
     setError(null);
@@ -474,10 +508,13 @@ function Builder({
 
   return (
     <div className="space-y-4">
-      <div className="card animate-rise">
+      <section aria-labelledby="wa-auto-ed-h" className="home-card animate-rise p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold">{automation ? `Edit "${automation.name}"` : "New automation"}</h2>
+          <div className="min-w-0">
+            <h2 id="wa-auto-ed-h" className="card-title flex flex-wrap items-center gap-2">
+              {automation ? `Edit "${automation.name}"` : "New automation"}
+              {savedStatus && <Badge tone={savedStatus.tone}>{savedStatus.label}</Badge>}
+            </h2>
             <p className="mt-1 text-sm text-muted">Trigger → conditions → message → recipient and timing. Saving never switches it on: you do that with Activate.</p>
           </div>
           <button type="button" className="btn-secondary" onClick={() => onDone(null)}>
@@ -492,16 +529,18 @@ function Builder({
                 aria-current={s === step ? "step" : undefined}
                 disabled={!d.trigger && s !== "trigger"}
                 onClick={() => setStep(s)}
-                className={`rounded-full border px-3 py-1 text-xs transition ${s === step ? "border-accent bg-accent/10 font-semibold" : "border-border text-muted hover:text-text"}`}
+                className={`inline-flex items-center gap-2 rounded px-2.5 py-1.5 text-xs font-medium transition outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50 ${s === step ? "bg-accent/10 text-accent" : "bg-home-soft text-muted hover:text-text"}`}
               >
-                {i + 1}. {STEP_LABEL[s]}
+                <StepNumber n={i + 1} done={s === step} />
+                <span className="sr-only">{i + 1}. </span>
+                {STEP_LABEL[s]}
               </button>
             </li>
           ))}
         </ol>
-      </div>
+      </section>
 
-      <div className="card space-y-4">
+      <StepCard id="wa-auto-step" n={idx + 1} title={STEP_LABEL[step]} level={3}>
         {step === "trigger" && (
           <fieldset>
             <legend className="label">What starts it</legend>
@@ -513,7 +552,7 @@ function Builder({
                 return (
                   <label
                     key={t}
-                    className={`flex cursor-pointer gap-2 rounded-lg border p-3 text-sm transition ${d.trigger === t ? "border-accent bg-accent/10" : "border-border hover:bg-bg"} ${!avail?.available || locked ? "cursor-not-allowed opacity-60" : ""}`}
+                    className={`flex cursor-pointer gap-2 rounded border p-3 text-sm transition ${d.trigger === t ? "border-accent bg-accent/10" : "border-transparent bg-home-soft hover:bg-home-soft-hover"} ${!avail?.available || locked ? "cursor-not-allowed opacity-60" : ""}`}
                   >
                     <input
                       type="radio"
@@ -577,7 +616,9 @@ function Builder({
             {template && (
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted">Preview with sample values</p>
-                <WaBubble>{renderWaText(template.body, samples, { lenient: true })}</WaBubble>
+                <SoftBox className="p-4">
+                  <WaBubble>{renderWaText(template.body, samples, { lenient: true })}</WaBubble>
+                </SoftBox>
                 {info.category === "marketing" && template.category !== "marketing" && <Alert kind="error">This trigger sends marketing, but the template isn&apos;t a marketing one.</Alert>}
                 {missingVars.length > 0 && (
                   <Alert kind="error">
@@ -684,7 +725,7 @@ function Builder({
 
         {step === "review" && info && (
           <div className="space-y-4">
-            <div className="rounded-lg border border-border bg-bg p-3 text-sm">
+            <div className="rounded bg-home-soft px-4 py-3 text-sm">
               <p>
                 <span className="font-medium">When</span> {info.label.toLowerCase()}
                 {d.conditions.length ? `, if ${d.conditions.map((c) => describeWaCondition(c).toLowerCase()).join(" and ")}` : ""},
@@ -769,7 +810,7 @@ function Builder({
           </div>
         )}
 
-        <div className="flex flex-wrap justify-between gap-2 border-t border-border pt-3">
+        <div className="flex flex-wrap justify-between gap-2 border-t border-home-line pt-4">
           <button type="button" className="btn-secondary" disabled={idx === 0} onClick={() => setStep(STEPS[idx - 1]!)}>
             Back
           </button>
@@ -779,7 +820,7 @@ function Builder({
             </button>
           )}
         </div>
-      </div>
+      </StepCard>
     </div>
   );
 }
@@ -796,7 +837,7 @@ function ConditionsStep({ trigger, conditions, onChange }: { trigger: WaTrigger;
         <p className="text-xs text-muted">Optional. Every condition must match; with none, every &ldquo;{WA_TRIGGER_INFO[trigger].label.toLowerCase()}&rdquo; event sends.</p>
       </div>
       {conditions.map((c, i) => (
-        <div key={i} className="rounded-lg border border-border p-3">
+        <div key={i} className="rounded bg-home-soft p-3">
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-medium">{WA_CONDITION_LABEL[c.field]}</p>
             <button type="button" className="text-xs text-muted underline hover:text-text" onClick={() => remove(i)}>
@@ -887,7 +928,7 @@ function RunsDrawer({ base, automation, tz, onClose }: { base: string; automatio
       {!r.data && !r.error && <Skeleton lines={4} />}
       {r.data && r.data.runs.length === 0 && <p className="text-sm text-muted">It hasn&apos;t run yet. It runs when its trigger happens while it is on.</p>}
       {r.data && r.data.runs.length > 0 && (
-        <ul className="divide-y divide-border rounded-lg border border-border">
+        <ul className="divide-y divide-home-line rounded bg-home-soft">
           {r.data.runs.map((run) => (
             <li key={run.id} className="space-y-1 p-3 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">

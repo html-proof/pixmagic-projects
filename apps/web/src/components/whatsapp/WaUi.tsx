@@ -140,7 +140,7 @@ export const SOURCE_LABEL: Record<string, string> = {
 /** A WhatsApp message as it looks on a phone (the store's side). */
 export function WaBubble({ children, mine = true }: { children: ReactNode; mine?: boolean }) {
   return (
-    <div className={`max-w-md whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm shadow-sm ${mine ? "rounded-br-sm bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef]" : "rounded-bl-sm border border-border bg-surface"}`}>
+    <div className={`max-w-md whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm shadow-sm ${mine ? "rounded-br-sm bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef]" : "rounded-bl-sm border border-home-line bg-surface"}`}>
       {children}
     </div>
   );

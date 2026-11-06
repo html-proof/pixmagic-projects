@@ -1,8 +1,9 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { CheckCircle2, Circle, QrCode, ShieldCheck, Smartphone } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, QrCode, ShieldCheck, Smartphone } from "lucide-react";
 import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaProvider, type WaSetupStep } from "@app/shared/whatsapp";
+import { Fact, FactList, SoftBox, StepCard, StepNumber } from "@/components/automations/MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
@@ -15,7 +16,9 @@ import { CONNECTION_TONE, MessageStatus, waError, waHref, WhatsappIcon, useWaAct
 // ---------------------------------------------------------------------------
 // The four-step setup: 1 Connect (choose how), 2 Authorize (scan WhatsApp's own QR code, type the
 // pairing code, or sign in with Meta), 3 Configure, 4 Test and activate. Every state shown comes from
-// the API, which asks the provider: nothing here says "connected" before WhatsApp did.
+// the API, which asks the provider: nothing here says "connected" before WhatsApp did. Each step is a
+// numbered card, as the Stitch design numbers a form's parts (screens 15 and 19), and the ways to
+// connect are drawn as its Channels screen (18) draws a channel: a name, its facts, one button.
 // ---------------------------------------------------------------------------
 
 export function Setup({ base, overview, reload }: { base: string; overview: WaOverview; reload: () => void }) {
@@ -28,7 +31,7 @@ export function Setup({ base, overview, reload }: { base: string; overview: WaOv
 
   return (
     <div className="space-y-4">
-      <ol className="card grid gap-2 sm:grid-cols-4" aria-label="Setup steps">
+      <ol className="home-card animate-rise grid gap-2 p-3 sm:grid-cols-4" aria-label="Setup steps">
         {WA_SETUP_STEPS.map((s, i) => {
           const active = s === step;
           return (
@@ -37,12 +40,13 @@ export function Setup({ base, overview, reload }: { base: string; overview: WaOv
                 type="button"
                 onClick={() => go(s)}
                 aria-current={active ? "step" : undefined}
-                className={`flex w-full items-start gap-2 rounded-lg border p-3 text-left text-sm transition ${active ? "border-accent bg-accent/5" : "border-border hover:bg-bg"}`}
+                className={`flex w-full items-start gap-3 rounded p-3 text-left text-sm transition outline-none focus-visible:ring-2 focus-visible:ring-accent ${active ? "bg-accent/10" : "hover:bg-home-soft"}`}
               >
-                {done[s] ? <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-good" aria-hidden /> : <Circle size={18} className="mt-0.5 shrink-0 text-muted" aria-hidden />}
-                <span>
+                <StepNumber n={done[s] ? <Check size={14} strokeWidth={2.5} /> : i + 1} done={done[s]} />
+                <span className="min-w-0">
                   <span className="font-semibold">
-                    {i + 1}. {WA_SETUP_STEP_INFO[s].label}
+                    <span className="sr-only">{i + 1}. </span>
+                    {WA_SETUP_STEP_INFO[s].label}
                   </span>
                   <span className="block text-xs text-muted">{WA_SETUP_STEP_INFO[s].help}</span>
                   <span className="sr-only">{done[s] ? "(done)" : "(not done)"}</span>
@@ -67,8 +71,7 @@ export function Setup({ base, overview, reload }: { base: string; overview: WaOv
         />
       )}
       {step === "configure" && (
-        <div className="card space-y-4">
-          <h2 className="text-base font-semibold">3. Configure</h2>
+        <StepCard id="wa-step-configure" n={3} title="Configure">
           <SettingsForm
             base={base}
             overview={overview}
@@ -78,7 +81,7 @@ export function Setup({ base, overview, reload }: { base: string; overview: WaOv
               go("test");
             }}
           />
-        </div>
+        </StepCard>
       )}
       {step === "test" && (all ? <Complete overview={overview} /> : <TestStep base={base} overview={overview} reload={reload} />)}
     </div>
@@ -96,66 +99,69 @@ function ConnectStep({ overview, provider, setProvider, next }: { overview: WaOv
   const cloudReady = !!overview.cloudSignup;
   if (!overview.platform.evolution) {
     return (
-      <div className="card space-y-2">
-        <h2 className="text-base font-semibold">1. Connect</h2>
+      <StepCard id="wa-step-connect" n={1} title="Connect">
         <Alert kind="info">WhatsApp connections aren&apos;t set up on bizinsights yet, so nothing can be connected and nothing is sent. Nothing needs changing in your accounts.</Alert>
-      </div>
+      </StepCard>
     );
   }
   if (live) {
     return (
-      <div className="card space-y-3">
-        <h2 className="text-base font-semibold">1. Connect</h2>
+      <StepCard id="wa-step-connect" n={1} title="Connect" aside={<Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>}>
         <p className="text-sm">
-          This store connects with <strong>{PROVIDER_INFO[conn.provider].label}</strong>.{" "}
-          <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>
+          This store connects with <strong>{PROVIDER_INFO[conn.provider].label}</strong>.
         </p>
         <p className="text-sm text-muted">To switch to the other way, disconnect first (Settings tab).</p>
-        <button type="button" className="btn-primary" onClick={next}>
-          Continue
-        </button>
-      </div>
+        <div>
+          <button type="button" className="btn-primary" onClick={next}>
+            Continue
+          </button>
+        </div>
+      </StepCard>
     );
   }
   const options: WaProvider[] = ["cloud_api", "qr"];
   return (
-    <div className="card space-y-4">
-      <div>
-        <h2 className="text-base font-semibold">1. Choose how to connect</h2>
-        <p className="mt-1 text-sm text-muted">Pick one. Read what each means first: they are different kinds of connection.</p>
-      </div>
+    <StepCard id="wa-step-connect" n={1} title="Choose how to connect">
+      <p className="text-sm text-muted">Pick one. Read what each means first: they are different kinds of connection.</p>
       <div className="grid gap-3 lg:grid-cols-2">
         {options.map((p) => {
           const info = PROVIDER_INFO[p];
           const unavailable = p === "cloud_api" && !cloudReady;
           const chosen = provider === p;
           return (
-            <label key={p} className={`flex cursor-pointer flex-col gap-3 rounded-xl border p-4 text-sm transition ${chosen ? "border-accent bg-accent/5" : "border-border"} ${unavailable ? "opacity-70" : ""}`}>
+            <label key={p} className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border p-4 text-sm transition ${chosen ? "border-accent bg-accent/5" : "border-home-line hover:bg-home-soft/60"} ${unavailable ? "opacity-70" : ""}`}>
               <span className="flex items-start gap-3">
-                <input type="radio" name="wa-provider" className="mt-1" checked={chosen} disabled={unavailable} onChange={() => setProvider(p)} />
-                <span>
-                  <span className="flex items-center gap-2 font-semibold">
-                    {p === "cloud_api" ? <ShieldCheck size={17} aria-hidden /> : <QrCode size={17} aria-hidden />}
+                <input type="radio" name="wa-provider" className="mt-1 accent-[var(--accent)]" checked={chosen} disabled={unavailable} onChange={() => setProvider(p)} />
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2 text-base font-semibold">
+                    {p === "cloud_api" ? <ShieldCheck size={17} aria-hidden className="shrink-0 text-accent" /> : <QrCode size={17} aria-hidden className="shrink-0 text-accent" />}
                     {info.label}
                   </span>
                   <span className="mt-1 block text-muted">{info.short}</span>
                 </span>
               </span>
-              <ul className="ml-7 list-disc space-y-1 text-muted">
-                {info.good.map((g) => (
-                  <li key={g}>{g}</li>
-                ))}
-              </ul>
-              <div className="ml-7 rounded-lg border border-border bg-bg p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Know before you choose</p>
-                <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-muted">
+              <div className="sm:ml-7">
+                <FactList>
+                  {info.good.map((g) => (
+                    <Fact key={g} icon={<Check className="text-accent" />}>
+                      {g}
+                    </Fact>
+                  ))}
+                </FactList>
+              </div>
+              <SoftBox className="sm:ml-7">
+                <p className="text-[11px] font-semibold tracking-wider text-muted uppercase">Know before you choose</p>
+                <ul className="mt-2 space-y-1.5 text-xs text-muted">
                   {info.limits.map((l) => (
-                    <li key={l}>{l}</li>
+                    <li key={l} className="flex gap-2">
+                      <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-warn" />
+                      <span className="min-w-0">{l}</span>
+                    </li>
                   ))}
                 </ul>
-              </div>
+              </SoftBox>
               {unavailable && (
-                <p className="ml-7 text-xs text-warn">
+                <p className="text-xs text-warn sm:ml-7">
                   Not available yet: bizinsights&apos; Meta app isn&apos;t set up for it
                   {overview.can.connect && overview.platform.cloudApi.missing.length ? ` (missing ${overview.platform.cloudApi.missing.join(", ")})` : ""}, and Meta must approve bizinsights as a Tech Provider before it can onboard businesses.
                 </p>
@@ -165,19 +171,21 @@ function ConnectStep({ overview, provider, setProvider, next }: { overview: WaOv
         })}
       </div>
       {provider === "qr" && (
-        <label className="flex items-start gap-2 text-sm">
-          <input type="checkbox" className="mt-1" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+        <label className="flex items-start gap-2 rounded bg-home-soft p-3 text-sm">
+          <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
           <span>I understand this links my WhatsApp app the way WhatsApp Web does. It is not Meta&apos;s official business API, and WhatsApp may restrict a number that sends unwanted or bulk messages.</span>
         </label>
       )}
       {!overview.can.connect ? (
         <p className="text-sm text-muted">Only people who may manage integrations can connect WhatsApp.</p>
       ) : (
-        <button type="button" className="btn-primary" disabled={!provider || (provider === "qr" && !understood)} onClick={next}>
-          Continue
-        </button>
+        <div>
+          <button type="button" className="btn-primary" disabled={!provider || (provider === "qr" && !understood)} onClick={next}>
+            Continue
+          </button>
+        </div>
       )}
-    </div>
+    </StepCard>
   );
 }
 
@@ -189,49 +197,52 @@ function AuthorizeStep({ base, overview, provider, back, onConnected }: { base: 
   const conn = overview.connection;
   if (conn && conn.status === "connected") {
     return (
-      <div className="card space-y-3">
-        <h2 className="text-base font-semibold">2. Authorize</h2>
+      <StepCard id="wa-step-authorize" n={2} title="Authorize">
         <Alert kind="success">
           Connected{conn.phone ? ` as ${conn.phone}` : ""}
           {conn.profileName ? ` (${conn.profileName})` : ""}. WhatsApp confirmed the connection.
         </Alert>
-        <button type="button" className="btn-primary" onClick={onConnected}>
-          Continue to settings
-        </button>
-      </div>
+        <div>
+          <button type="button" className="btn-primary" onClick={onConnected}>
+            Continue to settings
+          </button>
+        </div>
+      </StepCard>
     );
   }
   if (!provider) {
     return (
-      <div className="card space-y-3">
-        <h2 className="text-base font-semibold">2. Authorize</h2>
+      <StepCard id="wa-step-authorize" n={2} title="Authorize">
         <p className="text-sm text-muted">Choose how to connect first.</p>
-        <button type="button" className="btn-secondary" onClick={back}>
-          Back to step 1
-        </button>
-      </div>
+        <div>
+          <button type="button" className="btn-secondary" onClick={back}>
+            Back to step 1
+          </button>
+        </div>
+      </StepCard>
     );
   }
   if (!overview.can.connect) {
     return (
-      <div className="card">
+      <div className="home-card animate-rise p-5 sm:p-6">
         <p className="text-sm text-muted">Only people who may manage integrations can connect WhatsApp.</p>
       </div>
     );
   }
   if (provider === "cloud_api") {
     return (
-      <div className="card space-y-3">
-        <h2 className="text-base font-semibold">2. Sign in with Meta</h2>
+      <StepCard id="wa-step-authorize" n={2} title="Sign in with Meta">
         <p className="text-sm text-muted">
           Meta&apos;s own window opens. Sign in with Facebook, pick or create your business portfolio and WhatsApp Business account, and add or pick the phone number. bizinsights then checks with Meta that it may send for you, and registers the number.
         </p>
         {overview.cloudSignup ? <CloudSignup base={base} signup={overview.cloudSignup} onConnected={onConnected} /> : <Alert kind="info">The Cloud API isn&apos;t available on bizinsights yet.</Alert>}
         {overview.cloudSignup && overview.tokenConnect && <AppTokenConnect base={base} onConnected={onConnected} />}
-        <button type="button" className="btn-secondary" onClick={back}>
-          Back
-        </button>
-      </div>
+        <div>
+          <button type="button" className="btn-secondary" onClick={back}>
+            Back
+          </button>
+        </div>
+      </StepCard>
     );
   }
   return <QrPairing base={base} overview={overview} back={back} onConnected={onConnected} />;
@@ -294,8 +305,7 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
           ? "QR code shown. Scan it with the phone, under Linked devices."
           : "";
   return (
-    <div className="card space-y-4">
-      <h2 className="text-base font-semibold">2. Link your phone</h2>
+    <StepCard id="wa-step-authorize" n={2} title="Link your phone">
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
       </p>
@@ -309,14 +319,14 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
           <div className="flex flex-col items-center gap-2">
             {pairing.qr ? (
               // A data URL from the provider: WhatsApp's own code, never one made here.
-              <img src={pairing.qr} alt="QR code to link WhatsApp" width={264} height={264} className="rounded-lg border border-border bg-white p-2" data-testid="wa-qr" />
+              <img src={pairing.qr} alt="QR code to link WhatsApp" width={264} height={264} className="h-auto max-w-full rounded-lg border border-home-line bg-white p-2" data-testid="wa-qr" />
             ) : pairing.pairingCode ? (
-              <p className="rounded-lg border border-border bg-bg px-5 py-4 font-mono text-3xl font-semibold tracking-[0.3em]" data-testid="wa-pairing-code">
+              <p className="rounded bg-home-soft px-5 py-4 font-mono text-2xl font-semibold tracking-[0.3em] sm:text-3xl" data-testid="wa-pairing-code">
                 <span aria-hidden>{pairing.pairingCode}</span>
                 <span className="sr-only">Pairing code {pairing.pairingCode.split("").join(" ")}</span>
               </p>
             ) : (
-              <div className="skeleton h-[264px] w-[264px] rounded-lg" aria-label="Waiting for WhatsApp's code" />
+              <div className="skeleton aspect-square w-[264px] max-w-full rounded-lg" aria-label="Waiting for WhatsApp's code" />
             )}
             <p className="text-xs text-muted" aria-live="polite">
               {pairing.qrCount ? `Code ${pairing.qrCount} of 6: it changes about every 20 seconds.` : "Waiting for WhatsApp…"}
@@ -343,13 +353,13 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
           {(status === "failed" || status === "logged_out") && overview.connection?.reason && <Alert kind="info">{pairing?.reason ?? overview.connection.reason}</Alert>}
           <fieldset className="space-y-2">
             <legend className="label">How to link</legend>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="radio" name={`${id}-m`} checked={method === "qr"} onChange={() => setMethod("qr")} />
-              <QrCode size={16} aria-hidden /> Scan a QR code (this page on a computer, the phone in your hand)
+            <label className={`flex items-start gap-2 rounded p-3 text-sm transition ${method === "qr" ? "bg-accent/10" : "bg-home-soft hover:bg-home-soft-hover"}`}>
+              <input type="radio" name={`${id}-m`} className="mt-0.5 accent-[var(--accent)]" checked={method === "qr"} onChange={() => setMethod("qr")} />
+              <QrCode size={16} aria-hidden className="mt-0.5 shrink-0 text-accent" /> <span className="min-w-0">Scan a QR code (this page on a computer, the phone in your hand)</span>
             </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="radio" name={`${id}-m`} checked={method === "code"} onChange={() => setMethod("code")} />
-              <Smartphone size={16} aria-hidden /> Type a pairing code on the phone (when this page is on that phone)
+            <label className={`flex items-start gap-2 rounded p-3 text-sm transition ${method === "code" ? "bg-accent/10" : "bg-home-soft hover:bg-home-soft-hover"}`}>
+              <input type="radio" name={`${id}-m`} className="mt-0.5 accent-[var(--accent)]" checked={method === "code"} onChange={() => setMethod("code")} />
+              <Smartphone size={16} aria-hidden className="mt-0.5 shrink-0 text-accent" /> <span className="min-w-0">Type a pairing code on the phone (when this page is on that phone)</span>
             </label>
           </fieldset>
           {method === "code" && (
@@ -362,7 +372,7 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60" disabled={busy === "start" || (method === "code" && phone.trim().length < 8)} onClick={() => void start()} data-testid="wa-start-pairing">
+            <button type="button" className="btn-primary h-11 px-5" disabled={busy === "start" || (method === "code" && phone.trim().length < 8)} onClick={() => void start()} data-testid="wa-start-pairing">
               <WhatsappIcon size={20} /> {busy === "start" ? "Asking WhatsApp…" : status === "failed" || status === "logged_out" ? "Get a new code" : method === "qr" ? "Show QR code" : "Get pairing code"}
             </button>
             <button type="button" className="btn-secondary h-11" onClick={back}>
@@ -371,7 +381,7 @@ function QrPairing({ base, overview, back, onConnected }: { base: string; overvi
           </div>
         </>
       )}
-    </div>
+    </StepCard>
   );
 }
 
@@ -393,17 +403,15 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
 
   if (!connected) {
     return (
-      <div className="card space-y-2">
-        <h2 className="text-base font-semibold">4. Test and activate</h2>
+      <StepCard id="wa-step-test" n={4} title="Test and activate">
         <p className="text-sm text-muted">Connect WhatsApp first (step 2): the test goes out from your connected number.</p>
-      </div>
+      </StepCard>
     );
   }
   const manage = overview.can.manage;
   return (
     <div className="space-y-4">
-      <div className="card space-y-3">
-        <h2 className="text-base font-semibold">4a. Verify your own number</h2>
+      <StepCard id="wa-step-verify" n="4a" title="Verify your own number">
         <p className="text-sm text-muted">
           Tests only ever go to a number you prove is yours: bizinsights sends it a 6-digit code over WhatsApp. The number your WhatsApp is linked with needs no code.
         </p>
@@ -464,10 +472,9 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
             )}
           </div>
         )}
-      </div>
+      </StepCard>
 
-      <div className="card space-y-3">
-        <h2 className="text-base font-semibold">4b. Send a test message</h2>
+      <StepCard id="wa-step-send-test" n="4b" title="Send a test message">
         {!s.testVerifiedAt ? (
           <p className="text-sm text-muted">Verify your number first.</p>
         ) : (
@@ -506,7 +513,7 @@ function TestStep({ base, overview, reload }: { base: string; overview: WaOvervi
             {s.testPassedAt && <Alert kind="success">WhatsApp reported a test message as sent. Setup is complete.</Alert>}
           </>
         )}
-      </div>
+      </StepCard>
     </div>
   );
 }
@@ -543,7 +550,7 @@ export function LiveStatus({ base, messageId, onReached }: { base: string; messa
   }, [base, messageId, onReached]);
   // One live region from "Queued" on, so the first real status (even a final one) is announced.
   return (
-    <div className="space-y-1 rounded-lg border border-border bg-bg p-3 text-sm" aria-live="polite">
+    <div className="space-y-1 rounded bg-home-soft p-3 text-sm" aria-live="polite">
       {!m ? <p className="text-muted">Queued…</p> : <LiveStatusDetails m={m} gaveUp={gaveUp} />}
     </div>
   );
@@ -572,9 +579,9 @@ function LiveStatusDetails({ m, gaveUp }: { m: { message: WaMessage; events: WaM
 
 function Complete({ overview }: { overview: WaOverview }) {
   return (
-    <div className="card space-y-3">
-      <h2 className="flex items-center gap-2 text-base font-semibold">
-        <CheckCircle2 size={20} className="text-good" aria-hidden /> WhatsApp Automation is set up
+    <section aria-labelledby="wa-setup-done-h" className="home-card animate-rise space-y-3 p-5 sm:p-6">
+      <h2 id="wa-setup-done-h" className="home-h2 flex items-center gap-2">
+        <CheckCircle2 size={20} className="shrink-0 text-good" aria-hidden /> WhatsApp Automation is set up
       </h2>
       <p className="text-sm text-muted">
         Connected{overview.connection?.phone ? ` as ${overview.connection.phone}` : ""}, configured, and WhatsApp reported your test message sent. New automations start in test mode: they send only to your number until you switch test mode off.
@@ -590,6 +597,6 @@ function Complete({ overview }: { overview: WaOverview }) {
           Write templates
         </Link>
       </div>
-    </div>
+    </section>
   );
 }
