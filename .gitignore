@@ -38,3 +38,6 @@ apps/cloudflare/
 
 # Country flags copied from country-flag-icons at build time (apps/web/scripts/copy-flags.mjs)
 apps/web/public/flags/
+
+# The iKorex server's real settings and secrets (infra/ikorex/env/*.example lists them): never in Git.
+infra/ikorex/env/*.env

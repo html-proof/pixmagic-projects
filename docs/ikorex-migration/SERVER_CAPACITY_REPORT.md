@@ -37,7 +37,7 @@ Translated into containers on one server:
 | `worker` | 400–700 MB; 1–2 cores during backfills | 1.5 GB, 2 CPU |
 | `postgres` | 1–1.5 GB (more memory than RDS has today, which is what it needs) | 2 GB, 2 CPU |
 | `evolution` | 300–600 MB | 1 GB, 1 CPU |
-| `redis`, `cloudflared`, `backup` | ~200 MB together | 512 MB |
+| `cloudflared`, `backup` (the weekly restore test runs a second, small PostgreSQL) | ~150 MB, ~400 MB during the test | 896 MB |
 | monitoring | 0.8–1.2 GB | 1.5 GB |
 | **Total** | **~3.2–4.6 GB** | **~7.3 GB of limits** (not all used at once) |
 

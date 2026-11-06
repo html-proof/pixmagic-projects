@@ -1,7 +1,6 @@
 import { existsSync, watch } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type Server } from "node:http";
 import { resolve } from "node:path";
-import { Readable } from "node:stream";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, type WorkerDeps } from "@app/worker";
 import { logger, mailpitMailer, memoryBlobs, memoryCoord, reportUnscopedSystemQueries, withTimeout, type Mailer } from "@app/core";
@@ -10,6 +9,7 @@ import { disconnectDb } from "@app/db";
 import { apiDeps } from "./app.js";
 import { apiPath } from "./paths.js";
 import { localQueues, type LocalQueues } from "./localQueues.js";
+import { send, toRequest } from "./nodeHttp.js";
 import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { APP_SETTINGS } from "./settings.js";
 import { staticSite } from "./staticSite.js";
@@ -132,40 +132,6 @@ export function localHandler(app: App, ui: (request: Request) => Response, jobs:
   };
 }
 
-function toRequest(req: IncomingMessage, port: number): Request {
-  const headers = new Headers();
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (Array.isArray(v)) for (const one of v) headers.append(k, one);
-    else if (v !== undefined) headers.set(k, v);
-  }
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${port}`}`);
-  const hasBody = req.method !== "GET" && req.method !== "HEAD";
-  return new Request(url, {
-    method: req.method,
-    headers,
-    body: hasBody ? (Readable.toWeb(req) as ReadableStream) : undefined,
-    duplex: "half",
-  } as RequestInit);
-}
-
-async function send(res: ServerResponse, response: Response, head: boolean) {
-  const headers: Record<string, string | string[]> = {};
-  response.headers.forEach((value, key) => {
-    if (key !== "set-cookie") headers[key] = value;
-  });
-  const cookies = response.headers.getSetCookie();
-  if (cookies.length) headers["set-cookie"] = cookies;
-  res.writeHead(response.status, headers);
-  if (head || !response.body) return res.end();
-  await new Promise<void>((done, fail) => {
-    Readable.fromWeb(response.body as never)
-      .on("error", fail)
-      .pipe(res)
-      .on("finish", done)
-      .on("error", fail);
-  });
-}
-
 function listen(server: Server, port: number, host: string): Promise<boolean> {
   return new Promise((ready, fail) => {
     server.once("error", (err: NodeJS.ErrnoException) => {
@@ -189,7 +155,7 @@ export async function startLocal(opts: LocalOptions): Promise<{ close(): Promise
   const servers: Server[] = [];
   for (const host of ["127.0.0.1", "::1"]) {
     const server = createServer((req, res) => {
-      handle(toRequest(req, opts.port), req.socket.remoteAddress)
+      handle(toRequest(req, `http://${req.headers.host ?? `localhost:${opts.port}`}`), req.socket.remoteAddress)
         .then((response) => send(res, response, req.method === "HEAD"))
         .catch((err: unknown) => {
           logger.error({ err, path: req.url?.split("?")[0] }, "local server: request failed");

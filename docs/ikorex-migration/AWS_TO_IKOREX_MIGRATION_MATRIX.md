@@ -8,7 +8,7 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 
 | Stage | What | Touches production? | Approval |
 | --- | --- | --- | --- |
-| A | Code: the self-hosted entry point and adapters (queue, schedules, coordinator, blobs, metrics), Dockerfile, Compose file, backup/restore/deploy scripts. Merged to `main`; AWS keeps running the same code | No | — |
+| A | Code: the self-hosted entry point and adapters (queue, schedules, coordinator, blobs, metrics), Dockerfile, Compose file, backup/restore/deploy scripts. Merged to `main`; AWS keeps running the same code. **Built and tested 2026-11-06** ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)) | No | — |
 | B | Server: `~/bizinsights-staging` on iKorex, a copy of production data, schedules off, no webhooks, mail to a sink, behind Cloudflare Access | No (reads a dump) | Server administrator's OK |
 | C | Backups to R2, restore test, monitoring and alerts, external uptime check | No | — |
 | D | Cutover in a maintenance window (below) | **Yes** | **Owner, for the date** |
@@ -19,13 +19,13 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 
 | AWS today | On iKorex | Code change (stage A) | Data moved at cutover | Check | Main risk |
 | --- | --- | --- | --- | --- | --- |
-| Lambda `api` | `app` container | New entry point beside `index.ts`/`local.ts`: Node HTTP server, client IP from `CF-Connecting-IP`, no origin secret | — | Smoke tests, e2e suite against staging | Behaviour that relied on Lambda (cold starts, 55 s timeout): a long request now holds the process, so the server sets its own timeout |
-| SQS + Lambda `jobs` | `worker` + pg-boss | `pgBossQueues` (implements `Queues`), a consumer loop calling `consume()`, `dlq.mjs` inspect/redrive on the new dead-letter queue | Queues drained to empty before the window; nothing carried over | Integration tests: retry, backoff, dead-letter, worker killed mid-job, duplicate send | A handler that assumed SQS batch semantics; covered by running the worker suite against pg-boss |
-| EventBridge Scheduler + `cron` | pg-boss schedules in `worker`; admin CLI | Schedule registration; `admin <action>` command | — | Ticks recorded; restart between ticks | A missed tick during the window: the 15-minute jobs catch up by design |
+| Lambda `api` | `web` container | **Done**: `selfhost.ts` (`webHandler`, `startWeb`), `server.ts`; client IP from `CF-Connecting-IP`, no origin secret, 6 MB body limit | — | Smoke test of the bundle (UI, `/api/readyz`, `/api/version`, 401 without a session), e2e suite against staging | A long request now holds the process: the server's own 60 s limit |
+| SQS + Lambda `jobs` | `worker` + PostgreSQL queue | **Done**: `pgQueues.ts` (implements `Queues`; SQS's contract: delays, receive counts, holds, dead-letter after 10), runner in `selfhost.ts`, `admin queues/dlq/redrive` | Queues drained to empty before the window; nothing carried over | Integration tests against PostgreSQL (retry, backoff, dead-letter, worker dying mid-job, two claimers, time limit) | A handler that assumed SQS batch semantics: none do (they get one message at a time on both) |
+| EventBridge Scheduler + `cron` | Schedules in `worker` (`schedule_ticks`); admin command | **Done**: `schedules.ts` (cron with time zones, one run per tick across workers, catch-up, retries), `admin.ts` | — | Ticks recorded; two workers run a tick once; failed tick retried | A missed tick during the window: the 15-minute jobs catch up by design |
 | SNS alarms | Alertmanager | Rules + email config | — | One test alert | — |
 | SNS sms-events → SQS | SNS HTTPS subscription → app route → `smsEvents` queue (only if SMS stays on AWS) | Route with SNS signature check | — | Sandbox SMS shows "delivered" | Unsigned or replayed events: signature and timestamp checked |
-| DynamoDB `coord` | `redis` | `redisCoord` (implements `Coord`) | The 12 items (signed-out sessions among them) copied by a script | `Coord` contract tests against Redis | — |
-| S3 `payloads` | Volume + nightly prune | `fsBlobs` (implements `BlobStore`) | — (transient, drained) | Large webhook round trip | Disk fills: alert at 80 % |
+| DynamoDB `coord` | PostgreSQL table `coord_entries` | **Done**: `pgCoord.ts` (implements `Coord`), `admin import-coord` | The 12 items (signed-out sessions among them) copied with `admin import-coord` | `Coord` contract tests against PostgreSQL | — |
+| S3 `payloads` | Volume + nightly prune | **Done**: `fsBlobs.ts` (implements `BlobStore`) | — (transient, drained) | Unit tests incl. keys that would leave the folder | Disk fills: alert at 80 % |
 | S3 `site` | Served by `app` | Production static handler (`staticSite.ts` exists) with cache headers | — | Pages, hashed files cached by Cloudflare | — |
 | S3 `artifacts` | R2 bucket, encrypted | Backup scripts | Existing RDS snapshots stay in AWS until stage F | Restore test | — |
 | RDS PostgreSQL | `postgres` container | Connection strings only | `pg_dump` of `app` and `evolution` from RDS, restore on iKorex, inside the window (~1.8 GB of data: minutes) | Row counts per table equal (`counts` action on both), `_prisma_migrations` equal, RLS policies present, smoke tests | **Single server, no failover** (the owner's decision); a restore is the recovery |
@@ -37,9 +37,9 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | CloudFront + WAF | Cloudflare proxy + Tunnel + Cloudflare rules | — | — | Client IP, geo, rate limit, outage behaviour | Cloudflare Free has less WAF than AWS's managed groups (see the cost audit, change 6) |
 | EC2 NAT + admin host | — | — | — | Outbound calls work from the server | — |
 | Fargate Evolution + Cloud Map + Route 53 | `evolution` container | `EVOLUTION_API_URL` = `http://evolution:8080`; webhook URL to `app` on the internal network | Its `evolution` database (sessions) with the app's | Linked numbers still connected after the window | Sessions tied to the old webhook URL: Evolution's instances re-pointed at start |
-| CloudWatch | Prometheus, Alertmanager, Grafana, Loki + external uptime check | `/metrics` on `app` and `worker` | — | Each alert fired once | Monitoring on the same server: covered by the external check |
+| CloudWatch | Prometheus, Alertmanager, Grafana, Loki + external uptime check | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 15 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
 | GuardDuty, CloudTrail, Cost Explorer, Budgets | Stay while AWS has resources; GuardDuty off at stage F | — | — | — | — |
-| CDK + Deploy to AWS | Compose + deploy over SSH | New workflow; CLAUDE.md rewritten at cutover | — | A deploy with a failing health check rolls back | The PC runner and its SSH key: restricted to the deploy command |
+| CDK + Deploy to AWS | `ship.sh` + `deploy.sh` over SSH | **Done** (scripts); the GitHub workflow comes with stage B | — | A deploy with a failing migration or health check rolls back (stage B) | The PC runner and its SSH key: restricted to the deploy command |
 
 ## Cognito: the three ways
 
