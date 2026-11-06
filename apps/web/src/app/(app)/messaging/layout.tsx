@@ -48,7 +48,7 @@ export default function MessagingLayout({ children }: { children: ReactNode }) {
           <StoresPending />
         ) : !store ? (
           <div className="card">
-            <h1 className="text-lg font-semibold">Customer Messaging</h1>
+            <h1 className="card-title">Customer Messaging</h1>
             <p className="mt-1 text-sm text-muted">Connect a Shopify store first: text messages are about a store&apos;s orders and customers, and only reach customers Shopify says may receive them.</p>
             {canManage(workspace.role) && (
               <Link href="/onboarding" className="btn-primary mt-3 inline-flex">

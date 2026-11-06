@@ -18,7 +18,7 @@ export default function NewEmployeePage() {
   if (!can("staff:manage")) {
     return (
       <div className="card max-w-xl">
-        <h1 className="text-lg font-semibold">Add employee</h1>
+        <h1 className="card-title">Add employee</h1>
         <p className="mt-1 text-sm text-muted">Only owners, admins and HR managers can add employees. Ask one of them to add this person for you.</p>
       </div>
     );

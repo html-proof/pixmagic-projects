@@ -29,7 +29,7 @@ export default function ProfilePage() {
 
   return (
     <section className="card space-y-4">
-      <h1 className="text-lg font-semibold">Profile</h1>
+      <h1 className="card-title">Profile</h1>
       {msg && <Alert kind={msg.kind}>{msg.text}</Alert>}
       <form onSubmit={save} className="space-y-3">
         <div>

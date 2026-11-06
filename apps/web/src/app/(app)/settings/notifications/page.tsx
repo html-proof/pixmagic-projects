@@ -38,7 +38,7 @@ export default function NotificationsPage() {
 
   return (
     <section className="card space-y-4">
-      <h1 className="text-lg font-semibold">Notifications</h1>
+      <h1 className="card-title">Notifications</h1>
       {!prefs && error && <LoadError what="your notification settings" error={error} onRetry={() => void reload()} busy={loading} />}
       {saveError && <Alert>{saveError}</Alert>}
       {prefs &&

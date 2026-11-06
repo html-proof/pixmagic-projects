@@ -350,7 +350,7 @@ function PillSelect<T extends string>({
 }) {
   return (
     <div
-      className={`relative inline-flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface font-medium shadow-[var(--shadow)] transition-colors focus-within:ring-2 focus-within:ring-accent hover:border-accent/40 ${
+      className={`relative inline-flex min-w-0 items-center gap-2 rounded-lg border border-transparent bg-surface font-medium shadow-[var(--shadow)] transition-colors focus-within:ring-2 focus-within:ring-accent hover:bg-home-soft ${
         size === "sm" ? "h-9 pl-3 pr-8 text-xs" : "h-10 pl-3.5 pr-10 text-sm"
       }`}
       title={title}

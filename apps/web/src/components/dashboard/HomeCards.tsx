@@ -15,22 +15,18 @@ import { fmtMoney, fmtPct } from "@/lib/api";
  */
 const TINT = {
   green: {
-    tile: "border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-emerald-50/20 dark:border-emerald-400/20 dark:from-emerald-400/[0.09] dark:to-transparent",
     disc: "bg-emerald-600 dark:bg-emerald-500",
     ink: "text-emerald-600 dark:text-emerald-400",
   },
   blue: {
-    tile: "border-sky-200/80 bg-gradient-to-br from-sky-50 to-sky-50/20 dark:border-sky-400/20 dark:from-sky-400/[0.09] dark:to-transparent",
     disc: "bg-sky-600 dark:bg-sky-500",
     ink: "text-sky-600 dark:text-sky-400",
   },
   violet: {
-    tile: "border-violet-200/80 bg-gradient-to-br from-violet-50 to-violet-50/20 dark:border-violet-400/20 dark:from-violet-400/[0.09] dark:to-transparent",
     disc: "bg-violet-600 dark:bg-violet-500",
     ink: "text-violet-600 dark:text-violet-400",
   },
   amber: {
-    tile: "border-orange-200/80 bg-gradient-to-br from-orange-50 to-orange-50/20 dark:border-orange-400/20 dark:from-orange-400/[0.09] dark:to-transparent",
     disc: "bg-orange-500 dark:bg-orange-500",
     ink: "text-orange-600 dark:text-orange-400",
   },
@@ -153,7 +149,7 @@ export function KpiCard({
     <button
       type="button"
       onClick={onClick}
-      className={`lift animate-rise flex min-w-0 flex-col rounded-2xl border p-4 text-left shadow-[var(--shadow)] sm:p-5 ${t.tile}`}
+      className={`lift animate-rise flex min-w-0 flex-col rounded-lg bg-surface p-4 text-left shadow-[var(--shadow)] sm:p-5`}
       style={{ ["--i" as string]: i }}
       data-testid={`metric-${title}`}
     >

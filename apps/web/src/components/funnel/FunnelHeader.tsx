@@ -48,10 +48,10 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
   );
 
   return (
-    <header className="card animate-rise">
+    <header className="animate-rise">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight sm:text-2xl">
+          <h1 className="page-title flex items-center gap-2">
             <span aria-hidden className="grid size-9 place-items-center rounded-xl bg-accent/12 text-accent">
               <Funnel className="h-[18px] w-[18px]" />
             </span>

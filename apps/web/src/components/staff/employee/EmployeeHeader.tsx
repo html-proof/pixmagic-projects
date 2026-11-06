@@ -82,7 +82,7 @@ export function EmployeeHeader({
       </Link>
       <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold">{employee.fullName}</h1>
+          <h1 className="card-title">{employee.fullName}</h1>
           <p className="mt-0.5 text-sm text-muted">
             <span className="font-medium text-text">{employee.employeeNumber}</span> · {employee.jobTitle}
             {employee.department ? ` · ${employee.department.name}` : ""}

@@ -58,7 +58,7 @@ function ApiKeys() {
 
   return (
     <section className="card space-y-4">
-      <h1 className="text-lg font-semibold">API keys</h1>
+      <h1 className="card-title">API keys</h1>
       <p className="text-sm text-muted">
         Read-only keys for pulling your metrics into other tools. Send as <code>Authorization: Bearer sk_live_…</code> to
         <code> /api/workspaces/{workspace.id}/…</code>.

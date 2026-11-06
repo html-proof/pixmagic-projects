@@ -669,7 +669,7 @@ export function AutomationBuilder() {
       <section className="card animate-rise space-y-4" aria-labelledby="builder-h">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 id="builder-h" className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+            <h1 id="builder-h" className="card-title flex flex-wrap items-center gap-2">
               <MessageSquareText aria-hidden className="h-5 w-5 text-accent" /> {id ? (saved?.name ?? "Edit automation") : "Create SMS Automation"}
               {saved && <Badge tone={AUTOMATION_STATUS[saved.status].tone}>{AUTOMATION_STATUS[saved.status].label}</Badge>}
               {saved?.pendingChanges && <Badge tone="warn">Changes not live</Badge>}

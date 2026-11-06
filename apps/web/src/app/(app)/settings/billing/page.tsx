@@ -122,7 +122,7 @@ function BillingPlans() {
 
   return (
     <section className="space-y-4">
-      <h1 className="text-lg font-semibold">Billing</h1>
+      <h1 className="page-title">Billing</h1>
       {!data && loadError ? (
         <LoadError what="your plan" error={loadError} onRetry={() => void reload()} busy={loading} />
       ) : (

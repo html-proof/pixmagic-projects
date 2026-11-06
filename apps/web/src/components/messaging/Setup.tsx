@@ -375,7 +375,7 @@ export function SmsSetup() {
       <section className="card animate-rise space-y-4" aria-labelledby="setup-h">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 id="setup-h" className="flex items-center gap-2 text-lg font-semibold">
+            <h1 id="setup-h" className="card-title flex items-center gap-2">
               <MessageSquareText aria-hidden className="h-5 w-5 text-accent" /> Set up SMS
             </h1>
             <p className="mt-1 text-sm text-muted">Text your customers order updates in five short steps. No AWS account, keys or technical setup needed.</p>

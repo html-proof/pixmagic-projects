@@ -115,7 +115,7 @@ export function formatKpi(k: Pick<KpiData, "unit">, v: number | string | null, c
 export function KpiCard({ kpi, currency, asOf }: { kpi: KpiData; currency: string | null; asOf?: string | null }) {
   const value = formatKpi(kpi, kpi.value, currency);
   return (
-    <div className="lift flex min-w-0 flex-col gap-1 rounded-xl border border-border bg-surface p-4" data-testid={`kpi-${kpi.key}`}>
+    <div className="lift flex min-w-0 flex-col gap-1 rounded-lg border border-transparent bg-surface p-4 shadow-[var(--shadow)]" data-testid={`kpi-${kpi.key}`}>
       <p className="text-xs font-medium text-muted">{kpi.label}</p>
       <p className="truncate text-2xl font-semibold tabular-nums">{value}</p>
       <div className="min-h-5">

@@ -19,7 +19,7 @@ import type { Overview, YearMonth, YearOf } from "./types";
 
 function Panel({ id, title, total, sub, aside, legend, i, testId, children }: { id: string; title: string; total: ReactNode; sub: ReactNode; aside?: ReactNode; legend: ReactNode; i: number; testId: string; children: ReactNode }) {
   return (
-    <section className="card animate-rise min-w-0 rounded-2xl px-[18px] pb-3 pt-[18px]" style={{ ["--i" as string]: i }} aria-labelledby={id} data-testid={testId}>
+    <section className="card animate-rise min-w-0 px-[18px] pb-3 pt-[18px]" style={{ ["--i" as string]: i }} aria-labelledby={id} data-testid={testId}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 id={id} className="text-xs font-bold uppercase tracking-[0.04em] text-muted">{title}</h2>

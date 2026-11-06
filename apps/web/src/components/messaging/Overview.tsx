@@ -94,7 +94,7 @@ export function MessagingOverview() {
       <section className="card animate-rise" aria-labelledby="sms-h">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 space-y-2">
-            <h1 id="sms-h" className="text-xl font-semibold">
+            <h1 id="sms-h" className="card-title">
               Customer Messaging
             </h1>
             <p className="flex flex-wrap items-center gap-2 text-sm" aria-live="polite">

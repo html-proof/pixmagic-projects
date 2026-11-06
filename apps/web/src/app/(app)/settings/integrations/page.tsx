@@ -114,7 +114,7 @@ export default function IntegrationsPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Integrations</h1>
+        <h1 className="page-title">Integrations</h1>
         <p className="mt-2 max-w-2xl leading-relaxed text-muted">
           {showAds
             ? "Connect your business accounts and get your data from Shopify, Google Ads, Meta Ads and AdSense, all in one place. Track performance, optimize campaigns and grow your business effortlessly."

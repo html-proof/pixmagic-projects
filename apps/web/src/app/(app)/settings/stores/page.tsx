@@ -127,7 +127,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
 
   return (
     <section className="space-y-4">
-      <h1 className="text-lg font-semibold">Shopify stores</h1>
+      <h1 className="page-title">Shopify stores</h1>
       {connected && (
         <Alert kind="success">
           {justConnected ? `${justConnected.name ?? justConnected.shopDomain} is connected.` : "Your store is connected."} We&apos;re importing its

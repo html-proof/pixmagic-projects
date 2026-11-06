@@ -76,7 +76,7 @@ export default function GoogleAdsAnalyticsPage() {
   if (!store || !base) {
     return (
       <div className="card">
-        <h1 className="text-lg font-semibold">Google Ads Analytics</h1>
+        <h1 className="card-title">Google Ads Analytics</h1>
         <p className="mt-1 text-sm text-muted">Connect a Shopify store first; ad accounts are connected to a store.</p>
       </div>
     );

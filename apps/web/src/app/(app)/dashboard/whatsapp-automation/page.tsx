@@ -63,7 +63,7 @@ function WhatsappAutomation() {
   else if (!store || !base)
     body = (
       <div className="card">
-        <h1 className="text-lg font-semibold">{title}</h1>
+        <h1 className="card-title">{title}</h1>
         <p className="mt-1 text-sm text-muted">Connect a Shopify store first: WhatsApp messages are about a store&apos;s orders and customers.</p>
         {canManage(workspace.role) && (
           <Link href="/onboarding" className="btn-primary mt-3 inline-flex">
@@ -79,10 +79,10 @@ function WhatsappAutomation() {
     const conn = data.connection && data.connection.status !== "disconnected" ? data.connection : null;
     body = (
       <>
-        <div className="card animate-rise">
+        <div className="animate-rise">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="flex items-center gap-2 text-lg font-semibold">
+              <h1 className="page-title flex items-center gap-2">
                 <WhatsappIcon size={22} /> {title}
               </h1>
               <p className="mt-1 text-sm text-muted">

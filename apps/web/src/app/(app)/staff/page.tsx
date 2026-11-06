@@ -422,7 +422,7 @@ function QuickActions({ can }: { can: ReturnType<typeof useStaff>["can"] }) {
   return (
     <nav aria-label="Quick actions" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
       {shown.map((a) => (
-        <Link key={a.label} href={a.href} className="lift group flex min-w-0 items-start gap-3 rounded-xl border border-border bg-surface p-3 transition hover:border-accent">
+        <Link key={a.label} href={a.href} className="lift group flex min-w-0 items-start gap-3 rounded-lg border border-transparent bg-surface shadow-[var(--shadow)] p-3 transition hover:border-accent">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
             <Icon name={a.icon} />
           </span>

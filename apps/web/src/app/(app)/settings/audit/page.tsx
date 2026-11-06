@@ -72,7 +72,7 @@ export default function AuditPage() {
   if (!allowed) return <Alert kind="info">Only owners and admins can view the audit log.</Alert>;
   return (
     <section className="card space-y-3">
-      <h1 className="text-lg font-semibold">Audit log</h1>
+      <h1 className="card-title">Audit log</h1>
       {error && <Alert>{error}</Alert>}
       <ul className="divide-y divide-border text-sm">
         {items.map((i) => (

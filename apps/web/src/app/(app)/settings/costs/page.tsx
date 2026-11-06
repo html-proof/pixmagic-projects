@@ -112,7 +112,7 @@ export default function CostsPage() {
       <section className="card space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold">Costs</h1>
+            <h1 className="card-title">Costs</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted">
               The costs bizinsights can&apos;t read from Shopify or your ad accounts: rent, salaries, software, your Shopify plan and apps,
               shipping labels, packaging, payment fees, ads on platforms you haven&apos;t connected, and loan interest or income tax. Each is

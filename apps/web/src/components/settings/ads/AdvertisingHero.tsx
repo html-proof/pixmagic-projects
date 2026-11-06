@@ -37,7 +37,7 @@ export function AdvertisingHero({ children }: { children?: ReactNode }) {
           <Megaphone size={30} strokeWidth={1.9} />
         </span>
         <div className="min-w-0">
-          <h1 id="ads-hero-h" className="text-2xl font-semibold tracking-tight">
+          <h1 id="ads-hero-h" className="page-title">
             Advertising integrations
           </h1>
           <p className="mt-1.5 max-w-2xl text-sm text-muted">

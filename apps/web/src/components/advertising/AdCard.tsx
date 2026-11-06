@@ -37,7 +37,7 @@ export function AdCard({
   children: ReactNode;
 }) {
   return (
-    <section id={id} aria-labelledby={`${id}-h`} data-testid={id} className={`card animate-rise flex min-w-0 flex-col rounded-2xl ${className}`}>
+    <section id={id} aria-labelledby={`${id}-h`} data-testid={id} className={`card animate-rise flex min-w-0 flex-col ${className}`}>
       <div className="flex items-start gap-2.5">
         {IconCmp && <IconCmp aria-hidden className={`mt-0.5 h-5 w-5 shrink-0 ${CARD_TINT[tint]}`} strokeWidth={2.2} />}
         <div className="min-w-0 flex-1">

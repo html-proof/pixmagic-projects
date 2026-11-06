@@ -57,7 +57,7 @@ export function IntegrationRow({
 }) {
   return (
     <section
-      className="card animate-rise grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-4 rounded-2xl p-5 sm:gap-x-6 sm:p-6"
+      className="card animate-rise grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-4 p-5 sm:gap-x-6 sm:p-6"
       aria-labelledby={`${testid}-h`}
       data-testid={testid}
       data-state={state}

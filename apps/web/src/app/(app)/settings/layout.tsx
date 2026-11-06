@@ -26,7 +26,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
                 key={slug}
                 href={to}
                 aria-current={active ? "page" : undefined}
-                className={`inline-flex items-center gap-3 whitespace-nowrap rounded-lg border px-3 py-2.5 text-sm transition-colors ${active ? "border-accent/45 bg-accent/10 font-semibold text-text" : "border-transparent text-muted hover:bg-surface hover:text-text"}`}
+                className={`inline-flex items-center gap-3 whitespace-nowrap rounded-lg border px-3 py-2.5 text-sm transition-colors ${active ? "border-transparent bg-accent/10 font-semibold text-accent" : "border-transparent text-muted hover:bg-surface hover:text-text"}`}
               >
                 <Glyph size={18} strokeWidth={1.8} aria-hidden="true" className={active ? "text-accent" : undefined} />
                 {label}

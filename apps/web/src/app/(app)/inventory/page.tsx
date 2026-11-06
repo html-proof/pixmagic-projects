@@ -78,7 +78,7 @@ function KpiTile({ id, kpi, currency, data, rangeLabel }: { id: InventoryKpi; kp
   // Costs and stock value: not for this member (the API left them out).
   if (kpi === null) {
     return (
-      <div className="flex min-w-0 flex-col gap-1 rounded-xl border border-dashed border-border bg-surface p-3 sm:p-4" data-testid={`kpi-${id}`}>
+      <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-dashed border-border bg-surface p-3 sm:p-4" data-testid={`kpi-${id}`}>
         <p className="text-xs font-medium text-muted">{info.label}</p>
         <p className="text-sm text-muted">Hidden: needs permission to see costs and stock value.</p>
       </div>
@@ -87,7 +87,7 @@ function KpiTile({ id, kpi, currency, data, rangeLabel }: { id: InventoryKpi; kp
   const compared = id === "unitsToday" ? "vs yesterday so far" : id === "unitsMonth" ? "vs last month so far" : id === "turnover" ? "vs the period before" : `vs ${fmtDay(data.comparedWith)}`;
   const asOf = kpi.basis === "stock" ? (data.status.stockUpdatedAt ?? data.status.catalogSyncedAt) : data.status.catalogSyncedAt;
   return (
-    <div className="lift flex min-w-0 flex-col gap-1 rounded-xl border border-border bg-surface p-3 sm:p-4" data-testid={`kpi-${id}`}>
+    <div className="lift flex min-w-0 flex-col gap-1 rounded-lg border border-transparent bg-surface p-3 shadow-[var(--shadow)] sm:p-4" data-testid={`kpi-${id}`}>
       <p className="text-xs font-medium text-muted">
         <Defined label={info.label} definition={info.definition} />
       </p>

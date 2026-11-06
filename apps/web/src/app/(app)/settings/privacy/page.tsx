@@ -52,7 +52,7 @@ export default function PrivacyRequestsPage() {
   if (!allowed) return <Alert kind="info">Only owners and admins can see customer data requests.</Alert>;
   return (
     <section className="card space-y-3">
-      <h1 className="text-lg font-semibold">Privacy requests</h1>
+      <h1 className="card-title">Privacy requests</h1>
       <p className="text-sm text-muted">
         When a customer asks your store what data it holds about them, Shopify passes the request to every app you use. Download
         what bizinsights holds and send it to the customer. Shopify asks for an answer within 30 days.

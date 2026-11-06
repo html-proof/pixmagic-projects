@@ -186,8 +186,26 @@ failed action (save, delete): `actionError(e, "what you tried")` in a toast or a
 while rendering is caught by `app/(app)/error.tsx` inside the shell, or `app/error.tsx` for public
 pages. Unknown paths get `app/not-found.tsx`.
 
-**Fonts and prefetch.** Only the landing page, the split-card auth pages (`AuthSplitShell`) and the
-legal pages (`LegalPage`: /support, /privacy, /terms, /data-deletion) are in Geist. Prefetching one of
+**The signed-in look (the owner's Stitch design, 2026-11-06).** Every signed-in page follows the
+approved Stitch prototypes (docs/kpis.md "The simple Home"), through the shared pieces rather than
+page by page:
+- `globals.css` tokens: a cool off-white page, navy ink, slate secondary text, cool hairlines and a
+  faint shadow.
+- `card`: white, 8px radius, no outline. A card that sets a border colour (a highlighted one) or is
+  dashed keeps that border.
+- `btn` has a 4px radius; `btn-secondary` is a soft tinted button with no outline.
+- `PageHeader` is a page's 32px title (`page-title`) on the page itself, not in a panel; a title
+  inside the panel that heads its page is `card-title`.
+- Section menus are a pale green row with green words.
+- `AppShell` (`app-look`) sets the type in Inter, bundled from `@fontsource-variable/inter`: plain
+  `@font-face`, so nothing is preloaded.
+
+A new page uses these pieces rather than its own borders and radii. The menu itself is unchanged:
+the owner kept it.
+
+**Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
+auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
+/data-deletion) are in Geist. Prefetching one of
 those routes makes the current page preload Geist and its stylesheet, and Chrome then warns that they
 were "preloaded but not used", and warns again a few seconds after every later request while they
 stay unused. So a link from any other page to one of them is `<Link prefetch={false}>`. Geist Mono is
