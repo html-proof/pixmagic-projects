@@ -1,0 +1,31 @@
+# Alertmanager: every alert by email, through Resend's SMTP (the app's own sender). Rendered into
+# alertmanager.yml by scripts/render-monitoring.sh, which fills ${ALERT_EMAIL_TO} and
+# ${ALERT_EMAIL_FROM} from env/monitoring.env and writes the SMTP password to its own file.
+global:
+  smtp_smarthost: smtp.resend.com:587
+  smtp_from: ${ALERT_EMAIL_FROM}
+  smtp_auth_username: resend
+  smtp_auth_password_file: /etc/alertmanager/smtp_password
+  smtp_require_tls: true
+
+route:
+  receiver: owner
+  group_by: [alertname, queue, schedule]
+  group_wait: 1m
+  group_interval: 10m
+  repeat_interval: 6h
+  routes:
+    - matchers: [severity="page"]
+      receiver: owner
+      repeat_interval: 1h
+
+receivers:
+  - name: owner
+    email_configs:
+      - to: ${ALERT_EMAIL_TO}
+        send_resolved: true
+
+inhibit_rules:
+  # The database down explains everything else failing.
+  - source_matchers: [alertname="DatabaseDown"]
+    target_matchers: [alertname=~"ServerErrors|JobsFailing|QueueBacklog|ScheduleMissed"]

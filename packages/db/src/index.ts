@@ -98,16 +98,26 @@ function tenantUrl(urls: DbUrls): string {
   return urls.system;
 }
 
+/**
+ * Connections per role in one process. A Lambda instance serves one request at a time: three cover a
+ * request's parallel queries without crowding RDS's connection limit across many instances. A
+ * long-running server (apps/aws/src/server.ts) serves many requests and jobs at once from one
+ * process, so it sets DB_POOL_MAX (1-50).
+ */
+export function poolMax(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.DB_POOL_MAX);
+  return Number.isInteger(n) && n >= 1 && n <= 50 ? n : 3;
+}
+
 /** The current scope's connection pool for `role`, opened on first use. */
 function connection(role: Role): Promise<Adapter> {
   const s = scope();
   const url = role === "system" ? s.urls.system : tenantUrl(s.urls);
-  // A function instance serves one request at a time: three connections per role cover a
-  // request's parallel queries without crowding RDS's connection limit across many instances.
+  const max = poolMax();
   return (s[role] ??=
     role === "system"
-      ? new PrismaPg(new SystemPool({ connectionString: url, max: 3 }), { disposeExternalPool: true }).connect()
-      : new PrismaPg({ connectionString: url, max: 3 }).connect());
+      ? new PrismaPg(new SystemPool({ connectionString: url, max }), { disposeExternalPool: true }).connect()
+      : new PrismaPg({ connectionString: url, max }).connect());
 }
 
 /**

@@ -4769,3 +4769,74 @@ model ZapierDelivery {
   @@index([workspaceId])
   @@map("zapier_deliveries")
 }
+
+// --- Running on a server of its own instead of AWS (docs/ikorex-migration). Read and written only by
+// apps/aws's self-hosted runtime, over plain SQL on the system login. None of it is tenant data (a job's
+// body carries its workspace, and its handler runs under row-level security as on AWS), so these
+// tables have no row-level security and the tenant role has no rights on them (init.sql). On AWS they
+// stay empty.
+
+/// A background job: what an SQS message is on AWS (apps/aws/src/pgQueues.ts).
+model QueueJob {
+  id          String    @id @db.Uuid
+  queue       String
+  body        Json
+  /// Deliveries so far (SQS's ApproximateReceiveCount): each claim adds one.
+  receives    Int       @default(0)
+  /// Higher first. Every producer sends 0 today.
+  priority    Int       @default(0) @db.SmallInt
+  /// Not delivered before this: a delay, or a retry's backoff.
+  runAfter    DateTime  @default(now()) @map("run_after") @db.Timestamptz(3)
+  /// While in the future, a worker holds the job (SQS's visibility timeout); a crashed worker's hold lapses.
+  lockedUntil DateTime? @map("locked_until") @db.Timestamptz(3)
+  /// The hold's id: a worker whose hold lapsed and was taken over can no longer settle the job.
+  claimToken  String?   @map("claim_token") @db.Uuid
+  lastError   String?   @map("last_error")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([queue, runAfter])
+  @@map("job_queue")
+}
+
+/// A job given up on after too many deliveries: the dead-letter queue (pgQueues.ts).
+model DeadJob {
+  id        String   @id @db.Uuid
+  queue     String
+  body      Json
+  receives  Int
+  lastError String?  @map("last_error")
+  createdAt DateTime @map("created_at") @db.Timestamptz(3)
+  diedAt    DateTime @default(now()) @map("died_at") @db.Timestamptz(3)
+
+  @@index([queue, diedAt])
+  @@map("job_dead")
+}
+
+/// A schedule tick that started (apps/aws/src/schedules.ts): two workers can't both run one, and a
+/// restart finds the ticks it missed. EventBridge Scheduler's job on AWS.
+model ScheduleTick {
+  name       String
+  tick       DateTime  @db.Timestamptz(3)
+  attempts   Int       @default(1)
+  startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+  error      String?
+  result     Json?
+
+  @@id([name, tick])
+  @@index([startedAt])
+  @@map("schedule_ticks")
+}
+
+/// The coordinator (rate limits, OAuth state, locks, signed-out sessions): DynamoDB's `coord` table
+/// on AWS (apps/aws/src/pgCoord.ts).
+model CoordEntry {
+  key   String @id @map("k")
+  value String @default("") @map("v")
+  count Int    @default(0) @map("n")
+  /// When it stops counting or holding (epoch ms).
+  until BigInt
+
+  @@index([until])
+  @@map("coord_entries")
+}

@@ -1,0 +1,26 @@
+# Prometheus for bizinsights on the iKorex server (docker-compose.monitoring.yml).
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files: ["/etc/prometheus/alerts.yml"]
+
+alerting:
+  alertmanagers:
+    - static_configs: [{ targets: ["alertmanager:9093"] }]
+
+scrape_configs:
+  # The app (apps/aws/src/selfhost.ts): requests, jobs, queues, schedules. Every replica of each
+  # role is found through Docker's DNS.
+  - job_name: web
+    dns_sd_configs: [{ names: ["web"], type: A, port: 9464 }]
+  - job_name: worker
+    dns_sd_configs: [{ names: ["worker"], type: A, port: 9464 }]
+  - job_name: postgres
+    static_configs: [{ targets: ["postgres-exporter:9187"] }]
+  - job_name: node
+    static_configs: [{ targets: ["node-exporter:9100"] }]
+  - job_name: cloudflared
+    static_configs: [{ targets: ["cloudflared:2000"] }]
+  - job_name: prometheus
+    static_configs: [{ targets: ["localhost:9090"] }]

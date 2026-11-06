@@ -8,7 +8,8 @@
     "start": "tsx src/dev.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "build:server": "node scripts/build-server.mjs"
   },
   "dependencies": {
     "@app/api": "workspace:*",

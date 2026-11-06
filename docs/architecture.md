@@ -7,8 +7,10 @@ every merge to `main` deploys) and [RUNBOOK.md](RUNBOOK.md).
 ## The shape of the system
 
 The application code runs on AWS (`apps/aws`, `infra/cdk`) and, for development, the demos and
-e2e, as one local Node process (`apps/aws/src/local.ts`). Only the thin entry that wires it to its
-surroundings differs.
+e2e, as one local Node process (`apps/aws/src/local.ts`). A third entry, `apps/aws/src/selfhost.ts`,
+runs it on a server of its own (web and worker processes, PostgreSQL for the queue, schedules and
+coordinator; `infra/ikorex`, docs/ikorex-migration), built for the move off AWS and not yet live.
+Only the thin entry that wires it to its surroundings differs.
 
 ```
                         AWS                                   local server
@@ -49,6 +51,7 @@ Each package may import only the ones above it in this table, never one below.
 | `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
 | `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
 | `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth, WhatsApp and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
+| `infra/ikorex` | The self-hosted deployment (docs/ikorex-migration): Compose files, the app and PostgreSQL images, backups, monitoring, `ship.sh` / `deploy.sh`, env templates (never real values). | Hold application code or secrets. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
 Where a new piece of code goes:

@@ -1,0 +1,115 @@
+# Monitoring for bizinsights on the iKorex server (docs/ikorex-migration): what CloudWatch's metrics,
+# alarms and logs did on AWS. Its own Compose project, joined to the app's network to scrape it; no
+# published port (Grafana is reached through the tunnel, behind Cloudflare Access).
+#
+#   cd ~/bizinsights && scripts/render-monitoring.sh && docker compose -f docker-compose.monitoring.yml up -d
+#   ... --profile logs up -d    # Loki and Alloy too (logs; see the note on Alloy below)
+#
+# A monitor on the same server can't say the server is down: the external uptime check and the
+# backup's ping (env/postgres.env BACKUP_PING_URL) cover that. Short of memory? Grafana and the logs
+# profile go first; Prometheus and Alertmanager stay.
+name: bizinsights-monitoring
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-common: &common
+  networks: [app]
+  logging: *logging
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  prometheus:
+    <<: *common
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=4GB
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus:/prometheus
+    mem_limit: 512m
+    cpus: 0.5
+
+  alertmanager:
+    <<: *common
+    image: prom/alertmanager:v0.34.2
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      # Rendered from alertmanager.yml.template by scripts/render-monitoring.sh (it holds the alert address).
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/smtp_password:/etc/alertmanager/smtp_password:ro
+      - alertmanager:/alertmanager
+    mem_limit: 64m
+    cpus: 0.2
+
+  grafana:
+    <<: *common
+    image: grafana/grafana:13.0.12
+    env_file: [env/monitoring.env]
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    mem_limit: 256m
+    cpus: 0.5
+
+  # The host's CPU, memory, disk and network (read-only views of / and /proc).
+  node-exporter:
+    <<: *common
+    image: prom/node-exporter:v1.12.1
+    command: ["--path.rootfs=/host", "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($|/)"]
+    pid: host
+    volumes: ["/:/host:ro,rslave"]
+    mem_limit: 64m
+    cpus: 0.2
+
+  postgres-exporter:
+    <<: *common
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    env_file: [env/postgres-exporter.env]
+    mem_limit: 64m
+    cpus: 0.2
+
+  loki:
+    <<: *common
+    profiles: ["logs"]
+    image: grafana/loki:3.7.9
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/loki.yml:ro
+      - loki:/loki
+    mem_limit: 384m
+    cpus: 0.5
+
+  # Reads bizinsights' containers' logs (and only theirs: config.alloy filters on the Compose
+  # project) into Loki. It needs the Docker socket, read-only, which is root-equivalent on the host:
+  # ask the server's administrator before turning the logs profile on.
+  alloy:
+    <<: *common
+    profiles: ["logs"]
+    image: grafana/alloy:v1.21.3
+    command: ["run", "--storage.path=/var/lib/alloy", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./monitoring/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy:/var/lib/alloy
+    mem_limit: 192m
+    cpus: 0.3
+
+networks:
+  app:
+    external: true
+    name: bizinsights_internal
+
+volumes:
+  prometheus:
+  alertmanager:
+  grafana:
+  loki:
+  alloy:
