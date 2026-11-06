@@ -2,9 +2,10 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { errorLabel, MESSAGE_STATUS_HELP, MESSAGE_STATUS_LABEL, MESSAGE_STATUSES, PROVIDER_LABEL, type EmailProvider, type MessageStatus } from "@app/shared/email";
+import { FactsLine, ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
 import { MessageStatusBadge, providerLabel } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
-import { Modal, Table, Td, Th } from "@/components/staff/ui";
+import { Modal } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
 import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { api, useApi, type ApiError } from "@/lib/api";
@@ -106,7 +107,8 @@ function Activity() {
   return (
     <div className="space-y-4">
       <PageHeader title="Email activity" sub="Every email bizinsights sent or tried to send, newest first. Providers confirm acceptance; delivery to the inbox isn't reported to bizinsights." />
-      <section className="card grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      {/* The filters on one white bar, then the history as a table, as the Stitch design's Results (screen 17) draws them. */}
+      <section aria-label="Filters" role="search" className="home-card animate-rise grid gap-3 p-4 sm:grid-cols-3 sm:p-5 lg:grid-cols-6">
         <label>
           <span className="label text-xs text-muted">Period</span>
           <select aria-label="Period" className="input" value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
@@ -201,42 +203,67 @@ function Activity() {
       ) : rows.length === 0 ? (
         <EmptyState title="No emails match" body="Try a longer period or fewer filters." />
       ) : (
-        <section className="card">
-          <Table label="Emails">
-            <thead>
-              <tr>
-                <Th>When</Th>
-                <Th>Recipient</Th>
-                <Th>Sender</Th>
-                <Th>Automation</Th>
-                <Th>Subject</Th>
-                <Th>Status</Th>
-                <Th>Provider</Th>
-              </tr>
-            </thead>
+        <TableCard id="email-activity" title="Emails" aside={<FactsLine items={[`${rows.length.toLocaleString()} shown`, next ? "older ones below" : null, "newest first"]} />}>
+          {/* Phones: each email a stacked row instead of a wide table. */}
+          <ul className="divide-y divide-home-line border-t border-home-line sm:hidden" aria-label="Emails">
+            {rows.map((m) => (
+              <li key={m.id}>
+                <button type="button" className="block w-full px-5 py-3 text-left text-sm outline-none hover:bg-home-soft focus-visible:bg-home-soft" onClick={() => setOpenId(m.id)}>
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="min-w-0 truncate font-medium">{m.subject}</span>
+                    <MessageStatusBadge status={m.status} />
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-muted">
+                    {fmtDateTime(m.createdAt)} · {m.recipient}
+                  </span>
+                  <span className="block truncate text-xs text-muted">
+                    {m.rule ?? (m.kind === "test" ? "Test" : m.kind === "verification" ? "Sender verification" : "—")} · {providerLabel(m.provider)}
+                  </span>
+                  {m.errorCode && <span className="mt-0.5 block text-xs text-muted">{errorLabel(m.errorCode)}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <table className="hidden w-full min-w-[52rem] text-sm sm:table" aria-label="Emails">
+            <TableHead>
+              <Th>When</Th>
+              <Th>Recipient</Th>
+              <Th>Sender</Th>
+              <Th>Automation</Th>
+              <Th>Subject</Th>
+              <Th>Status</Th>
+              <Th>Provider</Th>
+            </TableHead>
             <tbody>
               {rows.map((m) => (
-                <tr key={m.id} className="cursor-pointer hover:bg-bg" onClick={() => setOpenId(m.id)}>
-                  <Td className="whitespace-nowrap text-xs">{fmtDateTime(m.createdAt)}</Td>
-                  <Td className="max-w-[12rem] truncate">{m.recipient}</Td>
-                  <Td className="max-w-[12rem] truncate text-xs">{m.sender}</Td>
-                  <Td className="min-w-[9rem] text-xs">{m.rule ?? (m.kind === "test" ? "Test" : m.kind === "verification" ? "Sender verification" : "—")}</Td>
-                  <Td className="max-w-[16rem] truncate">{m.subject}</Td>
-                  <Td>
+                <tr key={m.id} className={`${ROW} cursor-pointer hover:bg-home-soft`} onClick={() => setOpenId(m.id)}>
+                  <td className={`${TD} whitespace-nowrap text-xs`}>
+                    {/* The row opens on a click; the time is its button for the keyboard. */}
+                    <button type="button" className="rounded text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent" onClick={(e) => { e.stopPropagation(); setOpenId(m.id); }}>
+                      {fmtDateTime(m.createdAt)}
+                    </button>
+                  </td>
+                  <td className={`${TD} max-w-[12rem] truncate`}>{m.recipient}</td>
+                  <td className={`${TD} max-w-[12rem] truncate text-xs`}>{m.sender}</td>
+                  <td className={`${TD} min-w-[9rem] text-xs`}>{m.rule ?? (m.kind === "test" ? "Test" : m.kind === "verification" ? "Sender verification" : "—")}</td>
+                  <td className={`${TD} max-w-[16rem] truncate`}>{m.subject}</td>
+                  <td className={TD}>
                     <MessageStatusBadge status={m.status} />
                     {m.errorCode && <span className="block text-xs text-muted">{errorLabel(m.errorCode)}</span>}
-                  </Td>
-                  <Td className="text-xs">{providerLabel(m.provider)}</Td>
+                  </td>
+                  <td className={`${TD} text-xs`}>{providerLabel(m.provider)}</td>
                 </tr>
               ))}
             </tbody>
-          </Table>
+          </table>
           {next && (
-            <button className="btn-secondary mt-3" disabled={loading} onClick={() => load(next)}>
-              {loading ? "Loading…" : "Load more"}
-            </button>
+            <div className="border-t border-home-line p-3 text-center">
+              <button className="btn-secondary" disabled={loading} onClick={() => load(next)}>
+                {loading ? "Loading…" : "Load more"}
+              </button>
+            </div>
           )}
-        </section>
+        </TableCard>
       )}
       <MessageModal id={openId} canAct={automate} onClose={() => setOpenId(null)} onChanged={() => load(null)} />
     </div>
@@ -275,7 +302,7 @@ function MessageModal({ id, canAct, onClose, onChanged }: { id: string | null; c
             <span className="text-xs text-muted">{MESSAGE_STATUS_HELP[m.status as MessageStatus]}</span>
           </div>
           {m.errorCode && <Alert>{errorLabel(m.errorCode)}{m.errorMessage ? ` (${m.errorMessage})` : ""}</Alert>}
-          <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1">
+          <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-1 rounded bg-home-soft p-3 sm:grid-cols-[8rem_1fr]">
             <dt className="text-muted">To</dt>
             <dd className="break-all">{m.recipient}</dd>
             <dt className="text-muted">From</dt>
@@ -313,7 +340,7 @@ function MessageModal({ id, canAct, onClose, onChanged }: { id: string | null; c
             </ol>
           </div>
           {canAct && m.kind === "automation" && (m.status === "failed" || m.status === "unknown") && (
-            <div className="space-y-2 border-t border-border pt-3">
+            <div className="space-y-2 border-t border-home-line pt-3">
               {m.status === "unknown" && <p className="text-xs text-muted">The provider may already have this email. Sending it again could deliver it twice.</p>}
               <button
                 className="btn-primary"

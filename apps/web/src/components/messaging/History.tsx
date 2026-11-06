@@ -4,6 +4,7 @@ import { DELIVERY_EXPLANATION, skipFix, SMS_STATUS_LABEL, SMS_STATUSES, statusFr
 import Link from "next/link";
 import { PageHeader } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { FootLine, ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
 import { Empty } from "@/components/dashboard/Primitives";
 import { fmtMoney, useApi } from "@/lib/api";
 import { COUNTRY_CHOICES, countryName, Drawer, fmtUsd, fmtWhen, purposeLabel, SmsStatusBadge, TextBubble, usePagedList, useSms } from "./MessagingUi";
@@ -13,6 +14,8 @@ import type { AutomationsResponse, MessageEvent, SmsMessage, SmsTemplate } from 
 // Message History: every text an automation, a campaign or a test asked for, sent or held back,
 // and why, in words (the provider's own codes and ids only under Technical details, for owners and
 // admins). Customers' first names, numbers (masked) and texts need "View contact information".
+// Laid out as the Stitch design's screen 17 draws Results' message history: the filters on one
+// white bar, then the texts as a table with a tinted head row (scrolling inside its card on a phone).
 // ---------------------------------------------------------------------------
 
 const PURPOSES = [
@@ -188,13 +191,13 @@ export function MessageHistory() {
   const ruleName = automations.data?.automations.find((a) => a.id === filters.ruleId)?.name;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <PageHeader
         title="Message History"
         sub={`Every text bizinsights sent, held back or recorded, and how it ended. Times are in the store's time zone${tz ? ` (${tz})` : ""}. Customers' numbers are masked.`}
       />
-      <section className="card" aria-label="Messages">
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <section className="space-y-4" aria-label="Messages">
+        <div role="search" aria-label="Filters" className="home-card animate-rise grid gap-2 p-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4 xl:grid-cols-7">
           <details className="relative">
             <summary className="input flex cursor-pointer list-none items-center justify-between">
               <span className="truncate">{statuses.length ? `${statuses.length} status${statuses.length === 1 ? "" : "es"}` : "Any status"}</span>
@@ -250,84 +253,84 @@ export function MessageHistory() {
           </div>
         </div>
         {filters.ruleId && (
-          <p className="mt-3 text-sm">
+          <p className="text-sm">
             Showing <strong>{ruleName ?? "this automation"}</strong>&apos;s messages.{" "}
             <button type="button" className="text-accent underline-offset-2 hover:underline" onClick={() => setFilters({ ...filters, ruleId: "", purpose: "" })}>
               Show all
             </button>
           </p>
         )}
-        {list.error && list.rows ? <p className="mt-3 text-sm text-danger">We couldn&apos;t load more messages. Try again.</p> : null}
+        {list.error && list.rows ? <p className="text-sm text-danger">We couldn&apos;t load more messages. Try again.</p> : null}
         {list.error && !list.rows ? (
-          <div className="mt-4">
-            <LoadError what="the messages" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />
-          </div>
+          <LoadError what="the messages" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />
         ) : !list.rows ? (
-          <div className="mt-4 space-y-2">
+          <div className="space-y-2">
             {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-10" />)}
           </div>
         ) : !list.rows.length ? (
-          <div className="mt-4">
-            <Empty>No messages match.</Empty>
-          </div>
+          <Empty>No messages match.</Empty>
         ) : (
-          <div className={`relative mt-4 overflow-x-auto transition-opacity ${list.loading ? "opacity-60" : ""}`}>
-            <table className="w-full min-w-[56rem] text-left text-sm">
-              <thead className="text-xs text-muted">
-                <tr>
-                  <th className="py-2 pr-3 font-medium">Customer</th>
-                  <th className="py-2 pr-3 font-medium">Message</th>
-                  <th className="py-2 pr-3 font-medium">Automation</th>
-                  <th className="py-2 pr-3 font-medium">Status</th>
-                  <th className="py-2 pr-3 font-medium">Sent</th>
-                  <th className="py-2 pr-3 font-medium">Delivery</th>
-                  <th className="py-2 font-medium"><span className="sr-only">Details</span></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {list.rows.map((m) => (
-                  <tr key={m.id} className="cursor-pointer align-top hover:bg-bg/60" onClick={() => setOpen(m.id)}>
-                    <td className="py-2 pr-3">
-                      <span className="font-medium">{m.customerName ?? (m.purpose === "test" ? "Your test phone" : contact ? "Customer" : "Hidden")}</span>
-                      {m.to && <span className="block font-mono text-xs text-muted">{m.to}</span>}
-                    </td>
-                    <td className="max-w-[16rem] py-2 pr-3">
-                      <span className="line-clamp-2">{m.text ?? (m.templateId ? (names.get(m.templateId) ?? "—") : "—")}</span>
-                    </td>
-                    <td className="py-2 pr-3">
-                      <span>{sentBy(m)}</span>
-                      {m.purpose === "automation" && <span className="block text-xs text-muted">{purposeLabel(m.purpose, m.trigger)}</span>}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <SmsStatusBadge status={m.status} why={m.reasonLabel} label={m.statusLabel} />
-                    </td>
-                    <td className="whitespace-nowrap py-2 pr-3 text-muted">{fmtWhen(m.acceptedAt ?? m.createdAt, tz)}</td>
-                    <td className="max-w-xs py-2 pr-3 text-xs text-muted">{outcomeOf(m) ?? "—"}</td>
-                    <td className="py-2 text-right">
-                      <button
-                        type="button"
-                        className="btn-secondary h-7 px-2 text-xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpen(m.id);
-                        }}
-                        aria-label={`Details of the message from ${fmtWhen(m.createdAt, tz)}`}
-                      >
-                        Details
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TableCard id="sms-messages" title="Texts" aside="Newest first. Open one for its delivery reports.">
+            <div className={`transition-opacity ${list.loading ? "opacity-60" : ""}`}>
+              <table className="w-full min-w-[56rem] text-left text-sm">
+                <TableHead>
+                  <Th>Customer</Th>
+                  <Th>Message</Th>
+                  <Th>Automation or campaign</Th>
+                  <Th>Status</Th>
+                  <Th>Sent</Th>
+                  <Th>Delivery</Th>
+                  <Th>
+                    <span className="sr-only">Details</span>
+                  </Th>
+                </TableHead>
+                <tbody>
+                  {list.rows.map((m) => (
+                    <tr key={m.id} className={`${ROW} cursor-pointer hover:bg-home-soft/60`} onClick={() => setOpen(m.id)}>
+                      <td className={TD}>
+                        <span className="font-medium">{m.customerName ?? (m.purpose === "test" ? "Your test phone" : contact ? "Customer" : "Hidden")}</span>
+                        {m.to && <span className="block font-mono text-xs text-muted">{m.to}</span>}
+                      </td>
+                      <td className={`${TD} max-w-[16rem]`}>
+                        <span className="line-clamp-2">{m.text ?? (m.templateId ? (names.get(m.templateId) ?? "—") : "—")}</span>
+                      </td>
+                      <td className={TD}>
+                        <span>{sentBy(m)}</span>
+                        {m.purpose === "automation" && <span className="block text-xs text-muted">{purposeLabel(m.purpose, m.trigger)}</span>}
+                      </td>
+                      <td className={TD}>
+                        <SmsStatusBadge status={m.status} why={m.reasonLabel} label={m.statusLabel} />
+                      </td>
+                      <td className={`${TD} whitespace-nowrap text-muted`}>{fmtWhen(m.acceptedAt ?? m.createdAt, tz)}</td>
+                      <td className={`${TD} max-w-xs text-xs text-muted`}>{outcomeOf(m) ?? "—"}</td>
+                      <td className={`${TD} text-right`}>
+                        <button
+                          type="button"
+                          className="home-btn h-7 px-2 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpen(m.id);
+                          }}
+                          aria-label={`Details of the message from ${fmtWhen(m.createdAt, tz)}`}
+                        >
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {list.cursor && (
+              <div className="border-t border-home-line p-3 text-center">
+                <button type="button" className="btn-secondary" disabled={list.loading} onClick={list.loadMore}>
+                  {list.loading ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
+          </TableCard>
         )}
-        {list.cursor && list.rows && (
-          <button type="button" className="btn-secondary mt-3" disabled={list.loading} onClick={list.loadMore}>
-            {list.loading ? "Loading…" : "Load more"}
-          </button>
-        )}
-        <p className="mt-3 text-xs text-muted">&ldquo;Delivered&rdquo; only when the phone confirmed it. Date filters are whole days in the store&apos;s time zone.</p>
+        <FootLine>&ldquo;Delivered&rdquo; only when the phone confirmed it. Date filters are whole days in the store&apos;s time zone.</FootLine>
       </section>
       {open && base && <MessageDetail base={base} id={open} templates={names} onClose={() => setOpen(null)} />}
     </div>

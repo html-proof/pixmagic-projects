@@ -1,7 +1,11 @@
 "use client";
 import Link from "next/link";
+import type { ReactNode } from "react";
+import { Check } from "lucide-react";
 import { PROVIDER_INFO, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO } from "@app/shared/whatsapp";
-import { Badge, Empty, Panel, Stat, type Tone } from "@/components/dashboard/Primitives";
+import { StepNumber, TableCard } from "@/components/automations/MarketingKit";
+import { Badge, Dot, Empty, type Tone } from "@/components/dashboard/Primitives";
+import { Card, FigureTile } from "@/components/PageKit";
 import { Alert } from "@/components/ui";
 import { api } from "@/lib/api";
 import type { WaOverview, WaStats } from "./types";
@@ -9,12 +13,14 @@ import { CONNECTION_TONE, fmtAgo, fmtShare, MessageStatus, SOURCE_LABEL, waHref,
 
 // The page's first tab: the connection as the provider last reported it, the setup, automation as a
 // whole, the counts (from the message records), what is waiting or held, recent failures and the
-// latest messages.
+// latest messages. Laid out as the Stitch design's Marketing screens draw a channel (14 and 17): a
+// red row for what stops messages, the few numbers as tiles, then the panels on white cards.
 
 const STATE_TONE: Record<string, Tone> = { not_connected: "neutral", paused: "warn", setup: "warn", needs_attention: "danger", idle: "neutral", active: "good" };
 
 export function Overview({ base, overview: o, reload }: { base: string; overview: WaOverview; reload: () => void }) {
   const conn = o.connection && o.connection.status !== "disconnected" ? o.connection : null;
+  const down = !!conn && (conn.status === "logged_out" || conn.status === "failed");
   const { busy, run } = useWaAction();
   const check = () =>
     run("check", "check the connection", async () => {
@@ -25,6 +31,16 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
 
   return (
     <div className="space-y-4">
+      {/* What stops messages first, with its one fix, as the design's screen 14 opens. */}
+      {down && (
+        <div role="alert" className="alert alert-error flex-wrap items-center justify-between" data-testid="wa-down">
+          <p className="min-w-0 flex-1 font-medium">{conn.reason ?? conn.statusLabel}</p>
+          <Link href={waHref("setup")} className="btn-primary h-9 shrink-0">
+            Link the phone again
+          </Link>
+        </div>
+      )}
+
       {o.retired && (
         <Alert kind="info">
           This store&apos;s earlier WhatsApp Business connection{o.retired.displayPhoneNumber ? ` (${o.retired.displayPhoneNumber})` : ""} was retired when WhatsApp Automation moved to its new service. Connect again below; nothing from the earlier one sends.
@@ -32,47 +48,66 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat
-          label="Connection"
-          tone={conn ? (CONNECTION_TONE[conn.status] ?? "neutral") : "neutral"}
+        <FigureTile
+          testId="wa-figure-connection"
+          title="Connection"
+          icon={<Dot tone={conn ? (CONNECTION_TONE[conn.status] ?? "neutral") : "neutral"} />}
           value={conn ? conn.statusLabel : "Not connected"}
-          note={conn ? `${conn.phone ?? "Number not reported yet"} · ${conn.provider === "qr" ? "linked phone" : "Cloud API"}` : "Connect on the Setup tab."}
+          sub={conn ? `${conn.phone ?? "Number not reported yet"} · ${conn.provider === "qr" ? "linked phone" : "Cloud API"}` : "Connect on the Setup tab."}
         />
-        <Stat label="Automation" tone={STATE_TONE[o.automation.state] ?? "neutral"} value={WA_AUTOMATION_STATE_LABEL[o.automation.state]} note={`${o.automation.active} on${o.automation.testMode ? `, ${o.automation.testMode} in test mode` : ""} of ${o.automation.total}`} />
-        <Stat label="Sent today" value={`${o.limits.sentToday} / ${o.limits.dailyLimit}`} note="Business-started messages against the daily limit." />
-        <Stat label="Waiting to send" value={o.queue.waiting} note={o.queue.held.length ? `Held: ${o.queue.held.map((h) => `${h.label ?? h.reason} (${h.count})`).join(", ")}` : "Nothing held."} />
+        <FigureTile
+          testId="wa-figure-automation"
+          title="Automation"
+          icon={<Dot tone={STATE_TONE[o.automation.state] ?? "neutral"} />}
+          value={WA_AUTOMATION_STATE_LABEL[o.automation.state]}
+          sub={`${o.automation.active} on${o.automation.testMode ? `, ${o.automation.testMode} in test mode` : ""} of ${o.automation.total}`}
+        />
+        <FigureTile testId="wa-figure-today" title="Sent today" value={`${o.limits.sentToday} / ${o.limits.dailyLimit}`} sub="Business-started messages against the daily limit." />
+        <FigureTile
+          testId="wa-figure-waiting"
+          title="Waiting to send"
+          value={o.queue.waiting}
+          sub={o.queue.held.length ? `Held: ${o.queue.held.map((h) => `${h.label ?? h.reason} (${h.count})`).join(", ")}` : "Nothing held."}
+        />
       </div>
 
       {o.setup.current && (
-        <Panel id="wa-setup" title="Finish setting up" help="Four short steps. Nothing is sent to customers until they're done and you switch an automation on.">
+        <Card id="wa-setup" title="Finish setting up">
+          <p className="-mt-2 mb-4 text-sm text-muted">Four short steps. Nothing is sent to customers until they&apos;re done and you switch an automation on.</p>
           <ol className="grid gap-2 sm:grid-cols-4">
             {WA_SETUP_STEPS.map((s, i) => (
-              <li key={s} className={`rounded-lg border p-3 text-sm ${o.setup.done[s] ? "border-good/40" : s === o.setup.current ? "border-accent" : "border-border"}`}>
-                <span className="font-medium">
-                  {i + 1}. {WA_SETUP_STEP_INFO[s].label}
+              <li key={s} className={`flex gap-3 rounded p-3 text-sm ${s === o.setup.current ? "bg-accent/10" : "bg-home-soft"}`}>
+                <StepNumber n={o.setup.done[s] ? <Check size={14} strokeWidth={2.5} /> : i + 1} done={o.setup.done[s]} />
+                <span className="min-w-0">
+                  <span className="font-medium">
+                    <span className="sr-only">{i + 1}. </span>
+                    {WA_SETUP_STEP_INFO[s].label}
+                  </span>
+                  <span className="block text-xs text-muted">{o.setup.done[s] ? "Done" : WA_SETUP_STEP_INFO[s].help}</span>
                 </span>
-                <span className="block text-xs text-muted">{o.setup.done[s] ? "Done" : WA_SETUP_STEP_INFO[s].help}</span>
               </li>
             ))}
           </ol>
-          <Link href={waHref("setup")} className="btn-primary mt-3 inline-flex">
-            Continue setup
-          </Link>
-        </Panel>
+          <div>
+            <Link href={waHref("setup")} className="btn-primary mt-4 inline-flex">
+              Continue setup
+            </Link>
+          </div>
+        </Card>
       )}
 
       {conn && (
-        <Panel
+        <Card
           id="wa-health"
           title="Connection health"
-          help="As WhatsApp's service last reported it."
           aside={
-            <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => void check()} disabled={busy === "check"}>
+            <button type="button" className="home-btn h-8" onClick={() => void check()} disabled={busy === "check"}>
               {busy === "check" ? "Checking…" : "Check again"}
             </button>
           }
         >
-          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+          <p className="-mt-2 mb-3 text-xs text-muted">As WhatsApp&apos;s service last reported it.</p>
+          <dl className="grid gap-x-6 text-sm sm:grid-cols-2">
             <Row k="How it connects" v={PROVIDER_INFO[conn.provider].label} />
             <Row k="Status" v={<Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>} />
             <Row k="Number" v={conn.phone ?? "–"} />
@@ -83,12 +118,7 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
             {conn.downSince && <Row k="Down since" v={fmtAgo(conn.downSince)} />}
           </dl>
           {conn.reason && <p className="mt-3 text-sm text-warn">{conn.reason}</p>}
-          {(conn.status === "logged_out" || conn.status === "failed") && (
-            <Link href={waHref("setup")} className="btn-primary mt-3 inline-flex">
-              Link the phone again
-            </Link>
-          )}
-        </Panel>
+        </Card>
       )}
 
       {o.automation.blocked.length > 0 && (
@@ -110,28 +140,38 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
       </div>
 
       {o.queue.failures.length > 0 && (
-        <Panel id="wa-failures" title="Failures in the last 7 days" help="Why messages didn't go, most common first.">
-          <ul className="space-y-1 text-sm">
+        <Card id="wa-failures" title="Failures in the last 7 days" aside="Why messages didn't go, most common first.">
+          <ul className="divide-y divide-home-line text-sm">
             {o.queue.failures.map((f) => (
-              <li key={`${f.reason}-${f.errorCode}`} className="flex justify-between gap-3">
-                <span>{f.label ?? f.reason ?? "Failed"}</span>
-                <span className="text-muted">{f.count}</span>
+              <li key={`${f.reason}-${f.errorCode}`} className="flex justify-between gap-3 py-2 first:pt-0">
+                <span className="min-w-0">{f.label ?? f.reason ?? "Failed"}</span>
+                <span className="shrink-0 font-medium tabular-nums">{f.count}</span>
               </li>
             ))}
           </ul>
-          <Link href={waHref("messages", { status: "failed" })} className="mt-2 inline-block text-sm text-accent underline">
+          <Link href={waHref("messages", { status: "failed" })} className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
             See failed messages
           </Link>
-        </Panel>
+        </Card>
       )}
 
-      <Panel id="wa-recent" title="Recent messages" aside={<Link href={waHref("messages")} className="text-accent underline">All messages</Link>}>
+      <TableCard
+        id="wa-recent"
+        title="Recent messages"
+        actions={
+          <Link href={waHref("messages")} className="text-sm font-medium text-accent hover:underline">
+            All messages
+          </Link>
+        }
+      >
         {o.recent.length === 0 ? (
-          <Empty>No messages yet.</Empty>
+          <div className="px-5 pb-5 sm:px-6">
+            <Empty>No messages yet.</Empty>
+          </div>
         ) : (
-          <ul className="divide-y divide-border">
+          <ul className="divide-y divide-home-line border-t border-home-line">
             {o.recent.map((m) => (
-              <li key={m.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+              <li key={m.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm sm:px-6">
                 <span className="min-w-0">
                   <span className="font-medium">{m.direction === "in" ? `From ${m.phone ?? "a customer"}` : `To ${m.phone ?? "–"}`}</span>
                   <span className="ml-2 text-xs text-muted">{SOURCE_LABEL[m.source] ?? m.source}</span>
@@ -145,16 +185,27 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
             ))}
           </ul>
         )}
-      </Panel>
+      </TableCard>
     </div>
   );
 }
 
-function Row({ k, v }: { k: string; v: React.ReactNode }) {
+function Row({ k, v }: { k: string; v: ReactNode }) {
   return (
-    <div className="flex justify-between gap-3 border-b border-border/60 py-1">
+    <div className="flex justify-between gap-3 border-b border-home-line py-2">
       <dt className="text-muted">{k}</dt>
       <dd className="text-right font-medium">{v}</dd>
+    </div>
+  );
+}
+
+/** One count on a soft tile, as the design's results cards set them (screen 17). */
+function Count({ label, value, note, tone }: { label: string; value: ReactNode; note?: string; tone?: Tone }) {
+  return (
+    <div className="min-w-0 rounded bg-home-soft px-3 py-2.5">
+      <p className="text-xs text-muted">{label}</p>
+      <p className={`mt-0.5 flex items-center gap-2 text-lg leading-6 font-semibold tabular-nums ${tone === "danger" ? "text-danger" : ""}`}>{value}</p>
+      {note && <p className="mt-0.5 text-xs text-muted">{note}</p>}
     </div>
   );
 }
@@ -163,22 +214,23 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
 function StatsPanel({ id, title, s }: { id: string; title: string; s: WaStats }) {
   const total = s.sent + s.delivered + s.read + s.failed + s.notSent + s.waiting;
   return (
-    <Panel id={id} title={title} help="Counted from each message's own record. Delivered and read come only from WhatsApp's reports.">
+    <Card id={id} title={title}>
+      <p className="-mt-2 mb-3 text-xs text-muted">Counted from each message&apos;s own record. Delivered and read come only from WhatsApp&apos;s reports.</p>
       {total + s.received === 0 ? (
         <Empty>No messages in this period.</Empty>
       ) : (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <Stat label="Sent (no report yet)" value={s.sent} />
-          <Stat label="Delivered" value={s.delivered} />
-          <Stat label="Read" value={s.read} />
-          <Stat label="Failed" value={s.failed} tone={s.failed ? "danger" : undefined} />
-          <Stat label="Not sent" value={s.notSent} note="Skipped or cancelled, each with its reason." />
-          <Stat label="From customers" value={s.received} />
-          <Stat label="Delivery rate" value={fmtShare(s.deliveryRate)} note="Delivered or read, of what reached WhatsApp." />
-          <Stat label="Read rate" value={fmtShare(s.readRate)} />
-          <Stat label="Waiting" value={s.waiting} />
+          <Count label="Sent (no report yet)" value={s.sent} />
+          <Count label="Delivered" value={s.delivered} />
+          <Count label="Read" value={s.read} />
+          <Count label="Failed" value={s.failed} tone={s.failed ? "danger" : undefined} />
+          <Count label="Not sent" value={s.notSent} note="Skipped or cancelled, each with its reason." />
+          <Count label="From customers" value={s.received} />
+          <Count label="Delivery rate" value={fmtShare(s.deliveryRate)} note="Delivered or read, of what reached WhatsApp." />
+          <Count label="Read rate" value={fmtShare(s.readRate)} />
+          <Count label="Waiting" value={s.waiting} />
         </div>
       )}
-    </Panel>
+    </Card>
   );
 }

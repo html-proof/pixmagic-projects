@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { errorLabel } from "@app/shared/email";
+import { Chip, TableCard } from "@/components/automations/MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { MessageStatusBadge, relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
@@ -22,7 +23,10 @@ interface Execution {
 
 const delayText = (m: number) => (m === 0 ? "right away" : m % 1440 === 0 ? `after ${m / 1440} day${m === 1440 ? "" : "s"}` : m % 60 === 0 ? `after ${m / 60} hour${m === 60 ? "" : "s"}` : `after ${m} minutes`);
 
-/** Settings → Email → Automations. */
+/**
+ * Settings → Email → Automations: every rule as a row of one white card, as the Stitch design's
+ * Automations list draws them (Marketing, screen 14), each with its state and its own buttons.
+ */
 export default function EmailAutomationsPage() {
   const { base, automate, activity } = useEmail();
   const { data, error, loading, reload } = useApi<{ automations: RuleView[] }>(`${base}/automations`);
@@ -55,44 +59,49 @@ export default function EmailAutomationsPage() {
       {data.automations.length === 0 ? (
         <EmptyState title="No automations yet" body="For example: when an order is paid and its total is over 100, send “Thanks for your order” five minutes later." />
       ) : (
-        data.automations.map((r) => (
-          <section key={r.id} className="card space-y-2">
-            <div className="flex flex-wrap items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="flex flex-wrap items-center gap-2 font-semibold">
-                  {r.name}
-                  <Badge tone={r.enabled ? "good" : "neutral"}>{r.enabled ? "On" : "Off"}</Badge>
-                  {!r.valid && <Badge tone="danger">Needs editing</Badge>}
-                </p>
-                <p className="text-sm text-muted">
-                  When <b className="text-text">{r.eventLabel}</b>
-                  {r.conditions ? <> and {r.conditionsText.toLowerCase()}</> : ""}, send <b className="text-text">{r.template?.name ?? "(missing template)"}</b> from {r.sender?.email ?? "(missing sender)"} to {r.recipient?.type === "fixed" ? r.recipient.address : "the customer"} {delayText(r.delayMinutes)}.
-                </p>
-                <p className="text-xs text-muted">Last ran {relative(r.lastTriggeredAt)}</p>
-              </div>
-              {automate && (
-                <div className="flex flex-wrap gap-2">
-                  <button className={r.enabled ? "btn-secondary" : "btn-primary"} disabled={!!busy} onClick={() => toggle(r)}>
-                    {r.enabled ? "Turn off" : "Turn on"}
-                  </button>
-                  <Link className="btn-secondary" href={`/settings/email/automations/edit?id=${r.id}`}>
-                    Edit
-                  </Link>
-                  <button className="btn-secondary text-danger" disabled={!!busy} onClick={() => setRemove(r)}>
-                    Delete
-                  </button>
+        <TableCard id="email-rules">
+          <ul className="divide-y divide-home-line" aria-label="Automations">
+            {data.automations.map((r) => (
+              <li key={r.id} className="space-y-2 px-5 py-4 sm:px-6" aria-label={r.name}>
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-2 font-semibold">
+                      {r.name}
+                      <Badge tone={r.enabled ? "good" : "neutral"}>{r.enabled ? "On" : "Off"}</Badge>
+                      {!r.valid && <Badge tone="danger">Needs editing</Badge>}
+                      {r.template?.category === "marketing" && <Chip tone="accent">marketing</Chip>}
+                    </p>
+                    <p className="mt-0.5 text-sm text-muted">
+                      When <b className="text-text">{r.eventLabel}</b>
+                      {r.conditions ? <> and {r.conditionsText.toLowerCase()}</> : ""}, send <b className="text-text">{r.template?.name ?? "(missing template)"}</b> from {r.sender?.email ?? "(missing sender)"} to {r.recipient?.type === "fixed" ? r.recipient.address : "the customer"} {delayText(r.delayMinutes)}.
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted">Last ran {relative(r.lastTriggeredAt)}</p>
+                  </div>
+                  {automate && (
+                    <div className="flex flex-wrap gap-2">
+                      <button className={r.enabled ? "btn-secondary" : "btn-primary"} disabled={!!busy} onClick={() => toggle(r)}>
+                        {r.enabled ? "Turn off" : "Turn on"}
+                      </button>
+                      <Link className="btn-secondary" href={`/settings/email/automations/edit?id=${r.id}`}>
+                        Edit
+                      </Link>
+                      <button className="btn-secondary text-danger" disabled={!!busy} onClick={() => setRemove(r)}>
+                        Delete
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            {r.sender && r.sender.status !== "verified" && <Alert kind="info">Its sender address isn&apos;t verified any more, so it can&apos;t send. Choose another sender.</Alert>}
-            {activity && (
-              <button className="text-sm text-accent underline" onClick={() => setOpen(open === r.id ? null : r.id)} aria-expanded={open === r.id}>
-                {open === r.id ? "Hide recent runs" : "Show recent runs"}
-              </button>
-            )}
-            {open === r.id && <Executions ruleId={r.id} />}
-          </section>
-        ))
+                {r.sender && r.sender.status !== "verified" && <Alert kind="info">Its sender address isn&apos;t verified any more, so it can&apos;t send. Choose another sender.</Alert>}
+                {activity && (
+                  <button className="text-sm font-medium text-accent hover:underline" onClick={() => setOpen(open === r.id ? null : r.id)} aria-expanded={open === r.id}>
+                    {open === r.id ? "Hide recent runs" : "Show recent runs"}
+                  </button>
+                )}
+                {open === r.id && <Executions ruleId={r.id} />}
+              </li>
+            ))}
+          </ul>
+        </TableCard>
       )}
       <ConfirmDialog
         open={!!remove}
@@ -123,9 +132,9 @@ function Executions({ ruleId }: { ruleId: string }) {
   if (!data) return <Skeleton lines={2} />;
   if (!data.executions.length) return <p className="text-sm text-muted">No events have reached this automation yet.</p>;
   return (
-    <ul className="divide-y divide-border rounded-lg border border-border text-sm">
+    <ul className="divide-y divide-home-line overflow-hidden rounded border border-home-line text-sm" aria-label="Recent runs">
       {data.executions.map((e) => (
-        <li key={e.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+        <li key={e.id} className="flex flex-wrap items-center gap-2 px-3 py-2.5">
           <span className="w-40 shrink-0 text-xs text-muted">{fmtDateTime(e.evaluatedAt)}</span>
           <span className="min-w-0 flex-1">
             {e.message ? (

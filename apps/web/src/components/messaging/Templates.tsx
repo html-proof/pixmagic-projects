@@ -3,13 +3,18 @@ import { useState } from "react";
 import { previewSms } from "@app/shared/sms";
 import { PageHeader, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Chip, TableCard } from "@/components/automations/MarketingKit";
 import { Badge, Empty } from "@/components/dashboard/Primitives";
 import { useApi } from "@/lib/api";
 import { countryName, fmtWhen, TEMPLATE_STATUS, templateState, useSms } from "./MessagingUi";
 import { TemplateEditor } from "./TemplateEditor";
 import type { SmsTemplate } from "./types";
 
-/** Message Templates: every text starts from one, and only an approved version ever reaches a customer. */
+/**
+ * Message Templates: every text starts from one, and only an approved version ever reaches a
+ * customer. The list is a white card of rows with hairlines between them, as the Stitch design's
+ * Marketing screens list automations and campaigns.
+ */
 export function MessageTemplates() {
   const { base, manage, store } = useSms();
   const [archived, setArchived] = useState(false);
@@ -37,39 +42,39 @@ export function MessageTemplates() {
           onChanged={() => void reload()}
         />
       )}
-      <section className="card" aria-labelledby="tpl-list-h">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="tpl-list-h" className="font-semibold">
-            Templates
-          </h2>
+      <TableCard
+        id="tpl-list"
+        title="Templates"
+        actions={
           <label className="inline-flex items-center gap-2 text-sm">
             <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={archived} onChange={(e) => setArchived(e.target.checked)} />
             Show archived
           </label>
-        </div>
+        }
+      >
         {error ? (
-          <div className="mt-3">
+          <div className="px-5 pb-5 sm:px-6">
             <LoadError what="your templates" error={error} onRetry={() => void reload()} busy={loading} />
           </div>
         ) : !data ? (
-          <div className="mt-3">
+          <div className="px-5 pb-5 sm:px-6">
             <Skeleton lines={3} />
           </div>
         ) : !data.templates.length ? (
-          <div className="mt-3">
+          <div className="px-5 pb-5 sm:px-6">
             <Empty>{archived ? "No templates yet." : "No templates yet. Start with an order update, such as “your order has shipped”."}</Empty>
           </div>
         ) : (
-          <ul className="mt-3 divide-y divide-border">
+          <ul className="divide-y divide-home-line border-t border-home-line">
             {data.templates.map((t) => {
               const body = t.approvedBody ?? t.body ?? "";
               return (
-                <li key={t.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                <li key={t.id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-4 sm:px-6">
                   <div className="min-w-0 flex-1">
-                    <p className="flex flex-wrap items-center gap-2 font-medium">
+                    <p className="flex flex-wrap items-center gap-2 font-semibold">
                       {t.name}
                       <Badge tone={TEMPLATE_STATUS[t.status]?.tone ?? "neutral"}>{templateState(t)}</Badge>
-                      <span className="text-xs font-normal text-muted">{t.category === "marketing" ? "Marketing" : "Transactional"}</span>
+                      <Chip tone={t.category === "marketing" ? "accent" : "plain"}>{t.category === "marketing" ? "Marketing" : "Transactional"}</Chip>
                     </p>
                     <p className="mt-1 line-clamp-2 text-sm text-muted">{previewSms(body)}</p>
                     <p className="mt-1 text-xs text-muted">
@@ -79,7 +84,7 @@ export function MessageTemplates() {
                       updated {fmtWhen(t.updatedAt, store?.timezone)}
                     </p>
                   </div>
-                  <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setOpen({ id: t.id, key: Date.now() })} aria-label={`${manage ? "Open" : "View"} ${t.name}`}>
+                  <button type="button" className="home-btn h-8" onClick={() => setOpen({ id: t.id, key: Date.now() })} aria-label={`${manage ? "Open" : "View"} ${t.name}`}>
                     {manage ? "Open" : "View"}
                   </button>
                 </li>
@@ -87,7 +92,7 @@ export function MessageTemplates() {
             })}
           </ul>
         )}
-      </section>
+      </TableCard>
     </div>
   );
 }

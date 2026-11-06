@@ -244,6 +244,21 @@ approve", Record payment per person). The other pages take the same look from th
 screen 29: the organization and who is signed in at the top, one big Clock in, and the sections as
 a bar of icons along the bottom of a phone; it sets the same Inter type (`app-look`) as the app.
 
+**The Marketing pages (Stitch screens 14–20).** Automations, Customer Messaging, WhatsApp and the
+email pages keep their routes and section menus; what is on each page follows the design, through
+`components/automations/MarketingKit.tsx` on top of PageKit: tables with a tinted head row
+(`TableCard`, `TableHead`, `Th`, `TD`, `ROW`), a channel's chip (`Chip`), the line of a page's few
+facts (`FactsLine`), numbered form parts (`StepCard`, `StepTitle`: the number stays in the
+heading's words for screen readers and the specs), a channel's card with one status word and its
+facts (`ChannelPanel`, `FactList`), a filter bar (`FilterBar`) and the design's switch (`Switch`, a
+real checkbox with role "switch"). /automations is screen 14 (the automations as rows, each
+channel's card under them), the setup and the builders are 19 (numbered steps ending in "Check and
+turn on"), the message histories and Delivery Analytics are 17, campaigns (SMS and WhatsApp) are 15,
+consent, segments and WhatsApp customers are 16, and the SMS setup and sender, WhatsApp setup and
+settings and the email accounts and domains are 18. Every figure is the page's own API answer; what
+the design shows and no API returns (a total reach per channel, a "Pause all" across channels, SMS
+spend beside the sender) is left out.
+
 **Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
 auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
 /data-deletion) are in Geist. Prefetching one of

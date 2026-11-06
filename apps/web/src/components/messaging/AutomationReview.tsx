@@ -15,9 +15,10 @@ import type { AutomationChecks, AutomationView, MessagingReadiness, SmsMessage, 
 // ---------------------------------------------------------------------------
 // The builder's last two steps: a test text to one of the team's own approved numbers (followed to
 // its outcome), and the review, which shows the automation as a flow of WHEN → WHO → SEND →
-// MESSAGE → TIMING → STATUS (each block opens its step), the API's checks in words with where to
-// fix each one, and the button that activates it. The checks are the API's (readiness.ts): the
-// button is offered only when activation would be accepted.
+// MESSAGE → TIMING → STATUS (each block opens its step), and beside it the Stitch design's "Check
+// and turn on" panel (screen 19): the API's checks in words with where to fix each one, and the
+// button that activates it. The checks are the API's (readiness.ts): the button is offered only
+// when activation would be accepted.
 // ---------------------------------------------------------------------------
 
 const LIVE = new Set(["scheduled", "sending", "accepted", "pending"]);
@@ -135,7 +136,7 @@ export function TestStep({
       ) : !automationId ? (
         <p className="text-sm text-muted">Finish the message first: the saved message is what&apos;s tested.</p>
       ) : (
-        <div className="space-y-3 rounded-xl border border-border p-4">
+        <div className="space-y-3 rounded bg-home-soft p-4">
           <p className="font-medium">Send a test message</p>
           <p className="text-sm text-muted">Your message, with a sample customer&apos;s details, to your own phone. It never goes to a customer.</p>
           {!senderReady && (
@@ -152,7 +153,7 @@ export function TestStep({
             <fieldset className="space-y-2">
               <legend className="label">Test recipient</legend>
               {verified.map((t) => (
-                <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-2.5 text-sm ${numberId === t.id ? "border-accent bg-accent/5" : "border-border"}`}>
+                <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded bg-surface p-2.5 text-sm ${numberId === t.id ? "ring-2 ring-accent" : ""}`}>
                   <input type="radio" name="auto-test-number" className="accent-[var(--accent)]" checked={numberId === t.id} onChange={() => setNumberId(t.id)} />
                   <span className="font-mono">{t.number}</span>
                   <Badge tone="good">Approved</Badge>
@@ -161,7 +162,7 @@ export function TestStep({
             </fieldset>
           )}
           {pending.map((t) => (
-            <div key={t.id} className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-2.5">
+            <div key={t.id} className="flex flex-wrap items-end gap-2 rounded bg-surface p-2.5">
               <div className="min-w-0 flex-1 text-sm">
                 <p className="font-mono">{t.number}</p>
                 <p className="text-xs text-muted">Enter the code we texted to this number to approve it.</p>
@@ -245,7 +246,7 @@ export function TestStep({
             <Send aria-hidden className="h-4 w-4" /> {busy === "send" ? "Sending…" : wait > 0 ? `Send again in ${wait} s` : "Send Test"}
           </button>
           {message && result && (
-            <div className={`rounded-lg border p-3 text-sm ${result.ok === false ? "border-warn/40 bg-warn/5" : result.ok ? "border-good/40 bg-good/5" : "border-border bg-bg/50"}`} role="status" aria-live="polite">
+            <div className={`rounded p-3 text-sm ${result.ok === false ? "bg-warn/10" : result.ok ? "bg-good/10" : "bg-surface"}`} role="status" aria-live="polite">
               <p className="flex flex-wrap items-center gap-2 font-semibold">
                 {result.title} <SmsStatusBadge status={message.status} label={message.statusLabel} />
                 {message.to && <span className="font-normal text-muted">to {message.to}</span>}
@@ -263,7 +264,7 @@ export function TestStep({
 function FlowBlock({ label, icon, children, onEdit, editLabel }: { label: string; icon: ReactNode; children: ReactNode; onEdit?: () => void; editLabel: string }) {
   const body = (
     <>
-      <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+      <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-surface text-accent">
         {icon}
       </span>
       <span className="min-w-0 flex-1">
@@ -274,11 +275,11 @@ function FlowBlock({ label, icon, children, onEdit, editLabel }: { label: string
     </>
   );
   return onEdit ? (
-    <button type="button" className="group flex w-full items-start gap-3 rounded-xl border border-border bg-surface p-3 text-left transition hover:border-accent/60" aria-label={editLabel} onClick={onEdit}>
+    <button type="button" className="group flex w-full items-start gap-3 rounded bg-home-soft p-3 text-left transition outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent" aria-label={editLabel} onClick={onEdit}>
       {body}
     </button>
   ) : (
-    <div className="flex w-full items-start gap-3 rounded-xl border border-border bg-surface p-3">{body}</div>
+    <div className="flex w-full items-start gap-3 rounded bg-home-soft p-3">{body}</div>
   );
 }
 
@@ -288,7 +289,7 @@ const Arrow = () => (
   </div>
 );
 
-/** Step 5: the automation as a flow, the API's checks, and the switch. */
+/** Step 5: the automation as a flow, its name, count and status (the checks and the switch are ReviewChecks, beside it). */
 export function ReviewStep({
   name,
   trigger,
@@ -298,16 +299,10 @@ export function ReviewStep({
   message,
   timing,
   saved,
-  dirty,
   checks,
-  checksLoading,
   manage,
   busy,
   onGo,
-  onTest,
-  onActivate,
-  onPause,
-  onSave,
 }: {
   name: string;
   trigger: SmsTrigger;
@@ -317,30 +312,18 @@ export function ReviewStep({
   message: string;
   timing: string;
   saved: AutomationView | null;
-  dirty: boolean;
   checks: AutomationChecks | null;
-  checksLoading: boolean;
   manage: boolean;
   busy: string | null;
   onGo: (step: number) => void;
-  onTest: () => void;
-  onActivate: () => void;
-  onPause: () => void;
-  onSave: () => void;
 }) {
   const { store } = useSms();
-  const [showPassed, setShowPassed] = useState(false);
   const on = saved?.status === "active";
   const status = saved ? AUTOMATION_STATUS[saved.status] : null;
-  const failing = (checks?.checks ?? []).filter((c) => !c.ok);
-  const passed = (checks?.checks ?? []).filter((c) => c.ok);
-  const blocking = failing.filter((c) => c.blocking);
-  const canActivate = manage && !!saved && !!checks?.canActivate && !checksLoading;
-  const republish = on && (saved?.pendingChanges || dirty);
 
   return (
     <div className="space-y-5">
-      <dl className="grid gap-x-4 gap-y-2 rounded-xl border border-border p-4 text-sm sm:grid-cols-[10rem_1fr]">
+      <dl className="grid gap-x-4 gap-y-2 border-b border-home-line pb-4 text-sm sm:grid-cols-[10rem_1fr]">
         <dt className="text-muted">Automation name</dt>
         <dd className="flex flex-wrap items-center gap-2 font-medium">
           &ldquo;{name}&rdquo;
@@ -396,10 +379,73 @@ export function ReviewStep({
         </li>
       </ol>
 
-      <section aria-labelledby="checks-h" className="space-y-2">
-        <h3 id="checks-h" className="font-semibold">
-          Before it goes live
-        </h3>
+      {saved && (
+        <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted" aria-live="polite">
+          {saved.lastResult ? (
+            <>
+              Last text {fmtWhen(saved.lastResult.at, store?.timezone)}: <SmsStatusBadge status={saved.lastResult.status} why={saved.lastResult.reasonLabel} />
+              {saved.lastResult.reasonLabel && <span>{saved.lastResult.reasonLabel}</span>}
+            </>
+          ) : saved.lastRunAt ? (
+            `Last ran ${fmtWhen(saved.lastRunAt, store?.timezone)}`
+          ) : on ? (
+            "Hasn't run yet: it runs the next time this happens."
+          ) : null}
+        </p>
+      )}
+
+      {manage && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-home-line pt-4">
+          <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => onGo(3)}>
+            ← Back
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Beside the review, as the Stitch design's screen 19 puts its last step: the API's checks in
+ * words with where to fix each one, then a test and the button that turns it on (asked first).
+ */
+export function ReviewChecks({
+  saved,
+  dirty,
+  checks,
+  checksLoading,
+  manage,
+  busy,
+  onTest,
+  onActivate,
+  onPause,
+  onSave,
+}: {
+  saved: AutomationView | null;
+  dirty: boolean;
+  checks: AutomationChecks | null;
+  checksLoading: boolean;
+  manage: boolean;
+  busy: string | null;
+  onTest: () => void;
+  onActivate: () => void;
+  onPause: () => void;
+  onSave: () => void;
+}) {
+  const [showPassed, setShowPassed] = useState(false);
+  const on = saved?.status === "active";
+  const failing = (checks?.checks ?? []).filter((c) => !c.ok);
+  const passed = (checks?.checks ?? []).filter((c) => c.ok);
+  const blocking = failing.filter((c) => c.blocking);
+  const canActivate = manage && !!saved && !!checks?.canActivate && !checksLoading;
+  const republish = on && (saved?.pendingChanges || dirty);
+
+  return (
+    <section aria-labelledby="checks-h" className="home-card animate-rise space-y-4 p-5" data-testid="review-checks">
+      <h2 id="checks-h" className="home-h2">
+        Check and turn on
+      </h2>
+      <div className="space-y-2">
         {dirty ? (
           <p className="flex flex-wrap items-center gap-2 text-sm text-warn">
             <CircleAlert aria-hidden className="h-4 w-4" /> Your latest changes aren&apos;t saved yet.
@@ -420,14 +466,14 @@ export function ReviewStep({
             {failing.length > 0 ? (
               <ul className="space-y-2" aria-label="Needs attention">
                 {failing.map((c) => (
-                  <li key={c.key} className={`flex flex-wrap items-start gap-x-3 gap-y-1 rounded-lg border p-3 text-sm ${c.blocking ? "border-warn/50 bg-warn/5" : "border-border bg-bg/40"}`}>
+                  <li key={c.key} className={`flex flex-wrap items-start gap-x-3 gap-y-1 rounded p-3 text-sm ${c.blocking ? "bg-warn/10" : "bg-home-soft"}`}>
                     <CircleAlert aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${c.blocking ? "text-warn" : "text-muted"}`} />
                     <span className="min-w-0 flex-1">
                       <span className="block font-medium">{c.label}</span>
                       <span className="block text-muted">{c.message}</span>
                     </span>
                     {c.fix && manage && (
-                      <Link className="btn-secondary inline-flex h-8 items-center gap-1 px-3 text-xs" href={c.fix.href} aria-label={`${PLATFORM_CHECKS.has(c.key) ? c.fix.label : "Fix this"}: ${c.label}`}>
+                      <Link className="inline-flex h-8 items-center gap-1 rounded-sm text-[13px] font-medium text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent" href={c.fix.href} aria-label={`${PLATFORM_CHECKS.has(c.key) ? c.fix.label : "Fix this"}: ${c.label}`}>
                         {PLATFORM_CHECKS.has(c.key) ? c.fix.label : "Fix this"} <ArrowRight aria-hidden className="h-3.5 w-3.5" />
                       </Link>
                     )}
@@ -461,32 +507,13 @@ export function ReviewStep({
             {blocking.length > 0 && !on && <p className="text-xs text-muted">Fix what&apos;s marked above, then come back here to activate it. Your automation is saved as a draft meanwhile.</p>}
           </>
         )}
-      </section>
-
-      {saved && (
-        <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted" aria-live="polite">
-          {saved.lastResult ? (
-            <>
-              Last text {fmtWhen(saved.lastResult.at, store?.timezone)}: <SmsStatusBadge status={saved.lastResult.status} why={saved.lastResult.reasonLabel} />
-              {saved.lastResult.reasonLabel && <span>{saved.lastResult.reasonLabel}</span>}
-            </>
-          ) : saved.lastRunAt ? (
-            `Last ran ${fmtWhen(saved.lastRunAt, store?.timezone)}`
-          ) : on ? (
-            "Hasn't run yet: it runs the next time this happens."
-          ) : null}
-        </p>
-      )}
+      </div>
 
       {manage && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          <button type="button" className="btn-secondary" disabled={!!busy} onClick={() => onGo(3)}>
-            ← Back
-          </button>
+        <div className="flex flex-col gap-2 border-t border-home-line pt-4 [&>button]:w-full">
           <button type="button" className="btn-secondary inline-flex items-center gap-1.5" disabled={!!busy || !saved} onClick={onTest}>
             <Send aria-hidden className="h-4 w-4" /> Send Test
           </button>
-          <span className="flex-1" />
           {on && !republish ? (
             <button type="button" className="btn-secondary" disabled={!!busy} onClick={onPause}>
               {busy === "pause" ? "Pausing…" : "Pause automation"}
@@ -505,6 +532,6 @@ export function ReviewStep({
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 }

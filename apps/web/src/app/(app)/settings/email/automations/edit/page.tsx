@@ -2,9 +2,11 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { Check, X } from "lucide-react";
 import { isCustomEventType, type ConditionNode, type FrequencyPolicy, type RecipientSelection } from "@app/shared/email";
+import { SoftBox, StepCard, StepNumber } from "@/components/automations/MarketingKit";
 import { ConditionBuilder } from "@/components/email/ConditionBuilder";
-import { EmailPreviewFrame, Note } from "@/components/email/EmailUi";
+import { choiceClass, EmailPreviewFrame, Note } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
@@ -34,6 +36,8 @@ interface DryRun {
 }
 
 const STEPS = ["Event", "Conditions", "Sender", "Template", "Timing", "Preview and test", "Turn on"] as const;
+/** Each step's heading (its number is drawn in a disc and read out before it). */
+const TITLES = ["When should it run?", "Only when… (optional)", "Send from", "Which email", "Timing and limits", "Preview and test", "Name it and turn it on"] as const;
 
 export default function AutomationBuilderPage() {
   return (
@@ -164,23 +168,32 @@ function Builder() {
   return (
     <div className="space-y-4">
       <PageHeader title={id ? "Edit automation" : "New automation"} sub="Seven short steps. Nothing is sent until you turn it on." actions={<Link className="btn-secondary" href="/settings/email/automations">All automations</Link>} />
-      <ol className="flex flex-wrap gap-1 text-xs" aria-label="Steps">
+      {/* The steps as the Stitch design numbers one automation's parts (screen 19): a disc each, the one open in green. */}
+      <ol className="flex flex-wrap gap-1.5 text-xs" aria-label="Steps">
         {STEPS.map((s, i) => (
           <li key={s}>
-            <button type="button" onClick={() => setStep(i)} aria-current={step === i ? "step" : undefined} className={`rounded-full px-3 py-1 ${step === i ? "bg-accent/12 font-semibold text-accent" : i < step ? "text-text" : "text-muted"}`}>
-              {i + 1}. {s}
+            <button
+              type="button"
+              onClick={() => setStep(i)}
+              aria-current={step === i ? "step" : undefined}
+              className={`inline-flex items-center gap-2 rounded px-2.5 py-1.5 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent ${step === i ? "bg-accent/10 font-semibold text-accent" : i < step ? "text-text hover:bg-home-soft" : "text-muted hover:bg-home-soft"}`}
+            >
+              <StepNumber n={i + 1} done={i < step} />
+              <span>
+                <span className="sr-only">{i + 1}. </span>
+                {s}
+              </span>
             </button>
           </li>
         ))}
       </ol>
       {err && <Alert>{err}</Alert>}
-      <section className="card space-y-3">
+      <StepCard id="r-step" n={step + 1} title={TITLES[step]}>
         {step === 0 && (
           <>
-            <h2 className="font-semibold">1. When should it run?</h2>
             <div className="grid gap-2">
               {catalog.data.events.map((e) => (
-                <label key={e.type} className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${draft.eventType === e.type ? "border-accent" : "border-border"} ${e.available ? "" : "opacity-60"}`}>
+                <label key={e.type} className={`${choiceClass(draft.eventType === e.type)} ${e.available ? "" : "opacity-60"}`}>
                   <input type="radio" name="event" disabled={!e.available} checked={draft.eventType === e.type} onChange={() => set("eventType", e.type)} />
                   <span>
                     <span className="block font-medium">{e.label}</span>
@@ -188,7 +201,7 @@ function Builder() {
                   </span>
                 </label>
               ))}
-              <label className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${custom ? "border-accent" : "border-border"}`}>
+              <label className={choiceClass(custom)}>
                 <input type="radio" name="event" checked={custom} onChange={() => set("eventType", catalog.data!.customEvents.examples[0]!)} />
                 <span className="min-w-0 flex-1">
                   <span className="block font-medium">A custom event from your own systems</span>
@@ -216,13 +229,11 @@ function Builder() {
         )}
         {step === 1 && (
           <>
-            <h2 className="font-semibold">2. Only when… (optional)</h2>
             <ConditionBuilder value={draft.conditions} onChange={(v) => set("conditions", v)} fields={fields} customEvent={custom} />
           </>
         )}
         {step === 2 && (
           <>
-            <h2 className="font-semibold">3. Send from</h2>
             {senders.length === 0 ? (
               <Alert kind="info">
                 No verified sender yet. <Link className="underline" href="/settings/email/accounts?add=1">Connect an email account</Link> first.
@@ -252,7 +263,6 @@ function Builder() {
         )}
         {step === 3 && (
           <>
-            <h2 className="font-semibold">4. Which email</h2>
             {usable.length === 0 ? (
               <Alert kind="info">
                 No template fits this event yet. <Link className="underline" href="/settings/email/templates/edit">Write one</Link>, then come back.
@@ -260,7 +270,7 @@ function Builder() {
             ) : (
               <div className="grid gap-2">
                 {usable.map((t) => (
-                  <label key={t.id} className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${draft.templateId === t.id ? "border-accent" : "border-border"}`}>
+                  <label key={t.id} className={choiceClass(draft.templateId === t.id)}>
                     <input type="radio" name="template" checked={draft.templateId === t.id} onChange={() => set("templateId", t.id)} />
                     <span className="min-w-0">
                       <span className="block font-medium">
@@ -280,7 +290,6 @@ function Builder() {
         )}
         {step === 4 && (
           <>
-            <h2 className="font-semibold">5. Timing and limits</h2>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Wait before sending" htmlFor="r-delay" hint="Up to 30 days.">
                 <div className="flex gap-2">
@@ -320,7 +329,6 @@ function Builder() {
         )}
         {step === 5 && (
           <>
-            <h2 className="font-semibold">6. Preview and test</h2>
             <p className="text-sm text-muted">Runs the automation against example data, without sending anything. Change the example to try your conditions.</p>
             <textarea aria-label="Example data (JSON)" className="input min-h-[6rem] font-mono text-xs" placeholder='{"order": {"total": 150}}' value={sample} onChange={(e) => setSample(e.target.value)} />
             <button className="btn-primary" disabled={!!busy} onClick={dryRun}>
@@ -329,14 +337,20 @@ function Builder() {
             {dry && (
               <div className="space-y-3">
                 <Alert kind={dry.wouldSend ? "success" : "info"}>{dry.wouldSend ? "With this data, the email would be sent." : "With this data, nothing would be sent."}</Alert>
-                <ul className="space-y-1 text-sm">
-                  {dry.steps.map((s) => (
-                    <li key={s.step} className="flex gap-2">
-                      <span aria-hidden>{s.ok ? "✓" : "✗"}</span>
-                      <span className={s.ok ? "" : "text-danger"}>{s.detail}</span>
-                    </li>
-                  ))}
-                </ul>
+                {/* The checks before it would send, as the design's "Check and turn on" list (screen 19). */}
+                <SoftBox>
+                  <ul className="space-y-1.5" aria-label="Checks">
+                    {dry.steps.map((s) => (
+                      <li key={s.step} className="flex gap-2">
+                        {s.ok ? <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-good" /> : <X aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-danger" />}
+                        <span className={s.ok ? "" : "text-danger"}>
+                          <span className="sr-only">{s.ok ? "Passed: " : "Failed: "}</span>
+                          {s.detail}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </SoftBox>
                 {dry.conditions.length > 0 && (
                   <details className="text-xs">
                     <summary className="cursor-pointer text-muted">Each condition</summary>
@@ -363,7 +377,6 @@ function Builder() {
         )}
         {step === 6 && (
           <>
-            <h2 className="font-semibold">7. Name it and turn it on</h2>
             <Field label="Name" required htmlFor="r-name">
               <input id="r-name" className="input" maxLength={100} value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder="Thank-you for paid orders" />
             </Field>
@@ -381,7 +394,7 @@ function Builder() {
             <Note>It runs for events that happen after it is turned on. Every event sends at most one email per automation.</Note>
           </>
         )}
-      </section>
+      </StepCard>
       <div className="flex justify-between">
         <button className="btn-secondary" disabled={step === 0} onClick={() => setStep(step - 1)}>
           Back

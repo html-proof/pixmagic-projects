@@ -21,6 +21,7 @@ import {
 } from "@app/shared/sms";
 import { ConfirmDialog, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { SoftBox, TableHead, Th } from "@/components/automations/MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, fmtNum, useApi } from "@/lib/api";
@@ -92,44 +93,50 @@ function Prices({ base, draft }: { base: string; draft: Draft }) {
   if (state.error) return <p className="text-sm text-danger">{state.error}</p>;
   const p = state.data!;
   return (
-    <div className="relative overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-xs text-muted">
-          <tr>
-            <th className="py-1 pr-3 text-left font-medium">Country</th>
-            <th className="py-1 pr-3 text-right font-medium">Per part</th>
-            <th className="py-1 pr-3 text-right font-medium">This text ({p.segments.segments} part{p.segments.segments === 1 ? "" : "s"})</th>
-            <th className="py-1 text-right font-medium">At most ({p.worst.segments})</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {p.prices.map((r) => (
-            <tr key={r.country}>
-              <td className="py-1.5 pr-3">{countryName(r.country)}</td>
-              {r.perPartUsd === null ? (
-                <td className="py-1.5 text-xs text-muted" colSpan={3}>
-                  No price yet: AWS reports the price with each delivery.
-                </td>
-              ) : (
-                <>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {fmtUsd(r.perPartUsd)}
-                    <span className="block text-[11px] text-muted">{r.source === "aws_billed" ? "what AWS billed you" : "AWS price list"}</span>
+    <div className="min-w-0">
+      <div className="overflow-x-auto rounded border border-home-line">
+        <table className="w-full text-sm">
+          <TableHead>
+            <Th>Country</Th>
+            <Th right>Per part</Th>
+            <Th right>
+              This text ({p.segments.segments} part{p.segments.segments === 1 ? "" : "s"})
+            </Th>
+            <Th right>At most ({p.worst.segments})</Th>
+          </TableHead>
+          <tbody>
+            {p.prices.map((r) => (
+              <tr key={r.country} className="border-b border-home-line last:border-0">
+                <td className="px-3 py-2">{countryName(r.country)}</td>
+                {r.perPartUsd === null ? (
+                  <td className="px-3 py-2 text-xs text-muted" colSpan={3}>
+                    No price yet: AWS reports the price with each delivery.
                   </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">{fmtUsd(r.estimateUsd)}</td>
-                  <td className="py-1.5 text-right tabular-nums">{fmtUsd(r.worstUsd)}</td>
-                </>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                ) : (
+                  <>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtUsd(r.perPartUsd)}
+                      <span className="block text-[11px] text-muted">{r.source === "aws_billed" ? "what AWS billed you" : "AWS price list"}</span>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(r.estimateUsd)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(r.worstUsd)}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className="mt-1 text-xs text-muted">Estimates in US dollars. AWS charges per part and reports the real price with each delivery; carriers in some countries add a fee.</p>
     </div>
   );
 }
 
-/** Write or edit a template, see how it splits into parts and what it costs, and move it through review. */
+/**
+ * Write or edit a template, see how it splits into parts and what it costs, and move it through
+ * review. A white card of the Stitch design, as its screen 19 lays out a message: the text and its
+ * details on the left; the preview, the checks and the cost on the right.
+ */
 export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: string | null; onClose: () => void; onChanged: () => void }) {
   const { base, manage, meId, store } = useSms();
   const toast = useToast();
@@ -214,10 +221,10 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
   const can = (a: TemplateAction) => (a === "archive" || a === "restore" ? !!t && templateCan(t.status, a) : !!t && !archived && templateCan(latestStatus, a));
 
   return (
-    <section className="card animate-rise border-accent/40" aria-labelledby="tpl-h">
+    <section className="home-card animate-rise min-w-0 p-5 sm:p-6" aria-labelledby="tpl-h">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 id="tpl-h" className="flex flex-wrap items-center gap-2 font-semibold">
+          <h2 id="tpl-h" className="home-h2 flex flex-wrap items-center gap-2">
             {t ? t.name : "New template"}
             {t && <StatusPill map={TEMPLATE_STATUS} status={t.status} />}
             {t && <span className="text-xs font-normal text-muted">version {t.latestVersion}{t.approvedVersion ? ` · version ${t.approvedVersion} approved` : ""}</span>}
@@ -228,11 +235,11 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
         </div>
         <div className="flex flex-wrap gap-2">
           {manage && t && !archived && (
-            <Link className="btn-secondary h-8 px-3 text-xs" href={`/messaging/send?template=${t.id}`}>
+            <Link className="home-btn h-8" href={`/messaging/send?template=${t.id}`}>
               Send test
             </Link>
           )}
-          <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={onClose}>
+          <button type="button" className="home-btn h-8" onClick={onClose}>
             Close
           </button>
         </div>
@@ -283,7 +290,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
               <p className="label">Insert a variable</p>
               <div className="flex flex-wrap gap-1.5">
                 {SMS_VARIABLES.map((v) => (
-                  <button key={v} type="button" className="rounded-full border border-border px-2.5 py-1 text-xs hover:bg-bg" title={SMS_VARIABLE_INFO[v].description} onClick={() => insert(v)}>
+                  <button key={v} type="button" className="rounded bg-home-tag px-2.5 py-1 text-xs font-medium transition-colors outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent" title={SMS_VARIABLE_INFO[v].description} onClick={() => insert(v)}>
                     {SMS_VARIABLE_INFO[v].label}
                   </button>
                 ))}
@@ -301,7 +308,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
           />
 
           {forIndia && (
-            <fieldset className="min-w-0 space-y-3 rounded-lg border border-border p-3" disabled={!editable}>
+            <fieldset className="min-w-0 space-y-3 rounded border border-home-line p-3" disabled={!editable}>
               <legend className="px-1 text-sm font-medium">India (DLT registration)</legend>
               <div>
                 <label className="label" htmlFor="tpl-dlt-id">DLT Template ID</label>
@@ -321,7 +328,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
             <p className="label">Preview (sample values)</p>
             <TextBubble>{text || <span className="text-muted">(no text yet)</span>}</TextBubble>
           </div>
-          <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-3 rounded bg-home-soft px-4 py-3 text-sm sm:grid-cols-4">
             <div>
               <dt className="text-xs text-muted">Encoding</dt>
               <dd>{now.encoding === "GSM" ? "GSM-7" : "Unicode"}</dd>
@@ -344,7 +351,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
             {now.encoding === "GSM" ? "One part holds 160 characters (153 each when there are several)." : "Unicode parts hold 70 characters (67 each when there are several)."} AWS bills each part.
           </p>
           {now.nonGsm.length > 0 && (
-            <div className="rounded-lg border border-border p-3 text-sm">
+            <SoftBox>
               <p>
                 These characters make the text Unicode: <span className="font-mono">{now.nonGsm.map((c) => (c === " " ? "(non-breaking space)" : c)).join(" ")}</span>
               </p>
@@ -353,7 +360,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
                   Replace typographic characters
                 </button>
               )}
-            </div>
+            </SoftBox>
           )}
           <div>
             <p className="label">Checks</p>
@@ -367,7 +374,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
       </div>
 
       {manage && (
-        <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+        <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-home-line pt-4">
           {editable && (
             <button type="button" className="btn-primary" disabled={saving || !dirty || !draft.name.trim() || hasErrors(issues)} onClick={() => void save()}>
               {saving ? "Saving…" : id ? "Save changes" : "Save draft"}
@@ -408,11 +415,11 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
       )}
 
       {detail.data && (
-        <details className="mt-5 border-t border-border pt-4">
+        <details className="mt-5 border-t border-home-line pt-4">
           <summary className="cursor-pointer text-sm font-semibold">Version history</summary>
           <ol className="mt-3 space-y-3">
             {detail.data.versions.map((v) => (
-              <li key={v.version} className="rounded-lg border border-border p-3 text-sm">
+              <li key={v.version} className="rounded border border-home-line p-3 text-sm">
                 <p className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">Version {v.version}</span>
                   <StatusPill map={TEMPLATE_STATUS} status={v.status} />
@@ -427,7 +434,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
                   {v.approvedAt ? ` · approved by ${whoLabel(v.approvedBy, meId, v.approvedByName)} ${fmtWhen(v.approvedAt, store?.timezone)}` : ""}
                 </p>
                 {v.reviewNote && <p className="mt-1 text-xs">Review note: {v.reviewNote}</p>}
-                <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-bg p-2 font-mono text-xs">{v.body}</pre>
+                <pre className="mt-2 rounded bg-home-soft p-2 font-mono text-xs break-words whitespace-pre-wrap">{v.body}</pre>
               </li>
             ))}
           </ol>

@@ -7,7 +7,9 @@ import type { WaOverview } from "./types";
 import { useWaAction } from "./WaUi";
 
 // Step 3 (Configure) and Settings: the business name customers read, how they agree to messages,
-// marketing, sending hours and their time zone, daily limits and how long texts are kept.
+// marketing, sending hours and their time zone, daily limits and how long texts are kept. The
+// choices are drawn as the Stitch design's Channels screen (18) draws a channel's rules: soft rows,
+// the chosen one in green.
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -83,9 +85,9 @@ export function SettingsForm({ base, overview, onSaved, submitLabel = "Save sett
           <legend className="label">How customers agree to order updates</legend>
           <div className="space-y-2">
             {WA_ORDER_UPDATE_BASES.filter((b) => b !== "unset").map((b) => (
-              <label key={b} className={`flex cursor-pointer gap-3 rounded-lg border p-3 text-sm ${form.orderUpdates === b ? "border-accent bg-accent/5" : "border-border"}`}>
-                <input type="radio" name={`${id}-basis`} className="mt-1" checked={form.orderUpdates === b} onChange={() => set("orderUpdates", b as WaOrderUpdateBasis)} />
-                <span>
+              <label key={b} className={`flex cursor-pointer gap-3 rounded border p-3 text-sm transition ${form.orderUpdates === b ? "border-accent bg-accent/5" : "border-transparent bg-home-soft hover:bg-home-soft-hover"}`}>
+                <input type="radio" name={`${id}-basis`} className="mt-1 accent-[var(--accent)]" checked={form.orderUpdates === b} onChange={() => set("orderUpdates", b as WaOrderUpdateBasis)} />
+                <span className="min-w-0">
                   <span className="font-medium">{WA_ORDER_UPDATE_INFO[b].label}</span>
                   <span className="block text-muted">{WA_ORDER_UPDATE_INFO[b].help}</span>
                 </span>
@@ -96,16 +98,16 @@ export function SettingsForm({ base, overview, onSaved, submitLabel = "Save sett
         </fieldset>
 
         <div className="space-y-2">
-          <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1" checked={form.marketingEnabled} onChange={(e) => set("marketingEnabled", e.target.checked)} />
-            <span>
+          <label className="flex items-start gap-2 rounded bg-home-soft p-3 text-sm">
+            <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={form.marketingEnabled} onChange={(e) => set("marketingEnabled", e.target.checked)} />
+            <span className="min-w-0">
               <span className="font-medium">Send marketing messages</span>
               <span className="block text-muted">Cart reminders, welcomes and campaigns, only to customers who agreed to marketing. Every marketing message tells them how to stop.</span>
             </span>
           </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1" checked={form.shopifySmsConsent} onChange={(e) => set("shopifySmsConsent", e.target.checked)} />
-            <span>
+          <label className="flex items-start gap-2 rounded bg-home-soft p-3 text-sm">
+            <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={form.shopifySmsConsent} onChange={(e) => set("shopifySmsConsent", e.target.checked)} />
+            <span className="min-w-0">
               <span className="font-medium">Shopify&apos;s text-message consent covers WhatsApp</span>
               <span className="block text-muted">Tick only if the wording customers agree to in your checkout mentions WhatsApp. Then their Shopify marketing consent counts here too.</span>
             </span>

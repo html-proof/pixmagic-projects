@@ -2,6 +2,8 @@
 import { useState } from "react";
 import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Card } from "@/components/PageKit";
+import { TableCard } from "@/components/automations/MarketingKit";
 import { Empty } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, fmtNum, useApi } from "@/lib/api";
@@ -33,16 +35,13 @@ function Editor({ segment, onDone }: { segment: SmsSegment | null; onDone: (save
     }
   };
   return (
-    <section className="card animate-rise border-accent/40" aria-labelledby="seg-ed-h">
-      <h2 id="seg-ed-h" className="font-semibold">
-        {segment ? `Edit “${segment.name}”` : "New segment"}
-      </h2>
+    <Card id="seg-ed" title={segment ? `Edit “${segment.name}”` : "New segment"}>
       {error && (
-        <div className="mt-3">
+        <div className="mb-3">
           <Alert>{error}</Alert>
         </div>
       )}
-      <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_20rem]">
+      <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
         <div className="min-w-0 space-y-3">
           <div className="max-w-sm">
             <label className="label" htmlFor="seg-name">
@@ -54,7 +53,7 @@ function Editor({ segment, onDone }: { segment: SmsSegment | null; onDone: (save
         </div>
         <SegmentReach base={base} draft={draft} />
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap gap-2 border-t border-home-line pt-4">
         <button type="button" className="btn-primary" disabled={busy || !name.trim() || !parsed.ok} onClick={() => void save()}>
           {busy ? "Saving…" : "Save segment"}
         </button>
@@ -62,11 +61,15 @@ function Editor({ segment, onDone }: { segment: SmsSegment | null; onDone: (save
           Cancel
         </button>
       </div>
-    </section>
+    </Card>
   );
 }
 
-/** Customer Segments: saved audiences for campaigns, always within customers who agreed to SMS marketing. */
+/**
+ * Customer Segments: saved audiences for campaigns, always within customers who agreed to SMS
+ * marketing. The list is the Stitch design's screen 16 card of rows: each segment, who it holds in
+ * words, and how many customers it reaches now (the API's count).
+ */
 export function CustomerSegments() {
   const { base, manage, store } = useSms();
   const { data, error, reload, loading } = useApi<{ segments: SmsSegment[] }>(base ? `${base}/segments` : null);
@@ -103,12 +106,12 @@ export function CustomerSegments() {
       ) : !data.segments.length ? (
         !editing && <Empty>No segments yet. Campaigns can also use a one-off audience.</Empty>
       ) : (
-        <section className="card" aria-label="Segments">
-          <ul className="divide-y divide-border">
+        <TableCard id="seg-list" title="Segments">
+          <ul className="divide-y divide-home-line border-t border-home-line">
             {data.segments.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+              <li key={s.id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-4 sm:px-6">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium">{s.name}</p>
+                  <p className="font-semibold">{s.name}</p>
                   <p className="text-sm text-muted">{s.description}</p>
                   <p className="mt-0.5 text-xs text-muted">Updated {fmtWhen(s.updatedAt, store?.timezone)}</p>
                 </div>
@@ -118,10 +121,10 @@ export function CustomerSegments() {
                 </div>
                 {manage && (
                   <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-                    <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing({ segment: s, key: Date.now() })} aria-label={`Edit ${s.name}`}>
+                    <button type="button" className="home-btn h-8" onClick={() => setEditing({ segment: s, key: Date.now() })} aria-label={`Edit ${s.name}`}>
                       Edit
                     </button>
-                    <button type="button" className="btn-secondary h-8 px-3 text-xs" disabled={!!busy} onClick={() => setDeleting(s)} aria-label={`Delete ${s.name}`}>
+                    <button type="button" className="home-btn h-8 hover:text-danger" disabled={!!busy} onClick={() => setDeleting(s)} aria-label={`Delete ${s.name}`}>
                       Delete
                     </button>
                   </div>
@@ -129,7 +132,7 @@ export function CustomerSegments() {
               </li>
             ))}
           </ul>
-        </section>
+        </TableCard>
       )}
       <ConfirmDialog
         open={!!deleting}

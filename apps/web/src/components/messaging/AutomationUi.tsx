@@ -111,7 +111,7 @@ export function ActivateDialog({
           <strong className="text-text">{automationTriggerCard(trigger).label}.</strong> {automationTriggerCard(trigger).description} From now on, the customer gets:
         </p>
       )}
-      {body && trigger && <div className="whitespace-pre-wrap rounded-xl border border-border bg-bg px-3 py-2 text-text">{previewText(body, trigger, business)}</div>}
+      {body && trigger && <div className="rounded bg-home-soft px-3 py-2 whitespace-pre-wrap text-text">{previewText(body, trigger, business)}</div>}
       <p>It goes to real customers who may receive it, and activating it approves this message in your name.</p>
       {mode !== "live" && <p className="text-warn">Your SMS account is still being verified, so no customer is texted yet: what would be sent is recorded in Message History.</p>}
       {blocking.length > 0 && (

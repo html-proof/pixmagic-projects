@@ -1,8 +1,10 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Plus } from "lucide-react";
 import { describeWaAudience, renderWaText, WA_CAMPAIGN_MAX, type WaAudience } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
+import { ROW, SoftBox, StepCard, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
@@ -15,7 +17,9 @@ import { CAMPAIGN_STATUS, useWaAction, WaBubble, waError, waHref } from "./WaUi"
 // Campaigns (docs/whatsapp.md, "Campaigns"): a marketing template to the customers who agreed to
 // marketing messages. A campaign is saved as a draft, and launched only from its own dialog, which
 // shows the exact number of recipients and asks the merchant to confirm it; opening this tab never
-// sends anything. Results are counted by the API from the campaign's messages.
+// sends anything. Results are counted by the API from the campaign's messages. Laid out as the
+// Stitch design's Campaigns screen (15): the campaigns as a table first, then the editor in numbered
+// parts. WhatsApp reports read; orders that followed and a cost are SMS's alone, so they aren't here.
 // ---------------------------------------------------------------------------
 
 interface AudienceDraft {
@@ -103,97 +107,151 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
   }
 
   const campaigns = list.data.campaigns;
-  return (
-    <div className="space-y-4">
-      <div className="card animate-rise">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold">Campaigns</h2>
-            <p className="mt-1 text-sm text-muted">
-              Send a marketing message to customers who agreed to marketing messages. Customers who opted out, are on your do-not-message list, or aren&apos;t on WhatsApp are always left out.
-              Each campaign sends to at most {fmtNum(cap)} people on this connection.
-            </p>
-          </div>
-          {manage && (
-            <button type="button" className="btn-primary" onClick={() => setEditing("new")}>
-              New campaign
+  /** A campaign's buttons, the same on a phone's stacked row and the table's last column. */
+  const actions = (c: WaCampaign) =>
+    manage ? (
+      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        {c.status === "draft" && (
+          <>
+            <button type="button" className="btn-primary h-8 px-3 text-xs" onClick={() => setLaunching(c)}>
+              Launch…
             </button>
-          )}
-        </div>
-        {provider === "qr" && <QrWarning />}
-        {!overview.settings.marketingEnabled && (
-          <div className="mt-3">
-            <Alert kind="info">
-              Marketing messages are switched off in{" "}
-              <Link className="underline" href={waHref("settings")}>
-                Settings
-              </Link>
-              : campaigns can be written but not launched until they&apos;re on.
-            </Alert>
-          </div>
+            <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing(c)}>
+              Edit
+            </button>
+          </>
+        )}
+        {(c.status === "scheduled" || c.status === "sending") && (
+          <button type="button" className="btn-danger h-8 px-3 text-xs" onClick={() => setCancelling(c)}>
+            Cancel campaign
+          </button>
+        )}
+        {(c.status === "draft" || c.status === "completed" || c.status === "cancelled") && (
+          <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setDeleting(c)}>
+            Delete
+          </button>
+        )}
+        {c.status !== "draft" && (
+          <Link className="btn-secondary h-8 px-3 text-xs" href={waHref("messages", { campaign: c.id })}>
+            Messages
+          </Link>
         )}
       </div>
+    ) : null;
+  /** When it ran (or is to run), as each date the API keeps for it. */
+  const dates = (c: WaCampaign) => (
+    <>
+      {c.status === "scheduled" && c.scheduledAt && <span className="block">starts {fmtWhen(c.scheduledAt, tz)}</span>}
+      {c.startedAt && <span className="block">started {fmtWhen(c.startedAt, tz)}</span>}
+      {c.completedAt && <span className="block">finished {fmtWhen(c.completedAt, tz)}</span>}
+      {c.cancelledAt && <span className="block">cancelled {fmtWhen(c.cancelledAt, tz)}</span>}
+      {!c.scheduledAt && !c.startedAt && !c.completedAt && !c.cancelledAt && <span className="block text-muted">–</span>}
+    </>
+  );
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="min-w-0 flex-1 text-sm text-muted">
+          Send a marketing message to customers who agreed to marketing messages. Customers who opted out, are on your do-not-message list, or aren&apos;t on WhatsApp are always left out.
+          Each campaign sends to at most {fmtNum(cap)} people on this connection.
+        </p>
+        {manage && (
+          <button type="button" className="btn-primary shrink-0" onClick={() => setEditing("new")}>
+            <Plus aria-hidden className="h-4 w-4" /> New campaign
+          </button>
+        )}
+      </div>
+      {provider === "qr" && <QrWarning />}
+      {!overview.settings.marketingEnabled && (
+        <Alert kind="info">
+          Marketing messages are switched off in{" "}
+          <Link className="underline" href={waHref("settings")}>
+            Settings
+          </Link>
+          : campaigns can be written but not launched until they&apos;re on.
+        </Alert>
+      )}
 
       {campaigns.length === 0 ? (
         <EmptyState title="No campaigns yet" body="Write a marketing template first, then create a campaign, choose who it goes to, and launch it when you're ready." />
       ) : (
-        <ul className="space-y-3">
-          {campaigns.map((c) => {
-            const st = CAMPAIGN_STATUS[c.status] ?? { tone: "neutral" as const, label: c.status };
-            const tpl = templates.data!.templates.find((t) => t.id === c.templateId);
-            return (
-              <li key={c.id} className="card">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{c.name}</span>
-                      <Badge tone={st.tone}>{st.label}</Badge>
-                    </div>
-                    <p className="mt-1 text-sm text-muted">{c.audienceLabel}</p>
-                    <p className="mt-1 text-xs text-muted">
-                      Template: {tpl?.name ?? "deleted"}
-                      {c.status === "scheduled" && c.scheduledAt ? ` · starts ${fmtWhen(c.scheduledAt, tz)}` : ""}
-                      {c.startedAt ? ` · started ${fmtWhen(c.startedAt, tz)}` : ""}
-                      {c.completedAt ? ` · finished ${fmtWhen(c.completedAt, tz)}` : ""}
-                      {c.cancelledAt ? ` · cancelled ${fmtWhen(c.cancelledAt, tz)}` : ""}
-                    </p>
-                    {c.confirmedRecipients != null && <p className="mt-1 text-xs text-muted">{plural(c.confirmedRecipients, "recipient")} confirmed at launch · {plural(c.recipients, "message")} made so far</p>}
-                    {c.report && c.report.total > 0 && <Report report={c.report} />}
+        <TableCard id="wa-campaigns" title="Campaigns" testId="wa-campaigns">
+          {/* Phones: each campaign as a stacked row. */}
+          <ul className="divide-y divide-home-line border-t border-home-line sm:hidden" aria-label="Campaigns">
+            {campaigns.map((c) => {
+              const st = CAMPAIGN_STATUS[c.status] ?? { tone: "neutral" as const, label: c.status };
+              const tpl = templates.data!.templates.find((t) => t.id === c.templateId);
+              return (
+                <li key={c.id} className="space-y-2 px-5 py-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{c.name}</span>
+                    <Badge tone={st.tone}>{st.label}</Badge>
                   </div>
-                  {manage && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {c.status === "draft" && (
-                        <>
-                          <button type="button" className="btn-primary h-8 px-3 text-xs" onClick={() => setLaunching(c)}>
-                            Launch…
-                          </button>
-                          <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing(c)}>
-                            Edit
-                          </button>
-                        </>
+                  <p className="text-muted">{c.audienceLabel}</p>
+                  <p className="text-xs text-muted">
+                    Template: {tpl?.name ?? "deleted"}
+                    {c.status === "scheduled" && c.scheduledAt ? ` · starts ${fmtWhen(c.scheduledAt, tz)}` : ""}
+                    {c.startedAt ? ` · started ${fmtWhen(c.startedAt, tz)}` : ""}
+                    {c.completedAt ? ` · finished ${fmtWhen(c.completedAt, tz)}` : ""}
+                    {c.cancelledAt ? ` · cancelled ${fmtWhen(c.cancelledAt, tz)}` : ""}
+                  </p>
+                  {c.confirmedRecipients != null && <p className="text-xs text-muted">{plural(c.confirmedRecipients, "recipient")} confirmed at launch · {plural(c.recipients, "message")} made so far</p>}
+                  {c.report && c.report.total > 0 && <Report report={c.report} />}
+                  {actions(c)}
+                </li>
+              );
+            })}
+          </ul>
+          <table className="hidden w-full min-w-[56rem] text-sm sm:table" aria-label="Campaigns">
+            <TableHead>
+              <Th>Name</Th>
+              <Th>Status</Th>
+              <Th>Date</Th>
+              <Th right>Waiting</Th>
+              <Th right>Sent</Th>
+              <Th right>Delivered</Th>
+              <Th right>Read</Th>
+              <Th right>Failed</Th>
+              <Th right>Not sent</Th>
+              <Th right>
+                <span className="sr-only">Actions</span>
+              </Th>
+            </TableHead>
+            <tbody>
+              {campaigns.map((c) => {
+                const st = CAMPAIGN_STATUS[c.status] ?? { tone: "neutral" as const, label: c.status };
+                const tpl = templates.data!.templates.find((t) => t.id === c.templateId);
+                const r = c.report && c.report.total > 0 ? c.report : null;
+                const n = (v: number | undefined): ReactNode => (r && v !== undefined ? fmtNum(v) : <span className="text-muted">–</span>);
+                return (
+                  <tr key={c.id} className={ROW}>
+                    <td className={`${TD} max-w-[16rem]`}>
+                      <p className="font-medium">{c.name}</p>
+                      <p className="text-xs text-muted">{c.audienceLabel}</p>
+                      <p className="text-xs text-muted">Template: {tpl?.name ?? "deleted"}</p>
+                      {c.confirmedRecipients != null && (
+                        <p className="text-xs text-muted">
+                          {plural(c.confirmedRecipients, "recipient")} confirmed at launch · {plural(c.recipients, "message")} made so far
+                        </p>
                       )}
-                      {(c.status === "scheduled" || c.status === "sending") && (
-                        <button type="button" className="btn-danger h-8 px-3 text-xs" onClick={() => setCancelling(c)}>
-                          Cancel campaign
-                        </button>
-                      )}
-                      {(c.status === "draft" || c.status === "completed" || c.status === "cancelled") && (
-                        <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setDeleting(c)}>
-                          Delete
-                        </button>
-                      )}
-                      {c.status !== "draft" && (
-                        <Link className="btn-secondary h-8 px-3 text-xs" href={waHref("messages", { campaign: c.id })}>
-                          Messages
-                        </Link>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                    </td>
+                    <td className={TD}>
+                      <Badge tone={st.tone}>{st.label}</Badge>
+                    </td>
+                    <td className={`${TD} text-xs whitespace-nowrap`}>{dates(c)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{n(r?.waiting)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{n(r?.sent)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{n(r?.delivered)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{n(r?.read)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{n(r?.failed)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{n(r?.notSent)}</td>
+                    <td className={TD}>{actions(c)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </TableCard>
       )}
 
       {launching && (
@@ -254,12 +312,10 @@ export function Campaigns({ base, overview }: { base: string; overview: WaOvervi
 
 function QrWarning() {
   return (
-    <div className="mt-3">
-      <Alert kind="info">
-        This store sends from a phone linked with a QR code, not Meta&apos;s official API. WhatsApp may restrict or ban a number it sees sending bulk or unwanted messages, so send campaigns only to
-        customers who asked for them. bizinsights paces them (a message every few seconds) and caps how many go out a day.
-      </Alert>
-    </div>
+    <Alert kind="info">
+      This store sends from a phone linked with a QR code, not Meta&apos;s official API. WhatsApp may restrict or ban a number it sees sending bulk or unwanted messages, so send campaigns only to
+      customers who asked for them. bizinsights paces them (a message every few seconds) and caps how many go out a day.
+    </Alert>
   );
 }
 
@@ -273,9 +329,9 @@ function Report({ report }: { report: NonNullable<WaCampaign["report"]> }) {
     ["Not sent", report.notSent],
   ];
   return (
-    <dl className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
+    <dl className="grid grid-cols-3 gap-2">
       {cells.map(([label, n]) => (
-        <div key={label} className="rounded-lg border border-border px-2 py-1">
+        <div key={label} className="rounded bg-home-soft px-2 py-1">
           <dt className="text-[11px] text-muted">{label}</dt>
           <dd className="text-sm font-semibold">{fmtNum(n)}</dd>
         </div>
@@ -361,26 +417,31 @@ function Editor({
 
   return (
     <div className="space-y-4">
-      <div className="card animate-rise">
+      <section aria-labelledby="wa-camp-ed-h" className="home-card animate-rise space-y-3 p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold">{campaign ? `Edit "${campaign.name}"` : "New campaign"}</h2>
-            <p className="mt-1 text-sm text-muted">Saving keeps it as a draft. Nothing is sent until you launch it and confirm the number of recipients.</p>
+          <div className="min-w-0">
+            <h2 id="wa-camp-ed-h" className="home-h2 flex items-center gap-2">
+              <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-accent" />
+              {campaign ? `Edit "${campaign.name}"` : "New campaign"}
+            </h2>
           </div>
           <button type="button" className="btn-secondary" onClick={() => onDone(null)}>
             Back to campaigns
           </button>
         </div>
         {qr && <QrWarning />}
-      </div>
+      </section>
 
-      <div className="card space-y-4">
-        <div>
+      <StepCard id="wa-camp-step-name" n={1} title="Name" level={3}>
+        <div className="sm:max-w-md">
           <label className="label" htmlFor="wa-camp-name">
             Name
           </label>
           <input id="wa-camp-name" className="input" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Winter sale" />
         </div>
+      </StepCard>
+
+      <StepCard id="wa-camp-step-message" n={2} title="Message" level={3}>
         <div>
           <label className="label" htmlFor="wa-camp-template">
             Marketing template
@@ -405,13 +466,17 @@ function Editor({
           {templates.length === 0 && <p className="mt-1 text-xs text-warn">This store has no marketing template yet.</p>}
           {template && (
             <div className="mt-3 space-y-2">
-              <WaBubble>{renderWaText(template.body, samples, { lenient: true })}</WaBubble>
+              <SoftBox className="p-4">
+                <WaBubble>{renderWaText(template.body, samples, { lenient: true })}</WaBubble>
+              </SoftBox>
               {unsupported.length > 0 && <Alert kind="error">This template uses {unsupported.map((v) => `{{${v}}}`).join(", ")}, which a campaign can&apos;t fill. Pick another.</Alert>}
             </div>
           )}
         </div>
+      </StepCard>
 
-        <fieldset className="space-y-3">
+      <StepCard id="wa-camp-step-who" n={3} title="Who" level={3}>
+        <fieldset className="min-w-0 space-y-3">
           <legend className="label">Who it goes to</legend>
           <p className="text-xs text-muted">Always only customers who agreed to marketing messages; these narrow it further.</p>
           <CountryPicker label="Countries (none: every country)" value={a.countries} onChange={(countries) => set({ countries })} />
@@ -460,7 +525,7 @@ function Editor({
               </ul>
             </Alert>
           )}
-          <div className="rounded-lg border border-border bg-bg p-3 text-sm" aria-live="polite">
+          <div className="rounded bg-home-soft px-4 py-3 text-sm" aria-live="polite">
             {!audience ? (
               <span className="text-muted">Fix the audience to see how many customers it reaches.</span>
             ) : !estimate ? (
@@ -476,9 +541,13 @@ function Editor({
             )}
           </div>
         </fieldset>
+      </StepCard>
 
+      {/* The launch is its own step, as the design's last part asks for approval: the exact count, confirmed in the launch dialog. */}
+      <StepCard id="wa-camp-step-launch" n={4} title="Launch" level={3}>
+        <p className="text-sm text-muted">Saving keeps it as a draft. Nothing is sent until you launch it and confirm the number of recipients.</p>
         {error && <Alert kind="error">{error}</Alert>}
-        <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+        <div className="flex flex-wrap gap-2">
           <button type="button" className="btn-secondary" disabled={!ready || !!busy} onClick={() => void save(false)}>
             {busy === "save" ? "Saving…" : "Save draft"}
           </button>
@@ -486,7 +555,7 @@ function Editor({
             Save and review launch…
           </button>
         </div>
-      </div>
+      </StepCard>
     </div>
   );
 }
@@ -553,7 +622,7 @@ function LaunchDialog({
       <div className="space-y-3 text-sm">
         <p className="text-muted">{campaign.audienceLabel}.</p>
         {template && <WaBubble>{template.body}</WaBubble>}
-        <div className="rounded-lg border border-border bg-bg p-3" aria-live="polite">
+        <div className="rounded bg-home-soft p-3" aria-live="polite">
           {shown === null ? (
             estimate?.error ? <span className="text-danger">{estimate.error}</span> : <span className="text-muted">Counting recipients…</span>
           ) : (
@@ -592,7 +661,7 @@ function LaunchDialog({
           )}
         </fieldset>
         {shown !== null && shown > 0 && !tooMany && (
-          <label className="flex items-start gap-2 rounded-lg border border-border p-3">
+          <label className="flex items-start gap-2 rounded border border-home-line p-3">
             <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
             <span>
               Send this marketing message to <span className="font-semibold">{plural(shown, "customer")}</span>. They all agreed to marketing messages, and every message tells them how to stop.

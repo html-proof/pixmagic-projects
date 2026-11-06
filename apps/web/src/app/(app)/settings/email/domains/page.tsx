@@ -1,6 +1,8 @@
 "use client";
 import { useState, type FormEvent, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import { SENDING_SERVICE_INFO, SENDING_SERVICES, type SendingService } from "@app/shared/email";
+import { StepNumber } from "@/components/automations/MarketingKit";
 import { CheckBadge, CopyValue, DomainStatusBadge, Note, relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field } from "@/components/staff/ui";
@@ -9,7 +11,11 @@ import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/App
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtDateTime, useEmail, type DomainView } from "@/lib/email";
 
-/** Settings → Email → Domains: prove the business owns a domain, and see how its email authenticates. */
+/**
+ * Settings → Email → Domains: prove the business owns a domain, and see how its email
+ * authenticates. Each domain is a card as the Stitch design's screen 18 draws a channel: its name,
+ * one status word, its three checks; opened, the four records as numbered steps.
+ */
 export default function EmailDomainsPage() {
   const { base, manage } = useEmail();
   const { data, error, loading, reload, setData } = useApi<{ domains: DomainView[] }>(`${base}/domains`);
@@ -46,7 +52,7 @@ export default function EmailDomainsPage() {
         sub="Verify the domains you send from, and check that their SPF, DKIM and DMARC records let mail from them reach inboxes. bizinsights only reads your DNS; it never changes it."
       />
       {manage && (
-        <form onSubmit={add} className="card grid gap-3 sm:grid-cols-[1fr_16rem_auto] sm:items-end">
+        <form onSubmit={add} className="home-card animate-rise grid gap-3 p-5 sm:grid-cols-[1fr_16rem_auto] sm:items-end sm:p-6">
           <Field label="Domain" htmlFor="dom-name">
             <input id="dom-name" className="input" required placeholder="yourbusiness.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
           </Field>
@@ -91,33 +97,44 @@ function DomainCard({ domain: d, manage, expanded, onToggle, onChange, onRemoved
     });
 
   return (
-    <section className="card space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <button className="min-w-0 flex-1 text-left" onClick={onToggle} aria-expanded={expanded}>
-          <span className="block truncate font-semibold">{d.domain}</span>
-          <span className="text-xs text-muted">
-            {SENDING_SERVICE_INFO[d.sendingService].label} · checked {relative(d.lastCheckedAt)}
-          </span>
-        </button>
+    <section aria-labelledby={`dom-${d.id}-h`} className="home-card animate-rise min-w-0 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-3 px-5 pt-5 pb-3 sm:px-6">
+        <h2 id={`dom-${d.id}-h`} className="home-h2 min-w-0 flex-1">
+          <button className="flex w-full min-w-0 items-center gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-accent" onClick={onToggle} aria-expanded={expanded}>
+            <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 text-muted transition-transform ${expanded ? "rotate-180" : ""}`} />
+            <span className="min-w-0">
+              <span className="block truncate">{d.domain}</span>
+              <span className="block text-xs font-normal tracking-normal text-muted">
+                {SENDING_SERVICE_INFO[d.sendingService].label} · checked {relative(d.lastCheckedAt)}
+              </span>
+            </span>
+          </button>
+        </h2>
         <DomainStatusBadge status={d.status} />
-        <span className="hidden gap-1 sm:flex">
-          <span className="text-xs text-muted">SPF</span> <CheckBadge status={d.spf} />
-          <span className="text-xs text-muted">DKIM</span> <CheckBadge status={d.dkim} />
-          <span className="text-xs text-muted">DMARC</span> <CheckBadge status={d.dmarc} />
-        </span>
       </div>
+      <ul className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-5 pb-5 text-xs sm:px-6" aria-label={`How mail from ${d.domain} authenticates`}>
+        <li className="flex items-center gap-1.5">
+          <span className="text-muted">SPF</span> <CheckBadge status={d.spf} />
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="text-muted">DKIM</span> <CheckBadge status={d.dkim} />
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="text-muted">DMARC</span> <CheckBadge status={d.dmarc} />
+        </li>
+      </ul>
       {expanded && (
-        <div className="space-y-4">
+        <div className="space-y-4 border-t border-home-line px-5 py-5 sm:px-6">
           {r?.error && <Alert kind="info">{r.error}</Alert>}
           {d.status === "expired" && <Alert>The verification challenge expired. Generate a new record and publish that one instead.</Alert>}
-          <Record title="1. Ownership" status={r?.ownership?.status ?? null} explanation={r?.ownership?.explanation ?? "Add this TXT record at your DNS provider, then press Check now."}>
+          <Record n={1} title="Ownership" status={r?.ownership?.status ?? null} explanation={r?.ownership?.explanation ?? "Add this TXT record at your DNS provider, then press Check now."}>
             <DnsRow rec={d.records.ownership} />
             {d.status !== "verified" && <p className="text-xs text-muted">The challenge is valid until {fmtDateTime(d.challengeExpiresAt)}.</p>}
           </Record>
-          <Record title="2. SPF" status={r?.spf?.status ?? null} explanation={r?.spf?.explanation ?? d.records.spf.purpose} found={r?.spf?.records}>
+          <Record n={2} title="SPF" status={r?.spf?.status ?? null} explanation={r?.spf?.explanation ?? d.records.spf.purpose} found={r?.spf?.records}>
             <DnsRow rec={d.records.spf} hint="If the domain already has an SPF record, add the include to it instead of making a second record." />
           </Record>
-          <Record title="3. DKIM" status={r?.dkim?.status ?? null} explanation={r?.dkim?.explanation ?? SENDING_SERVICE_INFO[d.sendingService].dkimHelp} found={r?.dkim?.records}>
+          <Record n={3} title="DKIM" status={r?.dkim?.status ?? null} explanation={r?.dkim?.explanation ?? SENDING_SERVICE_INFO[d.sendingService].dkimHelp} found={r?.dkim?.records}>
             {d.records.dkim.length > 0 ? d.records.dkim.map((rec) => <DnsRow key={rec.host} rec={rec} />) : <p className="text-xs text-muted">Enter your provider&apos;s DKIM selector below so bizinsights can check it.</p>}
             {manage && (
               <form
@@ -134,11 +151,11 @@ function DomainCard({ domain: d, manage, expanded, onToggle, onChange, onRemoved
               </form>
             )}
           </Record>
-          <Record title="4. DMARC" status={r?.dmarc?.status ?? null} explanation={r?.dmarc?.explanation ?? d.records.dmarc.purpose} found={r?.dmarc?.records}>
+          <Record n={4} title="DMARC" status={r?.dmarc?.status ?? null} explanation={r?.dmarc?.explanation ?? d.records.dmarc.purpose} found={r?.dmarc?.records}>
             <DnsRow rec={d.records.dmarc} />
           </Record>
           {manage && (
-            <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+            <div className="flex flex-wrap gap-2 border-t border-home-line pt-4">
               {d.status !== "expired" && (
                 <button className="btn-primary" disabled={!!busy} onClick={() => call("check", "check DNS", `${base}/domains/${d.id}/verify`, "POST", undefined)}>
                   {busy === "check" ? "Checking…" : "Check now"}
@@ -189,11 +206,18 @@ function DomainCard({ domain: d, manage, expanded, onToggle, onChange, onRemoved
   );
 }
 
-function Record({ title, status, explanation, found, children }: { title: string; status: string | null; explanation: string; found?: string[]; children: ReactNode }) {
+/** One record to publish, as a numbered step (the design's numbered parts, screen 19). */
+function Record({ n, title, status, explanation, found, children }: { n: number; title: string; status: string | null; explanation: string; found?: string[]; children: ReactNode }) {
   return (
-    <div className="space-y-2 rounded-lg border border-border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
+    <div className="min-w-0 space-y-2 rounded border border-home-line p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <StepNumber n={n} />
+          <span>
+            <span className="sr-only">{n}. </span>
+            {title}
+          </span>
+        </h3>
         <CheckBadge status={status} />
       </div>
       <p className="text-sm text-muted">{explanation}</p>

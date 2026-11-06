@@ -1,19 +1,24 @@
 "use client";
 import Link from "next/link";
 import { useId, useState } from "react";
+import { Info } from "lucide-react";
 import { WA_ORDER_UPDATE_INFO } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
 import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
+import { Card } from "@/components/PageKit";
 import { api, useApi } from "@/lib/api";
-import { COUNTRY_CHOICES, countryName, usePagedList } from "@/components/messaging/MessagingUi";
+import { COUNTRY_CHOICES, countryName, plural, usePagedList } from "@/components/messaging/MessagingUi";
 import type { WaContact, WaOverview, WaSuppression } from "./types";
 import { fmtAgo, useWaAction, waHref } from "./WaUi";
 
 // ---------------------------------------------------------------------------
 // Customers: who agreed to what (docs/whatsapp.md, "Consent"), recording consent given another way,
 // and the store's do-not-message list. Numbers are shown masked; a customer is found by their full
-// number (the API matches it by its keyed hash, nothing is decrypted to search).
+// number (the API matches it by its keyed hash, nothing is decrypted to search). Laid out as the
+// Stitch design's Contacts screen (16): the rule in a line on top, the search, a table with
+// marketing and order updates in columns of their own, and the do-not-message list.
 // ---------------------------------------------------------------------------
 
 const MARKETING: Record<WaContact["marketing"], { tone: Tone; label: string }> = {
@@ -35,10 +40,9 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
 
   if (!overview.can.contacts) {
     return (
-      <div className="card animate-rise">
-        <h2 className="text-base font-semibold">Customers</h2>
-        <p className="mt-1 text-sm text-muted">You don&apos;t have permission to see customers&apos; contact details. Ask an owner or admin for &quot;View contact information&quot; in Team &amp; Access.</p>
-      </div>
+      <Card id="wa-customers" title="Customers">
+        <p className="text-sm text-muted">You don&apos;t have permission to see customers&apos; contact details. Ask an owner or admin for &quot;View contact information&quot; in Team &amp; Access.</p>
+      </Card>
     );
   }
 
@@ -50,21 +54,24 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
 
   return (
     <div className="space-y-4">
-      <div className="card animate-rise space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold">Customers and consent</h2>
-            <p className="mt-1 text-sm text-muted">
-              Order updates go out under your choice in Settings (now: {WA_ORDER_UPDATE_INFO[overview.settings.orderUpdates].label.toLowerCase()}); marketing only to customers who agreed to it. A customer who
-              replies STOP gets nothing more until they reply START. Only messages from your store&apos;s customers are recorded: the rest of the phone&apos;s chats are never read.
-            </p>
-          </div>
+      <section aria-labelledby="wa-consent-h" className="home-card animate-rise space-y-4 p-5 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="wa-consent-h" className="home-h2">
+            Customers and consent
+          </h2>
           {manage && (
             <button type="button" className="btn-primary" onClick={() => setRecording(true)}>
               Record consent
             </button>
           )}
         </div>
+        <p className="flex gap-2.5 rounded bg-home-soft px-4 py-3 text-sm">
+          <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+          <span className="min-w-0">
+            Order updates go out under your choice in Settings (now: {WA_ORDER_UPDATE_INFO[overview.settings.orderUpdates].label.toLowerCase()}); marketing only to customers who agreed to it. A customer who
+            replies STOP gets nothing more until they reply START. Only messages from your store&apos;s customers are recorded: the rest of the phone&apos;s chats are never read.
+          </span>
+        </p>
         <form
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
@@ -106,7 +113,7 @@ export function Customers({ base, overview }: { base: string; overview: WaOvervi
             </button>
           )}
         </form>
-      </div>
+      </section>
       <ContactList path={path} filtered={!!(search || consent)} />
       <DoNotMessage base={base} manage={manage} />
       {recording && <RecordConsentDialog base={base} onClose={() => setRecording(false)} />}
@@ -120,57 +127,108 @@ function ContactList({ path, filtered }: { path: string; filtered: boolean }) {
   if (!rows) return <Skeleton lines={4} />;
   if (!rows.length)
     return (
-      <div className="card">
+      <div className="home-card animate-rise p-5 sm:p-6">
         <Empty>{filtered ? "No customer matches. Search with the full number, including its country code." : "No customers yet: a customer appears here once a message is sent to them or their consent is recorded."}</Empty>
       </div>
     );
   return (
-    <div className="card animate-rise space-y-3">
-      <ul className="divide-y divide-border">
+    <TableCard id="wa-contacts" testId="wa-contacts">
+      {/* Phones: each customer as a stacked row. */}
+      <ul className="divide-y divide-home-line sm:hidden" aria-label="Customers">
         {rows.map((c) => (
-          <li key={c.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-medium">
-                  {c.phone}
-                  {c.firstName && <span className="ml-2 font-normal text-muted">{c.firstName}</span>}
-                </p>
-                <p className="text-xs text-muted">
-                  {c.country ? countryName(c.country) : "Country unknown"} · {c.ordersCount} order{c.ordersCount === 1 ? "" : "s"} · last message from them {fmtAgo(c.lastInboundAt)} · last sent {fmtAgo(c.lastOutboundAt)}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {c.optedOut ? <Badge tone="danger">Opted out of everything</Badge> : <Badge tone={MARKETING[c.marketing].tone}>{MARKETING[c.marketing].label}</Badge>}
-                {!c.optedOut && c.optedIn && <Badge tone="good">Agreed to order updates</Badge>}
-              </div>
+          <li key={c.id} className="space-y-2 px-5 py-3">
+            <div className="min-w-0">
+              <p className="font-medium">
+                {c.phone}
+                {c.firstName && <span className="ml-2 font-normal text-muted">{c.firstName}</span>}
+              </p>
+              <p className="text-xs text-muted">
+                {c.country ? countryName(c.country) : "Country unknown"} · {c.ordersCount} order{c.ordersCount === 1 ? "" : "s"} · last message from them {fmtAgo(c.lastInboundAt)} · last sent {fmtAgo(c.lastOutboundAt)}
+              </p>
             </div>
-            {c.history.length > 0 && (
-              <details className="text-xs">
-                <summary className="cursor-pointer text-muted hover:text-text">Consent history</summary>
-                <ol className="mt-2 space-y-1 border-l border-border pl-3">
-                  {c.history.map((h, i) => (
-                    <li key={i}>
-                      <span className="font-medium">
-                        {SCOPE_LABEL[h.scope] ?? h.scope}: {h.status === "opted_in" ? "agreed" : "opted out"}
-                      </span>{" "}
-                      <span className="text-muted">
-                        · {h.sourceLabel} · {fmtAgo(h.at)}
-                      </span>
-                      {h.note && <span className="block text-muted">“{h.note}”</span>}
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            )}
+            <ConsentBadges c={c} />
+            <ConsentHistory c={c} />
           </li>
         ))}
       </ul>
+      <table className="hidden w-full min-w-[46rem] text-sm sm:table" aria-label="Customers">
+        <TableHead>
+          <Th>Customer</Th>
+          <Th>Country</Th>
+          <Th right>Orders</Th>
+          <Th>Marketing</Th>
+          <Th>Order updates</Th>
+          <Th>Last messages</Th>
+        </TableHead>
+        <tbody>
+          {rows.map((c) => (
+            <tr key={c.id} className={ROW}>
+              <td className={TD}>
+                <p className="font-medium whitespace-nowrap">{c.phone}</p>
+                {c.firstName && <p className="text-xs text-muted">{c.firstName}</p>}
+                <ConsentHistory c={c} />
+              </td>
+              <td className={TD}>{c.country ? countryName(c.country) : "Country unknown"}</td>
+              <td className={`${TD} text-right tabular-nums`}>{c.ordersCount}</td>
+              {c.optedOut ? (
+                <td className={TD} colSpan={2}>
+                  <Badge tone="danger">Opted out of everything</Badge>
+                </td>
+              ) : (
+                <>
+                  <td className={TD}>
+                    <Badge tone={MARKETING[c.marketing].tone}>{MARKETING[c.marketing].label}</Badge>
+                  </td>
+                  <td className={TD}>{c.optedIn ? <Badge tone="good">Agreed to order updates</Badge> : <span className="text-muted" title="Order updates follow your choice in Settings">–</span>}</td>
+                </>
+              )}
+              <td className={`${TD} text-xs text-muted`}>
+                <p>From them {fmtAgo(c.lastInboundAt)}</p>
+                <p>Sent {fmtAgo(c.lastOutboundAt)}</p>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       {cursor && (
-        <button type="button" className="btn-secondary w-full" onClick={loadMore} disabled={loading}>
-          {loading ? "Loading…" : "Load more"}
-        </button>
+        <div className="border-t border-home-line p-3 text-center">
+          <button type="button" className="btn-secondary" onClick={loadMore} disabled={loading}>
+            {loading ? "Loading…" : "Load more"}
+          </button>
+        </div>
       )}
+    </TableCard>
+  );
+}
+
+function ConsentBadges({ c }: { c: WaContact }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {c.optedOut ? <Badge tone="danger">Opted out of everything</Badge> : <Badge tone={MARKETING[c.marketing].tone}>{MARKETING[c.marketing].label}</Badge>}
+      {!c.optedOut && c.optedIn && <Badge tone="good">Agreed to order updates</Badge>}
     </div>
+  );
+}
+
+function ConsentHistory({ c }: { c: WaContact }) {
+  if (!c.history.length) return null;
+  return (
+    <details className="mt-1 text-xs">
+      <summary className="cursor-pointer text-muted hover:text-text">Consent history</summary>
+      <ol className="mt-2 space-y-1 border-l border-home-line pl-3">
+        {c.history.map((h, i) => (
+          <li key={i}>
+            <span className="font-medium">
+              {SCOPE_LABEL[h.scope] ?? h.scope}: {h.status === "opted_in" ? "agreed" : "opted out"}
+            </span>{" "}
+            <span className="text-muted">
+              · {h.sourceLabel} · {fmtAgo(h.at)}
+            </span>
+            {h.note && <span className="block text-muted">“{h.note}”</span>}
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 
@@ -272,28 +330,39 @@ function DoNotMessage({ base, manage }: { base: string; manage: boolean }) {
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<WaSuppression | null>(null);
   return (
-    <div className="card animate-rise space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold">Do not message</h2>
-          <p className="mt-1 text-sm text-muted">Numbers your store never messages, or never sends marketing to. Customers who replied STOP are here until they reply START.</p>
-        </div>
-        {manage && (
+    <TableCard
+      id="wa-do-not-message"
+      title="Do not message"
+      aside={
+        <>
+          Numbers your store never messages, or never sends marketing to. Customers who replied STOP are here until they reply START.
+          {list.data && list.data.suppressions.length > 0 && <span className="ml-1 font-medium text-text">· {plural(list.data.suppressions.length, "number")}</span>}
+        </>
+      }
+      actions={
+        manage ? (
           <button type="button" className="btn-secondary" onClick={() => setAdding(true)}>
             Add a number
           </button>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
       {list.error ? (
-        <LoadError what="the do-not-message list" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />
+        <div className="px-5 pb-5 sm:px-6">
+          <LoadError what="the do-not-message list" error={list.error} onRetry={() => void list.reload()} busy={list.loading} />
+        </div>
       ) : !list.data ? (
-        <div className="skeleton h-16" />
+        <div className="px-5 pb-5 sm:px-6">
+          <div className="skeleton h-16" />
+        </div>
       ) : !list.data.suppressions.length ? (
-        <Empty>Nobody is on the list.</Empty>
+        <div className="px-5 pb-5 sm:px-6">
+          <Empty>Nobody is on the list.</Empty>
+        </div>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul className="divide-y divide-home-line border-t border-home-line">
           {list.data.suppressions.map((s) => (
-            <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+            <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm sm:px-6">
               <div className="min-w-0">
                 <p className="font-medium">{s.phone}</p>
                 <p className="text-xs text-muted">
@@ -302,8 +371,8 @@ function DoNotMessage({ base, manage }: { base: string; manage: boolean }) {
                 </p>
               </div>
               {manage && (
-                <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setRemoving(s)} disabled={!!busy}>
-                  Remove
+                <button type="button" className="home-btn h-8" onClick={() => setRemoving(s)} disabled={!!busy}>
+                  Remove<span className="sr-only"> {s.phone}</span>
                 </button>
               )}
             </li>
@@ -333,7 +402,7 @@ function DoNotMessage({ base, manage }: { base: string; manage: boolean }) {
       >
         <p>Messages can go to this number again, under the store&apos;s consent rules. A customer who replied STOP can only be taken off by replying START.</p>
       </ConfirmDialog>
-    </div>
+    </TableCard>
   );
 }
 

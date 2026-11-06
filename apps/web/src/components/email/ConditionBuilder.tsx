@@ -76,7 +76,8 @@ export function ConditionBuilder({ value, onChange, fields, customEvent, disable
         const list = row.op === "in" || row.op === "not_in";
         const parse = (raw: string): Scalar => (type === "number" && raw.trim() !== "" && !Number.isNaN(Number(raw)) ? Number(raw) : raw);
         return (
-          <div key={i} className="grid gap-2 rounded-lg border border-border p-2 sm:grid-cols-[1fr_10rem_1fr_auto]">
+          // Each condition on one of the design's soft rows (screen 19's optional filters).
+          <div key={i} className="grid gap-2 rounded bg-home-soft p-2 sm:grid-cols-[1fr_10rem_1fr_auto]">
             {customEvent ? (
               <input aria-label="Field" className="input" disabled={disabled} list="condition-fields" value={row.field} placeholder="data.plan or customer.email" onChange={(e) => update({ field: e.target.value.trim() })} />
             ) : (

@@ -178,7 +178,7 @@ export function CloudSignup({ base, signup, onConnected }: { base: string; signu
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60"
+          className="btn-primary h-11 px-5"
           onClick={() => void start()}
           disabled={busy}
           data-testid="wa-cloud-connect"
