@@ -284,7 +284,7 @@ export function SmsAutomations() {
                   const blocked = problemsFor(problems, a.category);
                   const sent = a.last30Days.accepted;
                   return (
-                    <li key={a.id} className={`animate-rise flex flex-col gap-3 px-5 py-4 sm:px-6 ${COLUMNS}`} aria-label={a.name}>
+                    <li key={a.id} className={`relative flex flex-col gap-3 px-5 py-4 focus-within:z-10 sm:px-6 ${COLUMNS}`} aria-label={a.name}>
                       <div className="flex min-w-0 items-start gap-3">
                         <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-accent/10 text-accent">
                           <TriggerIcon trigger={a.trigger} className="h-[18px] w-[18px]" />
