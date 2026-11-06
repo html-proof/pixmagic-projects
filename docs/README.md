@@ -29,6 +29,7 @@ the code, the code wins and the page is the bug.
 | [architecture/refactoring-report.md](architecture/refactoring-report.md) | What the restructuring changed, test results, open risks |
 | [architecture/architecture-decisions.md](architecture/architecture-decisions.md) | Decisions and why (no API versioning, no store library, ...) |
 | [aws-migration/AWS_MIGRATION_PLAN.md](aws-migration/AWS_MIGRATION_PLAN.md) | AWS cost audit of 2026-11-06: inventory, measured bill, why the in-app replacements of SQS/SNS/EventBridge wait, nine changes with status and rollback |
+| [ikorex-migration/README.md](ikorex-migration/README.md) | Moving off AWS to the iKorex server (proposal, 2026-11-06): inventory, matrix, architecture, capacity test, cost before/after, rollback |
 
 ## Product areas and integrations
 
