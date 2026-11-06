@@ -7,13 +7,23 @@ shown as "—" with the reason, never estimated.
 
 | Page | What it shows |
 | --- | --- |
-| Inventory overview | 16 figures (definitions on each card, `KPI_INFO` in `@app/shared/inventory`), the sync strip, what's low and out |
-| All stock / Low stock / Out of stock | The stock list: search, filters, sorting, pages, row selection, CSV, saved filters (per device); Low and Out add sales rate, days left and a reorder suggestion |
-| Inventory movements | Every stock change bizinsights saw, and the changes made here with Shopify's answer |
+| Inventory overview | What needs attention (out of stock, then low) with sold per day, days left, the suggested order and Add stock; under "More detail", 16 figures (definitions behind each "?", `KPI_INFO` in `@app/shared/inventory`) |
+| All stock / Low stock / Out of stock | The stock list: search, filters, sorting, pages, row selection, CSV, saved filters (per device); Low and Out show sales rate, days left as a tag, the suggested order and Add stock; All stock adds the stock value at cost |
+| Inventory movements | Every stock change bizinsights saw, grouped by the store's day with where it came from, and the changes made here with Shopify's answer |
 | Locations | Each Shopify location with its stock |
 | Inventory reports | Trends from the day's-end records, top sellers, slow movers, sell-through, turnover, stockouts, stock by location |
 | Stock settings | Threshold, alert channels, the check's schedule, restock planning, Shopify access |
 | Product panel (`?product=` on any page) | Product information, each variant's stock at every location in every state, sales, history; Adjust stock |
+
+The pages follow the owner's Stitch design (prototype v2, screens 21–24: Needs attention, All
+products, History, Stock on a phone), through `components/PageKit.tsx` and the section's own
+`components/inventory/StockKit.tsx`: the status pill ("In step with Shopify · checked …") and
+Refresh stock in each header, chips between Needs attention, Out of stock and Low stock, tables
+with a soft header row that become cards on a phone. The section menu is unchanged; it stands in
+for the design's three tabs. "Add stock" opens the stock change dialog on Increase for the row's
+item (`inventory.adjust` and the store's `write_inventory`, as the product panel's Adjust stock).
+bizinsights never orders from suppliers: the suggested order is a number to act on, worked out
+with Stock settings' lead time and days to cover.
 
 ## Where the stock comes from
 

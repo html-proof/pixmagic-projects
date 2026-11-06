@@ -9,9 +9,9 @@ import { Table, Td, Th } from "@/components/staff/ui";
 import { api, fmtMoney, fmtNum, useApi } from "@/lib/api";
 import { openProduct, type ProductDetail, type VariantView } from "@/lib/inventory";
 import { QUANTITY_INFO } from "@app/shared/inventory";
-import { AdjustDialog, type AdjustTarget } from "./AdjustDialog";
-import { ProductThumb, Qty, StockBadge, useInventory, variantLabel } from "./InventoryUi";
-import { MovementTable } from "./MovementTable";
+import { AdjustDialog, confirmedMessage, type AdjustTarget } from "./AdjustDialog";
+import { ProductThumb, Qty, StockBadge, useCanAdjust, useInventory, variantLabel } from "./InventoryUi";
+import { MovementList } from "./MovementList";
 
 /**
  * One product, in a panel over the page: what Shopify holds about it, each variant with its stock
@@ -50,7 +50,7 @@ export function ProductPanel({ productId }: { productId: string }) {
 
   const p = data?.product;
   const levelsKnown = status?.status.source === "levels";
-  const canAdjust = !!can?.adjust && levelsKnown && !!status?.capabilities.find((c) => c.id === "stock_adjustments")?.enabled;
+  const canAdjust = useCanAdjust();
 
   const saveThreshold = async () => {
     if (!threshold) return;
@@ -267,7 +267,7 @@ export function ProductPanel({ productId }: { productId: string }) {
               {data.history && (
                 <Section title="Stock history">
                   {data.history.rows.length ? (
-                    <MovementTable rows={data.history.rows} compact />
+                    <MovementList rows={data.history.rows} compact heading="h4" />
                   ) : (
                     <p className="text-sm text-muted">No stock changes recorded yet. Changes appear here from when bizinsights started following this store&apos;s stock.</p>
                   )}
@@ -284,7 +284,7 @@ export function ProductPanel({ productId }: { productId: string }) {
           onClose={() => setAdjust(null)}
           onDone={(a) => {
             setAdjust(null);
-            toast("success", `Shopify confirmed the change${a.resultQuantity !== null ? `: ${fmtNum(a.resultQuantity)} ${QUANTITY_INFO[a.quantityName as keyof typeof QUANTITY_INFO]?.label.toLowerCase() ?? ""} now` : ""}.`);
+            toast("success", confirmedMessage(a));
             void reload();
           }}
         />

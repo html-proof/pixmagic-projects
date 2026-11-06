@@ -15,6 +15,10 @@ import {
   type AdjustmentKind,
 } from "@app/shared/inventory";
 
+/** The toast once Shopify confirmed a change: what the stock is now. */
+export const confirmedMessage = (a: AdjustmentRow) =>
+  `Shopify confirmed the change${a.resultQuantity !== null ? `: ${fmtNum(a.resultQuantity)} ${QUANTITY_INFO[a.quantityName as keyof typeof QUANTITY_INFO]?.label.toLowerCase() ?? ""} now` : ""}.`;
+
 export interface AdjustTarget {
   variantId: string;
   label: string;
@@ -163,7 +167,7 @@ export function AdjustDialog({ base, target, onClose, onDone }: { base: string; 
         </form>
       ) : (
         <div className="space-y-4">
-          <div className="rounded-xl border border-border bg-bg p-4">
+          <div className="rounded bg-home-soft p-4">
             <p className="text-sm text-muted">
               {level?.locationName} · {target.sku ? `SKU ${target.sku} · ` : ""}
               {ADJUSTMENT_INFO[kind].label} · {ADJUSTMENT_REASON_LABEL[reason] ?? reason}

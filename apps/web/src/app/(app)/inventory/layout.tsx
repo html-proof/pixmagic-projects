@@ -39,7 +39,7 @@ export default function InventoryLayout({ children }: { children: ReactNode }) {
         {storesStatus !== "ready" ? (
           <StoresPending />
         ) : !store ? (
-          <div className="card">
+          <div className="home-card p-5 sm:p-6">
             <h1 className="card-title">Inventory</h1>
             <p className="mt-1 text-sm text-muted">Connect a Shopify store first: inventory is the stock of a store&apos;s products.</p>
             {canManage(workspace.role) && (

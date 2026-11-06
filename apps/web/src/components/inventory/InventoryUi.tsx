@@ -5,7 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { useApp } from "@/components/AppContext";
 import { useToast } from "@/components/AppUi";
 import { Alert } from "@/components/ui";
-import { Badge, type Tone } from "@/components/dashboard/Primitives";
+import { Dot, type Tone } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { actionError, api, ApiError, fmtNum, useLiveApi } from "@/lib/api";
 import type { StatusAnswer, StockSource } from "@/lib/inventory";
@@ -14,8 +14,9 @@ import { STOCK_STATUS_INFO, type StockStatus } from "@app/shared/inventory";
 
 // ---------------------------------------------------------------------------
 // What every Inventory page shares: the store's inventory status (where the stock comes from, when
-// it last matched Shopify, what this member may do), the sync strip, the "connect stock levels"
-// card, status badges and quantities.
+// it last matched Shopify, what this member may do), the status pill and Refresh in each page's
+// header (the Stitch design's "In step with Shopify · checked 4 h ago"), the "connect stock levels"
+// card, status words and quantities.
 // ---------------------------------------------------------------------------
 
 interface InventoryCtx {
@@ -48,15 +49,31 @@ export function useInventory(): InventoryCtx {
   return c;
 }
 
+/**
+ * Whether this member may change stock here: the permission (inventory.adjust), stock levels read
+ * per location, and the store's grant to change stock in Shopify. Each item must also be tracked.
+ */
+export function useCanAdjust(): boolean {
+  const { status } = useInventory();
+  return !!status?.can.adjust && status.status.source === "levels" && !!status.capabilities.find((c) => c.id === "stock_adjustments")?.enabled;
+}
+
 // ---------------------------------------------------------------------------
 // Status and quantities
 // ---------------------------------------------------------------------------
 
 const STATUS_TONE: Record<StockStatus, Tone> = { in_stock: "good", low: "warn", out: "danger", untracked: "neutral" };
+const STATUS_TEXT: Record<StockStatus, string> = { in_stock: "text-good", low: "text-warn", out: "text-danger", untracked: "text-muted" };
 
+/** A status as the design's screen 22 writes it: the words in the status's colour, with its dot. */
 export function StockBadge({ status }: { status: StockStatus | null }) {
   if (!status) return <span className="text-xs text-muted">—</span>;
-  return <Badge tone={STATUS_TONE[status]}>{STOCK_STATUS_INFO[status].label}</Badge>;
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium whitespace-nowrap ${STATUS_TEXT[status]}`}>
+      <Dot tone={STATUS_TONE[status]} />
+      {STOCK_STATUS_INFO[status].label}
+    </span>
+  );
 }
 
 /** A quantity: "—" when it isn't known, red when below zero (oversold). */
@@ -68,13 +85,13 @@ export function Qty({ value, strong = false }: { value: number | null | undefine
 export function ProductThumb({ url, title, size = 36 }: { url: string | null; title: string; size?: number }) {
   if (!url) {
     return (
-      <span aria-hidden className="grid shrink-0 place-items-center rounded-md border border-border bg-bg text-xs font-semibold text-muted" style={{ width: size, height: size }}>
+      <span aria-hidden className="grid shrink-0 place-items-center rounded bg-home-soft text-xs font-semibold text-muted" style={{ width: size, height: size }}>
         {title.trim().charAt(0).toUpperCase() || "?"}
       </span>
     );
   }
   // A plain img: Shopify's CDN sizes it (width=); the static export has no image optimizer.
-  return <img src={`${url}${url.includes("?") ? "&" : "?"}width=${size * 2}`} alt="" width={size} height={size} loading="lazy" className="shrink-0 rounded-md border border-border object-cover" style={{ width: size, height: size }} />;
+  return <img src={`${url}${url.includes("?") ? "&" : "?"}width=${size * 2}`} alt="" width={size} height={size} loading="lazy" className="shrink-0 rounded bg-home-soft object-cover" style={{ width: size, height: size }} />;
 }
 
 /** A variant's name as shown: the product, and the variant unless it is Shopify's "Default Title". */
@@ -88,10 +105,15 @@ export const SOURCE_NOTE: Record<StockSource, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// The sync strip: when the stock last matched Shopify, and Refresh
+// How current the stock is, and Refresh
 // ---------------------------------------------------------------------------
 
-export function SyncStrip() {
+/**
+ * The header's status pill and Refresh stock, as the design's screens 21–23 put them beside the
+ * title: when the stock last matched Shopify (never "live": Shopify gives webhooks no freshness
+ * guarantee), whether it may be out of date, and a full read of every location on request.
+ */
+export function StockStatus() {
   const { base, status, refresh } = useInventory();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -101,6 +123,7 @@ export function SyncStrip() {
   const checked = fmtRelative(s.checkedAt);
   const updated = fmtRelative(s.stockUpdatedAt);
   const failed = s.lastPass?.status === "failed";
+  const warn = !s.running && (failed || s.stale);
   const onRefresh = async () => {
     setBusy(true);
     try {
@@ -114,41 +137,48 @@ export function SyncStrip() {
     }
   };
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-sm" data-testid="inventory-sync">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.running ? "animate-pulse bg-accent" : failed || s.stale ? "bg-warn" : levels ? "bg-good" : "bg-muted"}`} />
-        <p className="min-w-0">
+    <>
+      <p className={`inline-flex min-h-9 max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-medium text-text ${warn ? "bg-warn/10" : "bg-accent/10"}`} data-testid="inventory-sync">
+        <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${s.running ? "animate-pulse bg-accent" : warn ? "bg-warn" : levels ? "bg-good" : "bg-muted"}`} />
+        <span className="min-w-0">
           {s.running ? (
-            <span>Checking every stock level against Shopify…</span>
+            "Checking every stock level against Shopify…"
           ) : levels ? (
             <>
-              <span className="font-medium">{failed ? "The last check against Shopify didn't finish" : s.stale ? "Stock may be out of date" : "In step with Shopify"}</span>
-              <span className="text-muted">
+              {failed ? "The last check against Shopify didn't finish" : s.stale ? "Stock may be out of date" : "In step with Shopify"}
+              <span className="font-normal text-muted">
                 {" "}
-                · Checked {checked ?? "never"}
+                · checked {checked ?? "never"}
                 {updated && updated !== checked ? ` · last change ${updated}` : ""} · {fmtNum(s.locations)} {s.locations === 1 ? "location" : "locations"}
               </span>
             </>
           ) : (
             <>
-              <span className="font-medium">Shopify&apos;s totals only</span>
-              <span className="text-muted"> · from the catalog import{status.status.catalogSyncedAt ? `, ${fmtRelative(status.status.catalogSyncedAt)}` : ""}</span>
+              Shopify&apos;s totals only
+              <span className="font-normal text-muted"> · from the catalog import{s.catalogSyncedAt ? `, ${fmtRelative(s.catalogSyncedAt)}` : ""}</span>
             </>
           )}
-        </p>
-      </div>
+        </span>
+      </p>
       {levels && (
-        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh} disabled={busy || s.running}>
-          <RefreshCw aria-hidden className={`h-3.5 w-3.5 ${busy || s.running ? "animate-spin" : ""}`} />
+        <button type="button" className="home-btn h-10 border border-home-line bg-surface disabled:opacity-50" onClick={onRefresh} disabled={busy || s.running}>
+          <RefreshCw aria-hidden className={`h-4 w-4 ${busy || s.running ? "animate-spin" : ""}`} />
           {s.running ? "Refreshing" : "Refresh stock"}
         </button>
       )}
-      {levels && s.lastPass && s.lastPass.trigger === "reconcile" && s.lastPass.status === "succeeded" && s.lastPass.differences > 0 && (
-        <p className="w-full text-xs text-muted">
-          The last scheduled check found {fmtNum(s.lastPass.differences)} {s.lastPass.differences === 1 ? "level" : "levels"} of {fmtNum(s.lastPass.levelsChecked)} that differed from Shopify, and corrected them.
-        </p>
-      )}
-    </div>
+    </>
+  );
+}
+
+/** Under the header, when the last scheduled check corrected levels that differed from Shopify. */
+export function SyncNote() {
+  const { status } = useInventory();
+  const s = status?.status;
+  if (!s || s.source !== "levels" || !s.lastPass || s.lastPass.trigger !== "reconcile" || s.lastPass.status !== "succeeded" || s.lastPass.differences === 0) return null;
+  return (
+    <p className="text-xs text-muted" data-testid="sync-differences">
+      The last scheduled check found {fmtNum(s.lastPass.differences)} {s.lastPass.differences === 1 ? "level" : "levels"} of {fmtNum(s.lastPass.levelsChecked)} that differed from Shopify, and corrected them.
+    </p>
   );
 }
 
@@ -192,8 +222,8 @@ export function ConnectCard({ capability }: { capability: "stock_levels" | "stoc
     }
   };
   return (
-    <div className="card border-dashed" data-testid={`connect-${capability}`}>
-      <p className="font-medium">{c.title}</p>
+    <section className="home-card animate-rise p-5 sm:p-6" aria-label={c.title} data-testid={`connect-${capability}`}>
+      <p className="font-semibold">{c.title}</p>
       <p className="mt-1 text-sm text-muted">
         To {what}, bizinsights needs access to {scopeList(c.missingScopes)} in Shopify.
       </p>
@@ -218,15 +248,15 @@ export function ConnectCard({ capability }: { capability: "stock_levels" | "stoc
       ) : (
         <p className="mt-2 text-sm text-muted">This can&apos;t be turned on for your store yet: the bizinsights app doesn&apos;t offer this access in Shopify yet.{capability === "stock_levels" ? " Until then, Inventory shows Shopify’s total available stock per item." : ""}</p>
       )}
-    </div>
+    </section>
   );
 }
 
 /** Shown to a member without the permission a page needs. */
 export function NoPermission({ what }: { what: string }) {
   return (
-    <div className="card" data-testid="inventory-no-permission">
-      <p className="font-medium">You don&apos;t have access to {what}</p>
+    <div className="home-card p-5 sm:p-6" data-testid="inventory-no-permission">
+      <p className="font-semibold">You don&apos;t have access to {what}</p>
       <p className="mt-1 text-sm text-muted">Ask an owner or admin of this workspace to give it to you in Team &amp; Access.</p>
     </div>
   );
