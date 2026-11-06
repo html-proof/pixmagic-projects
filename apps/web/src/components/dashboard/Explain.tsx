@@ -15,7 +15,7 @@ import type { Topic } from "./topics";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// The bottom of every detail panel: what to do about these numbers, worked out from the store's
+// The bottom of every topic's page: what to do about these numbers, worked out from the store's
 // own figures, and what each figure means in plain words. Nothing here is advice from outside
 // the data: each "next" line names the number it comes from.
 // ---------------------------------------------------------------------------

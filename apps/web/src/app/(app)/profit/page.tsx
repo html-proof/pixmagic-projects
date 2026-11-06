@@ -17,6 +17,7 @@ import { saveFile, Statement, statementCsv } from "@/components/profit/Statement
 import { useStatement, type ListedExpense, type StatementState } from "@/components/profit/useStatement";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, friendlyError, isTransient } from "@/lib/api";
+import { SalesTabs } from "@/components/dashboard/SalesFrame";
 
 const GRAIN_LABEL: Record<StatementGrain, string> = { day: "Daily", week: "Weekly", month: "Monthly", year: "Yearly" };
 
@@ -63,6 +64,8 @@ function ProfitView() {
 
   return (
     <div className="space-y-5" data-print-root data-testid="pl-page">
+      {/* The Sales area's tabs (the Stitch design): this is its Profit & Loss tab. */}
+      <SalesTabs active="profit" />
       <Header s={s} onAdd={() => setEditing({ expense: null, draft: blankCost(today) })} onCategories={() => setCategoriesOpen(true)} />
 
       {s.error && !data && <LoadError what="your profit and loss" error={s.error} onRetry={() => window.dispatchEvent(new Event("insights:retry"))} busy={s.loading} />}

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
@@ -7,9 +8,9 @@ import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StatusWords, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
 import { CompareDates, comparedWith, CompareSelect, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
-import { TopicDetail } from "@/components/dashboard/TopicDetail";
+import { SalesActions, SalesCrumbs, SalesHeader, SalesTabs, salesTabOf, StatusPill } from "@/components/dashboard/SalesFrame";
 import { HistoryFoot, HistoryLine } from "@/components/dashboard/HistoryLine";
-import { useDetailView } from "@/components/dashboard/topics";
+import { topicInfo, useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
 import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, PaidVsOrganic, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
@@ -28,7 +29,24 @@ import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
-import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
+import { hasDashboardAccess, seesTopic, showsDashboardHome, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
+
+/** While a topic's contents load (the first time one opens): its first panels, as shapes. */
+function TopicLoading() {
+  return (
+    <div className="space-y-4">
+      <p className="sr-only" role="status">Loading the details…</p>
+      <div className="skeleton h-14" aria-hidden />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-hidden>
+        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-28" />)}
+      </div>
+      <div className="skeleton h-72" aria-hidden />
+    </div>
+  );
+}
+
+// Every topic's panels (components/dashboard/Details.tsx): loaded the first time a topic opens, so the Home starts without them.
+const TopicContents = dynamic(() => import("@/components/dashboard/Details").then((m) => m.TopicContents), { loading: () => <TopicLoading /> });
 
 /**
  * Set just before we hand the browser to Shopify's optional-scope screen, and read when the
@@ -492,6 +510,131 @@ export default function DashboardPage() {
     </button>
   );
 
+  // How the store's sync stands, when something is wrong (the Home and every topic page say it alike).
+  const storeAlerts = (
+    <>
+      {ov && ov.store.status === "error" && (
+        <Alert>
+          {/* What `autoRefresh` actually does: the failed *job* is given up on, but the store is
+              re-seeded once every 30 minutes — from this page's own poll, for the store being
+              looked at. Saying "it will not clear on its own" was true of neither half, and sent
+              people to reconnect when waiting would have done. Shopify's own answer says which
+              (ov.syncProblem): a frozen, missing or locked store isn't fixed by reconnecting. */}
+          {ov.syncProblem === "shop_unavailable" ? (
+            <>
+              <p>
+                Shopify says {ov.store.name ?? ov.store.shopDomain} is unavailable: the store is frozen, paused or closed. That usually means an unpaid Shopify
+                bill or a trial that has ended.
+              </p>
+              <p className="mt-1 text-xs">
+                Reactivate it in your Shopify admin (Settings → Plan). Syncing starts again by itself within about half an hour; reconnecting won&apos;t help until then.
+                Your numbers below are from the last sync{ov.store.lastSyncedAt ? ` (${fmtRelative(ov.store.lastSyncedAt)})` : ""}.
+              </p>
+              <a className="btn-primary mt-2 inline-block" href={`https://${ov.store.shopDomain}/admin/settings/plan`} target="_blank" rel="noreferrer">Open Shopify admin</a>
+            </>
+          ) : ov.syncProblem === "not_approved" ? (
+            <>
+              <p>Shopify hasn&apos;t approved bizinsights to read {ov.store.name ?? ov.store.shopDomain}&apos;s orders yet.</p>
+              <p className="mt-1 text-xs">
+                Shopify has to approve an app before it can read orders, which hold customer details, on merchants&apos; stores, and bizinsights is still waiting on that
+                approval. There&apos;s nothing to do on your side, and reconnecting won&apos;t change it. We try again about every half hour while this page is open, so
+                your orders import by themselves once Shopify approves.
+              </p>
+            </>
+          ) : ov.syncProblem === "shop_locked" ? (
+            <>
+              <p>Shopify has locked {ov.store.name ?? ov.store.shopDomain}, so it can&apos;t be read right now.</p>
+              <p className="mt-1 text-xs">Check your Shopify admin for a notice. Syncing starts again by itself once Shopify unlocks the store.</p>
+            </>
+          ) : (
+            <>
+              <p>
+                {ov.syncProblem === "shop_gone"
+                  ? `Shopify can't find ${ov.store.shopDomain} any more: the store may have been closed, or its address changed.`
+                  : "Syncing this store has stopped. We try it again about every half hour while this page is open on this store, so it may well fix itself."}
+              </p>
+              <p className="mt-1 text-xs">
+                {ov.syncProblem === "access"
+                  ? "Shopify stopped accepting bizinsights' access. Reconnecting grants it again and restarts the import straight away."
+                  : "If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away."}
+              </p>
+              {canManage(workspace.role) && (
+                <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, ov.store.shopDomain)}>Reconnect</Link>
+              )}
+            </>
+          )}
+        </Alert>
+      )}
+    </>
+  );
+
+  // ---- A topic as a page of its own (the Stitch design's Sales tabs, components/dashboard/SalesFrame.tsx) ----
+  if (detail.view && !page) {
+    const topic = detail.view;
+    const tab = salesTabOf(topic);
+    const title = tab ? "Sales" : topicInfo(topic).title;
+    return (
+      <div className="space-y-6" data-testid="detail-panel" data-print-root>
+        <SalesHeader
+          crumbs={showsDashboardHome(access) ? <SalesCrumbs here={title} /> : undefined}
+          title={title}
+          sub={tab ? "How your store is selling" : "Right now, with sales speed from the last 30 days"}
+          status={
+            headerStore && (
+              <StatusPill>
+                <StatusWords key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />
+              </StatusPill>
+            )
+          }
+          dates={topic !== "stock" && <DateChip r={dates} shown={shown} current={!olderAnswer} />}
+          actions={<SalesActions exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />}
+          tabs={tab && <SalesTabs active={tab} onDashboard />}
+        />
+        {topic !== "stock" && customPickers}
+        {ov && (
+          <HistoryLine
+            ov={ov}
+            loading={olderAnswer && loading && !error ? (asking?.label ?? null) : null}
+            canManage={canManage(workspace.role)}
+            reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
+            onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
+            importing={pendingScope === "order_history"}
+            brief
+          />
+        )}
+        {error && !ov && (
+          <Alert kind={isTransient(error) ? "info" : "error"}>
+            {friendlyError(error)}
+            <RetryButton />
+          </Alert>
+        )}
+        {error && ov && olderAnswer && (
+          <Alert kind={isTransient(error) ? "info" : "error"}>
+            Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
+            <RetryButton />
+          </Alert>
+        )}
+        {loading && !ov && <TopicLoading />}
+        {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
+        {storeAlerts}
+        {ov && <TopicContents topic={topic} ov={ov} currency={cur} contactsOn={contactsOn} onOpen={detail.open} />}
+        {ov && (
+          <AboutThisData
+            brief
+            store={ov.store}
+            data={ov.data}
+            freshness={ov.freshness}
+            everySec={everySec}
+            check={ov.check}
+            ws={workspace.id}
+            seesFigures={allowed("finance.breakdown")}
+            canCheck={allowed("integrations.manage")}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {simple ? (
@@ -571,58 +714,7 @@ export default function DashboardPage() {
         </>
       )}
       {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
-      {ov && ov.store.status === "error" && (
-        <Alert>
-          {/* What `autoRefresh` actually does: the failed *job* is given up on, but the store is
-              re-seeded once every 30 minutes — from this page's own poll, for the store being
-              looked at. Saying "it will not clear on its own" was true of neither half, and sent
-              people to reconnect when waiting would have done. Shopify's own answer says which
-              (ov.syncProblem): a frozen, missing or locked store isn't fixed by reconnecting. */}
-          {ov.syncProblem === "shop_unavailable" ? (
-            <>
-              <p>
-                Shopify says {ov.store.name ?? ov.store.shopDomain} is unavailable: the store is frozen, paused or closed. That usually means an unpaid Shopify
-                bill or a trial that has ended.
-              </p>
-              <p className="mt-1 text-xs">
-                Reactivate it in your Shopify admin (Settings → Plan). Syncing starts again by itself within about half an hour; reconnecting won&apos;t help until then.
-                Your numbers below are from the last sync{ov.store.lastSyncedAt ? ` (${fmtRelative(ov.store.lastSyncedAt)})` : ""}.
-              </p>
-              <a className="btn-primary mt-2 inline-block" href={`https://${ov.store.shopDomain}/admin/settings/plan`} target="_blank" rel="noreferrer">Open Shopify admin</a>
-            </>
-          ) : ov.syncProblem === "not_approved" ? (
-            <>
-              <p>Shopify hasn&apos;t approved bizinsights to read {ov.store.name ?? ov.store.shopDomain}&apos;s orders yet.</p>
-              <p className="mt-1 text-xs">
-                Shopify has to approve an app before it can read orders, which hold customer details, on merchants&apos; stores, and bizinsights is still waiting on that
-                approval. There&apos;s nothing to do on your side, and reconnecting won&apos;t change it. We try again about every half hour while this page is open, so
-                your orders import by themselves once Shopify approves.
-              </p>
-            </>
-          ) : ov.syncProblem === "shop_locked" ? (
-            <>
-              <p>Shopify has locked {ov.store.name ?? ov.store.shopDomain}, so it can&apos;t be read right now.</p>
-              <p className="mt-1 text-xs">Check your Shopify admin for a notice. Syncing starts again by itself once Shopify unlocks the store.</p>
-            </>
-          ) : (
-            <>
-              <p>
-                {ov.syncProblem === "shop_gone"
-                  ? `Shopify can't find ${ov.store.shopDomain} any more: the store may have been closed, or its address changed.`
-                  : "Syncing this store has stopped. We try it again about every half hour while this page is open on this store, so it may well fix itself."}
-              </p>
-              <p className="mt-1 text-xs">
-                {ov.syncProblem === "access"
-                  ? "Shopify stopped accepting bizinsights' access. Reconnecting grants it again and restarts the import straight away."
-                  : "If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away."}
-              </p>
-              {canManage(workspace.role) && (
-                <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, ov.store.shopDomain)}>Reconnect</Link>
-              )}
-            </>
-          )}
-        </Alert>
-      )}
+      {storeAlerts}
 
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
@@ -655,8 +747,8 @@ export default function DashboardPage() {
             what's left after the costs we can see, then sales, advertising and best sellers, then
             costs, recent orders and key insights (components/dashboard/HomePanels.tsx); sales day by
             day and month by month against the years before (OverviewCharts.tsx); and the
-            integrations strip. Every number and panel opens the full details
-            (components/dashboard/TopicDetail.tsx). */}
+            integrations strip. Every number and panel opens the full details, a Sales page of its
+            own (components/dashboard/SalesFrame.tsx). */}
         {s && (
           <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
@@ -759,9 +851,6 @@ export default function DashboardPage() {
         />
       )}
 
-      {ov && detail.view && !page && (
-        <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />
-      )}
     </div>
   );
 }

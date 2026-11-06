@@ -301,13 +301,13 @@ export function OrderName({ o, shopDomain }: { o: RecentOrder; shopDomain: strin
 
 // Payment, fulfillment and cancellation each need their own permission (Team & Access): a field
 // that isn't in the answer gets no badge, rather than a guess.
-const PaymentBadge = ({ o }: { o: RecentOrder }) =>
+export const PaymentBadge = ({ o }: { o: RecentOrder }) =>
   o.cancelled ? (
     <Badge tone="danger">Cancelled</Badge>
   ) : o.financialStatus !== undefined ? (
     <Badge tone={financialTone(o.financialStatus)}>{humanize(o.financialStatus)}</Badge>
   ) : null;
-const FulfillmentBadge = ({ o }: { o: RecentOrder }) =>
+export const FulfillmentBadge = ({ o }: { o: RecentOrder }) =>
   o.fulfillmentStatus !== undefined ? <Badge tone={fulfillmentTone(o.fulfillmentStatus)}>{o.fulfillmentStatus ? humanize(o.fulfillmentStatus) : "Not synced yet"}</Badge> : null;
 
 export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { items: RecentOrder[]; currency: string; timezone: string; shopDomain: string }) {

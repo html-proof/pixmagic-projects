@@ -17,6 +17,7 @@ import { useAdvertising } from "@/components/advertising/useAdvertising";
 import { AdStatusNotes, AD_DEFINITIONS, Definitions } from "@/components/dashboard/AdsCommon";
 import { plural } from "@/components/dashboard/format";
 import { leftOutOf } from "@/components/dashboard/profitFigures";
+import { SalesTabs } from "@/components/dashboard/SalesFrame";
 
 /**
  * Advertising Performance: every ad platform together, the owner's design. Spend, clicks, impressions,
@@ -35,6 +36,8 @@ export default function AdvertisingOverviewPage() {
   const s = useAdvertising();
   return (
     <>
+      {/* The Sales area's tabs (the Stitch design): this is its Ads tab. */}
+      <SalesTabs active="ads" />
       <AdvertisingHeader
         title="Advertising Performance"
         icon={<Megaphone aria-hidden className="h-5 w-5 text-accent" />}

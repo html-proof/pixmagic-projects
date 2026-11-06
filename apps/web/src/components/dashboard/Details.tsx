@@ -1,41 +1,37 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { seesModule } from "@app/shared/access";
 import type { CompareMode } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { seesTopic } from "@/lib/access";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { BarRow, StackedBar } from "./Charts";
-import { TopProducts } from "./TopProducts";
-import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
-import { ContactsCard } from "./Contacts";
-import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
-import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
-import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
-import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
+import { BarRow } from "./Charts";
+import { noEarlierData, versusWords } from "./DateRange";
+import { fmtComparison, fmtRange, hourRange, plural, weekdayNames } from "./format";
+import { ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, TrafficCard } from "./Modules";
 import { Explained } from "./Explain";
-import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
+import { B, Change, InShort } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
 import { profitCardFigures } from "./profitFigures";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
+import { SectionName } from "./SalesFrame";
+import { ComparedFoot, CustomersTab, OrdersTab, ProductsTab, SalesOverviewTab } from "./SalesViews";
 import { ProfitCard, ShopifyCheckCard } from "./ShopifyReports";
-import type { Topic } from "./topics";
+import { openView, type Topic } from "./topics";
 import type { Overview } from "./types";
-import { appliedCustom, breakdownOf, salesLinesOf } from "./redacted";
+import { appliedCustom, salesLinesOf } from "./redacted";
 import { TotalSalesBreakdown } from "./TotalSalesBreakdown";
 
 export type { Topic } from "./topics";
 
 // ---------------------------------------------------------------------------
-// Topics (./topics.ts): everything the dashboard knows, one tap away from its summary card.
-// This is what goes inside the detail panel (./TopicDetail.tsx), loaded when a panel first opens.
+// Topics (./topics.ts): everything the dashboard knows, each a page of its own (?view=<topic>,
+// app/(app)/dashboard/page.tsx). Overview, Products, Customers and Orders & shipping are drawn as
+// the owner's approved Stitch design draws the Sales tabs (./SalesViews.tsx); the rest, and the
+// panels with more detail under the Overview, are here. Loaded when a topic is first opened, so the
+// Home starts without it.
 // ---------------------------------------------------------------------------
-
-const r2 = (n: number) => Math.round(n * 100) / 100;
-
-/** A figure for the dates compared with, by how they were chosen. */
-const COMPARE_LABEL: Record<CompareMode, string> = { previous: "The period before", year: "Same dates last year", custom: "The dates compared" };
 
 /** The sales comparison table's title, by what the dates are compared with. */
 const COMPARE_TITLE: Record<CompareMode, string> = {
@@ -48,7 +44,12 @@ const COMPARE_TITLE: Record<CompareMode, string> = {
 // Each topic.
 // ---------------------------------------------------------------------------
 
-function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
+/**
+ * Under the Sales overview: the panels with more detail than its layout has room for (total sales
+ * line by line with Custom sales, the check against Shopify, gross profit, the comparison table,
+ * returns, and sales day by day and month by month).
+ */
+function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
   const { access, offers } = useApp();
   // Advertising as the home page has it (app/(app)/dashboard/page.tsx), so Shopify's gross profit
   // card gives the same net profit as Business profit overview.
@@ -57,110 +58,29 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const c = s.current;
   const p = s.previous;
   const money = (n: number) => fmtMoney(n, currency);
-  // Gross sales, discounts, tax, shipping and total sales, and returns, each only for someone who
-  // may see them (Team & Access leaves them out of the answer otherwise). Returns follow from the
-  // breakdown, so whoever sees it sees them too.
-  const bd = breakdownOf(c);
-  const refunds = c.returns ?? (bd ? r2(bd.grossSales - bd.discounts - c.netSales) : null);
   const total = c.totalSales ?? null;
   const r = ov.modules.refunds;
   const prevPeriod = fmtComparison(ov.previous);
   const versus = versusWords(ov);
   // Null when the imported orders don't reach back to the dates compared with: nothing is compared.
   const missing = ov.previous.imported === false ? noEarlierData(ov.data?.historyFrom) : null;
-  const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
     ...(total !== null ? [{ label: "Total sales", now: money(total), before: p?.totalSales !== undefined ? money(p.totalSales) : "—", delta: s.deltas.totalSales ?? null }] : []),
     { label: "Net sales", now: money(c.netSales), before: p ? money(p.netSales) : "—", delta: s.deltas.netSales },
-    ...(bd ? [{ label: "Gross sales", now: money(bd.grossSales), before: p?.grossSales !== undefined ? money(p.grossSales) : "—", delta: s.deltas.grossSales ?? null }] : []),
+    ...(c.grossSales !== undefined ? [{ label: "Gross sales", now: money(c.grossSales), before: p?.grossSales !== undefined ? money(p.grossSales) : "—", delta: s.deltas.grossSales ?? null }] : []),
     { label: "Orders", now: fmtNum(c.orders), before: p ? fmtNum(p.orders) : "—", delta: s.deltas.orders },
+    { label: "Items sold", now: fmtNum(c.units), before: p ? fmtNum(p.units) : "—", delta: s.deltas.units },
     { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p && p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
   ];
-  // Shopify's "Total sales breakdown", in its order.
-  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = bd
-    ? [
-        { label: "Gross sales", note: "Every item sold at its listed price, before tax.", amount: bd.grossSales, sign: "" },
-        { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: bd.discounts, sign: "−" },
-        { label: "Returns", note: "What refunds, cancellations and order edits took back, on the day they were made.", amount: refunds ?? 0, sign: "−" },
-      ]
-    : [];
   // The store's own calculation (Custom sales), when it shows it on the dashboard: beside Shopify's figures, named.
   const custom = appliedCustom(s);
 
   return (
     <>
-      <InShort>
-        <p>
-          {total !== null ? (
-            <>
-              Your total sales were <B>{money(total)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
-              {c.totalRefunded !== undefined && c.totalRefunded > 0 ? <> That&apos;s after refunds took <B>{money(c.totalRefunded)}</B> off it.</> : null} Before shipping and
-              taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
-            </>
-          ) : (
-            <>
-              You had <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
-            </>
-          )}
-        </p>
-        {c.orders > 0 && (
-          <p>
-            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>.
-            {bd ? (
-              <>
-                {" "}Discounts took off {money(bd.discounts)}
-                {refunds !== null && refunds > 0 ? <> and returns {money(refunds)}</> : null}.
-              </>
-            ) : null}
-          </p>
-        )}
-      </InShort>
-
-      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous, ov.range)}.`}>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} label={versus} />} />}
-          {custom && <Stat label={`Custom sales · ${custom.name}`} value={money(custom.current)} note={<Delta value={custom.delta} label={versus} />} />}
-          <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} label={versus} />} />
-          <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} label={versus} />} />
-          <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} label={versus} />} />
-          {total === null && bd && <Stat label="Gross sales" value={money(bd.grossSales)} note={<Delta value={s.deltas.grossSales ?? null} label={versus} />} />}
-          <Stat label="Items sold" value={fmtNum(c.units)} note={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />
-          {r ? (
-            <Stat label="Returns" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert label={versus} />} />
-          ) : refunds !== null ? (
-            <Stat label="Returns" value={money(refunds)} />
-          ) : null}
-        </div>
-      </Panel>
+      <h2 className="pt-2 text-xl leading-7 font-semibold tracking-[-0.01em]">More detail</h2>
 
       {/* Net sales to total sales, line by line, and the store's own calculation from those lines. */}
       {salesLinesOf(c) && <TotalSalesBreakdown ov={ov} currency={currency} />}
-
-      {bd && (
-        <Panel
-          id="d-sales-adds-up"
-          title="How your net sales add up"
-          help="The first lines of Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
-        >
-          <ul className="divide-y divide-border text-sm">
-            {lines.map((l) => (
-              <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
-                <div className="min-w-0">
-                  <p className="font-medium">{l.label}</p>
-                  <p className="text-xs text-muted">{l.note}</p>
-                </div>
-                <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
-              </li>
-            ))}
-            <li className="flex items-center justify-between gap-4 py-2.5 text-base">
-              <p className="font-semibold">= Net sales</p>
-              <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
-            </li>
-          </ul>
-        </Panel>
-      )}
 
       {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
       {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn }, seesModule(access, "profit"))} />}
@@ -205,49 +125,6 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />
       )}
       {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />}
-    </>
-  );
-}
-
-function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
-  const items = ov.modules.top_products?.items ?? [];
-  const c = ov.modules.sales_overview?.current;
-  const money = (n: number) => fmtMoney(n, currency);
-  // Product sales are each product's net sales: together they make the store's net sales.
-  const base = c ? c.netSales : null;
-  const share = (n: number) => (base && base > 0 ? n / base : null);
-  const top = items[0];
-  const topTotal = items.reduce((a, i) => a + i.revenue, 0);
-  // Top products narrowed to a collection, picked in Sales by collection or Top products' own list.
-  const [collection, setCollection] = useState<CollectionChoice | null>(null);
-  const collections = useCollectionSales(ov, !!ov.modules.top_products);
-  const choices = (collections.report?.items ?? []).map((c) => ({ id: c.collectionId, title: collectionName(c) }));
-  const pick = (c: CollectionChoice) => {
-    setCollection(c);
-    document.getElementById("d-top-products")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-  return (
-    <>
-      <InShort>
-        {top ? (
-          <>
-            <p>
-              <B>{top.title}</B> sold best: <B>{money(top.revenue)}</B> from {plural(top.units, "unit")}
-              {share(top.revenue) !== null ? <>, {fmtPct(share(top.revenue))} of your sales</> : null}.
-            </p>
-            {items.length > 1 && share(topTotal) !== null && (
-              <p>
-                Your top {items.length} products made <B>{fmtPct(share(topTotal))}</B> of sales in these dates.
-              </p>
-            )}
-          </>
-        ) : (
-          <p>{ov.modules.top_products?.complete === false ? "Product rankings are waiting for complete sales data for these dates." : "No product sales in these dates yet."}</p>
-        )}
-      </InShort>
-      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} collection={collection} collections={choices} onCollection={setCollection} />}
-      {ov.modules.top_products && <CollectionSales ov={ov} currency={currency} live={collections} onPick={pick} />}
-      {ov.modules.catalog && <CatalogCard m={ov.modules.catalog} currency={currency} />}
     </>
   );
 }
@@ -329,34 +206,6 @@ function ChannelsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-function ShippingDetail({ ov }: { ov: Overview }) {
-  const f = ov.modules.fulfillment!;
-  const c = f.current;
-  return (
-    <>
-      <InShort>
-        <p>
-          {f.openNow === 0 ? (
-            <>Every order has shipped. Nothing is waiting.</>
-          ) : (
-            <>
-              <B>{plural(f.openNow, "order")}</B> {f.openNow === 1 ? "is" : "are"} waiting to ship
-              {f.oldestOpenDays !== null ? <>; the oldest has waited <B>{plural(f.oldestOpenDays, "day")}</B></> : null}.
-            </>
-          )}
-        </p>
-        {c.orders > 0 && (
-          <p>
-            Of the {plural(c.orders, "order")} placed in these dates, {fmtPct(c.fulfilled / c.orders)} have shipped
-            {c.avgHoursToFulfill !== null ? <>, taking {fmtDuration(c.avgHoursToFulfill)} on average</> : null}.
-          </p>
-        )}
-      </InShort>
-      <FulfillmentCard m={f} />
-    </>
-  );
-}
-
 function StockDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const inv = ov.modules.inventory!;
   const c = inv.current;
@@ -423,88 +272,10 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-function CustomersDetail({ ov, currency, contactsOn }: { ov: Overview; currency: string; contactsOn: boolean }) {
-  const cu = ov.modules.customers;
-  const rate = cu?.current.returningCustomerRate ?? null;
-  const before = cu?.previous.returningCustomerRate ?? null;
-  // Repeat customers and cohorts: their own report, asked for only with the customers module.
-  const [months, setMonths] = useState(12);
-  const lifetime = useCustomerAnalytics(ov, !!cu, months);
-  return (
-    <>
-      {cu && (
-        <>
-          <InShort>
-            {rate === null ? (
-              <p>No orders with a known customer in these dates yet.</p>
-            ) : (
-              <p>
-                <B>{fmtPct(rate)}</B> of the {fmtNum(cu.current.customers)} {cu.current.customers === 1 ? "customer" : "customers"} who ordered had bought from you before
-                {before !== null ? <> (it was {fmtPct(before)} for {comparedOn(ov)})</> : null}. {fmtNum(cu.current.newCustomers)} made their first purchase.
-              </p>
-            )}
-          </InShort>
-          <Panel
-            id="d-customers"
-            title="Returning customers"
-            help="As Shopify counts them: each customer once, however many orders. A customer is returning when an order of theirs in these dates came after an earlier one, and new when their very first purchase is in these dates (someone can be both)."
-          >
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Returning customer rate" value={fmtPct(rate)} note="Returning customers ÷ customers." />
-              <Stat label={COMPARE_LABEL[ov.previous.compare ?? "previous"]} value={fmtPct(before)} note={ov.previous.imported === false ? "No earlier data" : fmtComparison(ov.previous)} />
-              <Stat label="Customers" value={fmtNum(cu.current.customers)} note="Who ordered in these dates." />
-              <Stat label="New customers" value={fmtNum(cu.current.newCustomers)} note="Their first purchase ever." />
-            </div>
-            {rate !== null && (
-              <div className="mt-5">
-                <p className="mb-2 text-xs text-muted">Customers who ordered in these dates</p>
-                <StackedBar
-                  label="Returning and first-time customers"
-                  format={(v) => fmtPct(v / 1000)}
-                  segments={[
-                    { label: "Had bought before", value: Math.round(rate * 1000), fill: "bg-[var(--viz-cat-1)]" },
-                    { label: "First purchase only", value: Math.round((1 - rate) * 1000), fill: "bg-[var(--viz-cat-3)]" },
-                  ]}
-                />
-              </div>
-            )}
-          </Panel>
-          <RepeatCustomers currency={currency} live={lifetime} />
-          <MonthlyCohorts currency={currency} live={lifetime} months={months} onMonths={setMonths} />
-        </>
-      )}
-      {contactsOn && <ContactsCard key={ov.store.id} storeId={ov.store.id} storeName={ov.store.name ?? ov.store.shopDomain} shopDomain={ov.store.shopDomain} />}
-    </>
-  );
-}
+/** The topics that share the Overview tab: their own name over their panels, and the way back. */
+const SECTION: Partial<Record<Topic, string>> = { overview: "Business overview", channels: "Sales channels", discounts: "Discount codes", timing: "Busiest times" };
 
-function OrdersDetail({ ov, currency }: { ov: Overview; currency: string }) {
-  const { items, cancelledInRange } = ov.modules.recent_orders!;
-  const cancelled = items.filter((o) => o.cancelled).length;
-  return (
-    <>
-      <InShort>
-        {items.length ? (
-          <p>
-            The latest order placed in these dates is <B>{items[0]!.name}</B> for <B>{fmtMoney(items[0]!.total, currency)}</B>. Open any order to see it in Shopify.
-            {cancelled ? <> {plural(cancelled, "order")} here {cancelled === 1 ? "was" : "were"} cancelled.</> : null}
-          </p>
-        ) : (
-          <p>No orders were placed in these dates.</p>
-        )}
-        {/* Counted on the day each was cancelled, whenever it was placed: a transaction date, not the order's. */}
-        {cancelledInRange !== undefined && cancelledInRange > 0 && (
-          <p data-testid="cancelled-in-range">
-            <B>{plural(cancelledInRange, "order")}</B> {cancelledInRange === 1 ? "was" : "were"} cancelled in these dates, counted on the day of the cancellation.
-          </p>
-        )}
-      </InShort>
-      <RecentOrdersCard items={items} currency={currency} timezone={ov.store.timezone} shopDomain={ov.store.shopDomain} />
-    </>
-  );
-}
-
-/** Everything inside the detail panel for one topic: its own figures, then what to do about them and what they mean. */
+/** Everything on a topic's page: its own figures, then what to do about them and what they mean. */
 export function TopicContents({
   topic,
   ov,
@@ -520,25 +291,36 @@ export function TopicContents({
   onOpen: (t: Topic) => void;
 }) {
   const m = ov.modules;
+  const section = SECTION[topic];
   // A topic whose module isn't there (scopes changed, another store) shows nothing rather than crash.
   const body: ReactNode =
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
-    : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
-    : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
+    : topic === "sales" && m.sales_overview ? (
+      <>
+        <SalesOverviewTab ov={ov} currency={currency} onOpen={onOpen} />
+        <SalesMore ov={ov} currency={currency} />
+      </>
+    )
+    : topic === "products" && (m.top_products || m.catalog) ? <ProductsTab ov={ov} currency={currency} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />
     : topic === "channels" && m.channels ? <ChannelsDetail ov={ov} currency={currency} />
-    : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />
+    : (topic === "orders" || topic === "shipping") && (m.recent_orders || m.fulfillment || m.order_outcomes) ? (
+      <>
+        <OrdersTab ov={ov} currency={currency} />
+        {m.fulfillment && <FulfillmentCard m={m.fulfillment} />}
+      </>
+    )
     : topic === "stock" && m.inventory ? <StockDetail ov={ov} currency={currency} />
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
-    : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} currency={currency} contactsOn={contactsOn} />
-    : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
-    : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
+    : topic === "customers" && (m.customers || contactsOn) ? <CustomersTab ov={ov} currency={currency} contactsOn={contactsOn} />
+    : <p className="home-card p-5 text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
     <>
+      {section && <SectionName title={section} onBack={m.sales_overview ? () => openView("sales") : undefined} />}
       {body}
+      {topic !== "overview" && topic !== "stock" && <ComparedFoot ov={ov} />}
       {/* Then, under every topic: what to do about it, and what each number means. Ads and AdSense have their own pages (/advertising). */}
       <Explained topic={topic} ov={ov} currency={currency} />
     </>
   );
 }
-

@@ -68,9 +68,9 @@ import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } f
 // The signed-in frame, in the owner's design (2026-10-24): a dark sidebar down the whole left side
 // (logo, the dashboard's topics and the other areas, help, and the account at its foot) beside a
 // top bar over the page (store, search, notifications). On a phone the sidebar slides in from the
-// menu button and the account sits in the top bar. Topics open the dashboard's detail panels
-// (?view=…), the same ones its cards open; advertising (/advertising) and the shopping funnel (/funnel)
-// have pages of their own.
+// menu button and the account sits in the top bar. Topics open the dashboard's topic pages
+// (?view=…, the Sales tabs of components/dashboard/SalesFrame.tsx), the same ones its cards open;
+// advertising (/advertising) and the shopping funnel (/funnel) have pages of their own.
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";

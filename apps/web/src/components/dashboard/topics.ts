@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { IconName } from "./Icons";
 
-/** Everything a dashboard card can open, each as its own detail panel (?view=<topic>). */
+/** Everything a dashboard card can open, each as a page of its own (?view=<topic>, components/dashboard/SalesFrame.tsx). */
 export const TOPICS = ["overview", "sales", "ads", "adsense", "products", "shoppers", "timing", "channels", "shipping", "stock", "discounts", "customers", "orders"] as const;
 export type Topic = (typeof TOPICS)[number];
 
