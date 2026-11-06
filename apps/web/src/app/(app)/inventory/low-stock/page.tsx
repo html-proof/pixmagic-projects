@@ -1,9 +1,11 @@
 "use client";
 import Link from "next/link";
 import { PageHeader } from "@/components/AppUi";
-import { SyncStrip, useInventory } from "@/components/inventory/InventoryUi";
+import { StockStatus, SyncNote, useInventory } from "@/components/inventory/InventoryUi";
+import { SettingsLink } from "@/components/inventory/StockKit";
 import { StockTable } from "@/components/inventory/StockTable";
 
+/** Low stock, in the Stitch design's "Needs attention" layout (screen 21) with the Low stock chip on. */
 export default function LowStockPage() {
   const { status } = useInventory();
   return (
@@ -20,9 +22,17 @@ export default function LowStockPage() {
             )}
           </>
         }
+        actions={
+          status && (
+            <>
+              <StockStatus />
+              <SettingsLink />
+            </>
+          )
+        }
       />
-      <SyncStrip />
-      <StockTable title="Low stock" fixed={{ status: "low" }} planning />
+      <SyncNote />
+      <StockTable title="Low stock" fixed={{ status: "low" }} planning view="low" />
       <p className="text-xs text-muted">Reorder suggestions use the lead time and the days of sales to cover set in Stock settings.</p>
     </>
   );

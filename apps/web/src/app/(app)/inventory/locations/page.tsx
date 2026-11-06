@@ -1,16 +1,20 @@
 "use client";
 import { PageHeader } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
+import { Card, ShareRow } from "@/components/PageKit";
 import { EmptyState } from "@/components/ui";
-import { Badge } from "@/components/dashboard/Primitives";
-import { BarRow } from "@/components/dashboard/Charts";
 import { fmtRelative } from "@/components/dashboard/format";
-import { ConnectCard, Qty, SyncStrip, useInventory } from "@/components/inventory/InventoryUi";
-import { Table, Td, Th } from "@/components/staff/ui";
+import { ConnectCard, Qty, StockStatus, SyncNote, useInventory } from "@/components/inventory/InventoryUi";
+import { KIT_ROW, KitHead, KitTable, KitTd, KitTh } from "@/components/inventory/StockKit";
 import { fmtMoney, fmtNum, useApi } from "@/lib/api";
 import type { LocationView } from "@/lib/inventory";
 
-/** Every Shopify location with its stock, side by side; each item at each location counted once. */
+const TAG = "ml-1.5 inline-flex rounded bg-home-tag px-1.5 py-0.5 text-[11px] font-medium text-muted";
+
+/**
+ * Every Shopify location with its stock, side by side; each item at each location counted once.
+ * No Stitch screen draws this page: it has the Stock pages' look (cards, the soft-headed table).
+ */
 export default function LocationsPage() {
   const { base, status } = useInventory();
   const currency = status?.store.currency ?? "USD";
@@ -20,81 +24,85 @@ export default function LocationsPage() {
   const total = withStock.reduce((n, l) => n + l.stock!.available, 0);
   return (
     <>
-      <PageHeader title="Locations" sub="Your Shopify locations and the stock at each. An item stocked at two locations counts once at each, and once per unit in the totals." />
-      <SyncStrip />
+      <PageHeader title="Locations" sub="Your Shopify locations and the stock at each. An item stocked at two locations counts once at each, and once per unit in the totals." actions={status && <StockStatus />} />
+      <SyncNote />
       <ConnectCard capability="stock_levels" />
       {error && !data ? (
         <LoadError what="the locations" error={error} onRetry={reload} busy={loading} />
       ) : !data ? (
-        <div className="skeleton h-40 rounded-xl" />
+        <div className="skeleton h-40 rounded-lg" />
       ) : data.locations.length === 0 ? (
         <EmptyState title="No locations yet" body="Locations appear once bizinsights can read them from Shopify (stock-level access) and the first check has run." />
       ) : (
         <>
           {withStock.length > 1 && (
-            <section className="card space-y-2" aria-label="Available stock by location">
-              <h2 className="font-semibold">Available stock by location</h2>
-              {withStock.map((l) => (
-                <BarRow key={l.id} label={l.name} sub={total ? `${Math.round((l.stock!.available / total) * 100)}% of all available` : undefined} value={fmtNum(l.stock!.available)} fraction={l.stock!.available / most} />
-              ))}
-            </section>
+            <Card id="by-location" title="Available stock by location" aside={`${fmtNum(total)} available in all`}>
+              <ul className="space-y-3">
+                {withStock.map((l) => (
+                  <ShareRow key={l.id} label={l.name} sub={total ? `${Math.round((l.stock!.available / total) * 100)}% of all available` : undefined} value={fmtNum(l.stock!.available)} fraction={l.stock!.available / most} />
+                ))}
+              </ul>
+            </Card>
           )}
-          <div className="card">
-            <Table label="Locations">
-              <thead>
+          <section aria-labelledby="locations-h" className="home-card animate-rise min-w-0 overflow-hidden">
+            <h2 id="locations-h" className="home-h2 px-5 pt-5 pb-4 sm:px-6">
+              Locations
+            </h2>
+            <KitTable label="Locations" minWidth="60rem">
+              <KitHead>
                 <tr>
-                  <Th>Location</Th>
-                  <Th right>Items stocked</Th>
-                  <Th right>Available</Th>
-                  <Th right>On hand</Th>
-                  <Th right>Committed</Th>
-                  <Th right>Incoming</Th>
-                  <Th right>Low</Th>
-                  <Th right>Out</Th>
-                  {status?.can.costs && <Th right>Stock value at cost</Th>}
-                  <Th>Read from Shopify</Th>
+                  <KitTh>Location</KitTh>
+                  <KitTh right>Items stocked</KitTh>
+                  <KitTh right>Available</KitTh>
+                  <KitTh right>On hand</KitTh>
+                  <KitTh right>Committed</KitTh>
+                  <KitTh right>Incoming</KitTh>
+                  <KitTh right>Low</KitTh>
+                  <KitTh right>Out</KitTh>
+                  {status?.can.costs && <KitTh right>Stock value at cost</KitTh>}
+                  <KitTh>Read from Shopify</KitTh>
                 </tr>
-              </thead>
+              </KitHead>
               <tbody>
                 {data.locations.map((l) => (
-                  <tr key={l.id} data-testid={`location-${l.id}`}>
-                    <Td>
-                      <span className="font-medium">{l.name}</span>{" "}
-                      {!l.active && <Badge tone="neutral">Inactive</Badge>}
-                      {l.fulfillmentService && <Badge tone="neutral">App-managed</Badge>}
+                  <tr key={l.id} className={KIT_ROW} data-testid={`location-${l.id}`}>
+                    <KitTd>
+                      <span className="font-medium">{l.name}</span>
+                      {!l.active && <span className={TAG}>Inactive</span>}
+                      {l.fulfillmentService && <span className={TAG}>App-managed</span>}
                       <span className="block text-xs text-muted">
                         {l.address ?? "No address"} · ID {l.id}
                         {l.fulfillsOnlineOrders ? " · Fulfils online orders" : ""}
                       </span>
-                    </Td>
-                    <Td right>{l.stock ? fmtNum(l.stock.itemsStocked) : "—"}</Td>
-                    <Td right>
+                    </KitTd>
+                    <KitTd right>{l.stock ? fmtNum(l.stock.itemsStocked) : "—"}</KitTd>
+                    <KitTd right>
                       <Qty value={l.stock?.available} strong />
-                    </Td>
-                    <Td right>
+                    </KitTd>
+                    <KitTd right>
                       <Qty value={l.stock?.onHand} />
-                    </Td>
-                    <Td right>
+                    </KitTd>
+                    <KitTd right>
                       <Qty value={l.stock?.committed} />
-                    </Td>
-                    <Td right>
+                    </KitTd>
+                    <KitTd right>
                       <Qty value={l.stock?.incoming} />
-                    </Td>
-                    <Td right>{l.stock ? <span className={l.stock.lowStock ? "text-warn" : ""}>{fmtNum(l.stock.lowStock)}</span> : "—"}</Td>
-                    <Td right>{l.stock ? <span className={l.stock.outOfStock ? "text-danger" : ""}>{fmtNum(l.stock.outOfStock)}</span> : "—"}</Td>
+                    </KitTd>
+                    <KitTd right>{l.stock ? <span className={l.stock.lowStock ? "font-medium text-warn" : ""}>{fmtNum(l.stock.lowStock)}</span> : "—"}</KitTd>
+                    <KitTd right>{l.stock ? <span className={l.stock.outOfStock ? "font-medium text-danger" : ""}>{fmtNum(l.stock.outOfStock)}</span> : "—"}</KitTd>
                     {status?.can.costs && (
-                      <Td right>
+                      <KitTd right>
                         {l.stock?.costValue === null || l.stock?.costValue === undefined ? "—" : fmtMoney(l.stock.costValue, currency)}
                         {l.stock && l.stock.costComplete === false && <span className="block text-[11px] text-muted">Some items have no cost</span>}
-                      </Td>
+                      </KitTd>
                     )}
-                    <Td className="text-xs text-muted">{fmtRelative(l.syncedAt) ?? "—"}</Td>
+                    <KitTd className="text-xs text-muted">{fmtRelative(l.syncedAt) ?? "—"}</KitTd>
                   </tr>
                 ))}
               </tbody>
-            </Table>
-            {withStock.some((l) => l.stock!.untrackedItems > 0) && <p className="mt-2 text-xs text-muted">Items whose stock Shopify doesn&apos;t track aren&apos;t counted in these figures.</p>}
-          </div>
+            </KitTable>
+            {withStock.some((l) => l.stock!.untrackedItems > 0) && <p className="border-t border-home-line px-5 py-3 text-xs text-muted sm:px-6">Items whose stock Shopify doesn&apos;t track aren&apos;t counted in these figures.</p>}
+          </section>
         </>
       )}
     </>
