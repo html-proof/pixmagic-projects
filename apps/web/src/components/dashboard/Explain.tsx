@@ -145,7 +145,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Phone from the checkout", "When a shopper has no customer record yet, the phone number and name come from what they typed into the checkout's address."],
   ],
   orders: [
-    ["Recent orders", "The 10 latest orders, whatever dates are picked. Cancelled ones are shown and marked."],
+    ["Orders", "Every order placed in the dates picked, newest first unless you sort them. Cancelled ones are shown and marked."],
     ["Payment status", "Paid, pending, refunded and so on, as Shopify reports it."],
     ["Fulfillment status", "Whether the order has shipped."],
     ["Channel", "Where the order was placed."],

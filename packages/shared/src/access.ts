@@ -94,7 +94,7 @@ export const ACCESS_MODULE_INFO: Record<AccessModule, { label: string; descripti
   customers: { label: "Customer details", description: "Who buys from the store. Personal details need their own permission." },
   products: { label: "Product details", description: "The catalog, best sellers and stock." },
   inventory: { label: "Inventory", description: "Stock at every location, product information, stock history and stock changes made in Shopify." },
-  orders: { label: "Orders", description: "The latest orders and how they're getting on." },
+  orders: { label: "Orders", description: "The store's orders and how they're getting on." },
   marketing: { label: "Marketing", description: "Advertising results, campaigns and attribution." },
   discounts: { label: "Discounts", description: "Discount codes and what they bring in." },
   finance: { label: "Finance", description: "The money detail behind the sales figures." },
@@ -139,10 +139,10 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "inventory.alerts", module: "inventory", kind: "manage", sensitive: true, requires: ["inventory.view"], label: "Manage stock alerts", reveals: "Low-stock thresholds, and how the team is told about low and sold-out stock (email, WhatsApp, the bell)." },
   { key: "inventory.settings", module: "inventory", kind: "manage", sensitive: true, requires: ["inventory.view"], label: "Manage inventory settings", reveals: "How often stock is checked against Shopify, and the lead time and cover used for restock suggestions." },
   // ---- Orders
-  { key: "orders.list", module: "orders", kind: "view", label: "View order list", reveals: "The latest orders: order number, date, total, items and sales channel." },
+  { key: "orders.list", module: "orders", kind: "view", label: "View order list", reveals: "The orders placed in the dates picked: order number, date, total, items and sales channel." },
   { key: "orders.payments", module: "orders", kind: "view", requires: ["orders.list"], label: "View payment status", reveals: "Whether each order is paid, pending, refunded or failed." },
   { key: "orders.fulfillment", module: "orders", kind: "view", label: "View fulfillment status", reveals: "Orders waiting to ship, how quickly orders ship, and each order's fulfillment status." },
-  { key: "orders.cancellations", module: "orders", kind: "view", requires: ["orders.list"], label: "View cancellations", reveals: "Which of the latest orders were cancelled." },
+  { key: "orders.cancellations", module: "orders", kind: "view", requires: ["orders.list"], label: "View cancellations", reveals: "Which orders were cancelled." },
   // ---- Marketing
   { key: "marketing.ads", module: "marketing", kind: "view", label: "View advertising analytics", reveals: "Meta and Google Ads spend, clicks, conversions and return on ad spend, and AdSense earnings." },
   { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and Customer Messaging: WhatsApp and text message (SMS) campaigns, automations, templates and settings, their results and what texts cost. Customers' numbers and messages need \"View contact information\" too." },

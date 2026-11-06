@@ -1,6 +1,17 @@
 "use client";
 import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import { ArrowRight, ArrowUpRight, CalendarDays, Clock, Search, Sigma, Sparkles, Tag } from "lucide-react";
+import {
+  ORDER_CANCELLED_FILTERS,
+  ORDER_LIST_SORTS,
+  PAYMENT_GROUP_LABEL,
+  PAYMENT_GROUPS,
+  SHIPPING_GROUP_LABEL,
+  SHIPPING_GROUPS,
+  type OrderCancelledFilter,
+  type OrderListPage,
+  type OrderListSort,
+} from "@app/shared/orders";
 import { TRAFFIC_SPLIT_LABEL } from "@app/shared/traffic";
 import { Card as KitCard, ChangeTag, FigureTile, InShortLine, ShareRow } from "@/components/PageKit";
 import { useApp } from "@/components/AppContext";
@@ -745,18 +756,15 @@ function OrdersTable({
 }
 
 /** A page of GET …/orders: every order placed in the dates that matches, shaped as the overview's latest orders. */
-interface OrdersPage {
-  range: { from: string; to: string };
-  total: number;
-  page: number;
-  pageSize: number;
-  items: RecentOrder[];
-}
+type OrdersPage = OrderListPage;
 
-const PAYMENT_CHOICES: Array<[string, string]> = [["", "Any payment"], ["paid", "Paid"], ["pending", "Not paid yet"], ["refunded", "Refunded"], ["other", "Other"]];
-const SHIPPING_CHOICES: Array<[string, string]> = [["", "Any shipping"], ["shipped", "Shipped"], ["partly", "Partly shipped"], ["not_shipped", "Not shipped"]];
-const CANCELLED_CHOICES: Array<[string, string]> = [["", "Cancelled or not"], ["exclude", "Not cancelled"], ["only", "Cancelled only"]];
-const SORT_CHOICES: Array<[string, string]> = [["newest", "Newest first"], ["oldest", "Oldest first"], ["total_desc", "Highest total"], ["total_asc", "Lowest total"]];
+// The filters' groups and their names are the API's own (@app/shared/orders), so a filter and its rows can't disagree.
+const PAYMENT_CHOICES: Array<[string, string]> = [["", "Any payment"], ...PAYMENT_GROUPS.map((g): [string, string] => [g, PAYMENT_GROUP_LABEL[g]])];
+const SHIPPING_CHOICES: Array<[string, string]> = [["", "Any shipping"], ...SHIPPING_GROUPS.map((g): [string, string] => [g, SHIPPING_GROUP_LABEL[g]])];
+const CANCELLED_WORDS: Record<OrderCancelledFilter, string> = { exclude: "Not cancelled", only: "Cancelled only" };
+const CANCELLED_CHOICES: Array<[string, string]> = [["", "Cancelled or not"], ...ORDER_CANCELLED_FILTERS.map((c): [string, string] => [c, CANCELLED_WORDS[c]])];
+const SORT_WORDS: Record<OrderListSort, string> = { newest: "Newest first", oldest: "Oldest first", total_desc: "Highest total", total_asc: "Lowest total" };
+const SORT_CHOICES: Array<[string, string]> = ORDER_LIST_SORTS.map((o): [string, string] => [o, SORT_WORDS[o]]);
 const PAGE_SIZE = 25;
 
 /**

@@ -1019,7 +1019,7 @@ export function RecentOrdersHome({ ov, currency, onOpen }: { ov: Overview; curre
     <HomeCard
       id="recent-orders"
       title="Recent orders"
-      sub="The latest orders, whatever dates are picked."
+      sub="The latest orders placed in these dates."
       icon={<Disc icon={ReceiptText} className="bg-emerald-600 text-white dark:bg-emerald-500" />}
       action={<DetailsLink onClick={() => onOpen("orders")}>View all</DetailsLink>}
     >
