@@ -3,8 +3,10 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { eventLabel, type EventField } from "@app/shared/email";
+import { StepCard } from "@/components/automations/MarketingKit";
 import { EmailPreviewFrame, Note } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
+import { Card } from "@/components/PageKit";
 import { Field, Tabs } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
 import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/AppUi";
@@ -149,184 +151,192 @@ function Editor() {
           </ul>
         </Alert>
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Name" required htmlFor="t-name">
-              <input id="t-name" className="input" maxLength={100} disabled={readOnly} value={draft.name} onChange={(e) => set("name", e.target.value)} />
-            </Field>
-            <Field label="Type" htmlFor="t-cat" hint={draft.category === "marketing" ? "Only sent to customers who agreed to marketing; an unsubscribe link and your address are added." : "Answers something the customer did (order, booking, invoice)."}>
-              <select id="t-cat" className="input" disabled={readOnly} value={draft.category} onChange={(e) => set("category", e.target.value as Draft["category"])}>
-                <option value="transactional">Transactional</option>
-                <option value="marketing">Marketing</option>
-              </select>
-            </Field>
-            <Field label="Used for" htmlFor="t-event" hint="Decides which placeholders are available.">
-              <select
-                id="t-event"
-                className="input"
-                disabled={readOnly}
-                value={catalog.data.events.some((e) => e.type === draft.eventType) ? (draft.eventType ?? "") : draft.eventType ? "custom" : ""}
-                onChange={(e) => set("eventType", e.target.value === "custom" ? customType || null : e.target.value || null)}
-              >
-                <option value="">Any event (customer and business details only)</option>
-                {catalog.data.events.map((e) => (
-                  <option key={e.type} value={e.type}>
-                    {e.label}
-                  </option>
-                ))}
-                <option value="custom">A custom event…</option>
-              </select>
-            </Field>
-            {draft.eventType !== null && !catalog.data.events.some((e) => e.type === draft.eventType) && (
-              <Field label="Custom event name" htmlFor="t-custom" hint={`For example ${catalog.data.customEvents.examples.slice(0, 2).join(" or ")}.`}>
-                <input
-                  id="t-custom"
+      {/* As the Stitch design's screen 19 lays out one automation: the numbered parts on the left, what it will look like beside them. */}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <div className="min-w-0 space-y-4">
+          <StepCard id="t-step-about" n={1} title="What it's for">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Name" required htmlFor="t-name">
+                <input id="t-name" className="input" maxLength={100} disabled={readOnly} value={draft.name} onChange={(e) => set("name", e.target.value)} />
+              </Field>
+              <Field label="Type" htmlFor="t-cat" hint={draft.category === "marketing" ? "Only sent to customers who agreed to marketing; an unsubscribe link and your address are added." : "Answers something the customer did (order, booking, invoice)."}>
+                <select id="t-cat" className="input" disabled={readOnly} value={draft.category} onChange={(e) => set("category", e.target.value as Draft["category"])}>
+                  <option value="transactional">Transactional</option>
+                  <option value="marketing">Marketing</option>
+                </select>
+              </Field>
+              <Field label="Used for" htmlFor="t-event" hint="Decides which placeholders are available.">
+                <select
+                  id="t-event"
                   className="input"
                   disabled={readOnly}
-                  value={customType}
-                  onChange={(e) => {
-                    setCustomType(e.target.value.trim().toLowerCase());
-                    set("eventType", e.target.value.trim().toLowerCase() || null);
-                  }}
-                />
+                  value={catalog.data.events.some((e) => e.type === draft.eventType) ? (draft.eventType ?? "") : draft.eventType ? "custom" : ""}
+                  onChange={(e) => set("eventType", e.target.value === "custom" ? customType || null : e.target.value || null)}
+                >
+                  <option value="">Any event (customer and business details only)</option>
+                  {catalog.data.events.map((e) => (
+                    <option key={e.type} value={e.type}>
+                      {e.label}
+                    </option>
+                  ))}
+                  <option value="custom">A custom event…</option>
+                </select>
               </Field>
-            )}
-          </div>
-          <Field label="Subject" required htmlFor="t-subject">
-            <input id="t-subject" ref={subjectRef} className="input" maxLength={250} disabled={readOnly} value={draft.subject} onFocus={() => setLastFocus("subject")} onChange={(e) => set("subject", e.target.value)} />
-          </Field>
-          <Tabs tabs={[["html", "HTML"], ["text", "Plain text"]] as const} value={tab} onChange={setTab} label="Body" />
-          <textarea
-            ref={htmlRef}
-            aria-label={tab === "html" ? "HTML body" : "Plain-text body"}
-            className="input min-h-[18rem] font-mono text-xs"
-            disabled={readOnly}
-            value={tab === "html" ? draft.html : draft.text}
-            placeholder={tab === "text" ? "Leave empty to generate it from the HTML." : ""}
-            onFocus={() => setLastFocus(tab)}
-            onChange={(e) => set(tab, e.target.value)}
-          />
-          <details open>
-            <summary className="cursor-pointer text-sm font-medium">Insert a placeholder</summary>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {variables.map((v) => (
-                <button key={v.path} type="button" disabled={readOnly} className="rounded-full border border-border px-2 py-0.5 text-xs hover:border-accent" title={v.label} onClick={() => insert(v.path)}>
-                  {v.path}
-                </button>
-              ))}
-              {draft.eventType && !catalog.data.events.some((e) => e.type === draft.eventType) && <span className="text-xs text-muted">Custom events can also use data.&lt;field&gt; for any field your system sends.</span>}
-            </div>
-            <p className="mt-2 text-xs text-muted">
-              A fallback for missing values: <code>{'{{customer.first_name | default: "there"}}'}</code>. Scripts, forms and embedded content are removed when you save.
-            </p>
-          </details>
-          <Field label="Reply-to address" htmlFor="t-reply" hint="Optional; the sending account's reply-to is used otherwise.">
-            <input id="t-reply" className="input" type="email" disabled={readOnly} value={draft.replyTo} onChange={(e) => set("replyTo", e.target.value)} />
-          </Field>
-          {automate && (
-            <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-              <button className="btn-secondary" disabled={!!busy} onClick={() => save()}>
-                {busy === "save" ? "Saving…" : "Save"}
-              </button>
-              {t?.status !== "active" && (
-                <button className="btn-primary" disabled={!!busy} onClick={() => save("active")}>
-                  Save and activate
-                </button>
-              )}
-              {id && (
-                <>
-                  <button
-                    className="btn-secondary"
-                    disabled={!!busy}
-                    onClick={() =>
-                      run("test", "send a test", async () => {
-                        const r = await api<{ result: { status: string; message: string | null } }>(`${base}/templates/${id}/test`, { method: "POST", body: {} });
-                        if (r.result.status !== "accepted_by_provider") throw new Error(r.result.message ?? `Not sent (${r.result.status})`);
-                        return "Test sent to your own address, with example data.";
-                      })
-                    }
-                  >
-                    Send test to me
-                  </button>
-                  <button
-                    className="btn-secondary"
-                    disabled={!!busy}
-                    onClick={() =>
-                      run("dup", "duplicate the template", async () => {
-                        const r = await api<{ template: TemplateView }>(`${base}/templates/${id}/duplicate`, { method: "POST" });
-                        router.push(`/settings/email/templates/edit?id=${r.template.id}`);
-                        setDraft(null);
-                        return "Copied as a draft.";
-                      })
-                    }
-                  >
-                    Duplicate
-                  </button>
-                  {t?.status === "active" && (
-                    <button className="btn-secondary" disabled={!!busy} onClick={() => save("draft")}>
-                      Back to draft
-                    </button>
-                  )}
-                  <button className="btn-secondary text-danger" disabled={!!busy} onClick={() => setConfirmDelete(true)}>
-                    Delete
-                  </button>
-                </>
+              {draft.eventType !== null && !catalog.data.events.some((e) => e.type === draft.eventType) && (
+                <Field label="Custom event name" htmlFor="t-custom" hint={`For example ${catalog.data.customEvents.examples.slice(0, 2).join(" or ")}.`}>
+                  <input
+                    id="t-custom"
+                    className="input"
+                    disabled={readOnly}
+                    value={customType}
+                    onChange={(e) => {
+                      setCustomType(e.target.value.trim().toLowerCase());
+                      set("eventType", e.target.value.trim().toLowerCase() || null);
+                    }}
+                  />
+                </Field>
               )}
             </div>
-          )}
-        </section>
-        <section className="card space-y-3">
-          <h2 className="font-semibold">Preview with example data</h2>
-          {previewErr ? (
-            <Alert>{previewErr}</Alert>
-          ) : preview ? (
-            <>
-              <p className="text-sm">
-                <span className="text-muted">Subject:</span> {preview.subject}
+          </StepCard>
+          <StepCard id="t-step-email" n={2} title="The email">
+            <Field label="Subject" required htmlFor="t-subject">
+              <input id="t-subject" ref={subjectRef} className="input" maxLength={250} disabled={readOnly} value={draft.subject} onFocus={() => setLastFocus("subject")} onChange={(e) => set("subject", e.target.value)} />
+            </Field>
+            <Tabs tabs={[["html", "HTML"], ["text", "Plain text"]] as const} value={tab} onChange={setTab} label="Body" />
+            <textarea
+              ref={htmlRef}
+              aria-label={tab === "html" ? "HTML body" : "Plain-text body"}
+              className="input min-h-[18rem] font-mono text-xs"
+              disabled={readOnly}
+              value={tab === "html" ? draft.html : draft.text}
+              placeholder={tab === "text" ? "Leave empty to generate it from the HTML." : ""}
+              onFocus={() => setLastFocus(tab)}
+              onChange={(e) => set(tab, e.target.value)}
+            />
+            <details open>
+              <summary className="cursor-pointer text-sm font-medium">Insert a placeholder</summary>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {variables.map((v) => (
+                  <button key={v.path} type="button" disabled={readOnly} className="rounded bg-home-tag px-2 py-0.5 text-xs font-medium transition-colors outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60" title={v.label} onClick={() => insert(v.path)}>
+                    {v.path}
+                  </button>
+                ))}
+                {draft.eventType && !catalog.data.events.some((e) => e.type === draft.eventType) && <span className="text-xs text-muted">Custom events can also use data.&lt;field&gt; for any field your system sends.</span>}
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                A fallback for missing values: <code>{'{{customer.first_name | default: "there"}}'}</code>. Scripts, forms and embedded content are removed when you save.
               </p>
-              <EmailPreviewFrame html={preview.html} />
-              <details className="text-xs">
-                <summary className="cursor-pointer text-muted">Plain-text version</summary>
-                <pre className="mt-2 whitespace-pre-wrap rounded bg-bg p-2">{preview.text}</pre>
-              </details>
-            </>
-          ) : (
-            <Skeleton lines={4} />
-          )}
-          <Note>Example customer: Alex Rivera, alex@example.com. Real emails use each event&apos;s own data.</Note>
-          {existing.data && existing.data.versions.length > 0 && (
-            <div>
-              <h3 className="text-sm font-semibold">Version history</h3>
-              <ul className="mt-1 divide-y divide-border text-sm">
-                {existing.data.versions.map((v) => (
-                  <li key={v.version} className="flex items-center gap-2 py-1.5">
-                    <span className="w-10 text-muted">v{v.version}</span>
-                    <span className="min-w-0 flex-1 truncate">{v.subject}</span>
-                    <span className="text-xs text-muted">{fmtDateTime(v.createdAt)}</span>
-                    {automate && v.version !== t?.version && (
-                      <button
-                        className="text-xs text-accent underline"
-                        disabled={!!busy}
-                        onClick={() =>
-                          run("restore", "restore the version", async () => {
-                            await api(`${base}/templates/${id}/versions/${v.version}/restore`, { method: "POST" });
-                            setDraft(null);
-                            await existing.reload();
-                            return `Restored version ${v.version} as a new version.`;
-                          })
-                        }
-                      >
-                        Restore
+            </details>
+            <Field label="Reply-to address" htmlFor="t-reply" hint="Optional; the sending account's reply-to is used otherwise.">
+              <input id="t-reply" className="input" type="email" disabled={readOnly} value={draft.replyTo} onChange={(e) => set("replyTo", e.target.value)} />
+            </Field>
+          </StepCard>
+          {automate && (
+            <StepCard id="t-step-save" n={3} title="Test and save">
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-secondary" disabled={!!busy} onClick={() => save()}>
+                  {busy === "save" ? "Saving…" : "Save"}
+                </button>
+                {t?.status !== "active" && (
+                  <button className="btn-primary" disabled={!!busy} onClick={() => save("active")}>
+                    Save and activate
+                  </button>
+                )}
+                {id && (
+                  <>
+                    <button
+                      className="btn-secondary"
+                      disabled={!!busy}
+                      onClick={() =>
+                        run("test", "send a test", async () => {
+                          const r = await api<{ result: { status: string; message: string | null } }>(`${base}/templates/${id}/test`, { method: "POST", body: {} });
+                          if (r.result.status !== "accepted_by_provider") throw new Error(r.result.message ?? `Not sent (${r.result.status})`);
+                          return "Test sent to your own address, with example data.";
+                        })
+                      }
+                    >
+                      Send test to me
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      disabled={!!busy}
+                      onClick={() =>
+                        run("dup", "duplicate the template", async () => {
+                          const r = await api<{ template: TemplateView }>(`${base}/templates/${id}/duplicate`, { method: "POST" });
+                          router.push(`/settings/email/templates/edit?id=${r.template.id}`);
+                          setDraft(null);
+                          return "Copied as a draft.";
+                        })
+                      }
+                    >
+                      Duplicate
+                    </button>
+                    {t?.status === "active" && (
+                      <button className="btn-secondary" disabled={!!busy} onClick={() => save("draft")}>
+                        Back to draft
                       </button>
                     )}
-                  </li>
-                ))}
-              </ul>
-            </div>
+                    <button className="btn-secondary text-danger" disabled={!!busy} onClick={() => setConfirmDelete(true)}>
+                      Delete
+                    </button>
+                  </>
+                )}
+              </div>
+            </StepCard>
           )}
-          {draft.eventType && <p className="text-xs text-muted">Placeholders available for: {eventLabel(draft.eventType)}.</p>}
-        </section>
+        </div>
+        <Card id="t-preview" title="Preview with example data">
+          <div className="space-y-3">
+            {previewErr ? (
+              <Alert>{previewErr}</Alert>
+            ) : preview ? (
+              <>
+                <p className="text-sm">
+                  <span className="text-muted">Subject:</span> {preview.subject}
+                </p>
+                <EmailPreviewFrame html={preview.html} />
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted">Plain-text version</summary>
+                  <pre className="mt-2 whitespace-pre-wrap rounded bg-home-soft p-2">{preview.text}</pre>
+                </details>
+              </>
+            ) : (
+              <Skeleton lines={4} />
+            )}
+            <Note>Example customer: Alex Rivera, alex@example.com. Real emails use each event&apos;s own data.</Note>
+            {existing.data && existing.data.versions.length > 0 && (
+              <div>
+                <h3 className="text-sm font-semibold">Version history</h3>
+                <ul className="mt-1 divide-y divide-home-line text-sm">
+                  {existing.data.versions.map((v) => (
+                    <li key={v.version} className="flex items-center gap-2 py-1.5">
+                      <span className="w-10 text-muted">v{v.version}</span>
+                      <span className="min-w-0 flex-1 truncate">{v.subject}</span>
+                      <span className="text-xs text-muted">{fmtDateTime(v.createdAt)}</span>
+                      {automate && v.version !== t?.version && (
+                        <button
+                          className="text-xs text-accent underline"
+                          disabled={!!busy}
+                          onClick={() =>
+                            run("restore", "restore the version", async () => {
+                              await api(`${base}/templates/${id}/versions/${v.version}/restore`, { method: "POST" });
+                              setDraft(null);
+                              await existing.reload();
+                              return `Restored version ${v.version} as a new version.`;
+                            })
+                          }
+                        >
+                          Restore
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {draft.eventType && <p className="text-xs text-muted">Placeholders available for: {eventLabel(draft.eventType)}.</p>}
+          </div>
+        </Card>
       </div>
       <ConfirmDialog
         open={confirmDelete}

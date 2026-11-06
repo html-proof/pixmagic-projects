@@ -17,6 +17,8 @@ import { Badge, type Tone } from "@/components/dashboard/Primitives";
 
 // ---------------------------------------------------------------------------------------------
 // Pieces shared by the Email integrations pages. Built on the app's primitives; no rules here.
+// Their look is the Stitch design's (Marketing, screens 17–19): the soft tinted boxes of
+// components/automations/MarketingKit.tsx rather than outlined ones.
 // ---------------------------------------------------------------------------------------------
 
 const ACCOUNT_TONE: Record<AccountStatus, Tone> = {
@@ -74,7 +76,7 @@ export function ProviderMark({ provider }: { provider: string }) {
   const microsoft = provider === "outlook" || provider === "microsoft_365";
   const [letter, cls] = google ? ["G", "bg-[#EA4335]/12 text-[#EA4335]"] : microsoft ? ["M", "bg-[#0078D4]/12 text-[#0078D4]"] : ["S", "bg-accent/12 text-accent"];
   return (
-    <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${cls}`}>
+    <span aria-hidden className={`flex h-9 w-9 shrink-0 items-center justify-center rounded text-sm font-bold ${cls}`}>
       {letter}
     </span>
   );
@@ -85,10 +87,10 @@ export function CopyValue({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <code className="min-w-0 flex-1 break-all rounded bg-bg px-2 py-1 font-mono text-xs">{value}</code>
+      <code className="min-w-0 flex-1 break-all rounded bg-home-soft px-2 py-1 font-mono text-xs">{value}</code>
       <button
         type="button"
-        className="shrink-0 rounded-md border border-border p-1.5 text-muted transition hover:text-text"
+        className="shrink-0 rounded bg-home-soft p-1.5 text-muted transition outline-none hover:bg-home-soft-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent"
         aria-label={`Copy ${label}`}
         onClick={async () => {
           try {
@@ -113,13 +115,20 @@ export function CopyValue({ value, label }: { value: string; label: string }) {
  */
 export function EmailPreviewFrame({ html, title = "Email preview", height = 420 }: { html: string; title?: string; height?: number }) {
   const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'"><base target="_blank"><style>body{font-family:Arial,Helvetica,sans-serif;margin:16px;color:#111;background:#fff}</style></head><body>${html}</body></html>`;
-  return <iframe title={title} sandbox="" srcDoc={doc} className="w-full rounded-lg border border-border bg-white" style={{ height }} />;
+  return <iframe title={title} sandbox="" srcDoc={doc} className="w-full rounded border border-home-line bg-white" style={{ height }} />;
 }
 
-/** A small explanation box. */
+/** A small explanation box: a soft tinted row, as the design writes its honest lines. */
 export function Note({ children, tone = "info" }: { children: ReactNode; tone?: "info" | "warn" }) {
-  return <div className={`rounded-lg border px-3 py-2 text-xs ${tone === "warn" ? "border-warn/40 bg-warn/5 text-text" : "border-border bg-bg text-muted"}`}>{children}</div>;
+  return <div className={`rounded px-3 py-2 text-xs ${tone === "warn" ? "bg-warn/10 text-text" : "bg-home-soft text-muted"}`}>{children}</div>;
 }
+
+/** A box's small-capitals label, as the design heads a group of rows ("Sender addresses"). */
+export const BOX_LABEL = "text-[11px] font-semibold tracking-wider text-muted uppercase";
+
+/** A choice drawn as one of the design's soft rows (a radio option, a provider), the chosen one outlined in green. */
+export const choiceClass = (chosen: boolean) =>
+  `flex cursor-pointer gap-3 rounded-lg p-3 transition-colors ${chosen ? "bg-accent/10 ring-1 ring-accent" : "bg-home-soft hover:bg-home-soft-hover"}`;
 
 export const relative = (iso: string | null | undefined) => {
   if (!iso) return "never";

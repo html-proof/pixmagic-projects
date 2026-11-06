@@ -1,9 +1,11 @@
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Clock, Gauge, Inbox, KeyRound, Mail, ShieldCheck } from "lucide-react";
 import { DELIVERY_REPORTING, errorLabel, PROVIDER_LIMITS, SMTP_PORTS, type EmailProvider } from "@app/shared/email";
+import { ChannelPanel, Fact, FactList, FootLine } from "@/components/automations/MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
-import { AccountStatusBadge, Note, ProviderMark, providerLabel, relative } from "@/components/email/EmailUi";
+import { AccountStatusBadge, BOX_LABEL, Note, ProviderMark, providerLabel, relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field, Modal } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
@@ -80,11 +82,18 @@ function AccountsInner() {
       {data.accounts.length === 0 ? (
         <EmptyState title="No email accounts yet" body="Connect Gmail, Google Workspace, Outlook, Microsoft 365, or any provider that offers SMTP." action={manage ? <button className="btn-primary" onClick={() => setAdding(true)}>Add email account</button> : undefined} />
       ) : (
-        <div className="space-y-3">
+        <div className="grid gap-4 lg:grid-cols-2">
           {data.accounts.map((a) => (
             <AccountCard key={a.id} account={a} manage={manage} onChange={reload} />
           ))}
         </div>
+      )}
+      {(!data.configured.google || !data.configured.microsoft) && (
+        <FootLine>
+          {!data.configured.google && "Connecting Gmail / Google Workspace isn't set up on this server yet. "}
+          {!data.configured.microsoft && "Connecting Outlook / Microsoft 365 isn't set up on this server yet. "}
+          {data.smtpAvailable ? "Custom SMTP works either way." : ""}
+        </FootLine>
       )}
       <AddAccountModal open={adding} onClose={() => setAdding(false)} configured={data.configured} smtpAvailable={data.smtpAvailable} onAdded={reload} />
     </div>
@@ -111,101 +120,119 @@ function AccountCard({ account: a, manage, onChange }: { account: AccountView; m
     });
   }
 
+  const test = (cls: string) => (
+    <button className={cls} disabled={!!busy} onClick={() => act("test", "test the connection", async () => {
+      const r = await api<{ test: { ok: boolean; message?: string } }>(`${base}/accounts/${a.id}/test`, { method: "POST" });
+      if (!r.test.ok) throw new Error(r.test.message ?? "The connection test failed");
+      return "The connection works.";
+    })}>
+      {busy === "test" ? "Testing…" : "Test connection"}
+    </button>
+  );
+  const enable = (cls: string) => (
+    <button className={cls} disabled={!!busy} onClick={() => act("enable", "enable the account", async () => {
+      await api(`${base}/accounts/${a.id}`, { method: "PATCH", body: { enabled: true } });
+      return "Enabled. Test it to confirm it still works.";
+    })}>
+      Enable
+    </button>
+  );
+  // The one main button the Stitch design (screen 18) gives each channel's card: reconnect when the
+  // provider asks for it, else the connection test, else (a disabled account) enable. The other
+  // buttons are the quieter row at the card's foot.
+  const main = !manage ? null : needsReconnect && oauth ? "reconnect" : a.status !== "disabled" ? "test" : "enable";
+  const quiet = "home-btn border border-home-line bg-surface";
+
   return (
-    <section className="card space-y-3" aria-label={a.email}>
-      <div className="flex flex-wrap items-start gap-3">
-        <ProviderMark provider={a.provider} />
-        <div className="min-w-0 flex-1">
-          <p className="flex flex-wrap items-center gap-2 font-semibold">
-            <span className="truncate">{a.email}</span>
+    <>
+      <ChannelPanel
+        id={`acc-${a.id}`}
+        title={a.email}
+        icon={<ProviderMark provider={a.provider} />}
+        status={
+          <span className="flex flex-wrap items-center gap-1.5">
             {a.isDefault && <Badge tone="good">Default sender</Badge>}
-          </p>
-          <p className="text-xs text-muted">
-            {providerLabel(a.provider)}
-            {a.smtp ? ` · ${a.smtp.host}:${a.smtp.port} (${a.smtp.encryption === "tls" ? "TLS" : "STARTTLS"})` : ""}
-            {a.displayName ? ` · shown as “${a.displayName}”` : ""}
-          </p>
-        </div>
-        <AccountStatusBadge status={a.status} />
-      </div>
-      {a.statusReason && a.status !== "connected" && (
-        <Alert kind={needsReconnect || a.status === "failed" ? "error" : "info"}>
-          {errorLabel(a.statusReason)}
-          {needsReconnect && (oauth ? " Reconnect it to resume sending; mail waiting for it is kept for 24 hours." : " Update the password to resume sending.")}
-        </Alert>
-      )}
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
-        <div>
-          <dt className="text-muted">Last sent</dt>
-          <dd>{relative(a.lastSuccessfulSendAt)}</dd>
-        </div>
-        <div>
-          <dt className="text-muted">Last checked</dt>
-          <dd>{relative(a.lastVerifiedAt)}</dd>
-        </div>
-        <div>
-          <dt className="text-muted">Daily limit</dt>
-          <dd>{a.dailyLimit.toLocaleString()} emails</dd>
-        </div>
-        <div>
-          <dt className="text-muted">Permission</dt>
-          <dd>{oauth ? "Send email only" : "SMTP sign-in"}</dd>
-        </div>
-      </dl>
-      <Senders account={a} manage={manage} onChange={onChange} />
-      {manage && (
-        <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-          {needsReconnect && oauth && (
+            <AccountStatusBadge status={a.status} />
+          </span>
+        }
+        action={
+          main === "reconnect" ? (
             <button className="btn-primary" disabled={!!busy} onClick={reconnect}>
               Reconnect
             </button>
+          ) : main === "test" ? (
+            test("btn-secondary")
+          ) : main === "enable" ? (
+            enable("btn-secondary")
+          ) : undefined
+        }
+        footer={
+          manage ? (
+            <>
+              {main !== "test" && a.status !== "disabled" && test(quiet)}
+              {a.canSend && (
+                <button className={quiet} disabled={!!busy} onClick={() => act("send", "send a test email", async () => {
+                  const r = await api<{ result: { status: string; message: string | null } }>(`${base}/accounts/${a.id}/test-send`, { method: "POST", body: {} });
+                  if (r.result.status !== "accepted_by_provider") throw new Error(r.result.message ?? `Not sent (${r.result.status})`);
+                  return "Test email sent to your own address. Check your inbox.";
+                })}>
+                  {busy === "send" ? "Sending…" : "Send test email to me"}
+                </button>
+              )}
+              {!a.isDefault && a.canSend && a.senders.some((s) => s.email === a.email && s.status === "verified") && (
+                <button className={quiet} disabled={!!busy} onClick={() => act("default", "set the default sender", async () => {
+                  await api(`${base}/accounts/${a.id}`, { method: "PATCH", body: { isDefault: true } });
+                  return "Default sender updated.";
+                })}>
+                  Set as default
+                </button>
+              )}
+              <button className={quiet} disabled={!!busy} onClick={() => setEditing(true)}>
+                {a.smtp ? "Edit settings" : "Edit"}
+              </button>
+              {a.status === "disabled" ? (
+                main !== "enable" && enable(quiet)
+              ) : (
+                <button className={quiet} disabled={!!busy} onClick={() => setConfirm("disable")}>
+                  Disable
+                </button>
+              )}
+              <button className={`${quiet} ml-auto text-danger`} disabled={!!busy} onClick={() => setConfirm("disconnect")}>
+                Disconnect
+              </button>
+            </>
+          ) : undefined
+        }
+      >
+        {a.statusReason && a.status !== "connected" && (
+          <Alert kind={needsReconnect || a.status === "failed" ? "error" : "info"}>
+            {errorLabel(a.statusReason)}
+            {needsReconnect && (oauth ? " Reconnect it to resume sending; mail waiting for it is kept for 24 hours." : " Update the password to resume sending.")}
+          </Alert>
+        )}
+        <FactList label={`About ${a.email}`}>
+          <Fact icon={<Mail />}>
+            {providerLabel(a.provider)}
+            {a.smtp ? ` · ${a.smtp.host}:${a.smtp.port} (${a.smtp.encryption === "tls" ? "TLS" : "STARTTLS"})` : ""}
+            {a.displayName ? ` · shown as “${a.displayName}”` : ""}
+          </Fact>
+          <Fact icon={<Gauge />}>
+            <span className="text-muted">Daily limit:</span> {a.dailyLimit.toLocaleString()} emails
+          </Fact>
+          <Fact icon={<Clock />}>
+            <span className="text-muted">Last sent:</span> {relative(a.lastSuccessfulSendAt)} · <span className="text-muted">Last checked:</span> {relative(a.lastVerifiedAt)}
+          </Fact>
+          <Fact icon={oauth ? <ShieldCheck /> : <KeyRound />}>
+            <span className="text-muted">Permission:</span> {oauth ? "Send email only" : "SMTP sign-in"}
+          </Fact>
+          {DELIVERY_REPORTING[a.provider as EmailProvider] && (
+            <Fact icon={<Inbox />} muted>
+              {DELIVERY_REPORTING[a.provider as EmailProvider]}
+            </Fact>
           )}
-          {a.status !== "disabled" && (
-            <button className="btn-secondary" disabled={!!busy} onClick={() => act("test", "test the connection", async () => {
-              const r = await api<{ test: { ok: boolean; message?: string } }>(`${base}/accounts/${a.id}/test`, { method: "POST" });
-              if (!r.test.ok) throw new Error(r.test.message ?? "The connection test failed");
-              return "The connection works.";
-            })}>
-              {busy === "test" ? "Testing…" : "Test connection"}
-            </button>
-          )}
-          {a.canSend && (
-            <button className="btn-secondary" disabled={!!busy} onClick={() => act("send", "send a test email", async () => {
-              const r = await api<{ result: { status: string; message: string | null } }>(`${base}/accounts/${a.id}/test-send`, { method: "POST", body: {} });
-              if (r.result.status !== "accepted_by_provider") throw new Error(r.result.message ?? `Not sent (${r.result.status})`);
-              return "Test email sent to your own address. Check your inbox.";
-            })}>
-              {busy === "send" ? "Sending…" : "Send test email to me"}
-            </button>
-          )}
-          {!a.isDefault && a.canSend && a.senders.some((s) => s.email === a.email && s.status === "verified") && (
-            <button className="btn-secondary" disabled={!!busy} onClick={() => act("default", "set the default sender", async () => {
-              await api(`${base}/accounts/${a.id}`, { method: "PATCH", body: { isDefault: true } });
-              return "Default sender updated.";
-            })}>
-              Set as default
-            </button>
-          )}
-          <button className="btn-secondary" disabled={!!busy} onClick={() => setEditing(true)}>
-            {a.smtp ? "Edit settings" : "Edit"}
-          </button>
-          {a.status === "disabled" ? (
-            <button className="btn-secondary" disabled={!!busy} onClick={() => act("enable", "enable the account", async () => {
-              await api(`${base}/accounts/${a.id}`, { method: "PATCH", body: { enabled: true } });
-              return "Enabled. Test it to confirm it still works.";
-            })}>
-              Enable
-            </button>
-          ) : (
-            <button className="btn-secondary" disabled={!!busy} onClick={() => setConfirm("disable")}>
-              Disable
-            </button>
-          )}
-          <button className="btn-secondary text-danger" disabled={!!busy} onClick={() => setConfirm("disconnect")}>
-            Disconnect
-          </button>
-        </div>
-      )}
+        </FactList>
+        <Senders account={a} manage={manage} onChange={onChange} />
+      </ChannelPanel>
       <ConfirmDialog
         open={confirm === "disable"}
         title={`Disable ${a.email}?`}
@@ -243,7 +270,7 @@ function AccountCard({ account: a, manage, onChange }: { account: AccountView; m
         <p>bizinsights deletes the stored credentials, stops sending from this address, cancels emails waiting for it and turns off automations that send from it. Sent-email history stays.</p>
       </ConfirmDialog>
       <EditAccountModal open={editing} account={a} onClose={() => setEditing(false)} onSaved={onChange} />
-    </section>
+    </>
   );
 }
 
@@ -260,11 +287,11 @@ function Senders({ account: a, manage, onChange }: { account: AccountView; manag
   const statusBadge = (s: SenderView) =>
     s.status === "verified" ? <Badge tone="good">Verified{s.method === "domain_ownership" ? " by domain" : s.method === "provider_oauth" ? "" : " by code"}</Badge> : <Badge tone="warn">Not verified</Badge>;
   return (
-    <div className="rounded-lg border border-border">
-      <p className="border-b border-border px-3 py-2 text-xs font-medium text-muted">Sender addresses</p>
-      <ul className="divide-y divide-border">
+    <div className="overflow-hidden rounded border border-home-line">
+      <p className={`bg-home-soft px-3 py-2 ${BOX_LABEL}`}>Sender addresses</p>
+      <ul className="divide-y divide-home-line">
         {a.senders.map((s) => (
-          <li key={s.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+          <li key={s.id} className="flex flex-wrap items-center gap-2 px-3 py-2.5 text-sm">
             <span className="min-w-0 flex-1 truncate">{s.email}</span>
             {s.isDefault && <Badge tone="neutral">Default</Badge>}
             {statusBadge(s)}
@@ -306,7 +333,7 @@ function Senders({ account: a, manage, onChange }: { account: AccountView; manag
       </ul>
       {a.connectionMethod === "smtp" && manage && (
         <form
-          className="flex flex-wrap gap-2 border-t border-border px-3 py-2"
+          className="flex flex-wrap gap-2 border-t border-home-line px-3 py-2.5"
           onSubmit={(e) => {
             e.preventDefault();
             void act("alias", "add the sender", async () => {
@@ -323,7 +350,7 @@ function Senders({ account: a, manage, onChange }: { account: AccountView; manag
         </form>
       )}
       {a.connectionMethod === "smtp" && a.senders.some((s) => s.status === "pending") && (
-        <p className="border-t border-border px-3 py-2 text-xs text-muted">
+        <p className="border-t border-home-line px-3 py-2 text-xs text-muted">
           An SMTP address sends only once it's proven: enter the code bizinsights sends to it through this account, or verify the address's domain under Domains.
         </p>
       )}
@@ -377,7 +404,7 @@ function AddAccountModal({ open, onClose, configured, smtpAvailable, onAdded }: 
                 key={id}
                 type="button"
                 disabled={!available || !!busy}
-                className="flex w-full items-center gap-3 rounded-xl border border-border p-3 text-left transition hover:border-accent disabled:opacity-60"
+                className="flex w-full items-center gap-3 rounded-lg bg-home-soft p-3 text-left transition-colors outline-none hover:bg-home-soft-hover focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
                 onClick={() => (id === "smtp" ? setChoice("smtp") : oauth(id))}
               >
                 <ProviderMark provider={id === "google" ? "gmail" : id === "microsoft" ? "outlook" : "smtp"} />
