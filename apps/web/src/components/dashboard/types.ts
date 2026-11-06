@@ -130,6 +130,12 @@ export interface SalesOverview {
     }
   >;
   /**
+   * The dates compared with (`Overview.previous`), day by day: the simple Home draws them as a line
+   * under the bars, day i beside day i of the range. Null when they weren't imported; `totalSales`
+   * as `series`' (Team & Access); absent from answers of older releases.
+   */
+  previousSeries?: Array<{ day: string; netSales: number; totalSales?: number }> | null;
+  /**
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
    * month's lines of total sales as `totalSales`.
    */

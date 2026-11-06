@@ -139,6 +139,20 @@ export async function asNewVisitor(page: Page) {
   await page.setExtraHTTPHeaders({ "x-insights-client-ip": `10.${n()}.${n()}.${n()}` });
 }
 
+/**
+ * Show the full dashboard on /dashboard from now on, as "Show the full dashboard" keeps it on a device
+ * (lib/features.ts SIMPLE_HOME, storage.ts HOME_LAYOUT_KEY): for a test of a panel only it has.
+ */
+export async function fullDashboard(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.setItem("home-layout", "full");
+    } catch {
+      /* storage blocked: the simple Home stays */
+    }
+  });
+}
+
 /** Fill in the create-account form (without sending it). */
 export async function fillSignUp(page: Page, email: string, password = PASSWORD, name = "E2E User") {
   await asNewVisitor(page);

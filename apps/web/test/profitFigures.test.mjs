@@ -22,7 +22,7 @@ const load = async (path, deps = {}) => {
 const sharedRequire = createRequire(new URL("../../../packages/shared/package.json", import.meta.url));
 const dates = await load("../../../packages/shared/src/dates.ts");
 const expenses = await load("../../../packages/shared/src/expenses.ts", { "./dates": dates, "./zod": { z: sharedRequire("zod").z } });
-const { adsLeftOut, adsNotUsableWords, costsOf, leftOutOf, leftOutWords, marginKnown, profitOf, profitCardFigures } = await load("../src/components/dashboard/profitFigures.ts", { "@app/shared/expenses": expenses });
+const { adsLeftOut, adsNotUsableWords, costsOf, leftOutOf, leftOutWords, leftOverOf, leftOverWords, marginKnown, profitOf, profitCardFigures } = await load("../src/components/dashboard/profitFigures.ts", { "@app/shared/expenses": expenses });
 
 /** A dashboard answer for one store in AUD: $2,000 of net sales, Shopify's profit report as given. */
 function overview(profit, { expenses: costs = { total: 300, complete: true } } = {}) {
@@ -220,4 +220,29 @@ test("the Profit sheet's profit and loss names the account left out of a spend i
   assert.equal(adsNotUsableWords({ demo: false, currency: "EUR", leftOut: [] }, "AUD"), "Your ad accounts report in EUR, not AUD.");
   assert.equal(adsNotUsableWords({ demo: false, currency: "EUR", leftOut: [{ ...google, id: "uk", currency: "GBP" }, { ...google, id: "eu2" }] }, "AUD"), "Your ad accounts report in EUR and GBP, not AUD.");
   assert.equal(adsNotUsableWords({ demo: true, currency: null, leftOut: [] }, "AUD"), "The Google Ads demo's spend is simulated.");
+});
+
+test("Left over (the simple Home) is Business profit overview's figure: net profit once complete, else net sales less the costs known", () => {
+  const profit = { grossProfit: 1350, costOfGoodsSold: 650, netSalesWithCost: 2000, netSalesWithoutCost: 0, profitOnCosted: 1350, marginOnCosted: 0.675 };
+  // Costs list complete: net profit out of revenue (2,050 − 650 − 300).
+  const done = overview(profit);
+  const net = leftOverOf(done, costsOf(done, "AUD", false), "AUD", noAds, true);
+  assert.equal(net.isNet, true);
+  assert.equal(net.value, 1100);
+  assert.equal(net.base, 2050);
+  assert.equal(leftOverWords(net), "Net profit");
+  // Not marked complete: net sales less what is known (2,000 − 650 − 300), never called profit.
+  const open = overview(profit, { expenses: { total: 300, complete: false } });
+  const left = leftOverOf(open, costsOf(open, "AUD", false), "AUD", noAds, true);
+  assert.equal(left.isNet, false);
+  assert.equal(left.value, 1050);
+  assert.equal(left.base, 2000);
+  assert.equal(left.taken, 950);
+  assert.equal(leftOverWords(left), "After product costs and your costs");
+  // Nothing known to take off: net sales under its own name, with nothing taken.
+  const bare = overview(null, { expenses: null });
+  const none = leftOverOf(bare, costsOf(bare, "AUD", false), "AUD", noAds, true);
+  assert.equal(none.taken, 0);
+  assert.equal(none.value, 2000);
+  assert.equal(leftOverWords(none), "Net sales");
 });

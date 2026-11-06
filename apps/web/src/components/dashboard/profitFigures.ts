@@ -179,6 +179,41 @@ export function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown:
 }
 
 /**
+ * What is left of the dates' sales after the costs bizinsights can see: Business profit overview's
+ * figure, and the simple Home's "Left over" number, worked out once so the two never differ. Net
+ * profit when every cost is known and the costs list is marked complete (`profitOf`), out of
+ * revenue; otherwise net sales less the costs known, out of net sales.
+ */
+export interface LeftOver {
+  value: number;
+  /** It is net profit (`profitOf` gave a figure). */
+  isNet: boolean;
+  /** What a share of it is out of: revenue for net profit, net sales otherwise. */
+  base: number;
+  /** The costs taken off net sales (product costs, ads, your costs) when it isn't net profit. */
+  taken: number;
+  /** Those costs in words, as "After …" names them: "product costs", "ads" (or "ads in AUD"), "your costs". */
+  after: string[];
+  profit: NetProfit | null;
+}
+
+export function leftOverOf(ov: Overview, k: Costs, currency: string, ads: { offered: boolean; shown: boolean }, costsOn: boolean): LeftOver {
+  const net = ov.modules.sales_overview?.current.netSales ?? 0;
+  const profit = profitOf(ov, k, ads, costsOn);
+  const isNet = profit?.value !== null && profit?.value !== undefined;
+  const taken = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
+  // With an account left out (another currency), only the ads in the store's currency were taken off.
+  const after = [k.productCosts !== null ? "product costs" : null, k.adSpend !== null ? (k.adState === "partial" ? `ads in ${currency}` : "ads") : null, k.yourCosts ? "your costs" : null].filter((x): x is string => x !== null);
+  return { value: isNet ? profit!.value! : net - taken, isNet, base: isNet ? profit!.revenue : net, taken, after, profit };
+}
+
+/** "After product costs, ads and your costs", "Net profit", or "Net sales" when nothing was taken off. */
+export function leftOverWords(l: LeftOver): string {
+  if (l.isNet) return "Net profit";
+  return l.after.length ? `After ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(l.after)}` : "Net sales";
+}
+
+/**
  * What Shopify's gross profit card (the sales details) says beside Shopify's own figures, from the
  * same costs as Business profit overview. Worked out by the caller, so the card, also loaded with the
  * Shopping Funnel's sessions card, doesn't bring @app/shared/expenses (and zod) to that page.

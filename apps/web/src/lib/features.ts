@@ -32,6 +32,15 @@ export const API_KEYS_ENABLED: boolean = false;
 export const AUTOMATIONS_HUB: boolean = true;
 
 /**
+ * The simpler Home (2026-11-05, the owner's approved prototype): what needs you, four numbers,
+ * sales by day, what changed and the automations working for you
+ * (components/dashboard/SimpleHome.tsx). "Show the full dashboard" under the greeting brings back
+ * every panel on that device, and "Back to the simple Home" returns. Flip to `false` to make the
+ * full dashboard everyone's Home again, with no way to the simple one.
+ */
+export const SIMPLE_HOME: boolean = true;
+
+/**
  * The Zapier card on Settings → Integrations (docs/zapier.md): connect the store to the merchant's own
  * Zapier account through bizinsights' Zapier app. On in production since 2026-10-29: the app is
  * registered and its ZAPIER_* settings are live, and the first test Zap passed (docs/zapier.md,

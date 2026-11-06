@@ -177,6 +177,9 @@ export async function storeOverview(
           units: change(c.units, p.units),
         },
         series: dailySeries(cur, range),
+        // The dates compared with, day by day, for the Home's "Previous 30 days" line under the
+        // bars: day i beside day i of the range. Null when they weren't imported, as `previous`.
+        previousSeries: previousImported ? dailySeries(prev, previous).map((d) => ({ day: d.day, netSales: d.netSales, totalSales: d.totalSales })) : null,
         // This calendar year month by month, and the same months of the two years before, whole
         // (the dashboard's monthly comparison): each month not imported is said to be so.
         year: { ...yearBreakdown(yearRows, today, data.historyFrom), past: [1, 2].map((back) => pastYearBreakdown(yearRows, today, back, data.historyFrom)) },

@@ -411,6 +411,8 @@ describe("date ranges", () => {
     // orders at all, so nothing imported reaches back to it.
     expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/), compare: "previous", imported: false });
     expect(modules.sales_overview.series.map((x: { day: string }) => x.day)).toEqual([addDays(today, -2), addDays(today, -1), today]);
+    // Nothing to draw under the bars either.
+    expect(modules.sales_overview.previousSeries).toBeNull();
   });
 
   it("compares a day that isn't over with the day before up to the same time of day, as Shopify does", async () => {
@@ -527,6 +529,12 @@ describe("what the dates are compared with", () => {
     const before = (await overview(a.headers, ws, store.id, `preset=custom&from=${from}&to=${to}`)).json();
     expect(before.previous).toEqual({ from: d(-13), to: d(-11), compare: "previous", imported: true });
     expect(before.modules.sales_overview.previous).toMatchObject({ netSales: 999, orders: 1 });
+    // Day by day too, for the Home's "Previous" line under the bars.
+    expect(before.modules.sales_overview.previousSeries).toEqual([
+      { day: d(-13), netSales: 0, totalSales: 0 },
+      { day: d(-12), netSales: 999, totalSales: 999 },
+      { day: d(-11), netSales: 0, totalSales: 0 },
+    ]);
     expect(before.modules.ads.previous.spend).toBe(500);
   });
 

@@ -19,7 +19,7 @@ import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
 import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
-import { adsLeftOut, comparableAds, costsOf, leftOutWords, marginKnown, profitOf, type CostState, type ProductCostState } from "./profitFigures";
+import { adsLeftOut, comparableAds, costsOf, leftOutWords, leftOverOf, leftOverWords, marginKnown, type CostState, type ProductCostState } from "./profitFigures";
 import type { Topic } from "./topics";
 import type { Overview, RecentOrder } from "./types";
 
@@ -110,9 +110,6 @@ function LegendRow({ color, label, value, share, sub = false }: { color?: string
 }
 
 // ---- What the costs are (./profitFigures.ts) ----------------------------------------------------
-
-/** "product costs, ads and your costs". */
-const listOf = (items: string[]) => new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
 
 /**
  * A cost with no figure, in words: product costs need Shopify's reports and a cost per item on the
@@ -337,17 +334,12 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
 export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; adsOffered: boolean; costsOn: boolean; manageCosts: boolean }) {
   const net = ov.modules.sales_overview!.current.netSales;
   const k = costsOf(ov, currency, adsOn);
-  const profit = profitOf(ov, k, { offered: adsOffered, shown: adsOn }, costsOn);
-  const isNet = profit?.value !== null && profit?.value !== undefined;
+  // Net profit is out of revenue; what is left without it, out of net sales (`leftOverOf`, as the simple Home's Left over).
+  const lo = leftOverOf(ov, k, currency, { offered: adsOffered, shown: adsOn }, costsOn);
+  const { profit, isNet, base, taken, value: left } = lo;
   const money = (n: number) => fmtMoney(n, currency);
-  // Net profit is out of revenue; what is left without it, out of net sales.
-  const base = isNet ? profit!.revenue : net;
   const share = (n: number) => (base > 0 ? fmtPct(n / base) : null);
-  const taken = (k.productCosts ?? 0) + (k.adSpend ?? 0) + (k.yourCosts ?? 0);
-  const left = isNet ? profit!.value! : net - taken;
-  // With an account left out (another currency), only the ads in the store's currency were taken off.
-  const after = [k.productCosts !== null ? "product costs" : null, k.adSpend !== null ? (k.adState === "partial" ? `ads in ${currency}` : "ads") : null, k.yourCosts ? "your costs" : null].filter((x): x is string => x !== null);
-  const what = isNet ? "Net profit" : after.length ? `After ${listOf(after)}` : "Net sales";
+  const what = leftOverWords(lo);
   const slices: DonutSlice[] = [
     { key: "left", label: isNet ? "Net profit" : "Left after these costs", value: left, color: SALES },
     { key: "products", label: "Product costs", value: k.productCosts ?? 0, color: PRODUCT_COSTS },

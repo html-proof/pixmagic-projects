@@ -527,8 +527,15 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   );
 
   await page.goto("/dashboard");
-  await expect(page.getByText("No orders in this period")).toBeVisible();
+  // The simple Home first (lib/features.ts SIMPLE_HOME): one sales chart, and what can be unlocked.
+  await expect(page.getByTestId("home-sales-by-day")).toBeVisible();
   await expect(page.getByTestId("locked-top_products")).toContainText("access to your products");
+  // The full dashboard is a click away, and back.
+  await page.getByTestId("home-layout-switch").click();
+  await expect(page.getByText("No orders in this period")).toBeVisible();
+  await expect(page.getByTestId("home-layout-switch")).toHaveText("Back to the simple Home");
+  await page.getByTestId("home-layout-switch").click();
+  await expect(page.getByTestId("home-sales-by-day")).toBeVisible();
 
   const now = new Date().toISOString();
   const res = await signedWebhook(
@@ -550,6 +557,10 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
     await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00", { timeout: 5000 });
   }).toPass({ timeout: 30_000 });
   await expect(page.getByTestId("metric-Orders")).toContainText("1");
+  // The full dashboard, kept on this device after a reload.
+  await page.getByTestId("home-layout-switch").click();
+  await page.reload();
+  await expect(page.getByTestId("home-layout-switch")).toHaveText("Back to the simple Home");
   // How it went (Orders at a glance): through, none unsuccessful; checkouts left need the storefront pixel.
   await expect(page.getByTestId("glance-completed")).toContainText("1");
   await expect(page.getByTestId("glance-unsuccessful")).toContainText("None cancelled, failed or refunded");
