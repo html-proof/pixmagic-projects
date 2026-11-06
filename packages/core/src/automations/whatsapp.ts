@@ -13,7 +13,8 @@ export function whatsappConnection(ctx: HubContext): ChannelConnection {
     channel: "whatsapp",
     allowed: ctx.can.read.whatsapp,
     state: "elsewhere",
-    summary: ctx.can.read.whatsapp ? "Connected and automated on the WhatsApp Automation page, with its own templates, automations and campaigns." : "You don't have access to WhatsApp.",
+    // The hub doesn't read WhatsApp's connection, so this says where it is, not whether it works.
+    summary: ctx.can.read.whatsapp ? "Its connection, templates, automations and campaigns are on the WhatsApp Automation page." : "You don't have access to WhatsApp.",
     accounts: [],
     problems: [],
     checkedAt: null,
