@@ -5,11 +5,13 @@ import { LoadError } from "@/components/LoadError";
 import { EmptyState } from "@/components/ui";
 import { api } from "@/lib/api";
 import { CHANNEL_NAME, ChannelIcon, fmtWhen, useHub } from "./HubUi";
+import { Chip, TableCard } from "./MarketingKit";
 import type { AuditEntry } from "./types";
 
 // ---------------------------------------------------------------------------
 // Audit log: every change to the hub's channels (connections, automations, messages, approvals),
-// who made it and when, newest first. Owners and admins only; never a customer's details.
+// who made it and when, newest first, as rows on one white card in the Marketing pages' look.
+// Owners and admins only; never a customer's details.
 // ---------------------------------------------------------------------------
 
 export function AutomationAudit() {
@@ -52,35 +54,39 @@ export function AutomationAudit() {
       {entries.length === 0 ? (
         <EmptyState title="Nothing yet" body="Changes to your automations and channels will be listed here." />
       ) : (
-        <ul className="card divide-y divide-border p-0" aria-label="Changes">
-          {entries.map((e) => (
-            <li key={`${e.channel}:${e.id}`} className="flex flex-wrap items-start gap-3 px-4 py-3 text-sm">
-              <ChannelIcon channel={e.channel} className="mt-0.5 h-4 w-4 text-muted" />
-              <div className="min-w-0 flex-1">
-                <p>
-                  <span className="font-medium">{e.actor}</span> · {e.label} <span className="text-muted">({CHANNEL_NAME[e.channel]})</span>
-                </p>
-                {e.detail && (
-                  <p className="text-xs text-muted">
-                    {Object.entries(e.detail)
-                      .map(([k, v]) => `${k}: ${String(v)}`)
-                      .join(" · ")}
+        <TableCard id="changes" title="Changes" aside="Newest first, with who made each one.">
+          <ul className="divide-y divide-home-line border-t border-home-line" aria-label="Changes">
+            {entries.map((e) => (
+              <li key={`${e.channel}:${e.id}`} className="flex flex-wrap items-start gap-3 px-5 py-3 text-sm sm:px-6">
+                <span aria-hidden className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-home-soft text-muted">
+                  <ChannelIcon channel={e.channel} className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p>
+                    <span className="font-medium">{e.actor}</span> · {e.label} <Chip>{CHANNEL_NAME[e.channel]}</Chip>
                   </p>
-                )}
-              </div>
-              <time className="text-xs text-muted" dateTime={e.at}>
-                {fmtWhen(e.at)}
-              </time>
-            </li>
-          ))}
-        </ul>
-      )}
-      {before && (
-        <div className="text-center">
-          <button type="button" className="btn-secondary" disabled={loading} onClick={() => void load(before)}>
-            {loading ? "Loading…" : "Load older changes"}
-          </button>
-        </div>
+                  {e.detail && (
+                    <p className="mt-0.5 text-xs break-words text-muted">
+                      {Object.entries(e.detail)
+                        .map(([k, v]) => `${k}: ${String(v)}`)
+                        .join(" · ")}
+                    </p>
+                  )}
+                </div>
+                <time className="text-xs whitespace-nowrap text-muted" dateTime={e.at}>
+                  {fmtWhen(e.at)}
+                </time>
+              </li>
+            ))}
+          </ul>
+          {before && (
+            <div className="border-t border-home-line p-3 text-center">
+              <button type="button" className="btn-secondary" disabled={loading} onClick={() => void load(before)}>
+                {loading ? "Loading…" : "Load older changes"}
+              </button>
+            </div>
+          )}
+        </TableCard>
       )}
     </div>
   );

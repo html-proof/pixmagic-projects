@@ -12,6 +12,7 @@ import { Alert } from "@/components/ui";
 import { api, ApiError, useApi } from "@/lib/api";
 import { ChannelCards } from "./Channels";
 import { CHANNEL_NAME, fmtWhen, HubTriggerIconView, hubError, useHub } from "./HubUi";
+import { StepNumber, StepTitle } from "./MarketingKit";
 import { EmailEditor, emailIssues, SmsEditor, smsIssues, type EmailDraft, type SmsDraft } from "./MessageEditors";
 import { Review } from "./Review";
 import type { HubAutomation, HubTriggerState, OverviewResponse } from "./types";
@@ -21,6 +22,8 @@ import type { HubAutomation, HubTriggerState, OverviewResponse } from "./types";
 // channel really receives for this store, 3 write and check the message, 4 review, test and turn
 // on. Saving at step 3 writes the channel's own rule and message (nothing is sent by saving);
 // turning on at step 4 asks first. ?channel=&id= edits one; ?trigger= starts from a trigger.
+// The steps are numbered as the Stitch design's screen 19 numbers an automation's parts, and the
+// last one ends in its "Check and turn on" card (./Review.tsx).
 // ---------------------------------------------------------------------------
 
 const STEPS = ["Connect", "Trigger", "Message", "Review and turn on"] as const;
@@ -199,7 +202,7 @@ export function AutomationWizard() {
         }
       />
 
-      <ol className="card flex flex-wrap gap-2" aria-label="Steps">
+      <ol className="home-card animate-rise flex flex-wrap gap-2 p-3 sm:px-4" aria-label="Steps">
         {STEPS.map((label, i) => {
           const n = i + 1;
           const done = n < step;
@@ -207,12 +210,12 @@ export function AutomationWizard() {
             <li key={label}>
               <button
                 type="button"
-                className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${n === step ? "bg-accent text-white" : done ? "bg-accent/10 text-accent" : "text-muted"}`}
+                className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent ${n === step ? "bg-accent/10 font-semibold text-accent" : done ? "text-text hover:bg-home-soft" : "text-muted"}`}
                 aria-current={n === step ? "step" : undefined}
                 disabled={!reachable(n) || n === step || (editing && n < 3)}
                 onClick={() => setStep(n)}
               >
-                <span className="flex h-5 w-5 items-center justify-center rounded-full border border-current text-xs">{done ? <Check aria-hidden className="h-3 w-3" /> : n}</span>
+                <StepNumber n={done ? <Check aria-hidden className="h-3 w-3" /> : n} done={done || n === step} />
                 {label}
               </button>
             </li>
@@ -223,10 +226,10 @@ export function AutomationWizard() {
       {problem && <Alert onDismiss={() => setProblem(null)}>{problem}</Alert>}
 
       {step === 1 && (
-        <section className="space-y-3" aria-labelledby="s1">
-          <h2 id="s1" className="font-semibold">
-            1. Choose the channel and connect it
-          </h2>
+        <section className="space-y-4" aria-labelledby="s1">
+          <StepTitle id="s1" n={1}>
+            Choose the channel and connect it
+          </StepTitle>
           <ChannelCards
             connections={connections}
             permissions={permissions}
@@ -248,11 +251,11 @@ export function AutomationWizard() {
       )}
 
       {step === 2 && channel && (
-        <section className="space-y-3" aria-labelledby="s2">
+        <section className="space-y-4" aria-labelledby="s2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 id="s2" className="font-semibold">
-              2. Choose what starts it ({CHANNEL_NAME[channel]})
-            </h2>
+            <StepTitle id="s2" n={2}>
+              Choose what starts it ({CHANNEL_NAME[channel]})
+            </StepTitle>
             {channel === "sms" && triggers.data.triggers.some((t) => t.channels.sms.state === "needs_setup" && !t.channels.sms.fix) && (
               <button type="button" className="btn-secondary h-8 px-3 text-xs" disabled={!!busy} onClick={() => void verifyTriggers()}>
                 {busy === "verify" ? "Asking Shopify…" : "Check with Shopify"}
@@ -270,13 +273,13 @@ export function AutomationWizard() {
                   <li key={t.key}>
                     <button
                       type="button"
-                      className={`card h-full w-full text-left transition ${picked ? "border-accent ring-2 ring-accent/30" : usable ? "hover:border-accent/60" : "opacity-70"}`}
+                      className={`home-card h-full w-full p-4 text-left transition outline-none focus-visible:ring-2 focus-visible:ring-accent ${picked ? "ring-2 ring-accent" : usable ? "hover:bg-home-soft" : "opacity-70"}`}
                       aria-pressed={picked}
                       disabled={!usable}
                       onClick={() => pickTrigger(t.key)}
                     >
                       <span className="flex items-start gap-3">
-                        <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+                        <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-accent/10 text-accent">
                           <HubTriggerIconView icon={t.icon} />
                         </span>
                         <span className="min-w-0">
@@ -308,7 +311,7 @@ export function AutomationWizard() {
             </button>
           )}
           {trigger === "external_event" && channel === "email" && (
-            <div className="card max-w-lg space-y-2">
+            <div className="home-card max-w-lg space-y-2 p-5">
               <label className="label" htmlFor="custom-event">
                 Your event&apos;s name
               </label>
@@ -328,11 +331,11 @@ export function AutomationWizard() {
       )}
 
       {step === 3 && channel && trigger && (
-        <section className="space-y-3" aria-labelledby="s3">
-          <h2 id="s3" className="font-semibold">
-            3. Write the message ({CHANNEL_INFO[channel].label}, when: {HUB_TRIGGER_INFO[trigger].label})
-          </h2>
-          <div className="card">
+        <section className="space-y-4" aria-labelledby="s3">
+          <StepTitle id="s3" n={3}>
+            Write the message ({CHANNEL_INFO[channel].label}, when: {HUB_TRIGGER_INFO[trigger].label})
+          </StepTitle>
+          <div className="home-card animate-rise p-5 sm:p-6">
             {channel === "sms" && smsTrigger ? (
               <SmsEditor
                 trigger={smsTrigger}
@@ -359,10 +362,10 @@ export function AutomationWizard() {
       )}
 
       {step === 4 && saved && (
-        <section className="space-y-3" aria-labelledby="s4">
-          <h2 id="s4" className="font-semibold">
-            4. Review, test and turn on
-          </h2>
+        <section className="space-y-4" aria-labelledby="s4">
+          <StepTitle id="s4" n={4}>
+            Review, test and turn on
+          </StepTitle>
           <Review automation={saved} connection={connections.find((c) => c.channel === saved.channel)} onChanged={(a) => setSaved(a)} />
           <div className="flex justify-between">
             <button type="button" className="btn-secondary inline-flex items-center gap-1.5" onClick={() => setStep(3)}>

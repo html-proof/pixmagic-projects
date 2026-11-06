@@ -6,30 +6,23 @@ import { HUB_STATUSES, HUB_STATUS_INFO, type HubCounts, type HubStatus } from "@
 import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Drawer, usePagedList } from "@/components/messaging/MessagingUi";
+import { Card, FigureTile } from "@/components/PageKit";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, fmtNum, useApi } from "@/lib/api";
 import { CHANNEL_NAME, ChannelIcon, fmtRate, fmtWhen, HubStatusBadge, hubError, useHub } from "./HubUi";
+import { FilterBar, ROW, TableCard, TableHead, TD, Th } from "./MarketingKit";
 import type { HubMessage, MessageDetail, OverviewResponse, StatsResponse } from "./types";
 
 // ---------------------------------------------------------------------------
-// Message history: every automated message of every channel, newest first, filtered and paged on
-// the server, on one scale of statuses. "Accepted by provider" and "Delivered" are kept apart:
-// only a provider's delivery report makes a message delivered, and email through a mailbox never
-// has one. Above the list, the period's figures per channel and per day.
+// Message history, as the Stitch design's screen 17 draws Results: the filters on one bar, the
+// period's few numbers, what each channel can report, then every automated message of every
+// channel, newest first, filtered and paged on the server, on one scale of statuses. "Accepted by
+// provider" and "Delivered" are kept apart: only a provider's delivery report makes a message
+// delivered, and email through a mailbox never has one.
 // ---------------------------------------------------------------------------
 
 const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const KIND: Record<string, string> = { automation: "Automation", campaign: "Campaign", test: "Test", manual: "Sent by hand" };
-
-function Tile({ label, value, note }: { label: string; value: string; note?: string | null }) {
-  return (
-    <div className="card">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-      {note && <p className="mt-1 text-xs text-muted">{note}</p>}
-    </div>
-  );
-}
 
 /** Each day's messages as a bar: delivered, accepted only, failed or undelivered, everything else. */
 function DayBars({ days }: { days: Array<{ day: string; counts: HubCounts }> }) {
@@ -37,9 +30,8 @@ function DayBars({ days }: { days: Array<{ day: string; counts: HubCounts }> }) 
   const max = Math.max(1, ...totals);
   if (!days.length) return null;
   return (
-    <div className="card">
-      <p className="text-sm font-semibold">Messages per day</p>
-      <div className="mt-3 flex h-32 items-end gap-1" role="img" aria-label={`Messages per day: ${days.map((d, i) => `${d.day} ${totals[i]}`).join(", ")}`}>
+    <Card id="per-day" title="Messages per day" testId="history-per-day">
+      <div className="flex h-32 items-end gap-1" role="img" aria-label={`Messages per day: ${days.map((d, i) => `${d.day} ${totals[i]}`).join(", ")}`}>
         {days.map((d, i) => {
           const c = d.counts;
           const parts: Array<[number, string]> = [
@@ -49,13 +41,13 @@ function DayBars({ days }: { days: Array<{ day: string; counts: HubCounts }> }) 
             [totals[i]! - c.delivered - c.sent - c.failed - c.undelivered, "bg-muted/40"],
           ];
           return (
-            <div key={d.day} className="flex h-full min-w-[4px] flex-1 flex-col justify-end" title={`${d.day}: ${totals[i]} messages`}>
+            <div key={d.day} className="flex h-full min-w-[3px] flex-1 flex-col justify-end overflow-hidden rounded-t-sm" title={`${d.day}: ${totals[i]} messages`}>
               {parts.map(([n, cls], j) => (n > 0 ? <div key={j} className={cls} style={{ height: `${(n / max) * 100}%` }} /> : null))}
             </div>
           );
         })}
       </div>
-      <p className="mt-2 flex flex-wrap gap-3 text-xs text-muted">
+      <p className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
         <span>
           <span className="mr-1 inline-block h-2 w-2 rounded-full bg-good" />
           Delivered
@@ -73,7 +65,7 @@ function DayBars({ days }: { days: Array<{ day: string; counts: HubCounts }> }) 
           Waiting, not sent or test only
         </span>
       </p>
-    </div>
+    </Card>
   );
 }
 
@@ -115,27 +107,27 @@ export function MessageMonitor() {
 
   const s = stats.data;
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <PageHeader
         title="Message history"
         sub="Every automated message, from every channel, with what the provider said about it. Accepted by the provider isn't the same as delivered: only a delivery report confirms that."
       />
 
-      <div className="card flex flex-wrap items-end gap-3" role="search">
+      <FilterBar>
         <div>
-          <label className="label" htmlFor="m-from">
+          <label className="label text-xs text-muted" htmlFor="m-from">
             From
           </label>
           <input id="m-from" className="input" type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} />
         </div>
         <div>
-          <label className="label" htmlFor="m-to">
+          <label className="label text-xs text-muted" htmlFor="m-to">
             To
           </label>
           <input id="m-to" className="input" type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} />
         </div>
         <div>
-          <label className="label" htmlFor="m-channel">
+          <label className="label text-xs text-muted" htmlFor="m-channel">
             Channel
           </label>
           <select id="m-channel" className="input" value={channel} onChange={(e) => setChannel(e.target.value as "" | "sms" | "email")}>
@@ -145,7 +137,7 @@ export function MessageMonitor() {
           </select>
         </div>
         <div>
-          <label className="label" htmlFor="m-status">
+          <label className="label text-xs text-muted" htmlFor="m-status">
             Status
           </label>
           <select id="m-status" className="input" value={status} onChange={(e) => setStatus(e.target.value as "" | HubStatus)}>
@@ -158,7 +150,7 @@ export function MessageMonitor() {
           </select>
         </div>
         <div className="min-w-[12rem] flex-1">
-          <label className="label" htmlFor="m-automation">
+          <label className="label text-xs text-muted" htmlFor="m-automation">
             Automation
           </label>
           <select id="m-automation" className="input" value={automation} onChange={(e) => setAutomation(e.target.value)}>
@@ -170,7 +162,7 @@ export function MessageMonitor() {
             ))}
           </select>
         </div>
-      </div>
+      </FilterBar>
 
       {stats.error && !s ? (
         <LoadError what="the figures" error={stats.error} onRetry={() => void stats.reload()} busy={stats.loading} />
@@ -178,31 +170,42 @@ export function MessageMonitor() {
         <Skeleton lines={2} />
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Tile label="Messages" value={fmtNum(Object.values(s.totals).reduce((a, b) => a + b, 0))} note={`${from} to ${to}`} />
-            <Tile label="Accepted by providers" value={fmtNum(s.totals.sent + s.totals.delivered + s.totals.undelivered)} note={fmtRate(s.acceptanceRate) ? `${fmtRate(s.acceptanceRate)} of those that tried to send` : null} />
-            <Tile label="Delivered (confirmed)" value={fmtNum(s.totals.delivered)} note={fmtRate(s.deliveryRate) ? `${fmtRate(s.deliveryRate)} of those with a delivery report` : "No delivery reports in this period"} />
-            <Tile label="Failed or undelivered" value={fmtNum(s.totals.failed + s.totals.undelivered)} note={s.totals.not_sent ? `${fmtNum(s.totals.not_sent)} more not sent on purpose (consent, opt-outs, rules)` : null} />
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <FigureTile title="Messages" value={fmtNum(Object.values(s.totals).reduce((a, b) => a + b, 0))} sub={`${from} to ${to}`} />
+            <FigureTile
+              title="Accepted by providers"
+              value={fmtNum(s.totals.sent + s.totals.delivered + s.totals.undelivered)}
+              sub={fmtRate(s.acceptanceRate) ? `${fmtRate(s.acceptanceRate)} of those that tried to send` : null}
+            />
+            <FigureTile
+              title="Delivered (confirmed)"
+              value={fmtNum(s.totals.delivered)}
+              sub={fmtRate(s.deliveryRate) ? `${fmtRate(s.deliveryRate)} of those with a delivery report` : "No delivery reports in this period"}
+            />
+            <FigureTile
+              title="Failed or undelivered"
+              value={fmtNum(s.totals.failed + s.totals.undelivered)}
+              sub={s.totals.not_sent ? `${fmtNum(s.totals.not_sent)} more not sent on purpose (consent, opt-outs, rules)` : null}
+            />
           </div>
           {s.channels.length > 0 && (
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2">
               {s.channels.map((c) => (
-                <div key={c.channel} className="card space-y-1 text-sm">
-                  <p className="flex items-center gap-2 font-semibold">
-                    <ChannelIcon channel={c.channel} className="h-4 w-4" /> {CHANNEL_NAME[c.channel]}
-                  </p>
-                  <p className="text-muted">
-                    {fmtNum(c.totals.delivered)} delivered · {fmtNum(c.totals.sent)} accepted, no report yet · {fmtNum(c.totals.failed + c.totals.undelivered)} failed · {fmtNum(c.totals.test_only)} test only
-                  </p>
-                  <p>Delivery rate: {fmtRate(c.deliveryRate) ?? "not reported"}</p>
-                  {c.deliveryNote && <p className="text-xs text-muted">{c.deliveryNote}</p>}
-                  {c.usage.map((u) => (
-                    <p key={u.label} className="text-xs text-muted">
-                      {u.label}: <span className="font-medium text-text">{u.value}</span>
+                <Card key={c.channel} id={`channel-stats-${c.channel}`} title={CHANNEL_NAME[c.channel]} aside={<ChannelIcon channel={c.channel} className="h-4 w-4" />} testId={`history-channel-${c.channel}`}>
+                  <div className="space-y-1.5 text-sm">
+                    <p className="text-muted">
+                      {fmtNum(c.totals.delivered)} delivered · {fmtNum(c.totals.sent)} accepted, no report yet · {fmtNum(c.totals.failed + c.totals.undelivered)} failed · {fmtNum(c.totals.test_only)} test only
                     </p>
-                  ))}
-                  {c.costUsd !== null && <p className="text-xs text-muted">Billed by the provider in this period: US${c.costUsd.toFixed(4)}</p>}
-                </div>
+                    <p>Delivery rate: {fmtRate(c.deliveryRate) ?? "not reported"}</p>
+                    {c.deliveryNote && <p className="text-xs text-muted">{c.deliveryNote}</p>}
+                    {c.usage.map((u) => (
+                      <p key={u.label} className="text-xs text-muted">
+                        {u.label}: <span className="font-medium text-text">{u.value}</span>
+                      </p>
+                    ))}
+                    {c.costUsd !== null && <p className="text-xs text-muted">Billed by the provider in this period: US${c.costUsd.toFixed(4)}</p>}
+                  </div>
+                </Card>
               ))}
             </div>
           )}
@@ -217,52 +220,69 @@ export function MessageMonitor() {
       ) : list.rows.length === 0 ? (
         <EmptyState title="No messages" body="Nothing was sent or scheduled with these filters. Try a longer period, or another status." />
       ) : (
-        <div className="card overflow-x-auto p-0">
-          <table className="w-full min-w-[42rem] text-sm">
-            <thead className="text-left text-xs text-muted">
-              <tr className="border-b border-border">
-                <th className="px-4 py-2 font-medium">When</th>
-                <th className="px-4 py-2 font-medium">Channel</th>
-                <th className="px-4 py-2 font-medium">From</th>
-                <th className="px-4 py-2 font-medium">To</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Cost</th>
-              </tr>
-            </thead>
+        <TableCard id="messages" title="Messages" aside="Newest first. Open one to see what the provider said, step by step.">
+          <table className="w-full min-w-[46rem] text-sm">
+            <TableHead>
+              <Th>Time</Th>
+              <Th>Channel</Th>
+              <Th>Automation or campaign</Th>
+              <Th>To</Th>
+              <Th>Status and reason</Th>
+              <Th right>Cost</Th>
+              <Th right>
+                <span className="sr-only">Action</span>
+              </Th>
+            </TableHead>
             <tbody>
               {list.rows.map((m) => (
-                <tr key={`${m.channel}:${m.id}`} className="cursor-pointer border-b border-border last:border-0 hover:bg-bg/60" onClick={() => setOpen(m)}>
-                  <td className="whitespace-nowrap px-4 py-2">
-                    <button type="button" className="text-left underline-offset-2 hover:underline" onClick={() => setOpen(m)}>
+                <tr key={`${m.channel}:${m.id}`} className={`${ROW} cursor-pointer hover:bg-home-soft/60`} onClick={() => setOpen(m)}>
+                  <td className={`${TD} whitespace-nowrap`}>
+                    <button type="button" className="rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent" onClick={() => setOpen(m)}>
                       {fmtWhen(m.createdAt)}
                     </button>
                   </td>
-                  <td className="px-4 py-2">
+                  <td className={TD}>
                     <span className="inline-flex items-center gap-1.5">
                       <ChannelIcon channel={m.channel} className="h-4 w-4" /> {CHANNEL_NAME[m.channel]}
                     </span>
                   </td>
-                  <td className="px-4 py-2">{m.automation?.name ?? (m.automation ? "Deleted automation" : (KIND[m.kind] ?? m.kind))}</td>
-                  <td className="px-4 py-2 text-muted">{m.to ?? "—"}</td>
-                  <td className="px-4 py-2">
-                    <span className="flex flex-col gap-0.5">
+                  <td className={TD}>{m.automation?.name ?? (m.automation ? "Deleted automation" : (KIND[m.kind] ?? m.kind))}</td>
+                  <td className={`${TD} text-muted`}>{m.to ?? "—"}</td>
+                  <td className={TD}>
+                    <span className="flex flex-col items-start gap-0.5">
                       <HubStatusBadge status={m.status} />
                       {m.reason && <span className="text-xs text-muted">{m.reason}</span>}
                     </span>
                   </td>
-                  <td className="px-4 py-2 tabular-nums text-muted">{m.costUsd !== null ? `US$${m.costUsd.toFixed(4)}` : "—"}</td>
+                  <td className={`${TD} text-right tabular-nums text-muted`}>{m.costUsd !== null ? `US$${m.costUsd.toFixed(4)}` : "—"}</td>
+                  <td className={`${TD} text-right`}>
+                    {m.retryable && (
+                      <button
+                        type="button"
+                        className="home-btn h-8 text-xs"
+                        disabled={busy}
+                        aria-label={`Send again: ${m.automation?.name ?? KIND[m.kind] ?? "message"}, ${fmtWhen(m.createdAt)}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRetrying(m);
+                        }}
+                      >
+                        <RotateCcw aria-hidden className="h-3.5 w-3.5" /> Send again
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {list.cursor && (
-            <div className="border-t border-border p-3 text-center">
+            <div className="border-t border-home-line p-3 text-center">
               <button type="button" className="btn-secondary" disabled={list.loading} onClick={list.loadMore}>
                 {list.loading ? "Loading…" : "Load more"}
               </button>
             </div>
           )}
-        </div>
+        </TableCard>
       )}
 
       {open && (
@@ -283,7 +303,7 @@ export function MessageMonitor() {
                 </p>
               </div>
               {detail.data.message.subject && <p className="text-sm font-medium">{detail.data.message.subject}</p>}
-              {detail.data.text && <p className="whitespace-pre-line rounded-xl border border-border bg-surface px-3 py-2 text-sm">{detail.data.text}</p>}
+              {detail.data.text && <p className="rounded bg-home-soft px-3 py-2 text-sm whitespace-pre-line">{detail.data.text}</p>}
               <dl className="grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1 text-sm">
                 <dt className="text-muted">To</dt>
                 <dd>{detail.data.message.to ?? "Hidden (needs contact details permission)"}</dd>
@@ -295,7 +315,7 @@ export function MessageMonitor() {
                 <dd>{detail.data.message.deliveredAt ? fmtWhen(detail.data.message.deliveredAt) : "No delivery report"}</dd>
               </dl>
               {detail.data.timeline.length > 0 && (
-                <ol className="space-y-2 border-l border-border pl-4 text-sm" aria-label="What happened">
+                <ol className="space-y-2 border-l border-home-line pl-4 text-sm" aria-label="What happened">
                   {detail.data.timeline.map((t, i) => (
                     <li key={i}>
                       <p className="font-medium">{t.label}</p>

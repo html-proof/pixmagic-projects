@@ -75,10 +75,17 @@ export function Review({ automation, connection, onChanged }: { automation: HubA
   const on = automation.status === "active";
   const canTurnOn = automation.actions.includes("activate") || automation.actions.includes("resume") || (on && automation.pendingChanges);
 
+  const panel = "home-card animate-rise min-w-0 space-y-3 p-5 sm:p-6";
   return (
     <div className="space-y-4">
       {problem && <Alert onDismiss={() => setProblem(null)}>{problem}</Alert>}
-      <dl className="card grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[10rem_1fr]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="min-w-0 space-y-4">
+      <section className={panel} aria-labelledby="saved-h">
+      <h3 id="saved-h" className="home-h2">
+        What you saved
+      </h3>
+      <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[10rem_1fr]">
         <dt className="text-muted">Channel</dt>
         <dd className="flex flex-wrap items-center gap-2">
           {CHANNEL_INFO[automation.channel].label} {connection && <ConnectionBadge state={connection.state} />}
@@ -109,28 +116,10 @@ export function Review({ automation, connection, onChanged }: { automation: HubA
           {automation.testMode && <span className="text-xs text-muted">Test mode: it records what it would send, and sends nothing.</span>}
         </dd>
       </dl>
+      </section>
 
-      {(blocking.length > 0 || testMode) && (
-        <Alert kind="info">
-          <p className="font-medium">Before it can reach customers:</p>
-          <ul className="mt-1 space-y-1">
-            {testMode && <li>bizinsights&apos; SMS is in test mode: automatic texts are recorded in the history, not sent. Test texts still reach your verified numbers.</li>}
-            {blocking.map((p) => (
-              <li key={p.code}>
-                {p.message}{" "}
-                {p.fix && (
-                  <Link className="font-medium underline" href={p.fix.href}>
-                    {p.fix.label}
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Alert>
-      )}
-
-      <section className="card space-y-3" aria-labelledby="test-h">
-        <h3 id="test-h" className="font-semibold">
+      <section className={panel} aria-labelledby="test-h">
+        <h3 id="test-h" className="home-h2">
           Send yourself a test
         </h3>
         {sms ? (
@@ -166,7 +155,7 @@ export function Review({ automation, connection, onChanged }: { automation: HubA
           </button>
         )}
         {test && (
-          <div className="rounded-xl border border-border px-3 py-2 text-sm" role="status">
+          <div className="rounded bg-home-soft px-3 py-2 text-sm" role="status">
             <p className="flex flex-wrap items-center gap-2">
               Test: <HubStatusBadge status={test.status} />
               {!FINAL.has(test.status) && (
@@ -179,11 +168,41 @@ export function Review({ automation, connection, onChanged }: { automation: HubA
           </div>
         )}
       </section>
+      </div>
 
-      <section className="card space-y-3" aria-labelledby="activate-h">
-        <h3 id="activate-h" className="font-semibold">
+      {/* The design's "Check and turn on": what still stops it, then the switch (asked first). */}
+      <section className={`${panel} lg:sticky lg:top-20`} aria-labelledby="activate-h" data-testid="check-and-turn-on">
+        <h3 id="activate-h" className="home-h2">
           {on && !automation.pendingChanges ? "It's on" : "Turn it on"}
         </h3>
+        <ul className="space-y-2 text-sm" aria-label="Checks">
+          {connection && (
+            <li className="flex items-start gap-2">
+              {connection.state === "connected" ? <CircleCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-good" /> : <CircleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-warn" />}
+              <span className="flex flex-wrap items-center gap-2">
+                {CHANNEL_INFO[automation.channel].label} <ConnectionBadge state={connection.state} />
+              </span>
+            </li>
+          )}
+          {(blocking.length > 0 || testMode) && <li className="pt-1 text-xs font-medium text-muted">Before it can reach customers:</li>}
+          {testMode && (
+            <li className="flex items-start gap-2 rounded bg-warn/10 px-3 py-2 text-xs text-warn">
+              <CircleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>bizinsights&apos; SMS is in test mode: automatic texts are recorded in the history, not sent. Test texts still reach your verified numbers.</span>
+            </li>
+          )}
+          {blocking.map((p) => (
+            <li key={p.code} className="flex items-start gap-2 rounded bg-danger/10 px-3 py-2 text-xs text-danger">
+              <CircleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1">{p.message}</span>
+              {p.fix && (
+                <Link className="shrink-0 font-medium underline" href={p.fix.href}>
+                  {p.fix.label}
+                </Link>
+              )}
+            </li>
+          ))}
+        </ul>
         {on && !automation.pendingChanges ? (
           <p className="flex items-center gap-2 text-sm text-good">
             <CircleCheck aria-hidden className="h-4 w-4" /> Running. Follow its messages in the{" "}
@@ -215,6 +234,7 @@ export function Review({ automation, connection, onChanged }: { automation: HubA
           </p>
         )}
       </section>
+      </div>
     </div>
   );
 }
