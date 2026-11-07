@@ -1,14 +1,16 @@
 // Job-started hook of the PC's runner for main (install-runner.ps1 -Main). The runner runs it with
 // its own Node before every job, and any exit code but 0 fails the job before its first step. Only
-// main's own jobs get through: CI for a push to main, and Deploy to AWS from main. A job from any
-// other workflow or branch (a pull request's) could leave something behind (a tool, a package, a
-// profile file) that the next deploy would run with while it holds the deploy role. Labels can't
+// main's own jobs get through: CI for a push to main, and Deploy to AWS and Deploy to iKorex from
+// main. A job from any other workflow or branch (a pull request's) could leave something behind (a
+// tool, a package, a profile file) that the next deploy would run with while it holds the deploy
+// role or the iKorex deploy key. Labels can't
 // stop that: any branch's workflow can ask for any label. These values come from GitHub (the job's
 // github context), not from the workflow file.
 const repo = "html-proof/pixmagic-projects";
 const allowed = [
   { workflow: `${repo}/.github/workflows/ci.yml@refs/heads/main`, events: ["push"] },
   { workflow: `${repo}/.github/workflows/aws-deploy.yml@refs/heads/main`, events: ["workflow_run", "workflow_dispatch"] },
+  { workflow: `${repo}/.github/workflows/ikorex-deploy.yml@refs/heads/main`, events: ["workflow_run", "workflow_dispatch"] },
 ];
 
 const env = process.env;

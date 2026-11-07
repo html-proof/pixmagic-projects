@@ -11,7 +11,9 @@ and the CCTV tunnel already on that server.
 backups to R2, one server accepted, the cutover on a Sunday 20:00-21:00 Melbourne time, no logs
 profile. **The database copy and the security audit are built** (2026-11-07): the copy is tested
 against PostgreSQL with the real schema, and six security findings in the server's files are fixed
-with tests. The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for
+with tests. **The deploy workflow is built and off** (Deploy to iKorex, 2026-11-07): it deploys
+`main` to staging, and from the cutover to production, once the deploy key is agreed with the
+administrator and set up. The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for
 the administrator. Nothing has changed on the server, and AWS keeps running everything (its only
 changes: four empty tables the runtime uses, and the admin host may write dumps under one bucket
 prefix).

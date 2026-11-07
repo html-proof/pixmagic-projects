@@ -1,0 +1,174 @@
+name: Deploy to iKorex
+
+# The self-hosted copy on the iKorex server (docs/ikorex-migration), beside Deploy to AWS until the
+# cutover. OFF until the server is set up: each target deploys only while its repository variable
+# is on, and with both off every job skips (grey, not red).
+#   IKOREX_STAGING=on     main's commits go to ~/bizinsights-staging (stage B onwards)
+#   IKOREX_PRODUCTION=on  ... and then to ~/bizinsights (from the cutover, stage D)
+# Setup (the deploy key, the server's gate, the secret): docs/ikorex-migration/
+# PRODUCTION_DEPLOYMENT_GUIDE.md, "Deploy to iKorex (GitHub Actions)".
+#
+# Two jobs, split as in Deploy to AWS. `build` installs every dependency and packs the release
+# (`ship.sh pack`: the server bundle with the UI, and infra/ikorex) with no way to reach the server:
+# it never sees the deploy key. `deploy` installs nothing and is the only job given the key (the
+# environment "ikorex"'s secret IKOREX_SSH_KEY). On the server that key runs only
+# infra/ikorex/scripts/ssh-gate.sh (receive a release, deploy it), and this job connects only to the
+# host key pinned in infra/ikorex/known_hosts. deploy.sh there runs the migrations before anything
+# switches, checks health, /api/readyz and /api/version, and puts the previous release back if a
+# check fails: a failed deploy leaves the copy that ran before it running.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to (its variable, IKOREX_STAGING or IKOREX_PRODUCTION, must be on)
+        type: choice
+        options: [staging, production]
+        default: staging
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# One deploy to the server at a time. Never cancelled: deploy.sh stopped half way would leave the
+# switch to its own rollback, which then never runs.
+concurrency:
+  group: ikorex-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Every `run:` is bash: on a self-hosted Windows runner, Git Bash (see ci.yml).
+defaults:
+  run:
+    shell: bash
+
+env:
+  COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+  # The release `build` hands to `deploy`, in the Actions cache (artifact storage is full on this
+  # plan; as in Deploy to AWS). Caches made on main can't be written by pull requests.
+  RELEASE_KEY: ikorex-release-${{ github.run_id }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  RELEASE: apps/aws/dist/ikorex-release.tgz
+
+jobs:
+  build:
+    # As Deploy to AWS: by hand only from main, after CI only its run for a push to main (a docs-only
+    # change starts no CI run, so it deploys nothing). And only while a target this run would deploy
+    # to is on.
+    if: >-
+      (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+          && ((inputs.target == 'staging' && vars.IKOREX_STAGING == 'on') || (inputs.target == 'production' && vars.IKOREX_PRODUCTION == 'on')))
+        || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+          && (vars.IKOREX_STAGING == 'on' || vars.IKOREX_PRODUCTION == 'on'))
+      )
+    # The runner Deploy to AWS uses (its comment says why the runner for main comes first).
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 45
+    steps:
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: "true"
+        with:
+          ref: ${{ env.COMMIT }}
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install the pinned pnpm (cached on this runner)
+        run: node infra/runner/setup-pnpm.mjs
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+      - run: pnpm install --frozen-lockfile
+        env: { DATABASE_URL: "postgresql://build:build@localhost:5432/build" }
+      # CI already passed this commit's tests; this builds the server bundle (UI included) and packs
+      # it with infra/ikorex, leaving out every env/*.env and .env.
+      - name: Pack the release (ship.sh pack)
+        run: infra/ikorex/scripts/ship.sh pack "$RELEASE"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.RELEASE }}
+          key: ${{ env.RELEASE_KEY }}
+
+  deploy:
+    needs: build
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    # deploy.sh waits up to 3 minutes for health on each target; the image builds on the server.
+    timeout-minutes: 40
+    environment: ikorex
+    env:
+      STAGING: ${{ vars.IKOREX_STAGING == 'on' && (github.event_name == 'workflow_run' || inputs.target == 'staging') }}
+      PRODUCTION: ${{ vars.IKOREX_PRODUCTION == 'on' && (github.event_name == 'workflow_run' || inputs.target == 'production') }}
+    steps:
+      - name: Git Bash (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: "true"
+        with:
+          ref: ${{ env.COMMIT }}
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.RELEASE }}
+          key: ${{ env.RELEASE_KEY }}
+          fail-on-cache-miss: true
+      # The key goes into this job's temporary folder (the runner empties it after every job; the
+      # last step removes it first), never into the log or the checkout. The host and user are the
+      # administrator's guide's; IKOREX_SSH_TARGET (user@host) overrides them.
+      - name: SSH to the server (the deploy key, the pinned host key)
+        env:
+          KEY: ${{ secrets.IKOREX_SSH_KEY }}
+          TARGET: ${{ vars.IKOREX_SSH_TARGET || 'deployer@103.146.112.176' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEY" ]]; then echo "::error::The environment ikorex has no secret IKOREX_SSH_KEY (docs/ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md, Deploy to iKorex)."; exit 1; fi
+          [[ "$TARGET" =~ ^[a-z_][a-z0-9_-]*@[A-Za-z0-9.-]+$ ]] || { echo "::error::IKOREX_SSH_TARGET must be user@host."; exit 1; }
+          dir="$RUNNER_TEMP/ikorex-ssh"
+          command -v cygpath >/dev/null 2>&1 && dir="$(cygpath -u "$dir")"
+          rm -rf "$dir"; mkdir -m 700 "$dir"
+          (umask 077; printf '%s\n' "$KEY" | tr -d '\r' > "$dir/key")
+          chmod 600 "$dir/key"
+          { echo "Host ikorex"
+            echo "  HostName ${TARGET#*@}"
+            echo "  User ${TARGET%@*}"
+            echo "  IdentityFile $dir/key"
+            echo "  BatchMode yes"
+            echo "  ConnectTimeout 20"
+            echo "  ServerAliveInterval 15"
+            echo "  ServerAliveCountMax 8"
+          } > "$dir/config"
+          echo "SHIP_SSH_CONFIG=$dir/config" >> "$GITHUB_ENV"
+          echo "IKOREX_SSH_DIR=$dir" >> "$GITHUB_ENV"
+      # Staging first: production waits for it, so a release that fails there never reaches production.
+      - name: Deploy to staging (~/bizinsights-staging)
+        if: env.STAGING == 'true'
+        env: { SHIP_GATED: "1" }
+        run: infra/ikorex/scripts/ship.sh send ikorex bizinsights-staging "$RELEASE" "${COMMIT:0:12}"
+      - name: Deploy to production (~/bizinsights)
+        if: env.PRODUCTION == 'true'
+        env: { SHIP_GATED: "1" }
+        run: infra/ikorex/scripts/ship.sh send ikorex bizinsights "$RELEASE" "${COMMIT:0:12}"
+      - name: Remove the key
+        if: always()
+        run: rm -rf "${IKOREX_SSH_DIR:-/nonexistent}"
