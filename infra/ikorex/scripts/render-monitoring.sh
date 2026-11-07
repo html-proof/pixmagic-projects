@@ -6,6 +6,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f env/alerting.env ] || { echo "missing env/alerting.env (env/alerting.env.example)" >&2; exit 1; }
+# Grafana's admin password, the monitoring login: a placeholder from an env/*.example is public.
+if placeholders="$(grep -l 'CHANGE_ME' env/*.env 2>/dev/null)"; then
+  echo "placeholder values (CHANGE_ME) still in: $(echo $placeholders): give each its own value" >&2
+  exit 1
+fi
 get() { sed -n "s/^$1=//p" env/alerting.env | tail -1; }
 to="$(get ALERT_EMAIL_TO)"; from="$(get ALERT_EMAIL_FROM)"; pw="$(get RESEND_SMTP_PASSWORD)"
 [ -n "$to" ] && [ -n "$from" ] && [ -n "$pw" ] || { echo "env/alerting.env needs ALERT_EMAIL_TO, ALERT_EMAIL_FROM and RESEND_SMTP_PASSWORD" >&2; exit 1; }

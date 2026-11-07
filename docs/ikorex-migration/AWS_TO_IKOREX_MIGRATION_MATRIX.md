@@ -28,7 +28,7 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | S3 `payloads` | Volume + nightly prune | **Done**: `fsBlobs.ts` (implements `BlobStore`) | — (transient, drained) | Unit tests incl. keys that would leave the folder | Disk fills: alert at 80 % |
 | S3 `site` | Served by `app` | Production static handler (`staticSite.ts` exists) with cache headers | — | Pages, hashed files cached by Cloudflare | — |
 | S3 `artifacts` | R2 bucket, encrypted | Backup scripts | Existing RDS snapshots stay in AWS until stage F | Restore test | — |
-| RDS PostgreSQL | `postgres` container | Connection strings only | `pg_dump` of `app` and `evolution` from RDS, restore on iKorex, inside the window (~1.8 GB of data: minutes) | Row counts per table equal (`counts` action on both), `_prisma_migrations` equal, RLS policies present, smoke tests | **Single server, no failover** (the owner's decision); a restore is the recovery |
+| RDS PostgreSQL | `postgres` container | Connection strings only. **Copy built** (`copy-db.mjs` + `copy-db.sh`, tested against PostgreSQL; [DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)) | One snapshot per database dumped on the admin host, restored on iKorex inside the window (~1.8 GB of data: minutes) | Every table's row count equal to the snapshot's, row-level security and policies equal, then `migrate` and the counts again; smoke tests | **Single server, no failover** (the owner's decision); a restore is the recovery |
 | Cognito | **Keep** (recommended) | Admin calls with an IAM user key (today: the function's role) | — | Password, email code, Google, reset, sign-out | Long-lived IAM key: limited to this pool, rotated |
 | Cognito email Lambda + KMS | Keep with Cognito | — | — | Reset code arrives | — |
 | SES | Nothing (Resend sends) | — | — | — | — |
@@ -61,7 +61,8 @@ only reach users with one.
 2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours); the `jobs`
    function's `smsEvents` trigger off (SMS events then wait in SQS for the server); the other queues
    drained to empty; final `counts`.
-3. `pg_dump` both databases from RDS, restore on iKorex, `counts` compared table by table.
+3. `node infra/ikorex/scripts/copy-db.mjs --cutover --replace`: both databases from one snapshot
+   each, restored on iKorex, compared table by table, `admin migrate`, compared again.
 4. Copy the coordinator's items; start `app`, `worker`, `evolution` with production settings.
 5. Cloudflare: `bizinsights.io` and `www` move from CloudFront to the tunnel (proxied, takes effect
    in seconds).

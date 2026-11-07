@@ -41,3 +41,6 @@ apps/web/public/flags/
 
 # The iKorex server's real settings and secrets (infra/ikorex/env/*.example lists them): never in Git.
 infra/ikorex/env/*.env
+# Rendered on the server by scripts/render-monitoring.sh (the alert address, the SMTP password).
+infra/ikorex/monitoring/alertmanager.yml
+infra/ikorex/monitoring/smtp_password

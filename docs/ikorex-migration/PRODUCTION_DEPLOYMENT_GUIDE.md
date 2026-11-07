@@ -71,8 +71,12 @@ From the repository, on a clean checkout of the commit (main in production):
 infra/ikorex/scripts/ship.sh deployer@103.146.112.176
 ```
 
-`ship.sh` builds the bundle, sends it and `infra/ikorex` (never `env/` or `.env`), builds the image on
-the server and runs `scripts/deploy.sh <commit>` there: PostgreSQL up, migrations (`admin migrate`) and
+`ship.sh` connects only to the server's pinned host key (`infra/ikorex/known_hosts`, the fingerprint
+in the administrator's guide), with Windows' own OpenSSH where there is one (it uses the Windows
+ssh-agent; without the agent, the key's passphrase is asked for at each connection). It builds the
+bundle, sends it and `infra/ikorex` (never `env/`, `.env` or the rendered alert files), builds the
+image on the server and runs `scripts/deploy.sh <commit>` there. `deploy.sh` refuses to start while any
+`env/*.env` still holds a `CHANGE_ME` placeholder; then PostgreSQL up, migrations (`admin migrate`) and
 the WhatsApp database role (`admin evolution-db`) first, then `web` and `worker` on the new image,
 health, `/api/readyz`, `/api/version`. A failure puts the previous image back and the run fails.
 
@@ -131,6 +135,29 @@ docker compose run --rm --no-deps --user postgres --entrypoint pgbackrest postgr
 
 To a moment in time, add `--type=time "--target=2026-11-20 03:00:00+00" --target-action=promote`.
 Then `docker compose up -d`, and check with `admin counts` and `/api/readyz`.
+
+## Copying the database from RDS
+
+From the owner's PC, signed in to AWS (`aws login`), with the SSH key ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)
+says what each step does and checks):
+
+```powershell
+node infra/ikorex/scripts/copy-db.mjs --rehearsal
+```
+
+The rehearsal (stage B) restores both databases into throwaway ones on the staging project's
+PostgreSQL, compares them table by table with the snapshot it dumped, and drops them; AWS is only
+read. In the cutover window, after cutover step 2 (schedules off, webhooks answered 503, queues
+drained), the real copy replaces the server's `app` and `evolution`:
+
+```powershell
+node infra/ikorex/scripts/copy-db.mjs --cutover --replace
+```
+
+It refuses while any AWS queue but the SMS events holds a message, stops `web`, `worker` and
+`evolution` on the server, and ends with `admin migrate` and the comparison again. Exit 1 means a
+difference: the cutover stops there (ROLLBACK_PLAN.md). The report (counts only) is saved in
+`C:\Users\Seban\insights-backups`; the dumps are deleted from the bucket.
 
 ## The cutover and the rollback period
 

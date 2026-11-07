@@ -36,4 +36,6 @@ deleted.
 
 - Restore of the latest off-server backup into a fresh container (stage C, weekly after that).
 - The DNS switch and its reverse, on `staging.bizinsights.io`.
-- The reverse database copy (iKorex → a throwaway RDS-like PostgreSQL), timed.
+- The reverse database copy (iKorex → a throwaway RDS-like PostgreSQL), timed. `copy-db.sh` dumps
+  and restores in either direction; its driver for this direction is still to write
+  ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md), "Open before stage D").

@@ -9,9 +9,12 @@ and the CCTV tunnel already on that server.
 ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)). **The owner's decisions are made**
 ([the list](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)): Cognito and SMS stay on AWS,
 backups to R2, one server accepted, the cutover on a Sunday 20:00-21:00 Melbourne time, no logs
-profile. The server is not inspected yet: this PC's SSH key waits for the administrator. Nothing has
-changed on the server, and AWS keeps running everything (its only change: four empty tables the
-runtime uses).
+profile. **The database copy and the security audit are built** (2026-11-07): the copy is tested
+against PostgreSQL with the real schema, and six security findings in the server's files are fixed
+with tests. The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for
+the administrator. Nothing has changed on the server, and AWS keeps running everything (its only
+changes: four empty tables the runtime uses, and the admin host may write dumps under one bucket
+prefix).
 
 ## The pages
 
@@ -21,8 +24,8 @@ runtime uses).
 | 2. Migration matrix | [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.md) | Done: stages A-F, service by service, cutover steps |
 | 3. Infrastructure architecture | [IKOREX_INFRASTRUCTURE_ARCHITECTURE.md](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md) | Built (stage A); not deployed |
 | 4. Server capacity | [SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md) | Demand measured; server side waits for SSH access. Script: [inspect-server.sh](inspect-server.sh) |
-| 5. Database migration report | `DATABASE_MIGRATION_REPORT.md` | Written when the database is copied (stages B and D) |
-| 6. Security audit | `SECURITY_AUDIT.md` | Written after the server inspection |
+| 5. Database migration report | [DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md) | Method built and tested on the PC (`copy-db.mjs`, `copy-db.sh`); the rehearsal (stage B) and the real copy (stage D) are recorded there when they run |
+| 6. Security audit | [SECURITY_AUDIT.md](SECURITY_AUDIT.md) | The files audited, six findings fixed with tests; eight questions only the server or its administrator can answer |
 | 7. Migration test report | [MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md) | Stage A's runs; the 22 acceptance criteria and where each stands |
 | 8. Cost comparison | [AWS_COST_COMPARISON.md](AWS_COST_COMPARISON.md) | Estimate; the real figure comes from the bill after cutover |
 | 9. Rollback plan | [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md) | Done |
@@ -47,6 +50,9 @@ GST, at the price of one server instead of a failover database, and of running i
 
 ## Waiting on
 
-1. **SSH access**: a key for this PC, added by the server's administrator (guide steps 2-4), and
-   their agreement to host bizinsights there.
+1. **SSH access**: the administrator adding this PC's key (guide steps 2-4), and their agreement to
+   host bizinsights there. Then the read-only inspection, which also answers the audit's open
+   questions (who is in the `docker` group, what runs as `deployer`, disk encryption).
 2. The capacity test's result (go / tight / no go).
+3. Before stage D: the reverse copy (iKorex back to RDS) for the rollback period, driven and timed
+   like the forward one.
