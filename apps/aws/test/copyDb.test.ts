@@ -48,25 +48,23 @@ describe.skipIf(!adminUrl || !bash || !hasPgTools)("database copy to the iKorex 
   const evo = `copy_evo_${id}`;
   const evoRole = `copy_evo_${id}`;
   const made: string[] = [];
-  const work = mkdtempSync(join(tmpdir(), "copy-db-")).replace(/\\/g, "/");
+  // Set in beforeAll, and the database address read only in hooks and tests: Vitest runs a skipped
+  // suite's body too (to list its tests), where there is no database (Deploy to AWS's unit tests).
+  let work = "";
   let admin: pg.Client;
   const url = (db: string) => {
     const u = new URL(adminUrl!);
     u.pathname = `/${db}`;
     return u.toString();
   };
-  const conn = new URL(adminUrl!);
-  const pgEnv = {
-    PGHOST: conn.hostname,
-    PGPORT: conn.port || "5432",
-    PGUSER: decodeURIComponent(conn.username),
-    PGPASSWORD: decodeURIComponent(conn.password),
-    TMPDIR_COPY: work,
+  const pgEnv = () => {
+    const conn = new URL(adminUrl!);
+    return { PGHOST: conn.hostname, PGPORT: conn.port || "5432", PGUSER: decodeURIComponent(conn.username), PGPASSWORD: decodeURIComponent(conn.password), TMPDIR_COPY: work };
   };
 
   function run(command: "dump" | "restore" | "facts", env: Record<string, string>): Promise<{ code: number; stdout: string; stderr: string; result?: Record<string, Result> }> {
     return new Promise((done) => {
-      execFile(bash!, [script, command], { env: { ...process.env, ...pgEnv, ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile(bash!, [script, command], { env: { ...process.env, ...pgEnv(), ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
         const line = stdout.split(/\r?\n/).find((l) => l.startsWith("COPY-RESULT "));
         done({ code: err ? ((err as { code?: number }).code ?? 1) : 0, stdout, stderr, result: line ? JSON.parse(line.slice("COPY-RESULT ".length)) : undefined });
       });
@@ -87,6 +85,7 @@ describe.skipIf(!adminUrl || !bash || !hasPgTools)("database copy to the iKorex 
   let liveCoordRows = 0;
 
   beforeAll(async () => {
+    work = mkdtempSync(join(tmpdir(), "copy-db-")).replace(/\\/g, "/");
     admin = new pg.Client({ connectionString: adminUrl });
     await admin.connect();
     // The app's database as on RDS: its public schema made again (as the move to AWS did), then
